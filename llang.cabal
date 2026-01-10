@@ -26,6 +26,19 @@ source-repository head
 library
   exposed-modules:
       Lib
+      Strat.Doctrine.Stub
+      Strat.Meta.Coherence
+      Strat.Meta.CriticalPairs
+      Strat.Meta.Examples.Monoid
+      Strat.Meta.Presentation
+      Strat.Meta.Rewrite
+      Strat.Meta.RewriteSystem
+      Strat.Meta.Rule
+      Strat.Meta.Term.Class
+      Strat.Meta.Term.FO
+      Strat.Meta.Types
+      Strat.Model.Stub
+      Strat.Syntax.Stub
   other-modules:
       Paths_llang
   autogen-modules:
@@ -35,6 +48,8 @@ library
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       base >=4.7 && <5
+    , containers
+    , text
   default-language: Haskell2010
 
 executable llang-exe
@@ -48,7 +63,9 @@ executable llang-exe
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
+    , containers
     , llang
+    , text
   default-language: Haskell2010
 
 test-suite llang-test
@@ -63,5 +80,9 @@ test-suite llang-test
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
+    , containers
     , llang
+    , tasty
+    , tasty-hunit
+    , text
   default-language: Haskell2010
