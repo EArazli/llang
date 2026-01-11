@@ -2,6 +2,7 @@
 module Strat.Meta.Term.FO where
 
 import Strat.Meta.Term.Class
+import Strat.Meta.Term.Syms
 import Strat.Meta.Types
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -74,6 +75,13 @@ instance TermLike Term where
 
 instance ScopedVar V where
   setNs ns v = v { vNs = ns }
+
+instance SymRenamable Term where
+  renameSyms _ (TVar v) = TVar v
+  renameSyms f (TApp (Sym s) args) = TApp (Sym (f s)) (map (renameSyms f) args)
+
+  syms (TVar _) = S.empty
+  syms (TApp (Sym s) args) = S.insert s (S.unions (map syms args))
 
 instance Matchable Term where
   match pat target = Subst <$> go M.empty pat target

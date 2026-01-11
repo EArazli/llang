@@ -7,6 +7,8 @@ import Strat.Meta.Rule
 import Strat.Meta.RewriteSystem
 import Strat.Meta.Term.Class
 import Strat.Meta.Types
+import qualified Data.List as L
+import Data.Ord (comparing)
 
 data Step t = Step
   { stepRule  :: RuleId
@@ -18,6 +20,7 @@ data Redex t = Redex
   { redexStep :: Step t
   , redexFrom :: t
   , redexTo   :: t
+  , redexRuleIx :: Int
   }
 
 deriving instance (Eq t, Eq (Var t)) => Eq (Step t)
@@ -35,6 +38,7 @@ rewriteOnce rs term =
           { redexStep = Step (ruleId rule) pos subst
           , redexFrom = term
           , redexTo   = newTerm
+          , redexRuleIx = ruleIx rule
           }
       | pos <- positions term
       , Just sub <- [subtermAt term pos]
@@ -53,6 +57,13 @@ applyStep lookupRuleFn step term = do
 
 data Strategy = FirstRedex
 
+chooseRedex :: [Redex t] -> Maybe (Redex t)
+chooseRedex [] = Nothing
+chooseRedex reds =
+  Just (L.minimumBy (comparing redexKey) reds)
+  where
+    redexKey r = (stepPos (redexStep r), redexRuleIx r)
+
 normalizeWith :: Matchable t => Strategy -> Int -> RewriteSystem t -> t -> t
 normalizeWith strategy fuel rs t0 = go fuel t0
   where
@@ -63,7 +74,10 @@ normalizeWith strategy fuel rs t0 = go fuel t0
             FirstRedex ->
               case rewriteOnce rs t of
                 [] -> t
-                (r : _) -> go (n - 1) (redexTo r)
+                reds ->
+                  case chooseRedex reds of
+                    Nothing -> t
+                    Just r  -> go (n - 1) (redexTo r)
 
 normalize :: Matchable t => Int -> RewriteSystem t -> t -> t
 normalize = normalizeWith FirstRedex

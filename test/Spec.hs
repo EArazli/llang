@@ -8,6 +8,7 @@ import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import Strat.Meta.Coherence
 import Strat.Meta.CriticalPairs
+import Strat.Meta.DoctrineExpr
 import Strat.Meta.Examples.Monoid
 import Strat.Meta.Presentation
 import Strat.Meta.Rewrite
@@ -24,36 +25,50 @@ tests :: TestTree
 tests =
   testGroup
     "Strat.Meta"
-    [ testCase "match sanity" testMatchSanity
-    , testCase "match repeated var" testMatchRepeatedVar
-    , testCase "unify sanity" testUnifySanity
-    , testCase "unify applies substitution" testUnifyAppliesSubst
-    , testCase "applySubst recursive" testApplySubstRecursive
-    , testCase "applyStep strict mismatch" testApplyStepMismatch
-    , testCase "validateJoiner succeeds" testValidateJoiner
-    , testCase "validateJoiner fails on wrong join" testValidateJoinerWrongJoin
-    , testCase "validateJoiner fails on wrong rule" testValidateJoinerWrongRule
-    , testCase "compile RL orientation" testCompileRLOrientation
-    , testCase "compile bidirectional" testCompileBidirectional
-    , testCase "compile unoriented skipped" testCompileUnorientedSkipped
-    , testCase "compile structural as bidirectional" testCompileStructuralAsBidirectional
-    , testCase "compile duplicate equation names rejected" testCompileDuplicateEqNames
-    , testCase "compile UseOnlyComputationalLR skips RL" testCompileUseOnlyComputationalLRSkipsRL
-    , testCase "monoid critical pairs non-empty" testMonoidCriticalPairs
-    , testCase "monoid critical pair non-trivial" testMonoidCriticalPairsNonTrivial
-    , testCase "monoid normalize deterministic" testMonoidNormalize
-    , testCase "critical pairs include root overlaps" testCriticalPairsRootOverlap
-    , testCase "critical pairs exclude variable overlap" testCriticalPairsExcludeVarOverlap
-    , testCase "critical pairs exclude inner variable overlap" testCriticalPairsExcludeInnerVarOverlap
-    , testCase "critical pairs freshen self-overlap" testCriticalPairsSelfOverlapFreshening
-    , testCase "critical pairs CPMode filtering" testCriticalPairsCPModeFiltering
-    , testCase "critical pair soundness" testCriticalPairSoundness
-    , testCase "rewriteOnce orders positions" testRewriteOncePositionOrder
-    , testCase "rewriteOnce orders deeper positions" testRewriteOncePositionOrderDeep
-    , testCase "rewriteOnce orders rules" testRewriteOnceRuleOrder
-    , testCase "rewriteOnce rule order same position" testRewriteOnceRuleOrderSamePos
-    , testCase "normalize chooses first rule" testNormalizeChoosesFirstRule
-    , testCase "normalize fuel edge cases" testNormalizeFuelEdgeCases
+    [ testGroup
+        "Meta"
+        [ testCase "match sanity" testMatchSanity
+        , testCase "match repeated var" testMatchRepeatedVar
+        , testCase "unify sanity" testUnifySanity
+        , testCase "unify applies substitution" testUnifyAppliesSubst
+        , testCase "applySubst recursive" testApplySubstRecursive
+        , testCase "applyStep strict mismatch" testApplyStepMismatch
+        , testCase "validateJoiner succeeds" testValidateJoiner
+        , testCase "validateJoiner fails on wrong join" testValidateJoinerWrongJoin
+        , testCase "validateJoiner fails on wrong rule" testValidateJoinerWrongRule
+        , testCase "compile RL orientation" testCompileRLOrientation
+        , testCase "compile bidirectional" testCompileBidirectional
+        , testCase "compile unoriented skipped" testCompileUnorientedSkipped
+        , testCase "compile structural as bidirectional" testCompileStructuralAsBidirectional
+        , testCase "compile duplicate equation names rejected" testCompileDuplicateEqNames
+        , testCase "compile UseOnlyComputationalLR skips RL" testCompileUseOnlyComputationalLRSkipsRL
+        , testCase "monoid critical pairs non-empty" testMonoidCriticalPairs
+        , testCase "monoid critical pair non-trivial" testMonoidCriticalPairsNonTrivial
+        , testCase "monoid normalize deterministic" testMonoidNormalize
+        , testCase "critical pairs include root overlaps" testCriticalPairsRootOverlap
+        , testCase "critical pairs exclude variable overlap" testCriticalPairsExcludeVarOverlap
+        , testCase "critical pairs exclude inner variable overlap" testCriticalPairsExcludeInnerVarOverlap
+        , testCase "critical pairs freshen self-overlap" testCriticalPairsSelfOverlapFreshening
+        , testCase "critical pairs CPMode filtering" testCriticalPairsCPModeFiltering
+        , testCase "critical pair soundness" testCriticalPairSoundness
+        , testCase "rewriteOnce orders positions" testRewriteOncePositionOrder
+        , testCase "rewriteOnce orders deeper positions" testRewriteOncePositionOrderDeep
+        , testCase "rewriteOnce orders rules" testRewriteOnceRuleOrder
+        , testCase "rewriteOnce rule order same position" testRewriteOnceRuleOrderSamePos
+        , testCase "normalize chooses first rule" testNormalizeChoosesFirstRule
+        , testCase "normalize fuel edge cases" testNormalizeFuelEdgeCases
+        ]
+    , testGroup
+        "DoctrineExpr"
+        [ testCase "disjoint composition qualifies" testDoctrineDisjointQualifies
+        , testCase "disjoint rules do not cross-apply" testDoctrineDisjointNoCross
+        , testCase "sharing enables cross-application" testDoctrineShareSyms
+        , testCase "extends-like same namespace" testDoctrineExtendsLike
+        , testCase "duplicate eq names rejected" testDoctrineDuplicateEqNames
+        , testCase "rename eqs resolves collisions" testDoctrineRenameEqs
+        , testCase "ShareSyms unknown symbol fails" testDoctrineShareUnknown
+        , testCase "RenameSyms works" testDoctrineRenameSyms
+        ]
     ]
 
 ns :: Text -> Ns
@@ -70,6 +85,13 @@ app f xs = TApp (sym f) xs
 
 constTerm :: Text -> Term
 constTerm name = app name []
+
+qname :: Text -> Text -> Text
+qname ns x = ns <> "." <> x
+
+termSym :: Term -> Maybe Text
+termSym (TApp (Sym s) _) = Just s
+termSym _ = Nothing
 
 mkRuleWith :: RuleClass -> Text -> Int -> Term -> Term -> Rule Term
 mkRuleWith cls name ix l r =
@@ -108,6 +130,45 @@ renameRuleNs ns' r =
     { lhs = renameVars (setNs ns') (lhs r)
     , rhs = renameVars (setNs ns') (rhs r)
     }
+
+presA :: Presentation Term
+presA =
+  Presentation
+    { presName = "A"
+    , presEqs =
+        [ mkEq "r" Computational LR (app "f" [varX]) (app "g" [varX])
+        ]
+    }
+
+presB :: Presentation Term
+presB =
+  Presentation
+    { presName = "B"
+    , presEqs =
+        [ mkEq "r" Computational LR (app "f" [varX]) (app "h" [varX])
+        ]
+    }
+
+presBase :: Presentation Term
+presBase =
+  Presentation
+    { presName = "Base"
+    , presEqs =
+        [ mkEq "base" Computational LR (app "f" [varX]) varX
+        ]
+    }
+
+presExt :: Presentation Term
+presExt =
+  Presentation
+    { presName = "Ext"
+    , presEqs =
+        [ mkEq "ext" Computational LR (app "k" [app "f" [varX]]) varX
+        ]
+    }
+
+varX :: Term
+varX = TVar (V (ns "v") 0)
 
 testMatchSanity :: Assertion
 testMatchSanity =
@@ -599,3 +660,92 @@ testNormalizeFuelEdgeCases = do
   normalize 0 rs (constTerm "a") @?= constTerm "a"
   normalize 1 rs (constTerm "a") @?= constTerm "b"
   normalize 2 rs (constTerm "a") @?= constTerm "c"
+
+testDoctrineDisjointQualifies :: Assertion
+testDoctrineDisjointQualifies = do
+  let expr = And (Atom "A" presA) (Atom "B" presB)
+  case elabDocExpr expr of
+    Left err -> assertFailure (show err)
+    Right p -> do
+      map eqName (presEqs p) @?= [qname "A" "r", qname "B" "r"]
+      case presEqs p of
+        (e1 : e2 : _) -> do
+          termSym (eqLHS e1) @?= Just (qname "A" "f")
+          termSym (eqLHS e2) @?= Just (qname "B" "f")
+        _ -> assertFailure "expected two equations"
+      case compileDocExpr UseOnlyComputationalLR expr of
+        Left err -> assertFailure (show err)
+        Right _ -> pure ()
+
+testDoctrineDisjointNoCross :: Assertion
+testDoctrineDisjointNoCross = do
+  let expr = And (Atom "A" presA) (Atom "B" presB)
+  case compileDocExpr UseOnlyComputationalLR expr of
+    Left err -> assertFailure (show err)
+    Right rs -> do
+      let t = app (qname "A" "f") [constTerm "z"]
+      let reds = rewriteOnce rs t
+      length reds @?= 1
+      map (stepRule . redexStep) reds @?= [RuleId (qname "A" "r") DirLR]
+
+testDoctrineShareSyms :: Assertion
+testDoctrineShareSyms = do
+  let expr = And (Atom "A" presA) (Atom "B" presB)
+  let exprShared = ShareSyms [(qname "A" "f", qname "B" "f")] expr
+  case compileDocExpr UseOnlyComputationalLR exprShared of
+    Left err -> assertFailure (show err)
+    Right rs -> do
+      let t = app (qname "A" "f") [constTerm "z"]
+      let reds = rewriteOnce rs t
+      length reds @?= 2
+      map (stepRule . redexStep) reds
+        @?= [ RuleId (qname "A" "r") DirLR
+            , RuleId (qname "B" "r") DirLR
+            ]
+
+testDoctrineExtendsLike :: Assertion
+testDoctrineExtendsLike = do
+  let exprExt = And (Atom "C" presBase) (Atom "C" presExt)
+  case compileDocExpr UseOnlyComputationalLR exprExt of
+    Left err -> assertFailure (show err)
+    Right rs -> do
+      let t = app (qname "C" "k") [app (qname "C" "f") [constTerm "z"]]
+      normalize 1 rs t @?= constTerm "z"
+
+testDoctrineDuplicateEqNames :: Assertion
+testDoctrineDuplicateEqNames = do
+  let exprDup = And (Atom "C" presA) (Atom "C" presB)
+  case elabDocExpr exprDup of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected duplicate equation name rejection"
+
+testDoctrineRenameEqs :: Assertion
+testDoctrineRenameEqs = do
+  let exprFixed =
+        And
+          (Atom "C" presA)
+          (RenameEqs (M.fromList [(qname "C" "r", qname "C" "r2")]) (Atom "C" presB))
+  case compileDocExpr UseOnlyComputationalLR exprFixed of
+    Left err -> assertFailure (show err)
+    Right rs -> do
+      let rules = map ruleId (rsRules rs)
+      assertBool "expected C.r rule" (RuleId (qname "C" "r") DirLR `elem` rules)
+      assertBool "expected C.r2 rule" (RuleId (qname "C" "r2") DirLR `elem` rules)
+
+testDoctrineShareUnknown :: Assertion
+testDoctrineShareUnknown = do
+  let expr = And (Atom "A" presA) (Atom "B" presB)
+  let exprBad = ShareSyms [(qname "A" "missing", qname "B" "f")] expr
+  case elabDocExpr exprBad of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected ShareSyms unknown symbol failure"
+
+testDoctrineRenameSyms :: Assertion
+testDoctrineRenameSyms = do
+  let expr = RenameSyms (M.fromList [(qname "A" "g", qname "A" "g2")]) (Atom "A" presA)
+  case elabDocExpr expr of
+    Left err -> assertFailure (show err)
+    Right p ->
+      case presEqs p of
+        (e1 : _) -> termSym (eqRHS e1) @?= Just (qname "A" "g2")
+        _ -> assertFailure "expected at least one equation"

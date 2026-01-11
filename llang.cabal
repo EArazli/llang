@@ -29,6 +29,7 @@ library
       Strat.Doctrine.Stub
       Strat.Meta.Coherence
       Strat.Meta.CriticalPairs
+      Strat.Meta.DoctrineExpr
       Strat.Meta.Examples.Monoid
       Strat.Meta.Presentation
       Strat.Meta.Rewrite
@@ -36,6 +37,7 @@ library
       Strat.Meta.Rule
       Strat.Meta.Term.Class
       Strat.Meta.Term.FO
+      Strat.Meta.Term.Syms
       Strat.Meta.Types
       Strat.Model.Stub
       Strat.Syntax.Stub
