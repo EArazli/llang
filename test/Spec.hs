@@ -6,8 +6,10 @@ import Test.Tasty.HUnit
 import Data.List (find)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
+import qualified Data.Text as T
 import Strat.Meta.Coherence
 import Strat.Meta.CriticalPairs
+import Strat.Meta.DSL.Elab.FO
 import Strat.Meta.DoctrineExpr
 import Strat.Meta.Examples.Monoid
 import Strat.Meta.Presentation
@@ -69,6 +71,19 @@ tests =
         , testCase "ShareSyms unknown symbol fails" testDoctrineShareUnknown
         , testCase "RenameSyms works" testDoctrineRenameSyms
         ]
+    , testGroup
+        "DoctrineDSL"
+        [ testCase "load succeeds" testDSLLoad
+        , testCase "AB disjoint" testDSLDisjoint
+        , testCase "ABshared enables cross-apply" testDSLShared
+        , testCase "Base@C & Ext@C works" testDSLExtendsLike
+        , testCase "Cbad duplicate eq names fails" testDSLDuplicateEqNames
+        , testCase "rename syms works" testDSLRenameSyms
+        , testCase "share unknown symbol fails" testDSLShareUnknown
+        , testCase "RL orientation parses" testDSLRLOrientation
+        , testCase "associativity preserves order" testDSLAssocOrdering
+        , testCase "share precedence" testDSLSharePrecedence
+        ]
     ]
 
 ns :: Text -> Ns
@@ -87,7 +102,7 @@ constTerm :: Text -> Term
 constTerm name = app name []
 
 qname :: Text -> Text -> Text
-qname ns x = ns <> "." <> x
+qname nsName x = nsName <> "." <> x
 
 termSym :: Term -> Maybe Text
 termSym (TApp (Sym s) _) = Just s
@@ -169,6 +184,46 @@ presExt =
 
 varX :: Term
 varX = TVar (V (ns "v") 0)
+
+dslProgram :: Text
+dslProgram =
+  T.unlines
+    [ "doctrine A where {"
+    , "  computational r : f(?x) -> g(?x);"
+    , "}"
+    , ""
+    , "doctrine B where {"
+    , "  computational r : f(?x) -> h(?x);"
+    , "}"
+    , ""
+    , "doctrine AB = A & B;"
+    , ""
+    , "doctrine ABshared = share syms { A.f = B.f } in (A & B);"
+    , ""
+    , "doctrine Base where {"
+    , "  computational base : f(?x) -> ?x;"
+    , "}"
+    , ""
+    , "doctrine Ext where {"
+    , "  computational ext : k(f(?x)) -> ?x;"
+    , "}"
+    , ""
+    , "doctrine C = (Base@C) & (Ext@C);"
+    , ""
+    , "doctrine Cbad = (A@C) & (B@C);"
+    , ""
+    , "doctrine Aren = rename syms { A.g -> A.g2 } in A;"
+    , ""
+    , "doctrine BadShare = share syms { A.missing = B.f } in (A & B);"
+    , ""
+    , "doctrine RLTest where {"
+    , "  computational rr : a <- b;"
+    , "}"
+    , ""
+    , "doctrine AssocTest = A & B & Base;"
+    , ""
+    , "doctrine ABshared2 = share syms { A.f = B.f } in A & B;"
+    ]
 
 testMatchSanity :: Assertion
 testMatchSanity =
@@ -749,3 +804,131 @@ testDoctrineRenameSyms = do
       case presEqs p of
         (e1 : _) -> termSym (eqRHS e1) @?= Just (qname "A" "g2")
         _ -> assertFailure "expected at least one equation"
+
+testDSLLoad :: Assertion
+testDSLLoad =
+  case loadDoctrinesFO dslProgram of
+    Left err -> assertFailure (show err)
+    Right env -> do
+      let expected =
+            [ "A", "B", "AB", "ABshared", "Base", "Ext", "C", "Cbad"
+            , "Aren", "BadShare", "RLTest", "AssocTest", "ABshared2"
+            ]
+      assertBool "expected all doctrine keys"
+        (all (`M.member` env) expected)
+
+testDSLDisjoint :: Assertion
+testDSLDisjoint = do
+  env <- requireEnv
+  expr <- requireExpr env "AB"
+  case compileDocExpr UseOnlyComputationalLR expr of
+    Left err -> assertFailure (show err)
+    Right rs -> do
+      let t = app (qname "A" "f") [constTerm "z"]
+      let reds = rewriteOnce rs t
+      length reds @?= 1
+      map (stepRule . redexStep) reds @?= [RuleId (qname "A" "r") DirLR]
+
+testDSLShared :: Assertion
+testDSLShared = do
+  env <- requireEnv
+  expr <- requireExpr env "ABshared"
+  case compileDocExpr UseOnlyComputationalLR expr of
+    Left err -> assertFailure (show err)
+    Right rs -> do
+      let t = app (qname "A" "f") [constTerm "z"]
+      let reds = rewriteOnce rs t
+      length reds @?= 2
+      map (stepRule . redexStep) reds
+        @?= [ RuleId (qname "A" "r") DirLR
+            , RuleId (qname "B" "r") DirLR
+            ]
+
+testDSLExtendsLike :: Assertion
+testDSLExtendsLike = do
+  env <- requireEnv
+  expr <- requireExpr env "C"
+  case compileDocExpr UseOnlyComputationalLR expr of
+    Left err -> assertFailure (show err)
+    Right rs -> do
+      let t = app (qname "C" "k") [app (qname "C" "f") [constTerm "z"]]
+      normalize 1 rs t @?= constTerm "z"
+
+testDSLDuplicateEqNames :: Assertion
+testDSLDuplicateEqNames = do
+  env <- requireEnv
+  expr <- requireExpr env "Cbad"
+  case elabDocExpr expr of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected duplicate eq name failure"
+
+testDSLRenameSyms :: Assertion
+testDSLRenameSyms = do
+  env <- requireEnv
+  expr <- requireExpr env "Aren"
+  case elabDocExpr expr of
+    Left err -> assertFailure (show err)
+    Right p ->
+      case presEqs p of
+        (e1 : _) -> termSym (eqRHS e1) @?= Just (qname "A" "g2")
+        _ -> assertFailure "expected at least one equation"
+
+testDSLShareUnknown :: Assertion
+testDSLShareUnknown = do
+  env <- requireEnv
+  expr <- requireExpr env "BadShare"
+  case elabDocExpr expr of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected unknown symbol failure"
+
+testDSLRLOrientation :: Assertion
+testDSLRLOrientation = do
+  env <- requireEnv
+  expr <- requireExpr env "RLTest"
+  case compileDocExpr UseAllOriented expr of
+    Left err -> assertFailure (show err)
+    Right rs ->
+      case rsRules rs of
+        [r] -> ruleId r @?= RuleId (qname "RLTest" "rr") DirRL
+        _ -> assertFailure "expected one RL rule"
+
+testDSLAssocOrdering :: Assertion
+testDSLAssocOrdering = do
+  env <- requireEnv
+  expr <- requireExpr env "AssocTest"
+  case elabDocExpr expr of
+    Left err -> assertFailure (show err)
+    Right p ->
+      map eqName (presEqs p)
+        @?= [qname "A" "r", qname "B" "r", qname "Base" "base"]
+
+testDSLSharePrecedence :: Assertion
+testDSLSharePrecedence = do
+  env <- requireEnv
+  expr <- requireExpr env "ABshared2"
+  case compileDocExpr UseOnlyComputationalLR expr of
+    Left err -> assertFailure (show err)
+    Right rs -> do
+      let t = app (qname "A" "f") [constTerm "z"]
+      let reds = rewriteOnce rs t
+      length reds @?= 2
+      map (stepRule . redexStep) reds
+        @?= [ RuleId (qname "A" "r") DirLR
+            , RuleId (qname "B" "r") DirLR
+            ]
+
+requireEnv :: IO (M.Map Text (DocExpr Term))
+requireEnv =
+  case loadDoctrinesFO dslProgram of
+    Left err -> do
+      _ <- assertFailure (show err)
+      pure M.empty
+    Right env -> pure env
+
+requireExpr :: M.Map Text (DocExpr Term) -> Text -> IO (DocExpr Term)
+requireExpr env name =
+  case M.lookup name env of
+    Nothing -> do
+      _ <- assertFailure ("missing doctrine: " <> T.unpack name)
+      pure (Atom "Missing" (Presentation "Missing" []))
+    Just expr -> pure expr

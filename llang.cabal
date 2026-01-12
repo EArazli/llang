@@ -30,6 +30,10 @@ library
       Strat.Meta.Coherence
       Strat.Meta.CriticalPairs
       Strat.Meta.DoctrineExpr
+      Strat.Meta.DSL.AST
+      Strat.Meta.DSL.Elab.FO
+      Strat.Meta.DSL.Examples
+      Strat.Meta.DSL.Parse
       Strat.Meta.Examples.Monoid
       Strat.Meta.Presentation
       Strat.Meta.Rewrite
@@ -51,6 +55,7 @@ library
   build-depends:
       base >=4.7 && <5
     , containers
+    , megaparsec
     , text
   default-language: Haskell2010
 
@@ -67,6 +72,7 @@ executable llang-exe
       base >=4.7 && <5
     , containers
     , llang
+    , megaparsec
     , text
   default-language: Haskell2010
 
@@ -84,6 +90,7 @@ test-suite llang-test
       base >=4.7 && <5
     , containers
     , llang
+    , megaparsec
     , tasty
     , tasty-hunit
     , text
