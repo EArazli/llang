@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Main where
+module Main (main) where
 
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -28,6 +28,7 @@ import qualified Strat.Kernel.Examples.Monoid as KMono
 import qualified Strat.Kernel.RewriteSystem as KRS
 import qualified Strat.Kernel.CriticalPairs as KCP
 import qualified Strat.Kernel.Coherence as KCo
+import qualified Strat.Kernel.Rewrite as KRew
 
 main :: IO ()
 main = defaultMain tests
@@ -97,8 +98,12 @@ tests =
         "Kernel"
         [ testCase "Kernel.Syntax loads" testKernelSyntaxLoads
         , testCase "Kernel.mkOp sanity" testKernelMkOp
+        , testCase "Kernel.mkSort sanity" testKernelMkSortSanity
+        , testCase "Kernel.mkSort arity mismatch" testKernelMkSortArity
+        , testCase "Kernel.mkSort sort mismatch" testKernelMkSortMismatch
         , testCase "Kernel.applySubstSort substitutes indices" testKernelApplySubstSort
         , testCase "Kernel.unify respects sort indices" testKernelUnifySortIndices
+        , testCase "Kernel rewriteOnce monoid unit" testKernelRewriteOnceMonoid
         , testCase "Kernel monoid critical pairs" testKernelMonoidCriticalPairs
         , testCase "Kernel monoid obligations" testKernelMonoidObligations
         ]
@@ -226,22 +231,22 @@ kernelSig =
     { KSig.sigSortCtors =
         M.fromList
           [ (objName, KSig.SortCtor objName [])
-          , (homName, KSig.SortCtor homName [objSort, objSort])
+          , (homName, KSig.SortCtor homName [objSort0, objSort0])
           ]
     , KSig.sigOps = M.fromList [(eName, eDecl), (mName, mDecl)]
     }
   where
     objName = KSyn.SortName "Obj"
     homName = KSyn.SortName "Hom"
-    objSort = KSyn.Sort objName []
+    objSort0 = KSyn.Sort objName []
     eName = KSyn.OpName "e"
     mName = KSyn.OpName "m"
-    eDecl = KSig.OpDecl eName [] objSort
+    eDecl = KSig.OpDecl eName [] objSort0
     mDecl =
       let scope = KSyn.ScopeId "op:m"
           a = KSyn.Var scope 0
           b = KSyn.Var scope 1
-      in KSig.OpDecl mName [KSyn.Binder a objSort, KSyn.Binder b objSort] objSort
+      in KSig.OpDecl mName [KSyn.Binder a objSort0, KSyn.Binder b objSort0] objSort0
 
 objSort :: KSyn.Sort
 objSort = KSyn.Sort (KSyn.SortName "Obj") []
@@ -262,6 +267,32 @@ testKernelMkOp = do
   case KTerm.mkOp kernelSig (KSyn.OpName "m") [kernelE, x] of
     Left err -> assertFailure (show err)
     Right t -> KSyn.termSort t @?= objSort
+
+testKernelMkSortSanity :: Assertion
+testKernelMkSortSanity =
+  case KSig.mkSort kernelSig (KSyn.SortName "Hom") [kernelE, kernelE] of
+    Left err -> assertFailure (show err)
+    Right s -> s @?= homSort kernelE kernelE
+
+testKernelMkSortArity :: Assertion
+testKernelMkSortArity =
+  case KSig.mkSort kernelSig (KSyn.SortName "Hom") [kernelE] of
+    Left (KSig.SortArityMismatch _ 2 1) -> pure ()
+    Left err -> assertFailure ("unexpected error: " <> show err)
+    Right _ -> assertFailure "expected arity mismatch"
+
+testKernelMkSortMismatch :: Assertion
+testKernelMkSortMismatch = do
+  let scope = KSyn.ScopeId "ex:Kernel"
+  let homS =
+        case KSig.mkSort kernelSig (KSyn.SortName "Hom") [kernelE, kernelE] of
+          Left err -> error (show err)
+          Right s -> s
+  let badIdx = KTerm.mkVar homS (KSyn.Var scope 9)
+  case KSig.mkSort kernelSig (KSyn.SortName "Hom") [badIdx, kernelE] of
+    Left (KSig.SortIndexSortMismatch _ 0 _ _) -> pure ()
+    Left err -> assertFailure ("unexpected error: " <> show err)
+    Right _ -> assertFailure "expected sort mismatch"
 
 testKernelApplySubstSort :: Assertion
 testKernelApplySubstSort = do
@@ -289,6 +320,21 @@ testKernelUnifySortIndices = do
       KSubst.applySubstSort subst (KSyn.termSort t1) @?= KSubst.applySubstSort subst (KSyn.termSort t2)
       KSubst.applySubstTerm subst x @?= kernelE
       KSubst.applySubstTerm subst y @?= kernelE
+
+testKernelRewriteOnceMonoid :: Assertion
+testKernelRewriteOnceMonoid =
+  case KRS.compileRewriteSystem KRS.UseOnlyComputationalLR KMono.presMonoid of
+    Left err -> assertFailure (T.unpack err)
+    Right rs ->
+      case (KMono.eTerm, KMono.eTerm) of
+        (Right e, Right e2) ->
+          case KMono.mTerm e e2 of
+            Left err -> assertFailure (show err)
+            Right term ->
+              case KRew.rewriteOnce rs term of
+                [redex] -> KRew.redexTo redex @?= e
+                reds -> assertFailure ("expected single redex, got " <> show (length reds))
+        _ -> assertFailure "failed to build monoid terms"
 
 testKernelMonoidCriticalPairs :: Assertion
 testKernelMonoidCriticalPairs =

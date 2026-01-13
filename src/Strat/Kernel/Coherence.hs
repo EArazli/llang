@@ -1,5 +1,12 @@
 {-# LANGUAGE StandaloneDeriving #-}
-module Strat.Kernel.Coherence where
+module Strat.Kernel.Coherence
+  ( ObligationKind(..)
+  , Obligation(..)
+  , Joiner(..)
+  , JoinDB(..)
+  , obligationsFromCPs
+  , validateJoiner
+  ) where
 
 import Strat.Kernel.CriticalPairs
 import Strat.Kernel.Rewrite

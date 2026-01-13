@@ -1,5 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Strat.Kernel.Examples.Monoid where
+module Strat.Kernel.Examples.Monoid
+  ( objSortName
+  , objSort
+  , eName
+  , mName
+  , sigMonoid
+  , eTerm
+  , mTerm
+  , eqUnitL
+  , eqAssoc
+  , presMonoid
+  ) where
 
 import Strat.Kernel.Signature
 import Strat.Kernel.Syntax

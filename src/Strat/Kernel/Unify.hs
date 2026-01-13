@@ -1,4 +1,7 @@
-module Strat.Kernel.Unify where
+module Strat.Kernel.Unify
+  ( match
+  , unify
+  ) where
 
 import Strat.Kernel.Subst
 import Strat.Kernel.Syntax

@@ -1,4 +1,13 @@
-module Strat.Kernel.Syntax where
+module Strat.Kernel.Syntax
+  ( ScopeId(..)
+  , Var(..)
+  , SortName(..)
+  , OpName(..)
+  , Sort(..)
+  , TermNode(..)
+  , Term(..)
+  , Binder(..)
+  ) where
 
 import Data.Text (Text)
 

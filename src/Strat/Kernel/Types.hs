@@ -1,4 +1,10 @@
-module Strat.Kernel.Types where
+module Strat.Kernel.Types
+  ( RuleDir(..)
+  , RuleId(..)
+  , Pos
+  , RuleClass(..)
+  , Orientation(..)
+  ) where
 
 import Data.Text (Text)
 

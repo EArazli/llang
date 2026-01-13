@@ -1,4 +1,7 @@
-module Strat.Kernel.Rule where
+module Strat.Kernel.Rule
+  ( Equation(..)
+  , Rule(..)
+  ) where
 
 import Strat.Kernel.Syntax
 import Strat.Kernel.Types

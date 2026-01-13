@@ -1,4 +1,20 @@
-module Strat.Kernel.Term where
+module Strat.Kernel.Term
+  ( TypeError(..)
+  , mkVar
+  , mkOp
+  , isVar
+  , asVar
+  , positions
+  , subtermAt
+  , replaceAt
+  , renameScope
+  , renameScopeVar
+  , renameScopeSort
+  , renameScopeBinder
+  , scopesInTerm
+  , varsTerm
+  , varsInSort
+  ) where
 
 import Strat.Kernel.Signature
 import Strat.Kernel.Subst

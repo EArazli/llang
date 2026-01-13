@@ -1,5 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Strat.Kernel.Presentation where
+module Strat.Kernel.Presentation
+  ( Presentation(..)
+  , validateEquation
+  , validatePresentation
+  ) where
 
 import Strat.Kernel.Rule
 import Strat.Kernel.Signature

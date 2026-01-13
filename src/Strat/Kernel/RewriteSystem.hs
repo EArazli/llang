@@ -1,5 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Strat.Kernel.RewriteSystem where
+module Strat.Kernel.RewriteSystem
+  ( RewriteSystem(..)
+  , lookupRule
+  , getRule
+  , rulesInOrder
+  , RewritePolicy(..)
+  , compileRewriteSystem
+  ) where
 
 import Strat.Kernel.Presentation
 import Strat.Kernel.Rule

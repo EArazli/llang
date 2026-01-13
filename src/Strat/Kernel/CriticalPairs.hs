@@ -1,11 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving #-}
-module Strat.Kernel.CriticalPairs where
+module Strat.Kernel.CriticalPairs
+  ( CriticalPair(..)
+  , CPMode(..)
+  , criticalPairs
+  ) where
 
 import Strat.Kernel.Rule
 import Strat.Kernel.RewriteSystem
 import Strat.Kernel.Subst
-import Strat.Kernel.Syntax (Term, ScopeId (..))
+import Strat.Kernel.Syntax (Term, ScopeId (..), Var)
 import Strat.Kernel.Term
 import Strat.Kernel.Types
 import Strat.Kernel.Unify (unify)
@@ -97,8 +101,9 @@ criticalPairs mode _lookup rs = do
         || (ruleClass r1 == Computational && ruleClass r2 == Structural)
 
     isLeftLinear term =
-      all (<= 1) (M.elems counts)
+      all (<= (1 :: Int)) (M.elems counts)
       where
+        counts :: M.Map Var Int
         counts = foldl countVar M.empty (positions term)
         countVar m pos =
           case subtermAt term pos >>= asVar of

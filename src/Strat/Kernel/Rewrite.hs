@@ -1,5 +1,14 @@
 {-# LANGUAGE StandaloneDeriving #-}
-module Strat.Kernel.Rewrite where
+module Strat.Kernel.Rewrite
+  ( Step(..)
+  , Redex(..)
+  , rewriteOnce
+  , applyStep
+  , Strategy(..)
+  , chooseRedex
+  , normalizeWith
+  , normalize
+  ) where
 
 import Strat.Kernel.Rule
 import Strat.Kernel.RewriteSystem

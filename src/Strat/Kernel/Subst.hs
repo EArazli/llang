@@ -1,4 +1,8 @@
-module Strat.Kernel.Subst where
+module Strat.Kernel.Subst
+  ( Subst
+  , applySubstSort
+  , applySubstTerm
+  ) where
 
 import Strat.Kernel.Syntax
 import qualified Data.Map.Strict as M
