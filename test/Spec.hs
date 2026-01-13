@@ -19,10 +19,10 @@ import Strat.Meta.Rule
 import Strat.Meta.Term.Class
 import Strat.Meta.Term.FO
 import Strat.Meta.Types
-import qualified Strat.Kernel.Syntax as K
+import qualified Strat.Kernel.Syntax as KSyn
 import qualified Strat.Kernel.Signature as KSig
 import qualified Strat.Kernel.Subst as KSubst
-import qualified Strat.Kernel.Term as K
+import qualified Strat.Kernel.Term as KTerm
 import qualified Strat.Kernel.Unify as KUnify
 
 main :: IO ()
@@ -207,12 +207,12 @@ varX = TVar (V (ns "v") 0)
 
 testKernelSyntaxLoads :: Assertion
 testKernelSyntaxLoads = do
-  let obj = K.SortName "Obj"
-  let scope = K.ScopeId "ex:Kernel"
-  let v0 = K.Var scope 0
-  let s = K.Sort obj []
-  let t = K.mkVar s v0
-  K.termSort t @?= s
+  let obj = KSyn.SortName "Obj"
+  let scope = KSyn.ScopeId "ex:Kernel"
+  let v0 = KSyn.Var scope 0
+  let s = KSyn.Sort obj []
+  let t = KTerm.mkVar s v0
+  KSyn.termSort t @?= s
 
 kernelSig :: KSig.Signature
 kernelSig =
@@ -225,62 +225,62 @@ kernelSig =
     , KSig.sigOps = M.fromList [(eName, eDecl), (mName, mDecl)]
     }
   where
-    objName = K.SortName "Obj"
-    homName = K.SortName "Hom"
-    objSort = K.Sort objName []
-    eName = K.OpName "e"
-    mName = K.OpName "m"
+    objName = KSyn.SortName "Obj"
+    homName = KSyn.SortName "Hom"
+    objSort = KSyn.Sort objName []
+    eName = KSyn.OpName "e"
+    mName = KSyn.OpName "m"
     eDecl = KSig.OpDecl eName [] objSort
     mDecl =
-      let scope = K.ScopeId "op:m"
-          a = K.Var scope 0
-          b = K.Var scope 1
-      in KSig.OpDecl mName [K.Binder a objSort, K.Binder b objSort] objSort
+      let scope = KSyn.ScopeId "op:m"
+          a = KSyn.Var scope 0
+          b = KSyn.Var scope 1
+      in KSig.OpDecl mName [KSyn.Binder a objSort, KSyn.Binder b objSort] objSort
 
-objSort :: K.Sort
-objSort = K.Sort (K.SortName "Obj") []
+objSort :: KSyn.Sort
+objSort = KSyn.Sort (KSyn.SortName "Obj") []
 
-homSort :: K.Term -> K.Term -> K.Sort
-homSort a b = K.Sort (K.SortName "Hom") [a, b]
+homSort :: KSyn.Term -> KSyn.Term -> KSyn.Sort
+homSort a b = KSyn.Sort (KSyn.SortName "Hom") [a, b]
 
-kernelE :: K.Term
+kernelE :: KSyn.Term
 kernelE =
-  case K.mkOp kernelSig (K.OpName "e") [] of
+  case KTerm.mkOp kernelSig (KSyn.OpName "e") [] of
     Left err -> error (show err)
     Right t -> t
 
 testKernelMkOp :: Assertion
 testKernelMkOp = do
-  let scope = K.ScopeId "ex:Kernel"
-  let x = K.mkVar objSort (K.Var scope 0)
-  case K.mkOp kernelSig (K.OpName "m") [kernelE, x] of
+  let scope = KSyn.ScopeId "ex:Kernel"
+  let x = KTerm.mkVar objSort (KSyn.Var scope 0)
+  case KTerm.mkOp kernelSig (KSyn.OpName "m") [kernelE, x] of
     Left err -> assertFailure (show err)
-    Right t -> K.termSort t @?= objSort
+    Right t -> KSyn.termSort t @?= objSort
 
 testKernelApplySubstSort :: Assertion
 testKernelApplySubstSort = do
-  let scope = K.ScopeId "ex:Kernel"
-  let vx = K.Var scope 0
-  let x = K.mkVar objSort vx
+  let scope = KSyn.ScopeId "ex:Kernel"
+  let vx = KSyn.Var scope 0
+  let x = KTerm.mkVar objSort vx
   let s = homSort x x
   let subst = M.fromList [(vx, kernelE)]
   KSubst.applySubstSort subst s @?= homSort kernelE kernelE
 
 testKernelUnifySortIndices :: Assertion
 testKernelUnifySortIndices = do
-  let scope = K.ScopeId "ex:Kernel"
-  let vx = K.Var scope 0
-  let vy = K.Var scope 1
-  let x = K.mkVar objSort vx
-  let y = K.mkVar objSort vy
+  let scope = KSyn.ScopeId "ex:Kernel"
+  let vx = KSyn.Var scope 0
+  let vy = KSyn.Var scope 1
+  let x = KTerm.mkVar objSort vx
+  let y = KTerm.mkVar objSort vy
   let s1 = homSort x y
   let s2 = homSort kernelE kernelE
-  let t1 = K.Term { K.termSort = s1, K.termNode = K.TVar (K.Var scope 2) }
-  let t2 = K.Term { K.termSort = s2, K.termNode = K.TVar (K.Var scope 3) }
+  let t1 = KSyn.Term { KSyn.termSort = s1, KSyn.termNode = KSyn.TVar (KSyn.Var scope 2) }
+  let t2 = KSyn.Term { KSyn.termSort = s2, KSyn.termNode = KSyn.TVar (KSyn.Var scope 3) }
   case KUnify.unify t1 t2 of
     Nothing -> assertFailure "expected unifier"
     Just subst -> do
-      KSubst.applySubstSort subst (K.termSort t1) @?= KSubst.applySubstSort subst (K.termSort t2)
+      KSubst.applySubstSort subst (KSyn.termSort t1) @?= KSubst.applySubstSort subst (KSyn.termSort t2)
       KSubst.applySubstTerm subst x @?= kernelE
       KSubst.applySubstTerm subst y @?= kernelE
 

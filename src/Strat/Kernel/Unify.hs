@@ -14,18 +14,17 @@ unify t1 t2 = unifyTerm M.empty t1 t2
 matchTerm :: Subst -> Term -> Term -> Maybe Subst
 matchTerm subst pat target = do
   let p = applySubstTerm subst pat
-  let t = applySubstTerm subst target
-  subst1 <- matchSort subst (termSort p) (termSort t)
+  subst1 <- matchSort subst (termSort p) (termSort target)
   case termNode p of
     TVar v ->
       case M.lookup v subst1 of
-        Nothing -> Just (M.insert v t subst1)
+        Nothing -> Just (M.insert v target subst1)
         Just t' ->
-          if applySubstTerm subst1 t' == t
+          if applySubstTerm subst1 t' == target
             then Just subst1
             else Nothing
     TOp op args ->
-      case termNode t of
+      case termNode target of
         TOp op' args'
           | op == op' && length args == length args' ->
               foldl step (Just subst1) (zip args args')
@@ -37,8 +36,7 @@ matchTerm subst pat target = do
 matchSort :: Subst -> Sort -> Sort -> Maybe Subst
 matchSort subst s1 s2 = do
   let s1' = applySubstSort subst s1
-  let s2' = applySubstSort subst s2
-  case (s1', s2') of
+  case (s1', s2) of
     (Sort n1 args1, Sort n2 args2)
       | n1 == n2 && length args1 == length args2 ->
           foldl step (Just subst) (zip args1 args2)

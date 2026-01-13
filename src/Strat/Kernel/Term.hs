@@ -32,7 +32,7 @@ mkOp sig name args =
     step acc (ix, Binder v s, arg) = do
       subst <- acc
       let expectedSort = applySubstSort subst s
-      let actualSort = applySubstSort subst (termSort arg)
+      let actualSort = termSort arg
       if expectedSort == actualSort
         then pure (M.insert v arg subst)
         else Left (ArgSortMismatch name ix expectedSort actualSort)
