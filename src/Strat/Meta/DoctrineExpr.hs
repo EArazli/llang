@@ -1,10 +1,13 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Meta.DoctrineExpr where
 
 import Strat.Meta.Presentation
 import Strat.Meta.RewriteSystem
 import Strat.Meta.Rule
+import Strat.Meta.Term.Class
 import Strat.Meta.Term.Syms
+import Strat.Meta.Types
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -30,22 +33,26 @@ q ns x = qualifyName ns x
 qualifyName :: Text -> Text -> Text
 qualifyName ns x = ns <> "." <> x
 
-qualifyEquation :: SymRenamable t => Text -> Equation t -> Equation t
+qualifyEquation :: (SymRenamable t, TermLike t, ScopedVar (Var t)) => Text -> Equation t -> Equation t
 qualifyEquation ns e =
-  e
-    { eqName = qualifyName ns (eqName e)
-    , eqLHS  = renameSyms (qualifyName ns) (eqLHS e)
-    , eqRHS  = renameSyms (qualifyName ns) (eqRHS e)
-    }
+  let qn = qualifyName ns (eqName e)
+      nsEq = Ns (RuleId qn DirLR) 0
+      renameVarsNs = renameVars (setNs nsEq)
+      renameSym = qualifyName ns
+  in e
+      { eqName = qn
+      , eqLHS  = renameVarsNs (renameSyms renameSym (eqLHS e))
+      , eqRHS  = renameVarsNs (renameSyms renameSym (eqRHS e))
+      }
 
-qualifyPresentation :: SymRenamable t => Text -> Presentation t -> Presentation t
+qualifyPresentation :: (SymRenamable t, TermLike t, ScopedVar (Var t)) => Text -> Presentation t -> Presentation t
 qualifyPresentation ns pres =
   pres
     { presName = ns
     , presEqs = map (qualifyEquation ns) (presEqs pres)
     }
 
-elabDocExpr :: SymRenamable t => DocExpr t -> Either Text (Presentation t)
+elabDocExpr :: (SymRenamable t, TermLike t, ScopedVar (Var t)) => DocExpr t -> Either Text (Presentation t)
 elabDocExpr expr =
   case expr of
     Atom ns pres -> do
@@ -66,9 +73,15 @@ elabDocExpr expr =
       p <- elabDocExpr e
       let renameEqName n = M.findWithDefault n n m
       let eqs =
-            [ eq { eqName = renameEqName (eqName eq) }
-            | eq <- presEqs p
-            ]
+            [ let qn = renameEqName (eqName eq)
+                  nsEq = Ns (RuleId qn DirLR) 0
+                  renameVarsNs = renameVars (setNs nsEq)
+              in eq
+                  { eqName = qn
+                  , eqLHS = renameVarsNs (eqLHS eq)
+                  , eqRHS = renameVarsNs (eqRHS eq)
+                  }
+            | eq <- presEqs p ]
       checkUniqueEqNames eqs
       pure p { presEqs = eqs }
     RenameSyms m e -> do
@@ -89,18 +102,22 @@ elabDocExpr expr =
       case firstUnknown allSyms names of
         Just bad -> Left ("Unknown symbol in ShareSyms: " <> bad)
         Nothing -> do
-          let repMap = buildShareMap pairs
-          let renameSym s = M.findWithDefault s s repMap
-          let eqs =
-                [ eq
-                    { eqLHS = renameSyms renameSym (eqLHS eq)
-                    , eqRHS = renameSyms renameSym (eqRHS eq)
-                    }
-                | eq <- presEqs p
-                ]
-          pure p { presEqs = eqs }
+          let arities = symAritiesInPresentation p
+          case firstArityMismatch arities (shareComponents pairs) of
+            Just bad -> Left ("Arity mismatch in ShareSyms: " <> bad)
+            Nothing -> do
+              let repMap = buildShareMap pairs
+              let renameSym s = M.findWithDefault s s repMap
+              let eqs =
+                    [ eq
+                        { eqLHS = renameSyms renameSym (eqLHS eq)
+                        , eqRHS = renameSyms renameSym (eqRHS eq)
+                        }
+                    | eq <- presEqs p
+                    ]
+              pure p { presEqs = eqs }
 
-compileDocExpr :: SymRenamable t => RewritePolicy -> DocExpr t -> Either Text (RewriteSystem t)
+compileDocExpr :: (SymRenamable t, TermLike t, ScopedVar (Var t)) => RewritePolicy -> DocExpr t -> Either Text (RewriteSystem t)
 compileDocExpr pol expr = elabDocExpr expr >>= compileRewriteSystem pol
 
 checkUniqueEqNames :: [Equation t] -> Either Text ()
@@ -119,6 +136,13 @@ symsInPresentation :: SymRenamable t => Presentation t -> S.Set Text
 symsInPresentation pres =
   S.unions
     [ syms (eqLHS eq) `S.union` syms (eqRHS eq)
+    | eq <- presEqs pres
+    ]
+
+symAritiesInPresentation :: SymRenamable t => Presentation t -> M.Map Text (S.Set Int)
+symAritiesInPresentation pres =
+  M.unionsWith S.union
+    [ M.unionWith S.union (symArities (eqLHS eq)) (symArities (eqRHS eq))
     | eq <- presEqs pres
     ]
 
@@ -142,6 +166,25 @@ buildShareMap pairs =
     nodes = S.fromList [n | (a, b) <- pairs, n <- [a, b]]
     adj = buildAdj nodes pairs
     components = connectedComponents nodes adj
+
+shareComponents :: [(Text, Text)] -> [S.Set Text]
+shareComponents pairs =
+  let nodes = S.fromList [n | (a, b) <- pairs, n <- [a, b]]
+      adj = buildAdj nodes pairs
+  in connectedComponents nodes adj
+
+firstArityMismatch :: M.Map Text (S.Set Int) -> [S.Set Text] -> Maybe Text
+firstArityMismatch arities comps = go comps
+  where
+    go [] = Nothing
+    go (c : cs) =
+      case aritySets c of
+        [] -> go cs
+        (s : ss) ->
+          if all (== s) ss
+            then go cs
+            else Just (S.findMin c)
+    aritySets c = [M.findWithDefault S.empty n arities | n <- S.toList c]
 
 buildAdj :: S.Set Text -> [(Text, Text)] -> M.Map Text (S.Set Text)
 buildAdj nodes pairs =

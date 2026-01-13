@@ -61,12 +61,18 @@ instance TermLike Term where
   vars (TApp _ as) = S.unions (map vars as)
 
   applySubst (Subst s) tm =
-    case tm of
-      TVar v ->
-        case M.lookup v s of
-          Nothing -> tm
-          Just t  -> applySubst (Subst s) t
-      TApp f as -> TApp f (map (applySubst (Subst s)) as)
+    go S.empty tm
+    where
+      go seen term =
+        case term of
+          TVar v ->
+            case M.lookup v s of
+              Nothing -> term
+              Just t ->
+                if v `S.member` seen
+                  then TVar v
+                  else go (S.insert v seen) t
+          TApp f as -> TApp f (map (go seen) as)
 
   renameVars f tm =
     case tm of
@@ -82,6 +88,12 @@ instance SymRenamable Term where
 
   syms (TVar _) = S.empty
   syms (TApp (Sym s) args) = S.insert s (S.unions (map syms args))
+
+  symArities (TVar _) = M.empty
+  symArities (TApp (Sym s) args) =
+    let ar = M.singleton s (S.singleton (length args))
+        rest = M.unionsWith S.union (map symArities args)
+    in M.unionWith S.union ar rest
 
 instance Matchable Term where
   match pat target = Subst <$> go M.empty pat target

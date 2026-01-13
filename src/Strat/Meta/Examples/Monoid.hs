@@ -69,4 +69,4 @@ monoidRewriteSystem = compileRewriteSystem UseOnlyComputationalLR monoidPresenta
 monoidCriticalPairs :: Either Text [CriticalPair Term]
 monoidCriticalPairs = do
   rs <- monoidRewriteSystem
-  pure (criticalPairs CP_All (getRule rs) rs)
+  criticalPairs CP_All (getRule rs) rs

@@ -146,6 +146,14 @@ renameRuleNs ns' r =
     , rhs = renameVars (setNs ns') (rhs r)
     }
 
+expectCPs :: CPMode -> RewriteSystem Term -> IO [CriticalPair Term]
+expectCPs mode rs =
+  case criticalPairs mode (getRule rs) rs of
+    Left err -> do
+      _ <- assertFailure (show err)
+      pure []
+    Right cps -> pure cps
+
 presA :: Presentation Term
 presA =
   Presentation
@@ -564,7 +572,7 @@ testCriticalPairsRootOverlap = do
   let r1 = mkRule "r1" 0 (app "f" [TVar x]) (app "g" [TVar x])
   let r2 = mkRule "r2" 1 (app "f" [TVar y]) (app "h" [TVar y])
   let rs = mkRS [r1, r2]
-  let cps = criticalPairs CP_All (getRule rs) rs
+  cps <- expectCPs CP_All rs
   assertBool "expected root overlap critical pair"
     (any (\cp -> cpRule1 cp == rid1 && cpRule2 cp == rid2 && cpPosIn2 cp == [] && cpLeft cp /= cpRight cp) cps)
 
@@ -577,7 +585,7 @@ testCriticalPairsExcludeVarOverlap = do
   let r1 = mkRule "r1" 0 (app "f" [TVar x]) (app "g" [TVar x])
   let rVar = mkRule "var" 1 (TVar vvar) (app "h" [TVar vvar])
   let rs = mkRS [r1, rVar]
-  let cps = criticalPairs CP_All (getRule rs) rs
+  cps <- expectCPs CP_All rs
   assertBool "expected no overlaps into variable lhs"
     (all (\cp -> cpRule2 cp /= ridVar) cps)
 
@@ -588,7 +596,7 @@ testCriticalPairsExcludeInnerVarOverlap = do
   let r1 = mkRule "r1" 0 (constTerm "a") (constTerm "b")
   let r2 = mkRule "r2" 1 (app "f" [TVar x]) (app "g" [TVar x])
   let rs = mkRS [r1, r2]
-  let cps = criticalPairs CP_All (getRule rs) rs
+  cps <- expectCPs CP_All rs
   assertBool "expected no overlaps into variable position"
     (not (any (\cp -> cpRule2 cp == rid2 && cpPosIn2 cp == [0]) cps))
 
@@ -598,7 +606,8 @@ testCriticalPairsSelfOverlapFreshening = do
   let x = V (Ns rid 0) 0
   let r = mkRule "self" 0 (app "f" [TVar x]) (app "g" [TVar x])
   let rs = mkRS [r]
-  let cps = filter (\cp -> cpRule1 cp == rid && cpRule2 cp == rid) (criticalPairs CP_All (getRule rs) rs)
+  cpsAll <- expectCPs CP_All rs
+  let cps = filter (\cp -> cpRule1 cp == rid && cpRule2 cp == rid) cpsAll
   case cps of
     [] -> assertFailure "expected self-overlap critical pair"
     (cp : _) ->
@@ -626,10 +635,10 @@ testCriticalPairsCPModeFiltering = do
   let rs = mkRS [rS1, rS2, rC1]
   let cls r = ruleClass (getRule rs r)
   let pairIs cls1 cls2 cp = cls (cpRule1 cp) == cls1 && cls (cpRule2 cp) == cls2
-  let cpsStructural = criticalPairs CP_OnlyStructural (getRule rs) rs
+  cpsStructural <- expectCPs CP_OnlyStructural rs
   assertBool "expected only structural pairs"
     (not (null cpsStructural) && all (\cp -> pairIs Structural Structural cp) cpsStructural)
-  let cpsMixed = criticalPairs CP_StructuralVsComputational (getRule rs) rs
+  cpsMixed <- expectCPs CP_StructuralVsComputational rs
   assertBool "expected only mixed pairs"
     (not (null cpsMixed) && all (\cp -> pairIs Structural Computational cp || pairIs Computational Structural cp) cpsMixed)
 
@@ -642,7 +651,7 @@ testCriticalPairSoundness = do
   let r1 = mkRule "r1" 0 (app "f" [TVar x]) (app "g" [TVar x])
   let r2 = mkRule "r2" 1 (app "h" [app "f" [TVar y]]) (app "k" [TVar y])
   let rs = mkRS [r1, r2]
-  let cps = criticalPairs CP_All (getRule rs) rs
+  cps <- expectCPs CP_All rs
   case find (\cp -> cpRule1 cp == rid1 && cpRule2 cp == rid2 && cpPosIn2 cp == [0]) cps of
     Nothing -> assertFailure "expected critical pair at position [0]"
     Just cp -> do
