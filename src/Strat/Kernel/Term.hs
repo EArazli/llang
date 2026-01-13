@@ -7,6 +7,7 @@ module Strat.Kernel.Term
   , positions
   , subtermAt
   , replaceAt
+  , replaceAtChecked
   , renameScope
   , renameScopeVar
   , renameScopeSort
@@ -97,6 +98,23 @@ replaceAt t (i : is) newTerm =
               target' <- replaceAt target is newTerm
               let args' = before ++ (target' : after)
               pure Term { termSort = termSort t, termNode = TOp op args' }
+            _ -> Nothing
+      | otherwise -> Nothing
+    _ -> Nothing
+
+replaceAtChecked :: Signature -> Term -> Pos -> Term -> Maybe Term
+replaceAtChecked _ _ [] newTerm = Just newTerm
+replaceAtChecked sig t (i : is) newTerm =
+  case termNode t of
+    TOp op args
+      | i >= 0 && i < length args ->
+          case splitAt i args of
+            (before, target : after) -> do
+              target' <- replaceAtChecked sig target is newTerm
+              let args' = before ++ (target' : after)
+              case mkOp sig op args' of
+                Left _ -> Nothing
+                Right t' -> Just t'
             _ -> Nothing
       | otherwise -> Nothing
     _ -> Nothing

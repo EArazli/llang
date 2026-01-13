@@ -25,6 +25,7 @@ tests =
     , testCase "mkOp unknown op" testMkOpUnknown
     , testCase "mkOp arity mismatch" testMkOpArity
     , testCase "mkOp arg sort mismatch" testMkOpArgSort
+    , testCase "mkOp binder sort depends on earlier binder" testMkOpDependentBinder
     , testCase "positions preorder" testPositionsOrder
     , testCase "subtermAt/replaceAt" testSubtermReplace
     , testCase "renameScope touches only one scope" testRenameScope
@@ -90,6 +91,25 @@ testMkOpArgSort = do
           case mkOp sigBasic opF [ida] of
             Left (ArgSortMismatch _ _ _ _) -> pure ()
             other -> assertFailure ("expected ArgSortMismatch, got " <> show other)
+
+testMkOpDependentBinder :: Assertion
+testMkOpDependentBinder = do
+  let opP = OpName "p"
+  let vx = Var (ScopeId "op:p") 0
+  let vh = Var (ScopeId "op:p") 1
+  let x = mkVar objSort vx
+  let decl = OpDecl opP [Binder vx objSort, Binder vh (homSort x x)] objSort
+  let sig = sigBasic { sigOps = M.insert opP decl (sigOps sigBasic) }
+  let a = mkTerm sig "a" []
+  let b = mkTerm sig "b" []
+  let ida = mkTerm sig "id" [a]
+  let idb = mkTerm sig "id" [b]
+  case mkOp sig opP [a, ida] of
+    Left err -> assertFailure (show err)
+    Right _ -> pure ()
+  case mkOp sig opP [a, idb] of
+    Left (ArgSortMismatch _ _ _ _) -> pure ()
+    other -> assertFailure ("expected ArgSortMismatch, got " <> show other)
 
 testPositionsOrder :: Assertion
 testPositionsOrder = do

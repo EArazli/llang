@@ -10,15 +10,19 @@ module Strat.Kernel.RewriteSystem
 
 import Strat.Kernel.Presentation
 import Strat.Kernel.Rule
+import Strat.Kernel.Signature
 import Strat.Kernel.Syntax
+import Strat.Kernel.Term (varsTerm)
 import Strat.Kernel.Types
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
+import qualified Data.Text as T
 
 data RewriteSystem = RewriteSystem
   { rsRules   :: [Rule]
   , rsRuleMap :: M.Map RuleId Rule
+  , rsSig     :: Signature
   }
   deriving (Eq, Show)
 
@@ -46,9 +50,10 @@ compileRewriteSystem policy pres = do
   validatePresentation pres
   ensureUniqueNames (presEqs pres)
   let rules = buildRules policy (presEqs pres)
+  ensureVarCondition rules
   let rulesWithIx = zipWith (\ix r -> r { ruleIx = ix }) [0 ..] rules
   let ruleMap = M.fromList [(ruleId r, r) | r <- rulesWithIx]
-  pure RewriteSystem { rsRules = rulesWithIx, rsRuleMap = ruleMap }
+  pure RewriteSystem { rsRules = rulesWithIx, rsRuleMap = ruleMap, rsSig = presSig pres }
 
 ensureUniqueNames :: [Equation] -> Either Text ()
 ensureUniqueNames eqs =
@@ -107,3 +112,11 @@ mkRule dir eq l r =
     , lhs = l
     , rhs = r
     }
+
+ensureVarCondition :: [Rule] -> Either Text ()
+ensureVarCondition rules = mapM_ check rules
+  where
+    check r =
+      if varsTerm (rhs r) `S.isSubsetOf` varsTerm (lhs r)
+        then Right ()
+        else Left ("Rule introduces fresh variables: " <> T.pack (show (ruleId r)))

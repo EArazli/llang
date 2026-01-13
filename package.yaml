@@ -65,6 +65,7 @@ tests:
     other-modules:
     - Test.Backend
     - Test.Kernel.Basic
+    - Test.Kernel.Coherence
     - Test.Kernel.CriticalPairs
     - Test.Kernel.DoctrineExpr
     - Test.Kernel.DSL

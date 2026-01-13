@@ -5,6 +5,7 @@ import qualified Test.Kernel.Basic as KernelBasic
 import qualified Test.Kernel.RewriteSystem as KernelRewriteSystem
 import qualified Test.Kernel.Rewrite as KernelRewrite
 import qualified Test.Kernel.CriticalPairs as KernelCriticalPairs
+import qualified Test.Kernel.Coherence as KernelCoherence
 import qualified Test.Kernel.DoctrineExpr as KernelDoctrineExpr
 import qualified Test.Kernel.DSL as KernelDSL
 import qualified Test.Kernel.Relative as KernelRelative
@@ -20,6 +21,7 @@ main =
       , KernelRewriteSystem.tests
       , KernelRewrite.tests
       , KernelCriticalPairs.tests
+      , KernelCoherence.tests
       , KernelDoctrineExpr.tests
       , KernelDSL.tests
       , KernelRelative.tests

@@ -27,6 +27,9 @@ tests =
     , testCase "duplicate eq names rejected" testDuplicateEqNames
     , testCase "out-of-scope vars rejected" testOutOfScopeVars
     , testCase "equation sort mismatch rejected" testSortMismatch
+    , testCase "variable condition violated LR rejected" testVarConditionLR
+    , testCase "variable condition violated RL rejected" testVarConditionRL
+    , testCase "variable condition violated bidirectional rejected" testVarConditionBidir
     ]
 
 mkEq1 :: Text -> RuleClass -> Orientation -> (Term -> Term) -> (Term -> Term) -> Equation
@@ -135,3 +138,63 @@ testSortMismatch = do
   case compileRewriteSystem UseAllOriented (basePres [eq]) of
     Left _ -> pure ()
     Right _ -> assertFailure "expected sort mismatch error"
+
+testVarConditionLR :: Assertion
+testVarConditionLR = do
+  let scope = ScopeId "eq:r"
+  let vx = Var scope 0
+  let vy = Var scope 1
+  let x = mkVar objSort vx
+  let y = mkVar objSort vy
+  let eq =
+        Equation
+          { eqName = "r"
+          , eqClass = Computational
+          , eqOrient = LR
+          , eqTele = [Binder vx objSort, Binder vy objSort]
+          , eqLHS = mkTerm sigBasic "f" [x]
+          , eqRHS = mkTerm sigBasic "g" [y]
+          }
+  case compileRewriteSystem UseAllOriented (basePres [eq]) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected variable condition error"
+
+testVarConditionRL :: Assertion
+testVarConditionRL = do
+  let scope = ScopeId "eq:r"
+  let vx = Var scope 0
+  let vy = Var scope 1
+  let x = mkVar objSort vx
+  let y = mkVar objSort vy
+  let eq =
+        Equation
+          { eqName = "r"
+          , eqClass = Computational
+          , eqOrient = RL
+          , eqTele = [Binder vx objSort, Binder vy objSort]
+          , eqLHS = mkTerm sigBasic "f" [x]
+          , eqRHS = mkTerm sigBasic "g" [y]
+          }
+  case compileRewriteSystem UseAllOriented (basePres [eq]) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected variable condition error"
+
+testVarConditionBidir :: Assertion
+testVarConditionBidir = do
+  let scope = ScopeId "eq:r"
+  let vx = Var scope 0
+  let vy = Var scope 1
+  let x = mkVar objSort vx
+  let y = mkVar objSort vy
+  let eq =
+        Equation
+          { eqName = "r"
+          , eqClass = Computational
+          , eqOrient = Bidirectional
+          , eqTele = [Binder vx objSort, Binder vy objSort]
+          , eqLHS = mkTerm sigBasic "f" [x]
+          , eqRHS = mkTerm sigBasic "m" [x, y]
+          }
+  case compileRewriteSystem UseAllOriented (basePres [eq]) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected variable condition error"

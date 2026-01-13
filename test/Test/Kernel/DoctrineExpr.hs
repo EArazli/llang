@@ -15,6 +15,7 @@ import Strat.Kernel.Syntax
 import Strat.Kernel.Term
 import Strat.Kernel.Types
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Text (Text)
 import Test.Kernel.Fixtures
 
@@ -28,6 +29,7 @@ tests =
     , testCase "share ops with mismatch fails" testShareOpsMismatch
     , testCase "share sorts with mismatch fails" testShareSortsMismatch
     , testCase "rename eqs resolves collisions" testRenameEqs
+    , testCase "rename eqs updates scopes" testRenameEqsScopes
     , testCase "rename ops updates terms" testRenameOps
     , testCase "share unknown op fails" testShareUnknown
     ]
@@ -146,6 +148,21 @@ testRenameEqs = do
   case elabDocExpr expr of
     Left err -> assertFailure (show err)
     Right pres -> map eqName (presEqs pres) @?= ["C.r", "C.r2"]
+
+testRenameEqsScopes :: Assertion
+testRenameEqsScopes = do
+  let expr = RenameEqs (M.fromList [("A.r", "A.r2")]) (Atom "A" presA)
+  case elabDocExpr expr of
+    Left err -> assertFailure (show err)
+    Right pres ->
+      case presEqs pres of
+        (e1 : _) -> do
+          case eqTele e1 of
+            (Binder v _ : _) -> vScope v @?= ScopeId "eq:A.r2"
+            _ -> assertFailure "expected binder"
+          let scopes = varsTerm (eqLHS e1) `S.union` varsTerm (eqRHS e1)
+          assertBool "expected renamed scope" (ScopeId "eq:A.r2" `S.member` S.map vScope scopes)
+        _ -> assertFailure "expected equation"
 
 testRenameOps :: Assertion
 testRenameOps = do

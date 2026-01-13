@@ -13,7 +13,6 @@ module Strat.Kernel.Coherence
 import Strat.Kernel.CriticalPairs
 import Strat.Kernel.Rewrite
 import Strat.Kernel.RewriteSystem
-import Strat.Kernel.Rule
 import Strat.Kernel.Syntax (Term)
 import Strat.Kernel.Types
 import Data.Text (Text)
@@ -46,31 +45,30 @@ obligationsFromCPs = map (Obligation NeedsJoin)
 
 relativeObligations :: RewriteSystem -> Either Text [Obligation]
 relativeObligations rs = do
-  cpsStruct <- criticalPairs CP_OnlyStructural (getRule rs) rs
-  cpsMixed <- criticalPairs CP_StructuralVsComputational (getRule rs) rs
+  cpsStruct <- criticalPairs CP_OnlyStructural rs
+  cpsMixed <- criticalPairs CP_StructuralVsComputational rs
   let obsStruct = map (Obligation NeedsCommute) cpsStruct
   let obsMixed = map (Obligation NeedsJoin) cpsMixed
   pure (obsStruct <> obsMixed)
 
 relativeObligationsForRules :: S.Set RuleId -> RewriteSystem -> Either Text [Obligation]
 relativeObligationsForRules allowed rs = do
-  cpsStruct <- criticalPairsForRules allowed CP_OnlyStructural (getRule rs) rs
-  cpsMixed <- criticalPairsForRules allowed CP_StructuralVsComputational (getRule rs) rs
+  cpsStruct <- criticalPairsForRules allowed CP_OnlyStructural rs
+  cpsMixed <- criticalPairsForRules allowed CP_StructuralVsComputational rs
   let obsStruct = map (Obligation NeedsCommute) cpsStruct
   let obsMixed = map (Obligation NeedsJoin) cpsMixed
   pure (obsStruct <> obsMixed)
 
 validateJoiner
-  :: (RuleId -> Rule)
-  -> RewriteSystem
+  :: RewriteSystem
   -> CriticalPair
   -> Joiner
   -> Bool
-validateJoiner lookupRuleFn _rs cp joiner =
+validateJoiner rs cp joiner =
   case (applySteps (cpLeft cp) (leftDerivation joiner), applySteps (cpRight cp) (rightDerivation joiner)) of
     (Just lfinal, Just rfinal) ->
       lfinal == joinTerm joiner && rfinal == joinTerm joiner
     _ -> False
   where
     applySteps t steps = foldl step (Just t) steps
-    step acc s = acc >>= applyStep lookupRuleFn s
+    step acc s = acc >>= applyStep rs s

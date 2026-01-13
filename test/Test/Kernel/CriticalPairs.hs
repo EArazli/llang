@@ -17,6 +17,7 @@ import Strat.Kernel.Unify
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
+import qualified Data.Text as T
 import Test.Kernel.Fixtures
 
 tests :: TestTree
@@ -24,14 +25,14 @@ tests =
   testGroup
     "Kernel.CriticalPairs"
     [ testCase "root overlap included" testRootOverlap
-    , testCase "variable overlap excluded" testVarOverlap
-    , testCase "inner variable overlap excluded" testInnerVarOverlap
+    , testCase "variable overlap included" testVarOverlap
+    , testCase "inner variable overlap included" testInnerVarOverlap
     , testCase "self-overlap freshens scopes" testSelfOverlapFreshening
     , testCase "CPMode filtering" testCPModeFiltering
     , testCase "critical pair soundness" testSoundness
-    , testCase "non-left-linear rule rejected" testNonLinearRejected
+    , testCase "non-left-linear rule allowed" testNonLinearAllowed
     , testCase "criticalPairsBounded subset" testBoundedSubset
-    , testCase "criticalPairsForRules ignores non-linear" testForRulesIgnoresNonLinear
+    , testCase "criticalPairsForRules respects allowed set" testForRulesSubset
     ]
 
 mkEqUnary :: Text -> Text -> Text -> RuleClass -> Equation
@@ -86,7 +87,7 @@ testRootOverlap = do
   let eq1 = mkEqUnary "r1" "f" "g" Computational
   let eq2 = mkEqUnary "r2" "f" "h" Computational
   let rs = mkRS [eq1, eq2]
-  case criticalPairs CP_All (getRule rs) rs of
+  case criticalPairs CP_All rs of
     Left err -> assertFailure (show err)
     Right cps -> assertBool "expected root overlap" (any ((== []) . cpPosIn2) cps)
 
@@ -106,50 +107,65 @@ testVarOverlap = do
           , eqRHS = mkTerm sigBasic "h" [x]
           }
   let rs = mkRS [eq1, eq2]
-  case criticalPairs CP_All (getRule rs) rs of
+  case criticalPairs CP_All rs of
     Left err -> assertFailure (show err)
     Right cps ->
       assertBool
-        "expected no overlaps into variable lhs"
-        (not (any (\cp -> cpRule2 cp == RuleId "r2" DirLR) cps))
+        "expected overlap into variable lhs"
+        (any (\cp -> cpRule2 cp == RuleId "r2" DirLR && cpPosIn2 cp == []) cps)
 
 testInnerVarOverlap :: Assertion
 testInnerVarOverlap = do
+  let scope = ScopeId "eq:dup"
+  let vx = Var scope 0
+  let x = mkVar objSort vx
   let eq1 = mkEqConst "r1" "a" "b" Computational
-  let eq2 = mkEqUnary "r2" "h" "k" Computational
+  let eq2 =
+        Equation
+          { eqName = "dup"
+          , eqClass = Computational
+          , eqOrient = LR
+          , eqTele = [Binder vx objSort]
+          , eqLHS = mkTerm sigBasic "m" [x, x]
+          , eqRHS = mkTerm sigBasic "f" [x]
+          }
   let rs = mkRS [eq1, eq2]
-  case criticalPairs CP_All (getRule rs) rs of
+  case criticalPairs CP_All rs of
     Left err -> assertFailure (show err)
     Right cps ->
       assertBool
-        "expected no inner variable overlap"
-        (not (any (\cp -> cpRule1 cp == RuleId "r1" DirLR && cpRule2 cp == RuleId "r2" DirLR && cpPosIn2 cp == [0]) cps))
+        "expected inner variable overlap"
+        (any (\cp -> cpRule1 cp == RuleId "r1" DirLR && cpRule2 cp == RuleId "dup" DirLR && cpPosIn2 cp == [0]) cps)
 
 testSelfOverlapFreshening :: Assertion
 testSelfOverlapFreshening = do
   let eq1 = mkEqUnary "r1" "f" "g" Computational
   let rs = mkRS [eq1]
-  case criticalPairs CP_All (getRule rs) rs of
+  case criticalPairs CP_All rs of
     Left err -> assertFailure (show err)
     Right cps -> do
       let scopes =
             case filter (\cp -> cpRule1 cp == RuleId "r1" DirLR && cpRule2 cp == RuleId "r1" DirLR) cps of
               [] -> S.empty
               (cp : _) -> scopesInSubst (cpMgu cp)
-      S.size scopes @?= 2
+      let has0 = any (T.isPrefixOf "cp:r1:0:") (map renderScope (S.toList scopes))
+      let has1 = any (T.isPrefixOf "cp:r1:1:") (map renderScope (S.toList scopes))
+      assertBool "expected scopes from both sides" (has0 && has1)
+  where
+    renderScope (ScopeId t) = t
 
 testCPModeFiltering :: Assertion
 testCPModeFiltering = do
   let eqS = mkEqUnary "s" "f" "g" Structural
   let eqC = mkEqUnary "c" "f" "h" Computational
   let rs = mkRS [eqS, eqC]
-  case criticalPairs CP_OnlyStructural (getRule rs) rs of
+  case criticalPairs CP_OnlyStructural rs of
     Left err -> assertFailure (show err)
     Right cps ->
       assertBool
         "expected only structural pairs"
         (all (\cp -> cpRule1 cp == RuleId "s" DirLR && cpRule2 cp == RuleId "s" DirLR) cps)
-  case criticalPairs CP_StructuralVsComputational (getRule rs) rs of
+  case criticalPairs CP_StructuralVsComputational rs of
     Left err -> assertFailure (show err)
     Right cps ->
       assertBool
@@ -161,7 +177,7 @@ testSoundness = do
   let eq1 = mkEqUnary "r1" "f" "g" Computational
   let eq2 = mkEqNested "r2"
   let rs = mkRS [eq1, eq2]
-  case criticalPairs CP_All (getRule rs) rs of
+  case criticalPairs CP_All rs of
     Left err -> assertFailure (show err)
     Right cps ->
       case filter (\cp -> cpRule1 cp == RuleId "r1" DirLR && cpRule2 cp == RuleId "r2" DirLR) cps of
@@ -169,22 +185,15 @@ testSoundness = do
         (cp : _) -> do
           let r1 = getRule rs (RuleId "r1" DirLR)
           let r2 = getRule rs (RuleId "r2" DirLR)
-          let renameRule scope r =
-                let renameAll t =
-                      foldl
-                        (\acc old -> renameScope old scope acc)
-                        t
-                        (S.toList (scopesInTerm t))
-                in r { lhs = renameAll (lhs r), rhs = renameAll (rhs r) }
-          let r1' = renameRule (ScopeId "cp:r1:0") r1
-          let r2' = renameRule (ScopeId "cp:r2:1") r2
+          let r1' = renameRule "0" r1
+          let r2' = renameRule "1" r2
           let sub = case subtermAt (lhs r2') (cpPosIn2 cp) of
                       Nothing -> error "missing subterm"
                       Just t -> t
           case unify (lhs r1') sub of
             Nothing -> assertFailure "expected mgu"
             Just mgu -> do
-              let replaced = case replaceAt (lhs r2') (cpPosIn2 cp) (rhs r1') of
+              let replaced = case replaceAtChecked sigBasic (lhs r2') (cpPosIn2 cp) (rhs r1') of
                                 Nothing -> error "replace failed"
                                 Just t -> t
               let peak = applySubstTerm mgu (lhs r2')
@@ -193,9 +202,40 @@ testSoundness = do
               cpPeak cp @?= peak
               cpLeft cp @?= left
               cpRight cp @?= right
+  where
+    renameRule tag r =
+      let scopes = scopesInTerm (lhs r) `S.union` scopesInTerm (rhs r)
+          mapping =
+            M.fromList
+              [ (old, ScopeId ("cp:" <> ridEq (ruleId r) <> ":" <> tag <> ":" <> renderScope old))
+              | old <- S.toList scopes
+              ]
+      in r
+          { lhs = renameScopesWith mapping (lhs r)
+          , rhs = renameScopesWith mapping (rhs r)
+          }
 
-testNonLinearRejected :: Assertion
-testNonLinearRejected = do
+    renameScopesWith m tm =
+      Term
+        { termSort = renameSort m (termSort tm)
+        , termNode =
+            case termNode tm of
+              TVar v -> TVar (renameVar m v)
+              TOp op args -> TOp op (map (renameScopesWith m) args)
+        }
+
+    renameVar m v =
+      case M.lookup (vScope v) m of
+        Nothing -> v
+        Just new -> v { vScope = new }
+
+    renameSort m (Sort name idx) =
+      Sort name (map (renameScopesWith m) idx)
+
+    renderScope (ScopeId t) = t
+
+testNonLinearAllowed :: Assertion
+testNonLinearAllowed = do
   let scope = ScopeId "eq:dup"
   let vx = Var scope 0
   let x = mkVar objSort vx
@@ -209,25 +249,25 @@ testNonLinearRejected = do
           , eqRHS = mkTerm sigBasic "f" [x]
           }
   let rs = mkRS [eq1]
-  case criticalPairs CP_All (getRule rs) rs of
-    Left _ -> pure ()
-    Right _ -> assertFailure "expected non-left-linear error"
+  case criticalPairs CP_All rs of
+    Left err -> assertFailure (show err)
+    Right _ -> pure ()
 
 testBoundedSubset :: Assertion
 testBoundedSubset = do
   let eq1 = mkEqUnary "r1" "f" "g" Computational
   let eq2 = mkEqNested "r2"
   let rs = mkRS [eq1, eq2]
-  case criticalPairs CP_All (getRule rs) rs of
+  case criticalPairs CP_All rs of
     Left err -> assertFailure (show err)
     Right cps ->
-      case criticalPairsBounded 1 CP_All (getRule rs) rs of
+      case criticalPairsBounded 1 CP_All rs of
         Left err -> assertFailure (show err)
         Right bounded ->
           assertBool "bounded should be subset" (length bounded <= length cps)
 
-testForRulesIgnoresNonLinear :: Assertion
-testForRulesIgnoresNonLinear = do
+testForRulesSubset :: Assertion
+testForRulesSubset = do
   let eq1 = mkEqUnary "r1" "f" "g" Computational
   let scope = ScopeId "eq:dup"
   let vx = Var scope 0
@@ -243,9 +283,11 @@ testForRulesIgnoresNonLinear = do
           }
   let rs = mkRS [eq1, eq2]
   let allowed = S.singleton (RuleId "r1" DirLR)
-  case criticalPairsForRules allowed CP_All (getRule rs) rs of
+  case criticalPairsForRules allowed CP_All rs of
     Left err -> assertFailure (show err)
-    Right _ -> pure ()
+    Right cps ->
+      assertBool "expected only allowed rule ids"
+        (all (\cp -> cpRule1 cp `S.member` allowed && cpRule2 cp `S.member` allowed) cps)
 
 scopesInSubst :: Subst -> S.Set ScopeId
 scopesInSubst subst =

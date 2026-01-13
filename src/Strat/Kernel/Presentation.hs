@@ -9,6 +9,7 @@ import Strat.Kernel.Rule
 import Strat.Kernel.Signature
 import Strat.Kernel.Syntax
 import Data.Text (Text)
+import qualified Data.List as L
 import qualified Data.Set as S
 
 data Presentation = Presentation
@@ -29,11 +30,27 @@ validateEquation eq = do
           used = varsTerm (eqLHS eq) `S.union` varsTerm (eqRHS eq)
           bad = used `S.difference` allowed
       in if S.null bad
-           then Right ()
+           then validateEqScopes eq
            else Left ("Equation has out-of-scope vars: " <> eqName eq)
 
 validatePresentation :: Presentation -> Either Text ()
 validatePresentation pres = mapM_ validateEquation (presEqs pres)
+
+validateEqScopes :: Equation -> Either Text ()
+validateEqScopes eq = do
+  let expectedScope = ScopeId ("eq:" <> eqName eq)
+  let vars = map bVar (eqTele eq)
+  case filter (\v -> vScope v /= expectedScope) vars of
+    (v : _) -> Left ("Equation has invalid binder scope: " <> eqName eq <> " (" <> renderScope (vScope v) <> ")")
+    [] ->
+      let locals = map vLocal vars
+          expected = [0 .. length vars - 1]
+      in if L.sort locals == expected
+           then Right ()
+           else Left ("Equation has non-contiguous locals: " <> eqName eq)
+
+renderScope :: ScopeId -> Text
+renderScope (ScopeId t) = t
 
 varsTerm :: Term -> S.Set Var
 varsTerm term =

@@ -15,6 +15,7 @@ import Strat.Kernel.Types
 import Strat.Kernel.Rewrite.Indexed as Indexed
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Test.Kernel.Fixtures
 
 tests :: TestTree
@@ -25,6 +26,8 @@ tests =
     , testCase "chooseRedex prefers outermost" testChooseRedexOutermost
     , testCase "chooseRedex tie-breaks by ruleIx" testChooseRedexRuleIx
     , testCase "applyStep strict" testApplyStepStrict
+    , testCase "rewrite freshens rule vars" testRewriteFreshensVars
+    , testCase "rewrite updates dependent sorts" testRewriteUpdatesSort
     , testCase "normalize uses chooseRedex" testNormalizeUsesChooseRedex
     , testCase "rewriteOnce indexed equals rewriteOnce" testRewriteOnceIndexed
     ]
@@ -126,7 +129,39 @@ testApplyStepStrict = do
           , stepSubst = M.empty
           }
   let term = mkTerm sigBasic "h" [mkTerm sigBasic "a" []]
-  applyStep (getRule rs) badStep term @?= Nothing
+  applyStep rs badStep term @?= Nothing
+
+testRewriteFreshensVars :: Assertion
+testRewriteFreshensVars = do
+  let eq = mkEqUnary "r" "f" "g"
+  let rs = mkRS [eq]
+  let scope = ScopeId "eq:r"
+  let vx = Var scope 0
+  let x = mkVar objSort vx
+  let term = mkTerm sigBasic "f" [x]
+  case rewriteOnce rs term of
+    [] -> assertFailure "expected redex"
+    (r : _) -> do
+      let substScopes = S.map vScope (S.fromList (M.keys (stepSubst (redexStep r))))
+      assertBool "expected freshened scope" (not (scope `S.member` substScopes))
+      case termNode (redexTo r) of
+        TOp _ [arg] ->
+          case termNode arg of
+            TVar v -> vScope v @?= scope
+            _ -> assertFailure "expected variable argument"
+        _ -> assertFailure "expected unary op"
+
+testRewriteUpdatesSort :: Assertion
+testRewriteUpdatesSort = do
+  let eq = mkEqConst "r1" Computational LR "a" "b"
+  let rs = mkRS [eq]
+  let a = mkTerm sigBasic "a" []
+  let b = mkTerm sigBasic "b" []
+  let term = mkTerm sigBasic "id" [a]
+  let reds = rewriteOnce rs term
+  case filter (\r -> stepPos (redexStep r) == [0]) reds of
+    [] -> assertFailure "expected inner redex"
+    (r : _) -> termSort (redexTo r) @?= homSort b b
 
 testNormalizeUsesChooseRedex :: Assertion
 testNormalizeUsesChooseRedex = do

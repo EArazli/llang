@@ -11,11 +11,11 @@ module Strat.Kernel.CriticalPairs
 import Strat.Kernel.Rule
 import Strat.Kernel.RewriteSystem
 import Strat.Kernel.Subst
-import Strat.Kernel.Syntax (Term(..), TermNode (..), ScopeId (..), Var)
+import Strat.Kernel.Syntax (Term(..), TermNode (..), ScopeId (..), Var(..), Sort(..))
 import Strat.Kernel.Term
+import Strat.Kernel.Signature
 import Strat.Kernel.Types
 import Strat.Kernel.Unify (unify)
-import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -41,52 +41,41 @@ data CPMode
 
 criticalPairs
   :: CPMode
-  -> (RuleId -> Rule)
   -> RewriteSystem
   -> Either Text [CriticalPair]
-criticalPairs mode _lookup rs =
-  criticalPairsWith mode (rulesInOrder rs)
+criticalPairs mode rs =
+  criticalPairsWith (rsSig rs) mode (rulesInOrder rs)
 
 criticalPairsBounded
   :: Int
   -> CPMode
-  -> (RuleId -> Rule)
   -> RewriteSystem
   -> Either Text [CriticalPair]
-criticalPairsBounded maxSize mode lookupFn rs = do
-  cps <- criticalPairs mode lookupFn rs
+criticalPairsBounded maxSize mode rs = do
+  cps <- criticalPairs mode rs
   pure [cp | cp <- cps, termSize (cpPeak cp) <= maxSize]
 
 criticalPairsForRules
   :: S.Set RuleId
   -> CPMode
-  -> (RuleId -> Rule)
   -> RewriteSystem
   -> Either Text [CriticalPair]
-criticalPairsForRules allowed mode _lookup rs =
-  criticalPairsWith mode (filter (\r -> ruleId r `S.member` allowed) (rulesInOrder rs))
+criticalPairsForRules allowed mode rs =
+  criticalPairsWith (rsSig rs) mode (filter (\r -> ruleId r `S.member` allowed) (rulesInOrder rs))
 
-criticalPairsWith :: CPMode -> [Rule] -> Either Text [CriticalPair]
-criticalPairsWith mode rules = do
-  case firstNonLinear of
-    Just rid -> Left ("Non-left-linear rule in criticalPairs: " <> rid)
-    Nothing ->
-      Right
-        [ cp
-        | r1 <- rules
-        , r2 <- rules
-        , allowedPair mode r1 r2
-        , cp <- overlaps r1 r2
-        ]
+criticalPairsWith :: Signature -> CPMode -> [Rule] -> Either Text [CriticalPair]
+criticalPairsWith sig mode rules =
+  Right
+    [ cp
+    | r1 <- rules
+    , r2 <- rules
+    , allowedPair mode r1 r2
+    , cp <- overlaps sig r1 r2
+    ]
   where
-    firstNonLinear =
-      case L.find (not . isLeftLinear . lhs) rules of
-        Nothing -> Nothing
-        Just r -> Just (ridEq (ruleId r))
-
-    overlaps r1 r2 =
-      let r1' = renameRule (ScopeId ("cp:" <> ridEq (ruleId r1) <> ":0")) r1
-          r2' = renameRule (ScopeId ("cp:" <> ridEq (ruleId r2) <> ":1")) r2
+    overlaps sig' r1 r2 =
+      let r1' = renameRule "0" r1
+          r2' = renameRule "1" r2
       in
       [ CriticalPair
           { cpRule1 = ruleId r1
@@ -99,23 +88,23 @@ criticalPairsWith mode rules = do
           }
       | pos <- positions (lhs r2')
       , Just sub <- [subtermAt (lhs r2') pos]
-      , not (isVar sub)
       , Just mgu <- [unify (lhs r1') sub]
-      , Just replaced <- [replaceAt (lhs r2') pos (rhs r1')]
+      , Just replaced <- [replaceAtChecked sig' (lhs r2') pos (rhs r1')]
       , let peak = applySubstTerm mgu (lhs r2')
       , let left = applySubstTerm mgu replaced
       , let right = applySubstTerm mgu (rhs r2')
       ]
 
-    renameRule scope r =
-      let renameAll t =
-            foldl
-              (\acc old -> renameScope old scope acc)
-              t
-              (S.toList (scopesInTerm t))
+    renameRule tag r =
+      let scopes = scopesInTerm (lhs r) `S.union` scopesInTerm (rhs r)
+          mapping =
+            M.fromList
+              [ (old, ScopeId ("cp:" <> ridEq (ruleId r) <> ":" <> tag <> ":" <> renderScope old))
+              | old <- S.toList scopes
+              ]
       in r
-          { lhs = renameAll (lhs r)
-          , rhs = renameAll (rhs r)
+          { lhs = renameScopesWith mapping (lhs r)
+          , rhs = renameScopesWith mapping (rhs r)
           }
 
     allowedPair CP_All _ _ = True
@@ -125,15 +114,24 @@ criticalPairsWith mode rules = do
       (ruleClass r1 == Structural && ruleClass r2 == Computational)
         || (ruleClass r1 == Computational && ruleClass r2 == Structural)
 
-    isLeftLinear term =
-      all (<= (1 :: Int)) (M.elems counts)
-      where
-        counts :: M.Map Var Int
-        counts = foldl countVar M.empty (positions term)
-        countVar m pos =
-          case subtermAt term pos >>= asVar of
-            Nothing -> m
-            Just v -> M.insertWith (+) v 1 m
+    renameScopesWith m tm =
+      Term
+        { termSort = renameSort m (termSort tm)
+        , termNode =
+            case termNode tm of
+              TVar v -> TVar (renameVar m v)
+              TOp op args -> TOp op (map (renameScopesWith m) args)
+        }
+
+    renameVar m v =
+      case M.lookup (vScope v) m of
+        Nothing -> v
+        Just new -> v { vScope = new }
+
+    renameSort m (Sort name idx) =
+      Sort name (map (renameScopesWith m) idx)
+
+    renderScope (ScopeId t) = t
 
 termSize :: Term -> Int
 termSize tm =
