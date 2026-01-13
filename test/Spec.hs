@@ -5,6 +5,7 @@ import Test.Tasty
 import Test.Tasty.HUnit
 import Data.List (find)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import Strat.Meta.Coherence
@@ -29,6 +30,17 @@ import qualified Strat.Kernel.RewriteSystem as KRS
 import qualified Strat.Kernel.CriticalPairs as KCP
 import qualified Strat.Kernel.Coherence as KCo
 import qualified Strat.Kernel.Rewrite as KRew
+import qualified Strat.Kernel.DoctrineExpr as KDoc
+import qualified Strat.Kernel.Rule as KRule
+import qualified Strat.Kernel.Presentation as KPres
+import qualified Strat.Kernel.Types as KTypes
+import qualified Strat.Kernel.DSL.Elab as KDSL
+import qualified Strat.Kernel.Relative as KRel
+import qualified Strat.Kernel.Rewrite.Indexed as KIdx
+import qualified Strat.Surface as Surf
+import qualified Strat.Surface.Combinator as SurfC
+import qualified Strat.Backend as KBackend
+import qualified Strat.Backend.Concat as KCat
 
 main :: IO ()
 main = defaultMain tests
@@ -95,6 +107,20 @@ tests =
         , testCase "share precedence" testDSLSharePrecedence
         ]
     , testGroup
+        "KernelDSL"
+        [ testCase "load succeeds" testKernelDSLLoad
+        , testCase "AB disjoint" testKernelDSLDisjoint
+        , testCase "ABshared enables cross-apply" testKernelDSLShare
+        , testCase "Base@C & Ext@C works" testKernelDSLExtendsLike
+        , testCase "Cbad duplicate eq names fails" testKernelDSLDuplicateEq
+        , testCase "rename ops works" testKernelDSLRenameOps
+        , testCase "share unknown op fails" testKernelDSLShareUnknown
+        , testCase "RL orientation parses" testKernelDSLRLOrient
+        , testCase "associativity preserves order" testKernelDSLAssocOrdering
+        , testCase "share precedence" testKernelDSLSharePrecedence
+        , testCase "share sorts merges" testKernelDSLShareSorts
+        ]
+    , testGroup
         "Kernel"
         [ testCase "Kernel.Syntax loads" testKernelSyntaxLoads
         , testCase "Kernel.mkOp sanity" testKernelMkOp
@@ -106,6 +132,32 @@ tests =
         , testCase "Kernel rewriteOnce monoid unit" testKernelRewriteOnceMonoid
         , testCase "Kernel monoid critical pairs" testKernelMonoidCriticalPairs
         , testCase "Kernel monoid obligations" testKernelMonoidObligations
+        , testCase "Kernel DoctrineExpr disjoint qualifies" testKDocDisjointQualifies
+        , testCase "Kernel DoctrineExpr disjoint no cross" testKDocDisjointNoCross
+        , testCase "Kernel DoctrineExpr share ops" testKDocShareOps
+        , testCase "Kernel DoctrineExpr extends-like" testKDocExtendsLike
+        , testCase "Kernel DoctrineExpr duplicate eq names" testKDocDuplicateEqNames
+        , testCase "Kernel DoctrineExpr rename eqs" testKDocRenameEqs
+        , testCase "Kernel DoctrineExpr rename ops" testKDocRenameOps
+        , testCase "Kernel DoctrineExpr share unknown op" testKDocShareUnknownOp
+        , testCase "Kernel relative normalizeW" testKernelRelativeNormalizeW
+        , testCase "Kernel relative normalizeR_mod_W" testKernelRelativeNormalizeRModW
+        , testCase "Kernel relative obligations" testKernelRelativeObligations
+    , testCase "Kernel rewriteOnce indexed" testKernelRewriteIndexed
+    , testCase "Kernel criticalPairs bounded" testKernelCriticalPairsBounded
+    , testCase "Kernel criticalPairs for rules" testKernelCriticalPairsForRules
+    , testCase "Kernel criticalPairs for rules ignores non-linear" testKernelCriticalPairsForRulesIgnoresNonLinear
+    ]
+    , testGroup
+        "Surface"
+        [ testCase "combinator elaborates" testSurfaceCombinatorElab
+        , testCase "combinator unknown op" testSurfaceCombinatorUnknownOp
+        , testCase "combinator unknown var" testSurfaceCombinatorUnknownVar
+        ]
+    , testGroup
+        "Backend"
+        [ testCase "evalTerm basic" testBackendEval
+        , testCase "compileTerm basic" testBackendCompile
         ]
     ]
 
@@ -260,6 +312,138 @@ kernelE =
     Left err -> error (show err)
     Right t -> t
 
+docSig :: KSig.Signature
+docSig =
+  KSig.Signature
+    { KSig.sigSortCtors = M.fromList [(docObjName, KSig.SortCtor docObjName [])]
+    , KSig.sigOps =
+        M.fromList
+          [ (op "f", unary "f")
+          , (op "g", unary "g")
+          , (op "h", unary "h")
+          , (op "k", unary "k")
+          , (op "z", constOp "z")
+          ]
+    }
+  where
+    docObjName = KSyn.SortName "Obj"
+    op = KSyn.OpName
+    unary name =
+      let scope = KSyn.ScopeId ("op:" <> name)
+          v0 = KSyn.Var scope 0
+          s = KSyn.Sort docObjName []
+      in KSig.OpDecl (op name) [KSyn.Binder v0 s] s
+    constOp name =
+      let s = KSyn.Sort docObjName []
+      in KSig.OpDecl (op name) [] s
+
+docObjSort :: KSyn.Sort
+docObjSort = KSyn.Sort (KSyn.SortName "Obj") []
+
+docTerm :: Text -> [KSyn.Term] -> KSyn.Term
+docTerm name args =
+  case KTerm.mkOp docSig (KSyn.OpName name) args of
+    Left err -> error (show err)
+    Right t -> t
+
+mkEq1 :: Text -> (KSyn.Term -> KSyn.Term) -> (KSyn.Term -> KSyn.Term) -> KRule.Equation
+mkEq1 name lhsBuilder rhsBuilder =
+  let scope = KSyn.ScopeId ("eq:" <> name)
+      vx = KSyn.Var scope 0
+      x = KTerm.mkVar docObjSort vx
+  in KRule.Equation
+      { KRule.eqName = name
+      , KRule.eqClass = KTypes.Computational
+      , KRule.eqOrient = KTypes.LR
+      , KRule.eqTele = [KSyn.Binder vx docObjSort]
+      , KRule.eqLHS = lhsBuilder x
+      , KRule.eqRHS = rhsBuilder x
+      }
+
+mkEq1Class :: Text -> KTypes.RuleClass -> (KSyn.Term -> KSyn.Term) -> (KSyn.Term -> KSyn.Term) -> KRule.Equation
+mkEq1Class name cls lhsBuilder rhsBuilder =
+  let scope = KSyn.ScopeId ("eq:" <> name)
+      vx = KSyn.Var scope 0
+      x = KTerm.mkVar docObjSort vx
+  in KRule.Equation
+      { KRule.eqName = name
+      , KRule.eqClass = cls
+      , KRule.eqOrient = KTypes.LR
+      , KRule.eqTele = [KSyn.Binder vx docObjSort]
+      , KRule.eqLHS = lhsBuilder x
+      , KRule.eqRHS = rhsBuilder x
+      }
+
+relSig :: KSig.Signature
+relSig =
+  KSig.Signature
+    { KSig.sigSortCtors = M.fromList [(docObjName, KSig.SortCtor docObjName [])]
+    , KSig.sigOps =
+        M.fromList
+          [ (op "f", unary "f")
+          , (op "g", unary "g")
+          , (op "s", unary "s")
+          , (op "z", constOp "z")
+          ]
+    }
+  where
+    docObjName = KSyn.SortName "Obj"
+    op = KSyn.OpName
+    unary name =
+      let scope = KSyn.ScopeId ("op:" <> name)
+          v0 = KSyn.Var scope 0
+          s = KSyn.Sort docObjName []
+      in KSig.OpDecl (op name) [KSyn.Binder v0 s] s
+    constOp name =
+      let s = KSyn.Sort docObjName []
+      in KSig.OpDecl (op name) [] s
+
+relTerm :: Text -> [KSyn.Term] -> KSyn.Term
+relTerm name args =
+  case KTerm.mkOp relSig (KSyn.OpName name) args of
+    Left err -> error (show err)
+    Right t -> t
+
+kPresA :: KPres.Presentation
+kPresA =
+  KPres.Presentation
+    { KPres.presName = "A"
+    , KPres.presSig = docSig
+    , KPres.presEqs =
+        [ mkEq1 "r" (\x -> docTerm "f" [x]) (\x -> docTerm "g" [x])
+        ]
+    }
+
+kPresB :: KPres.Presentation
+kPresB =
+  KPres.Presentation
+    { KPres.presName = "B"
+    , KPres.presSig = docSig
+    , KPres.presEqs =
+        [ mkEq1 "r" (\x -> docTerm "f" [x]) (\x -> docTerm "h" [x])
+        ]
+    }
+
+kPresBase :: KPres.Presentation
+kPresBase =
+  KPres.Presentation
+    { KPres.presName = "Base"
+    , KPres.presSig = docSig
+    , KPres.presEqs =
+        [ mkEq1 "base" (\x -> docTerm "f" [x]) id
+        ]
+    }
+
+kPresExt :: KPres.Presentation
+kPresExt =
+  KPres.Presentation
+    { KPres.presName = "Ext"
+    , KPres.presSig = docSig
+    , KPres.presEqs =
+        [ mkEq1 "ext" (\x -> docTerm "k" [docTerm "f" [x]]) id
+        ]
+    }
+
 testKernelMkOp :: Assertion
 testKernelMkOp = do
   let scope = KSyn.ScopeId "ex:Kernel"
@@ -356,6 +540,308 @@ testKernelMonoidObligations =
           let obs = KCo.obligationsFromCPs cps
           in assertBool "expected obligations from critical pairs" (not (null obs))
 
+testKernelRelativeNormalizeW :: Assertion
+testKernelRelativeNormalizeW = do
+  let eqStruct = mkEq1Class "struct" KTypes.Structural (\x -> relTerm "s" [x]) id
+  let eqComp = mkEq1Class "comp" KTypes.Computational (\x -> relTerm "f" [x]) (\x -> relTerm "g" [x])
+  let pres =
+        KPres.Presentation
+          { KPres.presName = "Rel"
+          , KPres.presSig = relSig
+          , KPres.presEqs = [eqStruct, eqComp]
+          }
+  case KRS.compileRewriteSystem KRS.UseAllOriented pres of
+    Left err -> assertFailure (T.unpack err)
+    Right rs -> do
+      let t = relTerm "f" [relTerm "s" [relTerm "z" []]]
+      KRel.normalizeW 1 rs t @?= relTerm "f" [relTerm "z" []]
+
+testKernelRelativeNormalizeRModW :: Assertion
+testKernelRelativeNormalizeRModW = do
+  let eqStruct = mkEq1Class "struct" KTypes.Structural (\x -> relTerm "s" [x]) id
+  let eqComp = mkEq1Class "comp" KTypes.Computational (\x -> relTerm "f" [x]) (\x -> relTerm "g" [x])
+  let pres =
+        KPres.Presentation
+          { KPres.presName = "Rel"
+          , KPres.presSig = relSig
+          , KPres.presEqs = [eqStruct, eqComp]
+          }
+  case KRS.compileRewriteSystem KRS.UseAllOriented pres of
+    Left err -> assertFailure (T.unpack err)
+    Right rs -> do
+      let t = relTerm "f" [relTerm "s" [relTerm "z" []]]
+      KRel.normalizeR_mod_W 1 rs t @?= relTerm "g" [relTerm "z" []]
+
+testKernelRelativeObligations :: Assertion
+testKernelRelativeObligations = do
+  let eqStruct = mkEq1Class "struct" KTypes.Structural (\x -> relTerm "f" [x]) id
+  let eqComp = mkEq1Class "comp" KTypes.Computational (\x -> relTerm "f" [x]) (\x -> relTerm "g" [x])
+  let pres =
+        KPres.Presentation
+          { KPres.presName = "RelObs"
+          , KPres.presSig = relSig
+          , KPres.presEqs = [eqStruct, eqComp]
+          }
+  case KRS.compileRewriteSystem KRS.UseAllOriented pres of
+    Left err -> assertFailure (T.unpack err)
+    Right rs ->
+      case KCo.relativeObligations rs of
+        Left err -> assertFailure (T.unpack err)
+        Right obs -> do
+          assertBool "expected NeedsCommute" (any ((== KCo.NeedsCommute) . KCo.obKind) obs)
+          assertBool "expected NeedsJoin" (any ((== KCo.NeedsJoin) . KCo.obKind) obs)
+
+testKernelRewriteIndexed :: Assertion
+testKernelRewriteIndexed =
+  case (KMono.eTerm, KMono.eTerm) of
+    (Right e1, Right e2) ->
+      case KMono.mTerm e1 e2 of
+        Left err -> assertFailure (show err)
+        Right t ->
+          case KRS.compileRewriteSystem KRS.UseOnlyComputationalLR KMono.presMonoid of
+            Left err -> assertFailure (T.unpack err)
+            Right rs ->
+              let idx = KIdx.buildRuleIndex rs
+              in KRew.rewriteOnce rs t @?= KIdx.rewriteOnceIndexed rs idx t
+    _ -> assertFailure "failed to build monoid terms"
+
+testKernelCriticalPairsBounded :: Assertion
+testKernelCriticalPairsBounded =
+  case KRS.compileRewriteSystem KRS.UseOnlyComputationalLR KMono.presMonoid of
+    Left err -> assertFailure (T.unpack err)
+    Right rs ->
+      case KCP.criticalPairs KCP.CP_All (KRS.getRule rs) rs of
+        Left err -> assertFailure (T.unpack err)
+        Right cps ->
+          case KCP.criticalPairsBounded 1 KCP.CP_All (KRS.getRule rs) rs of
+            Left err -> assertFailure (T.unpack err)
+            Right bounded -> assertBool "bounded should be subset" (length bounded <= length cps)
+
+testKernelCriticalPairsForRules :: Assertion
+testKernelCriticalPairsForRules =
+  case KRS.compileRewriteSystem KRS.UseOnlyComputationalLR KMono.presMonoid of
+    Left err -> assertFailure (T.unpack err)
+    Right rs ->
+      case KRS.rulesInOrder rs of
+        [] -> assertFailure "expected at least one rule"
+        (r1 : _) ->
+          let allowed = S.singleton (KRule.ruleId r1)
+          in case KCP.criticalPairsForRules allowed KCP.CP_All (KRS.getRule rs) rs of
+              Left err -> assertFailure (T.unpack err)
+              Right cps ->
+                assertBool "all cps should be in allowed set"
+                  (all (\cp -> KCP.cpRule1 cp `S.member` allowed && KCP.cpRule2 cp `S.member` allowed) cps)
+
+testKernelCriticalPairsForRulesIgnoresNonLinear :: Assertion
+testKernelCriticalPairsForRulesIgnoresNonLinear = do
+  let scope = KSyn.ScopeId "eq:dup"
+  let vx = KSyn.Var scope 0
+  let x = KTerm.mkVar KMono.objSort vx
+  let lhsTerm =
+        case KMono.mTerm x x of
+          Left err -> error (show err)
+          Right t -> t
+  let eqDup =
+        KRule.Equation
+          { KRule.eqName = "dup"
+          , KRule.eqClass = KTypes.Computational
+          , KRule.eqOrient = KTypes.LR
+          , KRule.eqTele = [KSyn.Binder vx KMono.objSort]
+          , KRule.eqLHS = lhsTerm
+          , KRule.eqRHS = x
+          }
+  let pres =
+        KPres.Presentation
+          { KPres.presName = "NonLinear"
+          , KPres.presSig = KMono.sigMonoid
+          , KPres.presEqs = [KMono.eqUnitL, eqDup]
+          }
+  case KRS.compileRewriteSystem KRS.UseOnlyComputationalLR pres of
+    Left err -> assertFailure (T.unpack err)
+    Right rs ->
+      case KRS.rulesInOrder rs of
+        [] -> assertFailure "expected at least one rule"
+        (r1 : _) ->
+          case KCP.criticalPairsForRules (S.singleton (KRule.ruleId r1)) KCP.CP_All (KRS.getRule rs) rs of
+            Left err -> assertFailure (T.unpack err)
+            Right _ -> pure ()
+
+testSurfaceCombinatorElab :: Assertion
+testSurfaceCombinatorElab = do
+  let scope = KSyn.ScopeId "surf"
+  let vx = KSyn.Var scope 0
+  let x = KTerm.mkVar KMono.objSort vx
+  let inst = Surf.withVars (M.fromList [("x", x)]) (Surf.defaultInstance KMono.presMonoid)
+  let term = SurfC.COp "m" [SurfC.COp "e" [], SurfC.CVar "x"]
+  case (Surf.elaborate inst term, KMono.eTerm) of
+    (Right t, Right e) ->
+      case KMono.mTerm e x of
+        Left err -> assertFailure (show err)
+        Right expected -> t @?= expected
+    (Left err, _) -> assertFailure (show err)
+    (_, Left err) -> assertFailure (show err)
+
+testSurfaceCombinatorUnknownOp :: Assertion
+testSurfaceCombinatorUnknownOp = do
+  let inst = Surf.defaultInstance KMono.presMonoid
+  case Surf.elaborate inst (SurfC.COp "missing" []) of
+    Left (Surf.UnknownOp _) -> pure ()
+    Left err -> assertFailure (show err)
+    Right _ -> assertFailure "expected unknown op error"
+
+testSurfaceCombinatorUnknownVar :: Assertion
+testSurfaceCombinatorUnknownVar = do
+  let inst = Surf.defaultInstance KMono.presMonoid
+  case Surf.elaborate inst (SurfC.CVar "x") of
+    Left (Surf.UnknownVar _) -> pure ()
+    Left err -> assertFailure (show err)
+    Right _ -> assertFailure "expected unknown var error"
+
+testBackendEval :: Assertion
+testBackendEval = do
+  let model =
+        KBackend.Model
+          { KBackend.interpOp = \op args ->
+              case op of
+                KSyn.OpName "e" -> Right (KBackend.VAtom "e")
+                KSyn.OpName "m" -> Right (KBackend.VList args)
+                _ -> Left (KBackend.RuntimeError "unknown op")
+          , KBackend.interpSort = \_ -> Right (KBackend.SortValue "ok")
+          }
+  case (KMono.eTerm, KMono.eTerm) of
+    (Right e1, Right e2) ->
+      case KMono.mTerm e1 e2 of
+        Left err -> assertFailure (show err)
+        Right term ->
+          KBackend.evalTerm model term @?= Right (KBackend.VList [KBackend.VAtom "e", KBackend.VAtom "e"])
+    _ -> assertFailure "failed to build monoid terms"
+
+testBackendCompile :: Assertion
+testBackendCompile = do
+  case (KMono.eTerm, KMono.eTerm) of
+    (Right e1, Right e2) ->
+      case KMono.mTerm e1 e2 of
+        Left err -> assertFailure (show err)
+        Right term ->
+          KCat.compileTerm term
+            @?= KCat.CatOp (KSyn.OpName "m") [KCat.CatOp (KSyn.OpName "e") [], KCat.CatOp (KSyn.OpName "e") []]
+    _ -> assertFailure "failed to build monoid terms"
+
+testKDocDisjointQualifies :: Assertion
+testKDocDisjointQualifies =
+  case KDoc.elabDocExpr (KDoc.And (KDoc.Atom "A" kPresA) (KDoc.Atom "B" kPresB)) of
+    Left err -> assertFailure (T.unpack err)
+    Right pres -> do
+      map KRule.eqName (KPres.presEqs pres) @?= ["A.r", "B.r"]
+      case KPres.presEqs pres of
+        (e1 : e2 : _) -> do
+          case KSyn.termNode (KRule.eqLHS e1) of
+            KSyn.TOp op _ -> op @?= KSyn.OpName "A.f"
+            _ -> assertFailure "expected op in LHS"
+          case KSyn.termNode (KRule.eqLHS e2) of
+            KSyn.TOp op _ -> op @?= KSyn.OpName "B.f"
+            _ -> assertFailure "expected op in LHS"
+        _ -> assertFailure "expected two equations"
+
+testKDocDisjointNoCross :: Assertion
+testKDocDisjointNoCross = do
+  let expr = KDoc.And (KDoc.Atom "A" kPresA) (KDoc.Atom "B" kPresB)
+  case (KDoc.elabDocExpr expr, KDoc.compileDocExpr KRS.UseOnlyComputationalLR expr) of
+    (Right pres, Right rs) -> do
+      let sig = KPres.presSig pres
+      let z = unsafeMk sig "A.z" []
+      let t = unsafeMk sig "A.f" [z]
+      let reds = KRew.rewriteOnce rs t
+      case reds of
+        [r] -> KRew.stepRule (KRew.redexStep r) @?= KTypes.RuleId "A.r" KTypes.DirLR
+        _ -> assertFailure "expected one redex"
+    (Left err, _) -> assertFailure (T.unpack err)
+    (_, Left err) -> assertFailure (T.unpack err)
+  where
+    unsafeMk sig name args =
+      case KTerm.mkOp sig (KSyn.OpName name) args of
+        Left err -> error (show err)
+        Right t -> t
+
+testKDocShareOps :: Assertion
+testKDocShareOps = do
+  let base = KDoc.And (KDoc.Atom "A" kPresA) (KDoc.Atom "B" kPresB)
+  let expr =
+        KDoc.ShareOps
+          [(KSyn.OpName "A.f", KSyn.OpName "B.f")]
+          (KDoc.ShareSorts [(KSyn.SortName "A.Obj", KSyn.SortName "B.Obj")] base)
+  case (KDoc.elabDocExpr expr, KDoc.compileDocExpr KRS.UseOnlyComputationalLR expr) of
+    (Right pres, Right rs) -> do
+      let sig = KPres.presSig pres
+      let z = unsafeMk sig "A.z" []
+      let t = unsafeMk sig "A.f" [z]
+      let reds = KRew.rewriteOnce rs t
+      map (KRew.stepRule . KRew.redexStep) reds
+        @?= [KTypes.RuleId "A.r" KTypes.DirLR, KTypes.RuleId "B.r" KTypes.DirLR]
+    (Left err, _) -> assertFailure (T.unpack err)
+    (_, Left err) -> assertFailure (T.unpack err)
+  where
+    unsafeMk sig name args =
+      case KTerm.mkOp sig (KSyn.OpName name) args of
+        Left err -> error (show err)
+        Right t -> t
+
+testKDocExtendsLike :: Assertion
+testKDocExtendsLike = do
+  let expr = KDoc.And (KDoc.Atom "C" kPresBase) (KDoc.Atom "C" kPresExt)
+  case (KDoc.elabDocExpr expr, KDoc.compileDocExpr KRS.UseOnlyComputationalLR expr) of
+    (Right pres, Right rs) -> do
+      let sig = KPres.presSig pres
+      let z = unsafeMk sig "C.z" []
+      let t = unsafeMk sig "C.k" [unsafeMk sig "C.f" [z]]
+      let nf = KRew.normalize 1 rs t
+      nf @?= z
+    (Left err, _) -> assertFailure (T.unpack err)
+    (_, Left err) -> assertFailure (T.unpack err)
+  where
+    unsafeMk sig name args =
+      case KTerm.mkOp sig (KSyn.OpName name) args of
+        Left err -> error (show err)
+        Right t -> t
+
+testKDocDuplicateEqNames :: Assertion
+testKDocDuplicateEqNames =
+  case KDoc.elabDocExpr (KDoc.And (KDoc.Atom "C" kPresA) (KDoc.Atom "C" kPresB)) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected duplicate equation names error"
+
+testKDocRenameEqs :: Assertion
+testKDocRenameEqs = do
+  let expr =
+        KDoc.And
+          (KDoc.Atom "C" kPresA)
+          (KDoc.RenameEqs (M.fromList [("C.r", "C.r2")]) (KDoc.Atom "C" kPresB))
+  case KDoc.compileDocExpr KRS.UseOnlyComputationalLR expr of
+    Left err -> assertFailure (T.unpack err)
+    Right rs ->
+      map (KRule.ruleId) (KRS.rulesInOrder rs)
+        @?= [KTypes.RuleId "C.r" KTypes.DirLR, KTypes.RuleId "C.r2" KTypes.DirLR]
+
+testKDocRenameOps :: Assertion
+testKDocRenameOps = do
+  let expr = KDoc.RenameOps (M.fromList [(KSyn.OpName "A.g", KSyn.OpName "A.g2")]) (KDoc.Atom "A" kPresA)
+  case KDoc.elabDocExpr expr of
+    Left err -> assertFailure (T.unpack err)
+    Right pres ->
+      case KPres.presEqs pres of
+        (e1 : _) ->
+          case KSyn.termNode (KRule.eqRHS e1) of
+            KSyn.TOp op _ -> op @?= KSyn.OpName "A.g2"
+            _ -> assertFailure "expected op in RHS"
+        _ -> assertFailure "expected at least one equation"
+
+testKDocShareUnknownOp :: Assertion
+testKDocShareUnknownOp = do
+  let base = KDoc.And (KDoc.Atom "A" kPresA) (KDoc.Atom "B" kPresB)
+  case KDoc.elabDocExpr (KDoc.ShareOps [(KSyn.OpName "A.missing", KSyn.OpName "B.f")] base) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected unknown op error"
+
 dslProgram :: Text
 dslProgram =
   T.unlines
@@ -394,6 +880,66 @@ dslProgram =
     , "doctrine AssocTest = A & B & Base;"
     , ""
     , "doctrine ABshared2 = share syms { A.f = B.f } in A & B;"
+    ]
+
+kernelDslProgram :: Text
+kernelDslProgram =
+  T.unlines
+    [ "doctrine A where {"
+    , "  sort Obj;"
+    , "  op z : Obj;"
+    , "  op f : (x:Obj) -> Obj;"
+    , "  op g : (x:Obj) -> Obj;"
+    , "  computational r : (x:Obj) |- f(?x) -> g(?x);"
+    , "}"
+    , ""
+    , "doctrine B where {"
+    , "  sort Obj;"
+    , "  op z : Obj;"
+    , "  op f : (x:Obj) -> Obj;"
+    , "  op h : (x:Obj) -> Obj;"
+    , "  computational r : (x:Obj) |- f(?x) -> h(?x);"
+    , "}"
+    , ""
+    , "doctrine AB = A & B;"
+    , ""
+    , "doctrine ABshared = share ops { A.f = B.f } in share sorts { A.Obj = B.Obj } in (A & B);"
+    , ""
+    , "doctrine Base where {"
+    , "  sort Obj;"
+    , "  op z : Obj;"
+    , "  op f : (x:Obj) -> Obj;"
+    , "  computational base : (x:Obj) |- f(?x) -> ?x;"
+    , "}"
+    , ""
+    , "doctrine Ext where {"
+    , "  sort Obj;"
+    , "  op z : Obj;"
+    , "  op f : (x:Obj) -> Obj;"
+    , "  op k : (x:Obj) -> Obj;"
+    , "  computational ext : (x:Obj) |- k(f(?x)) -> ?x;"
+    , "}"
+    , ""
+    , "doctrine C = (Base@C) & (Ext@C);"
+    , ""
+    , "doctrine Cbad = (A@C) & (B@C);"
+    , ""
+    , "doctrine Aren = rename ops { A.g -> A.g2 } in A;"
+    , ""
+    , "doctrine BadShare = share ops { A.missing = B.f } in (A & B);"
+    , ""
+    , "doctrine RLTest where {"
+    , "  sort Obj;"
+    , "  op a : Obj;"
+    , "  op b : Obj;"
+    , "  computational rr : a <- b;"
+    , "}"
+    , ""
+    , "doctrine AssocTest = A & B & Base;"
+    , ""
+    , "doctrine ABshared2 = share ops { A.f = B.f } in share sorts { A.Obj = B.Obj } in A & B;"
+    , ""
+    , "doctrine ABshareSort = share sorts { A.Obj = B.Obj } in (A & B);"
     ]
 
 testMatchSanity :: Assertion
@@ -1089,6 +1635,147 @@ testDSLSharePrecedence = do
             , RuleId (qname "B" "r") DirLR
             ]
 
+testKernelDSLLoad :: Assertion
+testKernelDSLLoad =
+  case KDSL.loadDoctrines kernelDslProgram of
+    Left err -> assertFailure (show err)
+    Right env -> do
+      let expected =
+            [ "A", "B", "AB", "ABshared", "Base", "Ext", "C", "Cbad"
+            , "Aren", "BadShare", "RLTest", "AssocTest", "ABshared2", "ABshareSort"
+            ]
+      assertBool "expected all doctrine keys"
+        (all (`M.member` env) expected)
+
+testKernelDSLDisjoint :: Assertion
+testKernelDSLDisjoint = do
+  env <- requireKernelEnv
+  expr <- requireKernelExpr env "AB"
+  case (KDoc.elabDocExpr expr, KDoc.compileDocExpr KRS.UseOnlyComputationalLR expr) of
+    (Right pres, Right rs) -> do
+      let sig = KPres.presSig pres
+      let t = mkTerm sig "A.f" [mkTerm sig "A.z" []]
+      let reds = KRew.rewriteOnce rs t
+      length reds @?= 1
+      map (KRew.stepRule . KRew.redexStep) reds
+        @?= [KTypes.RuleId "A.r" KTypes.DirLR]
+    (Left err, _) -> assertFailure (T.unpack err)
+    (_, Left err) -> assertFailure (T.unpack err)
+
+testKernelDSLShare :: Assertion
+testKernelDSLShare = do
+  env <- requireKernelEnv
+  expr <- requireKernelExpr env "ABshared"
+  case (KDoc.elabDocExpr expr, KDoc.compileDocExpr KRS.UseOnlyComputationalLR expr) of
+    (Right pres, Right rs) -> do
+      let sig = KPres.presSig pres
+      let t = mkTerm sig "A.f" [mkTerm sig "A.z" []]
+      let reds = KRew.rewriteOnce rs t
+      length reds @?= 2
+      map (KRew.stepRule . KRew.redexStep) reds
+        @?= [ KTypes.RuleId "A.r" KTypes.DirLR
+            , KTypes.RuleId "B.r" KTypes.DirLR
+            ]
+    (Left err, _) -> assertFailure (T.unpack err)
+    (_, Left err) -> assertFailure (T.unpack err)
+
+testKernelDSLExtendsLike :: Assertion
+testKernelDSLExtendsLike = do
+  env <- requireKernelEnv
+  expr <- requireKernelExpr env "C"
+  case (KDoc.elabDocExpr expr, KDoc.compileDocExpr KRS.UseOnlyComputationalLR expr) of
+    (Right pres, Right rs) -> do
+      let sig = KPres.presSig pres
+      let z = mkTerm sig "C.z" []
+      let t = mkTerm sig "C.k" [mkTerm sig "C.f" [z]]
+      KRew.normalize 1 rs t @?= z
+    (Left err, _) -> assertFailure (T.unpack err)
+    (_, Left err) -> assertFailure (T.unpack err)
+
+testKernelDSLDuplicateEq :: Assertion
+testKernelDSLDuplicateEq = do
+  env <- requireKernelEnv
+  expr <- requireKernelExpr env "Cbad"
+  case KDoc.elabDocExpr expr of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected duplicate eq name failure"
+
+testKernelDSLRenameOps :: Assertion
+testKernelDSLRenameOps = do
+  env <- requireKernelEnv
+  expr <- requireKernelExpr env "Aren"
+  case KDoc.elabDocExpr expr of
+    Left err -> assertFailure (T.unpack err)
+    Right pres ->
+      case KPres.presEqs pres of
+        (e1 : _) ->
+          case KSyn.termNode (KRule.eqRHS e1) of
+            KSyn.TOp op _ -> op @?= KSyn.OpName "A.g2"
+            _ -> assertFailure "expected op in RHS"
+        _ -> assertFailure "expected at least one equation"
+
+testKernelDSLShareUnknown :: Assertion
+testKernelDSLShareUnknown = do
+  env <- requireKernelEnv
+  expr <- requireKernelExpr env "BadShare"
+  case KDoc.elabDocExpr expr of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected unknown op failure"
+
+testKernelDSLRLOrient :: Assertion
+testKernelDSLRLOrient = do
+  env <- requireKernelEnv
+  expr <- requireKernelExpr env "RLTest"
+  case KDoc.compileDocExpr KRS.UseAllOriented expr of
+    Left err -> assertFailure (T.unpack err)
+    Right rs ->
+      case KRS.rulesInOrder rs of
+        [r] -> KRule.ruleId r @?= KTypes.RuleId "RLTest.rr" KTypes.DirRL
+        _ -> assertFailure "expected one RL rule"
+
+testKernelDSLAssocOrdering :: Assertion
+testKernelDSLAssocOrdering = do
+  env <- requireKernelEnv
+  expr <- requireKernelExpr env "AssocTest"
+  case KDoc.elabDocExpr expr of
+    Left err -> assertFailure (T.unpack err)
+    Right pres ->
+      map KRule.eqName (KPres.presEqs pres)
+        @?= ["A.r", "B.r", "Base.base"]
+
+testKernelDSLSharePrecedence :: Assertion
+testKernelDSLSharePrecedence = do
+  env <- requireKernelEnv
+  expr <- requireKernelExpr env "ABshared2"
+  case (KDoc.elabDocExpr expr, KDoc.compileDocExpr KRS.UseOnlyComputationalLR expr) of
+    (Right pres, Right rs) -> do
+      let sig = KPres.presSig pres
+      let t = mkTerm sig "A.f" [mkTerm sig "A.z" []]
+      let reds = KRew.rewriteOnce rs t
+      length reds @?= 2
+      map (KRew.stepRule . KRew.redexStep) reds
+        @?= [ KTypes.RuleId "A.r" KTypes.DirLR
+            , KTypes.RuleId "B.r" KTypes.DirLR
+            ]
+    (Left err, _) -> assertFailure (T.unpack err)
+    (_, Left err) -> assertFailure (T.unpack err)
+
+testKernelDSLShareSorts :: Assertion
+testKernelDSLShareSorts = do
+  env <- requireKernelEnv
+  expr <- requireKernelExpr env "ABshareSort"
+  case KDoc.elabDocExpr expr of
+    Left err -> assertFailure (T.unpack err)
+    Right pres -> do
+      let names = M.keys (KSig.sigSortCtors (KPres.presSig pres))
+      names @?= [KSyn.SortName "A.Obj"]
+
+mkTerm :: KSig.Signature -> Text -> [KSyn.Term] -> KSyn.Term
+mkTerm sig name args =
+  case KTerm.mkOp sig (KSyn.OpName name) args of
+    Left err -> error (show err)
+    Right t -> t
+
 requireEnv :: IO (M.Map Text (DocExpr Term))
 requireEnv =
   case loadDoctrinesFO dslProgram of
@@ -1103,4 +1790,20 @@ requireExpr env name =
     Nothing -> do
       _ <- assertFailure ("missing doctrine: " <> T.unpack name)
       pure (Atom "Missing" (Presentation "Missing" []))
+    Just expr -> pure expr
+
+requireKernelEnv :: IO (M.Map Text KDoc.DocExpr)
+requireKernelEnv =
+  case KDSL.loadDoctrines kernelDslProgram of
+    Left err -> do
+      _ <- assertFailure (show err)
+      pure M.empty
+    Right env -> pure env
+
+requireKernelExpr :: M.Map Text KDoc.DocExpr -> Text -> IO KDoc.DocExpr
+requireKernelExpr env name =
+  case M.lookup name env of
+    Nothing -> do
+      _ <- assertFailure ("missing doctrine: " <> T.unpack name)
+      pure (KDoc.Atom "Missing" (KPres.Presentation "Missing" (KSig.Signature M.empty M.empty) []))
     Just expr -> pure expr

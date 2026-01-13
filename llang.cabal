@@ -26,12 +26,20 @@ source-repository head
 library
   exposed-modules:
       Lib
+      Strat.Backend
+      Strat.Backend.Concat
       Strat.Doctrine.Stub
       Strat.Kernel.Coherence
       Strat.Kernel.CriticalPairs
+      Strat.Kernel.DoctrineExpr
+      Strat.Kernel.DSL.AST
+      Strat.Kernel.DSL.Elab
+      Strat.Kernel.DSL.Parse
       Strat.Kernel.Examples.Monoid
       Strat.Kernel.Presentation
+      Strat.Kernel.Relative
       Strat.Kernel.Rewrite
+      Strat.Kernel.Rewrite.Indexed
       Strat.Kernel.RewriteSystem
       Strat.Kernel.Rule
       Strat.Kernel.Signature
@@ -57,6 +65,8 @@ library
       Strat.Meta.Term.Syms
       Strat.Meta.Types
       Strat.Model.Stub
+      Strat.Surface
+      Strat.Surface.Combinator
       Strat.Syntax.Stub
   other-modules:
       Paths_llang

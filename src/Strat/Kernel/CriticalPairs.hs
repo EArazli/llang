@@ -4,12 +4,14 @@ module Strat.Kernel.CriticalPairs
   ( CriticalPair(..)
   , CPMode(..)
   , criticalPairs
+  , criticalPairsBounded
+  , criticalPairsForRules
   ) where
 
 import Strat.Kernel.Rule
 import Strat.Kernel.RewriteSystem
 import Strat.Kernel.Subst
-import Strat.Kernel.Syntax (Term, ScopeId (..), Var)
+import Strat.Kernel.Syntax (Term(..), TermNode (..), ScopeId (..), Var)
 import Strat.Kernel.Term
 import Strat.Kernel.Types
 import Strat.Kernel.Unify (unify)
@@ -42,20 +44,43 @@ criticalPairs
   -> (RuleId -> Rule)
   -> RewriteSystem
   -> Either Text [CriticalPair]
-criticalPairs mode _lookup rs = do
+criticalPairs mode _lookup rs =
+  criticalPairsWith mode (rulesInOrder rs)
+
+criticalPairsBounded
+  :: Int
+  -> CPMode
+  -> (RuleId -> Rule)
+  -> RewriteSystem
+  -> Either Text [CriticalPair]
+criticalPairsBounded maxSize mode lookupFn rs = do
+  cps <- criticalPairs mode lookupFn rs
+  pure [cp | cp <- cps, termSize (cpPeak cp) <= maxSize]
+
+criticalPairsForRules
+  :: S.Set RuleId
+  -> CPMode
+  -> (RuleId -> Rule)
+  -> RewriteSystem
+  -> Either Text [CriticalPair]
+criticalPairsForRules allowed mode _lookup rs =
+  criticalPairsWith mode (filter (\r -> ruleId r `S.member` allowed) (rulesInOrder rs))
+
+criticalPairsWith :: CPMode -> [Rule] -> Either Text [CriticalPair]
+criticalPairsWith mode rules = do
   case firstNonLinear of
     Just rid -> Left ("Non-left-linear rule in criticalPairs: " <> rid)
     Nothing ->
       Right
         [ cp
-        | r1 <- rulesInOrder rs
-        , r2 <- rulesInOrder rs
+        | r1 <- rules
+        , r2 <- rules
         , allowedPair mode r1 r2
         , cp <- overlaps r1 r2
         ]
   where
     firstNonLinear =
-      case L.find (not . isLeftLinear . lhs) (rulesInOrder rs) of
+      case L.find (not . isLeftLinear . lhs) rules of
         Nothing -> Nothing
         Just r -> Just (ridEq (ruleId r))
 
@@ -109,3 +134,9 @@ criticalPairs mode _lookup rs = do
           case subtermAt term pos >>= asVar of
             Nothing -> m
             Just v -> M.insertWith (+) v 1 m
+
+termSize :: Term -> Int
+termSize tm =
+  1 + case termNode tm of
+    TVar _ -> 0
+    TOp _ args -> sum (map termSize args)
