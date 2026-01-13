@@ -8,4 +8,7 @@ and this project adheres to the
 
 ## Unreleased
 
+### Added
+- Introduce a typed kernel scaffold (Syntax/Signature/Term/Subst/Unify) for the staged migration to typed doctrines.
+
 ## 0.1.0.0 - YYYY-MM-DD

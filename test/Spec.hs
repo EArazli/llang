@@ -19,6 +19,11 @@ import Strat.Meta.Rule
 import Strat.Meta.Term.Class
 import Strat.Meta.Term.FO
 import Strat.Meta.Types
+import qualified Strat.Kernel.Syntax as K
+import qualified Strat.Kernel.Signature as KSig
+import qualified Strat.Kernel.Subst as KSubst
+import qualified Strat.Kernel.Term as K
+import qualified Strat.Kernel.Unify as KUnify
 
 main :: IO ()
 main = defaultMain tests
@@ -83,6 +88,13 @@ tests =
         , testCase "RL orientation parses" testDSLRLOrientation
         , testCase "associativity preserves order" testDSLAssocOrdering
         , testCase "share precedence" testDSLSharePrecedence
+        ]
+    , testGroup
+        "Kernel"
+        [ testCase "Kernel.Syntax loads" testKernelSyntaxLoads
+        , testCase "Kernel.mkOp sanity" testKernelMkOp
+        , testCase "Kernel.applySubstSort substitutes indices" testKernelApplySubstSort
+        , testCase "Kernel.unify respects sort indices" testKernelUnifySortIndices
         ]
     ]
 
@@ -192,6 +204,85 @@ presExt =
 
 varX :: Term
 varX = TVar (V (ns "v") 0)
+
+testKernelSyntaxLoads :: Assertion
+testKernelSyntaxLoads = do
+  let obj = K.SortName "Obj"
+  let scope = K.ScopeId "ex:Kernel"
+  let v0 = K.Var scope 0
+  let s = K.Sort obj []
+  let t = K.mkVar s v0
+  K.termSort t @?= s
+
+kernelSig :: KSig.Signature
+kernelSig =
+  KSig.Signature
+    { KSig.sigSortCtors =
+        M.fromList
+          [ (objName, KSig.SortCtor objName [])
+          , (homName, KSig.SortCtor homName [objSort, objSort])
+          ]
+    , KSig.sigOps = M.fromList [(eName, eDecl), (mName, mDecl)]
+    }
+  where
+    objName = K.SortName "Obj"
+    homName = K.SortName "Hom"
+    objSort = K.Sort objName []
+    eName = K.OpName "e"
+    mName = K.OpName "m"
+    eDecl = KSig.OpDecl eName [] objSort
+    mDecl =
+      let scope = K.ScopeId "op:m"
+          a = K.Var scope 0
+          b = K.Var scope 1
+      in KSig.OpDecl mName [K.Binder a objSort, K.Binder b objSort] objSort
+
+objSort :: K.Sort
+objSort = K.Sort (K.SortName "Obj") []
+
+homSort :: K.Term -> K.Term -> K.Sort
+homSort a b = K.Sort (K.SortName "Hom") [a, b]
+
+kernelE :: K.Term
+kernelE =
+  case K.mkOp kernelSig (K.OpName "e") [] of
+    Left err -> error (show err)
+    Right t -> t
+
+testKernelMkOp :: Assertion
+testKernelMkOp = do
+  let scope = K.ScopeId "ex:Kernel"
+  let x = K.mkVar objSort (K.Var scope 0)
+  case K.mkOp kernelSig (K.OpName "m") [kernelE, x] of
+    Left err -> assertFailure (show err)
+    Right t -> K.termSort t @?= objSort
+
+testKernelApplySubstSort :: Assertion
+testKernelApplySubstSort = do
+  let scope = K.ScopeId "ex:Kernel"
+  let vx = K.Var scope 0
+  let x = K.mkVar objSort vx
+  let s = homSort x x
+  let subst = M.fromList [(vx, kernelE)]
+  KSubst.applySubstSort subst s @?= homSort kernelE kernelE
+
+testKernelUnifySortIndices :: Assertion
+testKernelUnifySortIndices = do
+  let scope = K.ScopeId "ex:Kernel"
+  let vx = K.Var scope 0
+  let vy = K.Var scope 1
+  let x = K.mkVar objSort vx
+  let y = K.mkVar objSort vy
+  let s1 = homSort x y
+  let s2 = homSort kernelE kernelE
+  let t1 = K.Term { K.termSort = s1, K.termNode = K.TVar (K.Var scope 2) }
+  let t2 = K.Term { K.termSort = s2, K.termNode = K.TVar (K.Var scope 3) }
+  case KUnify.unify t1 t2 of
+    Nothing -> assertFailure "expected unifier"
+    Just subst -> do
+      KSubst.applySubstSort subst (K.termSort t1) @?= KSubst.applySubstSort subst (K.termSort t2)
+      KSubst.applySubstTerm subst x @?= kernelE
+      KSubst.applySubstTerm subst y @?= kernelE
 
 dslProgram :: Text
 dslProgram =
