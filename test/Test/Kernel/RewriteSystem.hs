@@ -30,6 +30,8 @@ tests =
     , testCase "variable condition violated LR rejected" testVarConditionLR
     , testCase "variable condition violated RL rejected" testVarConditionRL
     , testCase "variable condition violated bidirectional rejected" testVarConditionBidir
+    , testCase "invalid cached term sort rejected" testInvalidCachedSort
+    , testCase "invalid sort index rejected" testInvalidSortIndex
     ]
 
 mkEq1 :: Text -> RuleClass -> Orientation -> (Term -> Term) -> (Term -> Term) -> Equation
@@ -198,3 +200,40 @@ testVarConditionBidir = do
   case compileRewriteSystem UseAllOriented (basePres [eq]) of
     Left _ -> pure ()
     Right _ -> assertFailure "expected variable condition error"
+
+testInvalidCachedSort :: Assertion
+testInvalidCachedSort = do
+  let a = mkTerm sigBasic "a" []
+  let badTerm = Term { termSort = homSort a a, termNode = TOp opA [] }
+  let eq =
+        Equation
+          { eqName = "badSortCache"
+          , eqClass = Computational
+          , eqOrient = LR
+          , eqTele = []
+          , eqLHS = badTerm
+          , eqRHS = badTerm
+          }
+  case compileRewriteSystem UseAllOriented (basePres [eq]) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected invalid cached sort error"
+
+testInvalidSortIndex :: Assertion
+testInvalidSortIndex = do
+  let a = mkTerm sigBasic "a" []
+  let ida = mkTerm sigBasic "id" [a]
+  let badSort = Sort homName [a, ida]
+  let v = Var (ScopeId "eq:badIdx") 0
+  let term = mkVar badSort v
+  let eq =
+        Equation
+          { eqName = "badIdx"
+          , eqClass = Computational
+          , eqOrient = LR
+          , eqTele = [Binder v badSort]
+          , eqLHS = term
+          , eqRHS = term
+          }
+  case compileRewriteSystem UseAllOriented (basePres [eq]) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected invalid sort index error"

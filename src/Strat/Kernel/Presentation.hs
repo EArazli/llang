@@ -8,9 +8,11 @@ module Strat.Kernel.Presentation
 import Strat.Kernel.Rule
 import Strat.Kernel.Signature
 import Strat.Kernel.Syntax
+import Strat.Kernel.Term (TypeError, mkOp)
 import Data.Text (Text)
 import qualified Data.List as L
 import qualified Data.Set as S
+import qualified Data.Text as T
 
 data Presentation = Presentation
   { presName :: Text
@@ -19,8 +21,8 @@ data Presentation = Presentation
   }
   deriving (Eq, Show)
 
-validateEquation :: Equation -> Either Text ()
-validateEquation eq = do
+validateEquation :: Signature -> Equation -> Either Text ()
+validateEquation sig eq = do
   let lhsSort = termSort (eqLHS eq)
   let rhsSort = termSort (eqRHS eq)
   if lhsSort /= rhsSort
@@ -30,11 +32,14 @@ validateEquation eq = do
           used = varsTerm (eqLHS eq) `S.union` varsTerm (eqRHS eq)
           bad = used `S.difference` allowed
       in if S.null bad
-           then validateEqScopes eq
+           then do
+             validateEqScopes eq
+             validateTerm sig (eqLHS eq)
+             validateTerm sig (eqRHS eq)
            else Left ("Equation has out-of-scope vars: " <> eqName eq)
 
 validatePresentation :: Presentation -> Either Text ()
-validatePresentation pres = mapM_ validateEquation (presEqs pres)
+validatePresentation pres = mapM_ (validateEquation (presSig pres)) (presEqs pres)
 
 validateEqScopes :: Equation -> Either Text ()
 validateEqScopes eq = do
@@ -63,3 +68,41 @@ varsTerm term =
 
 varsInSort :: Sort -> S.Set Var
 varsInSort (Sort _ idx) = S.unions (map varsTerm idx)
+
+validateTerm :: Signature -> Term -> Either Text ()
+validateTerm sig tm = do
+  inferred <- inferSort sig tm
+  if inferred == termSort tm
+    then Right ()
+    else Left ("Term sort mismatch: " <> renderSort inferred <> " vs " <> renderSort (termSort tm))
+
+inferSort :: Signature -> Term -> Either Text Sort
+inferSort sig tm =
+  case termNode tm of
+    TVar _ -> do
+      validateSort sig (termSort tm)
+      pure (termSort tm)
+    TOp op args -> do
+      mapM_ (validateTerm sig) args
+      case mkOp sig op args of
+        Left err -> Left ("Term not well-typed: " <> renderTypeError err)
+        Right t ->
+          if termSort t == termSort tm
+            then pure (termSort tm)
+            else Left ("Term sort mismatch: " <> renderSort (termSort t) <> " vs " <> renderSort (termSort tm))
+
+validateSort :: Signature -> Sort -> Either Text ()
+validateSort sig (Sort name idx) = do
+  mapM_ (validateTerm sig) idx
+  case mkSort sig name idx of
+    Left err -> Left ("Sort not well-formed: " <> renderSortError err)
+    Right _ -> Right ()
+
+renderTypeError :: TypeError -> Text
+renderTypeError = T.pack . show
+
+renderSortError :: SortError -> Text
+renderSortError = T.pack . show
+
+renderSort :: Sort -> Text
+renderSort = T.pack . show
