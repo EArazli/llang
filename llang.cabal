@@ -27,11 +27,18 @@ library
   exposed-modules:
       Lib
       Strat.Doctrine.Stub
+      Strat.Kernel.Coherence
+      Strat.Kernel.CriticalPairs
       Strat.Kernel.Examples.Monoid
+      Strat.Kernel.Presentation
+      Strat.Kernel.Rewrite
+      Strat.Kernel.RewriteSystem
+      Strat.Kernel.Rule
       Strat.Kernel.Signature
       Strat.Kernel.Subst
       Strat.Kernel.Syntax
       Strat.Kernel.Term
+      Strat.Kernel.Types
       Strat.Kernel.Unify
       Strat.Meta.Coherence
       Strat.Meta.CriticalPairs

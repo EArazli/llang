@@ -24,6 +24,10 @@ import qualified Strat.Kernel.Signature as KSig
 import qualified Strat.Kernel.Subst as KSubst
 import qualified Strat.Kernel.Term as KTerm
 import qualified Strat.Kernel.Unify as KUnify
+import qualified Strat.Kernel.Examples.Monoid as KMono
+import qualified Strat.Kernel.RewriteSystem as KRS
+import qualified Strat.Kernel.CriticalPairs as KCP
+import qualified Strat.Kernel.Coherence as KCo
 
 main :: IO ()
 main = defaultMain tests
@@ -95,6 +99,8 @@ tests =
         , testCase "Kernel.mkOp sanity" testKernelMkOp
         , testCase "Kernel.applySubstSort substitutes indices" testKernelApplySubstSort
         , testCase "Kernel.unify respects sort indices" testKernelUnifySortIndices
+        , testCase "Kernel monoid critical pairs" testKernelMonoidCriticalPairs
+        , testCase "Kernel monoid obligations" testKernelMonoidObligations
         ]
     ]
 
@@ -283,6 +289,26 @@ testKernelUnifySortIndices = do
       KSubst.applySubstSort subst (KSyn.termSort t1) @?= KSubst.applySubstSort subst (KSyn.termSort t2)
       KSubst.applySubstTerm subst x @?= kernelE
       KSubst.applySubstTerm subst y @?= kernelE
+
+testKernelMonoidCriticalPairs :: Assertion
+testKernelMonoidCriticalPairs =
+  case KRS.compileRewriteSystem KRS.UseOnlyComputationalLR KMono.presMonoid of
+    Left err -> assertFailure (T.unpack err)
+    Right rs ->
+      case KCP.criticalPairs KCP.CP_All (KRS.getRule rs) rs of
+        Left err -> assertFailure (T.unpack err)
+        Right cps -> assertBool "expected non-empty critical pairs" (not (null cps))
+
+testKernelMonoidObligations :: Assertion
+testKernelMonoidObligations =
+  case KRS.compileRewriteSystem KRS.UseOnlyComputationalLR KMono.presMonoid of
+    Left err -> assertFailure (T.unpack err)
+    Right rs ->
+      case KCP.criticalPairs KCP.CP_All (KRS.getRule rs) rs of
+        Left err -> assertFailure (T.unpack err)
+        Right cps ->
+          let obs = KCo.obligationsFromCPs cps
+          in assertBool "expected obligations from critical pairs" (not (null obs))
 
 dslProgram :: Text
 dslProgram =
