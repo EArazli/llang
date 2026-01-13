@@ -62,3 +62,14 @@ tests:
     - llang
     - tasty
     - tasty-hunit
+    other-modules:
+    - Test.Backend
+    - Test.Kernel.Basic
+    - Test.Kernel.CriticalPairs
+    - Test.Kernel.DoctrineExpr
+    - Test.Kernel.DSL
+    - Test.Kernel.Fixtures
+    - Test.Kernel.Relative
+    - Test.Kernel.Rewrite
+    - Test.Kernel.RewriteSystem
+    - Test.Surface

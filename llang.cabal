@@ -28,7 +28,6 @@ library
       Lib
       Strat.Backend
       Strat.Backend.Concat
-      Strat.Doctrine.Stub
       Strat.Kernel.Coherence
       Strat.Kernel.CriticalPairs
       Strat.Kernel.DoctrineExpr
@@ -48,26 +47,8 @@ library
       Strat.Kernel.Term
       Strat.Kernel.Types
       Strat.Kernel.Unify
-      Strat.Meta.Coherence
-      Strat.Meta.CriticalPairs
-      Strat.Meta.DoctrineExpr
-      Strat.Meta.DSL.AST
-      Strat.Meta.DSL.Elab.FO
-      Strat.Meta.DSL.Examples
-      Strat.Meta.DSL.Parse
-      Strat.Meta.Examples.Monoid
-      Strat.Meta.Presentation
-      Strat.Meta.Rewrite
-      Strat.Meta.RewriteSystem
-      Strat.Meta.Rule
-      Strat.Meta.Term.Class
-      Strat.Meta.Term.FO
-      Strat.Meta.Term.Syms
-      Strat.Meta.Types
-      Strat.Model.Stub
       Strat.Surface
       Strat.Surface.Combinator
-      Strat.Syntax.Stub
   other-modules:
       Paths_llang
   autogen-modules:
@@ -103,9 +84,16 @@ test-suite llang-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-      Paths_llang
-  autogen-modules:
-      Paths_llang
+      Test.Backend
+      Test.Kernel.Basic
+      Test.Kernel.CriticalPairs
+      Test.Kernel.DoctrineExpr
+      Test.Kernel.DSL
+      Test.Kernel.Fixtures
+      Test.Kernel.Relative
+      Test.Kernel.Rewrite
+      Test.Kernel.RewriteSystem
+      Test.Surface
   hs-source-dirs:
       test
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
