@@ -1,0 +1,19 @@
+import "./peano.llang";
+import "./peano.syntax.llang";
+import "./peano.models.llang";
+
+run where {
+  doctrine Nat;
+  open Nat;
+
+  syntax PeanoSyntax;
+  model NatModel;
+
+  policy UseOnlyComputationalLR;
+  fuel 200;
+
+  show normalized;
+  show value;
+}
+---
+S(S(Z)) * (S(Z) + S(S(S(Z))))

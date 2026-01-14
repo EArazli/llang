@@ -1,0 +1,20 @@
+import "./monoid.llang";
+import "./monoid.syntax.llang";
+import "./monoid.models.llang";
+
+run where {
+  doctrine Combined;
+  open C;
+
+  syntax MonoidSyntax;
+  model StringMonoid;
+
+  policy UseOnlyComputationalLR;
+  fuel 50;
+
+  show normalized;
+  show value;
+  show cat;
+}
+---
+k(e * e)

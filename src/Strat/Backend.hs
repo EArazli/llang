@@ -17,6 +17,7 @@ data Value
   | VList [Value]
   | VInt Int
   | VString Text
+  | VBool Bool
   deriving (Eq, Show)
 
 data SortValue = SortValue Text

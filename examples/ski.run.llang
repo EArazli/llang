@@ -1,0 +1,19 @@
+import "./ski.llang";
+import "./ski.syntax.llang";
+import "../stdlib/models.llang";
+
+run where {
+  doctrine SKI;
+  open SKI;
+
+  syntax SKISyntax;
+  model Symbolic;
+
+  policy UseOnlyComputationalLR;
+  fuel 80;
+
+  show normalized;
+  show value;
+}
+---
+K @ a @ b

@@ -13,6 +13,7 @@ import qualified Test.Kernel.Relative as KernelRelative
 import qualified Test.Surface as Surface
 import qualified Test.Backend as Backend
 import qualified Test.CLI as CLI
+import qualified Test.Frontend.SyntaxModel as FrontendSyntaxModel
 
 main :: IO ()
 main =
@@ -30,5 +31,6 @@ main =
       , KernelRelative.tests
       , Surface.tests
       , Backend.tests
+      , FrontendSyntaxModel.tests
       , CLI.tests
       ]

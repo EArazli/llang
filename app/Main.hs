@@ -19,4 +19,4 @@ main = do
         Left err -> do
           TIO.hPutStrLn stderr err
           exitFailure
-        Right out -> TIO.putStrLn (renderResult out)
+        Right out -> TIO.putStrLn out

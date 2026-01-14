@@ -20,9 +20,20 @@ extra-source-files:
     CHANGELOG.md
 data-files:
     examples/monoid.llang
+    examples/monoid.syntax.llang
+    examples/monoid.models.llang
+    examples/monoid.run.llang
     examples/cat.llang
+    examples/cat.run.llang
     examples/peano.llang
+    examples/peano.syntax.llang
+    examples/peano.models.llang
+    examples/peano.run.llang
     examples/ski.llang
+    examples/ski.syntax.llang
+    examples/ski.run.llang
+    stdlib/syntax.llang
+    stdlib/models.llang
 
 source-repository head
   type: git
@@ -33,8 +44,12 @@ library
       Lib
       Strat.Backend
       Strat.Backend.Concat
-      Strat.Backend.Models
       Strat.CLI
+      Strat.Frontend.Env
+      Strat.Frontend.Loader
+      Strat.Frontend.Resolve
+      Strat.Frontend.Run
+      Strat.Frontend.RunSpec
       Strat.Kernel.Coherence
       Strat.Kernel.CriticalPairs
       Strat.Kernel.DoctrineExpr
@@ -54,11 +69,10 @@ library
       Strat.Kernel.Term
       Strat.Kernel.Types
       Strat.Kernel.Unify
+      Strat.Model.Spec
       Strat.Surface
       Strat.Surface.Combinator
-      Strat.Surface.Combinator.Parse
-      Strat.Surface.Lambda
-      Strat.Surface.Lambda.Parse
+      Strat.Syntax.Spec
   other-modules:
       Paths_llang
   autogen-modules:
@@ -69,7 +83,10 @@ library
   build-depends:
       base >=4.7 && <5
     , containers
+    , directory
+    , filepath
     , megaparsec
+    , parser-combinators
     , text
   default-language: Haskell2010
 
@@ -85,8 +102,11 @@ executable llang-exe
   build-depends:
       base >=4.7 && <5
     , containers
+    , directory
+    , filepath
     , llang
     , megaparsec
+    , parser-combinators
     , text
   default-language: Haskell2010
 
@@ -105,6 +125,7 @@ test-suite llang-test
       Test.Kernel.Relative
       Test.Kernel.Rewrite
       Test.Kernel.RewriteSystem
+      Test.Frontend.SyntaxModel
       Test.Surface
       Test.CLI
       Paths_llang
@@ -116,8 +137,11 @@ test-suite llang-test
   build-depends:
       base >=4.7 && <5
     , containers
+    , directory
+    , filepath
     , llang
     , megaparsec
+    , parser-combinators
     , tasty
     , tasty-hunit
     , text

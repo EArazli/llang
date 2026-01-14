@@ -11,9 +11,20 @@ extra-source-files:
 - CHANGELOG.md
 data-files:
 - examples/monoid.llang
+- examples/monoid.syntax.llang
+- examples/monoid.models.llang
+- examples/monoid.run.llang
 - examples/cat.llang
+- examples/cat.run.llang
 - examples/peano.llang
+- examples/peano.syntax.llang
+- examples/peano.models.llang
+- examples/peano.run.llang
 - examples/ski.llang
+- examples/ski.syntax.llang
+- examples/ski.run.llang
+- stdlib/syntax.llang
+- stdlib/models.llang
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -27,7 +38,10 @@ description:         Please see the README on GitHub at <https://github.com/gith
 dependencies:
 - base >= 4.7 && < 5
 - containers
+- directory
+- filepath
 - megaparsec
+- parser-combinators
 - text
 
 ghc-options:
@@ -79,6 +93,7 @@ tests:
     - Test.Kernel.Relative
     - Test.Kernel.Rewrite
     - Test.Kernel.RewriteSystem
+    - Test.Frontend.SyntaxModel
     - Test.Surface
     - Test.CLI
     - Paths_llang

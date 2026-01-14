@@ -5,7 +5,8 @@ module Test.Kernel.DSL
 
 import Test.Tasty
 import Test.Tasty.HUnit
-import Strat.Kernel.DSL.Elab
+import Strat.Kernel.DSL.Parse (parseRawFile, parseRawExpr)
+import Strat.Kernel.DSL.Elab (elabRawFile)
 import Strat.Kernel.DoctrineExpr
 import Strat.Kernel.Presentation
 import Strat.Kernel.Rewrite
@@ -14,9 +15,11 @@ import Strat.Kernel.Rule
 import Strat.Kernel.Signature
 import Strat.Kernel.Syntax
 import Strat.Kernel.Types
+import Strat.Frontend.Env
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Test.Kernel.Fixtures
+
 
 tests :: TestTree
 tests =
@@ -36,6 +39,7 @@ tests =
     , testCase "parse error" testParseError
     , testCase "instantiation requires where-defined" testInstRequiresWhere
     , testCase "unknown doctrine reference" testUnknownDoctrine
+    , testCase "syntax/model/run parsing" testSyntaxModelRunParse
     ]
 
 kernelDslProgram :: T.Text
@@ -98,32 +102,35 @@ kernelDslProgram =
     , "doctrine ABshareSort = share sorts { A.Obj = B.Obj } in (A & B);"
     ]
 
-testLoad :: Assertion
-testLoad =
-  case loadDoctrines kernelDslProgram of
-    Left err -> assertFailure (show err)
-    Right env -> do
-      let expected =
-            [ "A", "B", "AB", "ABshared", "Base", "Ext", "C", "Cbad"
-            , "Aren", "BadShare", "RLTest", "AssocTest", "ABshared2", "ABshareSort"
-            ]
-      assertBool "expected all keys" (all (`M.member` env) expected)
+loadEnv :: T.Text -> IO ModuleEnv
+loadEnv src =
+  case parseRawFile src of
+    Left err -> assertFailure (show err) >> pure emptyEnv
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (show err) >> pure emptyEnv
+        Right env -> pure env
 
-requireEnv :: IO (M.Map T.Text DocExpr)
-requireEnv =
-  case loadDoctrines kernelDslProgram of
-    Left err -> assertFailure (show err) >> pure M.empty
-    Right env -> pure env
-
-requireExpr :: M.Map T.Text DocExpr -> T.Text -> IO DocExpr
+requireExpr :: ModuleEnv -> T.Text -> IO DocExpr
 requireExpr env name =
-  case M.lookup name env of
+  case M.lookup name (meDoctrines env) of
     Nothing -> assertFailure ("missing doctrine: " <> T.unpack name) >> pure (Atom "Missing" (Presentation "Missing" (Signature M.empty M.empty) []))
     Just expr -> pure expr
 
+
+testLoad :: Assertion
+testLoad = do
+  env <- loadEnv kernelDslProgram
+  let expected =
+        [ "A", "B", "AB", "ABshared", "Base", "Ext", "C", "Cbad"
+        , "Aren", "BadShare", "RLTest", "AssocTest", "ABshared2", "ABshareSort"
+        ]
+  assertBool "expected all keys" (all (`M.member` meDoctrines env) expected)
+
+
 testDisjoint :: Assertion
 testDisjoint = do
-  env <- requireEnv
+  env <- loadEnv kernelDslProgram
   expr <- requireExpr env "AB"
   case (elabDocExpr expr, compileDocExpr UseOnlyComputationalLR expr) of
     (Right pres, Right rs) -> do
@@ -134,9 +141,10 @@ testDisjoint = do
     (Left err, _) -> assertFailure (T.unpack err)
     (_, Left err) -> assertFailure (T.unpack err)
 
+
 testShared :: Assertion
 testShared = do
-  env <- requireEnv
+  env <- loadEnv kernelDslProgram
   expr <- requireExpr env "ABshared"
   case (elabDocExpr expr, compileDocExpr UseOnlyComputationalLR expr) of
     (Right pres, Right rs) -> do
@@ -148,9 +156,10 @@ testShared = do
     (Left err, _) -> assertFailure (T.unpack err)
     (_, Left err) -> assertFailure (T.unpack err)
 
+
 testExtendsLike :: Assertion
 testExtendsLike = do
-  env <- requireEnv
+  env <- loadEnv kernelDslProgram
   expr <- requireExpr env "C"
   case (elabDocExpr expr, compileDocExpr UseOnlyComputationalLR expr) of
     (Right pres, Right rs) -> do
@@ -161,17 +170,19 @@ testExtendsLike = do
     (Left err, _) -> assertFailure (T.unpack err)
     (_, Left err) -> assertFailure (T.unpack err)
 
+
 testDuplicateEq :: Assertion
 testDuplicateEq = do
-  env <- requireEnv
+  env <- loadEnv kernelDslProgram
   expr <- requireExpr env "Cbad"
   case elabDocExpr expr of
     Left _ -> pure ()
     Right _ -> assertFailure "expected duplicate eq name error"
 
+
 testRenameOps :: Assertion
 testRenameOps = do
-  env <- requireEnv
+  env <- loadEnv kernelDslProgram
   expr <- requireExpr env "Aren"
   case elabDocExpr expr of
     Left err -> assertFailure (T.unpack err)
@@ -183,75 +194,119 @@ testRenameOps = do
             _ -> assertFailure "expected op"
         _ -> assertFailure "expected equation"
 
+
 testShareUnknown :: Assertion
 testShareUnknown = do
-  env <- requireEnv
+  env <- loadEnv kernelDslProgram
   expr <- requireExpr env "BadShare"
   case elabDocExpr expr of
     Left _ -> pure ()
     Right _ -> assertFailure "expected unknown op error"
 
+
 testRLOrientation :: Assertion
 testRLOrientation = do
-  env <- requireEnv
+  env <- loadEnv kernelDslProgram
   expr <- requireExpr env "RLTest"
   case compileDocExpr UseAllOriented expr of
     Left err -> assertFailure (T.unpack err)
     Right rs -> map ruleId (rsRules rs) @?= [RuleId "RLTest.rr" DirRL]
 
+
 testAssocOrdering :: Assertion
 testAssocOrdering = do
-  env <- requireEnv
+  env <- loadEnv kernelDslProgram
   expr <- requireExpr env "AssocTest"
   case elabDocExpr expr of
     Left err -> assertFailure (T.unpack err)
     Right pres -> map eqName (presEqs pres) @?= ["A.r", "B.r", "Base.base"]
 
+
 testSharePrecedence :: Assertion
 testSharePrecedence = do
-  env <- requireEnv
+  env <- loadEnv kernelDslProgram
   expr <- requireExpr env "ABshared2"
   case (elabDocExpr expr, compileDocExpr UseOnlyComputationalLR expr) of
     (Right pres, Right rs) -> do
       let sig = presSig pres
       let t = mkTerm sig "A.f" [mkTerm sig "A.z" []]
-      map (stepRule . redexStep) (rewriteOnce rs t)
+      let reds = rewriteOnce rs t
+      map (stepRule . redexStep) reds
         @?= [RuleId "A.r" DirLR, RuleId "B.r" DirLR]
     (Left err, _) -> assertFailure (T.unpack err)
     (_, Left err) -> assertFailure (T.unpack err)
 
+
 testShareSorts :: Assertion
 testShareSorts = do
-  env <- requireEnv
+  env <- loadEnv kernelDslProgram
   expr <- requireExpr env "ABshareSort"
   case elabDocExpr expr of
     Left err -> assertFailure (T.unpack err)
-    Right pres -> do
-      let names = M.keys (sigSortCtors (presSig pres))
-      names @?= [SortName "A.Obj"]
+    Right pres ->
+      case sigSortCtors (presSig pres) of
+        ctors -> assertBool "merged sort ctor" (M.member (SortName "A.Obj") ctors && not (M.member (SortName "B.Obj") ctors))
+
 
 testParseError :: Assertion
-testParseError = do
-  let bad = "doctrine A where { op f : Obj }"
-  case loadDoctrines bad of
+testParseError =
+  case parseRawExpr "A &" of
     Left _ -> pure ()
     Right _ -> assertFailure "expected parse error"
 
+
 testInstRequiresWhere :: Assertion
 testInstRequiresWhere = do
-  let prog =
-        T.unlines
-          [ "doctrine A where { sort Obj; op a : Obj; }"
-          , "doctrine B = A;"
-          , "doctrine C = B@C;"
-          ]
-  case loadDoctrines prog of
-    Left _ -> pure ()
-    Right _ -> assertFailure "expected instantiation error"
+  let prog = T.unlines
+        [ "doctrine A where {"
+        , "  sort Obj;"
+        , "  op f : Obj;"
+        , "}"
+        , "doctrine B = A;"
+        , "doctrine C = (B@C);"
+        ]
+  case parseRawFile prog of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left _ -> pure ()
+        Right _ -> assertFailure "expected instantiation error"
+
 
 testUnknownDoctrine :: Assertion
 testUnknownDoctrine = do
-  let prog = "doctrine A = Missing;"
-  case loadDoctrines prog of
-    Left _ -> pure ()
-    Right _ -> assertFailure "expected unknown doctrine error"
+  let prog = T.unlines
+        [ "doctrine A = Missing;"
+        ]
+  case parseRawFile prog of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left _ -> pure ()
+        Right _ -> assertFailure "expected unknown doctrine error"
+
+
+testSyntaxModelRunParse :: Assertion
+testSyntaxModelRunParse = do
+  let prog = T.unlines
+        [ "syntax S where {"
+        , "  print atom \"e\" = e;"
+        , "  allow call;"
+        , "  varprefix \"?\";"
+        , "}"
+        , "model M where {"
+        , "  default = symbolic;"
+        , "  op e() = \"\";"
+        , "}"
+        , "run where {"
+        , "  doctrine A;"
+        , "  syntax S;"
+        , "  model M;"
+        , "  show normalized;"
+        , "}"
+        , "---"
+        , "e"
+        ]
+  case parseRawFile prog of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()

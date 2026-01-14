@@ -1,0 +1,9 @@
+model StringMonoid where {
+  default = error "unknown op";
+
+  op e() = "";
+  op m(x,y) = x ++ y;
+  op k(x) = x;
+  op x() = "x";
+  op y() = "y";
+}

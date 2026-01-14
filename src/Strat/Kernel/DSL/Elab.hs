@@ -1,57 +1,91 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Kernel.DSL.Elab
-  ( loadDoctrines
-  , elabRawFile
+  ( elabRawFile
+  , elabRawFileWithEnv
   , elabPresentation
   ) where
 
 import Strat.Kernel.DSL.AST
-import Strat.Kernel.DSL.Parse (parseRawFile)
 import Strat.Kernel.DoctrineExpr
 import Strat.Kernel.Presentation
 import Strat.Kernel.Rule
 import Strat.Kernel.Signature
 import Strat.Kernel.Term
 import Strat.Kernel.Syntax
+import Strat.Kernel.RewriteSystem (RewritePolicy(..))
+import Strat.Syntax.Spec
+import Strat.Model.Spec
+import Strat.Frontend.Env
+import Strat.Frontend.RunSpec
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import Control.Monad (foldM)
+
 
 data Def = Def
   { defExpr :: DocExpr
   , defRawPresentation :: Maybe Presentation
   }
 
-type Env = M.Map Text Def
+type DocEnv = M.Map Text Def
 type VarEnv = M.Map Text (Var, Sort)
 
-loadDoctrines :: Text -> Either Text (M.Map Text DocExpr)
-loadDoctrines input = do
-  rf <- parseRawFile input
-  elabRawFile rf
+elabRawFile :: RawFile -> Either Text ModuleEnv
+elabRawFile = elabRawFileWithEnv emptyEnv
 
-elabRawFile :: RawFile -> Either Text (M.Map Text DocExpr)
-elabRawFile (RawFile decls) = do
-  env <- foldM step M.empty decls
-  pure (M.map defExpr env)
+elabRawFileWithEnv :: ModuleEnv -> RawFile -> Either Text ModuleEnv
+elabRawFileWithEnv baseEnv (RawFile decls) = do
+  let baseDocEnv = docsFromEnv baseEnv
+  (docEnv, env) <- foldM step (baseDocEnv, baseEnv) decls
+  let env' = env { meDoctrines = M.map defExpr docEnv }
+  pure env'
   where
-    step env decl =
+    step (docEnv, env) decl =
       case decl of
+        DeclImport _ -> Right (docEnv, env)
         DeclWhere name items -> do
-          if M.member name env
-            then Left ("Duplicate doctrine name: " <> name)
-            else do
-              pres <- elabPresentation name items
-              let def = Def { defExpr = Atom name pres, defRawPresentation = Just pres }
-              pure (M.insert name def env)
+          ensureAbsent "doctrine" name (meDoctrines env)
+          pres <- elabPresentation name items
+          let def = Def { defExpr = Atom name pres, defRawPresentation = Just pres }
+          let docEnv' = M.insert name def docEnv
+          pure (docEnv', env
+            { meDoctrines = M.insert name (defExpr def) (meDoctrines env)
+            , mePresentations = M.insert name pres (mePresentations env)
+            })
         DeclExpr name expr -> do
-          if M.member name env
-            then Left ("Duplicate doctrine name: " <> name)
-            else do
-              dexpr <- resolveExpr env expr
-              let def = Def { defExpr = dexpr, defRawPresentation = Nothing }
-              pure (M.insert name def env)
+          ensureAbsent "doctrine" name (meDoctrines env)
+          dexpr <- resolveExpr docEnv expr
+          let def = Def { defExpr = dexpr, defRawPresentation = Nothing }
+          let docEnv' = M.insert name def docEnv
+          pure (docEnv', env { meDoctrines = M.insert name dexpr (meDoctrines env) })
+        DeclSyntaxWhere name items -> do
+          ensureAbsent "syntax" name (meSyntaxes env)
+          spec <- elabSyntaxSpec name items
+          let env' = env { meSyntaxes = M.insert name spec (meSyntaxes env) }
+          pure (docEnv, env')
+        DeclModelWhere name items -> do
+          ensureAbsent "model" name (meModels env)
+          spec <- elabModelSpec name items
+          let env' = env { meModels = M.insert name spec (meModels env) }
+          pure (docEnv, env')
+        DeclRun rawRun -> do
+          case meRun env of
+            Just _ -> Left "Multiple run blocks found"
+            Nothing -> do
+              runSpec <- elabRun rawRun
+              pure (docEnv, env { meRun = Just runSpec })
+
+    docsFromEnv env =
+      M.mapWithKey
+        (\name expr -> Def { defExpr = expr, defRawPresentation = M.lookup name (mePresentations env) })
+        (meDoctrines env)
+
+ensureAbsent :: Text -> Text -> M.Map Text v -> Either Text ()
+ensureAbsent label name mp =
+  if M.member name mp
+    then Left ("Duplicate " <> label <> " name: " <> name)
+    else Right ()
 
 elabPresentation :: Text -> [RawItem] -> Either Text Presentation
 elabPresentation name items = do
@@ -137,7 +171,7 @@ elabSort sig env (RawSort name idx) = do
     Left err -> Left (renderSortError err)
     Right s -> Right s
 
-resolveExpr :: Env -> RawExpr -> Either Text DocExpr
+resolveExpr :: DocEnv -> RawExpr -> Either Text DocExpr
 resolveExpr env expr =
   case expr of
     ERef name ->
@@ -166,6 +200,97 @@ mapSortNames m = M.fromList [(SortName k, SortName v) | (k, v) <- M.toList m]
 
 mapPair :: (Text -> a) -> [(Text, Text)] -> [(a, a)]
 mapPair f = map (\(a, b) -> (f a, f b))
+
+elabSyntaxSpec :: Text -> [RawSyntaxItem] -> Either Text SyntaxSpec
+elabSyntaxSpec name items =
+  foldM step initial items
+  where
+    initial = SyntaxSpec
+      { ssName = name
+      , ssNotations = []
+      , ssAllowCall = False
+      , ssVarPrefix = "?"
+      , ssAllowQualId = True
+      }
+
+    step spec item =
+      case item of
+        RSAllowCall -> pure spec { ssAllowCall = True }
+        RSVarPrefix pfx -> pure spec { ssVarPrefix = pfx }
+        RSPrint note -> pure spec { ssNotations = ssNotations spec <> [toNotation True note] }
+        RSParse note -> pure spec { ssNotations = ssNotations spec <> [toNotation False note] }
+
+    toNotation printable note =
+      case note of
+        RNAtom tok op -> NotationSpec NAtom tok op printable
+        RNPrefix prec tok op -> NotationSpec (NPrefix prec) tok op printable
+        RNPostfix prec tok op -> NotationSpec (NPostfix prec) tok op printable
+        RNInfix assoc prec tok op -> NotationSpec (NInfix (toAssoc assoc) prec) tok op printable
+
+    toAssoc a =
+      case a of
+        AssocL -> LeftAssoc
+        AssocR -> RightAssoc
+        AssocN -> NonAssoc
+
+elabModelSpec :: Text -> [RawModelItem] -> Either Text ModelSpec
+elabModelSpec name items = do
+  let defaults = [ d | RMDefault d <- items ]
+  def <-
+    case defaults of
+      [] -> Right DefaultSymbolic
+      [RawDefaultSymbolic] -> Right DefaultSymbolic
+      [RawDefaultError msg] -> Right (DefaultError msg)
+      _ -> Left "Multiple default clauses in model"
+  let clauses = [ c | RMOp c <- items ]
+  let opNames = map rmcOp clauses
+  case findDup opNames of
+    Just dup -> Left ("Duplicate op clause in model: " <> dup)
+    Nothing -> pure ()
+  let ops = map (\c -> OpClause (rmcOp c) (rmcArgs c) (rmcExpr c)) clauses
+  pure ModelSpec
+    { msName = name
+    , msClauses = ops
+    , msDefault = def
+    }
+  where
+    findDup xs = go M.empty xs
+    go _ [] = Nothing
+    go seen (x:rest)
+      | M.member x seen = Just x
+      | otherwise = go (M.insert x () seen) rest
+
+elabRun :: RawRun -> Either Text RunSpec
+elabRun raw = do
+  doctrine <- maybe (Left "run: missing doctrine") Right (rrDoctrine raw)
+  syntax <- maybe (Left "run: missing syntax") Right (rrSyntax raw)
+  model <- maybe (Left "run: missing model") Right (rrModel raw)
+  policy <- maybe (Right UseOnlyComputationalLR) parsePolicy (rrPolicy raw)
+  let fuel = maybe 50 id (rrFuel raw)
+  let showFlags = if null (rrShowFlags raw) then [ShowNormalized, ShowValue, ShowCat] else map toShow (rrShowFlags raw)
+  pure RunSpec
+    { runDoctrine = doctrine
+    , runSyntax = syntax
+    , runModel = model
+    , runOpen = rrOpen raw
+    , runPolicy = policy
+    , runFuel = fuel
+    , runShowFlags = showFlags
+    , runExprText = rrExprText raw
+    }
+  where
+    parsePolicy name =
+      case name of
+        "UseOnlyComputationalLR" -> Right UseOnlyComputationalLR
+        "UseStructuralAsBidirectional" -> Right UseStructuralAsBidirectional
+        "UseAllOriented" -> Right UseAllOriented
+        _ -> Left ("Unknown policy: " <> name)
+
+    toShow s =
+      case s of
+        RawShowNormalized -> ShowNormalized
+        RawShowValue -> ShowValue
+        RawShowCat -> ShowCat
 
 renderTypeError :: TypeError -> Text
 renderTypeError = T.pack . show
