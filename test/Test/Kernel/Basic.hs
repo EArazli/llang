@@ -27,7 +27,7 @@ tests =
     , testCase "mkOp arg sort mismatch" testMkOpArgSort
     , testCase "mkOp binder sort depends on earlier binder" testMkOpDependentBinder
     , testCase "positions preorder" testPositionsOrder
-    , testCase "subtermAt/replaceAt" testSubtermReplace
+    , testCase "subtermAt/replaceAtChecked" testSubtermReplace
     , testCase "renameScope touches only one scope" testRenameScope
     , testCase "applySubstTerm recursive" testApplySubstRecursive
     , testCase "applySubstTerm updates sort indices" testApplySubstSortIndices
@@ -124,12 +124,12 @@ testSubtermReplace = do
   let fa = mkTerm sigBasic "f" [a]
   let term = mkTerm sigBasic "m" [fa, a]
   subtermAt term [0] @?= Just fa
-  case replaceAt term [0] a of
+  case replaceAtChecked sigBasic term [0] a of
     Nothing -> assertFailure "expected replaceAt"
     Just term' -> do
       termNode term' @?= termNode (mkTerm sigBasic "m" [a, a])
       termSort term' @?= termSort term
-  replaceAt term [2] a @?= Nothing
+  replaceAtChecked sigBasic term [2] a @?= Nothing
 
 testRenameScope :: Assertion
 testRenameScope = do

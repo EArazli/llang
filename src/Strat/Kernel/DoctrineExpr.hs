@@ -226,11 +226,17 @@ renameSortsSignature f sig = do
 
 renameOpsDecl :: (OpName -> OpName) -> OpDecl -> OpDecl
 renameOpsDecl f decl =
-  decl
-    { opName = f (opName decl)
-    , opTele = map (renameOpsBinder f) (opTele decl)
-    , opResult = renameOpsSort f (opResult decl)
-    }
+  let oldName = opName decl
+      newName = f oldName
+      oldScope = ScopeId ("op:" <> renderOpName oldName)
+      newScope = ScopeId ("op:" <> renderOpName newName)
+      tele' = map (renameScopeBinder oldScope newScope) (opTele decl)
+      res' = renameScopeSort oldScope newScope (opResult decl)
+  in decl
+      { opName = newName
+      , opTele = map (renameOpsBinder f) tele'
+      , opResult = renameOpsSort f res'
+      }
 
 renameSortsDecl :: (SortName -> SortName) -> OpDecl -> OpDecl
 renameSortsDecl f decl =

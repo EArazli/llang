@@ -6,7 +6,6 @@ module Strat.Kernel.Term
   , asVar
   , positions
   , subtermAt
-  , replaceAt
   , replaceAtChecked
   , renameScope
   , renameScopeVar
@@ -84,21 +83,6 @@ subtermAt t (i : is) =
   case termNode t of
     TOp _ args
       | i >= 0 && i < length args -> subtermAt (args !! i) is
-      | otherwise -> Nothing
-    _ -> Nothing
-
-replaceAt :: Term -> Pos -> Term -> Maybe Term
-replaceAt _ [] newTerm = Just newTerm
-replaceAt t (i : is) newTerm =
-  case termNode t of
-    TOp op args
-      | i >= 0 && i < length args ->
-          case splitAt i args of
-            (before, target : after) -> do
-              target' <- replaceAt target is newTerm
-              let args' = before ++ (target' : after)
-              pure Term { termSort = termSort t, termNode = TOp op args' }
-            _ -> Nothing
       | otherwise -> Nothing
     _ -> Nothing
 

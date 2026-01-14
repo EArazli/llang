@@ -32,6 +32,9 @@ tests =
     , testCase "variable condition violated bidirectional rejected" testVarConditionBidir
     , testCase "invalid cached term sort rejected" testInvalidCachedSort
     , testCase "invalid sort index rejected" testInvalidSortIndex
+    , testCase "binder sort mismatch rejected" testBinderSortMismatch
+    , testCase "binder sort refers to later binder rejected" testBinderSortLate
+    , testCase "binder sort out-of-scope var rejected" testBinderSortOutOfScope
     ]
 
 mkEq1 :: Text -> RuleClass -> Orientation -> (Term -> Term) -> (Term -> Term) -> Equation
@@ -237,3 +240,63 @@ testInvalidSortIndex = do
   case compileRewriteSystem UseAllOriented (basePres [eq]) of
     Left _ -> pure ()
     Right _ -> assertFailure "expected invalid sort index error"
+
+testBinderSortMismatch :: Assertion
+testBinderSortMismatch = do
+  let a = mkTerm sigBasic "a" []
+  let scope = ScopeId "eq:badBind"
+  let vx = Var scope 0
+  let xBad = mkVar (homSort a a) vx
+  let badTerm = Term { termSort = objSort, termNode = TOp opF [xBad] }
+  let eq =
+        Equation
+          { eqName = "badBind"
+          , eqClass = Computational
+          , eqOrient = LR
+          , eqTele = [Binder vx objSort]
+          , eqLHS = badTerm
+          , eqRHS = badTerm
+          }
+  case compileRewriteSystem UseAllOriented (basePres [eq]) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected binder sort mismatch error"
+
+testBinderSortLate :: Assertion
+testBinderSortLate = do
+  let scope = ScopeId "eq:late"
+  let vx = Var scope 0
+  let vy = Var scope 1
+  let y = mkVar objSort vy
+  let badSort = homSort y y
+  let eq =
+        Equation
+          { eqName = "late"
+          , eqClass = Computational
+          , eqOrient = LR
+          , eqTele = [Binder vx badSort, Binder vy objSort]
+          , eqLHS = mkVar badSort vx
+          , eqRHS = mkVar badSort vx
+          }
+  case compileRewriteSystem UseAllOriented (basePres [eq]) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected late binder sort error"
+
+testBinderSortOutOfScope :: Assertion
+testBinderSortOutOfScope = do
+  let scope = ScopeId "eq:oob"
+  let vx = Var scope 0
+  let vz = Var (ScopeId "eq:oob:z") 2
+  let z = mkVar objSort vz
+  let badSort = homSort z z
+  let eq =
+        Equation
+          { eqName = "oob"
+          , eqClass = Computational
+          , eqOrient = LR
+          , eqTele = [Binder vx badSort]
+          , eqLHS = mkVar badSort vx
+          , eqRHS = mkVar badSort vx
+          }
+  case compileRewriteSystem UseAllOriented (basePres [eq]) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected out-of-scope binder sort error"

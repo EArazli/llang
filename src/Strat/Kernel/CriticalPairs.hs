@@ -89,10 +89,11 @@ criticalPairsWith sig mode rules =
       | pos <- positions (lhs r2')
       , Just sub <- [subtermAt (lhs r2') pos]
       , Just mgu <- [unify (lhs r1') sub]
-      , Just replaced <- [replaceAtChecked sig' (lhs r2') pos (rhs r1')]
       , let peak = applySubstTerm mgu (lhs r2')
-      , let left = applySubstTerm mgu replaced
-      , let right = applySubstTerm mgu (rhs r2')
+      , let rhs1 = applySubstTerm mgu (rhs r1')
+      , let rhs2 = applySubstTerm mgu (rhs r2')
+      , Just left <- [replaceAtChecked sig' peak pos rhs1]
+      , let right = rhs2
       ]
 
     renameRule tag r =

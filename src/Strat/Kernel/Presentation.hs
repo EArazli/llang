@@ -13,6 +13,7 @@ import Data.Text (Text)
 import qualified Data.List as L
 import qualified Data.Set as S
 import qualified Data.Text as T
+import qualified Data.Map.Strict as M
 
 data Presentation = Presentation
   { presName :: Text
@@ -34,12 +35,17 @@ validateEquation sig eq = do
       in if S.null bad
            then do
              validateEqScopes eq
+             env <- validateTele sig (eqName eq) (eqTele eq)
+             checkVarSorts (eqName eq) env (eqLHS eq)
+             checkVarSorts (eqName eq) env (eqRHS eq)
              validateTerm sig (eqLHS eq)
              validateTerm sig (eqRHS eq)
            else Left ("Equation has out-of-scope vars: " <> eqName eq)
 
 validatePresentation :: Presentation -> Either Text ()
-validatePresentation pres = mapM_ (validateEquation (presSig pres)) (presEqs pres)
+validatePresentation pres = do
+  validateSignature (presSig pres)
+  mapM_ (validateEquation (presSig pres)) (presEqs pres)
 
 validateEqScopes :: Equation -> Either Text ()
 validateEqScopes eq = do
@@ -68,6 +74,74 @@ varsTerm term =
 
 varsInSort :: Sort -> S.Set Var
 varsInSort (Sort _ idx) = S.unions (map varsTerm idx)
+
+validateSignature :: Signature -> Either Text ()
+validateSignature sig = do
+  mapM_ (validateSortCtor sig) (M.elems (sigSortCtors sig))
+  mapM_ (validateOpDecl sig) (M.elems (sigOps sig))
+
+validateSortCtor :: Signature -> SortCtor -> Either Text ()
+validateSortCtor sig ctor = mapM_ (validateClosedSort sig) (scParamSort ctor)
+
+validateClosedSort :: Signature -> Sort -> Either Text ()
+validateClosedSort sig s = do
+  validateSort sig s
+  if S.null (varsInSort s)
+    then Right ()
+    else Left ("Sort constructor parameter has free vars: " <> renderSort s)
+
+validateOpDecl :: Signature -> OpDecl -> Either Text ()
+validateOpDecl sig decl = do
+  let scope = ScopeId ("op:" <> renderOpName (opName decl))
+  validateOpBinderScopes scope (opName decl) (opTele decl)
+  env <- validateTele sig (renderOpName (opName decl)) (opTele decl)
+  let used = varsInSort (opResult decl)
+  let allowed = S.fromList (M.keys env)
+  if S.isSubsetOf used allowed
+    then do
+      checkSort (renderOpName (opName decl)) env (opResult decl)
+      validateSort sig (opResult decl)
+    else Left ("Op result sort has out-of-scope vars: " <> renderOpName (opName decl))
+
+validateOpBinderScopes :: ScopeId -> OpName -> [Binder] -> Either Text ()
+validateOpBinderScopes expected opName0 binders =
+  case filter (\v -> vScope v /= expected) (map bVar binders) of
+    (v : _) -> Left ("Op binder has invalid scope: " <> renderOpName opName0 <> " (" <> renderScope (vScope v) <> ")")
+    [] ->
+      let locals = map vLocal (map bVar binders)
+          expectedLocals = [0 .. length binders - 1]
+      in if L.sort locals == expectedLocals
+           then Right ()
+           else Left ("Op binder locals not contiguous: " <> renderOpName opName0)
+
+validateTele :: Signature -> Text -> [Binder] -> Either Text (M.Map Var Sort)
+validateTele sig eqName0 = go M.empty
+  where
+    go env [] = Right env
+    go env (Binder v s : rest) = do
+      validateSort sig s
+      checkSort eqName0 env s
+      let used = varsInSort s
+      let bad = used `S.difference` S.fromList (M.keys env)
+      if S.null bad
+        then go (M.insert v s env) rest
+        else Left ("Binder sort has out-of-scope vars: " <> eqName0)
+
+checkVarSorts :: Text -> M.Map Var Sort -> Term -> Either Text ()
+checkVarSorts eqName0 env tm = do
+  checkSort eqName0 env (termSort tm)
+  case termNode tm of
+    TVar v ->
+      case M.lookup v env of
+        Nothing -> Right ()
+        Just decl ->
+          if termSort tm == decl
+            then Right ()
+            else Left ("Variable sort mismatch in equation: " <> eqName0)
+    TOp _ args -> mapM_ (checkVarSorts eqName0 env) args
+
+checkSort :: Text -> M.Map Var Sort -> Sort -> Either Text ()
+checkSort eqName0 env (Sort _ idx) = mapM_ (checkVarSorts eqName0 env) idx
 
 validateTerm :: Signature -> Term -> Either Text ()
 validateTerm sig tm = do
@@ -106,3 +180,6 @@ renderSortError = T.pack . show
 
 renderSort :: Sort -> Text
 renderSort = T.pack . show
+
+renderOpName :: OpName -> Text
+renderOpName (OpName t) = t
