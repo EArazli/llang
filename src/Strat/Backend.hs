@@ -15,6 +15,8 @@ import Data.Text (Text)
 data Value
   = VAtom Text
   | VList [Value]
+  | VInt Int
+  | VString Text
   deriving (Eq, Show)
 
 data SortValue = SortValue Text

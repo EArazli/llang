@@ -1,0 +1,22 @@
+doctrine SKI where {
+  sort T;
+
+  op app : (f:T) (x:T) -> T;
+
+  op S : T;
+  op K : T;
+  op I : T;
+
+  op a : T;
+  op b : T;
+
+  computational i : (x:T) |-
+    app(I, ?x) -> ?x;
+
+  computational k : (x:T) (y:T) |-
+    app(app(K, ?x), ?y) -> ?x;
+
+  computational s : (f:T) (g:T) (x:T) |-
+    app(app(app(S, ?f), ?g), ?x)
+      -> app(app(?f, ?x), app(?g, ?x));
+}

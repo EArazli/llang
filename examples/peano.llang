@@ -1,0 +1,21 @@
+doctrine Nat where {
+  sort Nat;
+
+  op Z : Nat;
+  op S : (n:Nat) -> Nat;
+
+  op add : (x:Nat) (y:Nat) -> Nat;
+  op mul : (x:Nat) (y:Nat) -> Nat;
+
+  computational addZ : (y:Nat) |-
+    add(Z, ?y) -> ?y;
+
+  computational addS : (x:Nat) (y:Nat) |-
+    add(S(?x), ?y) -> S(add(?x, ?y));
+
+  computational mulZ : (y:Nat) |-
+    mul(Z, ?y) -> Z;
+
+  computational mulS : (x:Nat) (y:Nat) |-
+    mul(S(?x), ?y) -> add(?y, mul(?x, ?y));
+}

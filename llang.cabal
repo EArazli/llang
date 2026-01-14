@@ -20,6 +20,9 @@ extra-source-files:
     CHANGELOG.md
 data-files:
     examples/monoid.llang
+    examples/cat.llang
+    examples/peano.llang
+    examples/ski.llang
 
 source-repository head
   type: git
@@ -30,6 +33,7 @@ library
       Lib
       Strat.Backend
       Strat.Backend.Concat
+      Strat.Backend.Models
       Strat.CLI
       Strat.Kernel.Coherence
       Strat.Kernel.CriticalPairs
@@ -53,6 +57,8 @@ library
       Strat.Surface
       Strat.Surface.Combinator
       Strat.Surface.Combinator.Parse
+      Strat.Surface.Lambda
+      Strat.Surface.Lambda.Parse
   other-modules:
       Paths_llang
   autogen-modules:

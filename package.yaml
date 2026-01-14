@@ -11,6 +11,9 @@ extra-source-files:
 - CHANGELOG.md
 data-files:
 - examples/monoid.llang
+- examples/cat.llang
+- examples/peano.llang
+- examples/ski.llang
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package

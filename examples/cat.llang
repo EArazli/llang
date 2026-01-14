@@ -1,0 +1,41 @@
+doctrine CatCore where {
+  sort Obj;
+  sort Hom(Obj, Obj);
+
+  op id : (x:Obj) -> Hom(?x, ?x);
+
+  op comp :
+    (a:Obj) (b:Obj) (c:Obj)
+    (f:Hom(?b, ?c)) (g:Hom(?a, ?b))
+    -> Hom(?a, ?c);
+
+  computational idL :
+    (a:Obj) (b:Obj) (g:Hom(?a, ?b)) |-
+      comp(?a, ?b, ?b, id(?b), ?g) -> ?g;
+
+  computational idR :
+    (a:Obj) (b:Obj) (f:Hom(?a, ?b)) |-
+      comp(?a, ?a, ?b, ?f, id(?a)) -> ?f;
+
+  computational assoc :
+    (a:Obj) (b:Obj) (c:Obj) (d:Obj)
+    (h:Hom(?c, ?d)) (g:Hom(?b, ?c)) (f:Hom(?a, ?b)) |-
+      comp(?a, ?b, ?d, comp(?b, ?c, ?d, ?h, ?g), ?f)
+        -> comp(?a, ?c, ?d, ?h, comp(?a, ?b, ?c, ?g, ?f));
+}
+
+doctrine CatGen where {
+  sort Obj;
+  sort Hom(Obj, Obj);
+
+  op A : Obj;
+  op B : Obj;
+  op C : Obj;
+  op D : Obj;
+
+  op f : Hom(A, B);
+  op g : Hom(B, C);
+  op h : Hom(C, D);
+}
+
+doctrine Cat = (CatCore@C) & (CatGen@C);

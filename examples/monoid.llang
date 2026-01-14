@@ -2,6 +2,8 @@ doctrine Base where {
   sort Obj;
   op e : Obj;
   op m : (a:Obj) (b:Obj) -> Obj;
+  op x : Obj;
+  op y : Obj;
 
   computational unitL : (x:Obj) |- m(e, ?x) -> ?x;
   computational unitR : (x:Obj) |- m(?x, e) -> ?x;
