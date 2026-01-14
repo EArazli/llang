@@ -18,6 +18,8 @@ build-type:     Simple
 extra-source-files:
     README.md
     CHANGELOG.md
+data-files:
+    examples/monoid.llang
 
 source-repository head
   type: git
@@ -28,6 +30,7 @@ library
       Lib
       Strat.Backend
       Strat.Backend.Concat
+      Strat.CLI
       Strat.Kernel.Coherence
       Strat.Kernel.CriticalPairs
       Strat.Kernel.DoctrineExpr
@@ -49,6 +52,7 @@ library
       Strat.Kernel.Unify
       Strat.Surface
       Strat.Surface.Combinator
+      Strat.Surface.Combinator.Parse
   other-modules:
       Paths_llang
   autogen-modules:
@@ -96,6 +100,10 @@ test-suite llang-test
       Test.Kernel.Rewrite
       Test.Kernel.RewriteSystem
       Test.Surface
+      Test.CLI
+      Paths_llang
+  autogen-modules:
+      Paths_llang
   hs-source-dirs:
       test
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N

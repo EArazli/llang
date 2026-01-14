@@ -12,6 +12,7 @@ import qualified Test.Kernel.DSL as KernelDSL
 import qualified Test.Kernel.Relative as KernelRelative
 import qualified Test.Surface as Surface
 import qualified Test.Backend as Backend
+import qualified Test.CLI as CLI
 
 main :: IO ()
 main =
@@ -29,4 +30,5 @@ main =
       , KernelRelative.tests
       , Surface.tests
       , Backend.tests
+      , CLI.tests
       ]

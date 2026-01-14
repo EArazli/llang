@@ -9,6 +9,8 @@ copyright:           "2026 Author name here"
 extra-source-files:
 - README.md
 - CHANGELOG.md
+data-files:
+- examples/monoid.llang
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -75,3 +77,5 @@ tests:
     - Test.Kernel.Rewrite
     - Test.Kernel.RewriteSystem
     - Test.Surface
+    - Test.CLI
+    - Paths_llang
