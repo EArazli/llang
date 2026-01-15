@@ -16,4 +16,4 @@ run where {
   show value;
 }
 ---
-S(S(Z)) * (S(Z) + S(S(S(Z))))
+S(S(Z)) * (S(Z) + S(S(Z)))

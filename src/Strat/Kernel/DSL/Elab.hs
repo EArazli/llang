@@ -146,10 +146,13 @@ elabBinders sig scope binders =
   foldM step ([], M.empty, 0) binders >>= \(bs, env, _) -> pure (bs, env)
   where
     step (acc, env, ix) (RawBinder name sRaw) = do
-      let v = Var scope ix
-      s <- elabSort sig env sRaw
-      let env' = M.insert name (v, s) env
-      pure (acc <> [Binder v s], env', ix + 1)
+      if M.member name env
+        then Left ("Duplicate binder name: " <> name)
+        else do
+          let v = Var scope ix
+          s <- elabSort sig env sRaw
+          let env' = M.insert name (v, s) env
+          pure (acc <> [Binder v s], env', ix + 1)
 
 elabTerm :: Signature -> VarEnv -> RawTerm -> Either Text Term
 elabTerm sig env tm =

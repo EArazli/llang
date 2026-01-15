@@ -11,12 +11,13 @@ module Strat.Syntax.Spec
 import Strat.Surface.Combinator (CombTerm(..))
 import Strat.Kernel.Presentation (Presentation(..))
 import Strat.Kernel.Signature (Signature(..), OpDecl(..))
-import Strat.Kernel.Syntax (OpName(..), Term(..), TermNode(..))
+import Strat.Kernel.Syntax (OpName(..), Term(..), TermNode(..), Var(..), ScopeId(..))
 import Strat.Frontend.Resolve (resolveOpText)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Data.List (sortBy)
+import Data.Char (isAlphaNum)
 import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -65,6 +66,7 @@ type Parser = Parsec Void Text
 instantiateSyntax :: Presentation -> [Text] -> SyntaxSpec -> Either Text SyntaxInstance
 instantiateSyntax pres opens spec = do
   resolved <- mapM (resolveNotation sig opens) (ssNotations spec)
+  validateNotations resolved
   let parseNotations = resolved
   let printable = filter (rnPrint . snd) resolved
   let printerTable = buildPrinterTable printable
@@ -75,7 +77,7 @@ instantiateSyntax pres opens spec = do
   let parser = buildParser resolver (ssVarPrefix spec) (ssAllowCall spec) (ssAllowQualId spec) parseNotations
   pure SyntaxInstance
     { siParse = parser
-    , siPrint = printTerm printerTable
+    , siPrint = printTerm (ssVarPrefix spec) printerTable
     }
   where
     sig = presSig pres
@@ -118,6 +120,60 @@ data ResolvedNotation = ResolvedNotation
 
 rnPrint :: NotationSpec -> Bool
 rnPrint = nsPrint
+
+validateNotations :: [(ResolvedNotation, NotationSpec)] -> Either Text ()
+validateNotations resolved = do
+  checkPrintDuplicates
+  checkTokenCollisions
+  where
+    checkPrintDuplicates =
+      case dupPrintOps of
+        [] -> Right ()
+        (op:_) -> Left ("Multiple print notations for op " <> renderOp op)
+
+    dupPrintOps =
+      let ops = [ rnOp rn | (rn, nspec) <- resolved, nsPrint nspec ]
+      in findDup ops
+
+    checkTokenCollisions =
+      case collisions of
+        [] -> Right ()
+        ((tok, kind, prec, op1, op2):_) ->
+          Left ("Token collision for " <> tok <> " (" <> kind <> prec <> "): " <> renderOp op1 <> " vs " <> renderOp op2)
+
+    collisions = go M.empty (map toKey resolved)
+
+    go _ [] = []
+    go seen ((key, op):rest) =
+      case M.lookup key seen of
+        Nothing -> go (M.insert key op seen) rest
+        Just op'
+          | op' == op -> go seen rest
+          | otherwise -> (tokenText key, kindText key, precText key, op', op) : go seen rest
+
+    toKey (rn, _) = (keyFrom rn, rnOp rn)
+
+    keyFrom rn =
+      case rnKind rn of
+        NAtom -> Key "atom" Nothing (rnToken rn)
+        NPrefix prec -> Key "prefix" (Just prec) (rnToken rn)
+        NPostfix prec -> Key "postfix" (Just prec) (rnToken rn)
+        NInfix _ prec -> Key "infix" (Just prec) (rnToken rn)
+
+    tokenText (Key _ _ tok) = tok
+    kindText (Key k _ _) = k
+    precText (Key _ mp _) = maybe "" (\p -> "@" <> T.pack (show p)) mp
+
+data Key = Key Text (Maybe Int) Text
+  deriving (Eq, Ord, Show)
+
+findDup :: Ord a => [a] -> [a]
+findDup xs = go M.empty xs
+  where
+    go _ [] = []
+    go seen (y:ys)
+      | M.member y seen = y : go seen ys
+      | otherwise = go (M.insert y () seen) ys
 
 buildParser :: (Text -> Maybe OpName) -> Text -> Bool -> Bool -> [(ResolvedNotation, NotationSpec)] -> (Text -> Either Text CombTerm)
 buildParser resolveName varPrefix allowCall allowQual notations = \input ->
@@ -255,25 +311,25 @@ data PrinterTable = PrinterTable
 emptyTable :: PrinterTable
 emptyTable = PrinterTable M.empty M.empty M.empty M.empty
 
-printTerm :: PrinterTable -> Term -> Text
-printTerm table = go 0
+printTerm :: Text -> PrinterTable -> Term -> Text
+printTerm varPrefix table = go 0
   where
     go prec t =
       case termNode t of
-        TVar _ -> "?"
+        TVar v -> varPrefix <> renderVar v
         TOp op args ->
           case args of
             [] -> fromMaybe (renderOp op) (M.lookup op (ptAtom table))
             [x] ->
               case M.lookup op (ptPrefix table) of
                 Just (p, tok) ->
-                  let inner = go p x
-                  in parenIf (p < prec) (tok <> inner)
+                  let inner = go 0 x
+                  in parenIf (p < prec) (tok <> "(" <> inner <> ")")
                 Nothing ->
                   case M.lookup op (ptPostfix table) of
                     Just (p, tok) ->
-                      let inner = go p x
-                      in parenIf (p < prec) (inner <> tok)
+                      let inner = go 0 x
+                      in parenIf (p < prec) ("(" <> inner <> ")" <> tok)
                     Nothing -> fallback op args
             [a,b] ->
               case M.lookup op (ptInfix table) of
@@ -293,6 +349,11 @@ printTerm table = go 0
 
     parenIf True txt = "(" <> txt <> ")"
     parenIf False txt = txt
+
+    renderVar (Var (ScopeId scope) local) =
+      "v_" <> sanitize scope <> "_" <> T.pack (show local)
+
+    sanitize = T.map (\c -> if isAlphaNum c || c == '_' || c == '-' then c else '_')
 
 fromMaybe :: a -> Maybe a -> a
 fromMaybe def m = case m of

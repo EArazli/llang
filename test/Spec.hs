@@ -14,6 +14,7 @@ import qualified Test.Surface as Surface
 import qualified Test.Backend as Backend
 import qualified Test.CLI as CLI
 import qualified Test.Frontend.SyntaxModel as FrontendSyntaxModel
+import qualified Test.Frontend.Loader as FrontendLoader
 
 main :: IO ()
 main =
@@ -32,5 +33,6 @@ main =
       , Surface.tests
       , Backend.tests
       , FrontendSyntaxModel.tests
+      , FrontendLoader.tests
       , CLI.tests
       ]

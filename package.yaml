@@ -94,6 +94,7 @@ tests:
     - Test.Kernel.Rewrite
     - Test.Kernel.RewriteSystem
     - Test.Frontend.SyntaxModel
+    - Test.Frontend.Loader
     - Test.Surface
     - Test.CLI
     - Paths_llang
