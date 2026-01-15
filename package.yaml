@@ -12,10 +12,16 @@ extra-source-files:
 data-files:
 - examples/monoid.llang
 - examples/monoid.syntax.llang
+- examples/monoid.syntax.alt.llang
 - examples/monoid.models.llang
+- examples/monoid.models.int.llang
 - examples/monoid.run.llang
+- examples/monoid.alt.run.llang
 - examples/cat.llang
 - examples/cat.run.llang
+- examples/ccc.llang
+- examples/ccc.syntax.llang
+- examples/ccc.run.llang
 - examples/peano.llang
 - examples/peano.syntax.llang
 - examples/peano.models.llang
@@ -23,6 +29,11 @@ data-files:
 - examples/ski.llang
 - examples/ski.syntax.llang
 - examples/ski.run.llang
+- examples/ccc_surface/ccc.doctrine.llang
+- examples/ccc_surface/ccc.interface.llang
+- examples/ccc_surface/stlc.surface.llang
+- examples/ccc_surface/stlc.syntax.llang
+- examples/ccc_surface/stlc.run.llang
 - stdlib/syntax.llang
 - stdlib/models.llang
 
@@ -41,6 +52,7 @@ dependencies:
 - directory
 - filepath
 - megaparsec
+- mtl
 - parser-combinators
 - text
 
@@ -81,6 +93,8 @@ tests:
     - llang
     - tasty
     - tasty-hunit
+    - QuickCheck
+    - tasty-quickcheck
     other-modules:
     - Test.Backend
     - Test.Kernel.Basic
@@ -96,5 +110,7 @@ tests:
     - Test.Frontend.SyntaxModel
     - Test.Frontend.Loader
     - Test.Surface
+    - Test.Surface2.Term
+    - Test.Surface2.Pattern
     - Test.CLI
     - Paths_llang

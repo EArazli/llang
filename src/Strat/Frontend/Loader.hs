@@ -11,16 +11,14 @@ import Data.Text (Text)
 import qualified Data.Text.IO as TIO
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
-import qualified Data.Text as T
+import Control.Monad (foldM)
 import System.FilePath (takeDirectory, (</>))
 import System.Directory (canonicalizePath)
-import Data.List (sort)
-import Control.Monad (foldM)
 
 
 data LoadedModule = LoadedModule
-  { lmLocal   :: ModuleEnv
-  , lmClosure :: S.Set FilePath
+  { lmLocal :: ModuleEnv
+  , lmDeps  :: S.Set FilePath
   }
 
 data LoadState = LoadState
@@ -35,16 +33,15 @@ loadModule :: FilePath -> IO (Either Text ModuleEnv)
 loadModule path = do
   absPath <- canonicalizePath path
   result <- loadModuleWith emptyState absPath True
-  pure ((\(_, _, env) -> env) <$> result)
+  case result of
+    Left err -> pure (Left err)
+    Right (st, modMain) -> pure (envFromDeps st (lmDeps modMain))
 
-loadModuleWith :: LoadState -> FilePath -> Bool -> IO (Either Text (LoadState, S.Set FilePath, ModuleEnv))
+loadModuleWith :: LoadState -> FilePath -> Bool -> IO (Either Text (LoadState, LoadedModule))
 loadModuleWith st path isMain = do
   absPath <- canonicalizePath path
   case M.lookup absPath (lsLoaded st) of
-    Just loaded -> do
-      case envForPaths st (lmClosure loaded) of
-        Left err -> pure (Left err)
-        Right env -> pure (Right (st, lmClosure loaded, env))
+    Just mod -> pure (Right (st, mod))
     Nothing ->
       if absPath `S.member` lsLoading st
         then pure (Left "Import cycle detected")
@@ -58,58 +55,61 @@ loadModuleWith st path isMain = do
               resImports <- loadImports stLoading (takeDirectory absPath) imports
               case resImports of
                 Left err -> pure (Left err)
-                Right (stAfter, closureImports) ->
-                  case envForPaths stAfter closureImports of
+                Right (stAfter, importMods) ->
+                  case depsFromMods importMods of
                     Left err -> pure (Left err)
-                    Right envBase ->
-                      case elabRawFileWithEnv envBase raw of
+                    Right importDeps ->
+                      case envFromDeps stAfter importDeps of
                         Left err -> pure (Left err)
-                        Right envFull ->
-                          let envLocal = diffEnv envFull envBase
-                          in if not isMain && meRun envLocal /= Nothing
-                            then pure (Left "run block is only allowed in the main file")
-                            else do
-                              let closure = S.insert absPath closureImports
-                              let envAgg =
-                                    case mergeEnv envBase envLocal of
-                                      Left err -> Left err
-                                      Right merged -> Right merged
-                              let stFinal = stAfter
-                                    { lsLoading = S.delete absPath (lsLoading stAfter)
-                                    , lsLoaded = M.insert absPath (LoadedModule envLocal closure) (lsLoaded stAfter)
-                                    }
-                              case envAgg of
-                                Left err -> pure (Left err)
-                                Right merged -> pure (Right (stFinal, closure, merged))
+                        Right envBase ->
+                          case elabRawFileWithEnv envBase raw of
+                            Left err -> pure (Left err)
+                            Right envFull ->
+                              let envLocal = diffEnv envFull envBase
+                              in if not isMain && meRun envLocal /= Nothing
+                                then pure (Left "run block is only allowed in the main file")
+                                else do
+                                  let deps = S.insert absPath importDeps
+                                  let modLocal = LoadedModule envLocal deps
+                                  let stFinal = stAfter
+                                        { lsLoading = S.delete absPath (lsLoading stAfter)
+                                        , lsLoaded = M.insert absPath modLocal (lsLoaded stAfter)
+                                        }
+                                  pure (Right (stFinal, modLocal))
 
-loadImports :: LoadState -> FilePath -> [FilePath] -> IO (Either Text (LoadState, S.Set FilePath))
-loadImports st _ [] = pure (Right (st, S.empty))
+loadImports :: LoadState -> FilePath -> [FilePath] -> IO (Either Text (LoadState, [LoadedModule]))
+loadImports st _ [] = pure (Right (st, []))
 loadImports st base (p:ps) = do
   let nextPath = base </> p
   loaded <- loadModuleWith st nextPath False
   case loaded of
     Left err -> pure (Left err)
-    Right (st1, closure1, _) -> do
+    Right (st1, mod1) -> do
       rest <- loadImports st1 base ps
       case rest of
         Left err -> pure (Left err)
-        Right (st2, closureRest) ->
-          pure (Right (st2, S.union closure1 closureRest))
+        Right (st2, mods) -> pure (Right (st2, mod1 : mods))
 
-envForPaths :: LoadState -> S.Set FilePath -> Either Text ModuleEnv
-envForPaths st paths =
-  foldM step emptyEnv (sort (S.toList paths))
+depsFromMods :: [LoadedModule] -> Either Text (S.Set FilePath)
+depsFromMods mods = Right (S.unions (map lmDeps mods))
+
+envFromDeps :: LoadState -> S.Set FilePath -> Either Text ModuleEnv
+envFromDeps st deps =
+  foldM step emptyEnv (S.toList deps)
   where
     step acc path =
       case M.lookup path (lsLoaded st) of
-        Nothing -> Left ("Missing loaded module: " <> T.pack path)
-        Just loaded -> mergeEnv acc (lmLocal loaded)
+        Nothing -> Left "internal error: missing loaded module"
+        Just modLocal -> mergeEnv acc (lmLocal modLocal)
 
 diffEnv :: ModuleEnv -> ModuleEnv -> ModuleEnv
 diffEnv full base = ModuleEnv
   { meDoctrines = M.difference (meDoctrines full) (meDoctrines base)
   , mePresentations = M.difference (mePresentations full) (mePresentations base)
   , meSyntaxes = M.difference (meSyntaxes full) (meSyntaxes base)
+  , meSurfaces = M.difference (meSurfaces full) (meSurfaces base)
+  , meSurfaceSyntaxes = M.difference (meSurfaceSyntaxes full) (meSurfaceSyntaxes base)
+  , meInterfaces = M.difference (meInterfaces full) (meInterfaces base)
   , meModels = M.difference (meModels full) (meModels base)
   , meRun = meRun full
   }

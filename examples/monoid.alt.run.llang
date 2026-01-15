@@ -1,0 +1,19 @@
+import "./monoid.llang";
+import "./monoid.syntax.alt.llang";
+import "./monoid.models.int.llang";
+
+run where {
+  doctrine Combined;
+  open C;
+
+  syntax MonoidAltSyntax;
+  model IntMonoid;
+
+  policy UseOnlyComputationalLR;
+  fuel 50;
+
+  show normalized;
+  show value;
+}
+---
+id(unit + unit)

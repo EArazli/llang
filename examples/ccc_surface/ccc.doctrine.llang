@@ -1,0 +1,59 @@
+doctrine CCC where {
+  sort Obj;
+  sort Hom(Obj, Obj);
+
+  op id : (x:Obj) -> Hom(?x, ?x);
+
+  op comp :
+    (a:Obj) (b:Obj) (c:Obj)
+    (f:Hom(?b, ?c)) (g:Hom(?a, ?b))
+    -> Hom(?a, ?c);
+
+  computational idL :
+    (a:Obj) (b:Obj) (g:Hom(?a, ?b)) |-
+      comp(?a, ?b, ?b, id(?b), ?g) -> ?g;
+
+  computational idR :
+    (a:Obj) (b:Obj) (f:Hom(?a, ?b)) |-
+      comp(?a, ?a, ?b, ?f, id(?a)) -> ?f;
+
+  op Unit : Obj;
+  op prod : (a:Obj) (b:Obj) -> Obj;
+
+  op exl : (a:Obj) (b:Obj) -> Hom(prod(?a, ?b), ?a);
+  op exr : (a:Obj) (b:Obj) -> Hom(prod(?a, ?b), ?b);
+
+  op pair :
+    (a:Obj) (b:Obj) (c:Obj)
+    (f:Hom(?c, ?a)) (g:Hom(?c, ?b))
+    -> Hom(?c, prod(?a, ?b));
+
+  op exp : (a:Obj) (b:Obj) -> Obj;
+
+  op curry :
+    (a:Obj) (b:Obj) (c:Obj)
+    (f:Hom(prod(?c, ?a), ?b))
+    -> Hom(?c, exp(?a, ?b));
+
+  op eval :
+    (a:Obj) (b:Obj)
+    -> Hom(prod(exp(?a, ?b), ?a), ?b);
+
+  op terminal : (a:Obj) -> Hom(?a, Unit);
+
+  computational beta :
+    (a:Obj) (b:Obj) (c:Obj)
+    (f:Hom(prod(?c, ?a), ?b)) |-
+      comp(prod(?c, ?a), prod(exp(?a, ?b), ?a), ?b,
+           eval(?a, ?b),
+           pair(exp(?a, ?b), ?a, prod(?c, ?a),
+                comp(prod(?c, ?a), ?c, exp(?a, ?b),
+                     curry(?a, ?b, ?c, ?f),
+                     exl(?c, ?a)),
+                exr(?c, ?a)))
+        -> ?f;
+
+  op Bool : Obj;
+  op T : Hom(Unit, Bool);
+  op F : Hom(Unit, Bool);
+}

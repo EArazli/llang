@@ -14,6 +14,30 @@ module Strat.Kernel.DSL.AST
   , RawModelItem(..)
   , RawDefault(..)
   , RawModelClause(..)
+  , RawSurfaceDecl(..)
+  , RawSurfaceItem(..)
+  , RawSurfaceCon(..)
+  , RawSurfaceArg(..)
+  , RawSurfaceJudg(..)
+  , RawSurfaceJudgParam(..)
+  , RawSurfaceRule(..)
+  , RawSurfacePremise(..)
+  , RawSurfaceConclusion(..)
+  , RawSurfaceTerm(..)
+  , RawSurfacePat(..)
+  , RawCtxPat(..)
+  , RawNatPat(..)
+  , RawDefine(..)
+  , RawDefineClause(..)
+  , RawDefinePat(..)
+  , RawWhereClause(..)
+  , RawCoreExpr(..)
+  , RawSurfaceSyntaxDecl(..)
+  , RawSurfaceSyntaxItem(..)
+  , RawSurfaceNotation(..)
+  , RawSurfaceAssoc(..)
+  , RawInterfaceDecl(..)
+  , RawInterfaceItem(..)
   , RawRun(..)
   , RawRunShow(..)
   , RawFile(..)
@@ -81,6 +105,9 @@ data RawDecl
   | DeclExpr  Text RawExpr
   | DeclSyntaxWhere Text [RawSyntaxItem]
   | DeclModelWhere Text [RawModelItem]
+  | DeclSurfaceWhere RawSurfaceDecl
+  | DeclSurfaceSyntaxWhere RawSurfaceSyntaxDecl
+  | DeclInterfaceWhere RawInterfaceDecl
   | DeclRun RawRun
   deriving (Eq, Show)
 
@@ -141,12 +168,17 @@ data RawRunShow
   = RawShowNormalized
   | RawShowValue
   | RawShowCat
+  | RawShowInput
   deriving (Eq, Ord, Show)
 
 
 data RawRun = RawRun
   { rrDoctrine  :: Maybe RawExpr
   , rrSyntax    :: Maybe Text
+  , rrCoreSyntax :: Maybe Text
+  , rrSurface   :: Maybe Text
+  , rrSurfaceSyntax :: Maybe Text
+  , rrInterface :: Maybe Text
   , rrModel     :: Maybe Text
   , rrOpen      :: [Text]
   , rrPolicy    :: Maybe Text
@@ -155,6 +187,157 @@ data RawRun = RawRun
   , rrExprText  :: Text
   }
   deriving (Eq, Show)
+
+data RawSurfaceDecl = RawSurfaceDecl
+  { rsdName :: Text
+  , rsdItems :: [RawSurfaceItem]
+  } deriving (Eq, Show)
+
+data RawSurfaceItem
+  = RSRequiresInterface Text
+  | RSContextSort Text
+  | RSSort Text
+  | RSCon RawSurfaceCon
+  | RSJudg RawSurfaceJudg
+  | RSRule RawSurfaceRule
+  | RSDefine RawDefine
+  deriving (Eq, Show)
+
+data RawSurfaceCon = RawSurfaceCon
+  { rscName :: Text
+  , rscArgs :: [RawSurfaceArg]
+  , rscResult :: Text
+  } deriving (Eq, Show)
+
+data RawSurfaceArg = RawSurfaceArg
+  { rsaName :: Text
+  , rsaBinders :: [(Text, RawSurfaceTerm)]
+  , rsaSort :: Text
+  } deriving (Eq, Show)
+
+data RawSurfaceJudg = RawSurfaceJudg
+  { rsjName :: Text
+  , rsjParams :: [RawSurfaceJudgParam]
+  , rsjOutputs :: [RawSurfaceJudgParam]
+  } deriving (Eq, Show)
+
+data RawSurfaceJudgParam = RawSurfaceJudgParam
+  { rsjpName :: Text
+  , rsjpSort :: Text
+  } deriving (Eq, Show)
+
+data RawSurfaceRule = RawSurfaceRule
+  { rsrName :: Text
+  , rsrPremises :: [RawSurfacePremise]
+  , rsrConclusion :: RawSurfaceConclusion
+  } deriving (Eq, Show)
+
+data RawSurfacePremise
+  = RPremiseJudg
+      { rpjName :: Text
+      , rpjArgs :: [RawSurfacePat]
+      , rpjOutputs :: [Text]
+      , rpjUnder :: Maybe (Text, Text, RawSurfaceTerm)
+      }
+  | RPremiseLookup
+      { rplCtx :: Text
+      , rplIndex :: RawNatPat
+      , rplOut :: Text
+      }
+  deriving (Eq, Show)
+
+data RawSurfaceConclusion = RawSurfaceConclusion
+  { rcoName :: Text
+  , rcoArgs :: [RawSurfacePat]
+  , rcoOutputs :: [RawCoreExpr]
+  } deriving (Eq, Show)
+
+data RawSurfaceTerm
+  = RSTVar Text
+  | RSTBound Int
+  | RSTCon Text [RawSurfaceTerm]
+  deriving (Eq, Show)
+
+data RawSurfacePat
+  = RSPVar Text
+  | RSPBound Int
+  | RSPBoundVar Text
+  | RSPCon Text [RawSurfacePat]
+  deriving (Eq, Show)
+
+data RawCtxPat
+  = RCPEmpty
+  | RCPVar Text
+  | RCPExt Text Text RawSurfaceTerm
+  deriving (Eq, Show)
+
+data RawNatPat
+  = RNPZero
+  | RNPSucc Text
+  | RNPVar Text
+  deriving (Eq, Show)
+
+data RawDefine = RawDefine
+  { rdName :: Text
+  , rdClauses :: [RawDefineClause]
+  } deriving (Eq, Show)
+
+data RawDefineClause = RawDefineClause
+  { rdcArgs :: [RawDefinePat]
+  , rdcBody :: RawCoreExpr
+  , rdcWhere :: [RawWhereClause]
+  } deriving (Eq, Show)
+
+data RawDefinePat
+  = RDPVar Text
+  | RDPSurf RawSurfacePat
+  | RDPCtx RawCtxPat
+  | RDPNat RawNatPat
+  deriving (Eq, Show)
+
+data RawWhereClause = RawWhereClause
+  { rwcName :: Text
+  , rwcPat :: RawCtxPat
+  } deriving (Eq, Show)
+
+data RawCoreExpr
+  = RCEVar Text
+  | RCEApp Text [RawCoreExpr]
+  deriving (Eq, Show)
+
+data RawSurfaceSyntaxDecl = RawSurfaceSyntaxDecl
+  { rssName :: Text
+  , rssSurface :: Text
+  , rssItems :: [RawSurfaceSyntaxItem]
+  } deriving (Eq, Show)
+
+data RawSurfaceSyntaxItem
+  = RSSTy RawSurfaceNotation
+  | RSSTm RawSurfaceNotation
+  deriving (Eq, Show)
+
+data RawSurfaceNotation
+  = RSNAtom Text Text
+  | RSNPrefix Text Text
+  | RSNInfix RawSurfaceAssoc Int Text Text
+  | RSNBinder Text Text Text Text
+  | RSNApp Text
+  | RSNTuple Text Text
+  deriving (Eq, Show)
+
+data RawSurfaceAssoc = SurfAssocL | SurfAssocR | SurfAssocN
+  deriving (Eq, Show)
+
+data RawInterfaceDecl = RawInterfaceDecl
+  { ridName :: Text
+  , ridDoctrine :: RawExpr
+  , ridItems :: [RawInterfaceItem]
+  } deriving (Eq, Show)
+
+data RawInterfaceItem = RawInterfaceItem
+  { riiSlot :: Text
+  , riiTarget :: Text
+  } deriving (Eq, Show)
 
 newtype RawFile = RawFile [RawDecl]
   deriving (Eq, Show)

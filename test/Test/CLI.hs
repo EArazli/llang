@@ -18,9 +18,11 @@ tests =
   testGroup
     "CLI"
     [ testCase "end-to-end monoid" testEndToEndMonoid
+    , testCase "end-to-end monoid alt syntax/model" testEndToEndMonoidAlt
     , testCase "end-to-end peano" testEndToEndPeano
     , testCase "end-to-end ski" testEndToEndSKI
     , testCase "end-to-end category" testEndToEndCat
+    , testCase "end-to-end STLC surface" testEndToEndSTLCSurface
     ]
 
 
@@ -34,6 +36,16 @@ testEndToEndMonoid = do
       rrCatExpr out @?= CatOp (OpName "C.e") []
       rrValue out @?= VString ""
       rrPrintedNormalized out @?= "e"
+
+testEndToEndMonoidAlt :: Assertion
+testEndToEndMonoidAlt = do
+  path <- getDataFileName "examples/monoid.alt.run.llang"
+  result <- runFile path
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> do
+      rrValue out @?= VInt 0
+      rrPrintedNormalized out @?= "unit"
 
 
 testEndToEndPeano :: Assertion
@@ -69,6 +81,18 @@ testEndToEndCat = do
             [_, _, _, Term _ (TOp (OpName "C.g") []), Term _ (TOp (OpName "C.f") [])] -> pure ()
             _ -> assertFailure "inner composition not in expected form"
         _ -> assertFailure "outer composition not in expected form"
+
+testEndToEndSTLCSurface :: Assertion
+testEndToEndSTLCSurface = do
+  path <- getDataFileName "examples/ccc_surface/stlc.run.llang"
+  result <- runFile path
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> do
+      assertBool "surface input printed" (maybe False (not . T.null) (rrPrintedInput out))
+      case termNode (rrNormalized out) of
+        TOp _ _ -> pure ()
+        _ -> assertFailure "expected normalized core term"
 
 collectOps :: Term -> [OpName]
 collectOps tm =

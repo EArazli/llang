@@ -17,6 +17,10 @@ import Strat.Syntax.Spec
 import Strat.Model.Spec
 import Strat.Frontend.Env
 import Strat.Frontend.RunSpec
+import Strat.Surface2.Elab
+import Strat.Surface2.Def
+import Strat.Surface2.SyntaxSpec
+import Strat.Surface2.Interface
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -68,6 +72,24 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
           ensureAbsent "model" name (meModels env)
           spec <- elabModelSpec name items
           let env' = env { meModels = M.insert name spec (meModels env) }
+          pure (docEnv, env')
+        DeclSurfaceWhere surfDecl -> do
+          let name = rsdName surfDecl
+          ensureAbsent "surface" name (meSurfaces env)
+          def <- elabSurfaceDecl surfDecl
+          let env' = env { meSurfaces = M.insert name def (meSurfaces env) }
+          pure (docEnv, env')
+        DeclSurfaceSyntaxWhere synDecl -> do
+          let name = rssName synDecl
+          ensureAbsent "surface_syntax" name (meSurfaceSyntaxes env)
+          spec <- elabSurfaceSyntaxDecl synDecl
+          let env' = env { meSurfaceSyntaxes = M.insert name spec (meSurfaceSyntaxes env) }
+          pure (docEnv, env')
+        DeclInterfaceWhere ifaceDecl -> do
+          let name = ridName ifaceDecl
+          ensureAbsent "interface" name (meInterfaces env)
+          spec <- elabInterfaceDecl ifaceDecl
+          let env' = env { meInterfaces = M.insert name spec (meInterfaces env) }
           pure (docEnv, env')
         DeclRun rawRun -> do
           case meRun env of
@@ -266,14 +288,18 @@ elabModelSpec name items = do
 elabRun :: RawRun -> Either Text RunSpec
 elabRun raw = do
   doctrine <- maybe (Left "run: missing doctrine") Right (rrDoctrine raw)
-  syntax <- maybe (Left "run: missing syntax") Right (rrSyntax raw)
   model <- maybe (Left "run: missing model") Right (rrModel raw)
   policy <- maybe (Right UseOnlyComputationalLR) parsePolicy (rrPolicy raw)
   let fuel = maybe 50 id (rrFuel raw)
   let showFlags = if null (rrShowFlags raw) then [ShowNormalized, ShowValue, ShowCat] else map toShow (rrShowFlags raw)
+  validateRunFields (rrSurface raw) (rrSurfaceSyntax raw) (rrInterface raw) (rrSyntax raw)
   pure RunSpec
     { runDoctrine = doctrine
-    , runSyntax = syntax
+    , runSyntax = rrSyntax raw
+    , runCoreSyntax = rrCoreSyntax raw
+    , runSurface = rrSurface raw
+    , runSurfaceSyntax = rrSurfaceSyntax raw
+    , runInterface = rrInterface raw
     , runModel = model
     , runOpen = rrOpen raw
     , runPolicy = policy
@@ -294,6 +320,18 @@ elabRun raw = do
         RawShowNormalized -> ShowNormalized
         RawShowValue -> ShowValue
         RawShowCat -> ShowCat
+        RawShowInput -> ShowInput
+
+validateRunFields :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Either Text ()
+validateRunFields surf surfSyn iface coreSyn =
+  case surf of
+    Nothing ->
+      case coreSyn of
+        Nothing -> Left "run: missing syntax"
+        Just _ -> Right ()
+    Just _ -> do
+      if surfSyn == Nothing then Left "run: missing surface_syntax" else Right ()
+      if iface == Nothing then Left "run: missing interface" else Right ()
 
 renderTypeError :: TypeError -> Text
 renderTypeError = T.pack . show

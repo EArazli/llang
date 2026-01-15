@@ -1,0 +1,22 @@
+interface CCCIface for doctrine CCC where {
+  ObjSort = Obj;
+  HomSort = Hom;
+
+  id = id;
+  comp = comp;
+
+  Unit = Unit;
+  prod = prod;
+  exl = exl;
+  exr = exr;
+  pair = pair;
+
+  exp = exp;
+  curry = curry;
+  eval = eval;
+
+  terminal = terminal;
+  Bool = Bool;
+  T = T;
+  F = F;
+}

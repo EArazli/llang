@@ -1,0 +1,14 @@
+surface_syntax STLC_Syntax for STLC where {
+  ty print atom "Bool" = BoolTy;
+  ty print atom "Unit" = UnitTy;
+  ty print infixl 7 "*" = ProdTy;
+  ty print infixr 5 "->" = ArrTy;
+
+  tm print atom "true" = True;
+  tm print atom "false" = False;
+  tm print prefix "fst" = Fst;
+  tm print prefix "snd" = Snd;
+  tm print binder "lam" ":" "." = Lam;
+  tm print app = App;
+  tm print tuple "," = Pair;
+}

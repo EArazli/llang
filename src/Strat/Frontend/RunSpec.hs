@@ -12,12 +12,17 @@ data RunShow
   = ShowNormalized
   | ShowValue
   | ShowCat
+  | ShowInput
   deriving (Eq, Ord, Show)
 
 
 data RunSpec = RunSpec
   { runDoctrine  :: RawExpr
-  , runSyntax    :: Text
+  , runSyntax    :: Maybe Text
+  , runCoreSyntax :: Maybe Text
+  , runSurface   :: Maybe Text
+  , runSurfaceSyntax :: Maybe Text
+  , runInterface :: Maybe Text
   , runModel     :: Text
   , runOpen      :: [Text]
   , runPolicy    :: RewritePolicy

@@ -21,10 +21,16 @@ extra-source-files:
 data-files:
     examples/monoid.llang
     examples/monoid.syntax.llang
+    examples/monoid.syntax.alt.llang
     examples/monoid.models.llang
+    examples/monoid.models.int.llang
     examples/monoid.run.llang
+    examples/monoid.alt.run.llang
     examples/cat.llang
     examples/cat.run.llang
+    examples/ccc.llang
+    examples/ccc.syntax.llang
+    examples/ccc.run.llang
     examples/peano.llang
     examples/peano.syntax.llang
     examples/peano.models.llang
@@ -32,6 +38,11 @@ data-files:
     examples/ski.llang
     examples/ski.syntax.llang
     examples/ski.run.llang
+    examples/ccc_surface/ccc.doctrine.llang
+    examples/ccc_surface/ccc.interface.llang
+    examples/ccc_surface/stlc.surface.llang
+    examples/ccc_surface/stlc.syntax.llang
+    examples/ccc_surface/stlc.run.llang
     stdlib/syntax.llang
     stdlib/models.llang
 
@@ -71,6 +82,16 @@ library
       Strat.Model.Spec
       Strat.Surface
       Strat.Surface.Combinator
+      Strat.Surface2.CoreEval
+      Strat.Surface2.Def
+      Strat.Surface2.Elab
+      Strat.Surface2.Engine
+      Strat.Surface2.Interface
+      Strat.Surface2.InterfaceInst
+      Strat.Surface2.Pattern
+      Strat.Surface2.Syntax
+      Strat.Surface2.SyntaxSpec
+      Strat.Surface2.Term
       Strat.Syntax.Spec
   other-modules:
       Paths_llang
@@ -85,6 +106,7 @@ library
     , directory
     , filepath
     , megaparsec
+    , mtl
     , parser-combinators
     , text
   default-language: Haskell2010
@@ -105,6 +127,7 @@ executable llang-exe
     , filepath
     , llang
     , megaparsec
+    , mtl
     , parser-combinators
     , text
   default-language: Haskell2010
@@ -127,6 +150,8 @@ test-suite llang-test
       Test.Frontend.SyntaxModel
       Test.Frontend.Loader
       Test.Surface
+      Test.Surface2.Term
+      Test.Surface2.Pattern
       Test.CLI
       Paths_llang
   autogen-modules:
@@ -135,14 +160,17 @@ test-suite llang-test
       test
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
+      QuickCheck
+    , base >=4.7 && <5
     , containers
     , directory
     , filepath
     , llang
     , megaparsec
+    , mtl
     , parser-combinators
     , tasty
     , tasty-hunit
+    , tasty-quickcheck
     , text
   default-language: Haskell2010

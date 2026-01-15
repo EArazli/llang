@@ -16,7 +16,7 @@ import Strat.Frontend.Resolve (resolveOpText)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
-import Data.List (sortBy)
+import Data.List (sortBy, foldl')
 import Data.Char (isAlphaNum)
 import Data.Void (Void)
 import Text.Megaparsec

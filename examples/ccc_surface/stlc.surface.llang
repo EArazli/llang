@@ -1,0 +1,77 @@
+surface STLC where {
+  requires interface CCC_Bool;
+  context_sort Ty;
+
+  sort Ty;
+  sort Tm;
+
+  con BoolTy : Ty;
+  con UnitTy : Ty;
+  con ProdTy : (a:Ty) (b:Ty) -> Ty;
+  con ArrTy  : (a:Ty) (b:Ty) -> Ty;
+
+  con True  : Tm;
+  con False : Tm;
+
+  con Pair  : (x:Tm) (y:Tm) -> Tm;
+  con Fst   : (p:Tm) -> Tm;
+  con Snd   : (p:Tm) -> Tm;
+
+  con Lam : (A:Ty) (body : [x:A] Tm) -> Tm;
+  con App : (f:Tm) (x:Tm) -> Tm;
+
+  judgement HasType : (Γ:Ctx) (t:Tm) (A:Ty) => (e:Core);
+
+  define tyObj(UnitTy) = ccc.Unit;
+  define tyObj(BoolTy) = ccc.Bool;
+  define tyObj(ProdTy(A,B)) = ccc.prod(tyObj(A), tyObj(B));
+  define tyObj(ArrTy(A,B)) = ccc.exp(tyObj(A), tyObj(B));
+
+  define ctxObj(∙) = ccc.Unit;
+  define ctxObj(Γ) = ccc.prod(ctxObj(Γ'), tyObj(A)) where Γ = (Γ', x:A);
+
+  define proj(Γ, 0) = ccc.exr(ctxObj(Γ'), tyObj(A)) where Γ = (Γ', x:A);
+  define proj(Γ, i+1) =
+    ccc.comp(ctxObj(Γ), ctxObj(Γ'), tyObj(A),
+             proj(Γ', i),
+             ccc.exl(ctxObj(Γ'), tyObj(A)))
+    where Γ = (Γ', x:A);
+
+  rule true :
+    --------------------------------
+    HasType(Γ, True, BoolTy) => ccc.comp(ctxObj(Γ), ccc.Unit, tyObj(BoolTy),
+                                         ccc.T,
+                                         ccc.terminal(ctxObj(Γ)));
+
+  rule false :
+    --------------------------------
+    HasType(Γ, False, BoolTy) => ccc.comp(ctxObj(Γ), ccc.Unit, tyObj(BoolTy),
+                                          ccc.F,
+                                          ccc.terminal(ctxObj(Γ)));
+
+  rule var :
+    premise lookup(Γ, i) = A;
+    --------------------------------
+    HasType(Γ, #i, A) => proj(Γ, i);
+
+  rule lam :
+    premise HasType(Γ, body, B) => eBody under (Γ, x:A);
+    -----------------------------------------------
+    HasType(Γ, Lam(A, body), ArrTy(A,B))
+      => ccc.curry(tyObj(A), tyObj(B), ctxObj(Γ), eBody);
+
+  rule app :
+    premise HasType(Γ, f, ArrTy(A,B)) => eF;
+    premise HasType(Γ, x, A)         => eX;
+    -----------------------------------------------
+    HasType(Γ, App(f,x), B)
+      => ccc.comp(ctxObj(Γ),
+                  ccc.prod(ccc.exp(tyObj(A), tyObj(B)), tyObj(A)),
+                  tyObj(B),
+                  ccc.eval(tyObj(A), tyObj(B)),
+                  ccc.pair(ccc.exp(tyObj(A), tyObj(B)),
+                           tyObj(A),
+                           ctxObj(Γ),
+                           eF,
+                           eX));
+}

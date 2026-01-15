@@ -2,7 +2,7 @@ doctrine CCCore where {
   sort Obj;
   sort Hom(Obj, Obj);
 
-  # Category structure
+  -- Category structure
   op id : (x:Obj) -> Hom(?x, ?x);
 
   op comp :
@@ -24,7 +24,7 @@ doctrine CCCore where {
       comp(?a, ?b, ?d, comp(?b, ?c, ?d, ?h, ?g), ?f)
         -> comp(?a, ?c, ?d, ?h, comp(?a, ?b, ?c, ?g, ?f));
 
-  # Finite products
+  -- Finite products
   op Unit : Obj;
 
   op prod : (a:Obj) (b:Obj) -> Obj;
@@ -39,7 +39,7 @@ doctrine CCCore where {
     (f:Hom(?c, ?a)) (g:Hom(?c, ?b))
     -> Hom(?c, prod(?a, ?b));
 
-  # Product β and η
+  -- Product β and η
   computational exl_pair :
     (a:Obj) (b:Obj) (c:Obj)
     (f:Hom(?c, ?a)) (g:Hom(?c, ?b)) |-
@@ -60,7 +60,7 @@ doctrine CCCore where {
            comp(?c, prod(?a, ?b), ?b, exr(?a, ?b), ?h))
         -> ?h;
 
-  # Exponentials
+  -- Exponentials
   op exp : (a:Obj) (b:Obj) -> Obj;
 
   op curry :
@@ -72,7 +72,7 @@ doctrine CCCore where {
     (a:Obj) (b:Obj)
     -> Hom(prod(exp(?a, ?b), ?a), ?b);
 
-  # Exponential β: eval ∘ <(curry f ∘ π1), π2> = f
+  -- Exponential β: eval ∘ <(curry f ∘ π1), π2> = f
   computational beta :
     (a:Obj) (b:Obj) (c:Obj)
     (f:Hom(prod(?c, ?a), ?b)) |-
@@ -85,7 +85,7 @@ doctrine CCCore where {
                 exr(?c, ?a)))
         -> ?f;
 
-  # Exponential η: curry(eval ∘ <(g ∘ π1), π2>) = g
+  -- Exponential η: curry(eval ∘ <(g ∘ π1), π2>) = g
   computational eta :
     (a:Obj) (b:Obj) (c:Obj)
     (g:Hom(?c, exp(?a, ?b))) |-
@@ -102,7 +102,7 @@ doctrine CCGen where {
   sort Obj;
   sort Hom(Obj, Obj);
 
-  # repeat the core decls so we can mention them in types; And-merging will identify identical decls
+  -- repeat the core decls so we can mention them in types; And-merging will identify identical decls
   op Unit : Obj;
   op prod : (a:Obj) (b:Obj) -> Obj;
   op exp : (a:Obj) (b:Obj) -> Obj;
@@ -111,7 +111,7 @@ doctrine CCGen where {
   op A : Obj;
   op B : Obj;
 
-  # a “program” to test β: f : X×A -> B
+  -- a “program” to test β: f : X×A -> B
   op f : Hom(prod(X, A), B);
 }
 

@@ -48,6 +48,9 @@ declNoRun =
     <|> doctrineDecl
     <|> syntaxDecl
     <|> modelDecl
+    <|> surfaceSyntaxDecl
+    <|> surfaceDecl
+    <|> interfaceDecl
 
 importDecl :: Parser RawDecl
 importDecl = do
@@ -90,6 +93,38 @@ modelDecl = do
   items <- modelBlock
   optionalSemi
   pure (DeclModelWhere name items)
+
+surfaceDecl :: Parser RawDecl
+surfaceDecl = do
+  _ <- symbol "surface"
+  name <- ident
+  _ <- symbol "where"
+  items <- surfaceBlock
+  optionalSemi
+  pure (DeclSurfaceWhere (RawSurfaceDecl name items))
+
+surfaceSyntaxDecl :: Parser RawDecl
+surfaceSyntaxDecl = do
+  _ <- symbol "surface_syntax"
+  name <- ident
+  _ <- symbol "for"
+  surf <- ident
+  _ <- symbol "where"
+  items <- surfaceSyntaxBlock
+  optionalSemi
+  pure (DeclSurfaceSyntaxWhere (RawSurfaceSyntaxDecl name surf items))
+
+interfaceDecl :: Parser RawDecl
+interfaceDecl = do
+  _ <- symbol "interface"
+  name <- ident
+  _ <- symbol "for"
+  _ <- symbol "doctrine"
+  doc <- expr
+  _ <- symbol "where"
+  items <- interfaceBlock
+  optionalSemi
+  pure (DeclInterfaceWhere (RawInterfaceDecl name doc items))
 
 runDecl :: Parser RawRun
 runDecl = do
@@ -370,6 +405,409 @@ opItem = do
   pure (RMOp (RawModelClause name (maybe [] id args) expr'))
 
 
+-- Surface block
+
+surfaceBlock :: Parser [RawSurfaceItem]
+surfaceBlock = do
+  _ <- symbol "{"
+  items <- many surfaceItem
+  _ <- symbol "}"
+  pure items
+
+surfaceItem :: Parser RawSurfaceItem
+surfaceItem =
+  requiresItem <|> contextSortItem <|> surfaceSortItem <|> surfaceConItem <|> surfaceJudgItem <|> surfaceDefineItem <|> surfaceRuleItem
+
+requiresItem :: Parser RawSurfaceItem
+requiresItem = do
+  _ <- symbol "requires"
+  _ <- symbol "interface"
+  name <- ident
+  optionalSemi
+  pure (RSRequiresInterface name)
+
+contextSortItem :: Parser RawSurfaceItem
+contextSortItem = do
+  _ <- symbol "context_sort"
+  name <- ident
+  optionalSemi
+  pure (RSContextSort name)
+
+surfaceSortItem :: Parser RawSurfaceItem
+surfaceSortItem = do
+  _ <- symbol "sort"
+  name <- ident
+  optionalSemi
+  pure (RSSort name)
+
+surfaceConItem :: Parser RawSurfaceItem
+surfaceConItem = do
+  _ <- symbol "con"
+  name <- ident
+  _ <- symbol ":"
+  args <- many surfaceConArg
+  res <- if null args then ident else symbol "->" *> ident
+  optionalSemi
+  pure (RSCon (RawSurfaceCon name args res))
+
+surfaceConArg :: Parser RawSurfaceArg
+surfaceConArg = do
+  _ <- symbol "("
+  name <- ident
+  _ <- symbol ":"
+  binders <- option [] binderList
+  s <- ident
+  _ <- symbol ")"
+  pure (RawSurfaceArg name binders s)
+  where
+    binderList = do
+      _ <- symbol "["
+      bs <- binderDecl `sepBy` symbol ","
+      _ <- symbol "]"
+      pure bs
+    binderDecl = do
+      bname <- ident
+      _ <- symbol ":"
+      bty <- surfaceTerm
+      pure (bname, bty)
+
+surfaceJudgItem :: Parser RawSurfaceItem
+surfaceJudgItem = do
+  _ <- symbol "judgement"
+  name <- ident
+  _ <- symbol ":"
+  params <- many surfaceJudgParam
+  outs <- option [] (symbol "=>" *> many surfaceJudgParam)
+  optionalSemi
+  pure (RSJudg (RawSurfaceJudg name params outs))
+
+surfaceJudgParam :: Parser RawSurfaceJudgParam
+surfaceJudgParam = do
+  _ <- symbol "("
+  pname <- ident
+  _ <- symbol ":"
+  psort <- ident
+  _ <- symbol ")"
+  pure (RawSurfaceJudgParam pname psort)
+
+surfaceRuleItem :: Parser RawSurfaceItem
+surfaceRuleItem = do
+  _ <- symbol "rule"
+  name <- ident
+  _ <- symbol ":"
+  premises <- many premiseDecl
+  _ <- ruleSeparator
+  concl <- surfaceConclusion
+  optionalSemi
+  pure (RSRule (RawSurfaceRule name premises concl))
+
+premiseDecl :: Parser RawSurfacePremise
+premiseDecl = do
+  _ <- symbol "premise"
+  p <- lookupPremise <|> judgPremise
+  optionalSemi
+  pure p
+
+lookupPremise :: Parser RawSurfacePremise
+lookupPremise = do
+  _ <- symbol "lookup"
+  _ <- symbol "("
+  ctx <- ident
+  _ <- symbol ","
+  idx <- natPat
+  _ <- symbol ")"
+  _ <- symbol "="
+  out <- ident
+  pure (RPremiseLookup ctx idx out)
+
+judgPremise :: Parser RawSurfacePremise
+judgPremise = do
+  name <- ident
+  args <- surfacePatArgs
+  outs <- option [] (symbol "=>" *> outputVars)
+  under <- optional underClause
+  pure (RPremiseJudg name args outs under)
+  where
+    outputVars = ident `sepBy1` symbol ","
+
+underClause :: Parser (Text, Text, RawSurfaceTerm)
+underClause = do
+  _ <- symbol "under"
+  _ <- symbol "("
+  ctx <- ident
+  _ <- symbol ","
+  vname <- ident
+  _ <- symbol ":"
+  ty <- surfaceTerm
+  _ <- symbol ")"
+  pure (ctx, vname, ty)
+
+surfaceConclusion :: Parser RawSurfaceConclusion
+surfaceConclusion = do
+  name <- ident
+  args <- surfacePatArgs
+  outs <- option [] (symbol "=>" *> coreExprs)
+  pure (RawSurfaceConclusion name args outs)
+  where
+    coreExprs = coreExpr `sepBy1` symbol ","
+
+surfacePatArgs :: Parser [RawSurfacePat]
+surfacePatArgs = do
+  _ <- symbol "("
+  args <- surfacePat `sepBy` symbol ","
+  _ <- symbol ")"
+  pure args
+
+surfaceDefineItem :: Parser RawSurfaceItem
+surfaceDefineItem = do
+  _ <- symbol "define"
+  name <- ident
+  clause <- defineClause
+  optionalSemi
+  pure (RSDefine (RawDefine name [clause]))
+
+defineClause :: Parser RawDefineClause
+defineClause = do
+  args <- defineArgs
+  _ <- symbol "="
+  body <- coreExpr
+  wh <- option [] whereClause
+  pure (RawDefineClause args body wh)
+
+defineArgs :: Parser [RawDefinePat]
+defineArgs = do
+  _ <- symbol "("
+  args <- definePat `sepBy` symbol ","
+  _ <- symbol ")"
+  pure args
+
+definePat :: Parser RawDefinePat
+definePat =
+  try ctxOnly
+    <|> (RDPSurf <$> surfacePatNonVar)
+    <|> (RDPNat <$> natPatDefine)
+    <|> (RDPVar <$> ident)
+  where
+    ctxOnly = RDPCtx <$> ctxPatBare
+
+natPatDefine :: Parser RawNatPat
+natPatDefine =
+  (symbol "0" $> RNPZero)
+    <|> try (do
+        name <- ident
+        _ <- symbol "+"
+        _ <- symbol "1"
+        pure (RNPSucc name))
+
+surfacePatNonVar :: Parser RawSurfacePat
+surfacePatNonVar =
+  choice
+    [ parens surfacePatNonVar
+    , boundPat
+    , try conWithArgs
+    ]
+  where
+    parens = between (symbol "(") (symbol ")")
+    boundPat = do
+      _ <- char '#'
+      sc
+      (RSPBound . fromIntegral <$> integer)
+        <|> (RSPBoundVar <$> ident)
+    conWithArgs = do
+      name <- ident
+      _ <- symbol "("
+      args <- surfacePat `sepBy` symbol ","
+      _ <- symbol ")"
+      pure (RSPCon name args)
+
+whereClause :: Parser [RawWhereClause]
+whereClause = do
+  _ <- symbol "where"
+  clause `sepBy1` symbol ","
+  where
+    clause = do
+      name <- ident
+      _ <- symbol "="
+      pat <- ctxPat
+      pure (RawWhereClause name pat)
+
+ctxPat :: Parser RawCtxPat
+ctxPat = ctxPatBare <|> (RCPVar <$> ident)
+
+ctxPatBare :: Parser RawCtxPat
+ctxPatBare =
+  (symbol "∙" $> RCPEmpty)
+    <|> (do
+          _ <- symbol "("
+          ctx <- ident
+          _ <- symbol ","
+          vname <- ident
+          _ <- symbol ":"
+          ty <- surfaceTerm
+          _ <- symbol ")"
+          pure (RCPExt ctx vname ty))
+
+natPat :: Parser RawNatPat
+natPat =
+  (symbol "0" $> RNPZero)
+    <|> try (do
+        name <- ident
+        _ <- symbol "+"
+        _ <- symbol "1"
+        pure (RNPSucc name))
+    <|> (RNPVar <$> ident)
+
+surfaceTerm :: Parser RawSurfaceTerm
+surfaceTerm =
+  choice
+    [ parens surfaceTerm
+    , conOrVar
+    ]
+  where
+    parens = between (symbol "(") (symbol ")")
+    conOrVar = do
+      name <- ident
+      args <- optional (symbol "(" *> surfaceTerm `sepBy` symbol "," <* symbol ")")
+      pure $
+        case args of
+          Nothing -> RSTVar name
+          Just as -> RSTCon name as
+
+surfacePat :: Parser RawSurfacePat
+surfacePat =
+  choice
+    [ parens surfacePat
+    , boundPat
+    , conOrVar
+    ]
+  where
+    parens = between (symbol "(") (symbol ")")
+    boundPat = do
+      _ <- char '#'
+      sc
+      (RSPBound . fromIntegral <$> integer)
+        <|> (RSPBoundVar <$> ident)
+    conOrVar = do
+      name <- ident
+      args <- optional (symbol "(" *> surfacePat `sepBy` symbol "," <* symbol ")")
+      pure $
+        case args of
+          Nothing -> RSPVar name
+          Just as -> RSPCon name as
+
+ruleSeparator :: Parser ()
+ruleSeparator = do
+  _ <- some (char '-')
+  optional (some (char '-'))
+  sc
+  pure ()
+
+coreExpr :: Parser RawCoreExpr
+coreExpr = do
+  name <- qualifiedIdent
+  args <- optional (symbol "(" *> coreExpr `sepBy` symbol "," <* symbol ")")
+  pure $ case args of
+    Nothing -> RCEVar name
+    Just as -> RCEApp name as
+
+
+-- Surface syntax block
+
+surfaceSyntaxBlock :: Parser [RawSurfaceSyntaxItem]
+surfaceSyntaxBlock = do
+  _ <- symbol "{"
+  items <- many surfaceSyntaxItem
+  _ <- symbol "}"
+  pure items
+
+surfaceSyntaxItem :: Parser RawSurfaceSyntaxItem
+surfaceSyntaxItem = do
+  cat <- (symbol "ty" $> True) <|> (symbol "tm" $> False)
+  _ <- symbol "print"
+  item <- surfaceNotation
+  optionalSemi
+  pure (if cat then RSSTy item else RSSTm item)
+
+surfaceNotation :: Parser RawSurfaceNotation
+surfaceNotation =
+  choice
+    [ atomNotation
+    , prefixNotation
+    , infixNotation
+    , binderNotation
+    , appNotation
+    , tupleNotation
+    ]
+
+atomNotation :: Parser RawSurfaceNotation
+atomNotation = do
+  _ <- symbol "atom"
+  tok <- stringLiteral
+  _ <- symbol "="
+  con <- ident
+  pure (RSNAtom tok con)
+
+prefixNotation :: Parser RawSurfaceNotation
+prefixNotation = do
+  _ <- symbol "prefix"
+  tok <- stringLiteral
+  _ <- symbol "="
+  con <- ident
+  pure (RSNPrefix tok con)
+
+infixNotation :: Parser RawSurfaceNotation
+infixNotation = do
+  assoc <- (symbol "infixl" $> SurfAssocL) <|> (symbol "infixr" $> SurfAssocR) <|> (symbol "infix" $> SurfAssocN)
+  prec <- integer
+  tok <- stringLiteral
+  _ <- symbol "="
+  con <- ident
+  pure (RSNInfix assoc (fromIntegral prec) tok con)
+
+binderNotation :: Parser RawSurfaceNotation
+binderNotation = do
+  _ <- symbol "binder"
+  tok <- stringLiteral
+  tySep <- stringLiteral
+  bodySep <- stringLiteral
+  _ <- symbol "="
+  con <- ident
+  pure (RSNBinder tok tySep bodySep con)
+
+appNotation :: Parser RawSurfaceNotation
+appNotation = do
+  _ <- symbol "app"
+  _ <- symbol "="
+  con <- ident
+  pure (RSNApp con)
+
+tupleNotation :: Parser RawSurfaceNotation
+tupleNotation = do
+  _ <- symbol "tuple"
+  tok <- stringLiteral
+  _ <- symbol "="
+  con <- ident
+  pure (RSNTuple tok con)
+
+
+-- Interface block
+
+interfaceBlock :: Parser [RawInterfaceItem]
+interfaceBlock = do
+  _ <- symbol "{"
+  items <- many interfaceItem
+  _ <- symbol "}"
+  pure items
+
+interfaceItem :: Parser RawInterfaceItem
+interfaceItem = do
+  slot <- ident
+  _ <- symbol "="
+  target <- qualifiedIdent
+  optionalSemi
+  pure (RawInterfaceItem slot target)
+
+
 -- Run block
 
 runBlock :: Parser [RunItem]
@@ -382,6 +820,10 @@ runBlock = do
 data RunItem
   = RunDoctrine RawExpr
   | RunSyntax Text
+  | RunCoreSyntax Text
+  | RunSurface Text
+  | RunSurfaceSyntax Text
+  | RunInterface Text
   | RunModel Text
   | RunOpen Text
   | RunPolicy Text
@@ -390,7 +832,17 @@ data RunItem
 
 runItem :: Parser RunItem
 runItem =
-  doctrineItem <|> syntaxItemRun <|> modelItemRun <|> openItem <|> policyItem <|> fuelItem <|> showItem
+  doctrineItem
+    <|> syntaxItemRun
+    <|> coreSyntaxItemRun
+    <|> surfaceSyntaxItemRun
+    <|> surfaceItemRun
+    <|> interfaceItemRun
+    <|> modelItemRun
+    <|> openItem
+    <|> policyItem
+    <|> fuelItem
+    <|> showItem
 
 doctrineItem :: Parser RunItem
 doctrineItem = do
@@ -405,6 +857,34 @@ syntaxItemRun = do
   name <- ident
   optionalSemi
   pure (RunSyntax name)
+
+coreSyntaxItemRun :: Parser RunItem
+coreSyntaxItemRun = do
+  _ <- symbol "core_syntax"
+  name <- ident
+  optionalSemi
+  pure (RunCoreSyntax name)
+
+surfaceItemRun :: Parser RunItem
+surfaceItemRun = do
+  _ <- symbol "surface"
+  name <- ident
+  optionalSemi
+  pure (RunSurface name)
+
+surfaceSyntaxItemRun :: Parser RunItem
+surfaceSyntaxItemRun = do
+  _ <- symbol "surface_syntax"
+  name <- ident
+  optionalSemi
+  pure (RunSurfaceSyntax name)
+
+interfaceItemRun :: Parser RunItem
+interfaceItemRun = do
+  _ <- symbol "interface"
+  name <- ident
+  optionalSemi
+  pure (RunInterface name)
 
 modelItemRun :: Parser RunItem
 modelItemRun = do
@@ -440,6 +920,7 @@ showItem = do
   flag <- (symbol "normalized" $> RawShowNormalized)
       <|> (symbol "value" $> RawShowValue)
       <|> (symbol "cat" $> RawShowCat)
+      <|> (symbol "input" $> RawShowInput)
   optionalSemi
   pure (RunShow flag)
 
@@ -448,6 +929,10 @@ buildRun items exprText =
   RawRun
     { rrDoctrine = pickDoctrine
     , rrSyntax = pickSyntax
+    , rrCoreSyntax = pickCoreSyntax
+    , rrSurface = pickSurface
+    , rrSurfaceSyntax = pickSurfaceSyntax
+    , rrInterface = pickInterface
     , rrModel = pickModel
     , rrOpen = opens
     , rrPolicy = pickPolicy
@@ -458,6 +943,10 @@ buildRun items exprText =
   where
     pickDoctrine = firstJust [ e | RunDoctrine e <- items ]
     pickSyntax = firstJust [ n | RunSyntax n <- items ]
+    pickCoreSyntax = firstJust [ n | RunCoreSyntax n <- items ]
+    pickSurface = firstJust [ n | RunSurface n <- items ]
+    pickSurfaceSyntax = firstJust [ n | RunSurfaceSyntax n <- items ]
+    pickInterface = firstJust [ n | RunInterface n <- items ]
     pickModel = firstJust [ n | RunModel n <- items ]
     pickPolicy = firstJust [ p | RunPolicy p <- items ]
     pickFuel = firstJust [ f | RunFuel f <- items ]
@@ -546,7 +1035,7 @@ identRaw :: Parser Text
 identRaw = T.pack <$> ((:) <$> letterChar <*> many identChar)
 
 identChar :: Parser Char
-identChar = alphaNumChar <|> char '_' <|> char '-'
+identChar = alphaNumChar <|> char '_' <|> char '-' <|> char '\''
 
 stringLiteral :: Parser Text
 stringLiteral = lexeme (T.pack <$> (char '"' *> manyTill L.charLiteral (char '"')))
@@ -572,7 +1061,7 @@ sc :: Parser ()
 sc =
   L.space
     space1
-    (lineComment <|> L.skipLineComment "#")
+    lineComment
     empty
 
 lineComment :: Parser ()
