@@ -1,0 +1,26 @@
+import "./ccc.llang";
+import "./ccc.syntax.llang";
+import "../stdlib/models.llang";
+
+run where {
+  doctrine CCC;
+  open C;
+
+  syntax CCCSyntax;
+  model Symbolic;
+
+  policy UseOnlyComputationalLR;
+  fuel 200;
+
+  show normalized;
+  show cat;
+  show value;
+}
+---
+comp(prod(X, A), prod(exp(A, B), A), B,
+     eval(A, B),
+     pair(exp(A, B), A, prod(X, A),
+          comp(prod(X, A), X, exp(A, B),
+               curry(A, B, X, f),
+               exl(X, A)),
+          exr(X, A)))

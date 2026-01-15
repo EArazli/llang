@@ -1,0 +1,10 @@
+syntax CCCSyntax where {
+  print atom "1" = Unit;
+  print infixl 7 "*" = prod;
+  print infixr 5 "->" = exp;
+
+  parse atom "⊤" = Unit;
+
+  allow call;
+  varprefix "?";
+}
