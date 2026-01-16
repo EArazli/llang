@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Strat.Surface2.Term
   ( Sort2Name(..)
   , Con2Name(..)
@@ -37,10 +38,10 @@ data SArg = SArg
   , saBody :: STerm
   } deriving (Eq, Ord, Show)
 
-weaken :: Int -> STerm -> STerm
+weaken :: Int -> STerm -> Either Text STerm
 weaken n = shift n 0
 
-shift :: Int -> Int -> STerm -> STerm
+shift :: Int -> Int -> STerm -> Either Text STerm
 shift d cutoff = go cutoff
   where
     go c tm =
@@ -48,35 +49,37 @@ shift d cutoff = go cutoff
         SBound (Ix k)
           | k >= c ->
               let k' = k + d
-              in if k' < 0 then error "shift: negative index" else SBound (Ix k')
-          | otherwise -> SBound (Ix k)
-        SFree t -> SFree t
-        SCon con args -> SCon con (map (goArg c) args)
+              in if k' < 0 then Left "shift: negative index" else Right (SBound (Ix k'))
+          | otherwise -> Right (SBound (Ix k))
+        SFree t -> Right (SFree t)
+        SCon con args -> SCon con <$> mapM (goArg c) args
 
     goArg c (SArg binders body) =
-      let binders' = map (go c) binders
-          body' = go (c + length binders) body
-      in SArg binders' body'
+      SArg <$> mapM (go c) binders <*> go (c + length binders) body
 
-subst0 :: STerm -> STerm -> STerm
+subst0 :: STerm -> STerm -> Either Text STerm
 subst0 = subst 0
 
-substMany :: [STerm] -> STerm -> STerm
+substMany :: [STerm] -> STerm -> Either Text STerm
 substMany args body =
-  L.foldl' (\acc arg -> shift (-1) 0 (subst0 (shift 1 0 arg) acc)) body args
+  L.foldl' step (Right body) args
+  where
+    step accE arg = do
+      acc <- accE
+      arg' <- shift 1 0 arg
+      acc' <- subst0 arg' acc
+      shift (-1) 0 acc'
 
-subst :: Int -> STerm -> STerm -> STerm
+subst :: Int -> STerm -> STerm -> Either Text STerm
 subst j s = go 0
   where
     go c tm =
       case tm of
         SBound (Ix k)
           | k == j + c -> shift c 0 s
-          | otherwise -> SBound (Ix k)
-        SFree t -> SFree t
-        SCon con args -> SCon con (map (goArg c) args)
+          | otherwise -> Right (SBound (Ix k))
+        SFree t -> Right (SFree t)
+        SCon con args -> SCon con <$> mapM (goArg c) args
 
     goArg c (SArg binders body) =
-      let binders' = map (go c) binders
-          body' = go (c + length binders) body
-      in SArg binders' body'
+      SArg <$> mapM (go c) binders <*> go (c + length binders) body

@@ -142,22 +142,24 @@ renderRunResult spec norm cat val inputTxt =
 buildSurfaceGoal :: SurfaceDef -> STerm -> [GoalArg]
 buildSurfaceGoal surf tm =
   case M.lookup (JudgName "HasType") (sdJudgments surf) of
-    Nothing -> [GCtx emptyCtx, GSurf tm, GSurf (SFree "_A")]
+    Nothing -> [GCtx emptyCtx, GSurf tm, GSurf (SFree (holeName 0))]
     Just decl ->
       let params = jdParams decl
           surfArgs = [ tm ]
-          (args, _) = foldl build ([], surfArgs) params
+          (args, _, _) = foldl build ([], surfArgs, 0 :: Int) params
       in args
   where
-    build (acc, surfArgs) param =
+    holeName :: Int -> Text
+    holeName i = "_h" <> T.pack (show i)
+    build (acc, surfArgs, holeIdx) param =
       case jpSort param of
-        PCtx -> (acc <> [GCtx emptyCtx], surfArgs)
+        PCtx -> (acc <> [GCtx emptyCtx], surfArgs, holeIdx)
         PSurf _ ->
           case surfArgs of
-            (x:xs) -> (acc <> [GSurf x], xs)
-            [] -> (acc <> [GSurf (SFree "_A")], [])
-        PNat -> (acc <> [GNat 0], surfArgs)
-        PCore -> (acc, surfArgs)
+            (x:xs) -> (acc <> [GSurf x], xs, holeIdx)
+            [] -> (acc <> [GSurf (SFree (holeName holeIdx))], [], holeIdx + 1)
+        PNat -> (acc <> [GNat 0], surfArgs, holeIdx)
+        PCore -> (acc, surfArgs, holeIdx)
 
 chooseCoreSyntax :: ModuleEnv -> RunSpec -> Presentation -> Maybe (Term -> Text)
 chooseCoreSyntax env spec pres =
@@ -173,18 +175,41 @@ chooseCoreSyntax env spec pres =
 
 buildCoreEnv :: Presentation -> SurfaceDef -> InterfaceInstance -> SolveEnv -> Either Text CoreEnv
 buildCoreEnv pres surf iface env = do
-  let envSurf = M.fromList [ (renderMVar mv, CVSurf (metaToTerm mv ms)) | (mv, ms) <- M.toList (msTerms (seMatch env)) ]
+  envSurf <- buildSurfEnv
   let envNats = M.fromList [ (k, CVNat v) | (k, v) <- M.toList (msNats (seMatch env)) ]
   let envCtx = M.map CVCtx (seCtxs env)
   let envPlace = M.map CVSurf (seSurfVars env)
   let base = M.unions [envSurf, envNats, envCtx, envPlace]
-  foldM (evalCoreBinding pres surf iface) base (M.toList (seCore env))
+  evalCoreBindings base (seCore env)
   where
     renderMVar (MVar t) = t
-    metaToTerm mv ms =
-      case instantiateMeta ms (map Ix [0 .. msArity ms - 1]) of
-        Just tm -> resolvePlaceholders (seMatch env) tm
-        Nothing -> SFree (renderMVar mv)
+    buildSurfEnv = do
+      pairs <- mapM toPair (M.toList (msTerms (seMatch env)))
+      pure (M.fromList pairs)
+    toPair (mv, ms) = do
+      tm <- instantiateMeta ms (map Ix [0 .. msArity ms - 1])
+      tm' <- resolvePlaceholders (seMatch env) tm
+      pure (renderMVar mv, CVSurf tm')
+
+    evalCoreBindings env0 pending0 = go env0 pending0
+      where
+        go envAcc pending
+          | M.null pending = Right envAcc
+          | otherwise = do
+              (env', pending', progressed) <- foldM (step pending) (envAcc, pending, False) (M.toList pending)
+              if progressed
+                then go env' pending'
+                else Left "core binding dependency cycle or unresolved reference"
+
+        step pending (envAcc, pendingAcc, progressed) (name, expr) =
+          case evalCoreBinding pres surf iface envAcc (name, expr) of
+            Right env' -> Right (env', M.delete name pendingAcc, True)
+            Left err ->
+              case missingCoreVar err of
+                Just var | M.member var pending -> Right (envAcc, pendingAcc, progressed)
+                _ -> Left err
+
+        missingCoreVar msg = T.stripPrefix "unknown core var: " msg
 
 evalCoreBinding :: Presentation -> SurfaceDef -> InterfaceInstance -> CoreEnv -> (Text, CoreExpr) -> Either Text CoreEnv
 evalCoreBinding pres surf iface env (name, expr) = do

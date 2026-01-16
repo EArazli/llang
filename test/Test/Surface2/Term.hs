@@ -14,11 +14,13 @@ tests =
   testGroup
     "Surface2.Term"
     [ testCase "subst0 (SBound 0) t == t" $
-        subst0 (SBound (Ix 0)) sampleTerm @?= sampleTerm
+        case subst0 (SBound (Ix 0)) sampleTerm of
+          Left err -> assertFailure (show err)
+          Right tm -> tm @?= sampleTerm
     , QC.testProperty "subst0 keeps term when substituting bound 0 by itself" $
-        \t -> subst0 (SBound (Ix 0)) t == t
+        \t -> subst0 (SBound (Ix 0)) t == Right t
     , QC.testProperty "subst0 replaces bound 0" $
-        \t -> subst0 t (SBound (Ix 0)) == t
+        \t -> subst0 t (SBound (Ix 0)) == Right t
     ]
 
 sampleTerm :: STerm

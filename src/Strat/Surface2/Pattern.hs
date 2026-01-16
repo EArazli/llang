@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Strat.Surface2.Pattern
   ( MVar(..)
   , PTerm(..)
@@ -7,6 +8,8 @@ module Strat.Surface2.Pattern
   , NatSubst
   , MatchSubst(..)
   , matchPTerm
+  , matchPTermWithSubst
+  , matchPTermRigid
   , applySubstPTerm
   , resolvePlaceholders
   , instantiateMeta
@@ -18,6 +21,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.List as L
 import qualified Data.Text as T
 import qualified Data.Set as S
+import Control.Monad ((<=<))
 
 newtype MVar = MVar Text
   deriving (Eq, Ord, Show)
@@ -48,138 +52,167 @@ data MatchSubst = MatchSubst
   , msNats :: NatSubst
   } deriving (Eq, Ord, Show)
 
-matchPTerm :: PTerm -> STerm -> Maybe MatchSubst
-matchPTerm p t = go (MatchSubst M.empty M.empty) p t
+matchPTerm :: PTerm -> STerm -> Either Text (Maybe MatchSubst)
+matchPTerm = matchPTermWithSubst True (MatchSubst M.empty M.empty)
+
+matchPTermRigid :: PTerm -> STerm -> Either Text (Maybe MatchSubst)
+matchPTermRigid = matchPTermWithSubst False (MatchSubst M.empty M.empty)
+
+matchPTermWithSubst :: Bool -> MatchSubst -> PTerm -> STerm -> Either Text (Maybe MatchSubst)
+matchPTermWithSubst allowPlaceholders subst p t = go subst p t
   where
     isPlaceholder name = T.isPrefixOf (T.singleton '_') name
     placeholderName name = T.stripPrefix (T.singleton '_') name
 
-    bindMeta mv ixs tm subst =
-      case M.lookup mv (msTerms subst) of
-        Nothing ->
-          let body = abstract ixs tm
-          in Just subst { msTerms = M.insert mv (MetaSubst (length ixs) body) (msTerms subst) }
+    bindMeta mv ixs tm subst' =
+      case M.lookup mv (msTerms subst') of
+        Nothing -> do
+          body <- abstract ixs tm
+          Right (Just subst' { msTerms = M.insert mv (MetaSubst (length ixs) body) (msTerms subst') })
         Just ms -> do
           tm' <- instantiateMeta ms ixs
           if tm' == tm
-            then Just subst
-            else Nothing
+            then Right (Just subst')
+            else Right Nothing
 
-    bindPlaceholder name tm subst =
-      case M.lookup (MVar name) (msTerms subst) of
-        Nothing -> Just subst { msTerms = M.insert (MVar name) (MetaSubst 0 tm) (msTerms subst) }
+    bindPlaceholder name tm subst' =
+      case M.lookup (MVar name) (msTerms subst') of
+        Nothing -> Right (Just subst' { msTerms = M.insert (MVar name) (MetaSubst 0 tm) (msTerms subst') })
         Just ms -> do
           tm' <- instantiateMeta ms []
-          if tm' == tm then Just subst else Nothing
+          if tm' == tm then Right (Just subst') else Right Nothing
 
-    go subst pat tm =
+    go subst' pat tm =
       case pat of
         PBound ix ->
           case tm of
-            SBound ix' | ix == ix' -> Just subst
-            _ -> Nothing
+            SBound ix' | ix == ix' -> Right (Just subst')
+            _ -> Right Nothing
         PBoundVar name ->
           case tm of
             SBound (Ix k) ->
-              case M.lookup name (msNats subst) of
-                Nothing -> Just subst { msNats = M.insert name k (msNats subst) }
-                Just k' -> if k' == k then Just subst else Nothing
-            _ -> Nothing
+              case M.lookup name (msNats subst') of
+                Nothing -> Right (Just subst' { msNats = M.insert name k (msNats subst') })
+                Just k' -> if k' == k then Right (Just subst') else Right Nothing
+            _ -> Right Nothing
         PFree n ->
           case tm of
-            SFree n' | n == n' -> Just subst
-            _ -> Nothing
+            SFree n' | n == n' -> Right (Just subst')
+            _ -> Right Nothing
         PCon c args ->
           case tm of
-            SFree name | isPlaceholder name ->
+            SFree name | allowPlaceholders && isPlaceholder name ->
               case placeholderName name of
-                Nothing -> Nothing
-                Just base -> bindPlaceholder base (applySubstPTerm subst pat) subst
+                Nothing -> Right Nothing
+                Just base -> do
+                  tm' <- applySubstPTerm subst' pat
+                  bindPlaceholder base tm' subst'
             SCon c' args' | c == c' && length args == length args' ->
-              L.foldl' (\acc (pArg, tArg) -> acc >>= \s -> goArg s pArg tArg) (Just subst) (zip args args')
-            _ -> Nothing
+              L.foldl' stepArg (Right (Just subst')) (zip args args')
+            _ -> Right Nothing
         PMeta mv ixs ->
           case tm of
-            SFree name | isPlaceholder name ->
+            SFree name | allowPlaceholders && isPlaceholder name ->
               case placeholderName name of
-                Just base | base == renderMVar mv -> Just subst
-                _ -> bindMeta mv ixs tm subst
-            _ -> bindMeta mv ixs tm subst
+                Just base | base == renderMVar mv -> Right (Just subst')
+                Just base -> do
+                  tm' <- applySubstPTerm subst' pat
+                  bindPlaceholder base tm' subst'
+                Nothing -> bindMeta mv ixs tm subst'
+            _ -> bindMeta mv ixs tm subst'
 
-    goArg subst (PArg pBinders pBody) (SArg sBinders sBody) =
+    goArg subst' (PArg pBinders pBody) (SArg sBinders sBody) =
       if length pBinders /= length sBinders
-        then Nothing
+        then Right Nothing
         else do
-          subst' <- L.foldl' (\acc (pb, sb) -> acc >>= \s -> go s pb sb) (Just subst) (zip pBinders sBinders)
-          go subst' pBody sBody
+          subst'' <- L.foldl' stepBinder (Right (Just subst')) (zip pBinders sBinders)
+          case subst'' of
+            Nothing -> Right Nothing
+            Just s -> go s pBody sBody
+    stepArg acc (pArg, tArg) =
+      case acc of
+        Left err -> Left err
+        Right Nothing -> Right Nothing
+        Right (Just s) -> goArg s pArg tArg
 
-applySubstPTerm :: MatchSubst -> PTerm -> STerm
-applySubstPTerm subst = resolvePlaceholders subst . go
+    stepBinder acc (pb, sb) =
+      case acc of
+        Left err -> Left err
+        Right Nothing -> Right Nothing
+        Right (Just s) -> go s pb sb
+
+applySubstPTerm :: MatchSubst -> PTerm -> Either Text STerm
+applySubstPTerm subst = resolvePlaceholders subst <=< go
   where
+    metaPlaceholder name = "_" <> name
     go pat =
       case pat of
-        PBound ix -> SBound ix
+        PBound ix -> Right (SBound ix)
         PBoundVar name ->
           case M.lookup name (msNats subst) of
-            Nothing -> error "applySubstPTerm: unbound nat variable"
-            Just k -> SBound (Ix k)
-        PFree n -> SFree n
-        PCon c args -> SCon c (map goArg args)
+            Nothing -> Left "applySubstPTerm: unbound nat variable"
+            Just k -> Right (SBound (Ix k))
+        PFree n -> Right (SFree n)
+        PCon c args -> SCon c <$> mapM goArg args
         PMeta mv ixs ->
           case M.lookup mv (msTerms subst) of
             Nothing ->
               let name = renderMVar mv
-                  prefix = T.singleton '_'
-              in SFree (if T.isPrefixOf prefix name then name else prefix <> name)
+              in Right (SFree (metaPlaceholder name))
             Just ms ->
-              case instantiateMeta ms ixs of
-                Nothing -> error "applySubstPTerm: arity mismatch"
-                Just tm -> tm
+              instantiateMeta ms ixs
 
     goArg (PArg binders body) =
-      SArg (map go binders) (go body)
+      SArg <$> mapM go binders <*> go body
 
-resolvePlaceholders :: MatchSubst -> STerm -> STerm
+resolvePlaceholders :: MatchSubst -> STerm -> Either Text STerm
 resolvePlaceholders subst = go S.empty
   where
     go seen tm =
       case tm of
         SFree name ->
           case T.stripPrefix (T.singleton '_') name of
-            Nothing -> tm
+            Nothing -> Right tm
             Just base ->
-              if base `S.member` seen
-                then tm
-                else
-                  case M.lookup (MVar base) (msTerms subst) of
-                    Nothing -> tm
-                    Just ms ->
-                      if msArity ms /= 0
-                        then tm
-                        else
-                          case instantiateMeta ms [] of
-                            Nothing -> tm
-                            Just tm' -> go (S.insert base seen) tm'
-        SBound _ -> tm
-        SCon con args -> SCon con (map (goArg seen) args)
+              let alreadySeen = base `S.member` seen
+                  lookupMeta =
+                    case M.lookup (MVar base) (msTerms subst) of
+                      Just ms -> Just (base, ms)
+                      Nothing -> Nothing
+              in
+                if alreadySeen
+                  then Right tm
+                  else
+                    case lookupMeta of
+                      Nothing -> Right tm
+                      Just (key, ms) ->
+                        if msArity ms /= 0
+                          then Right tm
+                          else
+                            case instantiateMeta ms [] of
+                              Left err -> Left err
+                              Right tm' ->
+                                let seen' = S.insert base (S.insert key seen)
+                                in go seen' tm'
+        SBound _ -> Right tm
+        SCon con args -> SCon con <$> mapM (goArg seen) args
 
     goArg seen (SArg binders body) =
-      SArg (map (go seen) binders) (go seen body)
+      SArg <$> mapM (go seen) binders <*> go seen body
 
-instantiateMeta :: MetaSubst -> [Ix] -> Maybe STerm
+instantiateMeta :: MetaSubst -> [Ix] -> Either Text STerm
 instantiateMeta ms ixs
-  | msArity ms /= length ixs = Nothing
+  | msArity ms /= length ixs = Left "instantiateMeta: arity mismatch"
   | otherwise =
       let args = map SBound ixs
-          body' = substMany args (msBody ms)
-      in Just body'
+      in substMany args (msBody ms)
 
-abstract :: [Ix] -> STerm -> STerm
-abstract ixs tm =
+abstract :: [Ix] -> STerm -> Either Text STerm
+abstract ixs tm = do
   let k = length ixs
-      shifted = shift k 0 tm
-      mapping = M.fromList [ (ixKey ix, idx) | (idx, ix) <- zip [0..] ixs ]
-  in replaceBound mapping 0 shifted
+  shifted <- shift k 0 tm
+  let mapping = M.fromList [ (ixKey ix, idx) | (idx, ix) <- zip [0..] ixs ]
+  pure (replaceBound mapping 0 shifted)
   where
     ixKey (Ix i) = i + length ixs
 

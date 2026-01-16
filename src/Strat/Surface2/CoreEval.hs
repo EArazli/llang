@@ -11,7 +11,6 @@ import Strat.Surface2.Pattern
 import Strat.Surface2.Term
 import Strat.Surface2.InterfaceInst
 import Strat.Kernel.Presentation
-import Strat.Kernel.Signature
 import Strat.Kernel.Term
 import Strat.Kernel.Syntax
 import Data.Text (Text)
@@ -71,7 +70,8 @@ evalDefine pres surf iface env def args = do
   args' <- mapM (evalCoreExpr pres surf iface env) args
   tryClauses args' (defClauses def)
   where
-    tryClauses _ [] = Left ("no matching define clause for " <> defName def)
+    tryClauses vals [] =
+      Left ("no matching define clause for " <> defName def <> " with args " <> T.pack (show vals))
     tryClauses vals (cl:cls) =
       case matchDefine surf env vals cl of
         Left _ -> tryClauses vals cls
@@ -82,13 +82,18 @@ matchDefine surf env vals clause =
   if length vals /= length (dcArgs clause)
     then Left "define arity mismatch"
     else do
-      env1 <- foldM (matchArg surf) env (zip (dcArgs clause) vals)
-      foldM (matchWhere surf) env1 (dcWhere clause)
+      env1 <- foldM (matchArg surf) M.empty (zip (dcArgs clause) vals)
+      env2 <- foldM (matchWhere surf) env1 (dcWhere clause)
+      pure (M.union env2 env)
 
 matchArg :: SurfaceDef -> CoreEnv -> (DefinePat, CoreVal) -> Either Text CoreEnv
 matchArg surf env (pat, val) =
   case pat of
-    DPVar name -> Right (M.insert name val env)
+    DPVar name ->
+      case M.lookup name env of
+        Nothing -> Right (M.insert name val env)
+        Just existing ->
+          if existing == val then Right env else Left "define: conflicting variable"
     DPNat np ->
       case val of
         CVNat n -> bindNat env np n
@@ -96,9 +101,10 @@ matchArg surf env (pat, val) =
     DPSurf p ->
       case val of
         CVSurf t ->
-          case matchPTerm p t of
-            Nothing -> Left "define: pattern mismatch"
-            Just sub -> bindMatch env sub
+          case matchPTermRigid p t of
+            Left err -> Left err
+            Right Nothing -> Left "define: pattern mismatch"
+            Right (Just sub) -> bindMatch env sub
         _ -> Left "define: expected surface term"
     DPCtx cp ->
       case val of
@@ -107,15 +113,14 @@ matchArg surf env (pat, val) =
 
 bindMatch :: CoreEnv -> MatchSubst -> Either Text CoreEnv
 bindMatch env subst = do
-  let envTerms = M.fromList [ (renderMVar mv, CVSurf (instantiate mv ms)) | (mv, ms) <- M.toList (msTerms subst) ]
+  envTerms <- mapM toTerm (M.toList (msTerms subst))
   let envNats = M.fromList [ (k, CVNat v) | (k, v) <- M.toList (msNats subst) ]
-  pure (M.union env (M.union envTerms envNats))
+  pure (M.union env (M.union (M.fromList envTerms) envNats))
   where
-    instantiate mv ms =
+    toTerm (mv, ms) = do
       let args = map Ix [0 .. msArity ms - 1]
-      in case instantiateMeta ms args of
-          Just tm -> tm
-          Nothing -> SFree (renderMVar mv)
+      tm <- instantiateMeta ms args
+      pure (renderMVar mv, CVSurf tm)
     renderMVar (MVar t) = t
 
 bindNat :: CoreEnv -> NatPat -> Int -> Either Text CoreEnv

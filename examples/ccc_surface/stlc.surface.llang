@@ -74,4 +74,31 @@ surface STLC where {
                            ctxObj(Γ),
                            eF,
                            eX));
+
+  rule pair :
+    premise HasType(Γ, x, A) => eX;
+    premise HasType(Γ, y, B) => eY;
+    -----------------------------------------------
+    HasType(Γ, Pair(x,y), ProdTy(A,B))
+      => ccc.pair(tyObj(A), tyObj(B), ctxObj(Γ), eX, eY);
+
+  rule fst :
+    premise HasType(Γ, p, ProdTy(A,B)) => eP;
+    -----------------------------------------------
+    HasType(Γ, Fst(p), A)
+      => ccc.comp(ctxObj(Γ),
+                  ccc.prod(tyObj(A), tyObj(B)),
+                  tyObj(A),
+                  ccc.exl(tyObj(A), tyObj(B)),
+                  eP);
+
+  rule snd :
+    premise HasType(Γ, p, ProdTy(A,B)) => eP;
+    -----------------------------------------------
+    HasType(Γ, Snd(p), B)
+      => ccc.comp(ctxObj(Γ),
+                  ccc.prod(tyObj(A), tyObj(B)),
+                  tyObj(B),
+                  ccc.exr(tyObj(A), tyObj(B)),
+                  eP);
 }

@@ -1,0 +1,24 @@
+import "./ccc.doctrine.llang";
+import "./ccc.interface.llang";
+import "./stlc.surface.llang";
+import "./stlc.syntax.llang";
+import "../ccc.syntax.llang";
+import "../../stdlib/models.llang";
+
+run where {
+  doctrine CCC;
+  open CCC;
+
+  surface STLC;
+  surface_syntax STLC_Syntax;
+  interface CCCIface;
+  core_syntax CCCSyntax;
+
+  model Symbolic;
+  policy UseOnlyComputationalLR;
+  fuel 50;
+
+  show normalized;
+}
+---
+fst (true, false)

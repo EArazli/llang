@@ -43,6 +43,11 @@ data-files:
     examples/ccc_surface/stlc.surface.llang
     examples/ccc_surface/stlc.syntax.llang
     examples/ccc_surface/stlc.run.llang
+    examples/ccc_surface/stlc.lam1.run.llang
+    examples/ccc_surface/stlc.lam2.run.llang
+    examples/ccc_surface/stlc.lam3.run.llang
+    examples/ccc_surface/stlc.pair.run.llang
+    examples/ccc_surface/stlc.bad.run.llang
     stdlib/syntax.llang
     stdlib/models.llang
 
@@ -152,6 +157,8 @@ test-suite llang-test
       Test.Surface
       Test.Surface2.Term
       Test.Surface2.Pattern
+      Test.Surface2.CoreEval
+      Test.Surface2.Elab
       Test.CLI
       Paths_llang
   autogen-modules:

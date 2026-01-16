@@ -16,7 +16,9 @@ import Strat.Surface2.Term
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Control.Monad (foldM)
+import Data.List (foldl')
 
 data Ctx = Ctx [STerm]
   deriving (Eq, Show)
@@ -52,26 +54,27 @@ data SolveResult = SolveResult
 
 solveJudgment :: SurfaceDef -> JudgName -> [GoalArg] -> Int -> Either Text SolveResult
 solveJudgment surf judg args fuel =
-  solveGoal surf fuel judg args
+  fmap fst (solveGoal surf fuel judg args 0)
 
-solveGoal :: SurfaceDef -> Int -> JudgName -> [GoalArg] -> Either Text SolveResult
-solveGoal surf fuel judg args
+solveGoal :: SurfaceDef -> Int -> JudgName -> [GoalArg] -> Int -> Either Text (SolveResult, Int)
+solveGoal surf fuel judg args supply
   | fuel <= 0 = Left "surface solver: fuel exhausted"
-  | otherwise = tryRules (sdRules surf)
+  | otherwise = tryRules (sdRules surf) supply
   where
-    tryRules [] = Left "surface solver: no rule applies"
-    tryRules (r:rs)
-      | rcJudg (rdConclusion r) /= judg = tryRules rs
+    tryRules [] _ = Left "surface solver: no rule applies"
+    tryRules (r:rs) s
+      | rcJudg (rdConclusion r) /= judg = tryRules rs s
       | otherwise =
-          case applyRule r of
-            Left _ -> tryRules rs
-            Right res -> Right res
+          let (r', s') = freshenRule s r
+          in case applyRule r' s' of
+              Left _ -> tryRules rs s'
+              Right res -> Right res
 
-    applyRule rule = do
+    applyRule rule s = do
       env0 <- matchConclusion (rdConclusion rule) args
-      env1 <- solvePremises surf (fuel - 1) env0 (rdPremises rule)
+      (env1, s') <- solvePremises surf (fuel - 1) env0 (rdPremises rule) s
       let outs = rcOutputs (rdConclusion rule)
-      pure SolveResult { srOutputs = outs, srEnv = env1 }
+      pure (SolveResult { srOutputs = outs, srEnv = env1 }, s')
 
 matchConclusion :: RuleConclusion -> [GoalArg] -> Either Text SolveEnv
 matchConclusion concl args =
@@ -92,47 +95,79 @@ matchArg env (pat, arg) =
 matchSurf :: SolveEnv -> PTerm -> STerm -> Either Text SolveEnv
 matchSurf env pat term =
   case term of
-    SFree name | isPlaceholder name ->
-      case matchPTerm pat term of
+    SFree name | isPlaceholder name -> do
+      res <- matchPTermWithSubst True (seMatch env) pat term
+      case res of
         Nothing -> Left "surface solver: pattern mismatch"
-        Just sub -> mergeMatch env sub
-    SFree name ->
-      case M.lookup name (seSurfVars env) of
-        Nothing -> do
-          let tm = applySubstPTerm (seMatch env) pat
-          pure env { seSurfVars = M.insert name tm (seSurfVars env) }
-        Just tm ->
-          if tm == applySubstPTerm (seMatch env) pat
-            then Right env
-            else Left "surface solver: conflicting surface placeholder"
-    _ ->
-      case matchPTerm pat term of
+        Just sub -> Right (seedAfterMatch env sub)
+    _ -> do
+      res <- matchPTermWithSubst True (seMatch env) pat term
+      case res of
         Nothing -> Left "surface solver: pattern mismatch"
-        Just sub -> mergeMatch env sub
+        Just sub -> Right (seedAfterMatch env sub)
   where
     isPlaceholder name = T.isPrefixOf (T.singleton '_') name
+    seedAfterMatch env' sub =
+      let seeded = seedMetas sub pat
+      in env' { seMatch = seeded }
 
-mergeMatch :: SolveEnv -> MatchSubst -> Either Text SolveEnv
-mergeMatch env sub = do
-  merged <- mergeMatchSubst (seMatch env) sub
-  pure env { seMatch = merged }
+seedMetas :: MatchSubst -> PTerm -> MatchSubst
+seedMetas subst pat =
+  foldl' seedMeta subst (collectMeta0 pat)
+  where
+    metaPlaceholder name = "_" <> name
+    seedMeta s mv@(MVar name) =
+      if M.member mv (msTerms s)
+        then s
+        else s { msTerms = M.insert mv (MetaSubst 0 (SFree (metaPlaceholder name))) (msTerms s) }
+
+collectMeta0 :: PTerm -> [MVar]
+collectMeta0 pat =
+  case pat of
+    PMeta mv [] -> [mv]
+    PMeta _ _ -> []
+    PCon _ args -> concatMap collectArg args
+    PBound _ -> []
+    PBoundVar _ -> []
+    PFree _ -> []
+
+collectArg :: PArg -> [MVar]
+collectArg (PArg binders body) =
+  concatMap collectMeta0 binders <> collectMeta0 body
 
 mergeMatchSubst :: MatchSubst -> MatchSubst -> Either Text MatchSubst
 mergeMatchSubst a b = do
-  terms <- mergeMap msTerms "metavariable" a b
-  nats <- mergeMap msNats "nat variable" a b
+  terms <- mergeTerms (msTerms a) (msTerms b)
+  nats <- mergeNats (msNats a) (msNats b)
   pure MatchSubst { msTerms = terms, msNats = nats }
   where
-    mergeMap sel label x y =
-      let left = sel x
-          right = sel y
-          dup = M.keys (M.intersection left right)
+    mergeNats left right =
+      let dup = M.keys (M.intersection left right)
       in case dup of
           [] -> Right (M.union left right)
           (k:_) ->
             if left M.! k == right M.! k
               then Right (M.union left right)
-              else Left ("surface solver: conflicting " <> label <> " binding")
+              else Left "surface solver: conflicting nat variable binding"
+
+    mergeTerms left right = foldM step left (M.toList right)
+      where
+        step acc (k, v) =
+          case M.lookup k acc of
+            Nothing -> Right (M.insert k v acc)
+            Just v' ->
+              case resolveConflict k v' v of
+                Just v'' -> Right (M.insert k v'' acc)
+                Nothing -> Left "surface solver: conflicting metavariable binding"
+
+        resolveConflict mv v1 v2
+          | v1 == v2 = Just v1
+          | isSelfPlaceholder mv v1 = Just v2
+          | isSelfPlaceholder mv v2 = Just v1
+          | otherwise = Nothing
+
+    isSelfPlaceholder (MVar name) ms =
+      msArity ms == 0 && msBody ms == SFree ("_" <> name)
 
 bindCtx :: SolveEnv -> Text -> Ctx -> Either Text SolveEnv
 bindCtx env name ctx =
@@ -158,14 +193,14 @@ bindNatVar env name n =
       in Right env { seMatch = match' }
     Just n' -> if n' == n then Right env else Left "surface solver: conflicting nat binding"
 
-solvePremises :: SurfaceDef -> Int -> SolveEnv -> [RulePremise] -> Either Text SolveEnv
-solvePremises _ _ env [] = Right env
-solvePremises surf fuel env (p:ps) = do
-  env' <- solvePremise surf fuel env p
-  solvePremises surf fuel env' ps
+solvePremises :: SurfaceDef -> Int -> SolveEnv -> [RulePremise] -> Int -> Either Text (SolveEnv, Int)
+solvePremises _ _ env [] supply = Right (env, supply)
+solvePremises surf fuel env (p:ps) supply = do
+  (env', supply') <- solvePremise surf fuel env p supply
+  solvePremises surf fuel env' ps supply'
 
-solvePremise :: SurfaceDef -> Int -> SolveEnv -> RulePremise -> Either Text SolveEnv
-solvePremise surf fuel env prem =
+solvePremise :: SurfaceDef -> Int -> SolveEnv -> RulePremise -> Int -> Either Text (SolveEnv, Int)
+solvePremise surf fuel env prem supply =
   case prem of
     PremiseLookup ctxName idxPat outName -> do
       ctx <- requireCtx env ctxName
@@ -176,14 +211,16 @@ solvePremise surf fuel env prem =
       let m = MVar outName
       let meta = MetaSubst 0 ty
       let match' = (seMatch env) { msTerms = M.insert m meta (msTerms (seMatch env)) }
-      pure env { seMatch = match' }
+      pure (env { seMatch = match' }, supply)
     PremiseJudg judg args outs under -> do
       args' <- mapM (instantiateArg env) args
-      let ctx' = applyUnder env under
+      ctx' <- applyUnder env under
       let args'' = replaceCtx args' ctx'
-      res <- solveGoal surf (fuel - 1) judg args''
-      let coreBindings = M.fromList (zip outs (srOutputs res))
-      let coreFromPremise = M.union coreBindings (seCore (srEnv res))
+      (res, supply') <- solveGoal surf (fuel - 1) judg args'' supply
+      let avoid = S.fromList outs `S.union` M.keysSet (seCore env)
+      let (subCore', outputs') = freshenCore avoid (seCore (srEnv res)) (srOutputs res)
+      let coreBindings = M.fromList (zip outs outputs')
+      let coreFromPremise = M.union coreBindings subCore'
       mergedMatch <- mergeMatchSubst (seMatch env) (seMatch (srEnv res))
       let (coreFromPremise', subCtxs) =
             case under of
@@ -199,12 +236,176 @@ solvePremise surf fuel env prem =
       mergedCtx <- mergeEqual "context" (seCtxs env) subCtxs
       mergedSurf <- mergeEqual "surface variable" (seSurfVars env) (seSurfVars (srEnv res))
       mergedCore <- mergeEqual "core binding" (seCore env) coreFromPremise'
-      pure env
-        { seCore = mergedCore
-        , seMatch = mergedMatch
-        , seCtxs = mergedCtx
-        , seSurfVars = mergedSurf
-        }
+      pure
+        ( env
+            { seCore = mergedCore
+            , seMatch = mergedMatch
+            , seCtxs = mergedCtx
+            , seSurfVars = mergedSurf
+            }
+        , supply'
+        )
+
+freshenRule :: Int -> RuleDef -> (RuleDef, Int)
+freshenRule n rule =
+  let suffix = "_" <> T.pack (show n)
+      renameName name =
+        case M.lookup name mapping of
+          Just name' -> name'
+          Nothing -> name
+      mapping = M.fromList [ (name, name <> suffix) | name <- S.toList names ]
+      names = collectRuleNames rule
+      rule' =
+        rule
+          { rdConclusion = renameConclusion renameName (rdConclusion rule)
+          , rdPremises = map (renamePremise renameName) (rdPremises rule)
+          }
+  in (rule', n + 1)
+
+collectRuleNames :: RuleDef -> S.Set Text
+collectRuleNames rule =
+  S.unions
+    [ collectConclusion (rdConclusion rule)
+    , S.unions (map collectPremise (rdPremises rule))
+    ]
+
+collectConclusion :: RuleConclusion -> S.Set Text
+collectConclusion concl =
+  S.unions (map collectArgPat (rcArgs concl))
+
+collectPremise :: RulePremise -> S.Set Text
+collectPremise prem =
+  case prem of
+    PremiseLookup ctxName idxPat outName ->
+      S.unions [S.singleton ctxName, S.singleton outName, collectNatPat idxPat]
+    PremiseJudg _ args outs under ->
+      S.unions
+        [ S.unions (map collectArgPat args)
+        , S.fromList outs
+        , collectUnder under
+        ]
+
+collectUnder :: Maybe UnderCtx -> S.Set Text
+collectUnder Nothing = S.empty
+collectUnder (Just under) =
+  S.insert (ucCtx under) (collectPTerm (ucType under))
+
+collectArgPat :: ArgPat -> S.Set Text
+collectArgPat pat =
+  case pat of
+    ArgSurf p -> collectPTerm p
+    ArgCtx name -> S.singleton name
+    ArgNat np -> collectNatPat np
+
+collectNatPat :: NatPat -> S.Set Text
+collectNatPat np =
+  case np of
+    NatZero -> S.empty
+    NatSucc name -> S.singleton name
+    NatVar name -> S.singleton name
+
+collectPTerm :: PTerm -> S.Set Text
+collectPTerm pat =
+  case pat of
+    PBound _ -> S.empty
+    PBoundVar name -> S.singleton name
+    PFree _ -> S.empty
+    PMeta (MVar name) _ -> S.singleton name
+    PCon _ args -> S.unions (map collectPArg args)
+
+collectPArg :: PArg -> S.Set Text
+collectPArg (PArg binders body) =
+  S.unions (map collectPTerm binders) `S.union` collectPTerm body
+
+renameConclusion :: (Text -> Text) -> RuleConclusion -> RuleConclusion
+renameConclusion f concl =
+  concl
+    { rcArgs = map (renameArgPat f) (rcArgs concl)
+    , rcOutputs = map (renameCoreExpr f) (rcOutputs concl)
+    }
+
+renamePremise :: (Text -> Text) -> RulePremise -> RulePremise
+renamePremise f prem =
+  case prem of
+    PremiseLookup ctxName idxPat outName ->
+      PremiseLookup (f ctxName) (renameNatPat f idxPat) (f outName)
+    PremiseJudg judg args outs under ->
+      PremiseJudg judg
+        (map (renameArgPat f) args)
+        (map f outs)
+        (renameUnder f under)
+
+renameUnder :: (Text -> Text) -> Maybe UnderCtx -> Maybe UnderCtx
+renameUnder _ Nothing = Nothing
+renameUnder f (Just under) =
+  Just under
+    { ucCtx = f (ucCtx under)
+    , ucType = renamePTerm f (ucType under)
+    }
+
+renameArgPat :: (Text -> Text) -> ArgPat -> ArgPat
+renameArgPat f pat =
+  case pat of
+    ArgSurf p -> ArgSurf (renamePTerm f p)
+    ArgCtx name -> ArgCtx (f name)
+    ArgNat np -> ArgNat (renameNatPat f np)
+
+renameNatPat :: (Text -> Text) -> NatPat -> NatPat
+renameNatPat f np =
+  case np of
+    NatZero -> NatZero
+    NatSucc name -> NatSucc (f name)
+    NatVar name -> NatVar (f name)
+
+renamePTerm :: (Text -> Text) -> PTerm -> PTerm
+renamePTerm f pat =
+  case pat of
+    PBound ix -> PBound ix
+    PBoundVar name -> PBoundVar (f name)
+    PFree name -> PFree name
+    PMeta (MVar name) ixs -> PMeta (MVar (f name)) ixs
+    PCon con args -> PCon con (map (renamePArg f) args)
+
+renamePArg :: (Text -> Text) -> PArg -> PArg
+renamePArg f (PArg binders body) =
+  PArg (map (renamePTerm f) binders) (renamePTerm f body)
+
+renameCoreExpr :: (Text -> Text) -> CoreExpr -> CoreExpr
+renameCoreExpr f expr =
+  case expr of
+    CoreVar name -> CoreVar (f name)
+    CoreApp fun args -> CoreApp fun (map (renameCoreExpr f) args)
+
+freshenCore :: S.Set Text -> M.Map Text CoreExpr -> [CoreExpr] -> (M.Map Text CoreExpr, [CoreExpr])
+freshenCore avoid subCore outputs =
+  let (renameMap, _) = foldl' step (M.empty, avoid) (M.keys subCore)
+      renameKey name = M.findWithDefault name name renameMap
+      renameExpr = renameCoreVars renameMap
+      subCore' = M.fromList
+        [ (renameKey k, renameExpr v)
+        | (k, v) <- M.toList subCore
+        ]
+      outputs' = map renameExpr outputs
+  in (subCore', outputs')
+  where
+    step (m, used) name =
+      if name `S.member` used
+        then
+          let name' = freshName name used
+          in (M.insert name name' m, S.insert name' used)
+        else (m, S.insert name used)
+    freshName base used = go (0 :: Int)
+      where
+        go n =
+          let suffix = if n == 0 then "_sub" else "_sub" <> T.pack (show n)
+              candidate = base <> suffix
+          in if candidate `S.member` used then go (n + 1) else candidate
+
+renameCoreVars :: M.Map Text Text -> CoreExpr -> CoreExpr
+renameCoreVars mapping expr =
+  case expr of
+    CoreVar name -> CoreVar (M.findWithDefault name name mapping)
+    CoreApp f args -> CoreApp f (map (renameCoreVars mapping) args)
 
 mergeEqual :: (Eq v) => Text -> M.Map Text v -> M.Map Text v -> Either Text (M.Map Text v)
 mergeEqual label left right =
@@ -218,7 +419,7 @@ mergeEqual label left right =
 instantiateArg :: SolveEnv -> ArgPat -> Either Text GoalArg
 instantiateArg env pat =
   case pat of
-    ArgSurf p -> Right (GSurf (applySubstPTerm (seMatch env) p))
+    ArgSurf p -> GSurf <$> applySubstPTerm (seMatch env) p
     ArgCtx name -> requireCtx env name >>= \ctx -> Right (GCtx ctx)
     ArgNat np -> evalNatPat (seMatch env) np >>= \n -> Right (GNat n)
 
@@ -242,14 +443,14 @@ evalNatPat subst np =
         Nothing -> Left ("surface solver: unbound nat variable " <> name)
         Just n -> Right n
 
-applyUnder :: SolveEnv -> Maybe UnderCtx -> Maybe Ctx
-applyUnder _ Nothing = Nothing
+applyUnder :: SolveEnv -> Maybe UnderCtx -> Either Text (Maybe Ctx)
+applyUnder _ Nothing = Right Nothing
 applyUnder env (Just under) =
   case M.lookup (ucCtx under) (seCtxs env) of
-    Nothing -> Nothing
-    Just ctx ->
-      let ty = applySubstPTerm (seMatch env) (ucType under)
-      in Just (extendCtx ctx ty)
+    Nothing -> Right Nothing
+    Just ctx -> do
+      ty <- applySubstPTerm (seMatch env) (ucType under)
+      Right (Just (extendCtx ctx ty))
 
 replaceCtx :: [GoalArg] -> Maybe Ctx -> [GoalArg]
 replaceCtx args Nothing = args

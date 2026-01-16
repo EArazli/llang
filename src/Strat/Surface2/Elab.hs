@@ -31,7 +31,7 @@ elabSurfaceDecl (RawSurfaceDecl name items) = do
     (n:_) -> Right n
   cons <- buildConstructors sorts items
   validateBinderTypes ctxSortName cons
-  judgs <- buildJudgments items
+  judgs <- buildJudgments sorts items
   defs <- buildDefines cons items
   rules <- buildRules cons judgs ctxSortName items
   pure SurfaceDef
@@ -150,29 +150,33 @@ elabConArg conNames sorts arg = do
     , caSort = res
     }
 
-buildJudgments :: [RawSurfaceItem] -> Either Text (M.Map JudgName JudgDecl)
-buildJudgments items = foldM step M.empty [ j | RSJudg j <- items ]
+buildJudgments :: M.Map Sort2Name () -> [RawSurfaceItem] -> Either Text (M.Map JudgName JudgDecl)
+buildJudgments sorts items = foldM step M.empty [ j | RSJudg j <- items ]
   where
     step acc decl = do
       let jname = JudgName (rsjName decl)
       if M.member jname acc
         then Left ("Duplicate judgment: " <> rsjName decl)
         else do
-          params <- mapM elabJudgParam (rsjParams decl)
-          outs <- mapM elabJudgParam (rsjOutputs decl)
+          params <- mapM (elabJudgParam sorts) (rsjParams decl)
+          outs <- mapM (elabJudgParam sorts) (rsjOutputs decl)
           pure (M.insert jname (JudgDecl jname params outs) acc)
 
-elabJudgParam :: RawSurfaceJudgParam -> Either Text JudgParam
-elabJudgParam (RawSurfaceJudgParam name sortName) =
-  JudgParam name <$> parseParamSort sortName
+elabJudgParam :: M.Map Sort2Name () -> RawSurfaceJudgParam -> Either Text JudgParam
+elabJudgParam sorts (RawSurfaceJudgParam name sortName) =
+  JudgParam name <$> parseParamSort sorts sortName
 
-parseParamSort :: Text -> Either Text ParamSort
-parseParamSort name =
+parseParamSort :: M.Map Sort2Name () -> Text -> Either Text ParamSort
+parseParamSort sorts name =
   case name of
     "Ctx" -> Right PCtx
     "Core" -> Right PCore
     "Nat" -> Right PNat
-    _ -> Right (PSurf (Sort2Name name))
+    _ ->
+      let s = Sort2Name name
+      in if M.member s sorts
+          then Right (PSurf s)
+          else Left ("Unknown surface sort in judgment: " <> name)
 
 buildRules :: M.Map Con2Name ConDecl -> M.Map JudgName JudgDecl -> Sort2Name -> [RawSurfaceItem] -> Either Text [RuleDef]
 buildRules cons judgs ctxSort items = mapM (elabRule cons judgs ctxSort) [ r | RSRule r <- items ]
@@ -190,6 +194,9 @@ elabPremise cons judgs ctxSort prem =
       PremiseLookup <$> pure ctx <*> pure (elabNatPat idx) <*> pure out
     RPremiseJudg name args outs under -> do
       jdecl <- lookupJudg name judgs
+      if length outs /= length (jdOutputs jdecl)
+        then Left ("Judgment output arity mismatch in premise: " <> renderJudg (jdName jdecl))
+        else pure ()
       let depthFor param =
             case under of
               Nothing -> 0
@@ -204,9 +211,15 @@ elabPremise cons judgs ctxSort prem =
 elabConclusion :: M.Map Con2Name ConDecl -> M.Map JudgName JudgDecl -> Sort2Name -> RawSurfaceConclusion -> Either Text RuleConclusion
 elabConclusion cons judgs ctxSort concl = do
   jdecl <- lookupJudg (rcoName concl) judgs
+  if length (rcoOutputs concl) /= length (jdOutputs jdecl)
+    then Left ("Judgment output arity mismatch in conclusion: " <> renderJudg (jdName jdecl))
+    else pure ()
   argPats <- elabArgPats cons ctxSort (const 0) (jdParams jdecl) (rcoArgs concl)
   let outs = map elabCoreExpr (rcoOutputs concl)
   pure (RuleConclusion (jdName jdecl) argPats outs)
+
+renderJudg :: JudgName -> Text
+renderJudg (JudgName t) = t
 
 elabArgPats :: M.Map Con2Name ConDecl -> Sort2Name -> (JudgParam -> Int) -> [JudgParam] -> [RawSurfacePat] -> Either Text [ArgPat]
 elabArgPats cons ctxSort depthFor params args =
@@ -215,7 +228,7 @@ elabArgPats cons ctxSort depthFor params args =
     else mapM (\(param, arg) -> elabArgPat cons ctxSort (depthFor param) param arg) (zip params args)
 
 elabArgPat :: M.Map Con2Name ConDecl -> Sort2Name -> Int -> JudgParam -> RawSurfacePat -> Either Text ArgPat
-elabArgPat cons ctxSort depth param pat =
+elabArgPat cons _ctxSort depth param pat =
   case jpSort param of
     PCtx ->
       case pat of

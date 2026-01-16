@@ -17,6 +17,8 @@ import qualified Test.Frontend.SyntaxModel as FrontendSyntaxModel
 import qualified Test.Frontend.Loader as FrontendLoader
 import qualified Test.Surface2.Term as Surface2Term
 import qualified Test.Surface2.Pattern as Surface2Pattern
+import qualified Test.Surface2.CoreEval as Surface2CoreEval
+import qualified Test.Surface2.Elab as Surface2Elab
 
 main :: IO ()
 main =
@@ -38,5 +40,7 @@ main =
       , FrontendLoader.tests
       , Surface2Term.tests
       , Surface2Pattern.tests
+      , Surface2CoreEval.tests
+      , Surface2Elab.tests
       , CLI.tests
       ]
