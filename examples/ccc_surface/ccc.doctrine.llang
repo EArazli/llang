@@ -1,6 +1,6 @@
-doctrine CCC where {
+doctrine CCC_Bool where {
   sort Obj;
-  sort Hom(Obj, Obj);
+  sort Hom (a:Obj) (b:Obj);
 
   op id : (x:Obj) -> Hom(?x, ?x);
 
@@ -17,6 +17,12 @@ doctrine CCC where {
     (a:Obj) (b:Obj) (f:Hom(?a, ?b)) |-
       comp(?a, ?a, ?b, ?f, id(?a)) -> ?f;
 
+  structural assoc :
+    (a:Obj) (b:Obj) (c:Obj) (d:Obj)
+    (h:Hom(?c, ?d)) (g:Hom(?b, ?c)) (f:Hom(?a, ?b)) |-
+      comp(?a, ?c, ?d, ?h, comp(?a, ?b, ?c, ?g, ?f))
+        = comp(?a, ?b, ?d, comp(?b, ?c, ?d, ?h, ?g), ?f);
+
   op Unit : Obj;
   op prod : (a:Obj) (b:Obj) -> Obj;
 
@@ -27,6 +33,22 @@ doctrine CCC where {
     (a:Obj) (b:Obj) (c:Obj)
     (f:Hom(?c, ?a)) (g:Hom(?c, ?b))
     -> Hom(?c, prod(?a, ?b));
+
+  computational exl_pair :
+    (a:Obj) (b:Obj) (c:Obj)
+    (f:Hom(?c, ?a)) (g:Hom(?c, ?b)) |-
+      comp(?c, prod(?a, ?b), ?a,
+           exl(?a, ?b),
+           pair(?a, ?b, ?c, ?f, ?g))
+        -> ?f;
+
+  computational exr_pair :
+    (a:Obj) (b:Obj) (c:Obj)
+    (f:Hom(?c, ?a)) (g:Hom(?c, ?b)) |-
+      comp(?c, prod(?a, ?b), ?b,
+           exr(?a, ?b),
+           pair(?a, ?b, ?c, ?f, ?g))
+        -> ?g;
 
   op exp : (a:Obj) (b:Obj) -> Obj;
 
@@ -41,6 +63,9 @@ doctrine CCC where {
 
   op terminal : (a:Obj) -> Hom(?a, Unit);
 
+  computational terminal_unit :
+    terminal(Unit) -> id(Unit);
+
   computational beta :
     (a:Obj) (b:Obj) (c:Obj)
     (f:Hom(prod(?c, ?a), ?b)) |-
@@ -53,7 +78,22 @@ doctrine CCC where {
                 exr(?c, ?a)))
         -> ?f;
 
+  computational beta_app :
+    (a:Obj) (b:Obj) (c:Obj)
+    (f:Hom(prod(?c, ?a), ?b)) (g:Hom(?c, ?a)) |-
+      comp(?c, prod(exp(?a, ?b), ?a), ?b,
+           eval(?a, ?b),
+           pair(exp(?a, ?b), ?a, ?c,
+                curry(?a, ?b, ?c, ?f),
+                ?g))
+        -> comp(?c, prod(?c, ?a), ?b,
+                ?f,
+                pair(?c, ?a, ?c, id(?c), ?g));
+
   op Bool : Obj;
   op T : Hom(Unit, Bool);
   op F : Hom(Unit, Bool);
+}
+
+doctrine CCC extends CCC_Bool where {
 }

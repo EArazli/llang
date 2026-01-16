@@ -11,13 +11,10 @@ doctrine Base where {
     m(m(?x, ?y), ?z) -> m(?x, m(?y, ?z));
 }
 
-doctrine Ext where {
-  sort Obj;
-  op e : Obj;
-  op m : (a:Obj) (b:Obj) -> Obj;
+doctrine Ext extends Base where {
   op k : (x:Obj) -> Obj;
 
   computational ext : (x:Obj) |- k(m(e, ?x)) -> ?x;
 }
 
-doctrine Combined = (Base@C) & (Ext@C);
+doctrine Combined = (Ext@C);

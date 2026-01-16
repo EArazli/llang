@@ -1,5 +1,6 @@
 module Strat.Surface2.Def
   ( SurfaceDef(..)
+  , SurfaceRequire(..)
   , ParamSort(..)
   , ConDecl(..)
   , ConArg(..)
@@ -21,6 +22,7 @@ module Strat.Surface2.Def
 
 import Strat.Surface2.Term
 import Strat.Surface2.Pattern
+import Strat.Kernel.Presentation (Presentation)
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 
@@ -32,7 +34,12 @@ data SurfaceDef = SurfaceDef
   , sdJudgments :: M.Map JudgName JudgDecl
   , sdRules :: [RuleDef]
   , sdDefines :: M.Map Text Define
-  , sdRequires :: Text
+  , sdRequires :: SurfaceRequire
+  } deriving (Eq, Show)
+
+data SurfaceRequire = SurfaceRequire
+  { srAlias :: Text
+  , srPres  :: Presentation
   } deriving (Eq, Show)
 
 data ParamSort

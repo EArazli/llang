@@ -9,6 +9,10 @@ import qualified Test.Kernel.CriticalPairsDependent as KernelCriticalPairsDepend
 import qualified Test.Kernel.Coherence as KernelCoherence
 import qualified Test.Kernel.DoctrineExpr as KernelDoctrineExpr
 import qualified Test.Kernel.DSL as KernelDSL
+import qualified Test.Kernel.Include as KernelInclude
+import qualified Test.Kernel.Morphism as KernelMorphism
+import qualified Test.Kernel.Sogat as KernelSogat
+import qualified Test.Kernel.SortCtorTele as KernelSortCtorTele
 import qualified Test.Kernel.Relative as KernelRelative
 import qualified Test.Surface as Surface
 import qualified Test.Backend as Backend
@@ -19,6 +23,7 @@ import qualified Test.Surface2.Term as Surface2Term
 import qualified Test.Surface2.Pattern as Surface2Pattern
 import qualified Test.Surface2.CoreEval as Surface2CoreEval
 import qualified Test.Surface2.Elab as Surface2Elab
+import qualified Test.Surface2.Determinism as Surface2Determinism
 
 main :: IO ()
 main =
@@ -33,6 +38,10 @@ main =
       , KernelCoherence.tests
       , KernelDoctrineExpr.tests
       , KernelDSL.tests
+      , KernelInclude.tests
+      , KernelMorphism.tests
+      , KernelSogat.tests
+      , KernelSortCtorTele.tests
       , KernelRelative.tests
       , Surface.tests
       , Backend.tests
@@ -42,5 +51,6 @@ main =
       , Surface2Pattern.tests
       , Surface2CoreEval.tests
       , Surface2Elab.tests
+      , Surface2Determinism.tests
       , CLI.tests
       ]

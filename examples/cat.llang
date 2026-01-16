@@ -1,6 +1,6 @@
 doctrine CatCore where {
   sort Obj;
-  sort Hom(Obj, Obj);
+  sort Hom (a:Obj) (b:Obj);
 
   op id : (x:Obj) -> Hom(?x, ?x);
 
@@ -24,10 +24,7 @@ doctrine CatCore where {
         -> comp(?a, ?c, ?d, ?h, comp(?a, ?b, ?c, ?g, ?f));
 }
 
-doctrine CatGen where {
-  sort Obj;
-  sort Hom(Obj, Obj);
-
+doctrine CatGen extends CatCore where {
   op A : Obj;
   op B : Obj;
   op C : Obj;
@@ -38,4 +35,4 @@ doctrine CatGen where {
   op h : Hom(C, D);
 }
 
-doctrine Cat = (CatCore@C) & (CatGen@C);
+doctrine Cat = (CatGen@C);

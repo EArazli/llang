@@ -81,14 +81,18 @@ validateSignature sig = do
   mapM_ (validateOpDecl sig) (M.elems (sigOps sig))
 
 validateSortCtor :: Signature -> SortCtor -> Either Text ()
-validateSortCtor sig ctor = mapM_ (validateClosedSort sig) (scParamSort ctor)
+validateSortCtor sig ctor = do
+  let scope = ScopeId ("sort:" <> renderSortName (scName ctor))
+  validateSortBinderScopes scope (scName ctor) (scTele ctor)
+  _ <- validateTele sig (renderSortName (scName ctor)) (scTele ctor)
+  pure ()
 
 validateClosedSort :: Signature -> Sort -> Either Text ()
 validateClosedSort sig s = do
   validateSort sig s
   if S.null (varsInSort s)
     then Right ()
-    else Left ("Sort constructor parameter has free vars: " <> renderSort s)
+    else Left ("Sort has free vars: " <> renderSort s)
 
 validateOpDecl :: Signature -> OpDecl -> Either Text ()
 validateOpDecl sig decl = do
@@ -113,6 +117,17 @@ validateOpBinderScopes expected opName0 binders =
       in if L.sort locals == expectedLocals
            then Right ()
            else Left ("Op binder locals not contiguous: " <> renderOpName opName0)
+
+validateSortBinderScopes :: ScopeId -> SortName -> [Binder] -> Either Text ()
+validateSortBinderScopes expected sortName0 binders =
+  case filter (\v -> vScope v /= expected) (map bVar binders) of
+    (v : _) -> Left ("Sort binder has invalid scope: " <> renderSortName sortName0 <> " (" <> renderScope (vScope v) <> ")")
+    [] ->
+      let locals = map vLocal (map bVar binders)
+          expectedLocals = [0 .. length binders - 1]
+      in if L.sort locals == expectedLocals
+           then Right ()
+           else Left ("Sort binder locals not contiguous: " <> renderSortName sortName0)
 
 validateTele :: Signature -> Text -> [Binder] -> Either Text (M.Map Var Sort)
 validateTele sig eqName0 = go M.empty
@@ -180,6 +195,9 @@ renderSortError = T.pack . show
 
 renderSort :: Sort -> Text
 renderSort = T.pack . show
+
+renderSortName :: SortName -> Text
+renderSortName (SortName t) = t
 
 renderOpName :: OpName -> Text
 renderOpName (OpName t) = t

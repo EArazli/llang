@@ -115,7 +115,7 @@ mergeSortCtors = foldl step (Right M.empty)
       case M.lookup name m of
         Nothing -> pure (M.insert name ctor m)
         Just ctor' ->
-          if ctor' == ctor
+          if alphaEqSortCtor ctor' ctor
             then pure m
             else Left ("Duplicate sort ctor: " <> renderSortName name)
 
@@ -206,7 +206,7 @@ renameSortsPresentation f pres = do
 renameOpsSignature :: (OpName -> OpName) -> Signature -> Either Text Signature
 renameOpsSignature f sig = do
   let sortCtors' = M.fromList
-        [ (name, ctor { scParamSort = map (renameOpsSort f) (scParamSort ctor) })
+        [ (name, ctor { scTele = map (renameOpsBinder f) (scTele ctor) })
         | (name, ctor) <- M.toList (sigSortCtors sig)
         ]
   let opDecls = map (renameOpsDecl f) (M.elems (sigOps sig))
@@ -216,7 +216,14 @@ renameOpsSignature f sig = do
 renameSortsSignature :: (SortName -> SortName) -> Signature -> Either Text Signature
 renameSortsSignature f sig = do
   let sortDecls =
-        [ (f name, ctor { scName = f (scName ctor), scParamSort = map (renameSortsSort f) (scParamSort ctor) })
+        [ let oldName = name
+              newName = f name
+              oldScope = ScopeId ("sort:" <> renderSortName oldName)
+              newScope = ScopeId ("sort:" <> renderSortName newName)
+              tele' = map (renameScopeBinder oldScope newScope) (scTele ctor)
+              tele'' = map (renameSortsBinder f) tele'
+              ctor' = ctor { scName = newName, scTele = tele'' }
+          in (newName, ctor')
         | (name, ctor) <- M.toList (sigSortCtors sig)
         ]
   sortCtors' <- mergeSortCtors sortDecls
@@ -326,6 +333,22 @@ alphaEqOpDecl d1 d2 =
       M.fromList
         [ (v2, mkVar s1 v1)
         | (Binder v1 s1, Binder v2 _) <- zip (opTele d1) (opTele d2)
+        ]
+    alphaEqBinder (Binder _ s1) (Binder _ s2) =
+      let s2' = applySubstSort subst s2
+      in s1 == s2'
+
+alphaEqSortCtor :: SortCtor -> SortCtor -> Bool
+alphaEqSortCtor c1 c2 =
+  let tele1 = scTele c1
+      tele2 = scTele c2
+  in length tele1 == length tele2
+      && and (zipWith alphaEqBinder tele1 tele2)
+  where
+    subst =
+      M.fromList
+        [ (v2, mkVar s1 v1)
+        | (Binder v1 s1, Binder v2 _) <- zip (scTele c1) (scTele c2)
         ]
     alphaEqBinder (Binder _ s1) (Binder _ s2) =
       let s2' = applySubstSort subst s2

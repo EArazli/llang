@@ -108,8 +108,7 @@ diffEnv full base = ModuleEnv
   , mePresentations = M.difference (mePresentations full) (mePresentations base)
   , meSyntaxes = M.difference (meSyntaxes full) (meSyntaxes base)
   , meSurfaces = M.difference (meSurfaces full) (meSurfaces base)
-  , meSurfaceSyntaxes = M.difference (meSurfaceSyntaxes full) (meSurfaceSyntaxes base)
-  , meInterfaces = M.difference (meInterfaces full) (meInterfaces base)
+  , meMorphisms = M.difference (meMorphisms full) (meMorphisms base)
   , meModels = M.difference (meModels full) (meModels base)
   , meRun = meRun full
   }

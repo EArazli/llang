@@ -8,6 +8,8 @@ module Strat.Kernel.DSL.AST
   , RawItem(..)
   , RawDecl(..)
   , RawExpr(..)
+  , RawSyntaxDecl(..)
+  , RawSyntaxTarget(..)
   , RawSyntaxItem(..)
   , RawNotation(..)
   , RawAssoc(..)
@@ -32,12 +34,16 @@ module Strat.Kernel.DSL.AST
   , RawDefinePat(..)
   , RawWhereClause(..)
   , RawCoreExpr(..)
-  , RawSurfaceSyntaxDecl(..)
-  , RawSurfaceSyntaxItem(..)
   , RawSurfaceNotation(..)
   , RawSurfaceAssoc(..)
-  , RawInterfaceDecl(..)
-  , RawInterfaceItem(..)
+  , RawSogatDecl(..)
+  , RawSogatItem(..)
+  , RawSogatOpDecl(..)
+  , RawSogatArg(..)
+  , RawSogatBinder(..)
+  , RawMorphismDecl(..)
+  , RawMorphismItem(..)
+  , RawMorphismCheck(..)
   , RawRun(..)
   , RawRunShow(..)
   , RawFile(..)
@@ -68,7 +74,7 @@ data RawBinder = RawBinder
 
 data RawSortDecl = RawSortDecl
   { rsName   :: Text
-  , rsParams :: [RawSort]
+  , rsTele   :: [RawBinder]
   }
   deriving (Eq, Show)
 
@@ -96,6 +102,7 @@ data RawItem
   = ItemSort RawSortDecl
   | ItemOp   RawOpDecl
   | ItemRule RawRule
+  | ItemInclude RawExpr
   deriving (Eq, Show)
 
 
@@ -103,11 +110,11 @@ data RawDecl
   = DeclImport FilePath
   | DeclWhere Text [RawItem]
   | DeclExpr  Text RawExpr
-  | DeclSyntaxWhere Text [RawSyntaxItem]
+  | DeclSyntaxWhere RawSyntaxDecl
   | DeclModelWhere Text [RawModelItem]
   | DeclSurfaceWhere RawSurfaceDecl
-  | DeclSurfaceSyntaxWhere RawSurfaceSyntaxDecl
-  | DeclInterfaceWhere RawInterfaceDecl
+  | DeclSogatWhere RawSogatDecl
+  | DeclMorphismWhere RawMorphismDecl
   | DeclRun RawRun
   deriving (Eq, Show)
 
@@ -124,9 +131,22 @@ data RawExpr
   deriving (Eq, Show)
 
 
+data RawSyntaxDecl = RawSyntaxDecl
+  { rsnName :: Text
+  , rsnTarget :: RawSyntaxTarget
+  , rsnItems :: [RawSyntaxItem]
+  } deriving (Eq, Show)
+
+data RawSyntaxTarget
+  = SyntaxDoctrine RawExpr
+  | SyntaxSurface Text
+  deriving (Eq, Show)
+
 data RawSyntaxItem
   = RSPrint RawNotation
   | RSParse RawNotation
+  | RSTy RawSurfaceNotation
+  | RSTm RawSurfaceNotation
   | RSAllowCall
   | RSVarPrefix Text
   deriving (Eq, Show)
@@ -169,6 +189,7 @@ data RawRunShow
   | RawShowValue
   | RawShowCat
   | RawShowInput
+  | RawShowResult
   deriving (Eq, Ord, Show)
 
 
@@ -178,8 +199,8 @@ data RawRun = RawRun
   , rrCoreSyntax :: Maybe Text
   , rrSurface   :: Maybe Text
   , rrSurfaceSyntax :: Maybe Text
-  , rrInterface :: Maybe Text
   , rrModel     :: Maybe Text
+  , rrUses      :: [(Text, Text)]
   , rrOpen      :: [Text]
   , rrPolicy    :: Maybe Text
   , rrFuel      :: Maybe Int
@@ -194,7 +215,8 @@ data RawSurfaceDecl = RawSurfaceDecl
   } deriving (Eq, Show)
 
 data RawSurfaceItem
-  = RSRequiresInterface Text
+  = RSRequires Text RawExpr
+  | RSDeriveContexts Text
   | RSContextSort Text
   | RSSort Text
   | RSCon RawSurfaceCon
@@ -305,16 +327,33 @@ data RawCoreExpr
   | RCEApp Text [RawCoreExpr]
   deriving (Eq, Show)
 
-data RawSurfaceSyntaxDecl = RawSurfaceSyntaxDecl
-  { rssName :: Text
-  , rssSurface :: Text
-  , rssItems :: [RawSurfaceSyntaxItem]
+data RawSogatDecl = RawSogatDecl
+  { rsogName :: Text
+  , rsogItems :: [RawSogatItem]
   } deriving (Eq, Show)
 
-data RawSurfaceSyntaxItem
-  = RSSTy RawSurfaceNotation
-  | RSSTm RawSurfaceNotation
+data RawSogatItem
+  = RSSogatContextSort Text
+  | RSSogatSort RawSortDecl
+  | RSSogatOp RawSogatOpDecl
   deriving (Eq, Show)
+
+data RawSogatOpDecl = RawSogatOpDecl
+  { rsoName :: Text
+  , rsoArgs :: [RawSogatArg]
+  , rsoResult :: RawSort
+  } deriving (Eq, Show)
+
+data RawSogatArg = RawSogatArg
+  { rsgaName :: Text
+  , rsgaSort :: RawSort
+  , rsgaBinders :: [RawSogatBinder]
+  } deriving (Eq, Show)
+
+data RawSogatBinder = RawSogatBinder
+  { rsbName :: Text
+  , rsbType :: RawTerm
+  } deriving (Eq, Show)
 
 data RawSurfaceNotation
   = RSNAtom Text Text
@@ -328,15 +367,22 @@ data RawSurfaceNotation
 data RawSurfaceAssoc = SurfAssocL | SurfAssocR | SurfAssocN
   deriving (Eq, Show)
 
-data RawInterfaceDecl = RawInterfaceDecl
-  { ridName :: Text
-  , ridDoctrine :: RawExpr
-  , ridItems :: [RawInterfaceItem]
+data RawMorphismDecl = RawMorphismDecl
+  { rmdName  :: Text
+  , rmdSrc   :: RawExpr
+  , rmdTgt   :: RawExpr
+  , rmdItems :: [RawMorphismItem]
+  , rmdCheck :: Maybe RawMorphismCheck
   } deriving (Eq, Show)
 
-data RawInterfaceItem = RawInterfaceItem
-  { riiSlot :: Text
-  , riiTarget :: Text
+data RawMorphismItem
+  = RMISort Text Text
+  | RMIOp   Text Text
+  deriving (Eq, Show)
+
+data RawMorphismCheck = RawMorphismCheck
+  { rmcPolicy :: Maybe Text
+  , rmcFuel   :: Maybe Int
   } deriving (Eq, Show)
 
 newtype RawFile = RawFile [RawDecl]

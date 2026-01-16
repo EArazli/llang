@@ -1,6 +1,9 @@
+import "./ccc.doctrine.llang";
+
 surface STLC where {
-  requires interface CCC_Bool;
+  requires ccc : CCC_Bool;
   context_sort Ty;
+  derive contexts using ccc;
 
   sort Ty;
   sort Tm;
@@ -27,16 +30,6 @@ surface STLC where {
   define tyObj(ProdTy(A,B)) = ccc.prod(tyObj(A), tyObj(B));
   define tyObj(ArrTy(A,B)) = ccc.exp(tyObj(A), tyObj(B));
 
-  define ctxObj(∙) = ccc.Unit;
-  define ctxObj(Γ) = ccc.prod(ctxObj(Γ'), tyObj(A)) where Γ = (Γ', x:A);
-
-  define proj(Γ, 0) = ccc.exr(ctxObj(Γ'), tyObj(A)) where Γ = (Γ', x:A);
-  define proj(Γ, i+1) =
-    ccc.comp(ctxObj(Γ), ctxObj(Γ'), tyObj(A),
-             proj(Γ', i),
-             ccc.exl(ctxObj(Γ'), tyObj(A)))
-    where Γ = (Γ', x:A);
-
   rule true :
     --------------------------------
     HasType(Γ, True, BoolTy) => ccc.comp(ctxObj(Γ), ccc.Unit, tyObj(BoolTy),
@@ -48,11 +41,6 @@ surface STLC where {
     HasType(Γ, False, BoolTy) => ccc.comp(ctxObj(Γ), ccc.Unit, tyObj(BoolTy),
                                           ccc.F,
                                           ccc.terminal(ctxObj(Γ)));
-
-  rule var :
-    premise lookup(Γ, i) = A;
-    --------------------------------
-    HasType(Γ, #i, A) => proj(Γ, i);
 
   rule lam :
     premise HasType(Γ, body, B) => eBody under (Γ, x:A);

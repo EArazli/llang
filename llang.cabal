@@ -72,6 +72,7 @@ library
       Strat.Kernel.DSL.Elab
       Strat.Kernel.DSL.Parse
       Strat.Kernel.Examples.Monoid
+      Strat.Kernel.Morphism
       Strat.Kernel.Presentation
       Strat.Kernel.Relative
       Strat.Kernel.Rewrite
@@ -86,13 +87,10 @@ library
       Strat.Kernel.Unify
       Strat.Model.Spec
       Strat.Surface
-      Strat.Surface.Combinator
       Strat.Surface2.CoreEval
       Strat.Surface2.Def
       Strat.Surface2.Elab
       Strat.Surface2.Engine
-      Strat.Surface2.Interface
-      Strat.Surface2.InterfaceInst
       Strat.Surface2.Pattern
       Strat.Surface2.Syntax
       Strat.Surface2.SyntaxSpec
@@ -149,6 +147,10 @@ test-suite llang-test
       Test.Kernel.DoctrineExpr
       Test.Kernel.DSL
       Test.Kernel.Fixtures
+      Test.Kernel.Include
+      Test.Kernel.Morphism
+      Test.Kernel.Sogat
+      Test.Kernel.SortCtorTele
       Test.Kernel.Relative
       Test.Kernel.Rewrite
       Test.Kernel.RewriteSystem
@@ -158,6 +160,7 @@ test-suite llang-test
       Test.Surface2.Term
       Test.Surface2.Pattern
       Test.Surface2.CoreEval
+      Test.Surface2.Determinism
       Test.Surface2.Elab
       Test.CLI
       Paths_llang

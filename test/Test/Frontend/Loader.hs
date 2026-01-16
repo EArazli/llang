@@ -46,7 +46,7 @@ testDiamondImports = do
   TIO.writeFile mainFile $ T.unlines
     [ "import \"./A.llang\";"
     , "import \"./B.llang\";"
-    , "syntax S where {"
+    , "syntax S for doctrine A where {"
     , "  allow call;"
     , "  varprefix \"?\";"
     , "}"

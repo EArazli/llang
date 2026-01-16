@@ -1,6 +1,6 @@
 doctrine CCCore where {
   sort Obj;
-  sort Hom(Obj, Obj);
+  sort Hom (a:Obj) (b:Obj);
 
   -- Category structure
   op id : (x:Obj) -> Hom(?x, ?x);
@@ -98,15 +98,7 @@ doctrine CCCore where {
         -> ?g;
 }
 
-doctrine CCGen where {
-  sort Obj;
-  sort Hom(Obj, Obj);
-
-  -- repeat the core decls so we can mention them in types; And-merging will identify identical decls
-  op Unit : Obj;
-  op prod : (a:Obj) (b:Obj) -> Obj;
-  op exp : (a:Obj) (b:Obj) -> Obj;
-
+doctrine CCGen extends CCCore where {
   op X : Obj;
   op A : Obj;
   op B : Obj;
@@ -115,4 +107,4 @@ doctrine CCGen where {
   op f : Hom(prod(X, A), B);
 }
 
-doctrine CCC = (CCCore@C) & (CCGen@C);
+doctrine CCC = (CCGen@C);

@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Frontend.Env
   ( ModuleEnv(..)
+  , SyntaxDef(..)
   , emptyEnv
   , mergeEnv
   ) where
@@ -12,18 +13,22 @@ import Strat.Model.Spec (ModelSpec)
 import Strat.Frontend.RunSpec (RunSpec)
 import Strat.Surface2.Def (SurfaceDef)
 import Strat.Surface2.SyntaxSpec (SurfaceSyntaxSpec)
-import Strat.Surface2.Interface (InterfaceSpec)
+import Strat.Kernel.Morphism (Morphism)
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 
 
+data SyntaxDef
+  = SyntaxDoctrine SyntaxSpec
+  | SyntaxSurface SurfaceSyntaxSpec
+  deriving (Eq, Show)
+
 data ModuleEnv = ModuleEnv
   { meDoctrines     :: M.Map Text DocExpr
   , mePresentations :: M.Map Text Presentation
-  , meSyntaxes      :: M.Map Text SyntaxSpec
+  , meSyntaxes      :: M.Map Text SyntaxDef
   , meSurfaces      :: M.Map Text SurfaceDef
-  , meSurfaceSyntaxes :: M.Map Text SurfaceSyntaxSpec
-  , meInterfaces    :: M.Map Text InterfaceSpec
+  , meMorphisms     :: M.Map Text Morphism
   , meModels        :: M.Map Text ModelSpec
   , meRun           :: Maybe RunSpec
   }
@@ -35,8 +40,7 @@ emptyEnv = ModuleEnv
   , mePresentations = M.empty
   , meSyntaxes = M.empty
   , meSurfaces = M.empty
-  , meSurfaceSyntaxes = M.empty
-  , meInterfaces = M.empty
+  , meMorphisms = M.empty
   , meModels = M.empty
   , meRun = Nothing
   }
@@ -47,8 +51,7 @@ mergeEnv a b = do
   pres <- mergeMap "presentation" mePresentations
   syns <- mergeMap "syntax" meSyntaxes
   surfs <- mergeMap "surface" meSurfaces
-  surfSyns <- mergeMap "surface_syntax" meSurfaceSyntaxes
-  ifaces <- mergeMap "interface" meInterfaces
+  morphs <- mergeMap "morphism" meMorphisms
   mods <- mergeMap "model" meModels
   run <- mergeRun (meRun a) (meRun b)
   pure ModuleEnv
@@ -56,8 +59,7 @@ mergeEnv a b = do
     , mePresentations = pres
     , meSyntaxes = syns
     , meSurfaces = surfs
-    , meSurfaceSyntaxes = surfSyns
-    , meInterfaces = ifaces
+    , meMorphisms = morphs
     , meModels = mods
     , meRun = run
     }

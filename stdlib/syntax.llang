@@ -1,4 +1,4 @@
-syntax CombDefault where {
+syntax CombDefault for doctrine Any where {
   allow call;
   varprefix "?";
 }

@@ -53,7 +53,7 @@ sigBasic =
     { sigSortCtors =
         M.fromList
           [ (objName, SortCtor objName [])
-          , (homName, SortCtor homName [objSort, objSort])
+          , (homName, SortCtor homName homTele)
           ]
     , sigOps =
         M.fromList
@@ -82,6 +82,12 @@ sigBasic =
       let v = Var (ScopeId "op:id") 0
           vx = mkVar objSort v
       in OpDecl opId [Binder v objSort] (homSort vx vx)
+
+    homTele =
+      let scope = ScopeId "sort:Hom"
+          v0 = Var scope 0
+          v1 = Var scope 1
+      in [Binder v0 objSort, Binder v1 objSort]
 
 mkTerm :: Signature -> Text -> [Term] -> Term
 mkTerm sig name args =

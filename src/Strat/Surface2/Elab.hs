@@ -1,23 +1,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Surface2.Elab
   ( elabSurfaceDecl
-  , elabSurfaceSyntaxDecl
-  , elabInterfaceDecl
   ) where
 
-import Strat.Kernel.DSL.AST
+import Strat.Kernel.DSL.AST hiding (rdName)
+import Strat.Kernel.Presentation (Presentation(..))
+import Strat.Kernel.Signature (sigOps)
+import Strat.Kernel.Syntax (OpName(..))
 import Strat.Surface2.Term
 import Strat.Surface2.Pattern
 import Strat.Surface2.Def
-import Strat.Surface2.SyntaxSpec
-import Strat.Surface2.Interface
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Control.Monad (foldM)
 
-elabSurfaceDecl :: RawSurfaceDecl -> Either Text SurfaceDef
-elabSurfaceDecl (RawSurfaceDecl name items) = do
+type ResolveDoc = RawExpr -> Either Text Presentation
+
+elabSurfaceDecl :: ResolveDoc -> RawSurfaceDecl -> Either Text SurfaceDef
+elabSurfaceDecl resolveDoc (RawSurfaceDecl name items) = do
   let sortNames = [ Sort2Name s | RSSort s <- items ]
   let sorts = M.fromList [(s, ()) | s <- sortNames]
   ctxSortName <- case [ s | RSContextSort s <- items ] of
@@ -26,24 +27,36 @@ elabSurfaceDecl (RawSurfaceDecl name items) = do
   if M.member ctxSortName sorts
     then Right ()
     else Left ("context_sort not declared: " <> renderSort2 ctxSortName)
-  reqIface <- case [ n | RSRequiresInterface n <- items ] of
-    [] -> Left "surface missing requires interface"
-    (n:_) -> Right n
+  req <- case [ (alias, doc) | RSRequires alias doc <- items ] of
+    [] -> Left "surface missing requires"
+    ((alias, docExpr):_) -> do
+      pres <- resolveDoc docExpr
+      pure (SurfaceRequire alias pres)
+  deriveAlias <- case [ a | RSDeriveContexts a <- items ] of
+    [] -> Right Nothing
+    [a] -> Right (Just a)
+    _ -> Left "multiple derive contexts directives"
   cons <- buildConstructors sorts items
   validateBinderTypes ctxSortName cons
   judgs <- buildJudgments sorts items
   defs <- buildDefines cons items
   rules <- buildRules cons judgs ctxSortName items
-  pure SurfaceDef
-    { sdName = name
-    , sdSorts = sorts
-    , sdContextSort = ctxSortName
-    , sdCons = cons
-    , sdJudgments = judgs
-    , sdRules = rules
-    , sdDefines = defs
-    , sdRequires = reqIface
-    }
+  let surf0 = SurfaceDef
+        { sdName = name
+        , sdSorts = sorts
+        , sdContextSort = ctxSortName
+        , sdCons = cons
+        , sdJudgments = judgs
+        , sdRules = rules
+        , sdDefines = defs
+        , sdRequires = req
+        }
+  case deriveAlias of
+    Nothing -> pure surf0
+    Just alias ->
+      if alias /= srAlias req
+        then Left "derive contexts alias does not match requires alias"
+        else deriveContexts alias (srPres req) surf0
 
 validateBinderTypes :: Sort2Name -> M.Map Con2Name ConDecl -> Either Text ()
 validateBinderTypes ctxSort cons = do
@@ -90,40 +103,6 @@ validateBinderTypes ctxSort cons = do
 renderCon :: Con2Name -> Text
 renderCon (Con2Name t) = t
 
-elabSurfaceSyntaxDecl :: RawSurfaceSyntaxDecl -> Either Text SurfaceSyntaxSpec
-elabSurfaceSyntaxDecl (RawSurfaceSyntaxDecl name surf items) = do
-  let tyNotes = [ toNotation n | RSSTy n <- items ]
-  let tmNotes = [ toNotation n | RSSTm n <- items ]
-  pure SurfaceSyntaxSpec
-    { sssName = name
-    , sssSurface = surf
-    , sssTyNotations = tyNotes
-    , sssTmNotations = tmNotes
-    }
-  where
-    toNotation n =
-      case n of
-        RSNAtom tok con -> SAtom tok con
-        RSNPrefix tok con -> SPrefix tok con
-        RSNInfix assoc prec tok con -> SInfix (toAssoc assoc) prec tok con
-        RSNBinder tok tySep bodySep con -> SBinder tok tySep bodySep con
-        RSNApp con -> SApp con
-        RSNTuple tok con -> STuple tok con
-
-    toAssoc a =
-      case a of
-        SurfAssocL -> SLeft
-        SurfAssocR -> SRight
-        SurfAssocN -> SNon
-
-elabInterfaceDecl :: RawInterfaceDecl -> Either Text InterfaceSpec
-elabInterfaceDecl (RawInterfaceDecl name doc items) = do
-  let slots = M.fromList [(riiSlot it, riiTarget it) | it <- items]
-  pure InterfaceSpec
-    { isName = name
-    , isDoctrine = doc
-    , isSlots = slots
-    }
 
 buildConstructors :: M.Map Sort2Name () -> [RawSurfaceItem] -> Either Text (M.Map Con2Name ConDecl)
 buildConstructors sorts items = do
@@ -308,6 +287,136 @@ elabCoreExpr expr =
   case expr of
     RCEVar v -> CoreVar v
     RCEApp f args -> CoreApp f (map elabCoreExpr args)
+
+deriveContexts :: Text -> Presentation -> SurfaceDef -> Either Text SurfaceDef
+deriveContexts alias ifacePres surf = do
+  ensureTyObj
+  ensureHasType
+  let needCtxObj = not (hasDefine "ctxObj")
+  let needProj = not (hasDefine "proj")
+  let needVar = not (hasVarRule surf)
+  mapM_ (requireOp alias ifacePres "ctxObj") (if needCtxObj then ["Unit", "prod"] else [])
+  mapM_ (requireOp alias ifacePres "proj") (if needProj then ["exl", "exr", "comp"] else [])
+  let surf1 =
+        if needCtxObj
+          then surf { sdDefines = M.insert "ctxObj" (ctxObjDef alias) (sdDefines surf) }
+          else surf
+  let surf2 =
+        if needProj
+          then surf1 { sdDefines = M.insert "proj" (projDef alias) (sdDefines surf1) }
+          else surf1
+  let surf3 =
+        if needVar
+          then surf2 { sdRules = sdRules surf2 <> [varRule] }
+          else surf2
+  pure surf3
+  where
+    ensureTyObj =
+      if M.member "tyObj" (sdDefines surf)
+        then Right ()
+        else Left "derive contexts requires tyObj define"
+
+    ensureHasType =
+      if M.member (JudgName "HasType") (sdJudgments surf)
+        then Right ()
+        else Left "derive contexts requires HasType judgment"
+
+    hasDefine name = M.member name (sdDefines surf)
+    hasVarRule s = any (\r -> rdName r == "var") (sdRules s)
+
+    requireOp al pres neededFor name =
+      case resolveOpNameIn pres name of
+        Left _ -> Left ("DeriveContextsFailed { missingSlot = " <> name <> ", alias = " <> al <> ", neededFor = " <> neededFor <> " }")
+        Right _ -> Right ()
+
+    ctxObjDef al =
+      Define
+        { defName = "ctxObj"
+        , defClauses =
+            [ DefineClause
+                { dcArgs = [DPCtx CtxEmpty]
+                , dcBody = coreOp0 al "Unit"
+                , dcWhere = []
+                }
+            , DefineClause
+                { dcArgs = [DPCtx (CtxVar "Γ")]
+                , dcBody =
+                    coreOp al "prod"
+                      [ coreCall "ctxObj" [CoreVar "Γ'"]
+                      , coreCall "tyObj" [CoreVar "A"]
+                      ]
+                , dcWhere = [WhereClause "Γ" (CtxExtend "Γ'" "x" (PMeta (MVar "A") []))]
+                }
+            ]
+        }
+
+    projDef al =
+      Define
+        { defName = "proj"
+        , defClauses =
+            [ DefineClause
+                { dcArgs = [DPCtx (CtxVar "Γ"), DPNat NatZero]
+                , dcBody =
+                    coreOp al "exr"
+                      [ coreCall "ctxObj" [CoreVar "Γ'"]
+                      , coreCall "tyObj" [CoreVar "A"]
+                      ]
+                , dcWhere = [WhereClause "Γ" (CtxExtend "Γ'" "x" (PMeta (MVar "A") []))]
+                }
+            , DefineClause
+                { dcArgs = [DPCtx (CtxVar "Γ"), DPNat (NatSucc "i")]
+                , dcBody =
+                    coreOp al "comp"
+                      [ coreCall "ctxObj" [CoreVar "Γ"]
+                      , coreCall "ctxObj" [CoreVar "Γ'"]
+                      , coreCall "tyObj" [CoreVar "A"]
+                      , coreCall "proj" [CoreVar "Γ'", CoreVar "i"]
+                      , coreOp al "exl"
+                          [ coreCall "ctxObj" [CoreVar "Γ'"]
+                          , coreCall "tyObj" [CoreVar "A"]
+                          ]
+                      ]
+                , dcWhere = [WhereClause "Γ" (CtxExtend "Γ'" "x" (PMeta (MVar "A") []))]
+                }
+            ]
+        }
+
+    varRule =
+      RuleDef
+        { rdName = "var"
+        , rdPremises =
+            [ PremiseLookup
+                { plCtxVar = "Γ"
+                , plIndex = NatVar "i"
+                , plOut = "A"
+                }
+            ]
+        , rdConclusion =
+            RuleConclusion
+              { rcJudg = JudgName "HasType"
+              , rcArgs =
+                  [ ArgCtx "Γ"
+                  , ArgSurf (PBoundVar "i")
+                  , ArgSurf (PMeta (MVar "A") [])
+                  ]
+              , rcOutputs = [coreCall "proj" [CoreVar "Γ", CoreVar "i"]]
+              }
+        }
+
+    coreOp0 al op = CoreVar (al <> "." <> op)
+    coreOp al op args = CoreApp (al <> "." <> op) args
+    coreCall name args = CoreApp name args
+
+resolveOpNameIn :: Presentation -> Text -> Either Text OpName
+resolveOpNameIn pres name =
+  let direct = OpName name
+      pref = OpName (presName pres <> "." <> name)
+      sig = presSig pres
+  in if M.member direct (sigOps sig)
+      then Right direct
+      else if M.member pref (sigOps sig)
+        then Right pref
+        else Left ("Unknown op name: " <> name)
 
 elabPat :: M.Map Con2Name ConDecl -> Int -> RawSurfacePat -> Either Text PTerm
 elabPat cons depth pat =

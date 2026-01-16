@@ -7,6 +7,8 @@ module Strat.Surface2.Engine
   , GoalArg(..)
   , SolveEnv(..)
   , SolveResult(..)
+  , SolveError(..)
+  , renderSolveError
   , solveJudgment
   ) where
 
@@ -52,23 +54,47 @@ data SolveResult = SolveResult
   , srEnv :: SolveEnv
   } deriving (Eq, Show)
 
-solveJudgment :: SurfaceDef -> JudgName -> [GoalArg] -> Int -> Either Text SolveResult
+data SolveError
+  = AmbiguousRules { seGoal :: JudgName, seCandidates :: [Text] }
+  | NoRuleApplies { seGoal :: JudgName, seAttempted :: [(Text, Text)] }
+  | SolverFuelExhausted
+  deriving (Eq, Show)
+
+renderSolveError :: SolveError -> Text
+renderSolveError err =
+  case err of
+    AmbiguousRules goal names ->
+      "surface solver: ambiguous rules for " <> renderJudg goal <> " (" <> T.intercalate ", " names <> ")"
+    NoRuleApplies goal attempts ->
+      let detail = T.intercalate "; " [ n <> ": " <> msg | (n, msg) <- attempts ]
+      in "surface solver: no rule applies to " <> renderJudg goal <> if T.null detail then "" else " (" <> detail <> ")"
+    SolverFuelExhausted -> "surface solver: fuel exhausted"
+
+renderJudg :: JudgName -> Text
+renderJudg (JudgName t) = t
+
+solveJudgment :: SurfaceDef -> JudgName -> [GoalArg] -> Int -> Either SolveError SolveResult
 solveJudgment surf judg args fuel =
   fmap fst (solveGoal surf fuel judg args 0)
 
-solveGoal :: SurfaceDef -> Int -> JudgName -> [GoalArg] -> Int -> Either Text (SolveResult, Int)
+solveGoal :: SurfaceDef -> Int -> JudgName -> [GoalArg] -> Int -> Either SolveError (SolveResult, Int)
 solveGoal surf fuel judg args supply
-  | fuel <= 0 = Left "surface solver: fuel exhausted"
-  | otherwise = tryRules (sdRules surf) supply
+  | fuel <= 0 = Left SolverFuelExhausted
+  | otherwise =
+      let candidates = [ r | r <- sdRules surf, rcJudg (rdConclusion r) == judg ]
+          attempts = [ (r, attemptRule supply r) | r <- candidates ]
+          successes = [ (rdName r, res) | (r, Right res) <- attempts ]
+          failures = [ (rdName r, err) | (r, Left err) <- attempts ]
+      in case successes of
+          [] -> Left (NoRuleApplies judg failures)
+          [( _, res)] -> Right res
+          xs -> Left (AmbiguousRules judg (map fst xs))
   where
-    tryRules [] _ = Left "surface solver: no rule applies"
-    tryRules (r:rs) s
-      | rcJudg (rdConclusion r) /= judg = tryRules rs s
-      | otherwise =
-          let (r', s') = freshenRule s r
-          in case applyRule r' s' of
-              Left _ -> tryRules rs s'
-              Right res -> Right res
+    attemptRule s r =
+      let (r', s') = freshenRule s r
+      in case applyRule r' s' of
+          Left err -> Left err
+          Right res -> Right res
 
     applyRule rule s = do
       env0 <- matchConclusion (rdConclusion rule) args
@@ -94,19 +120,11 @@ matchArg env (pat, arg) =
 
 matchSurf :: SolveEnv -> PTerm -> STerm -> Either Text SolveEnv
 matchSurf env pat term =
-  case term of
-    SFree name | isPlaceholder name -> do
-      res <- matchPTermWithSubst True (seMatch env) pat term
-      case res of
-        Nothing -> Left "surface solver: pattern mismatch"
-        Just sub -> Right (seedAfterMatch env sub)
-    _ -> do
-      res <- matchPTermWithSubst True (seMatch env) pat term
-      case res of
-        Nothing -> Left "surface solver: pattern mismatch"
-        Just sub -> Right (seedAfterMatch env sub)
+  case matchPTermWithSubst True (seMatch env) pat term of
+    Left err -> Left err
+    Right Nothing -> Left "surface solver: pattern mismatch"
+    Right (Just sub) -> Right (seedAfterMatch env sub)
   where
-    isPlaceholder name = T.isPrefixOf (T.singleton '_') name
     seedAfterMatch env' sub =
       let seeded = seedMetas sub pat
       in env' { seMatch = seeded }
@@ -216,7 +234,10 @@ solvePremise surf fuel env prem supply =
       args' <- mapM (instantiateArg env) args
       ctx' <- applyUnder env under
       let args'' = replaceCtx args' ctx'
-      (res, supply') <- solveGoal surf (fuel - 1) judg args'' supply
+      (res, supply') <-
+        case solveGoal surf (fuel - 1) judg args'' supply of
+          Left err -> Left (renderSolveError err)
+          Right ok -> Right ok
       let avoid = S.fromList outs `S.union` M.keysSet (seCore env)
       let (subCore', outputs') = freshenCore avoid (seCore (srEnv res)) (srOutputs res)
       let coreBindings = M.fromList (zip outs outputs')

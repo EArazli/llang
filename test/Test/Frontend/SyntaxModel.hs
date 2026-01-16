@@ -52,6 +52,15 @@ mergeEnvs a b =
     Left err -> assertFailure (T.unpack err) >> pure emptyEnv
     Right env -> pure env
 
+lookupDoctrineSyntax :: ModuleEnv -> T.Text -> IO SyntaxSpec
+lookupDoctrineSyntax env name =
+  case M.lookup name (meSyntaxes env) of
+    Nothing -> assertFailure ("missing " <> T.unpack name) >> pure (error "missing")
+    Just def ->
+      case def of
+        SyntaxDoctrine spec -> pure spec
+        SyntaxSurface _ -> assertFailure ("syntax is for surface: " <> T.unpack name) >> pure (error "wrong")
+
 
 testSyntaxRoundtrip :: Assertion
 testSyntaxRoundtrip = do
@@ -66,10 +75,7 @@ testSyntaxRoundtrip = do
     case elabDocExpr expr of
       Left err -> assertFailure (T.unpack err) >> pure (error "bad")
       Right p -> pure p
-  spec <-
-    case M.lookup "MonoidSyntax" (meSyntaxes env) of
-      Nothing -> assertFailure "missing MonoidSyntax" >> pure (error "missing")
-      Just s -> pure s
+  spec <- lookupDoctrineSyntax env "MonoidSyntax"
   inst <-
     case instantiateSyntax pres ["C"] spec of
       Left err -> assertFailure (T.unpack err) >> pure (error "bad")
@@ -107,10 +113,7 @@ testSyntaxUnaryRoundtrip = do
     case elabDocExpr expr of
       Left err -> assertFailure (T.unpack err) >> pure (error "bad")
       Right p -> pure p
-  spec <-
-    case M.lookup "MonoidSyntax" (meSyntaxes env) of
-      Nothing -> assertFailure "missing MonoidSyntax" >> pure (error "missing")
-      Just s -> pure s
+  spec <- lookupDoctrineSyntax env "MonoidSyntax"
   inst <-
     case instantiateSyntax pres ["C"] spec of
       Left err -> assertFailure (T.unpack err) >> pure (error "bad")
@@ -148,10 +151,7 @@ testSyntaxVarRoundtrip = do
     case elabDocExpr expr of
       Left err -> assertFailure (T.unpack err) >> pure (error "bad")
       Right p -> pure p
-  spec <-
-    case M.lookup "MonoidSyntax" (meSyntaxes env) of
-      Nothing -> assertFailure "missing MonoidSyntax" >> pure (error "missing")
-      Just s -> pure s
+  spec <- lookupDoctrineSyntax env "MonoidSyntax"
   inst <-
     case instantiateSyntax pres ["C"] spec of
       Left err -> assertFailure (T.unpack err) >> pure (error "bad")

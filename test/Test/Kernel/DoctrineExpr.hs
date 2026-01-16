@@ -131,13 +131,18 @@ testShareSortsMismatch :: Assertion
 testShareSortsMismatch = do
   let badSig =
         sigBasic
-          { sigSortCtors = M.insert objName (SortCtor objName [objSort]) (sigSortCtors sigBasic)
+          { sigSortCtors = M.insert objName (SortCtor objName badTele) (sigSortCtors sigBasic)
           }
   let presBad = presA { presSig = badSig }
   let expr = ShareSorts [(SortName "A.Obj", SortName "B.Obj")] (And (Atom "A" presBad) (Atom "B" presB))
   case elabDocExpr expr of
     Left _ -> pure ()
     Right _ -> assertFailure "expected share sorts mismatch"
+  where
+    badTele =
+      let scope = ScopeId "sort:Obj"
+          v0 = Var scope 0
+      in [Binder v0 objSort]
 
 testRenameEqs :: Assertion
 testRenameEqs = do

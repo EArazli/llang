@@ -1,22 +1,27 @@
-interface CCCIface for doctrine CCC where {
-  ObjSort = Obj;
-  HomSort = Hom;
+import "./ccc.doctrine.llang";
 
-  id = id;
-  comp = comp;
+morphism CCCIface : CCC_Bool -> CCC where {
+  sort Obj = Obj;
+  sort Hom = Hom;
 
-  Unit = Unit;
-  prod = prod;
-  exl = exl;
-  exr = exr;
-  pair = pair;
+  op id = id;
+  op comp = comp;
 
-  exp = exp;
-  curry = curry;
-  eval = eval;
+  op Unit = Unit;
+  op prod = prod;
+  op exl = exl;
+  op exr = exr;
+  op pair = pair;
 
-  terminal = terminal;
-  Bool = Bool;
-  T = T;
-  F = F;
-}
+  op exp = exp;
+  op curry = curry;
+  op eval = eval;
+
+  op terminal = terminal;
+  op Bool = Bool;
+  op T = T;
+  op F = F;
+} check {
+  policy UseStructuralAsBidirectional;
+  fuel 200;
+};

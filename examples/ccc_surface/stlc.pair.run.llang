@@ -11,7 +11,7 @@ run where {
 
   surface STLC;
   surface_syntax STLC_Syntax;
-  interface CCCIface;
+  use ccc = CCCIface;
   core_syntax CCCSyntax;
 
   model Symbolic;

@@ -109,6 +109,10 @@ tests:
     - Test.Kernel.DoctrineExpr
     - Test.Kernel.DSL
     - Test.Kernel.Fixtures
+    - Test.Kernel.Include
+    - Test.Kernel.Morphism
+    - Test.Kernel.Sogat
+    - Test.Kernel.SortCtorTele
     - Test.Kernel.Relative
     - Test.Kernel.Rewrite
     - Test.Kernel.RewriteSystem
@@ -118,6 +122,7 @@ tests:
     - Test.Surface2.Term
     - Test.Surface2.Pattern
     - Test.Surface2.CoreEval
+    - Test.Surface2.Determinism
     - Test.Surface2.Elab
     - Test.CLI
     - Paths_llang

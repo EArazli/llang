@@ -112,13 +112,18 @@ matchPTermWithSubst allowPlaceholders subst p t = go subst p t
             _ -> Right Nothing
         PMeta mv ixs ->
           case tm of
-            SFree name | allowPlaceholders && isPlaceholder name ->
-              case placeholderName name of
-                Just base | base == renderMVar mv -> Right (Just subst')
-                Just base -> do
-                  tm' <- applySubstPTerm subst' pat
-                  bindPlaceholder base tm' subst'
-                Nothing -> bindMeta mv ixs tm subst'
+            SFree name
+              | isPlaceholder name ->
+                  if allowPlaceholders
+                    then
+                      case placeholderName name of
+                        Just base | base == renderMVar mv -> Right (Just subst')
+                        Just base -> do
+                          tm' <- applySubstPTerm subst' pat
+                          bindPlaceholder base tm' subst'
+                        Nothing -> bindMeta mv ixs tm subst'
+                    else Right Nothing
+              | otherwise -> Right Nothing
             _ -> bindMeta mv ixs tm subst'
 
     goArg subst' (PArg pBinders pBody) (SArg sBinders sBody) =

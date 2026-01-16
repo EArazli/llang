@@ -1,4 +1,4 @@
-syntax MonoidSyntax where {
+syntax MonoidSyntax for doctrine Combined where {
   print atom "e" = e;
   print infixl 6 "*" = m;
   print prefix 9 "k" = k;

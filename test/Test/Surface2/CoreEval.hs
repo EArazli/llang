@@ -7,8 +7,6 @@ import Test.Tasty
 import Test.Tasty.HUnit
 import Strat.Surface2.CoreEval
 import Strat.Surface2.Def
-import Strat.Surface2.Interface
-import Strat.Surface2.InterfaceInst
 import Strat.Surface2.Term
 import Strat.Kernel.Presentation
 import Strat.Kernel.Signature
@@ -42,9 +40,8 @@ testDefineRepeatedVar = do
           , sdJudgments = M.empty
           , sdRules = []
           , sdDefines = M.fromList [("eqTest", def)]
-          , sdRequires = "CCC"
+          , sdRequires = SurfaceRequire "ccc" (Presentation "I" (Signature M.empty M.empty) [])
           }
-  let iface = InterfaceInstance (InterfaceKind "Empty" M.empty) M.empty M.empty
   let pres = Presentation "Test" (Signature M.empty M.empty) []
   let env =
         M.fromList
@@ -53,6 +50,6 @@ testDefineRepeatedVar = do
           , ("one", CVNat 1)
           , ("zero", CVNat 0)
           ]
-  case evalCoreExpr pres surf iface env (CoreApp "eqTest" [CoreVar "a", CoreVar "b"]) of
+  case evalCoreExpr pres surf M.empty env (CoreApp "eqTest" [CoreVar "a", CoreVar "b"]) of
     Left err -> assertFailure (show err)
     Right result -> result @?= CVNat 0

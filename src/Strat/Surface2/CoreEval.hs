@@ -9,10 +9,11 @@ import Strat.Surface2.Def
 import Strat.Surface2.Engine (Ctx(..))
 import Strat.Surface2.Pattern
 import Strat.Surface2.Term
-import Strat.Surface2.InterfaceInst
 import Strat.Kernel.Presentation
+import Strat.Kernel.Signature (sigOps)
 import Strat.Kernel.Term
 import Strat.Kernel.Syntax
+import Strat.Kernel.Morphism
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
@@ -27,16 +28,18 @@ data CoreVal
 
 type CoreEnv = M.Map Text CoreVal
 
-evalCoreExpr :: Presentation -> SurfaceDef -> InterfaceInstance -> CoreEnv -> CoreExpr -> Either Text CoreVal
-evalCoreExpr pres surf iface env expr =
+type MorphismEnv = M.Map Text Morphism
+
+evalCoreExpr :: Presentation -> SurfaceDef -> MorphismEnv -> CoreEnv -> CoreExpr -> Either Text CoreVal
+evalCoreExpr pres surf morphs env expr =
   case expr of
     CoreVar name ->
       case M.lookup name env of
         Just v -> Right v
         Nothing ->
-          case lookupOpSlot name iface of
-            Just op -> applyOp pres op []
-            Nothing ->
+          case resolveOp morphs name of
+            Right op -> applyOp pres op []
+            Left _ ->
               case M.lookup (Con2Name name) (sdCons surf) of
                 Just decl ->
                   if null (conArgs decl)
@@ -45,17 +48,17 @@ evalCoreExpr pres surf iface env expr =
                 Nothing -> Left ("unknown core var: " <> name)
     CoreApp f args ->
       case lookupDefine f surf of
-        Just def -> evalDefine pres surf iface env def args
+        Just def -> evalDefine pres surf morphs env def args
         Nothing ->
-          case lookupOpSlot f iface of
-            Just op -> do
-              args' <- mapM (evalCoreExpr pres surf iface env) args
+          case resolveOp morphs f of
+            Right op -> do
+              args' <- mapM (evalCoreExpr pres surf morphs env) args
               coreArgs <- mapM requireCore args'
               applyOp pres op coreArgs
-            Nothing ->
+            Left _ ->
               case M.lookup (Con2Name f) (sdCons surf) of
                 Just decl -> do
-                  args' <- mapM (evalCoreExpr pres surf iface env) args
+                  args' <- mapM (evalCoreExpr pres surf morphs env) args
                   surfArgs <- mapM requireSurf args'
                   if length surfArgs /= length (conArgs decl)
                     then Left ("constructor arity mismatch: " <> f)
@@ -65,9 +68,9 @@ evalCoreExpr pres surf iface env expr =
                         else Right (CVSurf (SCon (Con2Name f) (map (SArg []) surfArgs)))
                 Nothing -> Left ("unknown core function: " <> f)
 
-evalDefine :: Presentation -> SurfaceDef -> InterfaceInstance -> CoreEnv -> Define -> [CoreExpr] -> Either Text CoreVal
-evalDefine pres surf iface env def args = do
-  args' <- mapM (evalCoreExpr pres surf iface env) args
+evalDefine :: Presentation -> SurfaceDef -> MorphismEnv -> CoreEnv -> Define -> [CoreExpr] -> Either Text CoreVal
+evalDefine pres surf morphs env def args = do
+  args' <- mapM (evalCoreExpr pres surf morphs env) args
   tryClauses args' (defClauses def)
   where
     tryClauses vals [] =
@@ -75,7 +78,7 @@ evalDefine pres surf iface env def args = do
     tryClauses vals (cl:cls) =
       case matchDefine surf env vals cl of
         Left _ -> tryClauses vals cls
-        Right env' -> evalCoreExpr pres surf iface env' (dcBody cl)
+        Right env' -> evalCoreExpr pres surf morphs env' (dcBody cl)
 
 matchDefine :: SurfaceDef -> CoreEnv -> [CoreVal] -> DefineClause -> Either Text CoreEnv
 matchDefine surf env vals clause =
@@ -153,16 +156,41 @@ matchWhere surf env clause =
     _ -> Left "define: where expects context"
 
 lookupDefine :: Text -> SurfaceDef -> Maybe Define
-lookupDefine name surf = M.lookup (slotKey name) (sdDefines surf)
+lookupDefine name surf = M.lookup name (sdDefines surf)
 
-lookupOpSlot :: Text -> InterfaceInstance -> Maybe OpName
-lookupOpSlot name iface = M.lookup (slotKey name) (iiOps iface)
+resolveOp :: MorphismEnv -> Text -> Either Text OpName
+resolveOp morphs name =
+  case splitAlias name of
+    Nothing -> Left "unqualified core name"
+    Just (alias, slot) ->
+      case M.lookup alias morphs of
+        Nothing -> Left ("unknown core alias: " <> alias)
+        Just mor ->
+          case resolveOpNameIn (morSrc mor) slot of
+            Left err -> Left err
+            Right key ->
+              case M.lookup key (morOpMap mor) of
+                Nothing -> Left ("unknown core op: " <> name)
+                Just op -> Right op
 
-slotKey :: Text -> Text
-slotKey t =
-  case reverse (T.splitOn "." t) of
-    [] -> t
-    (x:_) -> x
+splitAlias :: Text -> Maybe (Text, Text)
+splitAlias name =
+  let (a, rest) = T.breakOn "." name
+  in if T.null rest
+      then Nothing
+      else Just (a, T.drop 1 rest)
+
+resolveOpNameIn :: Presentation -> Text -> Either Text OpName
+resolveOpNameIn pres name =
+  let direct = OpName name
+      pref = OpName (presName pres <> "." <> name)
+      sig = presSig pres
+  in if M.member direct (sigOps sig)
+      then Right direct
+      else if M.member pref (sigOps sig)
+        then Right pref
+        else Left ("unknown core op: " <> name)
+
 
 requireCore :: CoreVal -> Either Text Term
 requireCore val =

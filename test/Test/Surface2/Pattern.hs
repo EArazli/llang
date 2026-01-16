@@ -14,7 +14,7 @@ tests =
     "Surface2.Pattern"
     [ testCase "match meta no args" $ do
         let p = PMeta (MVar "M") []
-        let t = SFree "x"
+        let t = SCon (Con2Name "X") []
         case matchPTerm p t of
           Left err -> assertFailure (show err)
           Right Nothing -> assertFailure "expected match"
@@ -22,6 +22,13 @@ tests =
             case applySubstPTerm s p of
               Left err -> assertFailure (show err)
               Right tm -> tm @?= t
+    , testCase "match meta rejects rigid free" $ do
+        let p = PMeta (MVar "M") []
+        let t = SFree "x"
+        case matchPTerm p t of
+          Left err -> assertFailure (show err)
+          Right Nothing -> pure ()
+          Right (Just _) -> assertFailure "expected mismatch for rigid free"
     , testCase "match meta bound arg" $ do
         let p = PMeta (MVar "M") [Ix 0]
         let t = SBound (Ix 0)

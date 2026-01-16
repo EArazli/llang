@@ -48,9 +48,9 @@ declNoRun =
     <|> doctrineDecl
     <|> syntaxDecl
     <|> modelDecl
-    <|> surfaceSyntaxDecl
+    <|> sogatDecl
     <|> surfaceDecl
-    <|> interfaceDecl
+    <|> morphismDecl
 
 importDecl :: Parser RawDecl
 importDecl = do
@@ -64,10 +64,12 @@ doctrineDecl = do
   _ <- symbol "doctrine"
   name <- ident
   (do
+      mExt <- optional (symbol "extends" *> expr)
       _ <- symbol "where"
       items <- ruleBlock
+      let items' = maybe items (\e -> ItemInclude e : items) mExt
       optionalSemi
-      pure (DeclWhere name items)
+      pure (DeclWhere name items')
     )
     <|> (do
       _ <- symbol "="
@@ -76,14 +78,29 @@ doctrineDecl = do
       pure (DeclExpr name e)
     )
 
+-- SOGAT declarations
+
+sogatDecl :: Parser RawDecl
+sogatDecl = do
+  _ <- symbol "sogat"
+  name <- ident
+  _ <- symbol "where"
+  items <- sogatBlock
+  optionalSemi
+  pure (DeclSogatWhere (RawSogatDecl name items))
+
 syntaxDecl :: Parser RawDecl
 syntaxDecl = do
   _ <- symbol "syntax"
   name <- ident
+  _ <- symbol "for"
+  target <-
+    (symbol "doctrine" *> (SyntaxDoctrine <$> expr))
+      <|> (symbol "surface" *> (SyntaxSurface <$> ident))
   _ <- symbol "where"
   items <- syntaxBlock
   optionalSemi
-  pure (DeclSyntaxWhere name items)
+  pure (DeclSyntaxWhere (RawSyntaxDecl name target items))
 
 modelDecl :: Parser RawDecl
 modelDecl = do
@@ -103,28 +120,19 @@ surfaceDecl = do
   optionalSemi
   pure (DeclSurfaceWhere (RawSurfaceDecl name items))
 
-surfaceSyntaxDecl :: Parser RawDecl
-surfaceSyntaxDecl = do
-  _ <- symbol "surface_syntax"
+morphismDecl :: Parser RawDecl
+morphismDecl = do
+  _ <- symbol "morphism"
   name <- ident
-  _ <- symbol "for"
-  surf <- ident
+  _ <- symbol ":"
+  src <- expr
+  _ <- symbol "->"
+  tgt <- expr
   _ <- symbol "where"
-  items <- surfaceSyntaxBlock
+  items <- morphismBlock
+  mcheck <- optional morphismCheck
   optionalSemi
-  pure (DeclSurfaceSyntaxWhere (RawSurfaceSyntaxDecl name surf items))
-
-interfaceDecl :: Parser RawDecl
-interfaceDecl = do
-  _ <- symbol "interface"
-  name <- ident
-  _ <- symbol "for"
-  _ <- symbol "doctrine"
-  doc <- expr
-  _ <- symbol "where"
-  items <- interfaceBlock
-  optionalSemi
-  pure (DeclInterfaceWhere (RawInterfaceDecl name doc items))
+  pure (DeclMorphismWhere (RawMorphismDecl name src tgt items mcheck))
 
 runDecl :: Parser RawRun
 runDecl = do
@@ -149,17 +157,25 @@ itemDecl :: Parser RawItem
 itemDecl =
   (ItemSort <$> sortDecl)
     <|> (ItemOp <$> opDecl)
+    <|> includeDecl
     <|> (ItemRule <$> ruleDecl)
+
+includeDecl :: Parser RawItem
+includeDecl = do
+  _ <- symbol "include"
+  e <- expr
+  optionalSemi
+  pure (ItemInclude e)
 
 sortDecl :: Parser RawSortDecl
 sortDecl = do
   _ <- symbol "sort"
   name <- ident
-  params <- optional (symbol "(" *> rawSort `sepBy` symbol "," <* symbol ")")
+  tele <- many binder
   optionalSemi
   pure RawSortDecl
     { rsName = name
-    , rsParams = maybe [] id params
+    , rsTele = tele
     }
 
 opDecl :: Parser RawOpDecl
@@ -200,6 +216,103 @@ ruleDecl = do
     , rrLHS = lhs
     , rrRHS = rhs
     }
+
+
+-- SOGAT block
+
+sogatBlock :: Parser [RawSogatItem]
+sogatBlock = do
+  _ <- symbol "{"
+  items <- many sogatItem
+  _ <- symbol "}"
+  pure items
+
+sogatItem :: Parser RawSogatItem
+sogatItem =
+  contextSortItem
+    <|> (RSSogatSort <$> sogatSortDecl)
+    <|> (RSSogatOp <$> sogatOpDecl)
+  where
+    contextSortItem = do
+      _ <- symbol "context_sort"
+      name <- ident
+      optionalSemi
+      pure (RSSogatContextSort name)
+
+sogatOpDecl :: Parser RawSogatOpDecl
+sogatOpDecl = do
+  _ <- symbol "op"
+  name <- ident
+  args <- many sogatArg
+  _ <- symbol "->"
+  res <- sogatSort
+  optionalSemi
+  pure RawSogatOpDecl
+    { rsoName = name
+    , rsoArgs = args
+    , rsoResult = res
+    }
+
+sogatArg :: Parser RawSogatArg
+sogatArg = do
+  _ <- symbol "("
+  name <- ident
+  _ <- symbol ":"
+  srt <- sogatSort
+  binders <- many sogatBinder
+  _ <- symbol ")"
+  pure RawSogatArg
+    { rsgaName = name
+    , rsgaSort = srt
+    , rsgaBinders = binders
+    }
+
+sogatBinder :: Parser RawSogatBinder
+sogatBinder = do
+  _ <- symbol "["
+  name <- ident
+  _ <- symbol ":"
+  ty <- sogatTerm
+  _ <- symbol "]"
+  pure (RawSogatBinder name ty)
+
+sogatSortDecl :: Parser RawSortDecl
+sogatSortDecl = do
+  _ <- symbol "sort"
+  name <- ident
+  tele <- many sogatSortBinder
+  optionalSemi
+  pure RawSortDecl
+    { rsName = name
+    , rsTele = tele
+    }
+
+sogatSortBinder :: Parser RawBinder
+sogatSortBinder = do
+  _ <- symbol "("
+  name <- ident
+  _ <- symbol ":"
+  srt <- sogatSort
+  _ <- symbol ")"
+  pure (RawBinder name srt)
+
+sogatSort :: Parser RawSort
+sogatSort = do
+  name <- ident
+  mArgs <- optional (symbol "(" *> sogatTerm `sepBy` symbol "," <* symbol ")")
+  pure $ case mArgs of
+    Nothing -> RawSort name []
+    Just args -> RawSort name args
+
+sogatTerm :: Parser RawTerm
+sogatTerm = lexeme sogatApp
+  where
+    sogatApp = do
+      name <- identRaw
+      mArgs <- optional (symbol "(" *> sogatTerm `sepBy` symbol "," <* symbol ")")
+      case mArgs of
+        Nothing -> pure (RVar name)
+        Just args -> pure (RApp name args)
 
 binder :: Parser RawBinder
 binder = do
@@ -302,7 +415,23 @@ syntaxBlock = do
 
 syntaxItem :: Parser RawSyntaxItem
 syntaxItem =
-  printItem <|> parseItem <|> allowCallItem <|> varPrefixItem
+  surfaceTyItem <|> surfaceTmItem <|> printItem <|> parseItem <|> allowCallItem <|> varPrefixItem
+
+surfaceTyItem :: Parser RawSyntaxItem
+surfaceTyItem = do
+  _ <- symbol "ty"
+  _ <- symbol "print"
+  note <- surfaceNotation
+  optionalSemi
+  pure (RSTy note)
+
+surfaceTmItem :: Parser RawSyntaxItem
+surfaceTmItem = do
+  _ <- symbol "tm"
+  _ <- symbol "print"
+  note <- surfaceNotation
+  optionalSemi
+  pure (RSTm note)
 
 printItem :: Parser RawSyntaxItem
 printItem = do
@@ -416,15 +545,25 @@ surfaceBlock = do
 
 surfaceItem :: Parser RawSurfaceItem
 surfaceItem =
-  requiresItem <|> contextSortItem <|> surfaceSortItem <|> surfaceConItem <|> surfaceJudgItem <|> surfaceDefineItem <|> surfaceRuleItem
+  requiresItem <|> deriveContextsItem <|> contextSortItem <|> surfaceSortItem <|> surfaceConItem <|> surfaceJudgItem <|> surfaceDefineItem <|> surfaceRuleItem
 
 requiresItem :: Parser RawSurfaceItem
 requiresItem = do
   _ <- symbol "requires"
-  _ <- symbol "interface"
-  name <- ident
+  alias <- ident
+  _ <- symbol ":"
+  doc <- expr
   optionalSemi
-  pure (RSRequiresInterface name)
+  pure (RSRequires alias doc)
+
+deriveContextsItem :: Parser RawSurfaceItem
+deriveContextsItem = do
+  _ <- symbol "derive"
+  _ <- symbol "contexts"
+  _ <- symbol "using"
+  alias <- ident
+  optionalSemi
+  pure (RSDeriveContexts alias)
 
 contextSortItem :: Parser RawSurfaceItem
 contextSortItem = do
@@ -711,23 +850,6 @@ coreExpr = do
     Just as -> RCEApp name as
 
 
--- Surface syntax block
-
-surfaceSyntaxBlock :: Parser [RawSurfaceSyntaxItem]
-surfaceSyntaxBlock = do
-  _ <- symbol "{"
-  items <- many surfaceSyntaxItem
-  _ <- symbol "}"
-  pure items
-
-surfaceSyntaxItem :: Parser RawSurfaceSyntaxItem
-surfaceSyntaxItem = do
-  cat <- (symbol "ty" $> True) <|> (symbol "tm" $> False)
-  _ <- symbol "print"
-  item <- surfaceNotation
-  optionalSemi
-  pure (if cat then RSSTy item else RSSTm item)
-
 surfaceNotation :: Parser RawSurfaceNotation
 surfaceNotation =
   choice
@@ -790,22 +912,48 @@ tupleNotation = do
   pure (RSNTuple tok con)
 
 
--- Interface block
+-- Morphism block
 
-interfaceBlock :: Parser [RawInterfaceItem]
-interfaceBlock = do
+morphismBlock :: Parser [RawMorphismItem]
+morphismBlock = do
   _ <- symbol "{"
-  items <- many interfaceItem
+  items <- many morphismItem
   _ <- symbol "}"
   pure items
 
-interfaceItem :: Parser RawInterfaceItem
-interfaceItem = do
-  slot <- ident
-  _ <- symbol "="
-  target <- qualifiedIdent
-  optionalSemi
-  pure (RawInterfaceItem slot target)
+morphismItem :: Parser RawMorphismItem
+morphismItem = sortItem <|> opItem
+  where
+    sortItem = do
+      _ <- symbol "sort"
+      src <- qualifiedIdent
+      _ <- symbol "="
+      tgt <- qualifiedIdent
+      optionalSemi
+      pure (RMISort src tgt)
+    opItem = do
+      _ <- symbol "op"
+      src <- qualifiedIdent
+      _ <- symbol "="
+      tgt <- qualifiedIdent
+      optionalSemi
+      pure (RMIOp src tgt)
+
+morphismCheck :: Parser RawMorphismCheck
+morphismCheck = do
+  _ <- symbol "check"
+  _ <- symbol "{"
+  items <- many checkItem
+  _ <- symbol "}"
+  let policy = firstJust [p | Left p <- items]
+  let fuel = firstJust [f | Right f <- items]
+  pure RawMorphismCheck { rmcPolicy = policy, rmcFuel = fuel }
+  where
+    checkItem =
+      (symbol "policy" *> (Left <$> ident) <* optionalSemi)
+        <|> (symbol "fuel" *> (Right . fromIntegral <$> integer) <* optionalSemi)
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
 
 
 -- Run block
@@ -823,8 +971,8 @@ data RunItem
   | RunCoreSyntax Text
   | RunSurface Text
   | RunSurfaceSyntax Text
-  | RunInterface Text
   | RunModel Text
+  | RunUse Text Text
   | RunOpen Text
   | RunPolicy Text
   | RunFuel Int
@@ -837,8 +985,8 @@ runItem =
     <|> coreSyntaxItemRun
     <|> surfaceSyntaxItemRun
     <|> surfaceItemRun
-    <|> interfaceItemRun
     <|> modelItemRun
+    <|> useItemRun
     <|> openItem
     <|> policyItem
     <|> fuelItem
@@ -879,12 +1027,14 @@ surfaceSyntaxItemRun = do
   optionalSemi
   pure (RunSurfaceSyntax name)
 
-interfaceItemRun :: Parser RunItem
-interfaceItemRun = do
-  _ <- symbol "interface"
+useItemRun :: Parser RunItem
+useItemRun = do
+  _ <- symbol "use"
+  alias <- ident
+  _ <- symbol "="
   name <- ident
   optionalSemi
-  pure (RunInterface name)
+  pure (RunUse alias name)
 
 modelItemRun :: Parser RunItem
 modelItemRun = do
@@ -921,6 +1071,7 @@ showItem = do
       <|> (symbol "value" $> RawShowValue)
       <|> (symbol "cat" $> RawShowCat)
       <|> (symbol "input" $> RawShowInput)
+      <|> (symbol "result" $> RawShowResult)
   optionalSemi
   pure (RunShow flag)
 
@@ -932,8 +1083,8 @@ buildRun items exprText =
     , rrCoreSyntax = pickCoreSyntax
     , rrSurface = pickSurface
     , rrSurfaceSyntax = pickSurfaceSyntax
-    , rrInterface = pickInterface
     , rrModel = pickModel
+    , rrUses = uses
     , rrOpen = opens
     , rrPolicy = pickPolicy
     , rrFuel = pickFuel
@@ -946,11 +1097,11 @@ buildRun items exprText =
     pickCoreSyntax = firstJust [ n | RunCoreSyntax n <- items ]
     pickSurface = firstJust [ n | RunSurface n <- items ]
     pickSurfaceSyntax = firstJust [ n | RunSurfaceSyntax n <- items ]
-    pickInterface = firstJust [ n | RunInterface n <- items ]
     pickModel = firstJust [ n | RunModel n <- items ]
     pickPolicy = firstJust [ p | RunPolicy p <- items ]
     pickFuel = firstJust [ f | RunFuel f <- items ]
     opens = [ n | RunOpen n <- items ]
+    uses = [ (alias, name) | RunUse alias name <- items ]
     showFlags = [ s | RunShow s <- items ]
 
     firstJust [] = Nothing

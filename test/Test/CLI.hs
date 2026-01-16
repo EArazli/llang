@@ -95,6 +95,7 @@ testEndToEndSTLCSurface = do
     Left err -> assertFailure (T.unpack err)
     Right out -> do
       assertBool "surface input printed" (maybe False (not . T.null) (rrPrintedInput out))
+      rrResult out @?= Just "true"
       case termNode (rrNormalized out) of
         TOp _ _ -> pure ()
         _ -> assertFailure "expected normalized core term"
@@ -107,7 +108,7 @@ testEndToEndSTLCLam = do
     Left err -> assertFailure (T.unpack err)
     Right out -> do
       let ops = collectOps (rrNormalized out)
-      assertBool "expected CCC.curry in core term" (OpName "CCC.curry" `elem` ops)
+      assertBool "expected curry in core term" (OpName "CCC.curry" `elem` ops)
 
 testEndToEndSTLCLamNestedX :: Assertion
 testEndToEndSTLCLamNestedX = do
@@ -117,7 +118,7 @@ testEndToEndSTLCLamNestedX = do
     Left err -> assertFailure (T.unpack err)
     Right out -> do
       let ops = collectOps (rrNormalized out)
-      assertBool "expected CCC.curry in core term" (OpName "CCC.curry" `elem` ops)
+      assertBool "expected curry in core term" (OpName "CCC.curry" `elem` ops)
 
 testEndToEndSTLCLamNestedY :: Assertion
 testEndToEndSTLCLamNestedY = do
@@ -127,7 +128,7 @@ testEndToEndSTLCLamNestedY = do
     Left err -> assertFailure (T.unpack err)
     Right out -> do
       let ops = collectOps (rrNormalized out)
-      assertBool "expected CCC.curry in core term" (OpName "CCC.curry" `elem` ops)
+      assertBool "expected curry in core term" (OpName "CCC.curry" `elem` ops)
 
 testEndToEndSTLCPair :: Assertion
 testEndToEndSTLCPair = do

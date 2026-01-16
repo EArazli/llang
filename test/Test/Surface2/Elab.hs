@@ -6,7 +6,11 @@ module Test.Surface2.Elab
 import Test.Tasty
 import Test.Tasty.HUnit
 import Strat.Surface2.Elab
+import Strat.Kernel.Presentation (Presentation(..))
+import Strat.Kernel.Signature (Signature(..))
 import Strat.Kernel.DSL.AST
+import qualified Data.Map.Strict as M
+import Data.Text (Text)
 
 
 tests :: TestTree
@@ -25,13 +29,13 @@ testJudgSort = do
         RawSurfaceDecl
           { rsdName = "BadSort"
           , rsdItems =
-              [ RSRequiresInterface "CCC"
+              [ RSRequires "ccc" (ERef "CCC")
               , RSContextSort "Ty"
               , RSSort "Ty"
               , RSJudg (RawSurfaceJudg "HasType" [RawSurfaceJudgParam "t" "TmTypo"] [])
               ]
           }
-  case elabSurfaceDecl decl of
+  case elabSurfaceDecl resolveDummy decl of
     Left _ -> pure ()
     Right _ -> assertFailure "expected unknown sort error"
 
@@ -63,7 +67,7 @@ testJudgOutputMismatchConclusion = do
         RawSurfaceDecl
           { rsdName = "BadOut"
           , rsdItems =
-              [ RSRequiresInterface "CCC"
+              [ RSRequires "ccc" (ERef "CCC")
               , RSContextSort "Ty"
               , RSSort "Ty"
               , RSSort "Tm"
@@ -71,7 +75,7 @@ testJudgOutputMismatchConclusion = do
               , RSRule rule
               ]
           }
-  case elabSurfaceDecl decl of
+  case elabSurfaceDecl resolveDummy decl of
     Left _ -> pure ()
     Right _ -> assertFailure "expected output arity mismatch"
 
@@ -110,7 +114,7 @@ testJudgOutputMismatchPremise = do
         RawSurfaceDecl
           { rsdName = "BadPrem"
           , rsdItems =
-              [ RSRequiresInterface "CCC"
+              [ RSRequires "ccc" (ERef "CCC")
               , RSContextSort "Ty"
               , RSSort "Ty"
               , RSSort "Tm"
@@ -118,6 +122,14 @@ testJudgOutputMismatchPremise = do
               , RSRule rule
               ]
           }
-  case elabSurfaceDecl decl of
+  case elabSurfaceDecl resolveDummy decl of
     Left _ -> pure ()
     Right _ -> assertFailure "expected premise output arity mismatch"
+
+resolveDummy :: RawExpr -> Either Text Presentation
+resolveDummy _ =
+  Right Presentation
+    { presName = "Dummy"
+    , presSig = Signature M.empty M.empty
+    , presEqs = []
+    }

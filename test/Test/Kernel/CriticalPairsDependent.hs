@@ -44,7 +44,7 @@ sigDep =
     { sigSortCtors =
         M.fromList
           [ (objName, SortCtor objName [])
-          , (homName, SortCtor homName [objSort, objSort])
+          , (homName, SortCtor homName homTele)
           ]
     , sigOps =
         M.fromList
@@ -72,6 +72,12 @@ sigDep =
           x = mkVar objSort vx
           hSort = homSort x x
       in OpDecl (OpName "p") [Binder vx objSort, Binder vh hSort] objSort
+
+    homTele =
+      let scope = ScopeId "sort:Hom"
+          v0 = Var scope 0
+          v1 = Var scope 1
+      in [Binder v0 objSort, Binder v1 objSort]
 
 mkTerm :: Text -> [Term] -> Term
 mkTerm name args =
