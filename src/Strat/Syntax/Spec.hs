@@ -8,7 +8,7 @@ module Strat.Syntax.Spec
   , instantiateSyntax
   ) where
 
-import Strat.Surface.Combinator (CombTerm(..))
+import Strat.Syntax.CombTerm (CombTerm(..))
 import Strat.Kernel.Presentation (Presentation(..))
 import Strat.Kernel.Signature (Signature(..), OpDecl(..))
 import Strat.Kernel.Syntax (OpName(..), Term(..), TermNode(..), Var(..), ScopeId(..))

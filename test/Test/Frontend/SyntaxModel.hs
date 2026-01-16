@@ -13,7 +13,7 @@ import Strat.Kernel.Signature (Signature(..), SortCtor(..), OpDecl(..))
 import Strat.Kernel.Term (mkOp, mkVar)
 import Strat.Kernel.Syntax (OpName(..), Term, Sort(..), SortName(..), ScopeId(..), Var(..), Binder(..))
 import Strat.Surface (defaultInstance, elaborate, withVars)
-import Strat.Surface.Combinator (CombTerm(..))
+import Strat.Syntax.CombTerm (CombTerm(..))
 import Strat.Syntax.Spec (SyntaxInstance(..), SyntaxSpec(..), NotationSpec(..), NotationKind(..), Assoc(..), instantiateSyntax)
 import Strat.Model.Spec (instantiateModel)
 import Strat.Frontend.Env

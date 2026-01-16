@@ -15,6 +15,7 @@ import Strat.Kernel.Term
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
+import Control.Monad (foldM)
 
 data DocExpr
   = Atom Text Presentation
@@ -84,10 +85,17 @@ mergePresentations :: Presentation -> Presentation -> Either Text Presentation
 mergePresentations a b = do
   let presName' = presName a <> "+" <> presName b
   sig' <- mergeSignatures (presSig a) (presSig b)
-  let eqs' = presEqs a <> presEqs b
+  (eqMap, eqs') <- foldM insertEq (M.empty, []) (presEqs a <> presEqs b)
   let pres' = Presentation { presName = presName', presSig = sig', presEqs = eqs' }
-  checkUniqueEqNames pres'
   pure pres'
+  where
+    insertEq (eqMap, eqs) eq =
+      case M.lookup (eqName eq) eqMap of
+        Nothing -> Right (M.insert (eqName eq) eq eqMap, eqs <> [eq])
+        Just existing ->
+          if alphaEqEquation existing eq
+            then Right (eqMap, eqs)
+            else Left ("Duplicate equation name: " <> eqName eq)
 
 checkUniqueEqNames :: Presentation -> Either Text ()
 checkUniqueEqNames pres =
@@ -106,6 +114,26 @@ mergeSignatures s1 s2 = do
   sortCtors <- mergeSortCtors (M.toList (sigSortCtors s1) <> M.toList (sigSortCtors s2))
   opDecls <- mergeOpDecls (M.toList (sigOps s1) <> M.toList (sigOps s2))
   pure Signature { sigSortCtors = sortCtors, sigOps = opDecls }
+
+alphaEqEquation :: Equation -> Equation -> Bool
+alphaEqEquation e1 e2 =
+  eqClass e1 == eqClass e2
+    && eqOrient e1 == eqOrient e2
+    && length tele1 == length tele2
+    && and (zipWith alphaEqBinder tele1 tele2)
+    && eqLHS e1 == applySubstTerm subst (eqLHS e2)
+    && eqRHS e1 == applySubstTerm subst (eqRHS e2)
+  where
+    tele1 = eqTele e1
+    tele2 = eqTele e2
+    subst =
+      M.fromList
+        [ (v2, mkVar s1 v1)
+        | (Binder v1 s1, Binder v2 _) <- zip tele1 tele2
+        ]
+    alphaEqBinder (Binder _ s1) (Binder _ s2) =
+      let s2' = applySubstSort subst s2
+      in s1 == s2'
 
 mergeSortCtors :: [(SortName, SortCtor)] -> Either Text (M.Map SortName SortCtor)
 mergeSortCtors = foldl step (Right M.empty)

@@ -6,7 +6,7 @@ module Test.Surface
 import Test.Tasty
 import Test.Tasty.HUnit
 import Strat.Surface
-import Strat.Surface.Combinator
+import Strat.Syntax.CombTerm
 import Strat.Kernel.Examples.Monoid as KMono
 import Strat.Kernel.Syntax
 import Strat.Kernel.Term (mkVar)

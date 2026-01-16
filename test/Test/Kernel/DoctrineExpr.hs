@@ -28,6 +28,7 @@ tests =
     , testCase "share ops enables cross-apply" testShareOps
     , testCase "share ops with mismatch fails" testShareOpsMismatch
     , testCase "share sorts with mismatch fails" testShareSortsMismatch
+    , testCase "and is idempotent for equations" testAndIdempotentEqs
     , testCase "rename eqs resolves collisions" testRenameEqs
     , testCase "rename eqs updates scopes" testRenameEqsScopes
     , testCase "rename ops updates terms" testRenameOps
@@ -143,6 +144,14 @@ testShareSortsMismatch = do
       let scope = ScopeId "sort:Obj"
           v0 = Var scope 0
       in [Binder v0 objSort]
+
+testAndIdempotentEqs :: Assertion
+testAndIdempotentEqs = do
+  let expr = And (Atom "A" presA) (Atom "A" presA)
+  case elabDocExpr expr of
+    Left err -> assertFailure (show err)
+    Right pres -> do
+      map eqName (presEqs pres) @?= ["A.r"]
 
 testRenameEqs :: Assertion
 testRenameEqs = do

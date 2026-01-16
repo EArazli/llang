@@ -95,6 +95,7 @@ library
       Strat.Surface2.Syntax
       Strat.Surface2.SyntaxSpec
       Strat.Surface2.Term
+      Strat.Syntax.CombTerm
       Strat.Syntax.Spec
   other-modules:
       Paths_llang

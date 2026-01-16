@@ -120,7 +120,10 @@ ensureAbsent label name mp =
 elabPresentation :: DocEnv -> Text -> [RawItem] -> Either Text Presentation
 elabPresentation docEnv name items = do
   (sig, eqMap, eqs) <- foldM step (Signature M.empty M.empty, M.empty, []) items
-  pure Presentation { presName = name, presSig = sig, presEqs = eqs }
+  let pres = Presentation { presName = name, presSig = sig, presEqs = eqs }
+  case validatePresentation pres of
+    Left err -> Left ("Presentation invalid: " <> err)
+    Right () -> Right pres
   where
     step (sig, eqMap, eqs) item =
       case item of
@@ -678,11 +681,15 @@ elabSogatDecl decl = do
         { sigSortCtors = M.fromList ((scName ctxSortCtor, ctxSortCtor) : map (\c -> (scName c, c)) sortCtors)
         , sigOps = M.fromList (map (\o -> (opName o, o)) (ctxOps <> opDecls))
         }
-  pure Presentation
-    { presName = rsogName decl
-    , presSig = sig
-    , presEqs = []
-    }
+  let pres =
+        Presentation
+          { presName = rsogName decl
+          , presSig = sig
+          , presEqs = []
+          }
+  case validatePresentation pres of
+    Left err -> Left ("SOGAT presentation invalid: " <> err)
+    Right () -> Right pres
   where
     ctxSort = Sort (SortName "Ctx") []
 
@@ -723,7 +730,7 @@ elabSogatDecl decl = do
           gammaVar = Var scope 0
           aVar = Var scope 1
           ctxTerm = mkVar ctxSort gammaVar
-          tySort = Sort (seCtxSort env) [ctxTerm]
+          tySort = Sort (seCtxSort env) []
       in OpDecl
           { opName = name
           , opTele =
@@ -736,16 +743,22 @@ elabSogatDecl decl = do
     elabSogatSortCtor env rawDecl = do
       let name = rsName rawDecl
       let scope = ScopeId ("sort:" <> name)
+      let needsCtx = name /= ctxSortNameText env
       let gammaVar = Var scope 0
       let ctxTerm = mkVar ctxSort gammaVar
-      (binders, _, _) <- foldM (stepSortBinder env ctxTerm scope) ([], M.empty, 1) (rsTele rawDecl)
+      let mCtxTerm = if needsCtx then Just ctxTerm else Nothing
+      let startIx = if needsCtx then 1 else 0
+      (binders, _, _) <- foldM (stepSortBinder env mCtxTerm scope) ([], M.empty, startIx) (rsTele rawDecl)
       pure SortCtor
         { scName = SortName name
-        , scTele = Binder gammaVar ctxSort : binders
+        , scTele =
+            if needsCtx
+              then Binder gammaVar ctxSort : binders
+              else binders
         }
 
-    stepSortBinder env ctxTerm scope (acc, termEnv, idx) rb = do
-      srt <- elabRawSort env ctxTerm termEnv (rbSort rb)
+    stepSortBinder env mCtxTerm scope (acc, termEnv, idx) rb = do
+      srt <- elabRawSort env mCtxTerm termEnv (rbSort rb)
       let v = Var scope idx
       let termEnv' = M.insert (rbName rb) (mkVar srt v) termEnv
       pure (acc <> [Binder v srt], termEnv', idx + 1)
@@ -753,19 +766,33 @@ elabSogatDecl decl = do
     elabSogatOpDecl env rawDecl = do
       let name = rsoName rawDecl
       let scope = ScopeId ("op:" <> name)
+      let hasCtx = rawSortName (rsoResult rawDecl) /= ctxSortNameText env
       let gammaVar = Var scope 0
       let ctxTerm = mkVar ctxSort gammaVar
-      (binders, termEnv, _) <- foldM (stepOpArg env ctxTerm scope) ([], M.empty, 1) (rsoArgs rawDecl)
-      resultSort <- elabRawSort env ctxTerm termEnv (rsoResult rawDecl)
+      let mCtxTerm = if hasCtx then Just ctxTerm else Nothing
+      if (not hasCtx) && any (not . null . rsgaBinders) (rsoArgs rawDecl)
+        then Left ("SOGAT op with binders requires context: " <> name)
+        else Right ()
+      let startIx = if hasCtx then 1 else 0
+      (binders, termEnv, _) <- foldM (stepOpArg env mCtxTerm scope) ([], M.empty, startIx) (rsoArgs rawDecl)
+      resultSort <- elabRawSort env mCtxTerm termEnv (rsoResult rawDecl)
       pure OpDecl
         { opName = OpName name
-        , opTele = Binder gammaVar ctxSort : binders
+        , opTele =
+            if hasCtx
+              then Binder gammaVar ctxSort : binders
+              else binders
         , opResult = resultSort
         }
 
-    stepOpArg env ctxTerm scope (acc, termEnv, idx) arg = do
-      ctxTerm' <- extendCtx env ctxTerm termEnv (rsgaBinders arg)
-      srt <- elabRawSort env ctxTerm' termEnv (rsgaSort arg)
+    stepOpArg env mCtxTerm scope (acc, termEnv, idx) arg = do
+      mCtxTerm' <-
+        case (mCtxTerm, rsgaBinders arg) of
+          (Nothing, []) -> Right Nothing
+          (Nothing, _ : _) ->
+            Left "SOGAT binders require a context parameter"
+          (Just ctx, binders) -> Just <$> extendCtx env ctx termEnv binders
+      srt <- elabRawSort env mCtxTerm' termEnv (rsgaSort arg)
       let v = Var scope idx
       let termEnv' = M.insert (rsgaName arg) (mkVar srt v) termEnv
       pure (acc <> [Binder v srt], termEnv', idx + 1)
@@ -774,8 +801,8 @@ elabSogatDecl decl = do
       foldM step ctxTerm binders
       where
         step ctx (RawSogatBinder bName bType) = do
-          tyTerm <- elabRawTerm env ctxTerm termEnv bType
-          let expected = Sort (seCtxSort env) [ctxTerm]
+          tyTerm <- elabRawTerm env (Just ctxTerm) termEnv bType
+          let expected = Sort (seCtxSort env) []
           if termSort tyTerm /= expected
             then Left ("SOGAT binder type is not in context_sort: " <> bName)
             else Right (extendCtxTerm ctx tyTerm)
@@ -786,26 +813,33 @@ elabSogatDecl decl = do
         , termNode = TOp (OpName "extend") [ctxTerm, tyTerm]
         }
 
-    elabRawTerm env ctxTerm termEnv tm =
+    elabRawTerm env mCtxTerm termEnv tm =
       case tm of
         RVar name ->
           case M.lookup name termEnv of
             Nothing -> Left ("Unknown variable in SOGAT term: " <> name)
-            Just t -> Right (recontextualizeTy ctxTerm t)
+            Just t -> Right t
         RApp name args -> do
           case (args, M.lookup name termEnv) of
-            ([], Just t) -> Right (recontextualizeTy ctxTerm t)
+            ([], Just t) -> Right t
             _ -> do
               opDecl <- lookupOp name
               if any (not . null . rsgaBinders) (rsoArgs opDecl)
                 then Left ("SOGAT op with binders not allowed in type terms: " <> name)
                 else Right ()
+              let hasCtx = rawSortName (rsoResult opDecl) /= ctxSortNameText env
+              case (hasCtx, mCtxTerm) of
+                (True, Nothing) -> Left ("SOGAT term requires context for op: " <> name)
+                _ -> Right ()
               (tele, resSort) <- opSignature env opDecl
-              args' <- mapM (elabRawTerm env ctxTerm termEnv) args
-              if length args' /= length tele - 1
+              args' <- mapM (elabRawTerm env mCtxTerm termEnv) args
+              let allArgs =
+                    case (hasCtx, mCtxTerm) of
+                      (True, Just ctx) -> ctx : args'
+                      _ -> args'
+              if length allArgs /= length tele
                 then Left ("SOGAT op arity mismatch in term: " <> name)
                 else Right ()
-              let allArgs = ctxTerm : args'
               subst <- checkArgs name tele allArgs M.empty
               let resSort' = applySubstSort subst resSort
               pure Term
@@ -813,19 +847,6 @@ elabSogatDecl decl = do
                 , termNode = TOp (OpName name) allArgs
                 }
       where
-        recontextualizeTy newCtx t =
-          case termSort t of
-            Sort s (oldCtx:rest) | s == seCtxSort env ->
-              let node' =
-                    case termNode t of
-                      TVar v -> TVar v
-                      TOp op args ->
-                        case args of
-                          [] -> TOp op []
-                          (_:as) -> TOp op (newCtx : map (recontextualizeTy newCtx) as)
-              in Term { termSort = Sort s (newCtx : rest), termNode = node' }
-            _ -> t
-
         lookupOp n =
           case M.lookup n (seOps env) of
             Nothing -> Left ("Unknown op in SOGAT term: " <> n)
@@ -842,13 +863,20 @@ elabSogatDecl decl = do
     opSignature env opDecl = do
       let name = rsoName opDecl
       let scope = ScopeId ("op:" <> name)
+      let hasCtx = rawSortName (rsoResult opDecl) /= ctxSortNameText env
       let gammaVar = Var scope 0
       let ctxTerm = mkVar ctxSort gammaVar
-      (binders, termEnv, _) <- foldM (stepOpArg env ctxTerm scope) ([], M.empty, 1) (rsoArgs opDecl)
-      resultSort <- elabRawSort env ctxTerm termEnv (rsoResult opDecl)
-      pure (Binder gammaVar ctxSort : binders, resultSort)
+      let mCtxTerm = if hasCtx then Just ctxTerm else Nothing
+      let startIx = if hasCtx then 1 else 0
+      (binders, termEnv, _) <- foldM (stepOpArg env mCtxTerm scope) ([], M.empty, startIx) (rsoArgs opDecl)
+      resultSort <- elabRawSort env mCtxTerm termEnv (rsoResult opDecl)
+      let tele =
+            if hasCtx
+              then Binder gammaVar ctxSort : binders
+              else binders
+      pure (tele, resultSort)
 
-    elabRawSort env ctxTerm termEnv (RawSort name idx) =
+    elabRawSort env mCtxTerm termEnv (RawSort name idx) =
       if name == "Ctx"
         then
           if null idx
@@ -860,13 +888,28 @@ elabSogatDecl decl = do
           if length idx /= length tele
             then Left ("Sort index arity mismatch: " <> name)
             else Right ()
-          (binders, _, _) <- foldM (stepSortBinder env ctxTerm (ScopeId ("sort:" <> name))) ([], termEnv, 1) tele
+          let mCtxTerm' =
+                if name == ctxSortNameText env
+                  then Nothing
+                  else mCtxTerm
+          case (name == ctxSortNameText env, mCtxTerm') of
+            (False, Nothing) ->
+              Left ("SOGAT sort requires context: " <> name)
+            _ -> Right ()
+          let startIx = if name == ctxSortNameText env then 0 else 1
+          (binders, _, _) <- foldM (stepSortBinder env mCtxTerm' (ScopeId ("sort:" <> name))) ([], termEnv, startIx) tele
           let binderVars = map bVar binders
           let binderSorts = map bSort binders
-          terms <- mapM (elabRawTerm env ctxTerm termEnv) idx
+          terms <- mapM (elabRawTerm env mCtxTerm' termEnv) idx
           subst <- checkSortArgs name (zip3 binderVars binderSorts terms) M.empty
           let idx' = map (applySubstTerm subst) terms
-          pure (Sort (SortName name) (ctxTerm : idx'))
+          let allIdx =
+                if name == ctxSortNameText env
+                  then idx'
+                  else case mCtxTerm' of
+                    Just ctx -> ctx : idx'
+                    Nothing -> idx'
+          pure (Sort (SortName name) allIdx)
       where
         lookupSort n =
           case M.lookup n (seSorts env) of
@@ -880,22 +923,20 @@ elabSogatDecl decl = do
             then Left ("Sort parameter sort mismatch in " <> n)
             else checkSortArgs n rest (M.insert v t subst)
 
-    checkSogatV1 env opDecls sortDecls = do
-      let binderVars = S.fromList [ rsbName b | op <- opDecls, arg <- rsoArgs op, b <- rsgaBinders arg ]
-      let typeTerms =
-            concatMap (collectTypeTerms env) sortDecls
-              <> concatMap (collectOpTypeTerms env) opDecls
-              <> concatMap binderTypeTerms opDecls
-      case firstViolation binderVars typeTerms of
-        Nothing -> Right ()
-        Just (v, tm) ->
-          Left ("SOGAT_V1_DependentTypeNotSupported: " <> v <> " in " <> renderRawTerm tm)
+    checkSogatV1 env opDecls _sortDecls =
+      mapM_ (checkOp env) opDecls
       where
+        checkOp env0 op = do
+          let binderVars = S.fromList [ rsbName b | arg <- rsoArgs op, b <- rsgaBinders arg ]
+          let typeTerms =
+                collectOpTypeTerms env0 op <> binderTypeTerms op
+          case firstViolation binderVars typeTerms of
+            Nothing -> Right ()
+            Just (v, tm) ->
+              Left ("SOGAT_V1_DependentTypeNotSupported: " <> v <> " in " <> renderRawTerm tm)
+
         binderTypeTerms op =
           [ rsbType b | arg <- rsoArgs op, b <- rsgaBinders arg ]
-
-    collectTypeTerms env rawDecl =
-      concatMap (termsInSort env) [ rbSort b | b <- rsTele rawDecl ]
 
     collectOpTypeTerms env op =
       concatMap (termsInSort env . rsgaSort) (rsoArgs op) <> termsInSort env (rsoResult op)
@@ -906,10 +947,14 @@ elabSogatDecl decl = do
         Just decl ->
           let tele = rsTele decl
               pairs = zip tele idx
-              ctxName = case seCtxSort env of SortName t -> t
+              ctxName = ctxSortNameText env
           in [ t | (RawBinder _ s, t) <- pairs, rawSortName s == ctxName ]
 
     rawSortName (RawSort n _) = n
+
+    ctxSortNameText env =
+      case seCtxSort env of
+        SortName t -> t
 
     firstViolation vars terms =
       case [ (v, t) | t <- terms, v <- S.toList vars, v `S.member` freeVarsRawTerm t ] of
