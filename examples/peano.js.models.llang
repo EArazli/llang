@@ -1,0 +1,8 @@
+model PeanoJS where {
+  default = error "unknown op";
+
+  op Z() = "0";
+  op S(n) = "(" ++ n ++ "+1)";
+  op add(x,y) = "(" ++ x ++ "+" ++ y ++ ")";
+  op mul(x,y) = "(" ++ x ++ "*" ++ y ++ ")";
+}

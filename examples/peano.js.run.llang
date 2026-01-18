@@ -1,0 +1,18 @@
+import "./peano.llang";
+import "./peano.syntax.llang";
+import "./peano.js.models.llang";
+
+run where {
+  doctrine Nat;
+  open Nat;
+
+  syntax PeanoSyntax;
+  model PeanoJS;
+
+  policy UseOnlyComputationalLR;
+  fuel 0;
+
+  show value;
+}
+---
+S(S(Z)) * (S(Z) + S(S(Z)))
