@@ -29,7 +29,8 @@ testJudgSort = do
         RawSurfaceDecl
           { rsdName = "BadSort"
           , rsdItems =
-              [ RSRequires "ccc" (ERef "CCC")
+              [ RSContextDiscipline "cartesian"
+              , RSRequires "ccc" (ERef "CCC")
               , RSContextSort "Ty"
               , RSSort "Ty"
               , RSJudg (RawSurfaceJudg "HasType" [RawSurfaceJudgParam "t" "TmTypo"] [])
@@ -67,7 +68,8 @@ testJudgOutputMismatchConclusion = do
         RawSurfaceDecl
           { rsdName = "BadOut"
           , rsdItems =
-              [ RSRequires "ccc" (ERef "CCC")
+              [ RSContextDiscipline "cartesian"
+              , RSRequires "ccc" (ERef "CCC")
               , RSContextSort "Ty"
               , RSSort "Ty"
               , RSSort "Tm"
@@ -114,7 +116,8 @@ testJudgOutputMismatchPremise = do
         RawSurfaceDecl
           { rsdName = "BadPrem"
           , rsdItems =
-              [ RSRequires "ccc" (ERef "CCC")
+              [ RSContextDiscipline "cartesian"
+              , RSRequires "ccc" (ERef "CCC")
               , RSContextSort "Ty"
               , RSSort "Ty"
               , RSSort "Tm"

@@ -53,7 +53,7 @@ testDiamondImports = do
     , "model M where {"
     , "  default = symbolic;"
     , "}"
-    , "run where {"
+    , "run main where {"
     , "  doctrine A;"
     , "  open A;"
     , "  syntax S;"
@@ -63,7 +63,7 @@ testDiamondImports = do
     , "---"
     , "a"
     ]
-  result <- runFile mainFile
+  result <- runFile mainFile Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()

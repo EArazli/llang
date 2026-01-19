@@ -2,8 +2,11 @@
 module Strat.Surface2.Engine
   ( Ctx(..)
   , emptyCtx
+  , emptyCtxFor
   , extendCtx
+  , extendCtxFor
   , lookupCtx
+  , lookupCtxFor
   , GoalArg(..)
   , SolveEnv(..)
   , SolveResult(..)
@@ -28,13 +31,22 @@ data Ctx = Ctx [STerm]
 emptyCtx :: Ctx
 emptyCtx = Ctx []
 
+emptyCtxFor :: ContextDiscipline -> Ctx
+emptyCtxFor CtxCartesian = emptyCtx
+
 extendCtx :: Ctx -> STerm -> Ctx
 extendCtx (Ctx xs) ty = Ctx (xs <> [ty])
+
+extendCtxFor :: ContextDiscipline -> Ctx -> STerm -> Ctx
+extendCtxFor CtxCartesian = extendCtx
 
 lookupCtx :: Ctx -> Int -> Maybe STerm
 lookupCtx (Ctx xs) i =
   let idx = length xs - 1 - i
   in if idx >= 0 && idx < length xs then Just (xs !! idx) else Nothing
+
+lookupCtxFor :: ContextDiscipline -> Ctx -> Int -> Maybe STerm
+lookupCtxFor CtxCartesian = lookupCtx
 
 data GoalArg
   = GSurf STerm
@@ -223,7 +235,7 @@ solvePremise surf fuel env prem supply =
     PremiseLookup ctxName idxPat outName -> do
       ctx <- requireCtx env ctxName
       idx <- evalNatPat (seMatch env) idxPat
-      ty <- case lookupCtx ctx idx of
+      ty <- case lookupCtxFor (sdCtxDisc surf) ctx idx of
         Nothing -> Left "surface solver: lookup out of bounds"
         Just t -> Right t
       let m = MVar outName
@@ -232,7 +244,7 @@ solvePremise surf fuel env prem supply =
       pure (env { seMatch = match' }, supply)
     PremiseJudg judg args outs under -> do
       args' <- mapM (instantiateArg env) args
-      ctx' <- applyUnder env under
+      ctx' <- applyUnder surf env under
       let args'' = replaceCtx args' ctx'
       (res, supply') <-
         case solveGoal surf (fuel - 1) judg args'' supply of
@@ -464,14 +476,14 @@ evalNatPat subst np =
         Nothing -> Left ("surface solver: unbound nat variable " <> name)
         Just n -> Right n
 
-applyUnder :: SolveEnv -> Maybe UnderCtx -> Either Text (Maybe Ctx)
-applyUnder _ Nothing = Right Nothing
-applyUnder env (Just under) =
+applyUnder :: SurfaceDef -> SolveEnv -> Maybe UnderCtx -> Either Text (Maybe Ctx)
+applyUnder _ _ Nothing = Right Nothing
+applyUnder surf env (Just under) =
   case M.lookup (ucCtx under) (seCtxs env) of
     Nothing -> Right Nothing
     Just ctx -> do
       ty <- applySubstPTerm (seMatch env) (ucType under)
-      Right (Just (extendCtx ctx ty))
+      Right (Just (extendCtxFor (sdCtxDisc surf) ctx ty))
 
 replaceCtx :: [GoalArg] -> Maybe Ctx -> [GoalArg]
 replaceCtx args Nothing = args

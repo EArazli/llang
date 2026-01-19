@@ -1,5 +1,6 @@
 module Strat.Surface2.Def
   ( SurfaceDef(..)
+  , ContextDiscipline(..)
   , SurfaceRequire(..)
   , ParamSort(..)
   , ConDecl(..)
@@ -34,8 +35,13 @@ data SurfaceDef = SurfaceDef
   , sdJudgments :: M.Map JudgName JudgDecl
   , sdRules :: [RuleDef]
   , sdDefines :: M.Map Text Define
-  , sdRequires :: SurfaceRequire
+  , sdRequires :: [SurfaceRequire]
+  , sdCtxDisc :: ContextDiscipline
   } deriving (Eq, Show)
+
+data ContextDiscipline
+  = CtxCartesian
+  deriving (Eq, Ord, Show)
 
 data SurfaceRequire = SurfaceRequire
   { srAlias :: Text

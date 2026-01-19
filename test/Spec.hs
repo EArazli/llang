@@ -19,6 +19,7 @@ import qualified Test.Backend as Backend
 import qualified Test.CLI as CLI
 import qualified Test.Frontend.SyntaxModel as FrontendSyntaxModel
 import qualified Test.Frontend.Loader as FrontendLoader
+import qualified Test.Frontend.Implements as FrontendImplements
 import qualified Test.Surface2.Term as Surface2Term
 import qualified Test.Surface2.Pattern as Surface2Pattern
 import qualified Test.Surface2.CoreEval as Surface2CoreEval
@@ -47,6 +48,7 @@ main =
       , Backend.tests
       , FrontendSyntaxModel.tests
       , FrontendLoader.tests
+      , FrontendImplements.tests
       , Surface2Term.tests
       , Surface2Pattern.tests
       , Surface2CoreEval.tests

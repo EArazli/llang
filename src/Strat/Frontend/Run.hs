@@ -2,6 +2,7 @@
 module Strat.Frontend.Run
   ( RunResult(..)
   , runFile
+  , buildMorphismEnv
   , renderRunResult
   ) where
 
@@ -11,10 +12,11 @@ import Strat.Frontend.RunSpec
 import Strat.Kernel.DSL.AST (RawExpr(..))
 import Strat.Kernel.DoctrineExpr (DocExpr(..), elabDocExpr)
 import Strat.Kernel.Presentation (Presentation(..))
-import Strat.Kernel.RewriteSystem (compileRewriteSystem, RewritePolicy(..))
+import Strat.Kernel.RewriteSystem (compileRewriteSystem, RewritePolicy(..), RewriteSystem)
 import Strat.Kernel.Rewrite (normalize)
-import Strat.Kernel.Syntax (OpName(..), SortName(..), Term(..), TermNode(..))
-import Strat.Kernel.Signature (sigSortCtors, sigOps)
+import Strat.Kernel.Syntax (OpName(..), SortName(..), Term(..), TermNode(..), Var(..), ScopeId(..), Binder(..))
+import Strat.Kernel.Term (mkOp, mkVar)
+import Strat.Kernel.Signature (sigSortCtors, sigOps, opTele, opResult)
 import Strat.Kernel.Morphism
 import Strat.Surface (defaultInstance, elaborate)
 import Strat.Syntax.Spec (SyntaxSpec, SyntaxInstance(..), instantiateSyntax)
@@ -48,15 +50,36 @@ data RunResult = RunResult
   }
   deriving (Eq, Show)
 
-runFile :: FilePath -> IO (Either Text RunResult)
-runFile path = do
+runFile :: FilePath -> Maybe Text -> IO (Either Text RunResult)
+runFile path mRunName = do
   envResult <- loadModule path
   case envResult of
     Left err -> pure (Left err)
     Right env ->
-      case meRun env of
-        Nothing -> pure (Left "No run block found")
-        Just spec -> pure (runWithEnv env spec)
+      case selectRun env mRunName of
+        Left err -> pure (Left err)
+        Right spec -> pure (runWithEnv env spec)
+
+selectRun :: ModuleEnv -> Maybe Text -> Either Text RunSpec
+selectRun env mName =
+  case mName of
+    Just name ->
+      case M.lookup name (meRuns env) of
+        Nothing -> Left ("Unknown run: " <> name <> available)
+        Just spec -> Right spec
+    Nothing ->
+      case M.lookup "main" (meRuns env) of
+        Just spec -> Right spec
+        Nothing ->
+          case M.toList (meRuns env) of
+            [] -> Left "No runs found"
+            [(name, spec)] -> Right spec
+            _ -> Left ("Multiple runs found; specify --run. Available: " <> T.intercalate ", " (M.keys (meRuns env)))
+  where
+    available =
+      if M.null (meRuns env)
+        then ""
+        else " (available: " <> T.intercalate ", " (M.keys (meRuns env)) <> ")"
 
 runWithEnv :: ModuleEnv -> RunSpec -> Either Text RunResult
 runWithEnv env spec = do
@@ -108,7 +131,7 @@ runWithEnv env spec = do
     if ShowResult `elem` runShowFlags spec
       then case surfInfo of
         Nothing -> Right Nothing
-        Just info -> fmap Just (readbackResult norm info)
+        Just info -> fmap Just (readbackResult spec rs norm info)
       else Right Nothing
   let cat = compileTerm norm
   model <- instantiateModel pres (runOpen spec) modelSpec
@@ -164,16 +187,18 @@ lookupModel env name =
 
 buildMorphismEnv :: ModuleEnv -> Presentation -> SurfaceDef -> [(Text, Text)] -> Either Text (M.Map Text Morphism)
 buildMorphismEnv env pres surf uses = do
-  useMap <- ensureNoDupUses uses
-  let SurfaceRequire reqAlias reqPres = sdRequires surf
-  morphEnv <- traverse (lookupMorphism env) useMap
-  morphEnv' <- ensureRequired reqAlias reqPres pres morphEnv
-  validateMorphisms reqAlias reqPres pres morphEnv'
-  pure morphEnv'
+  explicit <- ensureNoDupUses uses
+  let reqs = sdRequires surf
+  let reqAliases = map srAlias reqs
+  case filter (`notElem` reqAliases) (M.keys explicit) of
+    (bad:_) -> Left ("Unknown required alias in run: " <> bad)
+    [] -> pure ()
+  morphs <- mapM (resolveRequirement explicit) reqs
+  pure (M.fromList morphs)
   where
     ensureNoDupUses pairs =
       case dupKey pairs of
-        Just k -> Left ("Duplicate use alias: " <> k)
+        Just k -> Left ("Duplicate implements alias: " <> k)
         Nothing -> Right (M.fromList pairs)
     dupKey = go M.empty
       where
@@ -182,39 +207,62 @@ buildMorphismEnv env pres surf uses = do
           | M.member k seen = Just k
           | otherwise = go (M.insert k () seen) rest
 
-    lookupMorphism env0 name =
-      case M.lookup name (meMorphisms env0) of
+    resolveRequirement explicit req = do
+      let alias = srAlias req
+      case M.lookup alias explicit of
+        Just name -> do
+          mor <- lookupMorphism name
+          ensureMorphMatch alias req mor
+        Nothing ->
+          case M.lookup (presName (srPres req), presName pres) (meImplDefaults env) of
+            Just name -> do
+              mor <- lookupMorphism name
+              ensureMorphMatch alias req mor
+            Nothing ->
+              if presName (srPres req) == presName pres
+                then do
+                  let mor = identityMorphism pres
+                  case checkMorphism (mcPolicy (morCheck mor)) (mcFuel (morCheck mor)) mor of
+                    Left err -> Left ("identity morphism check failed: " <> T.pack (show err))
+                    Right () -> Right (alias, mor)
+                else do
+                  let candidates =
+                        [ m
+                        | m <- M.elems (meMorphisms env)
+                        , morSrc m == srPres req
+                        , morTgt m == pres
+                        ]
+                  case candidates of
+                    [m] -> Right (alias, m)
+                    [] -> Left ("Missing implementation for alias: " <> alias)
+                    _ -> Left ("Ambiguous implementation for alias: " <> alias)
+
+    lookupMorphism name =
+      case M.lookup name (meMorphisms env) of
         Nothing -> Left ("Unknown morphism: " <> name)
         Just m -> Right m
 
-    ensureRequired alias reqPres runPres morphEnv =
-      if M.member alias morphEnv
-        then Right morphEnv
-        else
-          if reqPres == runPres
-            then do
-              let mor = identityMorphism runPres
-              case checkMorphism (mcPolicy (morCheck mor)) (mcFuel (morCheck mor)) mor of
-                Left err -> Left ("identity morphism check failed: " <> T.pack (show err))
-                Right () -> Right (M.insert alias mor morphEnv)
-            else Left ("Missing morphism for required alias: " <> alias)
-
-    validateMorphisms alias reqPres runPres morphEnv = do
-      case M.lookup alias morphEnv of
-        Nothing -> Left ("Missing morphism for required alias: " <> alias)
-        Just mor ->
-          if morSrc mor /= reqPres
-            then Left ("Morphism source does not match required interface for alias: " <> alias)
-            else if morTgt mor /= runPres
-              then Left ("Morphism target does not match run doctrine for alias: " <> alias)
-              else Right ()
+    ensureMorphMatch alias req mor =
+      if morSrc mor /= srPres req
+        then Left ("Morphism source does not match required interface for alias: " <> alias)
+        else if morTgt mor /= pres
+          then Left ("Morphism target does not match run doctrine for alias: " <> alias)
+          else Right (alias, mor)
 
 identityMorphism :: Presentation -> Morphism
 identityMorphism pres =
   let sorts = M.keys (sigSortCtors (presSig pres))
       ops = M.keys (sigOps (presSig pres))
       sortMap = M.fromList [ (s, s) | s <- sorts ]
-      opMap = M.fromList [ (o, o) | o <- ops ]
+      opMap = M.fromList [ (o, mkInterp o) | o <- ops ]
+      mkInterp op =
+        let decl = sigOps (presSig pres) M.! op
+            tele = opTele decl
+            args = [ mkVar (bSort b) v | b@(Binder v _) <- tele ]
+            rhs = case mkOp (presSig pres) op args of
+              Left _ -> mkVar (opResult decl) (Var (ScopeId "identity") 0)
+              Right t -> t
+        in OpInterp { oiTele = tele, oiRhs = rhs }
   in Morphism
       { morName = "identity"
       , morSrc = pres
@@ -242,7 +290,7 @@ renderRunResult spec norm cat val inputTxt resultTxt =
 buildSurfaceGoal :: SurfaceDef -> STerm -> [GoalArg]
 buildSurfaceGoal surf tm =
   case M.lookup (JudgName "HasType") (sdJudgments surf) of
-    Nothing -> [GCtx emptyCtx, GSurf tm, GSurf (SFree (holeName 0))]
+    Nothing -> [GCtx (emptyCtxFor (sdCtxDisc surf)), GSurf tm, GSurf (SFree (holeName 0))]
     Just decl ->
       let params = jdParams decl
           surfArgs = [ tm ]
@@ -253,7 +301,7 @@ buildSurfaceGoal surf tm =
     holeName i = "_h" <> T.pack (show i)
     build (acc, surfArgs, holeIdx) param =
       case jpSort param of
-        PCtx -> (acc <> [GCtx emptyCtx], surfArgs, holeIdx)
+        PCtx -> (acc <> [GCtx (emptyCtxFor (sdCtxDisc surf))], surfArgs, holeIdx)
         PSurf _ ->
           case surfArgs of
             (x:xs) -> (acc <> [GSurf x], xs, holeIdx)
@@ -261,12 +309,12 @@ buildSurfaceGoal surf tm =
         PNat -> (acc <> [GNat 0], surfArgs, holeIdx)
         PCore -> (acc, surfArgs, holeIdx)
 
-readbackResult :: Term -> (SurfaceDef, SurfaceSyntaxInstance, M.Map Text Morphism, SolveEnv, [GoalArg]) -> Either Text Text
-readbackResult norm (surf, surfSyntax, morphs, env, goalArgs) = do
+readbackResult :: RunSpec -> RewriteSystem -> Term -> (SurfaceDef, SurfaceSyntaxInstance, M.Map Text Morphism, SolveEnv, [GoalArg]) -> Either Text Text
+readbackResult spec rs norm (surf, surfSyntax, morphs, env, goalArgs) = do
   tyTerm <- inferTypeTerm surf env goalArgs
   if isBoolTy tyTerm
     then do
-      coreBool <- readbackCoreBool surf morphs norm
+      coreBool <- readbackCoreBool surf morphs rs spec norm
       case coreBool of
         Nothing -> pure "result not in canonical Bool form"
         Just tm -> pure (ssiPrintTm surfSyntax tm)
@@ -299,24 +347,59 @@ inferTypeTerm surf env goalArgs =
         PSurf _ -> True
         _ -> False
 
-readbackCoreBool :: SurfaceDef -> M.Map Text Morphism -> Term -> Either Text (Maybe STerm)
-readbackCoreBool surf morphs tm = do
-  let SurfaceRequire alias _ = sdRequires surf
-  mor <- case M.lookup alias morphs of
-    Nothing -> Left ("missing morphism for alias: " <> alias)
-    Just m -> Right m
-  tKey <- resolveOpNameIn (morSrc mor) "T"
-  tOp <- case M.lookup tKey (morOpMap mor) of
-    Nothing -> Left "morphism missing op T"
-    Just o -> Right o
-  fKey <- resolveOpNameIn (morSrc mor) "F"
-  fOp <- case M.lookup fKey (morOpMap mor) of
-    Nothing -> Left "morphism missing op F"
-    Just o -> Right o
-  case termNode tm of
-    TOp op [] | op == tOp -> Right (Just (SCon (Con2Name "True") []))
-    TOp op [] | op == fOp -> Right (Just (SCon (Con2Name "False") []))
-    _ -> Right Nothing
+readbackCoreBool :: SurfaceDef -> M.Map Text Morphism -> RewriteSystem -> RunSpec -> Term -> Either Text (Maybe STerm)
+readbackCoreBool surf morphs rs spec tm =
+  case candidates of
+    [] -> Right Nothing
+    ((mor, tInterp, fInterp):_) -> do
+      let tTerm = applyOpInterp tInterp []
+      let fTerm = applyOpInterp fInterp []
+      let normT = normalize (runFuel spec) rs tTerm
+      let normF = normalize (runFuel spec) rs fTerm
+      let ctxTerms =
+            either (const Nothing) Just
+              (buildCtxBoolTerms (runFuel spec) rs mor tInterp fInterp)
+      let isT =
+            tm == normT
+              || maybe False (\(tCtx, _) -> tm == tCtx) ctxTerms
+              || joinableWithin (runFuel spec) rs tm tTerm
+      let isF =
+            tm == normF
+              || maybe False (\(_, fCtx) -> tm == fCtx) ctxTerms
+              || joinableWithin (runFuel spec) rs tm fTerm
+      if isT && not isF
+        then Right (Just (SCon (Con2Name "True") []))
+        else if isF && not isT
+          then Right (Just (SCon (Con2Name "False") []))
+          else Right Nothing
+  where
+    candidates =
+      [ (mor, tInterp, fInterp)
+      | req <- sdRequires surf
+      , Just mor <- [M.lookup (srAlias req) morphs]
+      , Right tKey <- [resolveOpNameIn (morSrc mor) "T"]
+      , Right fKey <- [resolveOpNameIn (morSrc mor) "F"]
+      , Right tInterp <- [lookupInterp mor tKey]
+      , Right fInterp <- [lookupInterp mor fKey]
+      ]
+
+    buildCtxBoolTerms fuel rs mor tInterp0 fInterp0 = do
+      unitInterp <- resolveInterp mor "Unit"
+      boolInterp <- resolveInterp mor "Bool"
+      terminalInterp <- resolveInterp mor "terminal"
+      compInterp <- resolveInterp mor "comp"
+      let unitTerm = applyOpInterp unitInterp []
+      let boolTerm = applyOpInterp boolInterp []
+      let termT = applyOpInterp tInterp0 []
+      let termF = applyOpInterp fInterp0 []
+      let termTerminal = applyOpInterp terminalInterp [unitTerm]
+      let termTrue = applyOpInterp compInterp [unitTerm, unitTerm, boolTerm, termT, termTerminal]
+      let termFalse = applyOpInterp compInterp [unitTerm, unitTerm, boolTerm, termF, termTerminal]
+      pure (normalize fuel rs termTrue, normalize fuel rs termFalse)
+
+    resolveInterp mor name = do
+      key <- resolveOpNameIn (morSrc mor) name
+      lookupInterp mor key
 
 resolveOpNameIn :: Presentation -> Text -> Either Text OpName
 resolveOpNameIn pres name =

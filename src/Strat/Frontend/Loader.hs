@@ -66,8 +66,8 @@ loadModuleWith st path isMain = do
                             Left err -> pure (Left err)
                             Right envFull ->
                               let envLocal = diffEnv envFull envBase
-                              in if not isMain && meRun envLocal /= Nothing
-                                then pure (Left "run block is only allowed in the main file")
+                              in if not isMain && not (M.null (meRuns envLocal))
+                                then pure (Left "runs are only allowed in the main file")
                                 else do
                                   let deps = S.insert absPath importDeps
                                   let modLocal = LoadedModule envLocal deps
@@ -110,5 +110,7 @@ diffEnv full base = ModuleEnv
   , meSurfaces = M.difference (meSurfaces full) (meSurfaces base)
   , meMorphisms = M.difference (meMorphisms full) (meMorphisms base)
   , meModels = M.difference (meModels full) (meModels base)
-  , meRun = meRun full
+  , meImplDefaults = M.difference (meImplDefaults full) (meImplDefaults base)
+  , meRunSpecs = M.difference (meRunSpecs full) (meRunSpecs base)
+  , meRuns = meRuns full
   }

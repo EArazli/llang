@@ -40,7 +40,8 @@ testDefineRepeatedVar = do
           , sdJudgments = M.empty
           , sdRules = []
           , sdDefines = M.fromList [("eqTest", def)]
-          , sdRequires = SurfaceRequire "ccc" (Presentation "I" (Signature M.empty M.empty) [])
+          , sdRequires = [SurfaceRequire "ccc" (Presentation "I" (Signature M.empty M.empty) [])]
+          , sdCtxDisc = CtxCartesian
           }
   let pres = Presentation "Test" (Signature M.empty M.empty) []
   let env =

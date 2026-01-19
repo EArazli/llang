@@ -2,7 +2,7 @@ import "./ski.llang";
 import "./ski.syntax.llang";
 import "../stdlib/models.llang";
 
-run where {
+run main where {
   doctrine SKI;
   open SKI;
 

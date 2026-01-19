@@ -2,7 +2,7 @@ import "./monoid.llang";
 import "./monoid.syntax.llang";
 import "./monoid.models.llang";
 
-run where {
+run main where {
   doctrine Combined;
   open C;
 

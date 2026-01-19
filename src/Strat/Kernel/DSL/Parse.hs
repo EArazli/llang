@@ -35,15 +35,14 @@ parseRawExpr input =
 
 rawFile :: Parser RawFile
 rawFile = do
-  decls <- many declNoRun
-  mrun <- optional runDecl
-  pure (RawFile (decls <> maybe [] (\r -> [DeclRun r]) mrun))
+  decls <- many (sc *> decl)
+  pure (RawFile decls)
 
 
 -- Declarations
 
-declNoRun :: Parser RawDecl
-declNoRun =
+decl :: Parser RawDecl
+decl =
   importDecl
     <|> doctrineDecl
     <|> syntaxDecl
@@ -51,6 +50,9 @@ declNoRun =
     <|> sogatDecl
     <|> surfaceDecl
     <|> morphismDecl
+    <|> implementsDecl
+    <|> runSpecDecl
+    <|> runDecl
 
 importDecl :: Parser RawDecl
 importDecl = do
@@ -134,14 +136,48 @@ morphismDecl = do
   optionalSemi
   pure (DeclMorphismWhere (RawMorphismDecl name src tgt items mcheck))
 
-runDecl :: Parser RawRun
-runDecl = do
-  _ <- symbol "run"
+implementsDecl :: Parser RawDecl
+implementsDecl = do
+  _ <- symbol "implements"
+  iface <- expr
+  _ <- symbol "for"
+  tgt <- expr
+  _ <- symbol "using"
+  name <- ident
+  optionalSemi
+  pure (DeclImplements (RawImplementsDecl iface tgt name))
+
+runSpecDecl :: Parser RawDecl
+runSpecDecl = do
+  _ <- symbol "run_spec"
+  name <- ident
   _ <- symbol "where"
   items <- runBlock
-  _ <- symbol "---"
-  exprText <- T.strip <$> takeRest
-  pure (buildRun items exprText)
+  optionalSemi
+  pure (DeclRunSpec name (RawRunSpec (buildRun items "")))
+
+runDecl :: Parser RawDecl
+runDecl = do
+  _ <- symbol "run"
+  name <- ident
+  using <- optional (symbol "using" *> ident)
+  items <- option [] (symbol "where" *> runBlock)
+  exprText <- runBody
+  pure (DeclRun (RawNamedRun name using (buildRun items exprText)))
+
+runBody :: Parser Text
+runBody = do
+  _ <- delimiterLine
+  body <- T.pack <$> manyTill anySingle (lookAhead (try delimiterLine <|> eof))
+  _ <- optional (try delimiterLine)
+  pure (T.strip body)
+
+delimiterLine :: Parser ()
+delimiterLine = do
+  _ <- optional (many (char ' ' <|> char '\t'))
+  _ <- string "---"
+  _ <- optional (many (char ' ' <|> char '\t'))
+  void eol <|> eof
 
 
 -- Doctrine blocks
@@ -545,7 +581,22 @@ surfaceBlock = do
 
 surfaceItem :: Parser RawSurfaceItem
 surfaceItem =
-  requiresItem <|> deriveContextsItem <|> contextSortItem <|> surfaceSortItem <|> surfaceConItem <|> surfaceJudgItem <|> surfaceDefineItem <|> surfaceRuleItem
+  contextDisciplineItem
+    <|> requiresItem
+    <|> deriveContextsItem
+    <|> contextSortItem
+    <|> surfaceSortItem
+    <|> surfaceConItem
+    <|> surfaceJudgItem
+    <|> surfaceDefineItem
+    <|> surfaceRuleItem
+
+contextDisciplineItem :: Parser RawSurfaceItem
+contextDisciplineItem = do
+  _ <- symbol "context_discipline"
+  name <- ident
+  optionalSemi
+  pure (RSContextDiscipline name)
 
 requiresItem :: Parser RawSurfaceItem
 requiresItem = do
@@ -934,10 +985,11 @@ morphismItem = sortItem <|> opItem
     opItem = do
       _ <- symbol "op"
       src <- qualifiedIdent
+      params <- optional (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
       _ <- symbol "="
-      tgt <- qualifiedIdent
+      rhs <- term
       optionalSemi
-      pure (RMIOp src tgt)
+      pure (RMIOp src params rhs)
 
 morphismCheck :: Parser RawMorphismCheck
 morphismCheck = do
@@ -987,6 +1039,7 @@ runItem =
     <|> surfaceItemRun
     <|> modelItemRun
     <|> useItemRun
+    <|> implementsItemRun
     <|> openItem
     <|> policyItem
     <|> fuelItem
@@ -1030,6 +1083,15 @@ surfaceSyntaxItemRun = do
 useItemRun :: Parser RunItem
 useItemRun = do
   _ <- symbol "use"
+  alias <- ident
+  _ <- symbol "="
+  name <- ident
+  optionalSemi
+  pure (RunUse alias name)
+
+implementsItemRun :: Parser RunItem
+implementsItemRun = do
+  _ <- symbol "implements"
   alias <- ident
   _ <- symbol "="
   name <- ident

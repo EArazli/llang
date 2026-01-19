@@ -11,6 +11,7 @@ import Strat.Kernel.Presentation (Presentation)
 import Strat.Syntax.Spec (SyntaxSpec)
 import Strat.Model.Spec (ModelSpec)
 import Strat.Frontend.RunSpec (RunSpec)
+import Strat.Kernel.DSL.AST (RawRun)
 import Strat.Surface2.Def (SurfaceDef)
 import Strat.Surface2.SyntaxSpec (SurfaceSyntaxSpec)
 import Strat.Kernel.Morphism (Morphism)
@@ -30,7 +31,9 @@ data ModuleEnv = ModuleEnv
   , meSurfaces      :: M.Map Text SurfaceDef
   , meMorphisms     :: M.Map Text Morphism
   , meModels        :: M.Map Text ModelSpec
-  , meRun           :: Maybe RunSpec
+  , meImplDefaults  :: M.Map (Text, Text) Text
+  , meRunSpecs      :: M.Map Text RawRun
+  , meRuns          :: M.Map Text RunSpec
   }
   deriving (Eq, Show)
 
@@ -42,7 +45,9 @@ emptyEnv = ModuleEnv
   , meSurfaces = M.empty
   , meMorphisms = M.empty
   , meModels = M.empty
-  , meRun = Nothing
+  , meImplDefaults = M.empty
+  , meRunSpecs = M.empty
+  , meRuns = M.empty
   }
 
 mergeEnv :: ModuleEnv -> ModuleEnv -> Either Text ModuleEnv
@@ -53,7 +58,9 @@ mergeEnv a b = do
   surfs <- mergeMap "surface" meSurfaces
   morphs <- mergeMap "morphism" meMorphisms
   mods <- mergeMap "model" meModels
-  run <- mergeRun (meRun a) (meRun b)
+  impls <- mergeNamed "implements default" renderImplKey (meImplDefaults a) (meImplDefaults b)
+  specs <- mergeMap "run_spec" meRunSpecs
+  runs <- mergeMap "run" meRuns
   pure ModuleEnv
     { meDoctrines = docs
     , mePresentations = pres
@@ -61,24 +68,22 @@ mergeEnv a b = do
     , meSurfaces = surfs
     , meMorphisms = morphs
     , meModels = mods
-    , meRun = run
+    , meImplDefaults = impls
+    , meRunSpecs = specs
+    , meRuns = runs
     }
   where
-    mergeMap label f = mergeNamed label (f a) (f b)
+    mergeMap label f = mergeNamed label id (f a) (f b)
+    renderImplKey (i, t) = i <> " -> " <> t
 
-mergeNamed :: Eq v => Text -> M.Map Text v -> M.Map Text v -> Either Text (M.Map Text v)
-mergeNamed label left right =
+mergeNamed :: (Ord k, Eq v) => Text -> (k -> Text) -> M.Map k v -> M.Map k v -> Either Text (M.Map k v)
+mergeNamed label renderKey left right =
   case conflicts of
     [] -> Right (M.union left right)
-    (k:_) -> Left ("Duplicate " <> label <> " name: " <> k)
+    (k:_) -> Left ("Duplicate " <> label <> " name: " <> renderKey k)
   where
     conflicts =
       [ k
       | k <- M.keys (M.intersection left right)
       , M.lookup k left /= M.lookup k right
       ]
-
-mergeRun :: Maybe RunSpec -> Maybe RunSpec -> Either Text (Maybe RunSpec)
-mergeRun Nothing r = Right r
-mergeRun r Nothing = Right r
-mergeRun (Just _) (Just _) = Left "Multiple run blocks found"

@@ -1,0 +1,16 @@
+doctrine Invol where {
+  sort Obj;
+  op f : (x:Obj) -> Obj;
+  computational inv : (x:Obj) |- f(f(?x)) -> ?x;
+}
+
+doctrine Invol2 where {
+  sort Obj;
+  op g : (x:Obj) -> Obj;
+  computational inv : (x:Obj) |- g(g(?x)) -> ?x;
+}
+
+morphism Double : Invol -> Invol2 where {
+  sort Obj = Obj;
+  op f(x) = g(g(?x));
+}

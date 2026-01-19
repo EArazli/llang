@@ -11,9 +11,9 @@ import Strat.Surface2.Pattern
 import Strat.Surface2.Term
 import Strat.Kernel.Presentation
 import Strat.Kernel.Signature (sigOps)
-import Strat.Kernel.Term
 import Strat.Kernel.Syntax
 import Strat.Kernel.Morphism
+import Strat.Kernel.Subst (applySubstSort)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
@@ -37,8 +37,11 @@ evalCoreExpr pres surf morphs env expr =
       case M.lookup name env of
         Just v -> Right v
         Nothing ->
-          case resolveOp morphs name of
-            Right op -> applyOp pres op []
+          case resolveOpInterp morphs name of
+            Right interp ->
+              if null (oiTele interp)
+                then Right (CVCore (applyOpInterp interp []))
+                else Left ("core var is op with arguments: " <> name)
             Left _ ->
               case M.lookup (Con2Name name) (sdCons surf) of
                 Just decl ->
@@ -50,11 +53,15 @@ evalCoreExpr pres surf morphs env expr =
       case lookupDefine f surf of
         Just def -> evalDefine pres surf morphs env def args
         Nothing ->
-          case resolveOp morphs f of
-            Right op -> do
+          case resolveOpInterp morphs f of
+            Right interp -> do
               args' <- mapM (evalCoreExpr pres surf morphs env) args
               coreArgs <- mapM requireCore args'
-              applyOp pres op coreArgs
+              if length coreArgs /= length (oiTele interp)
+                then Left ("core op arity mismatch: " <> f)
+                else do
+                  checkOpArgs f (oiTele interp) coreArgs
+                  Right (CVCore (applyOpInterp interp coreArgs))
             Left _ ->
               case M.lookup (Con2Name f) (sdCons surf) of
                 Just decl -> do
@@ -158,8 +165,8 @@ matchWhere surf env clause =
 lookupDefine :: Text -> SurfaceDef -> Maybe Define
 lookupDefine name surf = M.lookup name (sdDefines surf)
 
-resolveOp :: MorphismEnv -> Text -> Either Text OpName
-resolveOp morphs name =
+resolveOpInterp :: MorphismEnv -> Text -> Either Text OpInterp
+resolveOpInterp morphs name =
   case splitAlias name of
     Nothing -> Left "unqualified core name"
     Just (alias, slot) ->
@@ -169,9 +176,7 @@ resolveOp morphs name =
           case resolveOpNameIn (morSrc mor) slot of
             Left err -> Left err
             Right key ->
-              case M.lookup key (morOpMap mor) of
-                Nothing -> Left ("unknown core op: " <> name)
-                Just op -> Right op
+              lookupInterp mor key
 
 splitAlias :: Text -> Maybe (Text, Text)
 splitAlias name =
@@ -204,8 +209,14 @@ requireSurf val =
     CVSurf t -> Right t
     _ -> Left "core evaluation: expected surface term"
 
-applyOp :: Presentation -> OpName -> [Term] -> Either Text CoreVal
-applyOp pres op args =
-  case mkOp (presSig pres) op args of
-    Left err -> Left (T.pack (show err))
-    Right t -> Right (CVCore t)
+checkOpArgs :: Text -> [Binder] -> [Term] -> Either Text ()
+checkOpArgs name tele args = go M.empty tele args
+  where
+    go _ [] [] = Right ()
+    go _ [] _ = Left ("core op arity mismatch: " <> name)
+    go _ _ [] = Left ("core op arity mismatch: " <> name)
+    go subst (Binder v s : bs) (a:as) =
+      let expected = applySubstSort subst s
+      in if termSort a == expected
+          then go (M.insert v a subst) bs as
+          else Left ("core op argument sort mismatch: " <> name)

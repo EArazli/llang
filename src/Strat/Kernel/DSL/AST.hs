@@ -44,7 +44,10 @@ module Strat.Kernel.DSL.AST
   , RawMorphismDecl(..)
   , RawMorphismItem(..)
   , RawMorphismCheck(..)
+  , RawImplementsDecl(..)
   , RawRun(..)
+  , RawRunSpec(..)
+  , RawNamedRun(..)
   , RawRunShow(..)
   , RawFile(..)
   ) where
@@ -115,7 +118,9 @@ data RawDecl
   | DeclSurfaceWhere RawSurfaceDecl
   | DeclSogatWhere RawSogatDecl
   | DeclMorphismWhere RawMorphismDecl
-  | DeclRun RawRun
+  | DeclImplements RawImplementsDecl
+  | DeclRunSpec Text RawRunSpec
+  | DeclRun RawNamedRun
   deriving (Eq, Show)
 
 
@@ -209,13 +214,26 @@ data RawRun = RawRun
   }
   deriving (Eq, Show)
 
+data RawRunSpec = RawRunSpec
+  { rrsRun :: RawRun
+  }
+  deriving (Eq, Show)
+
+data RawNamedRun = RawNamedRun
+  { rnrName  :: Text
+  , rnrUsing :: Maybe Text
+  , rnrRun   :: RawRun
+  }
+  deriving (Eq, Show)
+
 data RawSurfaceDecl = RawSurfaceDecl
   { rsdName :: Text
   , rsdItems :: [RawSurfaceItem]
   } deriving (Eq, Show)
 
 data RawSurfaceItem
-  = RSRequires Text RawExpr
+  = RSContextDiscipline Text
+  | RSRequires Text RawExpr
   | RSDeriveContexts Text
   | RSContextSort Text
   | RSSort Text
@@ -377,12 +395,22 @@ data RawMorphismDecl = RawMorphismDecl
 
 data RawMorphismItem
   = RMISort Text Text
-  | RMIOp   Text Text
+  | RMIOp
+      { rmiSrcOp  :: Text
+      , rmiParams :: Maybe [Text]
+      , rmiRhs    :: RawTerm
+      }
   deriving (Eq, Show)
 
 data RawMorphismCheck = RawMorphismCheck
   { rmcPolicy :: Maybe Text
   , rmcFuel   :: Maybe Int
+  } deriving (Eq, Show)
+
+data RawImplementsDecl = RawImplementsDecl
+  { ridInterface :: RawExpr
+  , ridTarget    :: RawExpr
+  , ridMorphism  :: Text
   } deriving (Eq, Show)
 
 newtype RawFile = RawFile [RawDecl]

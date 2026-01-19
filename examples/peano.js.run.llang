@@ -2,7 +2,7 @@ import "./peano.llang";
 import "./peano.syntax.llang";
 import "./peano.js.models.llang";
 
-run where {
+run main where {
   doctrine Nat;
   open Nat;
 

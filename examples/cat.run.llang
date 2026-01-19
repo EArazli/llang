@@ -2,7 +2,7 @@ import "./cat.llang";
 import "../stdlib/syntax.llang";
 import "../stdlib/models.llang";
 
-run where {
+run main where {
   doctrine Cat;
   syntax CombDefault;
   model Symbolic;

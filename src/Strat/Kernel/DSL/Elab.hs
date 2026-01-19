@@ -14,6 +14,7 @@ import Strat.Kernel.Term
 import Strat.Kernel.Syntax
 import Strat.Kernel.RewriteSystem (RewritePolicy(..))
 import Strat.Kernel.Subst (applySubstSort, applySubstTerm)
+import Strat.Kernel.AlphaEq
 import Strat.Syntax.Spec
 import Strat.Model.Spec
 import Strat.Frontend.Env (ModuleEnv(..), SyntaxDef)
@@ -44,13 +45,14 @@ elabRawFile = elabRawFileWithEnv Env.emptyEnv
 elabRawFileWithEnv :: ModuleEnv -> RawFile -> Either Text ModuleEnv
 elabRawFileWithEnv baseEnv (RawFile decls) = do
   let baseDocEnv = docsFromEnv baseEnv
-  (docEnv, env) <- foldM step (baseDocEnv, baseEnv) decls
+  (docEnv, env, rawRuns) <- foldM step (baseDocEnv, baseEnv, []) decls
   let env' = env { meDoctrines = M.map defExpr docEnv }
-  pure env'
+  runs <- elabRuns env' rawRuns
+  pure env' { meRuns = runs }
   where
-    step (docEnv, env) decl =
+    step (docEnv, env, rawRuns) decl =
       case decl of
-        DeclImport _ -> Right (docEnv, env)
+        DeclImport _ -> Right (docEnv, env, rawRuns)
         DeclWhere name items -> do
           ensureAbsent "doctrine" name (meDoctrines env)
           pres <- elabPresentation docEnv name items
@@ -59,7 +61,7 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
           pure (docEnv', env
             { meDoctrines = M.insert name (defExpr def) (meDoctrines env)
             , mePresentations = M.insert name pres (mePresentations env)
-            })
+            }, rawRuns)
         DeclSogatWhere decl -> do
           let name = rsogName decl
           ensureAbsent "doctrine" name (meDoctrines env)
@@ -69,42 +71,46 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
           pure (docEnv', env
             { meDoctrines = M.insert name (defExpr def) (meDoctrines env)
             , mePresentations = M.insert name pres (mePresentations env)
-            })
+            }, rawRuns)
         DeclExpr name expr -> do
           ensureAbsent "doctrine" name (meDoctrines env)
           dexpr <- resolveExpr docEnv expr
           let def = Def { defExpr = dexpr, defRawPresentation = Nothing }
           let docEnv' = M.insert name def docEnv
-          pure (docEnv', env { meDoctrines = M.insert name dexpr (meDoctrines env) })
+          pure (docEnv', env { meDoctrines = M.insert name dexpr (meDoctrines env) }, rawRuns)
         DeclSyntaxWhere decl -> do
           let name = rsnName decl
           ensureAbsent "syntax" name (meSyntaxes env)
           spec <- elabSyntaxDecl decl
           let env' = env { meSyntaxes = M.insert name spec (meSyntaxes env) }
-          pure (docEnv, env')
+          pure (docEnv, env', rawRuns)
         DeclModelWhere name items -> do
           ensureAbsent "model" name (meModels env)
           spec <- elabModelSpec name items
           let env' = env { meModels = M.insert name spec (meModels env) }
-          pure (docEnv, env')
+          pure (docEnv, env', rawRuns)
         DeclSurfaceWhere surfDecl -> do
           let name = rsdName surfDecl
           ensureAbsent "surface" name (meSurfaces env)
           def <- elabSurfaceDecl (resolvePresentation docEnv) surfDecl
           let env' = env { meSurfaces = M.insert name def (meSurfaces env) }
-          pure (docEnv, env')
+          pure (docEnv, env', rawRuns)
         DeclMorphismWhere morphDecl -> do
           let name = rmdName morphDecl
           ensureAbsent "morphism" name (meMorphisms env)
           morph <- elabMorphismDecl docEnv morphDecl
           let env' = env { meMorphisms = M.insert name morph (meMorphisms env) }
-          pure (docEnv, env')
-        DeclRun rawRun -> do
-          case meRun env of
-            Just _ -> Left "Multiple run blocks found"
-            Nothing -> do
-              runSpec <- elabRun rawRun
-              pure (docEnv, env { meRun = Just runSpec })
+          pure (docEnv, env', rawRuns)
+        DeclImplements implDecl -> do
+          (key, morphName) <- elabImplements docEnv env implDecl
+          let env' = env { meImplDefaults = M.insert key morphName (meImplDefaults env) }
+          pure (docEnv, env', rawRuns)
+        DeclRunSpec name rawSpec -> do
+          ensureAbsent "run_spec" name (meRunSpecs env)
+          let env' = env { meRunSpecs = M.insert name (rrsRun rawSpec) (meRunSpecs env) }
+          pure (docEnv, env', rawRuns)
+        DeclRun rawNamed ->
+          pure (docEnv, env, rawRuns <> [rawNamed])
 
     docsFromEnv env =
       M.mapWithKey
@@ -287,59 +293,6 @@ mergeOpDecls = foldl step (Right M.empty)
             then pure m
             else Left ("Duplicate op decl: " <> renderOpName name)
 
-alphaEqSortCtor :: SortCtor -> SortCtor -> Bool
-alphaEqSortCtor c1 c2 =
-  let tele1 = scTele c1
-      tele2 = scTele c2
-  in length tele1 == length tele2
-      && and (zipWith alphaEqBinder tele1 tele2)
-  where
-    subst =
-      M.fromList
-        [ (v2, mkVar s1 v1)
-        | (Binder v1 s1, Binder v2 _) <- zip (scTele c1) (scTele c2)
-        ]
-    alphaEqBinder (Binder _ s1) (Binder _ s2) =
-      let s2' = applySubstSort subst s2
-      in s1 == s2'
-
-alphaEqOpDecl :: OpDecl -> OpDecl -> Bool
-alphaEqOpDecl d1 d2 =
-  let tele1 = opTele d1
-      tele2 = opTele d2
-  in length tele1 == length tele2
-      && and (zipWith alphaEqBinder tele1 tele2)
-      && opResult d1 == applySubstSort subst (opResult d2)
-  where
-    subst =
-      M.fromList
-        [ (v2, mkVar s1 v1)
-        | (Binder v1 s1, Binder v2 _) <- zip (opTele d1) (opTele d2)
-        ]
-    alphaEqBinder (Binder _ s1) (Binder _ s2) =
-      let s2' = applySubstSort subst s2
-      in s1 == s2'
-
-alphaEqEquation :: Equation -> Equation -> Bool
-alphaEqEquation e1 e2 =
-  eqClass e1 == eqClass e2
-    && eqOrient e1 == eqOrient e2
-    && length tele1 == length tele2
-    && and (zipWith alphaEqBinder tele1 tele2)
-    && eqLHS e1 == applySubstTerm subst (eqLHS e2)
-    && eqRHS e1 == applySubstTerm subst (eqRHS e2)
-  where
-    tele1 = eqTele e1
-    tele2 = eqTele e2
-    subst =
-      M.fromList
-        [ (v2, mkVar s1 v1)
-        | (Binder v1 s1, Binder v2 _) <- zip tele1 tele2
-        ]
-    alphaEqBinder (Binder _ s1) (Binder _ s2) =
-      let s2' = applySubstSort subst s2
-      in s1 == s2'
-
 renderSortName :: SortName -> Text
 renderSortName (SortName t) = t
 
@@ -409,7 +362,7 @@ elabMorphismDecl docEnv decl = do
   srcPres <- resolvePresentation docEnv (rmdSrc decl)
   tgtPres <- resolvePresentation docEnv (rmdTgt decl)
   sortMap <- buildSortMap srcPres tgtPres (rmdItems decl)
-  opMap <- buildOpMap srcPres tgtPres (rmdItems decl)
+  opMap <- buildOpInterps (rmdName decl) srcPres tgtPres sortMap (rmdItems decl)
   checkCfg <- resolveCheck (rmdCheck decl)
   let mor = Morphism
         { morName = rmdName decl
@@ -456,32 +409,160 @@ buildSortMap src tgt items = do
           then Right (M.insert name name acc)
           else Left ("Missing sort mapping: " <> renderSortName name)
 
-buildOpMap :: Presentation -> Presentation -> [RawMorphismItem] -> Either Text (M.Map OpName OpName)
-buildOpMap src tgt items = do
-  explicit <- mapM (resolveOpPair src tgt) [ (s, t) | RMIOp s t <- items ]
+buildOpInterps :: Text -> Presentation -> Presentation -> M.Map SortName SortName -> [RawMorphismItem] -> Either Text (M.Map OpName OpInterp)
+buildOpInterps morName src tgt sortMap items = do
+  explicit <- mapM (resolveOpItem src) [ i | i@RMIOp{} <- items ]
   ensureNoDup "op mapping" (map fst explicit)
-  mapM_ (checkSrcOp src) (map fst explicit)
-  mapM_ (checkTgtOp tgt) (map snd explicit)
-  foldM (fillOp tgt) (M.fromList explicit) (M.keys (sigOps (presSig src)))
+  let explicitMap = M.fromList explicit
+  let srcOps = M.keys (sigOps (presSig src))
+  let deps = M.fromList [ (op, opDeps (sigOps (presSig src) M.! op)) | op <- srcOps ]
+  order <- topoSortOps (S.fromList srcOps) deps
+  foldM (buildOne explicitMap) M.empty order
   where
-    resolveOpPair presSrc presTgt (s, t) = do
-      s' <- resolveOpNameIn presSrc s
-      t' <- resolveOpNameIn presTgt t
-      pure (s', t')
-    checkSrcOp pres name =
-      if M.member name (sigOps (presSig pres))
-        then Right ()
-        else Left ("Unknown source op in morphism: " <> renderOpName name)
-    checkTgtOp pres name =
-      if M.member name (sigOps (presSig pres))
-        then Right ()
-        else Left ("Unknown target op in morphism: " <> renderOpName name)
-    fillOp pres acc name =
-      if M.member name acc
-        then Right acc
-        else if M.member name (sigOps (presSig pres))
-          then Right (M.insert name name acc)
-          else Left ("Missing op mapping: " <> renderOpName name)
+    resolveOpItem pres item = do
+      opName <- resolveOpNameIn pres (rmiSrcOp item)
+      pure (opName, item)
+
+    buildOne explicitMap acc opName = do
+      let decl = sigOps (presSig src) M.! opName
+      item <- case M.lookup opName explicitMap of
+        Just it -> Right it
+        Nothing ->
+          let opText = renderOpName opName
+          in Right RMIOp { rmiSrcOp = opText, rmiParams = Nothing, rmiRhs = RApp opText [] }
+      interp <- elabOpInterp morName src tgt sortMap acc decl item
+      pure (M.insert opName interp acc)
+
+    opDeps decl =
+      let fromBinder b = opsInSort (bSort b)
+      in S.unions (map fromBinder (opTele decl) <> [opsInSort (opResult decl)])
+
+    topoSortOps opSet deps =
+      let deps' = M.map (`S.intersection` opSet) deps
+      in go deps' []
+      where
+        go remaining acc
+          | M.null remaining = Right (reverse acc)
+          | otherwise =
+              case [ n | (n, ds) <- M.toList remaining, S.null (S.intersection ds (M.keysSet remaining)) ] of
+                [] -> Left ("Cyclic op dependency in morphism: " <> T.intercalate ", " (map renderOpName (M.keys remaining)))
+                (n:_) -> go (M.delete n remaining) (n:acc)
+
+elabOpInterp
+  :: Text
+  -> Presentation
+  -> Presentation
+  -> M.Map SortName SortName
+  -> M.Map OpName OpInterp
+  -> OpDecl
+  -> RawMorphismItem
+  -> Either Text OpInterp
+elabOpInterp morName src tgt sortMap opMapKnown decl item = do
+  let teleSrc = opTele decl
+  let arity = length teleSrc
+  let rhsVars = rawTermVars (rmiRhs item)
+  paramNames <- case rmiParams item of
+    Just names ->
+      if length names /= arity
+        then Left ("Morphism op mapping arity mismatch for " <> renderOpName (opName decl))
+        else if hasDup names
+          then Left ("Duplicate parameter name in op mapping for " <> renderOpName (opName decl))
+          else Right names
+    Nothing ->
+      if not (S.null rhsVars)
+        then Left ("Morphism op mapping for " <> renderOpName (opName decl) <> " uses variables; provide parameter list")
+        else Right [ "x" <> T.pack (show i) | i <- [0 .. arity - 1] ]
+  let rhsRaw0 =
+        case (rmiParams item, rmiRhs item, arity) of
+          (Nothing, RApp name [], n) | n > 0 -> RApp name (map RVar paramNames)
+          _ -> rmiRhs item
+  rhsRaw1 <- qualifyRawTerm tgt rhsRaw0
+  (teleTgt, subst) <- buildTele morName (opName decl) sortMap opMapKnown teleSrc
+  let env = M.fromList [ (n, (v, bSort b)) | (n, b@(Binder v _)) <- zip paramNames teleTgt ]
+  rhsTerm <- elabTerm (presSig tgt) env rhsRaw1
+  resSort <- applySubstSort subst <$> applyMorphismSortPartial sortMap opMapKnown (opResult decl)
+  if termSort rhsTerm /= resSort
+    then Left ("Morphism op mapping for " <> renderOpName (opName decl) <> " has wrong result sort")
+    else Right OpInterp { oiTele = teleTgt, oiRhs = rhsTerm }
+  where
+    hasDup xs = case findDup xs of
+      Nothing -> False
+      Just _ -> True
+    findDup = go M.empty
+    go _ [] = Nothing
+    go seen (x:rest)
+      | M.member x seen = Just x
+      | otherwise = go (M.insert x () seen) rest
+
+buildTele
+  :: Text
+  -> OpName
+  -> M.Map SortName SortName
+  -> M.Map OpName OpInterp
+  -> [Binder]
+  -> Either Text ([Binder], M.Map Var Term)
+buildTele morName opName0 sortMap opMap teleSrc =
+  foldM step ([], M.empty, 0) teleSrc >>= \(tele, subst, _) -> Right (tele, subst)
+  where
+    scope = ScopeId ("mor:" <> morName <> ":" <> renderOpName opName0)
+    step (acc, subst, ix) (Binder v s) = do
+      s0 <- applyMorphismSortPartial sortMap opMap s
+      let s1 = applySubstSort subst s0
+      let v' = Var scope ix
+      let b' = Binder v' s1
+      let subst' = M.insert v (mkVar s1 v') subst
+      pure (acc <> [b'], subst', ix + 1)
+
+applyMorphismSortPartial
+  :: M.Map SortName SortName
+  -> M.Map OpName OpInterp
+  -> Sort
+  -> Either Text Sort
+applyMorphismSortPartial sortMap opMap (Sort name idx) = do
+  let name' = M.findWithDefault name name sortMap
+  idx' <- mapM (applyMorphismTermPartial sortMap opMap) idx
+  pure (Sort name' idx')
+
+applyMorphismTermPartial
+  :: M.Map SortName SortName
+  -> M.Map OpName OpInterp
+  -> Term
+  -> Either Text Term
+applyMorphismTermPartial sortMap opMap tm =
+  case termNode tm of
+    TVar v -> do
+      s' <- applyMorphismSortPartial sortMap opMap (termSort tm)
+      pure Term { termSort = s', termNode = TVar v }
+    TOp op args -> do
+      args' <- mapM (applyMorphismTermPartial sortMap opMap) args
+      case M.lookup op opMap of
+        Nothing -> Left ("Morphism op dependency missing: " <> renderOpName op)
+        Just interp -> Right (applyOpInterp interp args')
+
+qualifyRawTerm :: Presentation -> RawTerm -> Either Text RawTerm
+qualifyRawTerm pres tm =
+  case tm of
+    RVar v -> Right (RVar v)
+    RApp name args -> do
+      op <- resolveOpNameIn pres name
+      args' <- mapM (qualifyRawTerm pres) args
+      pure (RApp (renderOpName op) args')
+
+rawTermVars :: RawTerm -> S.Set Text
+rawTermVars tm =
+  case tm of
+    RVar v -> S.singleton v
+    RApp _ args -> S.unions (map rawTermVars args)
+
+opsInSort :: Sort -> S.Set OpName
+opsInSort (Sort _ idx) = S.unions (map opsInTerm idx)
+
+opsInTerm :: Term -> S.Set OpName
+opsInTerm tm =
+  let fromSort = opsInSort (termSort tm)
+  in case termNode tm of
+      TVar _ -> fromSort
+      TOp op args -> S.insert op (S.unions (fromSort : map opsInTerm args))
 
 ensureNoDup :: Ord a => Text -> [a] -> Either Text ()
 ensureNoDup label xs =
@@ -627,6 +708,67 @@ elabRun raw = do
         RawShowCat -> ShowCat
         RawShowInput -> ShowInput
         RawShowResult -> ShowResult
+
+elabRuns :: ModuleEnv -> [RawNamedRun] -> Either Text (M.Map Text RunSpec)
+elabRuns env raws = foldM step M.empty raws
+  where
+    step acc raw = do
+      let name = rnrName raw
+      if M.member name acc
+        then Left ("Duplicate run name: " <> name)
+        else do
+          base <- case rnrUsing raw of
+            Nothing -> Right Nothing
+            Just specName ->
+              case M.lookup specName (meRunSpecs env) of
+                Nothing -> Left ("Unknown run_spec: " <> specName)
+                Just spec -> Right (Just spec)
+          let merged = mergeRawRun base (rnrRun raw)
+          spec <- elabRun merged
+          pure (M.insert name spec acc)
+
+mergeRawRun :: Maybe RawRun -> RawRun -> RawRun
+mergeRawRun base override =
+  case base of
+    Nothing -> override
+    Just b ->
+      RawRun
+        { rrDoctrine = pick rrDoctrine
+        , rrSyntax = pick rrSyntax
+        , rrCoreSyntax = pick rrCoreSyntax
+        , rrSurface = pick rrSurface
+        , rrSurfaceSyntax = pick rrSurfaceSyntax
+        , rrModel = pick rrModel
+        , rrUses = mergeUses (rrUses b) (rrUses override)
+        , rrOpen = rrOpen b <> rrOpen override
+        , rrPolicy = pick rrPolicy
+        , rrFuel = pick rrFuel
+        , rrShowFlags = rrShowFlags b <> rrShowFlags override
+        , rrExprText = rrExprText override
+        }
+      where
+        pick f = case f override of
+          Just v -> Just v
+          Nothing -> f b
+
+mergeUses :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)]
+mergeUses base override =
+  let baseMap = M.fromList base
+      overMap = M.fromList override
+  in M.toList (M.union overMap baseMap)
+
+elabImplements :: DocEnv -> ModuleEnv -> RawImplementsDecl -> Either Text ((Text, Text), Text)
+elabImplements docEnv env decl = do
+  ifacePres <- resolvePresentation docEnv (ridInterface decl)
+  tgtPres <- resolvePresentation docEnv (ridTarget decl)
+  morph <- case M.lookup (ridMorphism decl) (meMorphisms env) of
+    Nothing -> Left ("Unknown morphism: " <> ridMorphism decl)
+    Just m -> Right m
+  if morSrc morph /= ifacePres
+    then Left "Morphism source does not match implements interface"
+    else if morTgt morph /= tgtPres
+      then Left "Morphism target does not match implements target"
+      else Right ((presName ifacePres, presName tgtPres), ridMorphism decl)
 
 validateRunFields :: Maybe Text -> Maybe Text -> Maybe Text -> Either Text ()
 validateRunFields surf surfSyn coreSyn =

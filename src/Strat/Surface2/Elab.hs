@@ -21,17 +21,26 @@ elabSurfaceDecl :: ResolveDoc -> RawSurfaceDecl -> Either Text SurfaceDef
 elabSurfaceDecl resolveDoc (RawSurfaceDecl name items) = do
   let sortNames = [ Sort2Name s | RSSort s <- items ]
   let sorts = M.fromList [(s, ()) | s <- sortNames]
+  ctxDisc <- case [ d | RSContextDiscipline d <- items ] of
+    [] -> Left "surface missing context_discipline"
+    [d] ->
+      case d of
+        "cartesian" -> Right CtxCartesian
+        _ -> Left ("unknown context_discipline: " <> d)
+    _ -> Left "multiple context_discipline directives"
   ctxSortName <- case [ s | RSContextSort s <- items ] of
     [] -> Left "surface missing context_sort"
     (s:_) -> Right (Sort2Name s)
   if M.member ctxSortName sorts
     then Right ()
     else Left ("context_sort not declared: " <> renderSort2 ctxSortName)
-  req <- case [ (alias, doc) | RSRequires alias doc <- items ] of
+  reqs <- case [ (alias, doc) | RSRequires alias doc <- items ] of
     [] -> Left "surface missing requires"
-    ((alias, docExpr):_) -> do
-      pres <- resolveDoc docExpr
-      pure (SurfaceRequire alias pres)
+    reqItems -> do
+      let aliases = map fst reqItems
+      case findDup aliases of
+        Just dup -> Left ("duplicate requires alias: " <> dup)
+        Nothing -> mapM (\(alias, docExpr) -> SurfaceRequire alias <$> resolveDoc docExpr) reqItems
   deriveAlias <- case [ a | RSDeriveContexts a <- items ] of
     [] -> Right Nothing
     [a] -> Right (Just a)
@@ -49,14 +58,29 @@ elabSurfaceDecl resolveDoc (RawSurfaceDecl name items) = do
         , sdJudgments = judgs
         , sdRules = rules
         , sdDefines = defs
-        , sdRequires = req
+        , sdRequires = reqs
+        , sdCtxDisc = ctxDisc
         }
   case deriveAlias of
     Nothing -> pure surf0
     Just alias ->
-      if alias /= srAlias req
-        then Left "derive contexts alias does not match requires alias"
-        else deriveContexts alias (srPres req) surf0
+      case findRequire alias reqs of
+        Nothing -> Left "derive contexts alias does not match requires alias"
+        Just req ->
+          if alias /= srAlias req
+            then Left "derive contexts alias does not match requires alias"
+            else deriveContexts alias (srPres req) surf0
+  where
+    findDup xs = go M.empty xs
+    go _ [] = Nothing
+    go seen (x:rest)
+      | M.member x seen = Just x
+      | otherwise = go (M.insert x () seen) rest
+
+    findRequire alias = goReq
+      where
+        goReq [] = Nothing
+        goReq (r:rs) = if srAlias r == alias then Just r else goReq rs
 
 validateBinderTypes :: Sort2Name -> M.Map Con2Name ConDecl -> Either Text ()
 validateBinderTypes ctxSort cons = do

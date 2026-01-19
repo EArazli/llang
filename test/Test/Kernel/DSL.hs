@@ -7,6 +7,7 @@ import Test.Tasty
 import Test.Tasty.HUnit
 import Strat.Kernel.DSL.Parse (parseRawFile, parseRawExpr)
 import Strat.Kernel.DSL.Elab (elabRawFile)
+import Strat.Kernel.DSL.AST
 import Strat.Kernel.DoctrineExpr
 import Strat.Kernel.Presentation
 import Strat.Kernel.Rewrite
@@ -40,6 +41,9 @@ tests =
     , testCase "instantiation requires where-defined" testInstRequiresWhere
     , testCase "unknown doctrine reference" testUnknownDoctrine
     , testCase "syntax/model/run parsing" testSyntaxModelRunParse
+    , testCase "parse morphism op mapping with params" testParseMorphismParams
+    , testCase "parse morphism shorthand" testParseMorphismShorthand
+    , testCase "parse run_spec and multiple runs" testParseRunSpecMultiple
     ]
 
 kernelDslProgram :: T.Text
@@ -298,15 +302,75 @@ testSyntaxModelRunParse = do
         , "  default = symbolic;"
         , "  op e() = \"\";"
         , "}"
-        , "run where {"
+        , "run_spec RS where {"
         , "  doctrine A;"
         , "  syntax S;"
         , "  model M;"
         , "  show normalized;"
         , "}"
+        , "run main using RS where { }"
         , "---"
         , "e"
         ]
   case parseRawFile prog of
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()
+
+testParseMorphismParams :: Assertion
+testParseMorphismParams = do
+  let prog = T.unlines
+        [ "doctrine A where { sort Obj; op f : (x:Obj)(y:Obj) -> Obj; }"
+        , "doctrine B where { sort Obj; op g : (x:Obj)(y:Obj) -> Obj; }"
+        , "morphism M : A -> B where { op f(x,y) = g(?y,?x); }"
+        ]
+  case parseRawFile prog of
+    Left err -> assertFailure (T.unpack err)
+    Right (RawFile decls) ->
+      case [ item | DeclMorphismWhere item <- decls ] of
+        [morph] ->
+          case [ i | i@RMIOp{} <- rmdItems morph ] of
+            [RMIOp src (Just params) rhs] -> do
+              src @?= "f"
+              params @?= ["x","y"]
+              rhs @?= RApp "g" [RVar "y", RVar "x"]
+            _ -> assertFailure "expected morphism op mapping with params"
+        _ -> assertFailure "expected one morphism decl"
+
+testParseMorphismShorthand :: Assertion
+testParseMorphismShorthand = do
+  let prog = T.unlines
+        [ "doctrine A where { sort Obj; op f : (x:Obj) -> Obj; }"
+        , "doctrine B where { sort Obj; op g : (x:Obj) -> Obj; }"
+        , "morphism M : A -> B where { op f = g; }"
+        ]
+  case parseRawFile prog of
+    Left err -> assertFailure (T.unpack err)
+    Right (RawFile decls) ->
+      case [ item | DeclMorphismWhere item <- decls ] of
+        [morph] ->
+          case [ i | i@RMIOp{} <- rmdItems morph ] of
+            [RMIOp src Nothing rhs] -> do
+              src @?= "f"
+              rhs @?= RApp "g" []
+            _ -> assertFailure "expected morphism shorthand op mapping"
+        _ -> assertFailure "expected one morphism decl"
+
+testParseRunSpecMultiple :: Assertion
+testParseRunSpecMultiple = do
+  let prog = T.unlines
+        [ "run_spec S where { doctrine A; }"
+        , "run main using S where { }"
+        , "---"
+        , "a"
+        , "---"
+        , "run other using S where { }"
+        , "---"
+        , "b"
+        ]
+  case parseRawFile prog of
+    Left err -> assertFailure (T.unpack err)
+    Right (RawFile decls) -> do
+      let specCount = length [ () | DeclRunSpec _ _ <- decls ]
+      let runNames = [ rnrName r | DeclRun r <- decls ]
+      specCount @?= 1
+      runNames @?= ["main","other"]

@@ -25,3 +25,5 @@ morphism CCCIface : CCC_Bool -> CCC where {
   policy UseStructuralAsBidirectional;
   fuel 200;
 };
+
+implements CCC_Bool for CCC using CCCIface;

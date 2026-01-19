@@ -2,7 +2,7 @@ import "./ccc.llang";
 import "./ccc.syntax.llang";
 import "../stdlib/models.llang";
 
-run where {
+run main where {
   doctrine CCC;
   open C;
 

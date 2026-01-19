@@ -39,6 +39,9 @@ data-files:
 - examples/ccc_surface/stlc.lam3.run.llang
 - examples/ccc_surface/stlc.pair.run.llang
 - examples/ccc_surface/stlc.bad.run.llang
+- examples/ccc_surface/stlc.runspec.llang
+- examples/morphism_term.llang
+- examples/runspec/multi.llang
 - stdlib/syntax.llang
 - stdlib/models.llang
 
@@ -118,6 +121,7 @@ tests:
     - Test.Kernel.RewriteSystem
     - Test.Frontend.SyntaxModel
     - Test.Frontend.Loader
+    - Test.Frontend.Implements
     - Test.Surface
     - Test.Surface2.Term
     - Test.Surface2.Pattern

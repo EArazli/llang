@@ -1,19 +1,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Kernel.Morphism
   ( Morphism(..)
+  , OpInterp(..)
   , MorphismCheck(..)
   , MorphismError(..)
   , applyMorphismSort
   , applyMorphismTerm
+  , applyOpInterp
+  , lookupInterp
   , checkMorphism
+  , joinableWithin
   ) where
 
 import Strat.Kernel.Presentation
+import Strat.Kernel.AlphaEq
 import Strat.Kernel.Rewrite
 import Strat.Kernel.RewriteSystem
 import Strat.Kernel.Rule
 import Strat.Kernel.Signature
-import Strat.Kernel.Subst (applySubstSort)
+import Strat.Kernel.Subst (applySubstSort, applySubstTerm)
 import Strat.Kernel.Syntax
 import Strat.Kernel.Term
 import Strat.Kernel.Types
@@ -22,12 +27,18 @@ import qualified Data.Set as S
 import Data.Text (Text)
 
 
+data OpInterp = OpInterp
+  { oiTele :: [Binder]
+  , oiRhs  :: Term
+  }
+  deriving (Eq, Show)
+
 data Morphism = Morphism
   { morName    :: Text
   , morSrc     :: Presentation
   , morTgt     :: Presentation
   , morSortMap :: M.Map SortName SortName
-  , morOpMap   :: M.Map OpName OpName
+  , morOpMap   :: M.Map OpName OpInterp
   , morCheck   :: MorphismCheck
   }
   deriving (Eq, Show)
@@ -60,15 +71,34 @@ applyMorphismSort mor (Sort name idx) =
 
 applyMorphismTerm :: Morphism -> Term -> Term
 applyMorphismTerm mor tm =
-  Term
-    { termSort = applyMorphismSort mor (termSort tm)
-    , termNode =
-        case termNode tm of
-          TVar v -> TVar v
-          TOp op args ->
-            let op' = M.findWithDefault op op (morOpMap mor)
-            in TOp op' (map (applyMorphismTerm mor) args)
-    }
+  case termNode tm of
+    TVar v ->
+      Term { termSort = applyMorphismSort mor (termSort tm), termNode = TVar v }
+    TOp op args ->
+      let args' = map (applyMorphismTerm mor) args
+      in case M.lookup op (morOpMap mor) of
+          Nothing ->
+            Term { termSort = applyMorphismSort mor (termSort tm)
+                 , termNode = TOp op args'
+                 }
+          Just interp ->
+            applyOpInterp interp args'
+
+applyOpInterp :: OpInterp -> [Term] -> Term
+applyOpInterp interp args =
+  let tele = oiTele interp
+      subst =
+        M.fromList
+          [ (v, arg)
+          | (Binder v _, arg) <- zip tele args
+          ]
+  in applySubstTerm subst (oiRhs interp)
+
+lookupInterp :: Morphism -> OpName -> Either Text OpInterp
+lookupInterp mor op =
+  case M.lookup op (morOpMap mor) of
+    Nothing -> Left ("Unknown op in morphism: " <> renderOpName op)
+    Just interp -> Right interp
 
 
 checkMorphism :: RewritePolicy -> Int -> Morphism -> Either MorphismError ()
@@ -100,15 +130,28 @@ checkMorphism pol fuel mor = do
     checkOpDecl (opName, decl) =
       case M.lookup opName (morOpMap mor) of
         Nothing -> Left (MorphismMissingOp opName)
-        Just tgtName ->
-          case M.lookup tgtName (sigOps sigTgt) of
-            Nothing -> Left (MorphismUnknownOp tgtName)
-            Just tgtDecl ->
-              let mapped = mapOpDecl mor decl
-              in if alphaEqOpDecl mapped tgtDecl
-                   then Right ()
-                   else Left (MorphismOpMismatch opName tgtName)
+        Just interp -> checkOpInterp decl interp
 
+    checkOpInterp decl interp = do
+      let teleSrc = opTele decl
+      let teleTgt = oiTele interp
+      if length teleSrc /= length teleTgt
+        then Left (MorphismOpMismatch (opName decl) (opName decl))
+        else do
+          let subst =
+                M.fromList
+                  [ (v, mkVar (bSort bTgt) vTgt)
+                  | (Binder v _, bTgt@(Binder vTgt _)) <- zip teleSrc teleTgt
+                  ]
+          let checkBinder (Binder _ sSrc) (Binder _ sTgt) = do
+                let sSrc' = applySubstSort subst (applyMorphismSort mor sSrc)
+                if sSrc' == sTgt then Right () else Left (MorphismOpMismatch (opName decl) (opName decl))
+          mapM_ (uncurry checkBinder) (zip teleSrc teleTgt)
+          let res' = applySubstSort subst (applyMorphismSort mor (opResult decl))
+          let rhsSort = termSort (oiRhs interp)
+          if res' == rhsSort
+            then Right ()
+            else Left (MorphismOpMismatch (opName decl) (opName decl))
     checkEquations = do
       rsTgt <-
         case compileRewriteSystem pol (morTgt mor) of
@@ -135,49 +178,11 @@ mapSortCtor :: Morphism -> SortCtor -> SortCtor
 mapSortCtor mor ctor =
   ctor { scTele = map (mapBinderSort mor) (scTele ctor) }
 
-mapOpDecl :: Morphism -> OpDecl -> OpDecl
-mapOpDecl mor decl =
-  decl
-    { opTele = map (mapBinderSort mor) (opTele decl)
-    , opResult = applyMorphismSort mor (opResult decl)
-    }
-
 mapBinderSort :: Morphism -> Binder -> Binder
 mapBinderSort mor b = b { bSort = applyMorphismSort mor (bSort b) }
 
-
-alphaEqSortCtor :: SortCtor -> SortCtor -> Bool
-alphaEqSortCtor c1 c2 =
-  let tele1 = scTele c1
-      tele2 = scTele c2
-  in length tele1 == length tele2
-      && and (zipWith alphaEqBinder tele1 tele2)
-  where
-    subst =
-      M.fromList
-        [ (v2, mkVar s1 v1)
-        | (Binder v1 s1, Binder v2 _) <- zip (scTele c1) (scTele c2)
-        ]
-    alphaEqBinder (Binder _ s1) (Binder _ s2) =
-      let s2' = applySubstSort subst s2
-      in s1 == s2'
-
-alphaEqOpDecl :: OpDecl -> OpDecl -> Bool
-alphaEqOpDecl d1 d2 =
-  let tele1 = opTele d1
-      tele2 = opTele d2
-  in length tele1 == length tele2
-      && and (zipWith alphaEqBinder tele1 tele2)
-      && opResult d1 == applySubstSort subst (opResult d2)
-  where
-    subst =
-      M.fromList
-        [ (v2, mkVar s1 v1)
-        | (Binder v1 s1, Binder v2 _) <- zip (opTele d1) (opTele d2)
-        ]
-    alphaEqBinder (Binder _ s1) (Binder _ s2) =
-      let s2' = applySubstSort subst s2
-      in s1 == s2'
+renderOpName :: OpName -> Text
+renderOpName (OpName t) = t
 
 
 normalizeStatus :: Int -> RewriteSystem -> Term -> (Term, Bool)

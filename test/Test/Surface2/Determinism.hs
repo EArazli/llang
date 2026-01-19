@@ -43,6 +43,7 @@ testAmbiguous = do
   let prog = T.unlines
         [ "doctrine D where { }"
         , "surface S where {"
+        , "  context_discipline cartesian;"
         , "  requires ccc : D;"
         , "  context_sort Ty;"
         , "  sort Ty;"
@@ -70,6 +71,7 @@ surfaceProgram ruleLines =
   T.unlines $
     [ "doctrine D where { }"
     , "surface S where {"
+    , "  context_discipline cartesian;"
     , "  requires ccc : D;"
     , "  context_sort Ty;"
     , "  sort Ty;"

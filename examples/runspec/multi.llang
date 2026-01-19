@@ -1,0 +1,11 @@
+import "../ccc_surface/stlc.runspec.llang";
+
+run main using STLCinCCC
+---
+(lam x:Bool. x) true
+---
+
+run beta using STLCinCCC where { policy UseStructuralAsBidirectional; }
+---
+(lam x:Bool. lam y:Bool. x) false true
+---

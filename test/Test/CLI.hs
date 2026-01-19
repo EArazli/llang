@@ -28,13 +28,15 @@ tests =
     , testCase "end-to-end STLC surface lam nested y" testEndToEndSTLCLamNestedY
     , testCase "end-to-end STLC surface pair/fst" testEndToEndSTLCPair
     , testCase "end-to-end STLC surface unknown identifier" testEndToEndSTLCBadIdent
+    , testCase "multi-run default main" testMultiRunDefault
+    , testCase "multi-run selection" testMultiRunSelect
     ]
 
 
 testEndToEndMonoid :: Assertion
 testEndToEndMonoid = do
   path <- getDataFileName "examples/monoid.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> do
@@ -45,7 +47,7 @@ testEndToEndMonoid = do
 testEndToEndMonoidAlt :: Assertion
 testEndToEndMonoidAlt = do
   path <- getDataFileName "examples/monoid.alt.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> do
@@ -56,7 +58,7 @@ testEndToEndMonoidAlt = do
 testEndToEndPeano :: Assertion
 testEndToEndPeano = do
   path <- getDataFileName "examples/peano.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> rrValue out @?= VInt 6
@@ -65,7 +67,7 @@ testEndToEndPeano = do
 testEndToEndSKI :: Assertion
 testEndToEndSKI = do
   path <- getDataFileName "examples/ski.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> rrValue out @?= VAtom "SKI.a"
@@ -74,7 +76,7 @@ testEndToEndSKI = do
 testEndToEndCat :: Assertion
 testEndToEndCat = do
   path <- getDataFileName "examples/cat.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> do
@@ -90,7 +92,7 @@ testEndToEndCat = do
 testEndToEndSTLCSurface :: Assertion
 testEndToEndSTLCSurface = do
   path <- getDataFileName "examples/ccc_surface/stlc.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> do
@@ -103,7 +105,7 @@ testEndToEndSTLCSurface = do
 testEndToEndSTLCLam :: Assertion
 testEndToEndSTLCLam = do
   path <- getDataFileName "examples/ccc_surface/stlc.lam1.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> do
@@ -113,7 +115,7 @@ testEndToEndSTLCLam = do
 testEndToEndSTLCLamNestedX :: Assertion
 testEndToEndSTLCLamNestedX = do
   path <- getDataFileName "examples/ccc_surface/stlc.lam2.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> do
@@ -123,7 +125,7 @@ testEndToEndSTLCLamNestedX = do
 testEndToEndSTLCLamNestedY :: Assertion
 testEndToEndSTLCLamNestedY = do
   path <- getDataFileName "examples/ccc_surface/stlc.lam3.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> do
@@ -133,7 +135,7 @@ testEndToEndSTLCLamNestedY = do
 testEndToEndSTLCPair :: Assertion
 testEndToEndSTLCPair = do
   path <- getDataFileName "examples/ccc_surface/stlc.pair.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()
@@ -141,10 +143,26 @@ testEndToEndSTLCPair = do
 testEndToEndSTLCBadIdent :: Assertion
 testEndToEndSTLCBadIdent = do
   path <- getDataFileName "examples/ccc_surface/stlc.bad.run.llang"
-  result <- runFile path
+  result <- runFile path Nothing
   case result of
     Left _ -> pure ()
     Right _ -> assertFailure "expected failure for unknown identifier"
+
+testMultiRunDefault :: Assertion
+testMultiRunDefault = do
+  path <- getDataFileName "examples/runspec/multi.llang"
+  result <- runFile path Nothing
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> rrResult out @?= Just "true"
+
+testMultiRunSelect :: Assertion
+testMultiRunSelect = do
+  path <- getDataFileName "examples/runspec/multi.llang"
+  result <- runFile path (Just "beta")
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> rrResult out @?= Just "result not in canonical Bool form"
 
 collectOps :: Term -> [OpName]
 collectOps tm =
