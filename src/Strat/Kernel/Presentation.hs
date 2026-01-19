@@ -152,11 +152,49 @@ checkVarSorts eqName0 env tm = do
         Just decl ->
           if termSort tm == decl
             then Right ()
-            else Left ("Variable sort mismatch in equation: " <> eqName0)
+            else
+              if sortIsWeakening decl (termSort tm)
+                then Right ()
+                else Left ("Variable sort mismatch in equation: " <> eqName0)
     TOp _ args -> mapM_ (checkVarSorts eqName0 env) args
 
 checkSort :: Text -> M.Map Var Sort -> Sort -> Either Text ()
 checkSort eqName0 env (Sort _ idx) = mapM_ (checkVarSorts eqName0 env) idx
+
+sortIsWeakening :: Sort -> Sort -> Bool
+sortIsWeakening src tgt =
+  case (src, tgt) of
+    (Sort s (ctxOld:idxOld), Sort s' (ctxNew:idxNew))
+      | s == s' && length idxOld == length idxNew ->
+          case traverse (\t -> weakenTermToCtx t ctxNew) idxOld of
+            Just idxOld' -> idxOld' == idxNew
+            Nothing -> False
+    _ -> False
+  where
+    weakenTermToCtx ctxNew term =
+      case termSort term of
+        Sort (SortName "Ctx") _ -> Just term
+        Sort s (ctxOld:idxOld) ->
+          if not (isCtxExtension ctxOld ctxNew)
+            then Nothing
+            else do
+              idxOld' <- traverse (weakenTermToCtx ctxNew) idxOld
+              node' <-
+                case termNode term of
+                  TVar v -> Just (TVar v)
+                  TOp op args -> do
+                    args' <- traverse (weakenTermToCtx ctxNew) args
+                    Just (TOp op args')
+              let sort' = Sort s (ctxNew : idxOld')
+              Just Term { termSort = sort', termNode = node' }
+        _ -> Just term
+
+    isCtxExtension ctxOld ctxNew
+      | ctxNew == ctxOld = True
+      | otherwise =
+          case termNode ctxNew of
+            TOp (OpName "extend") (prev:_) -> isCtxExtension ctxOld prev
+            _ -> False
 
 validateTerm :: Signature -> Term -> Either Text ()
 validateTerm sig tm = do

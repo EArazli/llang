@@ -162,7 +162,7 @@ testMultiRunSelect = do
   result <- runFile path (Just "beta")
   case result of
     Left err -> assertFailure (T.unpack err)
-    Right out -> rrResult out @?= Just "result not in canonical Bool form"
+    Right out -> rrResult out @?= Just "false"
 
 collectOps :: Term -> [OpName]
 collectOps tm =

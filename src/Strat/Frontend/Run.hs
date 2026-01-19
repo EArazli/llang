@@ -221,7 +221,7 @@ buildMorphismEnv env pres surf uses = do
             Nothing ->
               if presName (srPres req) == presName pres
                 then do
-                  let mor = identityMorphism pres
+                  mor <- identityMorphism pres
                   case checkMorphism (mcPolicy (morCheck mor)) (mcFuel (morCheck mor)) mor of
                     Left err -> Left ("identity morphism check failed: " <> T.pack (show err))
                     Right () -> Right (alias, mor)
@@ -249,21 +249,22 @@ buildMorphismEnv env pres surf uses = do
           then Left ("Morphism target does not match run doctrine for alias: " <> alias)
           else Right (alias, mor)
 
-identityMorphism :: Presentation -> Morphism
+identityMorphism :: Presentation -> Either Text Morphism
 identityMorphism pres =
   let sorts = M.keys (sigSortCtors (presSig pres))
       ops = M.keys (sigOps (presSig pres))
       sortMap = M.fromList [ (s, s) | s <- sorts ]
-      opMap = M.fromList [ (o, mkInterp o) | o <- ops ]
       mkInterp op =
         let decl = sigOps (presSig pres) M.! op
             tele = opTele decl
             args = [ mkVar (bSort b) v | b@(Binder v _) <- tele ]
-            rhs = case mkOp (presSig pres) op args of
-              Left _ -> mkVar (opResult decl) (Var (ScopeId "identity") 0)
-              Right t -> t
-        in OpInterp { oiTele = tele, oiRhs = rhs }
-  in Morphism
+        in case mkOp (presSig pres) op args of
+          Left err -> Left ("identity morphism failed to construct op: " <> T.pack (show err))
+          Right rhs -> Right OpInterp { oiTele = tele, oiRhs = rhs }
+  in do
+    opMapList <- mapM (\o -> fmap (\i -> (o, i)) (mkInterp o)) ops
+    let opMap = M.fromList opMapList
+    pure Morphism
       { morName = "identity"
       , morSrc = pres
       , morTgt = pres

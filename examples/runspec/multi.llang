@@ -5,7 +5,7 @@ run main using STLCinCCC
 (lam x:Bool. x) true
 ---
 
-run beta using STLCinCCC where { policy UseStructuralAsBidirectional; }
+run beta using STLCinCCC where { policy UseOnlyComputationalLR; }
 ---
-(lam x:Bool. lam y:Bool. x) false true
+(lam x:Bool. x) false
 ---

@@ -34,13 +34,11 @@ elabSurfaceDecl resolveDoc (RawSurfaceDecl name items) = do
   if M.member ctxSortName sorts
     then Right ()
     else Left ("context_sort not declared: " <> renderSort2 ctxSortName)
-  reqs <- case [ (alias, doc) | RSRequires alias doc <- items ] of
-    [] -> Left "surface missing requires"
-    reqItems -> do
-      let aliases = map fst reqItems
-      case findDup aliases of
-        Just dup -> Left ("duplicate requires alias: " <> dup)
-        Nothing -> mapM (\(alias, docExpr) -> SurfaceRequire alias <$> resolveDoc docExpr) reqItems
+  let reqItems = [ (alias, doc) | RSRequires alias doc <- items ]
+  reqs <-
+    case findDup (map fst reqItems) of
+      Just dup -> Left ("duplicate requires alias: " <> dup)
+      Nothing -> mapM (\(alias, docExpr) -> SurfaceRequire alias <$> resolveDoc docExpr) reqItems
   deriveAlias <- case [ a | RSDeriveContexts a <- items ] of
     [] -> Right Nothing
     [a] -> Right (Just a)
