@@ -24,6 +24,7 @@ import Strat.Surface2.Elab
 import Strat.Surface2.Def
 import Strat.Surface2.SyntaxSpec
 import Strat.Kernel.Morphism
+import Strat.Kernel.Weakening (weakenTermToCtxEither)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -939,7 +940,7 @@ elabSogatDecl decl = do
       foldM step ctxTerm binders
       where
         step ctx (RawSogatBinder bName bType) = do
-          tyTerm <- elabRawTerm env (Just ctxTerm) termEnv bType
+          tyTerm <- elabRawTerm env (Just ctx) termEnv bType
           let expected = Sort (seCtxSort env) [ctx]
           tyTerm' <-
             if termSort tyTerm == expected
@@ -966,7 +967,7 @@ elabSogatDecl decl = do
       case ctxIndex expected of
         Nothing -> Left "no context index for expected sort"
         Just ctxNew -> do
-          term' <- weakenTermToCtx term ctxNew
+          term' <- weakenTermToCtxEither term ctxNew
           if termSort term' == expected
             then Right term'
             else Left "unable to weaken term to expected sort"
@@ -975,30 +976,6 @@ elabSogatDecl decl = do
     ctxIndex (Sort _ (ctx:_)) = Just ctx
     ctxIndex _ = Nothing
 
-    weakenTermToCtx term ctxNew =
-      case termSort term of
-        Sort (SortName "Ctx") _ -> Right term
-        Sort s (ctxOld:idxOld) -> do
-          if not (isCtxExtension ctxOld ctxNew)
-            then Left "context mismatch for weakening"
-            else do
-              idxOld' <- mapM (\ix -> weakenTermToCtx ix ctxNew) idxOld
-              node' <-
-                case termNode term of
-                  TVar v -> Right (TVar v)
-                  TOp op args -> do
-                    args' <- mapM (\a -> weakenTermToCtx a ctxNew) args
-                    Right (TOp op args')
-              let sort' = Sort s (ctxNew : idxOld')
-              Right Term { termSort = sort', termNode = node' }
-        _ -> Right term
-
-    isCtxExtension ctxOld ctxNew
-      | ctxNew == ctxOld = True
-      | otherwise =
-          case termNode ctxNew of
-            TOp (OpName "extend") (prev:_) -> isCtxExtension ctxOld prev
-            _ -> False
 
     elabRawTerm env mCtxTerm termEnv tm =
       case tm of

@@ -9,6 +9,7 @@ import Strat.Kernel.Rule
 import Strat.Kernel.Signature
 import Strat.Kernel.Syntax
 import Strat.Kernel.Term (TypeError, mkOp)
+import Strat.Kernel.Weakening (isCtxExtension, weakenTermToCtxMaybe)
 import Data.Text (Text)
 import qualified Data.List as L
 import qualified Data.Set as S
@@ -166,35 +167,12 @@ sortIsWeakening src tgt =
   case (src, tgt) of
     (Sort s (ctxOld:idxOld), Sort s' (ctxNew:idxNew))
       | s == s' && length idxOld == length idxNew ->
-          case traverse (\t -> weakenTermToCtx t ctxNew) idxOld of
-            Just idxOld' -> idxOld' == idxNew
-            Nothing -> False
+          if isCtxExtension ctxOld ctxNew
+            then case traverse (\t -> weakenTermToCtxMaybe t ctxNew) idxOld of
+              Just idxOld' -> idxOld' == idxNew
+              Nothing -> False
+            else False
     _ -> False
-  where
-    weakenTermToCtx ctxNew term =
-      case termSort term of
-        Sort (SortName "Ctx") _ -> Just term
-        Sort s (ctxOld:idxOld) ->
-          if not (isCtxExtension ctxOld ctxNew)
-            then Nothing
-            else do
-              idxOld' <- traverse (weakenTermToCtx ctxNew) idxOld
-              node' <-
-                case termNode term of
-                  TVar v -> Just (TVar v)
-                  TOp op args -> do
-                    args' <- traverse (weakenTermToCtx ctxNew) args
-                    Just (TOp op args')
-              let sort' = Sort s (ctxNew : idxOld')
-              Just Term { termSort = sort', termNode = node' }
-        _ -> Just term
-
-    isCtxExtension ctxOld ctxNew
-      | ctxNew == ctxOld = True
-      | otherwise =
-          case termNode ctxNew of
-            TOp (OpName "extend") (prev:_) -> isCtxExtension ctxOld prev
-            _ -> False
 
 validateTerm :: Signature -> Term -> Either Text ()
 validateTerm sig tm = do

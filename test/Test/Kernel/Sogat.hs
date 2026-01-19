@@ -22,6 +22,8 @@ tests =
     [ testCase "sogat elaborates" testSogatElab
     , testCase "sogat type former with term args" testSogatDependentType
     , testCase "sogat type former with binder arg" testSogatTypeBinder
+    , testCase "sogat multi-binder weakening" testSogatMultiBinder
+    , testCase "sogat weakening in indices" testSogatWeakIndex
     ]
 
 
@@ -106,6 +108,54 @@ testSogatTypeBinder = do
         Right env -> do
           case M.lookup "Pi" (mePresentations env) of
             Nothing -> assertFailure "missing Pi presentation"
+            Just pres ->
+              case validatePresentation pres of
+                Left err -> assertFailure (T.unpack err)
+                Right () -> pure ()
+
+testSogatMultiBinder :: Assertion
+testSogatMultiBinder = do
+  let src = T.unlines
+        [ "sogat MultiBinder where {"
+        , "  context_sort Ty;"
+        , "  sort Ty;"
+        , "  sort Tm (A:Ty);"
+        , "  op Arr (A:Ty) (B:Ty) -> Ty;"
+        , "  op Foo (A:Ty) (t: Tm(A) [x:Arr(A,A)] [y:Arr(A,A)]) -> Tm(A);"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right env -> do
+          case M.lookup "MultiBinder" (mePresentations env) of
+            Nothing -> assertFailure "missing MultiBinder presentation"
+            Just pres ->
+              case validatePresentation pres of
+                Left err -> assertFailure (T.unpack err)
+                Right () -> pure ()
+
+testSogatWeakIndex :: Assertion
+testSogatWeakIndex = do
+  let src = T.unlines
+        [ "sogat WeakIndex where {"
+        , "  context_sort Ty;"
+        , "  sort Ty;"
+        , "  sort Tm (A:Ty);"
+        , "  sort Pack (A:Ty) (u:Tm(A));"
+        , "  op Foo (A:Ty) (u:Tm(A)) (p:Pack(A,u) [x:A]) -> Tm(A);"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right env -> do
+          case M.lookup "WeakIndex" (mePresentations env) of
+            Nothing -> assertFailure "missing WeakIndex presentation"
             Just pres ->
               case validatePresentation pres of
                 Left err -> assertFailure (T.unpack err)
