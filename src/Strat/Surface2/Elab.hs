@@ -21,13 +21,6 @@ elabSurfaceDecl :: ResolveDoc -> RawSurfaceDecl -> Either Text SurfaceDef
 elabSurfaceDecl resolveDoc (RawSurfaceDecl name items) = do
   let sortNames = [ Sort2Name s | RSSort s <- items ]
   let sorts = M.fromList [(s, ()) | s <- sortNames]
-  ctxDisc <- case [ d | RSContextDiscipline d <- items ] of
-    [] -> Left "surface missing context_discipline"
-    [d] ->
-      case d of
-        "cartesian" -> Right CtxCartesian
-        _ -> Left ("unknown context_discipline: " <> d)
-    _ -> Left "multiple context_discipline directives"
   ctxSortName <- case [ s | RSContextSort s <- items ] of
     [] -> Left "surface missing context_sort"
     (s:_) -> Right (Sort2Name s)
@@ -57,7 +50,6 @@ elabSurfaceDecl resolveDoc (RawSurfaceDecl name items) = do
         , sdRules = rules
         , sdDefines = defs
         , sdRequires = reqs
-        , sdCtxDisc = ctxDisc
         }
   case deriveAlias of
     Nothing -> pure surf0

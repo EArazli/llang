@@ -12,11 +12,11 @@ import Strat.Frontend.RunSpec
 import Strat.Kernel.DSL.AST (RawExpr(..))
 import Strat.Kernel.DoctrineExpr (DocExpr(..), elabDocExpr)
 import Strat.Kernel.Presentation (Presentation(..))
-import Strat.Kernel.RewriteSystem (compileRewriteSystem, RewritePolicy(..), RewriteSystem)
+import Strat.Kernel.RewriteSystem (compileRewriteSystem, RewritePolicy(..))
 import Strat.Kernel.Rewrite (normalize)
-import Strat.Kernel.Syntax (OpName(..), SortName(..), Term(..), TermNode(..), Var(..), ScopeId(..), Binder(..))
+import Strat.Kernel.Syntax (OpName(..), SortName(..), Term(..), Binder(..))
 import Strat.Kernel.Term (mkOp, mkVar)
-import Strat.Kernel.Signature (sigSortCtors, sigOps, opTele, opResult)
+import Strat.Kernel.Signature (sigSortCtors, sigOps, opTele)
 import Strat.Kernel.Morphism
 import Strat.Surface (defaultInstance, elaborate)
 import Strat.Syntax.Spec (SyntaxSpec, SyntaxInstance(..), instantiateSyntax)
@@ -29,7 +29,7 @@ import Strat.Surface2.Syntax (SurfaceSyntaxInstance(..), instantiateSurfaceSynta
 import Strat.Surface2.SyntaxSpec (SurfaceSyntaxSpec)
 import Strat.Surface2.Engine
 import Strat.Surface2.CoreEval
-import Strat.Surface2.Term (STerm(..), Ix(..), JudgName(..), Con2Name(..))
+import Strat.Surface2.Term (STerm(..), Ix(..), JudgName(..))
 import Strat.Surface2.Pattern (MVar(..), MatchSubst(..), MetaSubst(..), instantiateMeta, resolvePlaceholders)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -45,7 +45,6 @@ data RunResult = RunResult
   , rrCatExpr :: CatExpr
   , rrValue :: Value
   , rrPrintedInput :: Maybe Text
-  , rrResult :: Maybe Text
   , rrOutput :: Text
   }
   deriving (Eq, Show)
@@ -73,7 +72,7 @@ selectRun env mName =
         Nothing ->
           case M.toList (meRuns env) of
             [] -> Left "No runs found"
-            [(name, spec)] -> Right spec
+            [(_, spec)] -> Right spec
             _ -> Left ("Multiple runs found; specify --run. Available: " <> T.intercalate ", " (M.keys (meRuns env)))
   where
     available =
@@ -87,7 +86,7 @@ runWithEnv env spec = do
   pres <- elabDocExpr docExpr
   rs <- compileRewriteSystem (runPolicy spec) pres
   modelSpec <- lookupModel env (runModel spec)
-  (term, printedInput, printedNorm, surfInfo) <- case runSurface spec of
+  (term, printedInput, printedNorm) <- case runSurface spec of
     Nothing -> do
       syntaxName <- maybe (Left "run: missing syntax") Right (runSyntax spec)
       syntaxSpec <- lookupDoctrineSyntax env syntaxName
@@ -98,7 +97,7 @@ runWithEnv env spec = do
           Left err -> Left ("Elaboration error: " <> T.pack (show err))
           Right t' -> Right t'
       let normText = siPrint syntaxInstance (normalize (runFuel spec) rs t)
-      pure (t, Just (siPrint syntaxInstance t), normText, Nothing)
+      pure (t, Just (siPrint syntaxInstance t), normText)
     Just surfName -> do
       surf <- lookupSpec "surface" surfName (meSurfaces env)
       surfSynName <- maybe (Left "run: missing surface_syntax") Right (runSurfaceSyntax spec)
@@ -125,21 +124,15 @@ runWithEnv env spec = do
               Just coreSyn -> coreSyn (normalize (runFuel spec) rs coreTerm)
               Nothing -> T.pack (show (normalize (runFuel spec) rs coreTerm))
       let inputText = ssiPrintTm surfSyntax surfaceTerm
-      pure (coreTerm, Just inputText, normText, Just (surf, surfSyntax, morphs, srEnv solveRes, goalArgs))
+      pure (coreTerm, Just inputText, normText)
   let norm = normalize (runFuel spec) rs term
-  resultTxt <-
-    if ShowResult `elem` runShowFlags spec
-      then case surfInfo of
-        Nothing -> Right Nothing
-        Just info -> fmap Just (readbackResult spec rs norm info)
-      else Right Nothing
   let cat = compileTerm norm
   model <- instantiateModel pres (runOpen spec) modelSpec
   val <-
     case evalTerm model norm of
       Left err -> Left ("Evaluation error: " <> renderRuntimeError err)
       Right v -> Right v
-  let output = renderRunResult spec printedNorm cat val printedInput resultTxt
+  let output = renderRunResult spec printedNorm cat val printedInput
   pure RunResult
     { rrPresentation = pres
     , rrInputTerm = term
@@ -148,7 +141,6 @@ runWithEnv env spec = do
     , rrCatExpr = cat
     , rrValue = val
     , rrPrintedInput = printedInput
-    , rrResult = resultTxt
     , rrOutput = output
     }
 
@@ -273,25 +265,19 @@ identityMorphism pres =
       , morCheck = MorphismCheck { mcPolicy = UseStructuralAsBidirectional, mcFuel = 200 }
       }
 
-renderRunResult :: RunSpec -> Text -> CatExpr -> Value -> Maybe Text -> Maybe Text -> Text
-renderRunResult spec norm cat val inputTxt resultTxt =
-  T.unlines (concat [inputOut, normOut, valOut, catOut, resultOut])
+renderRunResult :: RunSpec -> Text -> CatExpr -> Value -> Maybe Text -> Text
+renderRunResult spec norm cat val inputTxt =
+  T.unlines (concat [inputOut, normOut, valOut, catOut])
   where
     inputOut = if ShowInput `elem` runShowFlags spec then maybe [] (\t -> ["input: " <> t]) inputTxt else []
     normOut = if ShowNormalized `elem` runShowFlags spec then ["normalized: " <> norm] else []
     valOut = if ShowValue `elem` runShowFlags spec then ["value: " <> T.pack (show val)] else []
     catOut = if ShowCat `elem` runShowFlags spec then ["cat: " <> T.pack (show cat)] else []
-    resultOut =
-      if ShowResult `elem` runShowFlags spec
-        then case resultTxt of
-          Nothing -> ["result: (unavailable)"]
-          Just t -> ["result: " <> t]
-        else []
 
 buildSurfaceGoal :: SurfaceDef -> STerm -> [GoalArg]
 buildSurfaceGoal surf tm =
   case M.lookup (JudgName "HasType") (sdJudgments surf) of
-    Nothing -> [GCtx (emptyCtxFor (sdCtxDisc surf)), GSurf tm, GSurf (SFree (holeName 0))]
+    Nothing -> [GCtx emptyCtx, GSurf tm, GSurf (SFree (holeName 0))]
     Just decl ->
       let params = jdParams decl
           surfArgs = [ tm ]
@@ -302,7 +288,7 @@ buildSurfaceGoal surf tm =
     holeName i = "_h" <> T.pack (show i)
     build (acc, surfArgs, holeIdx) param =
       case jpSort param of
-        PCtx -> (acc <> [GCtx (emptyCtxFor (sdCtxDisc surf))], surfArgs, holeIdx)
+        PCtx -> (acc <> [GCtx emptyCtx], surfArgs, holeIdx)
         PSurf _ ->
           case surfArgs of
             (x:xs) -> (acc <> [GSurf x], xs, holeIdx)
@@ -310,112 +296,9 @@ buildSurfaceGoal surf tm =
         PNat -> (acc <> [GNat 0], surfArgs, holeIdx)
         PCore -> (acc, surfArgs, holeIdx)
 
-readbackResult :: RunSpec -> RewriteSystem -> Term -> (SurfaceDef, SurfaceSyntaxInstance, M.Map Text Morphism, SolveEnv, [GoalArg]) -> Either Text Text
-readbackResult spec rs norm (surf, surfSyntax, morphs, env, goalArgs) = do
-  tyTerm <- inferTypeTerm surf env goalArgs
-  if isBoolTy tyTerm
-    then do
-      coreBool <- readbackCoreBool surf morphs rs spec norm
-      case coreBool of
-        Nothing -> pure "result not in canonical Bool form"
-        Just tm -> pure (ssiPrintTm surfSyntax tm)
-    else pure "result not in canonical Bool form"
-  where
-    isBoolTy tm =
-      case tm of
-        SCon (Con2Name "BoolTy") [] -> True
-        _ -> False
-
-inferTypeTerm :: SurfaceDef -> SolveEnv -> [GoalArg] -> Either Text STerm
-inferTypeTerm surf env goalArgs =
-  case M.lookup (JudgName "HasType") (sdJudgments surf) of
-    Nothing -> Left "missing HasType judgment"
-    Just decl -> do
-      let params = jdParams decl
-      case lastSurfParam params goalArgs of
-        Nothing -> Left "no surface type argument"
-        Just tm -> resolvePlaceholders (seMatch env) tm
-  where
-    lastSurfParam params args =
-      let indexed = zip params args
-          surfArgs = [ tm | (p, GSurf tm) <- indexed, isSurfParam p ]
-      in case surfArgs of
-          [] -> Nothing
-          xs -> Just (last xs)
-
-    isSurfParam p =
-      case jpSort p of
-        PSurf _ -> True
-        _ -> False
-
-readbackCoreBool :: SurfaceDef -> M.Map Text Morphism -> RewriteSystem -> RunSpec -> Term -> Either Text (Maybe STerm)
-readbackCoreBool surf morphs rs spec tm =
-  case candidates of
-    [] -> Right Nothing
-    ((mor, tInterp, fInterp):_) -> do
-      let tTerm = applyOpInterp tInterp []
-      let fTerm = applyOpInterp fInterp []
-      let normT = normalize (runFuel spec) rs tTerm
-      let normF = normalize (runFuel spec) rs fTerm
-      let ctxTerms =
-            either (const Nothing) Just
-              (buildCtxBoolTerms (runFuel spec) rs mor tInterp fInterp)
-      let isT =
-            tm == normT
-              || maybe False (\(tCtx, _) -> tm == tCtx) ctxTerms
-              || joinableWithin (runFuel spec) rs tm tTerm
-      let isF =
-            tm == normF
-              || maybe False (\(_, fCtx) -> tm == fCtx) ctxTerms
-              || joinableWithin (runFuel spec) rs tm fTerm
-      if isT && not isF
-        then Right (Just (SCon (Con2Name "True") []))
-        else if isF && not isT
-          then Right (Just (SCon (Con2Name "False") []))
-          else Right Nothing
-  where
-    candidates =
-      [ (mor, tInterp, fInterp)
-      | req <- sdRequires surf
-      , Just mor <- [M.lookup (srAlias req) morphs]
-      , Right tKey <- [resolveOpNameIn (morSrc mor) "T"]
-      , Right fKey <- [resolveOpNameIn (morSrc mor) "F"]
-      , Right tInterp <- [lookupInterp mor tKey]
-      , Right fInterp <- [lookupInterp mor fKey]
-      ]
-
-    buildCtxBoolTerms fuel rs mor tInterp0 fInterp0 = do
-      unitInterp <- resolveInterp mor "Unit"
-      boolInterp <- resolveInterp mor "Bool"
-      terminalInterp <- resolveInterp mor "terminal"
-      compInterp <- resolveInterp mor "comp"
-      let unitTerm = applyOpInterp unitInterp []
-      let boolTerm = applyOpInterp boolInterp []
-      let termT = applyOpInterp tInterp0 []
-      let termF = applyOpInterp fInterp0 []
-      let termTerminal = applyOpInterp terminalInterp [unitTerm]
-      let termTrue = applyOpInterp compInterp [unitTerm, unitTerm, boolTerm, termT, termTerminal]
-      let termFalse = applyOpInterp compInterp [unitTerm, unitTerm, boolTerm, termF, termTerminal]
-      pure (normalize fuel rs termTrue, normalize fuel rs termFalse)
-
-    resolveInterp mor name = do
-      key <- resolveOpNameIn (morSrc mor) name
-      lookupInterp mor key
-
-resolveOpNameIn :: Presentation -> Text -> Either Text OpName
-resolveOpNameIn pres name =
-  let direct = OpName name
-      pref = OpName (presName pres <> "." <> name)
-      sig = presSig pres
-  in if M.member direct (sigOps sig)
-      then Right direct
-      else if M.member pref (sigOps sig)
-        then Right pref
-        else Left ("unknown core op: " <> name)
-
 chooseCoreSyntax :: ModuleEnv -> RunSpec -> Presentation -> Maybe (Term -> Text)
 chooseCoreSyntax env spec pres =
-  case runCoreSyntax spec of
+  case runSyntax spec of
     Nothing -> Nothing
     Just name ->
       case lookupDoctrineSyntax env name of

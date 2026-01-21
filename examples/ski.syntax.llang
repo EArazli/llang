@@ -1,4 +1,4 @@
-syntax SKISyntax for doctrine SKI where {
+syntax SKISyntax where {
   print atom "S" = S;
   print atom "K" = K;
   print atom "I" = I;

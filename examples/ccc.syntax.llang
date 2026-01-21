@@ -1,4 +1,4 @@
-syntax CCCSyntax for doctrine CCC where {
+syntax CCCSyntax where {
   print atom "1" = Unit;
   print infixl 7 "*" = prod;
   print infixr 5 "->" = exp;

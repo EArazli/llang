@@ -2,11 +2,8 @@
 module Strat.Surface2.Engine
   ( Ctx(..)
   , emptyCtx
-  , emptyCtxFor
   , extendCtx
-  , extendCtxFor
   , lookupCtx
-  , lookupCtxFor
   , GoalArg(..)
   , SolveEnv(..)
   , SolveResult(..)
@@ -31,22 +28,13 @@ data Ctx = Ctx [STerm]
 emptyCtx :: Ctx
 emptyCtx = Ctx []
 
-emptyCtxFor :: ContextDiscipline -> Ctx
-emptyCtxFor CtxCartesian = emptyCtx
-
 extendCtx :: Ctx -> STerm -> Ctx
 extendCtx (Ctx xs) ty = Ctx (xs <> [ty])
-
-extendCtxFor :: ContextDiscipline -> Ctx -> STerm -> Ctx
-extendCtxFor CtxCartesian = extendCtx
 
 lookupCtx :: Ctx -> Int -> Maybe STerm
 lookupCtx (Ctx xs) i =
   let idx = length xs - 1 - i
   in if idx >= 0 && idx < length xs then Just (xs !! idx) else Nothing
-
-lookupCtxFor :: ContextDiscipline -> Ctx -> Int -> Maybe STerm
-lookupCtxFor CtxCartesian = lookupCtx
 
 data GoalArg
   = GSurf STerm
@@ -235,7 +223,7 @@ solvePremise surf fuel env prem supply =
     PremiseLookup ctxName idxPat outName -> do
       ctx <- requireCtx env ctxName
       idx <- evalNatPat (seMatch env) idxPat
-      ty <- case lookupCtxFor (sdCtxDisc surf) ctx idx of
+      ty <- case lookupCtx ctx idx of
         Nothing -> Left "surface solver: lookup out of bounds"
         Just t -> Right t
       let m = MVar outName
@@ -478,12 +466,12 @@ evalNatPat subst np =
 
 applyUnder :: SurfaceDef -> SolveEnv -> Maybe UnderCtx -> Either Text (Maybe Ctx)
 applyUnder _ _ Nothing = Right Nothing
-applyUnder surf env (Just under) =
+applyUnder _ env (Just under) =
   case M.lookup (ucCtx under) (seCtxs env) of
     Nothing -> Right Nothing
     Just ctx -> do
       ty <- applySubstPTerm (seMatch env) (ucType under)
-      Right (Just (extendCtxFor (sdCtxDisc surf) ctx ty))
+      Right (Just (extendCtx ctx ty))
 
 replaceCtx :: [GoalArg] -> Maybe Ctx -> [GoalArg]
 replaceCtx args Nothing = args

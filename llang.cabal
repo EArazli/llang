@@ -18,6 +18,7 @@ build-type:     Simple
 extra-source-files:
     README.md
     CHANGELOG.md
+    ROADMAP.md
 data-files:
     examples/monoid.llang
     examples/monoid.syntax.llang
@@ -47,7 +48,6 @@ data-files:
     examples/ccc_surface/stlc.lam2.run.llang
     examples/ccc_surface/stlc.lam3.run.llang
     examples/ccc_surface/stlc.pair.run.llang
-    examples/ccc_surface/stlc.bad.run.llang
     examples/ccc_surface/stlc.runspec.llang
     examples/morphism_term.llang
     examples/runspec/multi.llang
@@ -78,7 +78,6 @@ library
       Strat.Kernel.Examples.Monoid
       Strat.Kernel.Morphism
       Strat.Kernel.Presentation
-      Strat.Kernel.Relative
       Strat.Kernel.Rewrite
       Strat.Kernel.Rewrite.Indexed
       Strat.Kernel.RewriteSystem
@@ -89,7 +88,6 @@ library
       Strat.Kernel.Term
       Strat.Kernel.Types
       Strat.Kernel.Unify
-      Strat.Kernel.Weakening
       Strat.Model.Spec
       Strat.Surface
       Strat.Surface2.CoreEval
@@ -155,9 +153,7 @@ test-suite llang-test
       Test.Kernel.Fixtures
       Test.Kernel.Include
       Test.Kernel.Morphism
-      Test.Kernel.Sogat
       Test.Kernel.SortCtorTele
-      Test.Kernel.Relative
       Test.Kernel.Rewrite
       Test.Kernel.RewriteSystem
       Test.Frontend.SyntaxModel

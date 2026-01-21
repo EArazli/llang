@@ -56,7 +56,6 @@ mkSurface pres =
     , sdRules = []
     , sdDefines = M.empty
     , sdRequires = [SurfaceRequire "i" pres]
-    , sdCtxDisc = CtxCartesian
     }
 
 requirePres :: ModuleEnv -> T.Text -> IO Presentation

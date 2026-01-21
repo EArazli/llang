@@ -9,8 +9,13 @@ import Strat.Frontend.Run
 import Strat.Backend (Value(..))
 import Strat.Backend.Concat (CatExpr(..))
 import Strat.Kernel.Syntax (OpName(..), Term(..), TermNode(..))
+import Data.Text (Text)
 import qualified Data.Text as T
 import Paths_llang (getDataFileName)
+import System.Directory (createDirectoryIfMissing, removePathForcibly, getTemporaryDirectory)
+import System.FilePath ((</>))
+import qualified Data.Text.IO as TIO
+import System.IO.Error (catchIOError)
 
 
 tests :: TestTree
@@ -97,7 +102,7 @@ testEndToEndSTLCSurface = do
     Left err -> assertFailure (T.unpack err)
     Right out -> do
       assertBool "surface input printed" (maybe False (not . T.null) (rrPrintedInput out))
-      rrResult out @?= Just "true"
+      assertHasOp "CCC.T" (rrNormalized out)
       case termNode (rrNormalized out) of
         TOp _ _ -> pure ()
         _ -> assertFailure "expected normalized core term"
@@ -142,11 +147,25 @@ testEndToEndSTLCPair = do
 
 testEndToEndSTLCBadIdent :: Assertion
 testEndToEndSTLCBadIdent = do
-  path <- getDataFileName "examples/ccc_surface/stlc.bad.run.llang"
-  result <- runFile path Nothing
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "llang-cli-stlc-bad"
+  cleanup dir
+  createDirectoryIfMissing True dir
+  specPath <- getDataFileName "examples/ccc_surface/stlc.runspec.llang"
+  let badFile = dir </> "bad-stlc.run.llang"
+  TIO.writeFile badFile $ T.unlines
+    [ "import \"" <> T.pack specPath <> "\";"
+    , "run main using STLCinCCC"
+    , "---"
+    , "unknownIdent"
+    ]
+  result <- runFile badFile Nothing
   case result of
     Left _ -> pure ()
     Right _ -> assertFailure "expected failure for unknown identifier"
+  cleanup dir
+  where
+    cleanup path = removePathForcibly path `catchIOError` \_ -> pure ()
 
 testMultiRunDefault :: Assertion
 testMultiRunDefault = do
@@ -154,7 +173,7 @@ testMultiRunDefault = do
   result <- runFile path Nothing
   case result of
     Left err -> assertFailure (T.unpack err)
-    Right out -> rrResult out @?= Just "true"
+    Right out -> assertHasOp "CCC.T" (rrNormalized out)
 
 testMultiRunSelect :: Assertion
 testMultiRunSelect = do
@@ -162,10 +181,16 @@ testMultiRunSelect = do
   result <- runFile path (Just "beta")
   case result of
     Left err -> assertFailure (T.unpack err)
-    Right out -> rrResult out @?= Just "false"
+    Right out -> assertHasOp "CCC.F" (rrNormalized out)
 
 collectOps :: Term -> [OpName]
 collectOps tm =
   case termNode tm of
     TVar _ -> []
     TOp op args -> op : concatMap collectOps args
+
+assertHasOp :: Text -> Term -> Assertion
+assertHasOp name tm =
+  let ops = collectOps tm
+      target = OpName name
+  in assertBool ("expected op " <> T.unpack name) (target `elem` ops)

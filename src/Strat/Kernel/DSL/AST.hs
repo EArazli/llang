@@ -36,11 +36,6 @@ module Strat.Kernel.DSL.AST
   , RawCoreExpr(..)
   , RawSurfaceNotation(..)
   , RawSurfaceAssoc(..)
-  , RawSogatDecl(..)
-  , RawSogatItem(..)
-  , RawSogatOpDecl(..)
-  , RawSogatArg(..)
-  , RawSogatBinder(..)
   , RawMorphismDecl(..)
   , RawMorphismItem(..)
   , RawMorphismCheck(..)
@@ -116,7 +111,6 @@ data RawDecl
   | DeclSyntaxWhere RawSyntaxDecl
   | DeclModelWhere Text [RawModelItem]
   | DeclSurfaceWhere RawSurfaceDecl
-  | DeclSogatWhere RawSogatDecl
   | DeclMorphismWhere RawMorphismDecl
   | DeclImplements RawImplementsDecl
   | DeclRunSpec Text RawRunSpec
@@ -143,7 +137,7 @@ data RawSyntaxDecl = RawSyntaxDecl
   } deriving (Eq, Show)
 
 data RawSyntaxTarget
-  = SyntaxDoctrine RawExpr
+  = SyntaxDoctrine
   | SyntaxSurface Text
   deriving (Eq, Show)
 
@@ -194,14 +188,12 @@ data RawRunShow
   | RawShowValue
   | RawShowCat
   | RawShowInput
-  | RawShowResult
   deriving (Eq, Ord, Show)
 
 
 data RawRun = RawRun
   { rrDoctrine  :: Maybe RawExpr
   , rrSyntax    :: Maybe Text
-  , rrCoreSyntax :: Maybe Text
   , rrSurface   :: Maybe Text
   , rrSurfaceSyntax :: Maybe Text
   , rrModel     :: Maybe Text
@@ -232,8 +224,7 @@ data RawSurfaceDecl = RawSurfaceDecl
   } deriving (Eq, Show)
 
 data RawSurfaceItem
-  = RSContextDiscipline Text
-  | RSRequires Text RawExpr
+  = RSRequires Text RawExpr
   | RSDeriveContexts Text
   | RSContextSort Text
   | RSSort Text
@@ -344,34 +335,6 @@ data RawCoreExpr
   = RCEVar Text
   | RCEApp Text [RawCoreExpr]
   deriving (Eq, Show)
-
-data RawSogatDecl = RawSogatDecl
-  { rsogName :: Text
-  , rsogItems :: [RawSogatItem]
-  } deriving (Eq, Show)
-
-data RawSogatItem
-  = RSSogatContextSort Text
-  | RSSogatSort RawSortDecl
-  | RSSogatOp RawSogatOpDecl
-  deriving (Eq, Show)
-
-data RawSogatOpDecl = RawSogatOpDecl
-  { rsoName :: Text
-  , rsoArgs :: [RawSogatArg]
-  , rsoResult :: RawSort
-  } deriving (Eq, Show)
-
-data RawSogatArg = RawSogatArg
-  { rsgaName :: Text
-  , rsgaSort :: RawSort
-  , rsgaBinders :: [RawSogatBinder]
-  } deriving (Eq, Show)
-
-data RawSogatBinder = RawSogatBinder
-  { rsbName :: Text
-  , rsbType :: RawTerm
-  } deriving (Eq, Show)
 
 data RawSurfaceNotation
   = RSNAtom Text Text

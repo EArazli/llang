@@ -14,7 +14,7 @@ run_spec STLCinCCC where {
   surface_syntax STLC_Syntax;
   policy UseOnlyComputationalLR;
   fuel 200;
-  show result;
+  show normalized;
   show cat;
   show value;
 }

@@ -13,14 +13,12 @@ data RunShow
   | ShowValue
   | ShowCat
   | ShowInput
-  | ShowResult
   deriving (Eq, Ord, Show)
 
 
 data RunSpec = RunSpec
   { runDoctrine  :: RawExpr
   , runSyntax    :: Maybe Text
-  , runCoreSyntax :: Maybe Text
   , runSurface   :: Maybe Text
   , runSurfaceSyntax :: Maybe Text
   , runModel     :: Text

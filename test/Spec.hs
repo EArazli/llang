@@ -11,9 +11,7 @@ import qualified Test.Kernel.DoctrineExpr as KernelDoctrineExpr
 import qualified Test.Kernel.DSL as KernelDSL
 import qualified Test.Kernel.Include as KernelInclude
 import qualified Test.Kernel.Morphism as KernelMorphism
-import qualified Test.Kernel.Sogat as KernelSogat
 import qualified Test.Kernel.SortCtorTele as KernelSortCtorTele
-import qualified Test.Kernel.Relative as KernelRelative
 import qualified Test.Surface as Surface
 import qualified Test.Backend as Backend
 import qualified Test.CLI as CLI
@@ -41,9 +39,7 @@ main =
       , KernelDSL.tests
       , KernelInclude.tests
       , KernelMorphism.tests
-      , KernelSogat.tests
       , KernelSortCtorTele.tests
-      , KernelRelative.tests
       , Surface.tests
       , Backend.tests
       , FrontendSyntaxModel.tests

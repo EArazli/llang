@@ -1,4 +1,4 @@
-syntax STLC_Syntax for surface STLC where {
+surface_syntax STLC_Syntax for STLC where {
   ty print atom "Bool" = BoolTy;
   ty print atom "Unit" = UnitTy;
   ty print infixl 7 "*" = ProdTy;

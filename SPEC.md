@@ -1,8 +1,6 @@
 # Mathematical specification of the project as implemented
 
-This document specifies the mathematical objects and algorithms implemented by the project (kernel, doctrine composition, morphisms/interpretations, surface layer, runs, SOGAT elaboration, normalization, and model evaluation). It is written to support reasoning about correctness and behavior of the implementation.
-
-Assumption: the “SOGAT fixes” previously discussed are applied (i.e. the SOGAT→FO elaborator and the kernel’s weakening-related checks handle context indices correctly, including updating explicit context arguments of operations). Where this matters, it is called out explicitly.
+This document specifies the mathematical objects and algorithms implemented by the project (kernel, doctrine composition, morphisms/interpretations, surface layer, runs, normalization, and model evaluation). It is written to support reasoning about correctness and behavior of the implementation.
 
 ---
 
@@ -11,12 +9,11 @@ Assumption: the “SOGAT fixes” previously discussed are applied (i.e. the SOG
 The project implements a **meta-language** (the “llang” DSL) for specifying and composing:
 
 1. **Doctrines**: presentations of (first-order) generalized algebraic theories with dependent arities (dependent signatures + equations), equipped with a rewriting system for definitional equality.
-2. **SOGAT doctrines**: a second-order “binder-aware” signature layer compiled down to the first-order kernel.
-3. **Interfaces**: not a distinct concept—an interface is simply a doctrine/presentation that other layers “require”.
-4. **Morphisms / interpretations** between doctrines: mappings of symbols to symbols/terms with proof obligations (equation preservation) checked by normalization/joinability.
-5. **Syntax**: parsing/printing of core kernel terms via user-defined notations (no binding) and a separate, rule-based “Surface2” language with binding and typing judgments.
-6. **Runs**: configurable elaboration + rewriting + model evaluation pipelines, with reusable run-specs and multiple runs per file.
-7. **Models**: an interpretation of operations into a simple meta-evaluator (symbolic or expression-based).
+2. **Interfaces**: not a distinct concept—an interface is simply a doctrine/presentation that other layers “require”.
+3. **Morphisms / interpretations** between doctrines: mappings of symbols to symbols/terms with proof obligations (equation preservation) checked by normalization/joinability.
+4. **Syntax**: parsing/printing of core kernel terms via user-defined notations (no binding) and a separate, rule-based “Surface2” language with binding and typing judgments.
+5. **Runs**: configurable elaboration + rewriting + model evaluation pipelines, with reusable run-specs and multiple runs per file.
+6. **Models**: an interpretation of operations into a simple meta-evaluator (symbolic or expression-based).
 
 Everything ultimately compiles to / is checked against the **kernel presentation**:
 
@@ -188,8 +185,6 @@ Whether an equation is eligible as a rewrite rule depends on the chosen rewrite 
 For any equation direction selected as a rewrite rule, the kernel requires vars(RHS) ⊆ vars(LHS) (no new variables introduced by rewriting).
 Rule-name uniqueness (among the rules included in the selected rewrite system) is also enforced at rewrite-system compilation time.
 These checks are implemented in compileRewriteSystem / toRules (see src/Strat/Kernel/RewriteSystem.hs).
-
-**SOGAT fix hook (assumed applied):** equation/typechecking validity must treat “context weakening” (for context-indexed sorts/terms produced by the SOGAT elaboration) as admissible in the precise places discussed earlier (i.e. variable sorts can be checked modulo context extension, and weakening updates explicit context indices and explicit context arguments of ops). This is not a general feature of the first-order kernel; it is a targeted accommodation used by the SOGAT encoding and its derived theories.
 
 ---
 
@@ -444,13 +439,11 @@ A `SurfaceDef` contains:
 
 * surface sorts (names only),
 * a distinguished `context_sort` among them,
-* a `ContextDiscipline`:
+* contexts are cartesian lists with:
 
-  * currently only `CtxCartesian`, meaning contexts support:
-
-    * empty,
-    * extension by a type,
-    * lookup by index (with contraction/weakening at the meta-level via structural recursion on the list).
+  * empty,
+  * extension by a type,
+  * lookup by index.
 * constructors:
 
   * each constructor argument has:
@@ -556,15 +549,16 @@ Arguments are checked **dependently**:
 A `RunSpec` fixes:
 
 * a doctrine expression,
-* either:
+* `syntax`:
 
-  * a doctrine syntax (core term parser/printer), or
-  * a surface + surface_syntax (surface parser/printer),
+  * required for core runs (core term parser/printer),
+  * optional for surface runs (used only to pretty-print normalized core terms),
+* for surface runs: a `surface` + `surface_syntax` (surface parser/printer),
 * a model name,
 * `open` namespaces for name resolution,
 * rewrite policy and fuel,
 * `uses` map for satisfying surface `requires`,
-* show flags (normalized, value, cat, input, result).
+* show flags (normalized, value, cat, input).
 
 A `run` can inherit from a `run_spec` and override fields.
 
@@ -581,7 +575,6 @@ Given a selected run:
 4. Normalize the kernel term with fuel.
 5. Compile normalized term to `CatExpr` (a syntax tree over ops/vars).
 6. Evaluate normalized term with the chosen model, producing a `Value`.
-7. Optionally perform readback (currently only a bounded Bool heuristic for surface runs).
 
 ### 8.2 Satisfying surface `requires`: building a morphism environment
 
@@ -622,308 +615,14 @@ The “compile to categories” output currently is `CatExpr`, which preserves o
 
 ---
 
-## 10. SOGAT DSL and its compilation to the kernel
-
-The `sogat` DSL is a *binder-aware* signature frontend. It is compiled into an ordinary kernel presentation.
-
-### 10.1 SOGAT inputs
-
-A SOGAT declaration provides:
-
-* `context_sort Ty` (a name; also declared as a sort in the SOGAT block),
-* sort declarations `S` with a telescope of parameters (written in SOGAT raw syntax),
-* op declarations `o` with arguments, where each argument may carry a list of binders:
-
-  * binder `x : A` where `A` is a SOGAT raw term,
-  * argument sort `B`.
-
-### 10.2 Generated first-order context theory
-
-Compilation introduces:
-
-* sort constructor `Ctx : Sort` (arity 0),
-* ops:
-
-  * `empty : Ctx`,
-  * `extend : (Γ : Ctx, A : Ty(Γ)) -> Ctx`.
-
-(Names `Ctx`, `empty`, `extend` are effectively reserved by this elaboration.)
-
-### 10.3 Context-indexing of sorts and ops
-
-* Every user sort `S` (including the context_sort `Ty`) becomes a first-order sort constructor whose first parameter is a context:
-  [
-  S(\Gamma, \vec{i})
-  ]
-* Every op returning a non-`Ctx` sort gets an explicit leading context argument `Γ : Ctx` and result sort indexed by that Γ.
-
-### 10.4 Elaborating binder arguments
-
-A SOGAT argument of the form:
-
-* name `u`,
-* binders `[x1:A1, …, xk:Ak]`,
-* sort `B`
-
-is compiled by:
-
-1. starting with a current context term `Γ`,
-2. elaborating binder types iteratively in the *current* context and extending it:
-   [
-   \Gamma_0 := \Gamma,\quad
-   A_i' : Ty(\Gamma_{i-1}),\quad
-   \Gamma_i := extend(\Gamma_{i-1}, A_i')
-   ]
-3. elaborating the argument sort `B` **under the extended context** `Γ_k`,
-4. producing a first-order binder `(u : B'(Γ_k,...))` in the op telescope.
-
-### 10.5 Dependent checking in elaboration
-
-The elaborator threads a term environment mapping SOGAT binder names to kernel terms and performs dependent instantiation checks analogous to `mkSort`/`mkOp`:
-
-* later binder sorts/types can mention earlier binders,
-* op argument sorts can depend on earlier arguments,
-* result sorts can depend on all arguments.
-
-### 10.6 Implicit weakening (assumed fixed)
-
-Because the SOGAT encoding uses explicit context indices, the system admits an implicit coercion:
-
-* If `Γ'` is a syntactic extension of `Γ` (built by repeated `extend` from `Γ`), then terms/sorts indexed by `Γ` may be used where `Γ'` is expected, by weakening.
-
-**Crucial operational content of the fix** (for correctness):
-
-* weakening must update:
-
-  1. the **leading context index** in the term’s sort, and
-  2. the **explicit context argument** passed to any op application whose first argument is a context term,
-     and do so recursively through subterms and sort indices.
-
-This weakening is used to typecheck binder types and dependent arities produced by the SOGAT compilation, and (where needed) to validate presentations containing SOGAT-derived context-indexed sorts.
-
-Note on namespacing: because doctrine atoms qualify all sort/op/equation names (e.g. ns.Ctx, ns.extend), weakening must recognize the context-discipline symbols under qualification. Operationally, the “extend chain” check is performed relative to the context sort name of the target context term, and the corresponding extend operator in the same namespace.
-
----
-
-## 11. Explicit limitations and non-goals of the current implementation
+## 10. Explicit limitations and non-goals of the current implementation
 
 These are properties you must assume when reasoning about correctness:
 
 1. **Definitional equality is bounded and strategy-dependent**: normalization is fuel-bounded; joinability is fuel-bounded; confluence/termination are not enforced.
 2. **Surface2 proof search is intentionally deterministic**: ambiguity is an error, not backtracking.
-3. **Contexts in Surface2 are currently cartesian lists**: no linear/affine/relevant discipline is implemented yet.
+3. **Contexts in Surface2 are cartesian lists**: no other context discipline is supported by design.
 4. **Models are a simple evaluator**: no general categorical semantics are implemented (yet).
-5. **SOGAT encoding currently relies on weakening**: substructural/linear correctness is not expressible at the kernel level without extending the notion of context discipline (this is explicitly deferred to the roadmap).
-
----
-
-# Plans and roadmap (less detailed, but complete enough to guide design)
-
-This section describes the settled direction and remaining major pieces: effects, pushouts, e-graphs, recursion/datatypes, modules and interoperability, non-cartesian context handling, and improved semantics.
-
----
-
-## A. Non-cartesian / substructural contexts (Option B direction)
-
-### Target state
-
-Make “context discipline” a first-class, user-provided structure rather than hard-coded cartesian weakening/contracting.
-
-### Design sketch
-
-1. Introduce an explicit *context discipline interface doctrine* `CtxDisc` exposing operations/relations used by:
-
-   * SOGAT compilation,
-   * Surface2 `UnderCtx`, lookup, and variable rules,
-   * any effect system requiring specific structural rules.
-2. Parameterize:
-
-   * SOGAT elaboration over a chosen discipline (cartesian, linear, affine, ordered, relevant),
-   * Surface2 context operations (`empty`, `extend`, `lookup`, and later split/merge/exchange where meaningful).
-3. Replace “implicit weakening” with discipline-provided admissibility rules:
-
-   * in a linear context, weakening is absent; “use” consumes variables;
-   * in ordered contexts, exchange is absent; contexts are sequences.
-
-### Payoff
-
-* Linear syntax becomes definable *without mismatch*.
-* Any effect system that assumes cartesian structure becomes implementable only when the doctrine/disciplines provide it (by obligations/implements).
-
----
-
-## B. Effects as user-defined doctrine layers (no baked-in effect system)
-
-### Target state
-
-Provide primitives sufficient for *declaring* effect systems in user doctrines and proving interoperability constraints, without committing to a single baked-in notion.
-
-### What the meta-language must support (foundation)
-
-1. **Interfaces as doctrines** (already done): effects are expressed as additional required interfaces (e.g. “strong monad”, “Freyd category”, “algebraic effects handler interface”).
-2. **Obligation checking** (already done for morphisms): effect laws are equations; implementations are morphisms; validation is equation preservation.
-3. **Context-discipline gating** (future): effects that need cartesian structure require the cartesian discipline interface.
-
-### Example family of libraries (later, not in kernel)
-
-* monadic effects (Kleisli triples),
-* Freyd categories / Arrows-style effects,
-* algebraic effects via handlers,
-* linear effects via graded/linear monads, etc.
-
----
-
-## C. Pushouts / theory assembly (`CCC + Bool + Nat + …`)
-
-### What “pushout” should mean here
-
-In a category of presentations, a pushout is a way to *glue* theories along a shared subtheory:
-
-* Given morphisms (A \xrightarrow{f} B) and (A \xrightarrow{g} C),
-* build (B \sqcup_A C) that identifies the images of (A) in both.
-
-### Practical implementation plan (tractable subset)
-
-1. Implement **pushout of signatures** along *symbol maps* (rename/share level):
-
-   * For now restrict `f` and `g` to *structure-preserving symbol maps* (SortName↦SortName and OpName↦OpName) or to morphisms whose op interpretations are *variables/constructors* that act like renamings.
-   * This yields a computable “gluing” by explicit renaming and sharing (which the project already supports via `Rename*` and `Share*`).
-2. Add DSL sugar:
-
-   * `pushout(B <- A -> C)` that expands to a `DocExpr` with the necessary renames and shares.
-3. Once e-graphs are in place (section D), extend pushouts to more general op→term morphisms:
-
-   * identification then becomes “quotient by equations induced by the span”, which is not tractable via simple name-sharing alone.
-
-### What you get immediately
-
-* A robust way to build `CCC_Bool` from `CCC` and `Bool` when the overlap is mostly shared by name/renaming (e.g. a common `Unit`, `Bool`, `T`, `F` interface).
-* A structured replacement for ad-hoc `And + Share + Rename` recipes.
-
----
-
-## D. E-graph normalization / equality saturation
-
-### Motivation
-
-Current rewriting is:
-
-* oriented and fuel-bounded,
-* sensitive to strategy,
-* brittle for structural equalities (CCC, associativity, η-laws).
-
-### Plan
-
-1. Add an alternate equality engine based on **e-graphs**:
-
-   * load equations (structural) as congruences,
-   * optionally load computational rules as directed rewrites or also as equalities,
-   * extract canonical representatives with cost functions.
-2. Use it for:
-
-   * morphism equation preservation (stronger, less strategy-dependent),
-   * readback and “canonical form” reporting,
-   * coherence obligation discharge automation (critical pair joins).
-
-This is the natural next step once “theory assembly” and “interop correctness” become central.
-
----
-
-## E. Recursion and user-definable datatypes
-
-### What’s missing today
-
-* There is no first-class notion of inductive definitions or recursion in the kernel.
-* You can encode specific recursors manually as operations + equations, but there’s no user-facing mechanism for:
-
-  * introducing a datatype,
-  * generating constructors,
-  * generating elimination/recursion principles and β/η laws.
-
-### Plan (kept compatible with the kernel)
-
-1. Add a doctrine-library layer that provides:
-
-   * a schema for *initial algebras* / W-types-like signatures,
-   * generated operations:
-
-     * constructors,
-     * fold/recursor,
-   * generated computation equations (β-laws) as `Computational` rules.
-2. Keep general recursion separate:
-
-   * either add a `Fix` interface (with appropriate equations and/or guardedness discipline),
-   * or treat general recursion as an effect (partiality) requiring additional structure.
-
-This fits the existing foundation because “datatype definitions” compile to ordinary presentations + equations.
-
----
-
-## F. Modules and true interoperability of doctrines/terms
-
-### Problem today
-
-Multiple runs in a file are separate pipelines. Terms do not interact across runs; there is no notion of “import a term produced under doctrine X and use it under doctrine Y”.
-
-### Needed concept
-
-A **module system** that:
-
-* gives names to definitions (terms),
-* assigns them a doctrine + surface + model context,
-* and allows importing them through morphisms.
-
-### Plan
-
-1. Introduce module-level definitions:
-
-   * `def foo : <judgment/type> := <surface/core term>`
-   * each definition elaborates under some run context (doctrine/surface/syntax).
-2. Allow a definition to be *re-used* under another doctrine by requiring a morphism:
-
-   * if `foo` is a kernel term in doctrine `P`, and you want it in doctrine `Q`, require a morphism `P -> Q` and translate it with `applyMorphismTerm`.
-3. Make run specs reusable at **term level**:
-
-   * `run_spec` becomes a named environment that can be attached to defs, not just runs.
-4. Add explicit “interop declarations”:
-
-   * `import foo using morphism M` or `open module X as Y` with checked requirements.
-
-This leverages the existing morphism machinery; what’s missing is the definition namespace and the ability to store elaborated terms in the environment.
-
----
-
-## G. Interoperability between models
-
-### Desired behavior
-
-Interpret a term in one model (e.g. AD) and use it in another (e.g. Eval/Hask), with correctness constraints.
-
-### Plan
-
-1. Treat model interoperability as **morphisms at the model level**:
-
-   * a natural transformation-like map between interpretations,
-   * or a “model transformer” that maps `interpOp` implementations.
-2. Make composition explicit:
-
-   * `Model := AD ∘ Eval` becomes a declared object with obligations (equations/laws).
-3. Use the same obligation machinery:
-
-   * either by checking commutation on a test suite of generated terms,
-   * or by symbolic equality saturation where possible.
-
-This is strictly beyond the current model implementation, but the same discipline (“declare structure + prove obligations”) applies.
-
----
-
-## H. Next steps to improve usability quickly (without destabilizing foundations)
-
-1. Implement pushout-sugar on top of existing `Rename/Share/And`.
-2. Add e-graph mode for equality checking and for morphism obligations (optional backend).
-3. Add definition bindings (`def`) and module imports, using morphisms for translation.
-4. Add datatype schema as library-doctrines (Nat/List + folds), generate β equations.
-5. Generalize context discipline (Option B proper), then revisit SOGAT weakening assumptions.
 
 ---
 
@@ -931,7 +630,7 @@ This is strictly beyond the current model implementation, but the same disciplin
 
 * Generalized algebraic theories (Cartmell and later formulations).
 * Presheaf-style syntax/semantics: Fiore–Plotkin–Turi.
-* SOGAT presentations and semantics: Kaposi–Xie (“Second-Order Generalised Algebraic Theories: Signatures and First-Order Semantics”).
-* Equality saturation / e-graphs: the “egg” approach (Tate et al. and subsequent work).
 * Freyd categories / Arrows: classic categorical semantics of effects.
 * GATLab (Julia): practical operations on GATs (pushouts/colimits and computations).
+
+For future plans, see `ROADMAP.md`.

@@ -1,5 +1,0 @@
-import "./stlc.runspec.llang";
-
-run main using STLCinCCC
----
-foo

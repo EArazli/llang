@@ -47,7 +47,6 @@ decl =
     <|> doctrineDecl
     <|> syntaxDecl
     <|> modelDecl
-    <|> sogatDecl
     <|> surfaceDecl
     <|> morphismDecl
     <|> implementsDecl
@@ -80,29 +79,26 @@ doctrineDecl = do
       pure (DeclExpr name e)
     )
 
--- SOGAT declarations
-
-sogatDecl :: Parser RawDecl
-sogatDecl = do
-  _ <- symbol "sogat"
-  name <- ident
-  _ <- symbol "where"
-  items <- sogatBlock
-  optionalSemi
-  pure (DeclSogatWhere (RawSogatDecl name items))
-
 syntaxDecl :: Parser RawDecl
 syntaxDecl = do
-  _ <- symbol "syntax"
-  name <- ident
-  _ <- symbol "for"
-  target <-
-    (symbol "doctrine" *> (SyntaxDoctrine <$> expr))
-      <|> (symbol "surface" *> (SyntaxSurface <$> ident))
-  _ <- symbol "where"
-  items <- syntaxBlock
-  optionalSemi
-  pure (DeclSyntaxWhere (RawSyntaxDecl name target items))
+  coreSyntaxDecl <|> surfaceSyntaxDecl
+  where
+    coreSyntaxDecl = do
+      _ <- symbol "syntax"
+      name <- ident
+      _ <- symbol "where"
+      items <- syntaxBlock
+      optionalSemi
+      pure (DeclSyntaxWhere (RawSyntaxDecl name SyntaxDoctrine items))
+    surfaceSyntaxDecl = do
+      _ <- symbol "surface_syntax"
+      name <- ident
+      _ <- symbol "for"
+      surf <- ident
+      _ <- symbol "where"
+      items <- syntaxBlock
+      optionalSemi
+      pure (DeclSyntaxWhere (RawSyntaxDecl name (SyntaxSurface surf) items))
 
 modelDecl :: Parser RawDecl
 modelDecl = do
@@ -253,102 +249,6 @@ ruleDecl = do
     , rrRHS = rhs
     }
 
-
--- SOGAT block
-
-sogatBlock :: Parser [RawSogatItem]
-sogatBlock = do
-  _ <- symbol "{"
-  items <- many sogatItem
-  _ <- symbol "}"
-  pure items
-
-sogatItem :: Parser RawSogatItem
-sogatItem =
-  contextSortItem
-    <|> (RSSogatSort <$> sogatSortDecl)
-    <|> (RSSogatOp <$> sogatOpDecl)
-  where
-    contextSortItem = do
-      _ <- symbol "context_sort"
-      name <- ident
-      optionalSemi
-      pure (RSSogatContextSort name)
-
-sogatOpDecl :: Parser RawSogatOpDecl
-sogatOpDecl = do
-  _ <- symbol "op"
-  name <- ident
-  args <- many sogatArg
-  _ <- symbol "->"
-  res <- sogatSort
-  optionalSemi
-  pure RawSogatOpDecl
-    { rsoName = name
-    , rsoArgs = args
-    , rsoResult = res
-    }
-
-sogatArg :: Parser RawSogatArg
-sogatArg = do
-  _ <- symbol "("
-  name <- ident
-  _ <- symbol ":"
-  srt <- sogatSort
-  binders <- many sogatBinder
-  _ <- symbol ")"
-  pure RawSogatArg
-    { rsgaName = name
-    , rsgaSort = srt
-    , rsgaBinders = binders
-    }
-
-sogatBinder :: Parser RawSogatBinder
-sogatBinder = do
-  _ <- symbol "["
-  name <- ident
-  _ <- symbol ":"
-  ty <- sogatTerm
-  _ <- symbol "]"
-  pure (RawSogatBinder name ty)
-
-sogatSortDecl :: Parser RawSortDecl
-sogatSortDecl = do
-  _ <- symbol "sort"
-  name <- ident
-  tele <- many sogatSortBinder
-  optionalSemi
-  pure RawSortDecl
-    { rsName = name
-    , rsTele = tele
-    }
-
-sogatSortBinder :: Parser RawBinder
-sogatSortBinder = do
-  _ <- symbol "("
-  name <- ident
-  _ <- symbol ":"
-  srt <- sogatSort
-  _ <- symbol ")"
-  pure (RawBinder name srt)
-
-sogatSort :: Parser RawSort
-sogatSort = do
-  name <- ident
-  mArgs <- optional (symbol "(" *> sogatTerm `sepBy` symbol "," <* symbol ")")
-  pure $ case mArgs of
-    Nothing -> RawSort name []
-    Just args -> RawSort name args
-
-sogatTerm :: Parser RawTerm
-sogatTerm = lexeme sogatApp
-  where
-    sogatApp = do
-      name <- identRaw
-      mArgs <- optional (symbol "(" *> sogatTerm `sepBy` symbol "," <* symbol ")")
-      case mArgs of
-        Nothing -> pure (RVar name)
-        Just args -> pure (RApp name args)
 
 binder :: Parser RawBinder
 binder = do
@@ -581,8 +481,7 @@ surfaceBlock = do
 
 surfaceItem :: Parser RawSurfaceItem
 surfaceItem =
-  contextDisciplineItem
-    <|> requiresItem
+  requiresItem
     <|> deriveContextsItem
     <|> contextSortItem
     <|> surfaceSortItem
@@ -590,13 +489,6 @@ surfaceItem =
     <|> surfaceJudgItem
     <|> surfaceDefineItem
     <|> surfaceRuleItem
-
-contextDisciplineItem :: Parser RawSurfaceItem
-contextDisciplineItem = do
-  _ <- symbol "context_discipline"
-  name <- ident
-  optionalSemi
-  pure (RSContextDiscipline name)
 
 requiresItem :: Parser RawSurfaceItem
 requiresItem = do
@@ -1020,7 +912,6 @@ runBlock = do
 data RunItem
   = RunDoctrine RawExpr
   | RunSyntax Text
-  | RunCoreSyntax Text
   | RunSurface Text
   | RunSurfaceSyntax Text
   | RunModel Text
@@ -1034,12 +925,10 @@ runItem :: Parser RunItem
 runItem =
   doctrineItem
     <|> syntaxItemRun
-    <|> coreSyntaxItemRun
     <|> surfaceSyntaxItemRun
     <|> surfaceItemRun
     <|> modelItemRun
     <|> useItemRun
-    <|> implementsItemRun
     <|> openItem
     <|> policyItem
     <|> fuelItem
@@ -1059,13 +948,6 @@ syntaxItemRun = do
   optionalSemi
   pure (RunSyntax name)
 
-coreSyntaxItemRun :: Parser RunItem
-coreSyntaxItemRun = do
-  _ <- symbol "core_syntax"
-  name <- ident
-  optionalSemi
-  pure (RunCoreSyntax name)
-
 surfaceItemRun :: Parser RunItem
 surfaceItemRun = do
   _ <- symbol "surface"
@@ -1083,15 +965,6 @@ surfaceSyntaxItemRun = do
 useItemRun :: Parser RunItem
 useItemRun = do
   _ <- symbol "use"
-  alias <- ident
-  _ <- symbol "="
-  name <- ident
-  optionalSemi
-  pure (RunUse alias name)
-
-implementsItemRun :: Parser RunItem
-implementsItemRun = do
-  _ <- symbol "implements"
   alias <- ident
   _ <- symbol "="
   name <- ident
@@ -1133,7 +1006,6 @@ showItem = do
       <|> (symbol "value" $> RawShowValue)
       <|> (symbol "cat" $> RawShowCat)
       <|> (symbol "input" $> RawShowInput)
-      <|> (symbol "result" $> RawShowResult)
   optionalSemi
   pure (RunShow flag)
 
@@ -1142,7 +1014,6 @@ buildRun items exprText =
   RawRun
     { rrDoctrine = pickDoctrine
     , rrSyntax = pickSyntax
-    , rrCoreSyntax = pickCoreSyntax
     , rrSurface = pickSurface
     , rrSurfaceSyntax = pickSurfaceSyntax
     , rrModel = pickModel
@@ -1156,7 +1027,6 @@ buildRun items exprText =
   where
     pickDoctrine = firstJust [ e | RunDoctrine e <- items ]
     pickSyntax = firstJust [ n | RunSyntax n <- items ]
-    pickCoreSyntax = firstJust [ n | RunCoreSyntax n <- items ]
     pickSurface = firstJust [ n | RunSurface n <- items ]
     pickSurfaceSyntax = firstJust [ n | RunSurfaceSyntax n <- items ]
     pickModel = firstJust [ n | RunModel n <- items ]

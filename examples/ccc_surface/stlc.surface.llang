@@ -1,7 +1,6 @@
 import "./ccc.doctrine.llang";
 
 surface STLC where {
-  context_discipline cartesian;
   requires ccc : CCC_Bool;
   context_sort Ty;
   derive contexts using ccc;

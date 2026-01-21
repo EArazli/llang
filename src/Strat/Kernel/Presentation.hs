@@ -9,7 +9,6 @@ import Strat.Kernel.Rule
 import Strat.Kernel.Signature
 import Strat.Kernel.Syntax
 import Strat.Kernel.Term (TypeError, mkOp)
-import Strat.Kernel.Weakening (isCtxExtension, weakenTermToCtxMaybe)
 import Data.Text (Text)
 import qualified Data.List as L
 import qualified Data.Set as S
@@ -153,26 +152,11 @@ checkVarSorts eqName0 env tm = do
         Just decl ->
           if termSort tm == decl
             then Right ()
-            else
-              if sortIsWeakening decl (termSort tm)
-                then Right ()
-                else Left ("Variable sort mismatch in equation: " <> eqName0)
+            else Left ("Variable sort mismatch in equation: " <> eqName0)
     TOp _ args -> mapM_ (checkVarSorts eqName0 env) args
 
 checkSort :: Text -> M.Map Var Sort -> Sort -> Either Text ()
 checkSort eqName0 env (Sort _ idx) = mapM_ (checkVarSorts eqName0 env) idx
-
-sortIsWeakening :: Sort -> Sort -> Bool
-sortIsWeakening src tgt =
-  case (src, tgt) of
-    (Sort s (ctxOld:idxOld), Sort s' (ctxNew:idxNew))
-      | s == s' && length idxOld == length idxNew ->
-          if isCtxExtension ctxOld ctxNew
-            then case traverse (\t -> weakenTermToCtxMaybe t ctxNew) idxOld of
-              Just idxOld' -> idxOld' == idxNew
-              Nothing -> False
-            else False
-    _ -> False
 
 validateTerm :: Signature -> Term -> Either Text ()
 validateTerm sig tm = do

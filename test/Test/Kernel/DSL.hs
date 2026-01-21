@@ -293,7 +293,7 @@ testUnknownDoctrine = do
 testSyntaxModelRunParse :: Assertion
 testSyntaxModelRunParse = do
   let prog = T.unlines
-        [ "syntax S for doctrine A where {"
+        [ "syntax S where {"
         , "  print atom \"e\" = e;"
         , "  allow call;"
         , "  varprefix \"?\";"

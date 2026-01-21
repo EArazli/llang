@@ -1,4 +1,4 @@
-syntax PeanoSyntax for doctrine Nat where {
+syntax PeanoSyntax where {
   print atom "Z" = Z;
   print prefix 9 "S" = S;
   print infixl 6 "+" = add;
