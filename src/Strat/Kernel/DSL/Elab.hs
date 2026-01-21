@@ -92,7 +92,9 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
           pure (docEnv, env', rawRuns)
         DeclImplements implDecl -> do
           (key, morphName) <- elabImplements docEnv env implDecl
-          let env' = env { meImplDefaults = M.insert key morphName (meImplDefaults env) }
+          let defaults = M.findWithDefault [] key (meImplDefaults env)
+          let defaults' = if morphName `elem` defaults then defaults else defaults <> [morphName]
+          let env' = env { meImplDefaults = M.insert key defaults' (meImplDefaults env) }
           pure (docEnv, env', rawRuns)
         DeclRunSpec name rawSpec -> do
           ensureAbsent "run_spec" name (meRunSpecs env)

@@ -110,7 +110,19 @@ diffEnv full base = ModuleEnv
   , meSurfaces = M.difference (meSurfaces full) (meSurfaces base)
   , meMorphisms = M.difference (meMorphisms full) (meMorphisms base)
   , meModels = M.difference (meModels full) (meModels base)
-  , meImplDefaults = M.difference (meImplDefaults full) (meImplDefaults base)
+  , meImplDefaults = diffImplDefaults (meImplDefaults full) (meImplDefaults base)
   , meRunSpecs = M.difference (meRunSpecs full) (meRunSpecs base)
   , meRuns = meRuns full
   }
+
+diffImplDefaults :: M.Map (Text, Text) [Text] -> M.Map (Text, Text) [Text] -> M.Map (Text, Text) [Text]
+diffImplDefaults full base =
+  M.mapMaybeWithKey dropBase full
+  where
+    dropBase key names =
+      case M.lookup key base of
+        Nothing -> Just names
+        Just baseNames ->
+          let baseSet = S.fromList baseNames
+              remaining = filter (`S.notMember` baseSet) names
+          in if null remaining then Nothing else Just remaining

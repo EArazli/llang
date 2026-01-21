@@ -17,6 +17,7 @@ import Strat.Surface2.SyntaxSpec (SurfaceSyntaxSpec)
 import Strat.Kernel.Morphism (Morphism)
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 
 
 data SyntaxDef
@@ -31,7 +32,7 @@ data ModuleEnv = ModuleEnv
   , meSurfaces      :: M.Map Text SurfaceDef
   , meMorphisms     :: M.Map Text Morphism
   , meModels        :: M.Map Text ModelSpec
-  , meImplDefaults  :: M.Map (Text, Text) Text
+  , meImplDefaults  :: M.Map (Text, Text) [Text]
   , meRunSpecs      :: M.Map Text RawRun
   , meRuns          :: M.Map Text RunSpec
   }
@@ -58,7 +59,7 @@ mergeEnv a b = do
   surfs <- mergeMap "surface" meSurfaces
   morphs <- mergeMap "morphism" meMorphisms
   mods <- mergeMap "model" meModels
-  impls <- mergeNamed "implements default" renderImplKey (meImplDefaults a) (meImplDefaults b)
+  let impls = mergeImplDefaults (meImplDefaults a) (meImplDefaults b)
   specs <- mergeMap "run_spec" meRunSpecs
   runs <- mergeMap "run" meRuns
   pure ModuleEnv
@@ -74,7 +75,16 @@ mergeEnv a b = do
     }
   where
     mergeMap label f = mergeNamed label id (f a) (f b)
-    renderImplKey (i, t) = i <> " -> " <> t
+    mergeImplDefaults left right = M.unionWith mergeDefaults left right
+    mergeDefaults xs ys = dedupe (xs <> ys)
+
+dedupe :: Ord a => [a] -> [a]
+dedupe = go S.empty
+  where
+    go _ [] = []
+    go seen (x:xs)
+      | x `S.member` seen = go seen xs
+      | otherwise = x : go (S.insert x seen) xs
 
 mergeNamed :: (Ord k, Eq v) => Text -> (k -> Text) -> M.Map k v -> M.Map k v -> Either Text (M.Map k v)
 mergeNamed label renderKey left right =

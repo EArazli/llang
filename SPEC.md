@@ -184,7 +184,7 @@ Rewrite-specific side conditions are enforced when compiling a rewrite system (n
 Whether an equation is eligible as a rewrite rule depends on the chosen rewrite policy and its orientation.
 For any equation direction selected as a rewrite rule, the kernel requires vars(RHS) ⊆ vars(LHS) (no new variables introduced by rewriting).
 Rule-name uniqueness (among the rules included in the selected rewrite system) is also enforced at rewrite-system compilation time.
-These checks are implemented in compileRewriteSystem / toRules (see src/Strat/Kernel/RewriteSystem.hs).
+These checks are implemented in `compileRewriteSystem` via `buildRules`/`rulesForEq` (see `src/Strat/Kernel/RewriteSystem.hs`).
 
 ---
 
@@ -195,9 +195,11 @@ These checks are implemented in compileRewriteSystem / toRules (see src/Strat/Ke
 Each equation can yield **directed rewrite rules** depending on its orientation and on the chosen **rewrite policy** (next section). Internally, a `Rule` carries:
 
 * rule id (from equation name and direction),
-* class (`Computational`/`Structural`),
-* LHS/RHS,
-* telescope.
+* rule index (deterministic iteration order),
+* equation name and class (`Computational`/`Structural`),
+* LHS/RHS terms.
+
+The equation telescope is not stored on `Rule`; variables in `lhs`/`rhs` originate from the equation telescope and are represented explicitly as `Var` nodes with scoped identifiers.
 
 ### 3.2 Rewrite policy
 
@@ -244,6 +246,8 @@ Occurs-checking unification (unify) is used by critical-pair generation tooling 
   * smallest rule index.
 
 This yields a deterministic “first redex” strategy.
+
+Before matching, rules are **freshened** against the target term to avoid variable-scope collisions; substitutions and step replay are computed against the freshened rule.
 
 ### 3.5 Normalization (bounded)
 
@@ -392,8 +396,9 @@ For each equation (e : \Gamma \vdash l = r : A) in (P):
 * compute translations (l' = M(l)), (r' = M(r)) in (Q),
 * check that (l') and (r') are equal by:
 
-  * normalization under (Q)’s rewrite system (policy+fuel), and/or
-  * bounded joinability under that rewrite system.
+  * normalize both sides with `normalizeStatus` under (Q)’s rewrite system (policy+fuel),
+  * if **both** normalizations finish within fuel, require syntactic equality of the normal forms,
+* otherwise, attempt `joinableWithin fuel` on the unnormalized translated images (l' and r').
 
 If preservation fails, the morphism declaration is rejected.
 
@@ -583,8 +588,8 @@ For each required alias (a : I) and the target run doctrine (D):
 Resolve a morphism (m : I \to D) by:
 
 1. explicit `uses` in the run,
-2. default `implements (I -> D)` mapping,
-3. identity morphism if `I` and `D` are the same presentation name,
+2. default `implements (I -> D)` mapping (use if exactly one default matches; if multiple defaults match, error),
+3. identity morphism if the required interface presentation equals the run presentation,
 4. if exactly one morphism exists in the environment with `src=I` and `tgt=D`, use it,
 5. otherwise error.
 

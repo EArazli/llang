@@ -205,18 +205,18 @@ buildMorphismEnv env pres surf uses = do
         Just name -> do
           mor <- lookupMorphism name
           ensureMorphMatch alias req mor
-        Nothing ->
-          case M.lookup (presName (srPres req), presName pres) (meImplDefaults env) of
-            Just name -> do
-              mor <- lookupMorphism name
-              ensureMorphMatch alias req mor
+        Nothing -> do
+          mDefault <- resolveDefault alias req
+          case mDefault of
+            Just pair -> Right pair
             Nothing ->
-              if presName (srPres req) == presName pres
+              if srPres req == pres
                 then do
                   mor <- identityMorphism pres
+                  pair <- ensureMorphMatch alias req mor
                   case checkMorphism (mcPolicy (morCheck mor)) (mcFuel (morCheck mor)) mor of
                     Left err -> Left ("identity morphism check failed: " <> T.pack (show err))
-                    Right () -> Right (alias, mor)
+                    Right () -> Right pair
                 else do
                   let candidates =
                         [ m
@@ -228,6 +228,17 @@ buildMorphismEnv env pres surf uses = do
                     [m] -> Right (alias, m)
                     [] -> Left ("Missing implementation for alias: " <> alias)
                     _ -> Left ("Ambiguous implementation for alias: " <> alias)
+      where
+        resolveDefault alias req' =
+          case M.lookup (presName (srPres req'), presName pres) (meImplDefaults env) of
+            Nothing -> Right Nothing
+            Just names -> do
+              mors <- mapM lookupMorphism names
+              let matches = [ pair | mor <- mors, Right pair <- [ensureMorphMatch alias req' mor] ]
+              case matches of
+                [] -> Right Nothing
+                [pair] -> Right (Just pair)
+                _ -> Left ("Ambiguous default implements for alias: " <> alias)
 
     lookupMorphism name =
       case M.lookup name (meMorphisms env) of
