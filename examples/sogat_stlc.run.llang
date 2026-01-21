@@ -18,8 +18,5 @@ run main where {
   show value;
 }
 ---
-Lam(empty,
-    Bool(empty),
-    Bool(empty),
-    true(extend(empty, Bool(empty))))
+true(empty)
 ---

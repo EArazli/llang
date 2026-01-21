@@ -7,7 +7,7 @@ sogat STLC where {
   op Arr (A:Ty) (B:Ty) -> Ty;
 
   op Bool -> Ty;
-  op true -> Tm(Bool);
+  op true -> Tm(Bool());
 
   op Lam (A:Ty) (B:Ty) (t: Tm(B) [x:A]) -> Tm(Arr(A,B));
   op App (A:Ty) (B:Ty) (f:Tm(Arr(A,B))) (u:Tm(A)) -> Tm(B);
