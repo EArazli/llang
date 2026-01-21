@@ -1,0 +1,25 @@
+import "../stdlib/models.llang";
+import "../stdlib/syntax.llang";
+import "sogat_stlc.llang";
+
+run main where {
+  doctrine STLC;
+  syntax CombDefault;
+  model Symbolic;
+
+  open STLC;
+
+  policy UseOnlyComputationalLR;
+  fuel 50;
+
+  show input;
+  show normalized;
+  show cat;
+  show value;
+}
+---
+Lam(empty,
+    Bool(empty),
+    Bool(empty),
+    true(extend(empty, Bool(empty))))
+---

@@ -8,6 +8,7 @@ import Test.Tasty.HUnit
 import Strat.Kernel.DSL.Parse (parseRawFile)
 import Strat.Kernel.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (ModuleEnv(..))
+import Strat.Kernel.DoctrineExpr (elabDocExpr)
 import Strat.Kernel.Presentation (Presentation(..), validatePresentation)
 import Strat.Kernel.Signature (Signature(..), SortCtor(..), OpDecl(..))
 import Strat.Kernel.Syntax (SortName(..), OpName(..))
@@ -20,6 +21,7 @@ tests =
   testGroup
     "Kernel.Sogat"
     [ testCase "sogat elaborates" testSogatElab
+    , testCase "sogat validates after qualification" testSogatQualified
     , testCase "sogat type former with term args" testSogatDependentType
     , testCase "sogat type former with binder arg" testSogatTypeBinder
     , testCase "sogat multi-binder weakening" testSogatMultiBinder
@@ -65,6 +67,34 @@ testSogatElab = do
               case M.lookup (OpName "Lam") (sigOps sig) of
                 Nothing -> assertFailure "missing Lam op"
                 Just op -> length (opTele op) @?= 4
+
+
+testSogatQualified :: Assertion
+testSogatQualified = do
+  let src = T.unlines
+        [ "sogat MultiBinder where {"
+        , "  context_sort Ty;"
+        , "  sort Ty;"
+        , "  sort Tm (A:Ty);"
+        , "  op Arr (A:Ty) (B:Ty) -> Ty;"
+        , "  op Foo (A:Ty) (t: Tm(A) [x:Arr(A,A)] [y:Arr(A,A)]) -> Tm(A);"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right env ->
+          case M.lookup "MultiBinder" (meDoctrines env) of
+            Nothing -> assertFailure "missing MultiBinder doctrine expr"
+            Just dexpr ->
+              case elabDocExpr dexpr of
+                Left err -> assertFailure (T.unpack err)
+                Right presQ ->
+                  case validatePresentation presQ of
+                    Left err -> assertFailure (T.unpack err)
+                    Right () -> pure ()
 
 
 testSogatDependentType :: Assertion

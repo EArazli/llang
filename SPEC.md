@@ -182,7 +182,12 @@ The kernel validates a presentation by checking:
   * telescope well-formed,
   * LHS and RHS terms are well-typed under telescope and have the same sort,
   * *variables used* are from the telescope,
-  * (rewrite-side condition) if oriented, RHS variables are a subset of LHS variables.
+
+Rewrite-specific side conditions are enforced when compiling a rewrite system (not when merely validating a presentation). In particular:
+Whether an equation is eligible as a rewrite rule depends on the chosen rewrite policy and its orientation.
+For any equation direction selected as a rewrite rule, the kernel requires vars(RHS) ⊆ vars(LHS) (no new variables introduced by rewriting).
+Rule-name uniqueness (among the rules included in the selected rewrite system) is also enforced at rewrite-system compilation time.
+These checks are implemented in compileRewriteSystem / toRules (see src/Strat/Kernel/RewriteSystem.hs).
 
 **SOGAT fix hook (assumed applied):** equation/typechecking validity must treat “context weakening” (for context-indexed sorts/terms produced by the SOGAT elaboration) as admissible in the precise places discussed earlier (i.e. variable sorts can be checked modulo context extension, and weakening updates explicit context indices and explicit context arguments of ops). This is not a general feature of the first-order kernel; it is a targeted accommodation used by the SOGAT encoding and its derived theories.
 
@@ -227,11 +232,13 @@ To apply a rewrite rule `l → r`:
 
   * matching checks sorts as well as term structure,
   * substitution must be consistent,
-  * matching and unification include occurs checks to avoid infinite terms.
+  * matching does not use occurs checks (it is pattern matching, not unification).
 
 If a match `σ` is found, the reduct is `t[r[σ]]_p` (replace the matched subterm by `r` instantiated by `σ`).
 
 The implementation enumerates all such redexes.
+
+Occurs-checking unification (unify) is used by critical-pair generation tooling (overlaps/unifiers between LHS patterns), and does reject cyclic bindings. (See src/Strat/Kernel/Unify.hs for match vs unify.)
 
 ### 3.4 One-step rewrite and strategy
 
@@ -381,7 +388,7 @@ The check requires:
   \mathrm{sort}(t) \equiv M(B)[y_0/x_0,\ldots,y_{m-1}/x_{m-1}]
   ]
 
-This is a strict sort equality check (plus whatever weakening accommodation exists for SOGAT-derived context sorts, if applicable to the target doctrine).
+The current implementation uses strict syntactic sort equality for these checks (no weakening-aware coercions during morphism typechecking). Any weakening-aware morphism typing would be a future extension and would also require inserting explicit coercions when applying op interpretations.
 
 ### 5.4 Equation preservation obligation
 
@@ -514,12 +521,20 @@ Evaluation of `CoreExpr` yields `CoreVal`:
 * `CVCtx Ctx` (context value),
 * `CVNat Int`.
 
-Resolution order for a `CoreVar`/`CoreApp` head symbol `f`:
+Resolution depends on whether the head is a variable reference (CoreVar) or an application (CoreApp).
 
-1. local core environment binding,
-2. required-interface op via `alias.slot` naming (see below),
-3. surface constructor,
-4. surface `define` clause.
+For CoreVar `f`:
+local core environment binding,
+required-interface op via alias.slot naming (only if f contains a dot and matches a requires alias),
+nullary surface constructor `f` (producing a surface value),
+otherwise error.
+
+For CoreApp `f args`:
+local core environment binding,
+define clause named `f` (function-style evaluation on core arguments),
+required-interface op via alias.slot naming,
+surface constructor application `f(args)` (building a surface term),
+otherwise error.
 
 #### Alias-qualified ops
 
@@ -685,6 +700,8 @@ Because the SOGAT encoding uses explicit context indices, the system admits an i
      and do so recursively through subterms and sort indices.
 
 This weakening is used to typecheck binder types and dependent arities produced by the SOGAT compilation, and (where needed) to validate presentations containing SOGAT-derived context-indexed sorts.
+
+Note on namespacing: because doctrine atoms qualify all sort/op/equation names (e.g. ns.Ctx, ns.extend), weakening must recognize the context-discipline symbols under qualification. Operationally, the “extend chain” check is performed relative to the context sort name of the target context term, and the corresponding extend operator in the same namespace.
 
 ---
 
