@@ -6,8 +6,7 @@ module Test.Frontend.SyntaxModel
 import Test.Tasty
 import Test.Tasty.HUnit
 import Strat.Kernel.DSL.Parse (parseRawFile)
-import Strat.Kernel.DSL.Elab (elabRawFile)
-import Strat.Kernel.DoctrineExpr (elabDocExpr)
+import Strat.Kernel.DSL.Elab (elabRawFile, elabRawFileWithEnv)
 import Strat.Kernel.Presentation (Presentation(..), presSig)
 import Strat.Kernel.Signature (Signature(..), SortCtor(..), OpDecl(..))
 import Strat.Kernel.Term (mkOp, mkVar)
@@ -46,6 +45,16 @@ loadEnvFromFile path = do
         Left err -> assertFailure (T.unpack err) >> pure emptyEnv
         Right env -> pure env
 
+loadEnvFromFileWithEnv :: ModuleEnv -> FilePath -> IO ModuleEnv
+loadEnvFromFileWithEnv base path = do
+  txt <- TIO.readFile path
+  case parseRawFile txt of
+    Left err -> assertFailure (T.unpack err) >> pure emptyEnv
+    Right rf ->
+      case elabRawFileWithEnv base rf of
+        Left err -> assertFailure (T.unpack err) >> pure emptyEnv
+        Right env -> pure env
+
 mergeEnvs :: ModuleEnv -> ModuleEnv -> IO ModuleEnv
 mergeEnvs a b =
   case mergeEnv a b of
@@ -61,23 +70,22 @@ lookupDoctrineSyntax env name =
         SyntaxDoctrine spec -> pure spec
         SyntaxSurface _ -> assertFailure ("syntax is for surface: " <> T.unpack name) >> pure (error "wrong")
 
+lookupDoctrinePres :: ModuleEnv -> T.Text -> IO Presentation
+lookupDoctrinePres env name =
+  case M.lookup name (meDoctrines env) of
+    Nothing -> assertFailure ("missing doctrine: " <> T.unpack name) >> pure (error "missing")
+    Just pres -> pure pres
+
 
 testSyntaxRoundtrip :: Assertion
 testSyntaxRoundtrip = do
   presEnv <- getDataFileName "examples/monoid.llang" >>= loadEnvFromFile
   synEnv <- getDataFileName "examples/monoid.syntax.llang" >>= loadEnvFromFile
   env <- mergeEnvs presEnv synEnv
-  expr <-
-    case M.lookup "Combined" (meDoctrines env) of
-      Nothing -> assertFailure "missing Combined" >> pure (error "missing")
-      Just e -> pure e
-  pres <-
-    case elabDocExpr expr of
-      Left err -> assertFailure (T.unpack err) >> pure (error "bad")
-      Right p -> pure p
+  pres <- lookupDoctrinePres env "Combined"
   spec <- lookupDoctrineSyntax env "MonoidSyntax"
   inst <-
-    case instantiateSyntax pres ["C"] spec of
+    case instantiateSyntax pres ["Combined"] spec of
       Left err -> assertFailure (T.unpack err) >> pure (error "bad")
       Right i -> pure i
   let input = "k(e * e)"
@@ -105,17 +113,10 @@ testSyntaxUnaryRoundtrip = do
   presEnv <- getDataFileName "examples/monoid.llang" >>= loadEnvFromFile
   synEnv <- getDataFileName "examples/monoid.syntax.llang" >>= loadEnvFromFile
   env <- mergeEnvs presEnv synEnv
-  expr <-
-    case M.lookup "Combined" (meDoctrines env) of
-      Nothing -> assertFailure "missing Combined" >> pure (error "missing")
-      Just e -> pure e
-  pres <-
-    case elabDocExpr expr of
-      Left err -> assertFailure (T.unpack err) >> pure (error "bad")
-      Right p -> pure p
+  pres <- lookupDoctrinePres env "Combined"
   spec <- lookupDoctrineSyntax env "MonoidSyntax"
   inst <-
-    case instantiateSyntax pres ["C"] spec of
+    case instantiateSyntax pres ["Combined"] spec of
       Left err -> assertFailure (T.unpack err) >> pure (error "bad")
       Right i -> pure i
   let input = "k(e)"
@@ -143,21 +144,14 @@ testSyntaxVarRoundtrip = do
   presEnv <- getDataFileName "examples/monoid.llang" >>= loadEnvFromFile
   synEnv <- getDataFileName "examples/monoid.syntax.llang" >>= loadEnvFromFile
   env <- mergeEnvs presEnv synEnv
-  expr <-
-    case M.lookup "Combined" (meDoctrines env) of
-      Nothing -> assertFailure "missing Combined" >> pure (error "missing")
-      Just e -> pure e
-  pres <-
-    case elabDocExpr expr of
-      Left err -> assertFailure (T.unpack err) >> pure (error "bad")
-      Right p -> pure p
+  pres <- lookupDoctrinePres env "Combined"
   spec <- lookupDoctrineSyntax env "MonoidSyntax"
   inst <-
-    case instantiateSyntax pres ["C"] spec of
+    case instantiateSyntax pres ["Combined"] spec of
       Left err -> assertFailure (T.unpack err) >> pure (error "bad")
       Right i -> pure i
   let var = Var (ScopeId "ex") 0
-  let sortObj = Sort (SortName "C.Obj") []
+  let sortObj = Sort (SortName "Combined.Obj") []
   let term = mkVar sortObj var
   let printed = siPrint inst term
   comb <-
@@ -179,25 +173,18 @@ testSyntaxDuplicatePrint :: Assertion
 testSyntaxDuplicatePrint = do
   presEnv <- getDataFileName "examples/monoid.llang" >>= loadEnvFromFile
   env <- mergeEnvs presEnv emptyEnv
-  expr <-
-    case M.lookup "Combined" (meDoctrines env) of
-      Nothing -> assertFailure "missing Combined" >> pure (error "missing")
-      Just e -> pure e
-  pres <-
-    case elabDocExpr expr of
-      Left err -> assertFailure (T.unpack err) >> pure (error "bad")
-      Right p -> pure p
+  pres <- lookupDoctrinePres env "Combined"
   let spec = SyntaxSpec
         { ssName = "Bad"
         , ssNotations =
-            [ NotationSpec NAtom "e" "C.e" True
-            , NotationSpec NAtom "E" "C.e" True
+            [ NotationSpec NAtom "e" "Combined.e" True
+            , NotationSpec NAtom "E" "Combined.e" True
             ]
         , ssAllowCall = True
         , ssVarPrefix = "?"
         , ssAllowQualId = True
         }
-  case instantiateSyntax pres ["C"] spec of
+  case instantiateSyntax pres ["Combined"] spec of
     Left _ -> pure ()
     Right _ -> assertFailure "expected duplicate print notation error"
 
@@ -228,26 +215,20 @@ testSyntaxTokenCollision = do
 testModelEval :: Assertion
 testModelEval = do
   presEnv <- getDataFileName "examples/monoid.llang" >>= loadEnvFromFile
-  modelEnv <- getDataFileName "examples/monoid.models.llang" >>= loadEnvFromFile
+  modelEnv <- getDataFileName "examples/monoid.models.llang" >>= loadEnvFromFileWithEnv presEnv
   env <- mergeEnvs presEnv modelEnv
-  expr <-
-    case M.lookup "Combined" (meDoctrines env) of
-      Nothing -> assertFailure "missing Combined" >> pure (error "missing")
-      Just e -> pure e
-  pres <-
-    case elabDocExpr expr of
-      Left err -> assertFailure (T.unpack err) >> pure (error "bad")
-      Right p -> pure p
-  spec <-
+  pres <- lookupDoctrinePres env "Combined"
+  (docName, spec) <-
     case M.lookup "StringMonoid" (meModels env) of
       Nothing -> assertFailure "missing StringMonoid" >> pure (error "missing")
       Just s -> pure s
+  modelPres <- lookupDoctrinePres env docName
   model <-
-    case instantiateModel pres ["C"] spec of
+    case instantiateModel modelPres ["Combined"] spec of
       Left err -> assertFailure (T.unpack err) >> pure (error "bad")
       Right m -> pure m
   term <-
-    case mkOp (presSig pres) (OpName "C.m") [mkTerm (presSig pres) "C.x" [], mkTerm (presSig pres) "C.y" []] of
+    case mkOp (presSig pres) (OpName "Combined.m") [mkTerm (presSig pres) "Combined.x" [], mkTerm (presSig pres) "Combined.y" []] of
       Left err -> assertFailure (show err) >> pure (error "bad")
       Right t -> pure t
   case evalTerm model term of

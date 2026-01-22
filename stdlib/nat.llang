@@ -1,0 +1,9 @@
+doctrine Nat where {
+  sort Nat;
+  op Z : Nat;
+  op S : (n:Nat) -> Nat;
+
+  op add : (a:Nat) (b:Nat) -> Nat;
+  computational addZ : (b:Nat) |- add(Z, ?b) -> ?b;
+  computational addS : (a:Nat) (b:Nat) |- add(S(?a), ?b) -> S(add(?a, ?b));
+}

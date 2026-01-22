@@ -41,9 +41,13 @@ data-files:
 - examples/ccc_surface/stlc.pair.run.llang
 - examples/ccc_surface/stlc.runspec.llang
 - examples/morphism_term.llang
+- examples/pushout_basic.llang
+- examples/native_pushout.llang
 - examples/runspec/multi.llang
 - stdlib/syntax.llang
-- stdlib/models.llang
+- stdlib/nat.llang
+- stdlib/bool.llang
+- stdlib/native.models.llang
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -109,14 +113,14 @@ tests:
     - Test.Kernel.CriticalPairsDependent
     - Test.Kernel.Coherence
     - Test.Kernel.CriticalPairs
-    - Test.Kernel.DoctrineExpr
     - Test.Kernel.DSL
     - Test.Kernel.Fixtures
-    - Test.Kernel.Include
     - Test.Kernel.Morphism
+    - Test.Kernel.Pushout
     - Test.Kernel.SortCtorTele
     - Test.Kernel.Rewrite
     - Test.Kernel.RewriteSystem
+    - Test.Frontend.ModelRestriction
     - Test.Frontend.SyntaxModel
     - Test.Frontend.Loader
     - Test.Frontend.Implements

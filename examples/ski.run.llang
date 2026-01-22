@@ -1,6 +1,5 @@
 import "./ski.llang";
 import "./ski.syntax.llang";
-import "../stdlib/models.llang";
 
 run main where {
   doctrine SKI;

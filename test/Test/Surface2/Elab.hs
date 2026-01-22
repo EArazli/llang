@@ -29,7 +29,7 @@ testJudgSort = do
         RawSurfaceDecl
           { rsdName = "BadSort"
           , rsdItems =
-              [ RSRequires "ccc" (ERef "CCC")
+              [ RSRequires "ccc" "CCC"
               , RSContextSort "Ty"
               , RSSort "Ty"
               , RSJudg (RawSurfaceJudg "HasType" [RawSurfaceJudgParam "t" "TmTypo"] [])
@@ -67,7 +67,7 @@ testJudgOutputMismatchConclusion = do
         RawSurfaceDecl
           { rsdName = "BadOut"
           , rsdItems =
-              [ RSRequires "ccc" (ERef "CCC")
+              [ RSRequires "ccc" "CCC"
               , RSContextSort "Ty"
               , RSSort "Ty"
               , RSSort "Tm"
@@ -114,7 +114,7 @@ testJudgOutputMismatchPremise = do
         RawSurfaceDecl
           { rsdName = "BadPrem"
           , rsdItems =
-              [ RSRequires "ccc" (ERef "CCC")
+              [ RSRequires "ccc" "CCC"
               , RSContextSort "Ty"
               , RSSort "Ty"
               , RSSort "Tm"
@@ -126,7 +126,7 @@ testJudgOutputMismatchPremise = do
     Left _ -> pure ()
     Right _ -> assertFailure "expected premise output arity mismatch"
 
-resolveDummy :: RawExpr -> Either Text Presentation
+resolveDummy :: Text -> Either Text Presentation
 resolveDummy _ =
   Right Presentation
     { presName = "Dummy"

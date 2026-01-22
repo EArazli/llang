@@ -7,10 +7,9 @@ import qualified Test.Kernel.Rewrite as KernelRewrite
 import qualified Test.Kernel.CriticalPairs as KernelCriticalPairs
 import qualified Test.Kernel.CriticalPairsDependent as KernelCriticalPairsDependent
 import qualified Test.Kernel.Coherence as KernelCoherence
-import qualified Test.Kernel.DoctrineExpr as KernelDoctrineExpr
 import qualified Test.Kernel.DSL as KernelDSL
-import qualified Test.Kernel.Include as KernelInclude
 import qualified Test.Kernel.Morphism as KernelMorphism
+import qualified Test.Kernel.Pushout as KernelPushout
 import qualified Test.Kernel.SortCtorTele as KernelSortCtorTele
 import qualified Test.Surface as Surface
 import qualified Test.Backend as Backend
@@ -18,6 +17,7 @@ import qualified Test.CLI as CLI
 import qualified Test.Frontend.SyntaxModel as FrontendSyntaxModel
 import qualified Test.Frontend.Loader as FrontendLoader
 import qualified Test.Frontend.Implements as FrontendImplements
+import qualified Test.Frontend.ModelRestriction as FrontendModelRestriction
 import qualified Test.Surface2.Term as Surface2Term
 import qualified Test.Surface2.Pattern as Surface2Pattern
 import qualified Test.Surface2.CoreEval as Surface2CoreEval
@@ -35,16 +35,16 @@ main =
       , KernelCriticalPairs.tests
       , KernelCriticalPairsDependent.tests
       , KernelCoherence.tests
-      , KernelDoctrineExpr.tests
       , KernelDSL.tests
-      , KernelInclude.tests
       , KernelMorphism.tests
+      , KernelPushout.tests
       , KernelSortCtorTele.tests
       , Surface.tests
       , Backend.tests
       , FrontendSyntaxModel.tests
       , FrontendLoader.tests
       , FrontendImplements.tests
+      , FrontendModelRestriction.tests
       , Surface2Term.tests
       , Surface2Pattern.tests
       , Surface2CoreEval.tests

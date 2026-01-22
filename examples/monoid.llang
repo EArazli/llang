@@ -17,4 +17,4 @@ doctrine Ext extends Base where {
   computational ext : (x:Obj) |- k(m(e, ?x)) -> ?x;
 }
 
-doctrine Combined = (Ext@C);
+doctrine Combined extends Ext where { }

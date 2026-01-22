@@ -35,4 +35,4 @@ doctrine CatGen extends CatCore where {
   op h : Hom(C, D);
 }
 
-doctrine Cat = (CatGen@C);
+doctrine Cat extends CatGen where { }

@@ -50,9 +50,13 @@ data-files:
     examples/ccc_surface/stlc.pair.run.llang
     examples/ccc_surface/stlc.runspec.llang
     examples/morphism_term.llang
+    examples/pushout_basic.llang
+    examples/native_pushout.llang
     examples/runspec/multi.llang
     stdlib/syntax.llang
-    stdlib/models.llang
+    stdlib/nat.llang
+    stdlib/bool.llang
+    stdlib/native.models.llang
 
 source-repository head
   type: git
@@ -71,13 +75,16 @@ library
       Strat.Kernel.AlphaEq
       Strat.Kernel.Coherence
       Strat.Kernel.CriticalPairs
-      Strat.Kernel.DoctrineExpr
       Strat.Kernel.DSL.AST
       Strat.Kernel.DSL.Elab
       Strat.Kernel.DSL.Parse
       Strat.Kernel.Examples.Monoid
       Strat.Kernel.Morphism
+      Strat.Kernel.Morphism.Util
       Strat.Kernel.Presentation
+      Strat.Kernel.Presentation.Merge
+      Strat.Kernel.Presentation.Rename
+      Strat.Kernel.Pushout
       Strat.Kernel.Rewrite
       Strat.Kernel.Rewrite.Indexed
       Strat.Kernel.RewriteSystem
@@ -148,14 +155,14 @@ test-suite llang-test
       Test.Kernel.CriticalPairsDependent
       Test.Kernel.Coherence
       Test.Kernel.CriticalPairs
-      Test.Kernel.DoctrineExpr
       Test.Kernel.DSL
       Test.Kernel.Fixtures
-      Test.Kernel.Include
       Test.Kernel.Morphism
+      Test.Kernel.Pushout
       Test.Kernel.SortCtorTele
       Test.Kernel.Rewrite
       Test.Kernel.RewriteSystem
+      Test.Frontend.ModelRestriction
       Test.Frontend.SyntaxModel
       Test.Frontend.Loader
       Test.Frontend.Implements

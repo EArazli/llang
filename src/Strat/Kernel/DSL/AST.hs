@@ -7,7 +7,6 @@ module Strat.Kernel.DSL.AST
   , RawRule(..)
   , RawItem(..)
   , RawDecl(..)
-  , RawExpr(..)
   , RawSyntaxDecl(..)
   , RawSyntaxTarget(..)
   , RawSyntaxItem(..)
@@ -50,7 +49,6 @@ module Strat.Kernel.DSL.AST
 import Strat.Kernel.Types
 import Strat.Model.Spec (MExpr)
 import Data.Text (Text)
-import qualified Data.Map.Strict as M
 
 
 data RawTerm
@@ -100,33 +98,20 @@ data RawItem
   = ItemSort RawSortDecl
   | ItemOp   RawOpDecl
   | ItemRule RawRule
-  | ItemInclude RawExpr
   deriving (Eq, Show)
 
 
 data RawDecl
   = DeclImport FilePath
-  | DeclWhere Text [RawItem]
-  | DeclExpr  Text RawExpr
+  | DeclDoctrineWhere Text (Maybe Text) [RawItem]
+  | DeclDoctrinePushout Text Text Text
   | DeclSyntaxWhere RawSyntaxDecl
-  | DeclModelWhere Text [RawModelItem]
+  | DeclModelWhere Text Text [RawModelItem]
   | DeclSurfaceWhere RawSurfaceDecl
   | DeclMorphismWhere RawMorphismDecl
   | DeclImplements RawImplementsDecl
   | DeclRunSpec Text RawRunSpec
   | DeclRun RawNamedRun
-  deriving (Eq, Show)
-
-
-data RawExpr
-  = ERef Text
-  | EInst Text Text
-  | EAnd RawExpr RawExpr
-  | ERenameOps   (M.Map Text Text) RawExpr
-  | ERenameSorts (M.Map Text Text) RawExpr
-  | ERenameEqs   (M.Map Text Text) RawExpr
-  | EShareOps    [(Text, Text)] RawExpr
-  | EShareSorts  [(Text, Text)] RawExpr
   deriving (Eq, Show)
 
 
@@ -192,7 +177,7 @@ data RawRunShow
 
 
 data RawRun = RawRun
-  { rrDoctrine  :: Maybe RawExpr
+  { rrDoctrine  :: Maybe Text
   , rrSyntax    :: Maybe Text
   , rrSurface   :: Maybe Text
   , rrSurfaceSyntax :: Maybe Text
@@ -224,7 +209,7 @@ data RawSurfaceDecl = RawSurfaceDecl
   } deriving (Eq, Show)
 
 data RawSurfaceItem
-  = RSRequires Text RawExpr
+  = RSRequires Text Text
   | RSDeriveContexts Text
   | RSContextSort Text
   | RSSort Text
@@ -350,8 +335,8 @@ data RawSurfaceAssoc = SurfAssocL | SurfAssocR | SurfAssocN
 
 data RawMorphismDecl = RawMorphismDecl
   { rmdName  :: Text
-  , rmdSrc   :: RawExpr
-  , rmdTgt   :: RawExpr
+  , rmdSrc   :: Text
+  , rmdTgt   :: Text
   , rmdItems :: [RawMorphismItem]
   , rmdCheck :: Maybe RawMorphismCheck
   } deriving (Eq, Show)
@@ -371,8 +356,8 @@ data RawMorphismCheck = RawMorphismCheck
   } deriving (Eq, Show)
 
 data RawImplementsDecl = RawImplementsDecl
-  { ridInterface :: RawExpr
-  , ridTarget    :: RawExpr
+  { ridInterface :: Text
+  , ridTarget    :: Text
   , ridMorphism  :: Text
   } deriving (Eq, Show)
 

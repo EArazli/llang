@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Kernel.DSL.Parse
   ( parseRawFile
-  , parseRawExpr
   ) where
 
 import Strat.Kernel.DSL.AST
@@ -9,7 +8,6 @@ import Strat.Kernel.Types
 import Strat.Model.Spec (MExpr(..))
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Map.Strict as M
 import Data.Functor (($>))
 import Data.Void (Void)
 import Text.Megaparsec
@@ -26,12 +24,6 @@ parseRawFile input =
   case runParser (sc *> rawFile <* eof) "<dsl>" input of
     Left err -> Left (T.pack (errorBundlePretty err))
     Right rf -> Right rf
-
-parseRawExpr :: Text -> Either Text RawExpr
-parseRawExpr input =
-  case runParser (sc *> expr <* eof) "<expr>" input of
-    Left err -> Left (T.pack (errorBundlePretty err))
-    Right e -> Right e
 
 rawFile :: Parser RawFile
 rawFile = do
@@ -64,20 +56,21 @@ doctrineDecl :: Parser RawDecl
 doctrineDecl = do
   _ <- symbol "doctrine"
   name <- ident
-  (do
-      mExt <- optional (symbol "extends" *> expr)
+  pushoutDecl name <|> whereDecl name
+  where
+    whereDecl docName = do
+      mExt <- optional (symbol "extends" *> ident)
       _ <- symbol "where"
       items <- ruleBlock
-      let items' = maybe items (\e -> ItemInclude e : items) mExt
       optionalSemi
-      pure (DeclWhere name items')
-    )
-    <|> (do
+      pure (DeclDoctrineWhere docName mExt items)
+    pushoutDecl docName = do
       _ <- symbol "="
-      e <- expr
+      _ <- symbol "pushout"
+      leftMor <- qualifiedIdent
+      rightMor <- qualifiedIdent
       optionalSemi
-      pure (DeclExpr name e)
-    )
+      pure (DeclDoctrinePushout docName leftMor rightMor)
 
 syntaxDecl :: Parser RawDecl
 syntaxDecl = do
@@ -104,10 +97,12 @@ modelDecl :: Parser RawDecl
 modelDecl = do
   _ <- symbol "model"
   name <- ident
+  _ <- symbol ":"
+  doc <- ident
   _ <- symbol "where"
   items <- modelBlock
   optionalSemi
-  pure (DeclModelWhere name items)
+  pure (DeclModelWhere name doc items)
 
 surfaceDecl :: Parser RawDecl
 surfaceDecl = do
@@ -121,11 +116,11 @@ surfaceDecl = do
 morphismDecl :: Parser RawDecl
 morphismDecl = do
   _ <- symbol "morphism"
-  name <- ident
+  name <- qualifiedIdent
   _ <- symbol ":"
-  src <- expr
+  src <- ident
   _ <- symbol "->"
-  tgt <- expr
+  tgt <- ident
   _ <- symbol "where"
   items <- morphismBlock
   mcheck <- optional morphismCheck
@@ -135,11 +130,11 @@ morphismDecl = do
 implementsDecl :: Parser RawDecl
 implementsDecl = do
   _ <- symbol "implements"
-  iface <- expr
+  iface <- ident
   _ <- symbol "for"
-  tgt <- expr
+  tgt <- ident
   _ <- symbol "using"
-  name <- ident
+  name <- qualifiedIdent
   optionalSemi
   pure (DeclImplements (RawImplementsDecl iface tgt name))
 
@@ -189,15 +184,7 @@ itemDecl :: Parser RawItem
 itemDecl =
   (ItemSort <$> sortDecl)
     <|> (ItemOp <$> opDecl)
-    <|> includeDecl
     <|> (ItemRule <$> ruleDecl)
-
-includeDecl :: Parser RawItem
-includeDecl = do
-  _ <- symbol "include"
-  e <- expr
-  optionalSemi
-  pure (ItemInclude e)
 
 sortDecl :: Parser RawSortDecl
 sortDecl = do
@@ -265,54 +252,6 @@ orientation =
     <|> (symbol "->" $> LR)
     <|> (symbol "<-" $> RL)
     <|> (symbol "=" $> Unoriented)
-
-expr :: Parser RawExpr
-expr = shareExpr <|> renameExpr <|> andExpr
-
-shareExpr :: Parser RawExpr
-shareExpr = do
-  _ <- symbol "share"
-  kind <- (symbol "ops" $> True) <|> (symbol "sorts" $> False)
-  pairs <- mapEqPairs
-  _ <- symbol "in"
-  e <- expr
-  pure (if kind then EShareOps pairs e else EShareSorts pairs e)
-
-renameExpr :: Parser RawExpr
-renameExpr = do
-  _ <- symbol "rename"
-  kind <-
-    (symbol "ops" $> RenameOps)
-      <|> (symbol "sorts" $> RenameSorts)
-      <|> (symbol "eqs" $> RenameEqs)
-  pairs <- mapArrowPairs
-  _ <- symbol "in"
-  e <- expr
-  pure $ case kind of
-    RenameOps -> ERenameOps (M.fromList pairs) e
-    RenameSorts -> ERenameSorts (M.fromList pairs) e
-    RenameEqs -> ERenameEqs (M.fromList pairs) e
-
-data RenameKind = RenameOps | RenameSorts | RenameEqs
-
-andExpr :: Parser RawExpr
-andExpr = chainl1 postExpr (symbol "&" $> EAnd)
-
-postExpr :: Parser RawExpr
-postExpr = do
-  prim <- primary
-  mns <- optional (symbol "@" *> ident)
-  case mns of
-    Nothing -> pure prim
-    Just ns ->
-      case prim of
-        ERef name -> pure (EInst name ns)
-        _ -> fail "@ requires a doctrine name"
-
-primary :: Parser RawExpr
-primary =
-  (ERef <$> ident)
-    <|> (symbol "(" *> expr <* symbol ")")
 
 term :: Parser RawTerm
 term = lexeme (varTerm <|> appTerm)
@@ -495,7 +434,7 @@ requiresItem = do
   _ <- symbol "requires"
   alias <- ident
   _ <- symbol ":"
-  doc <- expr
+  doc <- ident
   optionalSemi
   pure (RSRequires alias doc)
 
@@ -910,7 +849,7 @@ runBlock = do
   pure items
 
 data RunItem
-  = RunDoctrine RawExpr
+  = RunDoctrine Text
   | RunSyntax Text
   | RunSurface Text
   | RunSurfaceSyntax Text
@@ -937,7 +876,7 @@ runItem =
 doctrineItem :: Parser RunItem
 doctrineItem = do
   _ <- symbol "doctrine"
-  e <- expr
+  e <- ident
   optionalSemi
   pure (RunDoctrine e)
 
@@ -967,7 +906,7 @@ useItemRun = do
   _ <- symbol "use"
   alias <- ident
   _ <- symbol "="
-  name <- ident
+  name <- qualifiedIdent
   optionalSemi
   pure (RunUse alias name)
 
@@ -1086,24 +1025,6 @@ binary name f = InfixL (f <$ symbol name)
 
 
 -- Helpers
-
-mapEqPairs :: Parser [(Text, Text)]
-mapEqPairs = braces (pair `sepBy` symbol ",")
-  where
-    pair = do
-      a <- qualifiedIdent
-      _ <- symbol "="
-      b <- qualifiedIdent
-      pure (a, b)
-
-mapArrowPairs :: Parser [(Text, Text)]
-mapArrowPairs = braces (pair `sepBy` symbol ",")
-  where
-    pair = do
-      a <- qualifiedIdent
-      _ <- symbol "->"
-      b <- qualifiedIdent
-      pure (a, b)
 
 qualifiedIdent :: Parser Text
 qualifiedIdent = lexeme $ do

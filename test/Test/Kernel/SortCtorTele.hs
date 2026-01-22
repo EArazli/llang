@@ -37,7 +37,7 @@ testSortCtorTele = do
       case elabRawFile rf of
         Left err -> assertFailure (T.unpack err)
         Right env ->
-          case M.lookup "Dep" (mePresentations env) of
+          case M.lookup "Dep" (meDoctrines env) of
             Nothing -> assertFailure "missing Dep presentation"
             Just pres ->
               case validatePresentation pres of

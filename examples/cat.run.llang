@@ -1,6 +1,5 @@
 import "./cat.llang";
 import "../stdlib/syntax.llang";
-import "../stdlib/models.llang";
 
 run main where {
   doctrine Cat;
@@ -14,4 +13,4 @@ run main where {
   show value;
 }
 ---
-C.comp(C.A,C.B,C.D, C.comp(C.B,C.C,C.D, C.h, C.g), C.comp(C.A,C.A,C.B, C.f, C.id(C.A)))
+Cat.comp(Cat.A,Cat.B,Cat.D, Cat.comp(Cat.B,Cat.C,Cat.D, Cat.h, Cat.g), Cat.comp(Cat.A,Cat.A,Cat.B, Cat.f, Cat.id(Cat.A)))

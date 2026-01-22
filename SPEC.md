@@ -275,43 +275,59 @@ A “joiner” can be validated by replaying derivation steps. This is tooling; 
 
 ---
 
-## 4. Doctrine expressions: compositional construction of presentations
+## 4. Doctrine assembly (as implemented)
 
-A doctrine in the DSL denotes a `DocExpr`, which elaborates to a presentation.
+The DSL provides only three ways to build doctrines; there are **no** doctrine expressions (`&`, `rename`, `share`, `include`, `@`) in the implementation.
 
-### 4.1 Atoms and qualification
+### 4.1 Atomic doctrines and qualification
 
-An atom is `Atom(ns, pres_raw)`.
+A doctrine declaration `doctrine X where { ... }` elaborates a **raw presentation** from the items and then **qualifies** it by prefixing:
 
-Elaboration **qualifies** the raw presentation by prefixing:
+* every sort constructor name `S` ↦ `X.S`,
+* every op name `o` ↦ `X.o`,
+* every equation name `e` ↦ `X.e`,
 
-* every sort constructor name `S` ↦ `ns.S`,
-* every op name `o` ↦ `ns.o`,
-* every equation name `e` ↦ `ns.e`,
+and sets the resulting presentation’s `presName = X`.
 
-and sets the resulting presentation’s `presName = ns`.
+This qualification is the project’s primary name-spacing mechanism.
 
-This is the project’s primary name-spacing mechanism.
+### 4.2 Extension (`extends`)
 
-### 4.2 Include (inside where-doctrines)
+`doctrine X extends Y where { ... }` is elaborated as:
 
-Inside a `where`-defined doctrine, `include X` merges presentations at the raw/unqualified level when possible. This enables writing a doctrine once, then later qualifying the whole result by the doctrine’s name when used as an atom.
+1. look up the **raw** presentation of `Y`,
+2. merge it with `X`’s new raw items (duplicates allowed only if α‑equivalent),
+3. qualify the merged presentation by prefixing with `X`.
 
-### 4.3 Merging: `And`
+Additionally, the system generates a morphism:
 
-`And A B` elaborates both sides, then merges:
+* `X.fromBase : Y -> X`,
 
-* signatures: union of sort ctors and op decls; duplicates are permitted only if **α-equivalent** (binder-renaming equivalence).
-* equations: union; duplicates by name are permitted only if α-equivalent.
+implemented as a symbol-map morphism that maps each `Y.*` symbol to the corresponding `X.*` symbol. This morphism is validated by the kernel’s morphism checker.
 
-If a duplicate name exists but is not α-equivalent, elaboration fails.
+### 4.3 Pushout (`pushout`)
 
-### 4.4 Renaming and sharing
+`doctrine P = pushout f g;` constructs a presentation `P` from morphisms:
 
-* `RenameSorts`, `RenameOps`, `RenameEqs` apply renaming maps.
-* `ShareSorts`, `ShareOps` take a list of pairs `(a,b)`, compute connected components, choose a representative, and rename all members to the representative (quotient by name-identification).
+* `f : A -> B`
+* `g : A -> C`
 
-Renaming operations also update binder scopes (since scopes are derived from symbol names).
+with the **same source** `A`. The implementation enforces:
+
+* `f` and `g` are **symbol-map** morphisms (each op maps to `op(args...)`), and
+* the induced maps on **interface** sorts/ops are injective.
+
+The pushout works by renaming the images of interface symbols in `B` and `C` back to the interface names, then merging `A`, `B'`, and `C'`. The result’s `presName` is set to `P` (symbol names retain their original namespaces, except for unified interface symbols).
+
+The system generates and validates:
+
+* `P.inl : B -> P`,
+* `P.inr : C -> P`,
+* `P.glue : A -> P`.
+
+### 4.4 Interoperability via morphisms
+
+If there is a morphism `m : D1 -> D2`, then any term in `D1` can be transported into `D2` by applying the morphism (`applyMorphismTerm m`). This is the only interoperability mechanism used throughout the system.
 
 ---
 
@@ -397,8 +413,13 @@ For each equation (e : \Gamma \vdash l = r : A) in (P):
 * check that (l') and (r') are equal by:
 
   * normalize both sides with `normalizeStatus` under (Q)’s rewrite system (policy+fuel),
-  * if **both** normalizations finish within fuel, require syntactic equality of the normal forms,
-* otherwise, attempt `joinableWithin fuel` on the unnormalized translated images (l' and r').
+  * if **both** normalizations finish within fuel **and** the normal forms are syntactically equal, accept,
+  * otherwise, attempt `joinableWithin fuel` on the unnormalized translated images (l' and r').
+
+If joinability fails:
+
+* if both normalizations finished, the check fails with `MorphismEqViolation`,
+* otherwise, it fails with `MorphismEqUndecided` (insufficient fuel).
 
 If preservation fails, the morphism declaration is rejected.
 
@@ -553,7 +574,7 @@ Arguments are checked **dependently**:
 
 A `RunSpec` fixes:
 
-* a doctrine expression,
+* a doctrine **name** (referring to an already elaborated presentation),
 * `syntax`:
 
   * required for core runs (core term parser/printer),
@@ -571,7 +592,7 @@ A `run` can inherit from a `run_spec` and override fields.
 
 Given a selected run:
 
-1. Elaborate the doctrine expression to a presentation.
+1. Look up the doctrine presentation by name (already elaborated during module loading).
 2. Compile its rewrite system with the selected policy.
 3. Parse/elaborate input:
 
@@ -579,7 +600,10 @@ Given a selected run:
    * surface: parse surface term → solve `HasType` judgment → evaluate core outputs → kernel term.
 4. Normalize the kernel term with fuel.
 5. Compile normalized term to `CatExpr` (a syntax tree over ops/vars).
-6. Evaluate normalized term with the chosen model, producing a `Value`.
+6. Evaluate the normalized term with the chosen model:
+
+   * if the model’s doctrine equals the run doctrine, evaluate directly,
+   * otherwise, require a morphism `runDoctrine -> modelDoctrine`, transport the term via that morphism, then evaluate.
 
 ### 8.2 Satisfying surface `requires`: building a morphism environment
 
@@ -617,6 +641,8 @@ Evaluation of a kernel term is straightforward recursion over the op tree, with 
 This is sufficient to prototype “interpretations” and to test rewriting correctness, but it is not (yet) a general semantics in categories.
 
 The “compile to categories” output currently is `CatExpr`, which preserves only the op-tree structure; there is no categorical normalizer beyond kernel rewriting.
+
+**Model restriction (implemented):** if a run selects a doctrine `D_run` but the chosen model was declared for `D_model`, the run is still valid provided there is a morphism `m : D_run -> D_model`. The term is transported with `applyMorphismTerm m` and then evaluated using the model for `D_model`. If no such morphism exists (or if it is ambiguous), the run fails.
 
 ---
 

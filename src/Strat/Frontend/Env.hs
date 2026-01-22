@@ -6,7 +6,6 @@ module Strat.Frontend.Env
   , mergeEnv
   ) where
 
-import Strat.Kernel.DoctrineExpr (DocExpr)
 import Strat.Kernel.Presentation (Presentation)
 import Strat.Syntax.Spec (SyntaxSpec)
 import Strat.Model.Spec (ModelSpec)
@@ -26,12 +25,12 @@ data SyntaxDef
   deriving (Eq, Show)
 
 data ModuleEnv = ModuleEnv
-  { meDoctrines     :: M.Map Text DocExpr
-  , mePresentations :: M.Map Text Presentation
+  { meDoctrines     :: M.Map Text Presentation
+  , meRawDoctrines  :: M.Map Text Presentation
   , meSyntaxes      :: M.Map Text SyntaxDef
   , meSurfaces      :: M.Map Text SurfaceDef
   , meMorphisms     :: M.Map Text Morphism
-  , meModels        :: M.Map Text ModelSpec
+  , meModels        :: M.Map Text (Text, ModelSpec)
   , meImplDefaults  :: M.Map (Text, Text) [Text]
   , meRunSpecs      :: M.Map Text RawRun
   , meRuns          :: M.Map Text RunSpec
@@ -41,7 +40,7 @@ data ModuleEnv = ModuleEnv
 emptyEnv :: ModuleEnv
 emptyEnv = ModuleEnv
   { meDoctrines = M.empty
-  , mePresentations = M.empty
+  , meRawDoctrines = M.empty
   , meSyntaxes = M.empty
   , meSurfaces = M.empty
   , meMorphisms = M.empty
@@ -54,7 +53,7 @@ emptyEnv = ModuleEnv
 mergeEnv :: ModuleEnv -> ModuleEnv -> Either Text ModuleEnv
 mergeEnv a b = do
   docs <- mergeMap "doctrine" meDoctrines
-  pres <- mergeMap "presentation" mePresentations
+  rawDocs <- mergeMap "raw doctrine" meRawDoctrines
   syns <- mergeMap "syntax" meSyntaxes
   surfs <- mergeMap "surface" meSurfaces
   morphs <- mergeMap "morphism" meMorphisms
@@ -64,7 +63,7 @@ mergeEnv a b = do
   runs <- mergeMap "run" meRuns
   pure ModuleEnv
     { meDoctrines = docs
-    , mePresentations = pres
+    , meRawDoctrines = rawDocs
     , meSyntaxes = syns
     , meSurfaces = surfs
     , meMorphisms = morphs

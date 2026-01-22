@@ -1,0 +1,9 @@
+doctrine Bool where {
+  sort Bool;
+  op T : Bool;
+  op F : Bool;
+
+  op if : (c:Bool) (x:Bool) (y:Bool) -> Bool;
+  computational ifT : (x:Bool) (y:Bool) |- if(T, ?x, ?y) -> ?x;
+  computational ifF : (x:Bool) (y:Bool) |- if(F, ?x, ?y) -> ?y;
+}

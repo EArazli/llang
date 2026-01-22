@@ -3,7 +3,6 @@ import "./stlc.surface.llang";
 import "./stlc.syntax.llang";
 import "../ccc.syntax.llang";
 import "../../stdlib/syntax.llang";
-import "../../stdlib/models.llang";
 
 run_spec STLCinCCC where {
   doctrine CCC;

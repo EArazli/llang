@@ -107,4 +107,4 @@ doctrine CCGen extends CCCore where {
   op f : Hom(prod(X, A), B);
 }
 
-doctrine CCC = (CCGen@C);
+doctrine CCC extends CCGen where { }

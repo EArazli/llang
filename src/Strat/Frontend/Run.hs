@@ -9,14 +9,11 @@ module Strat.Frontend.Run
 import Strat.Frontend.Loader (loadModule)
 import Strat.Frontend.Env
 import Strat.Frontend.RunSpec
-import Strat.Kernel.DSL.AST (RawExpr(..))
-import Strat.Kernel.DoctrineExpr (DocExpr(..), elabDocExpr)
+import Strat.Kernel.Morphism.Util (identityMorphism)
 import Strat.Kernel.Presentation (Presentation(..))
-import Strat.Kernel.RewriteSystem (compileRewriteSystem, RewritePolicy(..))
+import Strat.Kernel.RewriteSystem (compileRewriteSystem)
 import Strat.Kernel.Rewrite (normalize)
-import Strat.Kernel.Syntax (OpName(..), SortName(..), Term(..), Binder(..))
-import Strat.Kernel.Term (mkOp, mkVar)
-import Strat.Kernel.Signature (sigSortCtors, sigOps, opTele)
+import Strat.Kernel.Syntax (Term(..))
 import Strat.Kernel.Morphism
 import Strat.Surface (defaultInstance, elaborate)
 import Strat.Syntax.Spec (SyntaxSpec, SyntaxInstance(..), instantiateSyntax)
@@ -82,10 +79,9 @@ selectRun env mName =
 
 runWithEnv :: ModuleEnv -> RunSpec -> Either Text RunResult
 runWithEnv env spec = do
-  docExpr <- resolveRunExpr env (runDoctrine spec)
-  pres <- elabDocExpr docExpr
+  pres <- lookupDoctrine env (runDoctrine spec)
   rs <- compileRewriteSystem (runPolicy spec) pres
-  modelSpec <- lookupModel env (runModel spec)
+  (modelDocName, modelSpec) <- lookupModel env (runModel spec) (runDoctrine spec)
   (term, printedInput, printedNorm) <- case runSurface spec of
     Nothing -> do
       syntaxName <- maybe (Left "run: missing syntax") Right (runSyntax spec)
@@ -127,9 +123,11 @@ runWithEnv env spec = do
       pure (coreTerm, Just inputText, normText)
   let norm = normalize (runFuel spec) rs term
   let cat = compileTerm norm
-  model <- instantiateModel pres (runOpen spec) modelSpec
+  modelPres <- lookupDoctrine env modelDocName
+  model <- instantiateModel modelPres (runOpen spec) modelSpec
+  evalTerm' <- resolveModelTerm env pres modelPres norm
   val <-
-    case evalTerm model norm of
+    case evalTerm model evalTerm' of
       Left err -> Left ("Evaluation error: " <> renderRuntimeError err)
       Right v -> Right v
   let output = renderRunResult spec printedNorm cat val printedInput
@@ -168,14 +166,35 @@ lookupSurfaceSyntax env name =
         SyntaxSurface spec -> Right spec
         SyntaxDoctrine _ -> Left ("Syntax is for doctrine, not surface: " <> name)
 
-lookupModel :: ModuleEnv -> Text -> Either Text ModelSpec
-lookupModel env name =
+lookupModel :: ModuleEnv -> Text -> Text -> Either Text (Text, ModelSpec)
+lookupModel env name runDocName =
   case M.lookup name (meModels env) of
     Nothing ->
       if name == "Symbolic"
-        then Right ModelSpec { msName = "Symbolic", msClauses = [], msDefault = DefaultSymbolic }
+        then Right (runDocName, ModelSpec { msName = "Symbolic", msClauses = [], msDefault = DefaultSymbolic })
         else Left ("Unknown model: " <> name)
     Just spec -> Right spec
+
+lookupDoctrine :: ModuleEnv -> Text -> Either Text Presentation
+lookupDoctrine env name =
+  case M.lookup name (meDoctrines env) of
+    Nothing -> Left ("Unknown doctrine: " <> name)
+    Just pres -> Right pres
+
+resolveModelTerm :: ModuleEnv -> Presentation -> Presentation -> Term -> Either Text Term
+resolveModelTerm env runPres modelPres term =
+  if runPres == modelPres
+    then Right term
+    else do
+      mor <- findUniqueMorphism env runPres modelPres
+      Right (applyMorphismTerm mor term)
+
+findUniqueMorphism :: ModuleEnv -> Presentation -> Presentation -> Either Text Morphism
+findUniqueMorphism env src tgt =
+  case [ m | m <- M.elems (meMorphisms env), morSrc m == src, morTgt m == tgt ] of
+    [m] -> Right m
+    [] -> Left ("Model restriction requires morphism from " <> presName src <> " to " <> presName tgt <> "; none found")
+    ms -> Left ("Model restriction ambiguous: multiple morphisms from " <> presName src <> " to " <> presName tgt <> " (" <> T.intercalate ", " (map morName ms) <> ")")
 
 buildMorphismEnv :: ModuleEnv -> Presentation -> SurfaceDef -> [(Text, Text)] -> Either Text (M.Map Text Morphism)
 buildMorphismEnv env pres surf uses = do
@@ -212,7 +231,7 @@ buildMorphismEnv env pres surf uses = do
             Nothing ->
               if srPres req == pres
                 then do
-                  mor <- identityMorphism pres
+                  let mor = identityMorphism pres
                   pair <- ensureMorphMatch alias req mor
                   case checkMorphism (mcPolicy (morCheck mor)) (mcFuel (morCheck mor)) mor of
                     Left err -> Left ("identity morphism check failed: " <> T.pack (show err))
@@ -251,30 +270,6 @@ buildMorphismEnv env pres surf uses = do
         else if morTgt mor /= pres
           then Left ("Morphism target does not match run doctrine for alias: " <> alias)
           else Right (alias, mor)
-
-identityMorphism :: Presentation -> Either Text Morphism
-identityMorphism pres =
-  let sorts = M.keys (sigSortCtors (presSig pres))
-      ops = M.keys (sigOps (presSig pres))
-      sortMap = M.fromList [ (s, s) | s <- sorts ]
-      mkInterp op =
-        let decl = sigOps (presSig pres) M.! op
-            tele = opTele decl
-            args = [ mkVar (bSort b) v | b@(Binder v _) <- tele ]
-        in case mkOp (presSig pres) op args of
-          Left err -> Left ("identity morphism failed to construct op: " <> T.pack (show err))
-          Right rhs -> Right OpInterp { oiTele = tele, oiRhs = rhs }
-  in do
-    opMapList <- mapM (\o -> fmap (\i -> (o, i)) (mkInterp o)) ops
-    let opMap = M.fromList opMapList
-    pure Morphism
-      { morName = "identity"
-      , morSrc = pres
-      , morTgt = pres
-      , morSortMap = sortMap
-      , morOpMap = opMap
-      , morCheck = MorphismCheck { mcPolicy = UseStructuralAsBidirectional, mcFuel = 200 }
-      }
 
 renderRunResult :: RunSpec -> Text -> CatExpr -> Value -> Maybe Text -> Text
 renderRunResult spec norm cat val inputTxt =
@@ -363,33 +358,6 @@ evalCoreBinding pres surf morphs env (name, expr) = do
   case val of
     CVCore t -> Right (M.insert name (CVCore t) env)
     _ -> Right (M.insert name val env)
-
-resolveRunExpr :: ModuleEnv -> RawExpr -> Either Text DocExpr
-resolveRunExpr env expr =
-  case expr of
-    ERef name ->
-      case M.lookup name (meDoctrines env) of
-        Nothing -> Left ("Unknown doctrine: " <> name)
-        Just d -> Right d
-    EInst base ns ->
-      case M.lookup base (mePresentations env) of
-        Nothing -> Left ("@ requires a where-defined doctrine: " <> base)
-        Just pres -> Right (Atom ns pres)
-    EAnd a b -> And <$> resolveRunExpr env a <*> resolveRunExpr env b
-    ERenameOps m e -> RenameOps (mapOpNames m) <$> resolveRunExpr env e
-    ERenameSorts m e -> RenameSorts (mapSortNames m) <$> resolveRunExpr env e
-    ERenameEqs m e -> RenameEqs m <$> resolveRunExpr env e
-    EShareOps pairs e -> ShareOps (mapPair OpName pairs) <$> resolveRunExpr env e
-    EShareSorts pairs e -> ShareSorts (mapPair SortName pairs) <$> resolveRunExpr env e
-
-mapOpNames :: M.Map Text Text -> M.Map OpName OpName
-mapOpNames m = M.fromList [(OpName k, OpName v) | (k, v) <- M.toList m]
-
-mapSortNames :: M.Map Text Text -> M.Map SortName SortName
-mapSortNames m = M.fromList [(SortName k, SortName v) | (k, v) <- M.toList m]
-
-mapPair :: (Text -> a) -> [(Text, Text)] -> [(a, a)]
-mapPair f = map (\(a, b) -> (f a, f b))
 
 renderRuntimeError :: RuntimeError -> Text
 renderRuntimeError (RuntimeError msg) = msg

@@ -1,10 +1,9 @@
 import "./ccc.llang";
 import "./ccc.syntax.llang";
-import "../stdlib/models.llang";
 
 run main where {
   doctrine CCC;
-  open C;
+  open CCC;
 
   syntax CCCSyntax;
   model Symbolic;

@@ -6,8 +6,8 @@ module Strat.Kernel.DSL.Elab
   ) where
 
 import Strat.Kernel.DSL.AST
-import Strat.Kernel.DoctrineExpr
 import Strat.Kernel.Presentation
+import Strat.Kernel.Presentation.Rename (qualifyPresentation)
 import Strat.Kernel.Rule
 import Strat.Kernel.Signature
 import Strat.Kernel.Term
@@ -15,6 +15,8 @@ import Strat.Kernel.Syntax
 import Strat.Kernel.RewriteSystem (RewritePolicy(..))
 import Strat.Kernel.Subst (applySubstSort)
 import Strat.Kernel.AlphaEq
+import Strat.Kernel.Pushout
+import Strat.Kernel.Morphism.Util (symbolMapMorphism)
 import Strat.Syntax.Spec
 import Strat.Model.Spec
 import Strat.Frontend.Env (ModuleEnv(..), SyntaxDef)
@@ -30,12 +32,6 @@ import qualified Data.Text as T
 import Control.Monad (foldM)
 
 
-data Def = Def
-  { defExpr :: DocExpr
-  , defRawPresentation :: Maybe Presentation
-  }
-
-type DocEnv = M.Map Text Def
 type VarEnv = M.Map Text (Var, Sort)
 
 elabRawFile :: RawFile -> Either Text ModuleEnv
@@ -43,70 +39,87 @@ elabRawFile = elabRawFileWithEnv Env.emptyEnv
 
 elabRawFileWithEnv :: ModuleEnv -> RawFile -> Either Text ModuleEnv
 elabRawFileWithEnv baseEnv (RawFile decls) = do
-  let baseDocEnv = docsFromEnv baseEnv
-  (docEnv, env, rawRuns) <- foldM step (baseDocEnv, baseEnv, []) decls
-  let env' = env { meDoctrines = M.map defExpr docEnv }
-  runs <- elabRuns env' rawRuns
-  pure env' { meRuns = runs }
+  (env, rawRuns) <- foldM step (baseEnv, []) decls
+  runs <- elabRuns env rawRuns
+  pure env { meRuns = runs }
   where
-    step (docEnv, env, rawRuns) decl =
+    step (env, rawRuns) decl =
       case decl of
-        DeclImport _ -> Right (docEnv, env, rawRuns)
-        DeclWhere name items -> do
+        DeclImport _ -> Right (env, rawRuns)
+        DeclDoctrineWhere name mExt items -> do
           ensureAbsent "doctrine" name (meDoctrines env)
-          pres <- elabPresentation docEnv name items
-          let def = Def { defExpr = Atom name pres, defRawPresentation = Just pres }
-          let docEnv' = M.insert name def docEnv
-          pure (docEnv', env
-            { meDoctrines = M.insert name (defExpr def) (meDoctrines env)
-            , mePresentations = M.insert name pres (mePresentations env)
-            }, rawRuns)
-        DeclExpr name expr -> do
+          rawPres <- case mExt of
+            Nothing -> elabPresentation name items
+            Just base -> do
+              baseRaw <- lookupRawDoctrine env base
+              elabPresentationWith name baseRaw items
+          pres <- qualifyPresentation name rawPres
+          case validatePresentation pres of
+            Left err -> Left ("Presentation invalid: " <> err)
+            Right () -> do
+              env' <- case mExt of
+                Nothing -> Right env
+                Just base -> do
+                  mor <- buildFromBase base name env pres
+                  pure env { meMorphisms = M.insert (morName mor) mor (meMorphisms env) }
+              let env'' = env'
+                    { meDoctrines = M.insert name pres (meDoctrines env')
+                    , meRawDoctrines = M.insert name rawPres (meRawDoctrines env')
+                    }
+              pure (env'', rawRuns)
+        DeclDoctrinePushout name leftMor rightMor -> do
           ensureAbsent "doctrine" name (meDoctrines env)
-          dexpr <- resolveExpr docEnv expr
-          let def = Def { defExpr = dexpr, defRawPresentation = Nothing }
-          let docEnv' = M.insert name def docEnv
-          pure (docEnv', env { meDoctrines = M.insert name dexpr (meDoctrines env) }, rawRuns)
+          f <- lookupMorphism env leftMor
+          g <- lookupMorphism env rightMor
+          PushoutResult pres inl inr glue <- computePushout name f g
+          ensureAbsent "morphism" (morName inl) (meMorphisms env)
+          ensureAbsent "morphism" (morName inr) (meMorphisms env)
+          ensureAbsent "morphism" (morName glue) (meMorphisms env)
+          let env' = env
+                { meDoctrines = M.insert name pres (meDoctrines env)
+                , meRawDoctrines = M.insert name pres (meRawDoctrines env)
+                , meMorphisms =
+                    M.insert (morName glue) glue
+                    (M.insert (morName inl) inl
+                    (M.insert (morName inr) inr (meMorphisms env)))
+                }
+          pure (env', rawRuns)
         DeclSyntaxWhere decl -> do
           let name = rsnName decl
           ensureAbsent "syntax" name (meSyntaxes env)
           spec <- elabSyntaxDecl decl
           let env' = env { meSyntaxes = M.insert name spec (meSyntaxes env) }
-          pure (docEnv, env', rawRuns)
-        DeclModelWhere name items -> do
+          pure (env', rawRuns)
+        DeclModelWhere name doc items -> do
           ensureAbsent "model" name (meModels env)
           spec <- elabModelSpec name items
-          let env' = env { meModels = M.insert name spec (meModels env) }
-          pure (docEnv, env', rawRuns)
+          _ <- lookupDoctrine env doc
+          let env' = env { meModels = M.insert name (doc, spec) (meModels env) }
+          pure (env', rawRuns)
         DeclSurfaceWhere surfDecl -> do
           let name = rsdName surfDecl
           ensureAbsent "surface" name (meSurfaces env)
-          def <- elabSurfaceDecl (resolvePresentation docEnv) surfDecl
+          def <- elabSurfaceDecl (resolveDoctrine env) surfDecl
           let env' = env { meSurfaces = M.insert name def (meSurfaces env) }
-          pure (docEnv, env', rawRuns)
+          pure (env', rawRuns)
         DeclMorphismWhere morphDecl -> do
           let name = rmdName morphDecl
           ensureAbsent "morphism" name (meMorphisms env)
-          morph <- elabMorphismDecl docEnv morphDecl
+          morph <- elabMorphismDecl env morphDecl
           let env' = env { meMorphisms = M.insert name morph (meMorphisms env) }
-          pure (docEnv, env', rawRuns)
+          pure (env', rawRuns)
         DeclImplements implDecl -> do
-          (key, morphName) <- elabImplements docEnv env implDecl
+          (key, morphName) <- elabImplements env implDecl
           let defaults = M.findWithDefault [] key (meImplDefaults env)
           let defaults' = if morphName `elem` defaults then defaults else defaults <> [morphName]
           let env' = env { meImplDefaults = M.insert key defaults' (meImplDefaults env) }
-          pure (docEnv, env', rawRuns)
+          pure (env', rawRuns)
         DeclRunSpec name rawSpec -> do
           ensureAbsent "run_spec" name (meRunSpecs env)
           let env' = env { meRunSpecs = M.insert name (rrsRun rawSpec) (meRunSpecs env) }
-          pure (docEnv, env', rawRuns)
+          pure (env', rawRuns)
         DeclRun rawNamed ->
-          pure (docEnv, env, rawRuns <> [rawNamed])
-
-    docsFromEnv env =
-      M.mapWithKey
-        (\name expr -> Def { defExpr = expr, defRawPresentation = M.lookup name (mePresentations env) })
-        (meDoctrines env)
+          pure (env, rawRuns <> [rawNamed])
 
 ensureAbsent :: Text -> Text -> M.Map Text v -> Either Text ()
 ensureAbsent label name mp =
@@ -114,21 +127,67 @@ ensureAbsent label name mp =
     then Left ("Duplicate " <> label <> " name: " <> name)
     else Right ()
 
-elabPresentation :: DocEnv -> Text -> [RawItem] -> Either Text Presentation
-elabPresentation docEnv name items = do
-  (sig, eqMap, eqs) <- foldM step (Signature M.empty M.empty, M.empty, []) items
-  let pres = Presentation { presName = name, presSig = sig, presEqs = eqs }
-  case validatePresentation pres of
-    Left err -> Left ("Presentation invalid: " <> err)
-    Right () -> Right pres
+lookupDoctrine :: ModuleEnv -> Text -> Either Text Presentation
+lookupDoctrine env name =
+  case M.lookup name (meDoctrines env) of
+    Nothing -> Left ("Unknown doctrine: " <> name)
+    Just pres -> Right pres
+
+lookupRawDoctrine :: ModuleEnv -> Text -> Either Text Presentation
+lookupRawDoctrine env name =
+  case M.lookup name (meRawDoctrines env) of
+    Nothing -> Left ("Unknown doctrine: " <> name)
+    Just pres -> Right pres
+
+resolveDoctrine :: ModuleEnv -> Text -> Either Text Presentation
+resolveDoctrine env = lookupDoctrine env
+
+lookupMorphism :: ModuleEnv -> Text -> Either Text Morphism
+lookupMorphism env name =
+  case M.lookup name (meMorphisms env) of
+    Nothing -> Left ("Unknown morphism: " <> name)
+    Just mor -> Right mor
+
+buildFromBase :: Text -> Text -> ModuleEnv -> Presentation -> Either Text Morphism
+buildFromBase baseName newName env newPres = do
+  basePres <- lookupDoctrine env baseName
+  ensureAbsent "morphism" morName (meMorphisms env)
+  let sortMap = M.fromList [ (s, requalifySortName baseName newName s) | s <- M.keys (sigSortCtors (presSig basePres)) ]
+  let opMap = M.fromList [ (o, requalifyOpName baseName newName o) | o <- M.keys (sigOps (presSig basePres)) ]
+  mor <- symbolMapMorphism basePres newPres sortMap opMap
+  let mor' = mor { morName = morName }
+  case checkMorphism (mcPolicy (morCheck mor')) (mcFuel (morCheck mor')) mor' of
+    Left err -> Left ("generated morphism " <> morName <> " invalid: " <> renderMorphismError err)
+    Right () -> Right mor'
+  where
+    morName = newName <> ".fromBase"
+
+requalifySortName :: Text -> Text -> SortName -> SortName
+requalifySortName baseName newName (SortName t) =
+  SortName (requalifyName baseName newName t)
+
+requalifyOpName :: Text -> Text -> OpName -> OpName
+requalifyOpName baseName newName (OpName t) =
+  OpName (requalifyName baseName newName t)
+
+requalifyName :: Text -> Text -> Text -> Text
+requalifyName baseName newName t =
+  case T.stripPrefix (baseName <> ".") t of
+    Just rest -> newName <> "." <> rest
+    Nothing -> newName <> "." <> t
+
+elabPresentation :: Text -> [RawItem] -> Either Text Presentation
+elabPresentation name items =
+  elabPresentationWith name (Presentation name (Signature M.empty M.empty) []) items
+
+elabPresentationWith :: Text -> Presentation -> [RawItem] -> Either Text Presentation
+elabPresentationWith name base items = do
+  (eqMap0, eqs0) <- foldM insertEq (M.empty, []) (presEqs base)
+  (sig, _, eqs) <- foldM step (presSig base, eqMap0, eqs0) items
+  pure Presentation { presName = name, presSig = sig, presEqs = eqs }
   where
     step (sig, eqMap, eqs) item =
       case item of
-        ItemInclude expr -> do
-          presInc <- resolveIncludePresentation docEnv expr
-          sig' <- mergeSignatures sig (presSig presInc)
-          (eqMap', eqs') <- foldM insertEq (eqMap, eqs) (presEqs presInc)
-          pure (sig', eqMap', eqs')
         ItemSort decl -> do
           sig' <- addSortDecl sig decl
           pure (sig', eqMap, eqs)
@@ -254,36 +313,6 @@ insertEq (eqMap, eqs) eq =
         then Right (eqMap, eqs)
         else Left ("Duplicate equation name: " <> eqName eq)
 
-mergeSignatures :: Signature -> Signature -> Either Text Signature
-mergeSignatures s1 s2 = do
-  sortCtors <- mergeSortCtors (M.toList (sigSortCtors s1) <> M.toList (sigSortCtors s2))
-  opDecls <- mergeOpDecls (M.toList (sigOps s1) <> M.toList (sigOps s2))
-  pure Signature { sigSortCtors = sortCtors, sigOps = opDecls }
-
-mergeSortCtors :: [(SortName, SortCtor)] -> Either Text (M.Map SortName SortCtor)
-mergeSortCtors = foldl step (Right M.empty)
-  where
-    step acc (name, ctor) = do
-      m <- acc
-      case M.lookup name m of
-        Nothing -> pure (M.insert name ctor m)
-        Just ctor' ->
-          if alphaEqSortCtor ctor' ctor
-            then pure m
-            else Left ("Duplicate sort ctor: " <> renderSortName name)
-
-mergeOpDecls :: [(OpName, OpDecl)] -> Either Text (M.Map OpName OpDecl)
-mergeOpDecls = foldl step (Right M.empty)
-  where
-    step acc (name, decl) = do
-      m <- acc
-      case M.lookup name m of
-        Nothing -> pure (M.insert name decl m)
-        Just decl' ->
-          if alphaEqOpDecl decl' decl
-            then pure m
-            else Left ("Duplicate op decl: " <> renderOpName name)
-
 renderSortName :: SortName -> Text
 renderSortName (SortName t) = t
 
@@ -312,46 +341,10 @@ resolveOpNameIn pres name =
         then Right pref
         else Left ("Unknown op name: " <> name)
 
-resolveExpr :: DocEnv -> RawExpr -> Either Text DocExpr
-resolveExpr env expr =
-  case expr of
-    ERef name ->
-      case M.lookup name env of
-        Nothing -> Left ("Unknown doctrine: " <> name)
-        Just def -> Right (defExpr def)
-    EInst base ns ->
-      case M.lookup base env of
-        Nothing -> Left ("Unknown doctrine: " <> base)
-        Just def ->
-          case defRawPresentation def of
-            Nothing -> Left ("@ requires a where-defined doctrine: " <> base)
-            Just pres -> Right (Atom ns pres)
-    EAnd a b -> And <$> resolveExpr env a <*> resolveExpr env b
-    ERenameOps m e -> RenameOps (mapOpNames m) <$> resolveExpr env e
-    ERenameSorts m e -> RenameSorts (mapSortNames m) <$> resolveExpr env e
-    ERenameEqs m e -> RenameEqs m <$> resolveExpr env e
-    EShareOps pairs e -> ShareOps (mapPair OpName pairs) <$> resolveExpr env e
-    EShareSorts pairs e -> ShareSorts (mapPair SortName pairs) <$> resolveExpr env e
-
-resolvePresentation :: DocEnv -> RawExpr -> Either Text Presentation
-resolvePresentation env expr = resolveExpr env expr >>= elabDocExpr
-
-resolveIncludePresentation :: DocEnv -> RawExpr -> Either Text Presentation
-resolveIncludePresentation env expr =
-  case expr of
-    ERef name ->
-      case M.lookup name env of
-        Just def ->
-          case defRawPresentation def of
-            Just pres -> Right pres
-            Nothing -> resolvePresentation env expr
-        Nothing -> resolvePresentation env expr
-    _ -> resolvePresentation env expr
-
-elabMorphismDecl :: DocEnv -> RawMorphismDecl -> Either Text Morphism
-elabMorphismDecl docEnv decl = do
-  srcPres <- resolvePresentation docEnv (rmdSrc decl)
-  tgtPres <- resolvePresentation docEnv (rmdTgt decl)
+elabMorphismDecl :: ModuleEnv -> RawMorphismDecl -> Either Text Morphism
+elabMorphismDecl env decl = do
+  srcPres <- lookupDoctrine env (rmdSrc decl)
+  tgtPres <- lookupDoctrine env (rmdTgt decl)
   sortMap <- buildSortMap srcPres tgtPres (rmdItems decl)
   opMap <- buildOpInterps (rmdName decl) srcPres tgtPres sortMap (rmdItems decl)
   checkCfg <- resolveCheck (rmdCheck decl)
@@ -570,15 +563,6 @@ ensureNoDup label xs =
 renderMorphismError :: MorphismError -> Text
 renderMorphismError = T.pack . show
 
-mapOpNames :: M.Map Text Text -> M.Map OpName OpName
-mapOpNames m = M.fromList [(OpName k, OpName v) | (k, v) <- M.toList m]
-
-mapSortNames :: M.Map Text Text -> M.Map SortName SortName
-mapSortNames m = M.fromList [(SortName k, SortName v) | (k, v) <- M.toList m]
-
-mapPair :: (Text -> a) -> [(Text, Text)] -> [(a, a)]
-mapPair f = map (\(a, b) -> (f a, f b))
-
 elabSyntaxSpec :: Text -> [RawSyntaxItem] -> Either Text SyntaxSpec
 elabSyntaxSpec name items =
   foldM step initial items
@@ -745,10 +729,10 @@ mergeUses base override =
       overMap = M.fromList override
   in M.toList (M.union overMap baseMap)
 
-elabImplements :: DocEnv -> ModuleEnv -> RawImplementsDecl -> Either Text ((Text, Text), Text)
-elabImplements docEnv env decl = do
-  ifacePres <- resolvePresentation docEnv (ridInterface decl)
-  tgtPres <- resolvePresentation docEnv (ridTarget decl)
+elabImplements :: ModuleEnv -> RawImplementsDecl -> Either Text ((Text, Text), Text)
+elabImplements env decl = do
+  ifacePres <- lookupDoctrine env (ridInterface decl)
+  tgtPres <- lookupDoctrine env (ridTarget decl)
   morph <- case M.lookup (ridMorphism decl) (meMorphisms env) of
     Nothing -> Left ("Unknown morphism: " <> ridMorphism decl)
     Just m -> Right m

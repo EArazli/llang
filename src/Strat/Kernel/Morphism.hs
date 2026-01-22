@@ -21,7 +21,6 @@ import Strat.Kernel.Signature
 import Strat.Kernel.Subst (applySubstSort, applySubstTerm)
 import Strat.Kernel.Syntax
 import Strat.Kernel.Term
-import Strat.Kernel.Types
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -164,14 +163,14 @@ checkMorphism pol fuel mor = do
       let rhs' = applyMorphismTerm mor (eqRHS eq)
       let (nfL, okL) = normalizeStatus fuel rs lhs'
       let (nfR, okR) = normalizeStatus fuel rs rhs'
-      if okL && okR
-        then if nfL == nfR
-          then Right ()
-          else Left (MorphismEqViolation (eqName eq) nfL nfR)
+      if okL && okR && nfL == nfR
+        then Right ()
         else
           if joinableWithin fuel rs lhs' rhs'
             then Right ()
-            else Left (MorphismEqUndecided (eqName eq) pol fuel)
+            else if okL && okR
+              then Left (MorphismEqViolation (eqName eq) nfL nfR)
+              else Left (MorphismEqUndecided (eqName eq) pol fuel)
 
 
 mapSortCtor :: Morphism -> SortCtor -> SortCtor

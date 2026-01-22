@@ -50,7 +50,7 @@ testDiamondImports = do
     , "  allow call;"
     , "  varprefix \"?\";"
     , "}"
-    , "model M where {"
+    , "model M : A where {"
     , "  default = symbolic;"
     , "}"
     , "run main where {"

@@ -1,4 +1,6 @@
-model NatModel where {
+import "./peano.llang";
+
+model NatModel : Nat where {
   default = error "unknown op";
 
   op Z() = 0;

@@ -1,0 +1,14 @@
+import "./nat.llang";
+import "./bool.llang";
+
+model NatAsInt : Nat where {
+  op Z() = 0;
+  op S(n) = n + 1;
+  op add(a,b) = a + b;
+}
+
+model BoolAsBool : Bool where {
+  op T() = true;
+  op F() = false;
+  op if(c,x,y) = if c then x else y;
+}

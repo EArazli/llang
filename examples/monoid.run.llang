@@ -4,7 +4,7 @@ import "./monoid.models.llang";
 
 run main where {
   doctrine Combined;
-  open C;
+  open Combined;
 
   syntax MonoidSyntax;
   model StringMonoid;

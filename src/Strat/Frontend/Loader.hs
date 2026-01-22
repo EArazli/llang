@@ -105,7 +105,7 @@ envFromDeps st deps =
 diffEnv :: ModuleEnv -> ModuleEnv -> ModuleEnv
 diffEnv full base = ModuleEnv
   { meDoctrines = M.difference (meDoctrines full) (meDoctrines base)
-  , mePresentations = M.difference (mePresentations full) (mePresentations base)
+  , meRawDoctrines = M.difference (meRawDoctrines full) (meRawDoctrines base)
   , meSyntaxes = M.difference (meSyntaxes full) (meSyntaxes base)
   , meSurfaces = M.difference (meSurfaces full) (meSurfaces base)
   , meMorphisms = M.difference (meMorphisms full) (meMorphisms base)

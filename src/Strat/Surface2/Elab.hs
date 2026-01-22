@@ -15,7 +15,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Control.Monad (foldM)
 
-type ResolveDoc = RawExpr -> Either Text Presentation
+type ResolveDoc = Text -> Either Text Presentation
 
 elabSurfaceDecl :: ResolveDoc -> RawSurfaceDecl -> Either Text SurfaceDef
 elabSurfaceDecl resolveDoc (RawSurfaceDecl name items) = do
@@ -31,7 +31,7 @@ elabSurfaceDecl resolveDoc (RawSurfaceDecl name items) = do
   reqs <-
     case findDup (map fst reqItems) of
       Just dup -> Left ("duplicate requires alias: " <> dup)
-      Nothing -> mapM (\(alias, docExpr) -> SurfaceRequire alias <$> resolveDoc docExpr) reqItems
+      Nothing -> mapM (\(alias, docName) -> SurfaceRequire alias <$> resolveDoc docName) reqItems
   deriveAlias <- case [ a | RSDeriveContexts a <- items ] of
     [] -> Right Nothing
     [a] -> Right (Just a)

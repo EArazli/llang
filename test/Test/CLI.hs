@@ -45,7 +45,7 @@ testEndToEndMonoid = do
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> do
-      rrCatExpr out @?= CatOp (OpName "C.e") []
+      rrCatExpr out @?= CatOp (OpName "Combined.e") []
       rrValue out @?= VString ""
       rrPrintedNormalized out @?= "e"
 
@@ -86,11 +86,11 @@ testEndToEndCat = do
     Left err -> assertFailure (T.unpack err)
     Right out -> do
       let ops = collectOps (rrNormalized out)
-      assertBool "no id in normal form" (OpName "C.id" `notElem` ops)
+      assertBool "no id in normal form" (OpName "Cat.id" `notElem` ops)
       case termNode (rrNormalized out) of
-        TOp (OpName "C.comp") [_, _, _, Term _ (TOp (OpName "C.h") []), Term _ (TOp (OpName "C.comp") innerArgs)] ->
+        TOp (OpName "Cat.comp") [_, _, _, Term _ (TOp (OpName "Cat.h") []), Term _ (TOp (OpName "Cat.comp") innerArgs)] ->
           case innerArgs of
-            [_, _, _, Term _ (TOp (OpName "C.g") []), Term _ (TOp (OpName "C.f") [])] -> pure ()
+            [_, _, _, Term _ (TOp (OpName "Cat.g") []), Term _ (TOp (OpName "Cat.f") [])] -> pure ()
             _ -> assertFailure "inner composition not in expected form"
         _ -> assertFailure "outer composition not in expected form"
 

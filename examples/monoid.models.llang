@@ -1,4 +1,6 @@
-model StringMonoid where {
+import "./monoid.llang";
+
+model StringMonoid : Combined where {
   default = error "unknown op";
 
   op e() = "";

@@ -3,7 +3,6 @@ module Strat.Frontend.RunSpec
   , RunShow(..)
   ) where
 
-import Strat.Kernel.DSL.AST (RawExpr)
 import Strat.Kernel.RewriteSystem (RewritePolicy)
 import Data.Text (Text)
 
@@ -17,7 +16,7 @@ data RunShow
 
 
 data RunSpec = RunSpec
-  { runDoctrine  :: RawExpr
+  { runDoctrine  :: Text
   , runSyntax    :: Maybe Text
   , runSurface   :: Maybe Text
   , runSurfaceSyntax :: Maybe Text
