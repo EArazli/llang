@@ -264,7 +264,7 @@ varTerm = do
 
 appTerm :: Parser RawTerm
 appTerm = do
-  name <- identRaw
+  name <- qualifiedIdentRaw
   mArgs <- optional (symbol "(" *> term `sepBy` symbol "," <* symbol ")")
   case mArgs of
     Nothing -> pure (RApp name [])
@@ -272,7 +272,7 @@ appTerm = do
 
 rawSort :: Parser RawSort
 rawSort = do
-  name <- identRaw
+  name <- qualifiedIdentRaw
   mArgs <- optional (symbol "(" *> term `sepBy` symbol "," <* symbol ")")
   case mArgs of
     Nothing -> pure (RawSort name [])
@@ -1027,7 +1027,10 @@ binary name f = InfixL (f <$ symbol name)
 -- Helpers
 
 qualifiedIdent :: Parser Text
-qualifiedIdent = lexeme $ do
+qualifiedIdent = lexeme qualifiedIdentRaw
+
+qualifiedIdentRaw :: Parser Text
+qualifiedIdentRaw = do
   first <- identRaw
   rest <- many (char '.' *> identRaw)
   pure (T.intercalate "." (first : rest))

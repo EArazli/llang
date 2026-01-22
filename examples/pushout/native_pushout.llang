@@ -1,0 +1,9 @@
+import "../../stdlib/nat.llang";
+import "../../stdlib/bool.llang";
+
+doctrine Empty where { }
+
+morphism emptyToNat : Empty -> Nat where { }
+morphism emptyToBool : Empty -> Bool where { }
+
+doctrine NatBool = pushout emptyToNat emptyToBool;

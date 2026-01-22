@@ -1,0 +1,17 @@
+import "./nat_bool.llang";
+import "./nat_bool.models.llang";
+import "../../stdlib/syntax.llang";
+
+run main where {
+  doctrine Nat;
+  syntax CombDefault;
+  model NatBoolNative;
+
+  policy UseOnlyComputationalLR;
+  fuel 50;
+
+  show normalized;
+  show value;
+}
+---
+Nat.add(Nat.Z, Nat.S(Nat.Z))

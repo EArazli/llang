@@ -1,0 +1,11 @@
+import "./nat_bool.llang";
+
+model NatBoolNative : NatBool where {
+  op Nat.Z() = 0;
+  op Nat.S(n) = n + 1;
+  op Nat.add(a,b) = a + b;
+
+  op Bool.T() = true;
+  op Bool.F() = false;
+  op Bool.if(c,x,y) = if c then x else y;
+}

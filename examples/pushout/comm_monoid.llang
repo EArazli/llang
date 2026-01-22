@@ -1,0 +1,18 @@
+doctrine Semigroup where {
+  sort Obj;
+  op m : (x:Obj) (y:Obj) -> Obj;
+  structural assoc : (x:Obj) (y:Obj) (z:Obj) |-
+    m(m(?x, ?y), ?z) = m(?x, m(?y, ?z));
+}
+
+doctrine Monoid extends Semigroup where {
+  op e : Obj;
+  computational unitL : (x:Obj) |- m(e, ?x) -> ?x;
+  computational unitR : (x:Obj) |- m(?x, e) -> ?x;
+}
+
+doctrine Commutative extends Semigroup where {
+  structural comm : (x:Obj) (y:Obj) |- m(?x, ?y) = m(?y, ?x);
+}
+
+doctrine CommMonoid = pushout Monoid.fromBase Commutative.fromBase;

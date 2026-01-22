@@ -20,6 +20,8 @@ tests =
     , testCase "pushout decl generates morphisms" testPushoutDecl
     , testCase "duplicate eq names fails" testDuplicateEq
     , testCase "unknown doctrine reference" testUnknownDoctrine
+    , testCase "qualified names in pushout extension" testExtendPushoutQualifiedNames
+    , testCase "qualified morphism rhs into pushout" testMorphismIntoPushoutQualifiedRhs
     , testCase "syntax/model/run parsing" testSyntaxModelRunParse
     , testCase "parse morphism op mapping with params" testParseMorphismParams
     , testCase "parse morphism shorthand" testParseMorphismShorthand
@@ -98,6 +100,64 @@ testUnknownDoctrine = do
       case elabRawFile rf of
         Left _ -> pure ()
         Right _ -> assertFailure "expected unknown doctrine error"
+
+testExtendPushoutQualifiedNames :: Assertion
+testExtendPushoutQualifiedNames = do
+  let prog = T.unlines
+        [ "doctrine Category where {"
+        , "  sort Obj;"
+        , "  op a : Obj;"
+        , "  op f : (x:Obj) -> Obj;"
+        , "}"
+        , "doctrine BoolExt extends Category where {"
+        , "  op g : (x:Obj) -> Obj;"
+        , "  computational rB : (x:Obj) |- f(?x) -> g(?x);"
+        , "}"
+        , "doctrine NatExt extends Category where {"
+        , "  op h : (x:Obj) -> Obj;"
+        , "  computational rN : (x:Obj) |- f(?x) -> h(?x);"
+        , "}"
+        , "doctrine Both = pushout BoolExt.fromBase NatExt.fromBase;"
+        , "doctrine BothPlus extends Both where {"
+        , "  op k : (x:Category.Obj) -> Category.Obj;"
+        , "  computational agree : (x:Category.Obj) |- BoolExt.g(?x) -> NatExt.h(?x);"
+        , "}"
+        ]
+  case parseRawFile prog of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right _ -> pure ()
+
+testMorphismIntoPushoutQualifiedRhs :: Assertion
+testMorphismIntoPushoutQualifiedRhs = do
+  let prog = T.unlines
+        [ "doctrine Category where {"
+        , "  sort Obj;"
+        , "  op a : Obj;"
+        , "  op f : (x:Obj) -> Obj;"
+        , "}"
+        , "doctrine BoolExt extends Category where {"
+        , "  op g : (x:Obj) -> Obj;"
+        , "  computational rB : (x:Obj) |- f(?x) -> g(?x);"
+        , "}"
+        , "doctrine NatExt extends Category where {"
+        , "  op h : (x:Obj) -> Obj;"
+        , "  computational rN : (x:Obj) |- f(?x) -> h(?x);"
+        , "}"
+        , "doctrine Both = pushout BoolExt.fromBase NatExt.fromBase;"
+        , "morphism UseBool : Category -> Both where {"
+        , "  op Category.a = Category.a;"
+        , "  op Category.f(x) = BoolExt.g(?x);"
+        , "}"
+        ]
+  case parseRawFile prog of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right _ -> pure ()
 
 testSyntaxModelRunParse :: Assertion
 testSyntaxModelRunParse = do

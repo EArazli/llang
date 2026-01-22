@@ -1,29 +1,3 @@
 import "./ccc.doctrine.llang";
 
-morphism CCCIface : CCC_Bool -> CCC where {
-  sort Obj = Obj;
-  sort Hom = Hom;
-
-  op id = id;
-  op comp = comp;
-
-  op Unit = Unit;
-  op prod = prod;
-  op exl = exl;
-  op exr = exr;
-  op pair = pair;
-
-  op exp = exp;
-  op curry = curry;
-  op eval = eval;
-
-  op terminal = terminal;
-  op Bool = Bool;
-  op T = T;
-  op F = F;
-} check {
-  policy UseStructuralAsBidirectional;
-  fuel 200;
-};
-
-implements CCC_Bool for CCC using CCCIface;
+implements CCC_Bool for CCC using CCC.fromBase;

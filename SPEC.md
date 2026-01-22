@@ -291,6 +291,10 @@ and sets the resulting presentation’s `presName = X`.
 
 This qualification is the project’s primary name-spacing mechanism.
 
+Raw terms and raw sorts inside doctrine and morphism declarations may use **qualified identifiers** containing `.` to refer to symbols from other namespaces (e.g., `Category.Obj`, `BoolExt.g`). Unqualified identifiers resolve within the current presentation as usual.
+
+Qualification is purely prefix-based: qualifying a presentation under `X` prefixes existing names rather than structurally rebasing them (so `BoolExt.g` becomes `X.BoolExt.g`).
+
 ### 4.2 Extension (`extends`)
 
 `doctrine X extends Y where { ... }` is elaborated as:

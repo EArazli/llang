@@ -10,6 +10,7 @@ extra-source-files:
 - README.md
 - CHANGELOG.md
 - ROADMAP.md
+- examples/README.md
 data-files:
 - examples/monoid.llang
 - examples/monoid.syntax.llang
@@ -41,8 +42,13 @@ data-files:
 - examples/ccc_surface/stlc.pair.run.llang
 - examples/ccc_surface/stlc.runspec.llang
 - examples/morphism_term.llang
-- examples/pushout_basic.llang
-- examples/native_pushout.llang
+- examples/pushout/pushout_basic.llang
+- examples/pushout/native_pushout.llang
+- examples/pushout/pushout_extend.llang
+- examples/pushout/comm_monoid.llang
+- examples/pushout/nat_bool.llang
+- examples/pushout/nat_bool.models.llang
+- examples/pushout/nat_bool.run.llang
 - examples/runspec/multi.llang
 - stdlib/syntax.llang
 - stdlib/nat.llang

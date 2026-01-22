@@ -1,5 +1,5 @@
-import "../stdlib/nat.llang";
-import "../stdlib/bool.llang";
+import "../../stdlib/nat.llang";
+import "../../stdlib/bool.llang";
 
 doctrine Empty where { }
 

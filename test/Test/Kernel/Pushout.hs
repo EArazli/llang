@@ -26,6 +26,7 @@ tests =
     "Kernel.Pushout"
     [ testCase "pushout unifies interface ops" testPushoutUnifies
     , testCase "pushout injections validate" testPushoutInjections
+    , testCase "pushout injections commute" testPushoutCommutes
     , testCase "pushout rejects non-symbol map" testPushoutRejectsNonSymbol
     , testCase "pushout rejects non-injective op map" testPushoutRejectsNonInjective
     ]
@@ -51,6 +52,19 @@ testPushoutInjections = do
   requireRight (checkMorphism (mcPolicy (morCheck inr)) (mcFuel (morCheck inr)) inr)
   requireRight (checkMorphism (mcPolicy (morCheck glue)) (mcFuel (morCheck glue)) glue)
   assertBool "pres name set" (presName pres == "P")
+
+testPushoutCommutes :: Assertion
+testPushoutCommutes = do
+  let (aPres, bPres, cPres) = samplePres
+  f <- requireRight (symbolMapMorphism aPres bPres (mkSortMap "A" "B") (mkOpMap "A" "B"))
+  g <- requireRight (symbolMapMorphism aPres cPres (mkSortMap "A" "C") (mkOpMap "A" "C"))
+  PushoutResult _ inl inr glue <- requireRight (computePushout "P" f g)
+  t <- requireRight (mkUnaryTerm "A.f" aPres)
+  let viaInl = applyMorphismTerm inl (applyMorphismTerm f t)
+  let viaInr = applyMorphismTerm inr (applyMorphismTerm g t)
+  let viaGlue = applyMorphismTerm glue t
+  viaInl @?= viaGlue
+  viaInr @?= viaGlue
 
 testPushoutRejectsNonSymbol :: Assertion
 testPushoutRejectsNonSymbol = do
@@ -151,6 +165,15 @@ mkSortMap src tgt = M.fromList [(SortName (src <> ".Obj"), SortName (tgt <> ".Ob
 
 mkOpMap :: Text -> Text -> M.Map OpName OpName
 mkOpMap src tgt = M.fromList [(OpName (src <> ".f"), OpName (tgt <> ".f"))]
+
+mkUnaryTerm :: Text -> Presentation -> Either Text Term
+mkUnaryTerm opText pres = do
+  let sig = presSig pres
+  let scope = ScopeId ("term:" <> opText)
+  let v = Var scope 0
+  let s = Sort (SortName (presName pres <> ".Obj")) []
+  let arg = mkVar s v
+  mapLeft (mkOp sig (OpName opText) [arg]) renderTypeError
 
 termRootOp :: Term -> Maybe OpName
 termRootOp tm =
