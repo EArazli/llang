@@ -22,39 +22,6 @@ Provide primitives sufficient for *declaring* effect systems in user doctrines a
 * algebraic effects via handlers,
 * linear effects via graded/linear monads, etc.
 
----
-
-## Pushouts / theory assembly (`CCC + Bool + Nat + …`)
-
-### What “pushout” should mean here
-
-In a category of presentations, a pushout is a way to *glue* theories along a shared subtheory:
-
-* Given morphisms (A \xrightarrow{f} B) and (A \xrightarrow{g} C),
-* build (B \sqcup_A C) that identifies the images of (A) in both.
-
-### Practical implementation plan (current design)
-
-1. Make pushout **first-class** in the DSL:
-
-   * `doctrine P = pushout f g;`
-2. Implement pushout in-kernel (`Strat.Kernel.Pushout`) with explicit restrictions:
-
-   * `f` and `g` share a source,
-   * `f` and `g` are **symbol-map morphisms** (ops map to op-symbol applied to parameters),
-   * the induced interface maps on sorts/ops are injective.
-3. Generate canonical morphisms:
-
-   * `P.inl : tgt f -> P`
-   * `P.inr : tgt g -> P`
-   * `P.glue : src f -> P`
-
-### What you get immediately
-
-* Canonical injections/glue morphisms that enable interoperability via `applyMorphismTerm`.
-* Model restriction along a **unique** morphism `Dsmall -> Dlarge` in the frontend run pipeline.
-
----
 
 ## Recursion and user-definable datatypes
 
