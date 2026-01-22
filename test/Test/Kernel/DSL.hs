@@ -20,6 +20,7 @@ tests =
     , testCase "pushout decl generates morphisms" testPushoutDecl
     , testCase "duplicate eq names fails" testDuplicateEq
     , testCase "unknown doctrine reference" testUnknownDoctrine
+    , testCase "rawSort consumes trailing whitespace" testRawSortConsumesWhitespace
     , testCase "qualified names in pushout extension" testExtendPushoutQualifiedNames
     , testCase "qualified morphism rhs into pushout" testMorphismIntoPushoutQualifiedRhs
     , testCase "syntax/model/run parsing" testSyntaxModelRunParse
@@ -100,6 +101,23 @@ testUnknownDoctrine = do
       case elabRawFile rf of
         Left _ -> pure ()
         Right _ -> assertFailure "expected unknown doctrine error"
+
+testRawSortConsumesWhitespace :: Assertion
+testRawSortConsumesWhitespace = do
+  let src = T.unlines
+        [ "doctrine A where {"
+        , "  sort Obj ;"
+        , "  op a : Obj ;"
+        , "  op f : (x:Obj ) -> Obj ;"
+        , "  computational r : (x:Obj ) |- f(?x) -> ?x ;"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure ("parse failed: " <> T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure ("elab failed: " <> T.unpack err)
+        Right _ -> pure ()
 
 testExtendPushoutQualifiedNames :: Assertion
 testExtendPushoutQualifiedNames = do

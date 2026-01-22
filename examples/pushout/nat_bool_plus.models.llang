@@ -1,0 +1,16 @@
+import "./nat_bool_plus.llang";
+import "./nat_bool.models.llang";
+
+model NatBoolPlusNative : NatBoolPlus where {
+  default = symbolic;
+
+  op NatBoolPlus.Nat.Z() = 0;
+  op NatBoolPlus.Nat.S(n) = n + 1;
+  op NatBoolPlus.Nat.add(a,b) = a + b;
+
+  op NatBoolPlus.Bool.T() = true;
+  op NatBoolPlus.Bool.F() = false;
+  op NatBoolPlus.Bool.if(c,x,y) = if c then x else y;
+
+  op NatBoolPlus.isZero(n) = (n == 0);
+}

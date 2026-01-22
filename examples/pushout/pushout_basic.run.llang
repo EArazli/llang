@@ -1,0 +1,11 @@
+import "./pushout_basic.llang";
+import "../../stdlib/syntax.llang";
+
+run main where {
+  doctrine Both;
+  syntax CombDefault;
+  open Category;
+  show normalized;
+}
+---
+Category.f(Category.a)

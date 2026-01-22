@@ -33,23 +33,26 @@ In a category of presentations, a pushout is a way to *glue* theories along a sh
 * Given morphisms (A \xrightarrow{f} B) and (A \xrightarrow{g} C),
 * build (B \sqcup_A C) that identifies the images of (A) in both.
 
-### Practical implementation plan (tractable subset)
+### Practical implementation plan (current design)
 
-1. Implement **pushout of signatures** along *symbol maps* (rename/share level):
+1. Make pushout **first-class** in the DSL:
 
-   * For now restrict `f` and `g` to *structure-preserving symbol maps* (SortName↦SortName and OpName↦OpName) or to morphisms whose op interpretations are *variables/constructors* that act like renamings.
-   * This yields a computable “gluing” by explicit renaming and sharing (which the project already supports via `Rename*` and `Share*`).
-2. Add DSL sugar:
+   * `doctrine P = pushout f g;`
+2. Implement pushout in-kernel (`Strat.Kernel.Pushout`) with explicit restrictions:
 
-   * `pushout(B <- A -> C)` that expands to a `DocExpr` with the necessary renames and shares.
-3. Later, extend pushouts to more general op→term morphisms:
+   * `f` and `g` share a source,
+   * `f` and `g` are **symbol-map morphisms** (ops map to op-symbol applied to parameters),
+   * the induced interface maps on sorts/ops are injective.
+3. Generate canonical morphisms:
 
-   * identification then becomes “quotient by equations induced by the span”, which is not tractable via simple name-sharing alone.
+   * `P.inl : tgt f -> P`
+   * `P.inr : tgt g -> P`
+   * `P.glue : src f -> P`
 
 ### What you get immediately
 
-* A robust way to build `CCC_Bool` from `CCC` and `Bool` when the overlap is mostly shared by name/renaming (e.g. a common `Unit`, `Bool`, `T`, `F` interface).
-* A structured replacement for ad-hoc `And + Share + Rename` recipes.
+* Canonical injections/glue morphisms that enable interoperability via `applyMorphismTerm`.
+* Model restriction along a **unique** morphism `Dsmall -> Dlarge` in the frontend run pipeline.
 
 ---
 

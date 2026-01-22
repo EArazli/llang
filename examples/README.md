@@ -14,12 +14,16 @@ morphism_term.llang demonstrates morphism interpretation on terms; load it with 
 
 runspec/multi.llang demonstrates multiple runs in a single file; run it to see the two runs execute in sequence with their respective outputs.
 
-pushout/pushout_basic.llang demonstrates pushout-based doctrine assembly over a shared interface; load it to confirm the pushout and generated morphisms elaborate without errors.
+pushout/category_bool_nat_base.llang defines Category/BoolExt/NatExt and their pushout Both; other pushout examples import this as shared boilerplate.
 
-pushout/native_pushout.llang demonstrates a coproduct-style pushout over an empty interface for Nat and Bool; load it to confirm the pushout and injections exist.
+pushout/pushout_basic.llang just imports the base pushout definitions; pushout/pushout_basic.run.llang runs a core term in doctrine Both to exercise pushout normalization and open resolution.
 
-pushout/pushout_extend.llang extends a pushout and adds cross-fragment rules using qualified names; load it to confirm qualified sorts/ops parse and elaborate.
+pushout/pushout_extend.llang extends Both and adds cross-fragment rules using qualified names; load it to confirm qualified sorts/ops parse and elaborate.
 
-pushout/comm_monoid.llang demonstrates assembling a commutative monoid via pushout over a semigroup interface; load it to confirm the pushout and generated morphisms.
+pushout/comm_monoid.llang demonstrates assembling a commutative monoid via pushout over a semigroup interface.
 
-pushout/nat_bool.llang + pushout/nat_bool.models.llang + pushout/nat_bool.run.llang demonstrate model restriction: a Nat term is run using a NatBool model via the injection morphism; run `examples/pushout/nat_bool.run.llang` and expect normalized/value output for a Nat term (no result line).
+pushout/nat_bool.llang + pushout/nat_bool.models.llang + pushout/nat_bool.run.llang demonstrate model restriction: a Nat term is run using a NatBool model via the injection morphism; run `examples/pushout/nat_bool.run.llang` and expect normalized/value output for a Nat term.
+
+pushout/nat_bool_plus.llang + pushout/nat_bool_plus.models.llang + pushout/nat_bool_plus.run.llang extend NatBool with a cross-fragment op (Nat -> Bool) and model it; run `examples/pushout/nat_bool_plus.run.llang` and expect normalized/value output.
+
+pushout/ambiguous_model_restriction.llang demonstrates the expected error when multiple morphisms exist from a run doctrine to a model doctrine; load it to see the ambiguity failure.

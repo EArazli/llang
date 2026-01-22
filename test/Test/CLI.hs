@@ -25,6 +25,7 @@ tests =
     [ testCase "end-to-end monoid" testEndToEndMonoid
     , testCase "end-to-end monoid alt syntax/model" testEndToEndMonoidAlt
     , testCase "end-to-end peano" testEndToEndPeano
+    , testCase "end-to-end pushout model restriction nat_bool" testEndToEndNatBoolRestriction
     , testCase "end-to-end ski" testEndToEndSKI
     , testCase "end-to-end category" testEndToEndCat
     , testCase "end-to-end STLC surface" testEndToEndSTLCSurface
@@ -67,6 +68,14 @@ testEndToEndPeano = do
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> rrValue out @?= VInt 6
+
+testEndToEndNatBoolRestriction :: Assertion
+testEndToEndNatBoolRestriction = do
+  path <- getDataFileName "examples/pushout/nat_bool.run.llang"
+  result <- runFile path Nothing
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> rrValue out @?= VInt 1
 
 
 testEndToEndSKI :: Assertion

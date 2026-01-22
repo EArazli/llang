@@ -1,0 +1,13 @@
+import "./nat_bool_plus.llang";
+import "./nat_bool_plus.models.llang";
+import "../../stdlib/syntax.llang";
+
+run main where {
+  doctrine NatBoolPlus;
+  syntax CombDefault;
+  model NatBoolPlusNative;
+  show normalized;
+  show value;
+}
+---
+NatBoolPlus.isZero(NatBoolPlus.Nat.S(NatBoolPlus.Nat.Z))

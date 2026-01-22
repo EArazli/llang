@@ -271,12 +271,10 @@ appTerm = do
     Just args -> pure (RApp name args)
 
 rawSort :: Parser RawSort
-rawSort = do
+rawSort = lexeme $ do
   name <- qualifiedIdentRaw
   mArgs <- optional (symbol "(" *> term `sepBy` symbol "," <* symbol ")")
-  case mArgs of
-    Nothing -> pure (RawSort name [])
-    Just args -> pure (RawSort name args)
+  pure (RawSort name (maybe [] id mArgs))
 
 
 -- Syntax block

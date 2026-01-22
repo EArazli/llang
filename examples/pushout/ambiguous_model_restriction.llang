@@ -1,0 +1,21 @@
+import "./nat_bool.llang";
+import "./nat_bool.models.llang";
+import "../../stdlib/syntax.llang";
+
+morphism NatToNatBoolAlt : Nat -> NatBool where {
+  sort Nat = Nat.Nat;
+  op Z = Nat.Z;
+  op S(n) = Nat.S(?n);
+  op add(a,b) = Nat.add(?a, ?b);
+}
+
+run main where {
+  doctrine Nat;
+  syntax CombDefault;
+  model NatBoolNative;
+
+  show normalized;
+  show value;
+}
+---
+Nat.add(Nat.Z, Nat.S(Nat.Z))

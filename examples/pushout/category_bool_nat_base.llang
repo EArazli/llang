@@ -1,0 +1,17 @@
+doctrine Category where {
+  sort Obj;
+  op a : Obj;
+  op f : (x:Obj) -> Obj;
+}
+
+doctrine BoolExt extends Category where {
+  op g : (x:Obj) -> Obj;
+  computational rB : (x:Obj) |- f(?x) -> g(?x);
+}
+
+doctrine NatExt extends Category where {
+  op h : (x:Obj) -> Obj;
+  computational rN : (x:Obj) |- f(?x) -> h(?x);
+}
+
+doctrine Both = pushout BoolExt.fromBase NatExt.fromBase;

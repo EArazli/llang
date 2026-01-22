@@ -1,0 +1,8 @@
+import "./nat_bool.llang";
+
+doctrine NatBoolPlus extends NatBool where {
+  op isZero : (n:Nat.Nat) -> Bool.Bool;
+
+  computational isZeroZ : |- isZero(Nat.Z) -> Bool.T;
+  computational isZeroS : (n:Nat.Nat) |- isZero(Nat.S(?n)) -> Bool.F;
+}
