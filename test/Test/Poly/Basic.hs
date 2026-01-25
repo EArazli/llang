@@ -9,7 +9,8 @@ import Strat.Kernel.Syntax (OpName(..))
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..))
 import Strat.Poly.Diagram
-import Test.Kernel.Fixtures (objSort)
+import Strat.Poly.Eval (evalDiagram)
+import Test.Kernel.Fixtures (sigBasic, objSort)
 
 
 tests :: TestTree
@@ -19,6 +20,7 @@ tests =
     [ testCase "diagram dom/cod" testDiagramDomCod
     , testCase "compD rejects boundary mismatch" testCompMismatch
     , testCase "tensorD rejects mode mismatch" testTensorModeMismatch
+    , testCase "eval detects id boundary mismatch" testEvalIdBoundaryMismatch
     ]
 
 
@@ -55,3 +57,12 @@ testTensorModeMismatch = do
   case tensorD d1 d2 of
     Left _ -> pure ()
     Right _ -> assertFailure "expected mode mismatch"
+
+testEvalIdBoundaryMismatch :: Assertion
+testEvalIdBoundaryMismatch = do
+  let mode = ModeName "Cart"
+  let a = TySort objSort
+  let diag = idD mode [a]
+  case evalDiagram sigBasic [] diag of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected boundary mismatch"

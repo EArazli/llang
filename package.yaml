@@ -131,6 +131,7 @@ tests:
     - Test.Kernel.Rewrite
     - Test.Kernel.RewriteSystem
     - Test.Kernel.Regression
+    - Test.Kernel.FreeTele
     - Test.Frontend.ModelRestriction
     - Test.Frontend.SyntaxModel
     - Test.Frontend.Loader

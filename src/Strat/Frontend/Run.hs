@@ -13,7 +13,8 @@ import Strat.Kernel.Morphism.Util (identityMorphism)
 import Strat.Kernel.Presentation (Presentation(..))
 import Strat.Kernel.RewriteSystem (compileRewriteSystem, RewriteSystem)
 import Strat.Kernel.Signature (Signature)
-import Strat.Kernel.Syntax (Term(..), TermNode(..), Binder(..), Var, Sort)
+import Strat.Kernel.Syntax (Term(..), Binder)
+import Strat.Kernel.FreeTele (freeTeleOfTerm)
 import Strat.Kernel.Morphism
 import Strat.Surface (defaultInstance, elaborate)
 import Strat.Syntax.Spec (SyntaxSpec, SyntaxInstance(..), instantiateSyntax)
@@ -125,7 +126,7 @@ runWithEnv env spec = do
               Nothing -> T.pack . show
       let inputText = ssiPrintTm surfSyntax surfaceTerm
       pure (coreTerm, Just inputText, printNorm)
-  tele <- termTele term
+  tele <- freeTeleOfTerm term
   norm <- normalizeViaDiagrams (runFuel spec) rs (presSig pres) tele term
   let printedNorm = printNorm norm
   let cat = compileTerm norm
@@ -300,23 +301,6 @@ normalizeViaDiagrams fuel rs sig tele term = do
   case diagramToTerm1 sig tele diagNorm of
     Left err -> Left ("diagram readback: " <> err)
     Right t -> Right t
-
-termTele :: Term -> Either Text [Binder]
-termTele term = do
-  vars <- collectVars term M.empty
-  pure [Binder v s | (v, s) <- M.toList vars]
-
-collectVars :: Term -> M.Map Var Sort -> Either Text (M.Map Var Sort)
-collectVars (Term s node) acc =
-  case node of
-    TVar v ->
-      case M.lookup v acc of
-        Nothing -> Right (M.insert v s acc)
-        Just s' ->
-          if s' == s
-            then Right acc
-            else Left "termTele: variable sort mismatch"
-    TOp _ args -> foldM (flip collectVars) acc args
 
 buildSurfaceGoal :: SurfaceDef -> STerm -> [GoalArg]
 buildSurfaceGoal surf tm =

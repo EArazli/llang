@@ -28,7 +28,10 @@ diagramToTerm1 sig tele diagram = do
 evalWithEnv :: Signature -> [Term] -> Diagram -> Either Text [Term]
 evalWithEnv sig env diagram =
   case diagram of
-    DId _ _ -> Right env
+    DId _ ctx ->
+      if length env == length ctx
+        then Right env
+        else Left ("evalDiagram: id boundary mismatch (expected " <> T.pack (show (length ctx)) <> ", got " <> T.pack (show (length env)) <> ")")
     DGen _ _ _ label -> evalGen sig label env
     DComp g f -> do
       mid <- evalWithEnv sig env f

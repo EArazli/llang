@@ -89,6 +89,7 @@ library
       Strat.Kernel.DSL.Elab
       Strat.Kernel.DSL.Parse
       Strat.Kernel.Examples.Monoid
+      Strat.Kernel.FreeTele
       Strat.Kernel.Morphism
       Strat.Kernel.Morphism.Util
       Strat.Kernel.Presentation
@@ -182,6 +183,7 @@ test-suite llang-test
       Test.Kernel.Rewrite
       Test.Kernel.RewriteSystem
       Test.Kernel.Regression
+      Test.Kernel.FreeTele
       Test.Frontend.ModelRestriction
       Test.Frontend.SyntaxModel
       Test.Frontend.Loader

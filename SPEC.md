@@ -141,9 +141,9 @@ Implementation detail: substitution application tracks a `seen` set to prevent n
 
 ---
 
-## 1.9 Polygraph kernel (experimental, not yet wired into runs)
+## 1.9 Polygraph kernel (experimental; wired via compatibility wrapper)
 
-The codebase includes a parallel “polygraph” core (under `Strat.Poly.*`) that is **not yet wired into the run pipeline**. It defines the data model needed for future diagram-based rewriting while keeping the current term-based kernel intact.
+The codebase includes a parallel “polygraph” core (under `Strat.Poly.*`). It defines the data model needed for future diagram-based rewriting while keeping the current term-based kernel intact. The run pipeline currently **uses a compatibility wrapper** (term → cartesian diagram → term normalization in the old engine → diagram → term) to integrate the polygraph layer without changing semantics.
 
 Key components:
 
@@ -153,7 +153,7 @@ Key components:
 * **Cell2**: 2-cells between diagrams, carrying the original rule class and orientation.
 * **Doctrine2**: a compiled doctrine over a mode theory, signature, structural library per mode, and a list of 2-cells.
 
-No rewriting or evaluation uses these types yet; they are introduced for phased migration and regression-safe integration.
+True diagram rewriting is **not** implemented yet; the polygraph layer is used for integration/regression only.
 
 ---
 
@@ -653,6 +653,8 @@ Given a selected run:
    * compile the term to a cartesian diagram,
    * normalize using the existing term rewrite engine,
    * read back the normalized diagram to a kernel term.
+
+   The compatibility wrapper first extracts a telescope of free variables from the term, including variables that appear only in sort indices.
 5. Compile normalized term to `CatExpr` (a syntax tree over ops/vars).
 6. Evaluate the normalized term with the chosen model:
 

@@ -12,6 +12,7 @@ import qualified Test.Kernel.Morphism as KernelMorphism
 import qualified Test.Kernel.Pushout as KernelPushout
 import qualified Test.Kernel.SortCtorTele as KernelSortCtorTele
 import qualified Test.Kernel.Regression as KernelRegression
+import qualified Test.Kernel.FreeTele as KernelFreeTele
 import qualified Test.Surface as Surface
 import qualified Test.Backend as Backend
 import qualified Test.CLI as CLI
@@ -44,6 +45,7 @@ main =
       , KernelPushout.tests
       , KernelSortCtorTele.tests
       , KernelRegression.tests
+      , KernelFreeTele.tests
       , Surface.tests
       , Backend.tests
       , FrontendSyntaxModel.tests
