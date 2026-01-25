@@ -1,19 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Normalize
   ( NormalizationStatus(..)
-  , normalizeDiagramStatus
-  , joinableWithinDiagram
+  , normalize
+  , joinableWithin
   ) where
 
 import Data.Text (Text)
-import Strat.Kernel.Morphism (normalizeStatus, joinableWithin)
-import Strat.Kernel.RewriteSystem (RewriteSystem)
-import Strat.Kernel.Signature (Signature)
-import Strat.Kernel.Syntax (Binder)
+import qualified Data.Set as S
 import Strat.Poly.Diagram (Diagram)
-import Strat.Poly.Eval (diagramToTerm1)
-import Strat.Poly.Compat (compileTermToDiagram)
-import Strat.Poly.Doctrine (cartMode)
+import Strat.Poly.Graph (canonicalizeDiagram)
+import Strat.Poly.Rewrite (RewriteRule, rewriteOnce, rewriteAll)
 
 
 data NormalizationStatus a
@@ -21,28 +17,36 @@ data NormalizationStatus a
   | OutOfFuel a
   deriving (Eq, Show)
 
-normalizeDiagramStatus
-  :: Int
-  -> RewriteSystem
-  -> Signature
-  -> [Binder]
-  -> Diagram
-  -> Either Text (NormalizationStatus Diagram)
-normalizeDiagramStatus fuel rs sig tele diag = do
-  term <- diagramToTerm1 sig tele diag
-  let (nf, ok) = normalizeStatus fuel rs term
-  diag' <- compileTermToDiagram sig cartMode tele nf
-  pure (if ok then Finished diag' else OutOfFuel diag')
+normalize :: Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
+normalize fuel rules diag
+  | fuel <= 0 = Right (OutOfFuel (canonicalizeDiagram diag))
+  | otherwise = do
+      step <- rewriteOnce rules (canonicalizeDiagram diag)
+      case step of
+        Nothing -> Right (Finished (canonicalizeDiagram diag))
+        Just diag' -> normalize (fuel - 1) rules (canonicalizeDiagram diag')
 
-joinableWithinDiagram
-  :: Int
-  -> RewriteSystem
-  -> Signature
-  -> [Binder]
-  -> Diagram
-  -> Diagram
-  -> Either Text Bool
-joinableWithinDiagram fuel rs sig tele d1 d2 = do
-  t1 <- diagramToTerm1 sig tele d1
-  t2 <- diagramToTerm1 sig tele d2
-  pure (joinableWithin fuel rs t1 t2)
+joinableWithin :: Int -> [RewriteRule] -> Diagram -> Diagram -> Either Text Bool
+joinableWithin fuel rules d1 d2
+  | fuel < 0 = Right False
+  | otherwise = do
+      let cap = 50
+      reach1 <- reachable rules cap fuel (canonicalizeDiagram d1)
+      reach2 <- reachable rules cap fuel (canonicalizeDiagram d2)
+      pure (not (S.null (S.intersection reach1 reach2)))
+
+reachable :: [RewriteRule] -> Int -> Int -> Diagram -> Either Text (S.Set Diagram)
+reachable rules cap fuel start =
+  let start' = canonicalizeDiagram start
+  in go (S.singleton start') [(start', 0)]
+  where
+    go seen [] = Right seen
+    go seen ((d,depth):queue)
+      | depth >= fuel = go seen queue
+      | otherwise = do
+          next0 <- rewriteAll cap rules d
+          let next = map canonicalizeDiagram next0
+          let new = filter (`S.notMember` seen) next
+          let seen' = foldr S.insert seen new
+          let queue' = queue <> [(x, depth + 1) | x <- new]
+          go seen' queue'

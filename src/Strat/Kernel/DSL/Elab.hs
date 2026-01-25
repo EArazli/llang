@@ -6,6 +6,7 @@ module Strat.Kernel.DSL.Elab
   ) where
 
 import Strat.Kernel.DSL.AST
+import Strat.Poly.DSL.AST (RawPolyDoctrine(..))
 import Strat.Kernel.Presentation
 import Strat.Kernel.Presentation.Rename (qualifyPresentation)
 import Strat.Kernel.Rule
@@ -22,6 +23,7 @@ import Strat.Model.Spec
 import Strat.Frontend.Env (ModuleEnv(..), SyntaxDef)
 import qualified Strat.Frontend.Env as Env
 import Strat.Frontend.RunSpec
+import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyRun)
 import Strat.Surface2.Elab
 import Strat.Surface2.SyntaxSpec
 import Strat.Kernel.Morphism
@@ -84,6 +86,12 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
                     (M.insert (morName inr) inr (meMorphisms env)))
                 }
           pure (env', rawRuns)
+        DeclPolyDoctrine polyDecl -> do
+          let name = rpdName polyDecl
+          ensureAbsent "polydoctrine" name (mePolyDoctrines env)
+          doc <- elabPolyDoctrine env polyDecl
+          let env' = env { mePolyDoctrines = M.insert name doc (mePolyDoctrines env) }
+          pure (env', rawRuns)
         DeclSyntaxWhere decl -> do
           let name = rsnName decl
           ensureAbsent "syntax" name (meSyntaxes env)
@@ -120,6 +128,12 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
           pure (env', rawRuns)
         DeclRun rawNamed ->
           pure (env, rawRuns <> [rawNamed])
+        DeclPolyRun polyRun -> do
+          let name = rprName polyRun
+          ensureAbsent "polyrun" name (mePolyRuns env)
+          spec <- elabPolyRun polyRun
+          let env' = env { mePolyRuns = M.insert name spec (mePolyRuns env) }
+          pure (env', rawRuns)
 
 ensureAbsent :: Text -> Text -> M.Map Text v -> Either Text ()
 ensureAbsent label name mp =

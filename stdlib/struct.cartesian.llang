@@ -1,0 +1,18 @@
+import "./struct.symmetric.llang";
+
+polydoctrine StructCartesian extends StructSymmetric where {
+  gen dup a : [a] -> [a, a] @M;
+  gen drop a : [a] -> [] @M;
+
+  rule structural coassoc = a : [a] -> [a, a, a] @M =
+    dup ; (dup * id[a]) == dup ; (id[a] * dup)
+
+  rule structural counitL = a : [a] -> [a] @M =
+    dup ; (drop * id[a]) == id[a]
+
+  rule structural counitR = a : [a] -> [a] @M =
+    dup ; (id[a] * drop) == id[a]
+
+  rule structural cocomm = a : [a] -> [a, a] @M =
+    dup ; swap == dup
+}

@@ -5,12 +5,11 @@ module Test.Poly.Basic
 
 import Test.Tasty
 import Test.Tasty.HUnit
-import Strat.Kernel.Syntax (OpName(..))
+import qualified Data.Text as T
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..))
+import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram
-import Strat.Poly.Eval (evalDiagram)
-import Test.Kernel.Fixtures (sigBasic, objSort)
 
 
 tests :: TestTree
@@ -20,28 +19,28 @@ tests =
     [ testCase "diagram dom/cod" testDiagramDomCod
     , testCase "compD rejects boundary mismatch" testCompMismatch
     , testCase "tensorD rejects mode mismatch" testTensorModeMismatch
-    , testCase "eval detects id boundary mismatch" testEvalIdBoundaryMismatch
     ]
 
 
 testDiagramDomCod :: Assertion
 testDiagramDomCod = do
   let mode = ModeName "Cart"
-  let a = TySort objSort
+  let a = TCon (TypeName "A") []
   let ctx = [a]
-  let diag = genD mode ctx ctx (GLUser (OpName "f"))
-  diagramDom diag @?= ctx
-  diagramCod diag @?= ctx
+  case genD mode ctx ctx (GenName "f") of
+    Left err -> assertFailure (T.unpack err)
+    Right diag -> do
+      diagramDom diag @?= ctx
+      diagramCod diag @?= ctx
 
 
 testCompMismatch :: Assertion
 testCompMismatch = do
   let mode = ModeName "Cart"
-  let a = TySort objSort
-  let ctx1 = [a]
-  let ctx2 = [a, a]
-  let g = genD mode ctx1 ctx1 (GLUser (OpName "f"))
-  let f = idD mode ctx2
+  let a = TCon (TypeName "A") []
+  let b = TCon (TypeName "B") []
+  let g = idD mode [a]
+  let f = idD mode [b]
   case compD g f of
     Left _ -> pure ()
     Right _ -> assertFailure "expected boundary mismatch"
@@ -51,18 +50,9 @@ testTensorModeMismatch :: Assertion
 testTensorModeMismatch = do
   let modeA = ModeName "A"
   let modeB = ModeName "B"
-  let a = TySort objSort
+  let a = TCon (TypeName "A") []
   let d1 = idD modeA [a]
   let d2 = idD modeB [a]
   case tensorD d1 d2 of
     Left _ -> pure ()
     Right _ -> assertFailure "expected mode mismatch"
-
-testEvalIdBoundaryMismatch :: Assertion
-testEvalIdBoundaryMismatch = do
-  let mode = ModeName "Cart"
-  let a = TySort objSort
-  let diag = idD mode [a]
-  case evalDiagram sigBasic [] diag of
-    Left _ -> pure ()
-    Right _ -> assertFailure "expected boundary mismatch"

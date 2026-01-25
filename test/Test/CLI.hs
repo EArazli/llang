@@ -6,6 +6,7 @@ module Test.CLI
 import Test.Tasty
 import Test.Tasty.HUnit
 import Strat.Frontend.Run
+import Strat.CLI (runCLI, CLIOptions(..))
 import Strat.Backend (Value(..))
 import Strat.Backend.Concat (CatExpr(..))
 import Strat.Kernel.Syntax (OpName(..), Term(..), TermNode(..))
@@ -36,6 +37,7 @@ tests =
     , testCase "end-to-end STLC surface unknown identifier" testEndToEndSTLCBadIdent
     , testCase "multi-run default main" testMultiRunDefault
     , testCase "multi-run selection" testMultiRunSelect
+    , testCase "poly no-dup error" testPolyNoDupError
     ]
 
 
@@ -191,6 +193,15 @@ testMultiRunSelect = do
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> assertHasOp "CCC.F" (rrNormalized out)
+
+testPolyNoDupError :: Assertion
+testPolyNoDupError = do
+  path <- getDataFileName "examples/poly/no_dup_error.run.llang"
+  result <- runCLI (CLIOptions path Nothing)
+  case result of
+    Left err ->
+      assertBool "expected boundary mismatch" ("boundary mismatch" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected failure for no-dup example"
 
 collectOps :: Term -> [OpName]
 collectOps tm =

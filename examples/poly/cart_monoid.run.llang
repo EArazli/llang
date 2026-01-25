@@ -1,0 +1,8 @@
+import "./cart_monoid.poly.llang";
+
+polyrun main where {
+  doctrine CartMonoid;
+  show normalized;
+}
+---
+dup{A} ; mul

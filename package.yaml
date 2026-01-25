@@ -10,6 +10,7 @@ extra-source-files:
 - README.md
 - CHANGELOG.md
 - examples/README.md
+- SPEC-LEGACY.md
 data-files:
 - examples/monoid.llang
 - examples/monoid.syntax.llang
@@ -53,11 +54,21 @@ data-files:
 - examples/pushout/nat_bool_plus.models.llang
 - examples/pushout/nat_bool_plus.run.llang
 - examples/pushout/ambiguous_model_restriction.llang
+- examples/poly/README.md
+- examples/poly/planar_monoid.poly.llang
+- examples/poly/planar_monoid.run.llang
+- examples/poly/cart_monoid.poly.llang
+- examples/poly/cart_monoid.run.llang
+- examples/poly/no_dup_error.run.llang
+- examples/poly/subdiagram_match.poly.llang
 - examples/runspec/multi.llang
 - stdlib/syntax.llang
 - stdlib/nat.llang
 - stdlib/bool.llang
 - stdlib/native.models.llang
+- stdlib/struct.planar.llang
+- stdlib/struct.symmetric.llang
+- stdlib/struct.cartesian.llang
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -145,5 +156,7 @@ tests:
     - Test.CLI
     - Test.CLI.Golden
     - Test.Poly.Basic
-    - Test.Poly.Compat
+    - Test.Poly.Rewrite
+    - Test.Poly.DSL
+    - Test.Poly.Morphism
     - Paths_llang

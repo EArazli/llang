@@ -66,7 +66,7 @@ loadModuleWith st path isMain = do
                             Left err -> pure (Left err)
                             Right envFull ->
                               let envLocal = diffEnv envFull envBase
-                              in if not isMain && not (M.null (meRuns envLocal))
+                              in if not isMain && (not (M.null (meRuns envLocal)) || not (M.null (mePolyRuns envLocal)))
                                 then pure (Left "runs are only allowed in the main file")
                                 else do
                                   let deps = S.insert absPath importDeps
@@ -106,6 +106,7 @@ diffEnv :: ModuleEnv -> ModuleEnv -> ModuleEnv
 diffEnv full base = ModuleEnv
   { meDoctrines = M.difference (meDoctrines full) (meDoctrines base)
   , meRawDoctrines = M.difference (meRawDoctrines full) (meRawDoctrines base)
+  , mePolyDoctrines = M.difference (mePolyDoctrines full) (mePolyDoctrines base)
   , meSyntaxes = M.difference (meSyntaxes full) (meSyntaxes base)
   , meSurfaces = M.difference (meSurfaces full) (meSurfaces base)
   , meMorphisms = M.difference (meMorphisms full) (meMorphisms base)
@@ -113,6 +114,7 @@ diffEnv full base = ModuleEnv
   , meImplDefaults = diffImplDefaults (meImplDefaults full) (meImplDefaults base)
   , meRunSpecs = M.difference (meRunSpecs full) (meRunSpecs base)
   , meRuns = meRuns full
+  , mePolyRuns = mePolyRuns full
   }
 
 diffImplDefaults :: M.Map (Text, Text) [Text] -> M.Map (Text, Text) [Text] -> M.Map (Text, Text) [Text]

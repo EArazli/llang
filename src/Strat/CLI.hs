@@ -5,9 +5,13 @@ module Strat.CLI
   , runCLI
   ) where
 
-import Strat.Frontend.Run (runFile, RunResult(..))
+import Strat.Frontend.Loader (loadModule)
+import Strat.Frontend.Run (runWithEnv, selectRun, RunResult(..))
+import Strat.Frontend.RunPoly (runPolyWithEnv, selectPolyRun, PolyRunResult(..))
+import Strat.Frontend.Env
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Map.Strict as M
 
 
 data CLIOptions = CLIOptions
@@ -25,8 +29,23 @@ parseArgs args =
 
 runCLI :: CLIOptions -> IO (Either Text Text)
 runCLI opts = do
-  result <- runFile (optFile opts) (optRun opts)
-  pure (fmap rrOutput result)
+  envResult <- loadModule (optFile opts)
+  case envResult of
+    Left err -> pure (Left err)
+    Right env ->
+      if not (M.null (mePolyRuns env))
+        then case selectPolyRun env (optRun opts) of
+          Left err -> pure (Left err)
+          Right spec ->
+            case runPolyWithEnv env spec of
+              Left err -> pure (Left err)
+              Right res -> pure (Right (prOutput res))
+        else case selectRun env (optRun opts) of
+          Left err -> pure (Left err)
+          Right spec ->
+            case runWithEnv env spec of
+              Left err -> pure (Left err)
+              Right res -> pure (Right (rrOutput res))
 
 usage :: Text
 usage =

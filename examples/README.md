@@ -1,3 +1,15 @@
+Polygraph examples (current kernel)
+
+poly/planar_monoid.poly.llang + poly/planar_monoid.run.llang demonstrate a planar monoid with explicit generators and rules; run the .run file to see normalized diagram output.
+
+poly/cart_monoid.poly.llang + poly/cart_monoid.run.llang add explicit cartesian structure (dup/drop/swap) and normalize a diagram that uses dup.
+
+poly/no_dup_error.run.llang is a negative example that fails due to a boundary mismatch (no implicit duplication).
+
+poly/subdiagram_match.poly.llang is a small doctrine intended to exercise true subdiagram matching.
+
+Legacy examples (term kernel + Surface2)
+
 cat.llang + cat.run.llang demonstrate a small category doctrine with a direct core run using CombDefault syntax; run `examples/cat.run.llang` and expect normalized/value output for a fully-qualified core term.
 
 ccc.llang + ccc.syntax.llang + ccc.run.llang define the CCC doctrine and a core syntax for it; run `examples/ccc.run.llang` to see normalized/value/cat output for a CCC expression.

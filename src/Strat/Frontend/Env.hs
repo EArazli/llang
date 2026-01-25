@@ -14,6 +14,8 @@ import Strat.Kernel.DSL.AST (RawRun)
 import Strat.Surface2.Def (SurfaceDef)
 import Strat.Surface2.SyntaxSpec (SurfaceSyntaxSpec)
 import Strat.Kernel.Morphism (Morphism)
+import Strat.Poly.Doctrine (Doctrine)
+import Strat.Poly.RunSpec (PolyRunSpec)
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -27,6 +29,7 @@ data SyntaxDef
 data ModuleEnv = ModuleEnv
   { meDoctrines     :: M.Map Text Presentation
   , meRawDoctrines  :: M.Map Text Presentation
+  , mePolyDoctrines :: M.Map Text Doctrine
   , meSyntaxes      :: M.Map Text SyntaxDef
   , meSurfaces      :: M.Map Text SurfaceDef
   , meMorphisms     :: M.Map Text Morphism
@@ -34,6 +37,7 @@ data ModuleEnv = ModuleEnv
   , meImplDefaults  :: M.Map (Text, Text) [Text]
   , meRunSpecs      :: M.Map Text RawRun
   , meRuns          :: M.Map Text RunSpec
+  , mePolyRuns      :: M.Map Text PolyRunSpec
   }
   deriving (Eq, Show)
 
@@ -41,6 +45,7 @@ emptyEnv :: ModuleEnv
 emptyEnv = ModuleEnv
   { meDoctrines = M.empty
   , meRawDoctrines = M.empty
+  , mePolyDoctrines = M.empty
   , meSyntaxes = M.empty
   , meSurfaces = M.empty
   , meMorphisms = M.empty
@@ -48,12 +53,14 @@ emptyEnv = ModuleEnv
   , meImplDefaults = M.empty
   , meRunSpecs = M.empty
   , meRuns = M.empty
+  , mePolyRuns = M.empty
   }
 
 mergeEnv :: ModuleEnv -> ModuleEnv -> Either Text ModuleEnv
 mergeEnv a b = do
   docs <- mergeMap "doctrine" meDoctrines
   rawDocs <- mergeMap "raw doctrine" meRawDoctrines
+  polyDocs <- mergeMap "polydoctrine" mePolyDoctrines
   syns <- mergeMap "syntax" meSyntaxes
   surfs <- mergeMap "surface" meSurfaces
   morphs <- mergeMap "morphism" meMorphisms
@@ -61,9 +68,11 @@ mergeEnv a b = do
   let impls = mergeImplDefaults (meImplDefaults a) (meImplDefaults b)
   specs <- mergeMap "run_spec" meRunSpecs
   runs <- mergeMap "run" meRuns
+  polyRuns <- mergeMap "polyrun" mePolyRuns
   pure ModuleEnv
     { meDoctrines = docs
     , meRawDoctrines = rawDocs
+    , mePolyDoctrines = polyDocs
     , meSyntaxes = syns
     , meSurfaces = surfs
     , meMorphisms = morphs
@@ -71,6 +80,7 @@ mergeEnv a b = do
     , meImplDefaults = impls
     , meRunSpecs = specs
     , meRuns = runs
+    , mePolyRuns = polyRuns
     }
   where
     mergeMap label f = mergeNamed label id (f a) (f b)

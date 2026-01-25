@@ -27,7 +27,9 @@ import qualified Test.Surface2.CoreEval as Surface2CoreEval
 import qualified Test.Surface2.Elab as Surface2Elab
 import qualified Test.Surface2.Determinism as Surface2Determinism
 import qualified Test.Poly.Basic as PolyBasic
-import qualified Test.Poly.Compat as PolyCompat
+import qualified Test.Poly.Rewrite as PolyRewrite
+import qualified Test.Poly.DSL as PolyDSL
+import qualified Test.Poly.Morphism as PolyMorphism
 
 main :: IO ()
 main =
@@ -60,5 +62,7 @@ main =
       , CLI.tests
       , CLIGolden.tests
       , PolyBasic.tests
-      , PolyCompat.tests
+      , PolyRewrite.tests
+      , PolyDSL.tests
+      , PolyMorphism.tests
       ]

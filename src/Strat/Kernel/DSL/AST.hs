@@ -43,12 +43,14 @@ module Strat.Kernel.DSL.AST
   , RawRunSpec(..)
   , RawNamedRun(..)
   , RawRunShow(..)
+  , RawPolyRun(..)
   , RawFile(..)
   ) where
 
 import Strat.Kernel.Types
 import Strat.Model.Spec (MExpr)
 import Data.Text (Text)
+import Strat.Poly.DSL.AST (RawPolyDoctrine)
 
 
 data RawTerm
@@ -105,6 +107,7 @@ data RawDecl
   = DeclImport FilePath
   | DeclDoctrineWhere Text (Maybe Text) [RawItem]
   | DeclDoctrinePushout Text Text Text
+  | DeclPolyDoctrine RawPolyDoctrine
   | DeclSyntaxWhere RawSyntaxDecl
   | DeclModelWhere Text Text [RawModelItem]
   | DeclSurfaceWhere RawSurfaceDecl
@@ -112,6 +115,7 @@ data RawDecl
   | DeclImplements RawImplementsDecl
   | DeclRunSpec Text RawRunSpec
   | DeclRun RawNamedRun
+  | DeclPolyRun RawPolyRun
   deriving (Eq, Show)
 
 
@@ -188,6 +192,15 @@ data RawRun = RawRun
   , rrFuel      :: Maybe Int
   , rrShowFlags :: [RawRunShow]
   , rrExprText  :: Text
+  }
+  deriving (Eq, Show)
+
+data RawPolyRun = RawPolyRun
+  { rprName :: Text
+  , rprDoctrine :: Text
+  , rprFuel :: Maybe Int
+  , rprShowFlags :: [RawRunShow]
+  , rprExprText :: Text
   }
   deriving (Eq, Show)
 

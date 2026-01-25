@@ -1,20 +1,19 @@
 module Strat.Poly.TypeExpr
-  ( TypeExpr(..)
+  ( TyVar(..)
+  , TypeName(..)
+  , TypeExpr(..)
   , Context
-  , asSort
   ) where
 
 import Data.Text (Text)
-import Strat.Kernel.Syntax (Sort)
 
+
+newtype TyVar = TyVar Text deriving (Eq, Ord, Show)
+newtype TypeName = TypeName Text deriving (Eq, Ord, Show)
 
 data TypeExpr
-  = TySort Sort
-  | TyCon Text [TypeExpr]
+  = TVar TyVar
+  | TCon TypeName [TypeExpr]
   deriving (Eq, Ord, Show)
 
 type Context = [TypeExpr]
-
-asSort :: TypeExpr -> Maybe Sort
-asSort (TySort s) = Just s
-asSort _ = Nothing

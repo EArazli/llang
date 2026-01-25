@@ -6,6 +6,7 @@ module Strat.Kernel.DSL.Parse
 import Strat.Kernel.DSL.AST
 import Strat.Kernel.Types
 import Strat.Model.Spec (MExpr(..))
+import qualified Strat.Poly.DSL.AST as PolyAST
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Functor (($>))
@@ -15,6 +16,7 @@ import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
 import Control.Monad (void)
+import Data.Char (isLower)
 
 
 type Parser = Parsec Void Text
@@ -37,6 +39,7 @@ decl :: Parser RawDecl
 decl =
   importDecl
     <|> doctrineDecl
+    <|> polyDoctrineDecl
     <|> syntaxDecl
     <|> modelDecl
     <|> surfaceDecl
@@ -44,6 +47,7 @@ decl =
     <|> implementsDecl
     <|> runSpecDecl
     <|> runDecl
+    <|> polyRunDecl
 
 importDecl :: Parser RawDecl
 importDecl = do
@@ -71,6 +75,16 @@ doctrineDecl = do
       rightMor <- qualifiedIdent
       optionalSemi
       pure (DeclDoctrinePushout docName leftMor rightMor)
+
+polyDoctrineDecl :: Parser RawDecl
+polyDoctrineDecl = do
+  _ <- symbol "polydoctrine"
+  name <- ident
+  mExt <- optional (symbol "extends" *> ident)
+  _ <- symbol "where"
+  items <- polyBlock
+  optionalSemi
+  pure (DeclPolyDoctrine (PolyAST.RawPolyDoctrine name mExt items))
 
 syntaxDecl :: Parser RawDecl
 syntaxDecl = do
@@ -156,6 +170,16 @@ runDecl = do
   exprText <- runBody
   pure (DeclRun (RawNamedRun name using (buildRun items exprText)))
 
+polyRunDecl :: Parser RawDecl
+polyRunDecl = do
+  _ <- symbol "polyrun"
+  name <- ident
+  items <- option [] (symbol "where" *> polyRunBlock)
+  exprText <- runBody
+  case buildPolyRun name items exprText of
+    Left err -> fail (T.unpack err)
+    Right run -> pure (DeclPolyRun run)
+
 runBody :: Parser Text
 runBody = do
   _ <- delimiterLine
@@ -235,6 +259,137 @@ ruleDecl = do
     , rrLHS = lhs
     , rrRHS = rhs
     }
+
+
+-- Polydoctrine blocks
+
+polyBlock :: Parser [PolyAST.RawPolyItem]
+polyBlock = do
+  _ <- symbol "{"
+  items <- many polyItem
+  _ <- symbol "}"
+  pure items
+
+polyItem :: Parser PolyAST.RawPolyItem
+polyItem =
+  polyModeDecl
+    <|> (PolyAST.RPType <$> polyTypeDecl)
+    <|> (PolyAST.RPGen <$> polyGenDecl)
+    <|> (PolyAST.RPRule <$> polyRuleDecl)
+
+polyModeDecl :: Parser PolyAST.RawPolyItem
+polyModeDecl = do
+  _ <- symbol "mode"
+  name <- ident
+  optionalSemi
+  pure (PolyAST.RPMode name)
+
+polyTypeDecl :: Parser PolyAST.RawPolyTypeDecl
+polyTypeDecl = do
+  _ <- symbol "type"
+  name <- ident
+  vars <- many ident
+  _ <- symbol "@"
+  mode <- ident
+  optionalSemi
+  pure PolyAST.RawPolyTypeDecl
+    { PolyAST.rptName = name
+    , PolyAST.rptVars = vars
+    , PolyAST.rptMode = mode
+    }
+
+polyGenDecl :: Parser PolyAST.RawPolyGenDecl
+polyGenDecl = do
+  _ <- symbol "gen"
+  name <- ident
+  vars <- many ident
+  _ <- symbol ":"
+  dom <- polyContext
+  _ <- symbol "->"
+  cod <- polyContext
+  _ <- symbol "@"
+  mode <- ident
+  optionalSemi
+  pure PolyAST.RawPolyGenDecl
+    { PolyAST.rpgName = name
+    , PolyAST.rpgVars = vars
+    , PolyAST.rpgDom = dom
+    , PolyAST.rpgCod = cod
+    , PolyAST.rpgMode = mode
+    }
+
+polyRuleDecl :: Parser PolyAST.RawPolyRuleDecl
+polyRuleDecl = do
+  _ <- symbol "rule"
+  cls <- (symbol "computational" $> Computational) <|> (symbol "structural" $> Structural)
+  name <- ident
+  orient <- orientation
+  vars <- many ident
+  _ <- symbol ":"
+  dom <- polyContext
+  _ <- symbol "->"
+  cod <- polyContext
+  _ <- symbol "@"
+  mode <- ident
+  _ <- symbol "="
+  lhs <- polyDiagExpr
+  _ <- symbol "=="
+  rhs <- polyDiagExpr
+  optionalSemi
+  pure PolyAST.RawPolyRuleDecl
+    { PolyAST.rprClass = cls
+    , PolyAST.rprName = name
+    , PolyAST.rprOrient = orient
+    , PolyAST.rprVars = vars
+    , PolyAST.rprDom = dom
+    , PolyAST.rprCod = cod
+    , PolyAST.rprMode = mode
+    , PolyAST.rprLHS = lhs
+    , PolyAST.rprRHS = rhs
+    }
+
+polyContext :: Parser PolyAST.RawPolyContext
+polyContext = do
+  _ <- symbol "["
+  tys <- polyTypeExpr `sepBy` symbol ","
+  _ <- symbol "]"
+  pure tys
+
+polyTypeExpr :: Parser PolyAST.RawPolyTypeExpr
+polyTypeExpr = lexeme $ do
+  name <- identRaw
+  case T.uncons name of
+    Nothing -> fail "empty type name"
+    Just (c, _) ->
+      if isLower c
+        then pure (PolyAST.RPTVar name)
+        else do
+          mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
+          pure (PolyAST.RPTCon name (maybe [] id mArgs))
+
+polyDiagExpr :: Parser PolyAST.RawDiagExpr
+polyDiagExpr = makeExprParser polyDiagTerm operators
+  where
+    operators =
+      [ [ InfixL (symbol "*" $> PolyAST.RDTensor) ]
+      , [ InfixL (symbol ";" $> PolyAST.RDComp) ]
+      ]
+
+polyDiagTerm :: Parser PolyAST.RawDiagExpr
+polyDiagTerm =
+  polyIdTerm <|> polyGenTerm <|> parens polyDiagExpr
+
+polyIdTerm :: Parser PolyAST.RawDiagExpr
+polyIdTerm = do
+  _ <- symbol "id"
+  ctx <- polyContext
+  pure (PolyAST.RDId ctx)
+
+polyGenTerm :: Parser PolyAST.RawDiagExpr
+polyGenTerm = do
+  name <- ident
+  mArgs <- optional (symbol "{" *> polyTypeExpr `sepBy` symbol "," <* symbol "}")
+  pure (PolyAST.RDGen name mArgs)
 
 
 binder :: Parser RawBinder
@@ -846,6 +1001,45 @@ runBlock = do
   _ <- symbol "}"
   pure items
 
+data PolyRunItem
+  = PolyRunDoctrine Text
+  | PolyRunFuel Int
+  | PolyRunShow RawRunShow
+
+polyRunBlock :: Parser [PolyRunItem]
+polyRunBlock = do
+  _ <- symbol "{"
+  items <- many polyRunItem
+  _ <- symbol "}"
+  pure items
+
+polyRunItem :: Parser PolyRunItem
+polyRunItem =
+  polyDoctrineItem
+    <|> polyFuelItem
+    <|> polyShowItem
+
+polyDoctrineItem :: Parser PolyRunItem
+polyDoctrineItem = do
+  _ <- symbol "doctrine"
+  name <- ident
+  optionalSemi
+  pure (PolyRunDoctrine name)
+
+polyFuelItem :: Parser PolyRunItem
+polyFuelItem = do
+  _ <- symbol "fuel"
+  n <- fromIntegral <$> integer
+  optionalSemi
+  pure (PolyRunFuel n)
+
+polyShowItem :: Parser PolyRunItem
+polyShowItem = do
+  _ <- symbol "show"
+  flag <- showFlag
+  optionalSemi
+  pure (PolyRunShow flag)
+
 data RunItem
   = RunDoctrine Text
   | RunSyntax Text
@@ -939,12 +1133,16 @@ fuelItem = do
 showItem :: Parser RunItem
 showItem = do
   _ <- symbol "show"
-  flag <- (symbol "normalized" $> RawShowNormalized)
-      <|> (symbol "value" $> RawShowValue)
-      <|> (symbol "cat" $> RawShowCat)
-      <|> (symbol "input" $> RawShowInput)
+  flag <- showFlag
   optionalSemi
   pure (RunShow flag)
+
+showFlag :: Parser RawRunShow
+showFlag =
+  (symbol "normalized" $> RawShowNormalized)
+    <|> (symbol "value" $> RawShowValue)
+    <|> (symbol "cat" $> RawShowCat)
+    <|> (symbol "input" $> RawShowInput)
 
 buildRun :: [RunItem] -> Text -> RawRun
 buildRun items exprText =
@@ -973,6 +1171,25 @@ buildRun items exprText =
     uses = [ (alias, name) | RunUse alias name <- items ]
     showFlags = [ s | RunShow s <- items ]
 
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
+
+buildPolyRun :: Text -> [PolyRunItem] -> Text -> Either Text RawPolyRun
+buildPolyRun name items exprText =
+  case doctrineName of
+    Nothing -> Left "polyrun: missing doctrine"
+    Just doc ->
+      Right RawPolyRun
+        { rprName = name
+        , rprDoctrine = doc
+        , rprFuel = fuel
+        , rprShowFlags = flags
+        , rprExprText = exprText
+        }
+  where
+    doctrineName = firstJust [ d | PolyRunDoctrine d <- items ]
+    fuel = firstJust [ f | PolyRunFuel f <- items ]
+    flags = [ s | PolyRunShow s <- items ]
     firstJust [] = Nothing
     firstJust (x:_) = Just x
 

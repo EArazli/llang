@@ -2,6 +2,8 @@
 module Strat.Frontend.Run
   ( RunResult(..)
   , runFile
+  , runWithEnv
+  , selectRun
   , buildMorphismEnv
   , renderRunResult
   ) where
@@ -12,9 +14,7 @@ import Strat.Frontend.RunSpec
 import Strat.Kernel.Morphism.Util (identityMorphism)
 import Strat.Kernel.Presentation (Presentation(..))
 import Strat.Kernel.RewriteSystem (compileRewriteSystem, RewriteSystem)
-import Strat.Kernel.Signature (Signature)
-import Strat.Kernel.Syntax (Term(..), Binder)
-import Strat.Kernel.FreeTele (freeTeleOfTerm)
+import Strat.Kernel.Syntax (Term(..))
 import Strat.Kernel.Morphism
 import Strat.Surface (defaultInstance, elaborate)
 import Strat.Syntax.Spec (SyntaxSpec, SyntaxInstance(..), instantiateSyntax)
@@ -29,10 +29,6 @@ import Strat.Surface2.Engine
 import Strat.Surface2.CoreEval
 import Strat.Surface2.Term (STerm(..), Ix(..), JudgName(..))
 import Strat.Surface2.Pattern (MVar(..), MatchSubst(..), MetaSubst(..), instantiateMeta, resolvePlaceholders)
-import Strat.Poly.Compat (compileTermToDiagram)
-import Strat.Poly.Normalize (NormalizationStatus(..), normalizeDiagramStatus)
-import Strat.Poly.Eval (diagramToTerm1)
-import Strat.Poly.Doctrine (cartMode)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
@@ -126,8 +122,7 @@ runWithEnv env spec = do
               Nothing -> T.pack . show
       let inputText = ssiPrintTm surfSyntax surfaceTerm
       pure (coreTerm, Just inputText, printNorm)
-  tele <- freeTeleOfTerm term
-  norm <- normalizeViaDiagrams (runFuel spec) rs (presSig pres) tele term
+  let (norm, _ok) = normalizeStatus (runFuel spec) rs term
   let printedNorm = printNorm norm
   let cat = compileTerm norm
   modelPres <- lookupDoctrine env modelDocName
@@ -286,21 +281,6 @@ renderRunResult spec norm cat val inputTxt =
     normOut = if ShowNormalized `elem` runShowFlags spec then ["normalized: " <> norm] else []
     valOut = if ShowValue `elem` runShowFlags spec then ["value: " <> T.pack (show val)] else []
     catOut = if ShowCat `elem` runShowFlags spec then ["cat: " <> T.pack (show cat)] else []
-
-normalizeViaDiagrams :: Int -> RewriteSystem -> Signature -> [Binder] -> Term -> Either Text Term
-normalizeViaDiagrams fuel rs sig tele term = do
-  diag0 <-
-    case compileTermToDiagram sig cartMode tele term of
-      Left err -> Left ("diagram compile: " <> err)
-      Right d -> Right d
-  status <- normalizeDiagramStatus fuel rs sig tele diag0
-  let diagNorm =
-        case status of
-          Finished d -> d
-          OutOfFuel d -> d
-  case diagramToTerm1 sig tele diagNorm of
-    Left err -> Left ("diagram readback: " <> err)
-    Right t -> Right t
 
 buildSurfaceGoal :: SurfaceDef -> STerm -> [GoalArg]
 buildSurfaceGoal surf tm =
