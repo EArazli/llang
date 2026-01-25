@@ -667,5 +667,3 @@ These are properties you must assume when reasoning about correctness:
 * Presheaf-style syntax/semantics: Fiore–Plotkin–Turi.
 * Freyd categories / Arrows: classic categorical semantics of effects.
 * GATLab (Julia): practical operations on GATs (pushouts/colimits and computations).
-
-For future plans, see `ROADMAP.md`.
