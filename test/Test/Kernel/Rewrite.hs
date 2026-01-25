@@ -13,7 +13,13 @@ import Strat.Kernel.Syntax
 import Strat.Kernel.Term
 import Strat.Kernel.Types
 import Strat.Kernel.Rewrite.Indexed as Indexed
+import Strat.Kernel.Morphism (normalizeStatus)
+import Strat.Poly.Compat (compileTermToDiagram)
+import Strat.Poly.Normalize (NormalizationStatus(..), normalizeDiagramStatus)
+import Strat.Poly.Eval (diagramToTerm1)
+import Strat.Poly.Doctrine (cartMode)
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Test.Kernel.Fixtures
@@ -30,6 +36,7 @@ tests =
     , testCase "rewrite updates dependent sorts" testRewriteUpdatesSort
     , testCase "normalize uses chooseRedex" testNormalizeUsesChooseRedex
     , testCase "rewriteOnce indexed equals rewriteOnce" testRewriteOnceIndexed
+    , testCase "poly normalization agrees" testPolyNormalizeAgrees
     ]
 
 mkEqConst :: Text -> RuleClass -> Orientation -> Text -> Text -> Equation
@@ -179,3 +186,36 @@ testRewriteOnceIndexed = do
   let idx = Indexed.buildRuleIndex rs
   let term = mkTerm sigBasic "m" [mkTerm sigBasic "a" [], mkTerm sigBasic "a" []]
   rewriteOnce rs term @?= Indexed.rewriteOnceIndexed rs idx term
+
+testPolyNormalizeAgrees :: Assertion
+testPolyNormalizeAgrees = do
+  let eq1 = mkEqConst "r1" Computational LR "a" "b"
+  let eq2 = mkEqConst "r2" Computational LR "b" "c"
+  let eq3 = mkEqUnary "r3" "f" "g"
+  let rs = mkRS [eq1, eq2, eq3]
+  let a = mkTerm sigBasic "a" []
+  let b = mkTerm sigBasic "b" []
+  let f x = mkTerm sigBasic "f" [x]
+  let terms = [a, b, f a]
+  mapM_ (assertAgrees rs) terms
+  where
+    assertAgrees rs t = do
+      let (nf, ok) = normalizeStatus 50 rs t
+      diag0 <-
+        case compileTermToDiagram sigBasic cartMode [] t of
+          Left err -> assertFailure ("compileTermToDiagram failed: " <> T.unpack err)
+          Right d -> pure d
+      status <-
+        case normalizeDiagramStatus 50 rs sigBasic [] diag0 of
+          Left err -> assertFailure ("normalizeDiagramStatus failed: " <> T.unpack err)
+          Right s -> pure s
+      let (diagNorm, finished) =
+            case status of
+              Finished d -> (d, True)
+              OutOfFuel d -> (d, False)
+      term' <-
+        case diagramToTerm1 sigBasic [] diagNorm of
+          Left err -> assertFailure ("diagramToTerm1 failed: " <> T.unpack err)
+          Right t' -> pure t'
+      term' @?= nf
+      finished @?= ok

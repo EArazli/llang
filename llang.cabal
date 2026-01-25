@@ -18,7 +18,6 @@ build-type:     Simple
 extra-source-files:
     README.md
     CHANGELOG.md
-    ROADMAP.md
     examples/README.md
 data-files:
     examples/monoid.llang
@@ -107,6 +106,15 @@ library
       Strat.Kernel.Types
       Strat.Kernel.Unify
       Strat.Model.Spec
+      Strat.Poly.CartLib
+      Strat.Poly.Cell2
+      Strat.Poly.Compat
+      Strat.Poly.Diagram
+      Strat.Poly.Doctrine
+      Strat.Poly.Eval
+      Strat.Poly.ModeTheory
+      Strat.Poly.Normalize
+      Strat.Poly.TypeExpr
       Strat.Surface
       Strat.Surface2.CoreEval
       Strat.Surface2.Def
@@ -173,6 +181,7 @@ test-suite llang-test
       Test.Kernel.SortCtorTele
       Test.Kernel.Rewrite
       Test.Kernel.RewriteSystem
+      Test.Kernel.Regression
       Test.Frontend.ModelRestriction
       Test.Frontend.SyntaxModel
       Test.Frontend.Loader
@@ -184,6 +193,9 @@ test-suite llang-test
       Test.Surface2.Determinism
       Test.Surface2.Elab
       Test.CLI
+      Test.CLI.Golden
+      Test.Poly.Basic
+      Test.Poly.Compat
       Paths_llang
   autogen-modules:
       Paths_llang

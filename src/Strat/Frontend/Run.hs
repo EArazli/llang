@@ -11,9 +11,9 @@ import Strat.Frontend.Env
 import Strat.Frontend.RunSpec
 import Strat.Kernel.Morphism.Util (identityMorphism)
 import Strat.Kernel.Presentation (Presentation(..))
-import Strat.Kernel.RewriteSystem (compileRewriteSystem)
-import Strat.Kernel.Rewrite (normalize)
-import Strat.Kernel.Syntax (Term(..))
+import Strat.Kernel.RewriteSystem (compileRewriteSystem, RewriteSystem)
+import Strat.Kernel.Signature (Signature)
+import Strat.Kernel.Syntax (Term(..), TermNode(..), Binder(..), Var, Sort)
 import Strat.Kernel.Morphism
 import Strat.Surface (defaultInstance, elaborate)
 import Strat.Syntax.Spec (SyntaxSpec, SyntaxInstance(..), instantiateSyntax)
@@ -28,6 +28,10 @@ import Strat.Surface2.Engine
 import Strat.Surface2.CoreEval
 import Strat.Surface2.Term (STerm(..), Ix(..), JudgName(..))
 import Strat.Surface2.Pattern (MVar(..), MatchSubst(..), MetaSubst(..), instantiateMeta, resolvePlaceholders)
+import Strat.Poly.Compat (compileTermToDiagram)
+import Strat.Poly.Normalize (NormalizationStatus(..), normalizeDiagramStatus)
+import Strat.Poly.Eval (diagramToTerm1)
+import Strat.Poly.Doctrine (cartMode)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
@@ -82,7 +86,7 @@ runWithEnv env spec = do
   pres <- lookupDoctrine env (runDoctrine spec)
   rs <- compileRewriteSystem (runPolicy spec) pres
   (modelDocName, modelSpec) <- lookupModel env (runModel spec) (runDoctrine spec)
-  (term, printedInput, printedNorm) <- case runSurface spec of
+  (term, printedInput, printNorm) <- case runSurface spec of
     Nothing -> do
       syntaxName <- maybe (Left "run: missing syntax") Right (runSyntax spec)
       syntaxSpec <- lookupDoctrineSyntax env syntaxName
@@ -92,8 +96,8 @@ runWithEnv env spec = do
         case elaborate (defaultInstance pres) comb of
           Left err -> Left ("Elaboration error: " <> T.pack (show err))
           Right t' -> Right t'
-      let normText = siPrint syntaxInstance (normalize (runFuel spec) rs t)
-      pure (t, Just (siPrint syntaxInstance t), normText)
+      let printNorm = siPrint syntaxInstance
+      pure (t, Just (siPrint syntaxInstance t), printNorm)
     Just surfName -> do
       surf <- lookupSpec "surface" surfName (meSurfaces env)
       surfSynName <- maybe (Left "run: missing surface_syntax") Right (runSurfaceSyntax spec)
@@ -115,13 +119,15 @@ runWithEnv env spec = do
       coreTerm <- case coreVal of
         CVCore t -> Right t
         _ -> Left "surface elaboration did not produce core term"
-      let normText =
+      let printNorm =
             case chooseCoreSyntax env spec pres of
-              Just coreSyn -> coreSyn (normalize (runFuel spec) rs coreTerm)
-              Nothing -> T.pack (show (normalize (runFuel spec) rs coreTerm))
+              Just coreSyn -> coreSyn
+              Nothing -> T.pack . show
       let inputText = ssiPrintTm surfSyntax surfaceTerm
-      pure (coreTerm, Just inputText, normText)
-  let norm = normalize (runFuel spec) rs term
+      pure (coreTerm, Just inputText, printNorm)
+  tele <- termTele term
+  norm <- normalizeViaDiagrams (runFuel spec) rs (presSig pres) tele term
+  let printedNorm = printNorm norm
   let cat = compileTerm norm
   modelPres <- lookupDoctrine env modelDocName
   model <- instantiateModel modelPres (runOpen spec) modelSpec
@@ -279,6 +285,38 @@ renderRunResult spec norm cat val inputTxt =
     normOut = if ShowNormalized `elem` runShowFlags spec then ["normalized: " <> norm] else []
     valOut = if ShowValue `elem` runShowFlags spec then ["value: " <> T.pack (show val)] else []
     catOut = if ShowCat `elem` runShowFlags spec then ["cat: " <> T.pack (show cat)] else []
+
+normalizeViaDiagrams :: Int -> RewriteSystem -> Signature -> [Binder] -> Term -> Either Text Term
+normalizeViaDiagrams fuel rs sig tele term = do
+  diag0 <-
+    case compileTermToDiagram sig cartMode tele term of
+      Left err -> Left ("diagram compile: " <> err)
+      Right d -> Right d
+  status <- normalizeDiagramStatus fuel rs sig tele diag0
+  let diagNorm =
+        case status of
+          Finished d -> d
+          OutOfFuel d -> d
+  case diagramToTerm1 sig tele diagNorm of
+    Left err -> Left ("diagram readback: " <> err)
+    Right t -> Right t
+
+termTele :: Term -> Either Text [Binder]
+termTele term = do
+  vars <- collectVars term M.empty
+  pure [Binder v s | (v, s) <- M.toList vars]
+
+collectVars :: Term -> M.Map Var Sort -> Either Text (M.Map Var Sort)
+collectVars (Term s node) acc =
+  case node of
+    TVar v ->
+      case M.lookup v acc of
+        Nothing -> Right (M.insert v s acc)
+        Just s' ->
+          if s' == s
+            then Right acc
+            else Left "termTele: variable sort mismatch"
+    TOp _ args -> foldM (flip collectVars) acc args
 
 buildSurfaceGoal :: SurfaceDef -> STerm -> [GoalArg]
 buildSurfaceGoal surf tm =

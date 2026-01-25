@@ -9,6 +9,7 @@ module Strat.Kernel.Morphism
   , applyOpInterp
   , lookupInterp
   , checkMorphism
+  , normalizeStatus
   , joinableWithin
   ) where
 

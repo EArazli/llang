@@ -15,6 +15,8 @@ The project implements a **meta-language** (the “llang” DSL) for specifying 
 5. **Runs**: configurable elaboration + rewriting + model evaluation pipelines, with reusable run-specs and multiple runs per file.
 6. **Models**: an interpretation of operations into a simple meta-evaluator (symbolic or expression-based).
 
+Regression tests exist for example outputs and for kernel normalization/joinability. These tests are treated as the semantic reference during the migration to the new core.
+
 Everything ultimately compiles to / is checked against the **kernel presentation**:
 
 * sort constructors + operation symbols (with dependent telescopes),
@@ -139,6 +141,48 @@ Implementation detail: substitution application tracks a `seen` set to prevent n
 
 ---
 
+## 1.9 Polygraph kernel (experimental, not yet wired into runs)
+
+The codebase includes a parallel “polygraph” core (under `Strat.Poly.*`) that is **not yet wired into the run pipeline**. It defines the data model needed for future diagram-based rewriting while keeping the current term-based kernel intact.
+
+Key components:
+
+* **ModeTheory**: a minimal mode theory with modes, modality generators, and (stored) equations. No normalization of modality expressions is implemented yet.
+* **TypeExpr**: a small type language with an explicit embedding `TySort Sort` to preserve compatibility with kernel sorts.
+* **Diagram**: planar string diagrams with ordered boundary contexts, identities, generators, composition, and tensor; user generators are labeled with kernel op names, and structural generators are represented by schema labels (dup/drop/swap).
+* **Cell2**: 2-cells between diagrams, carrying the original rule class and orientation.
+* **Doctrine2**: a compiled doctrine over a mode theory, signature, structural library per mode, and a list of 2-cells.
+
+No rewriting or evaluation uses these types yet; they are introduced for phased migration and regression-safe integration.
+
+---
+
+## 1.10 Compatibility embedding into the Cart polygraph core
+
+The current kernel can be embedded into the polygraph core in a **cartesian** mode:
+
+* The compilation target uses a single mode `Cart` with `StructCartesian` structural support.
+* Structural generators are represented by schema labels (`GLDup`, `GLDrop`, `GLSwap`) rather than enumerated symbols.
+* Terms are compiled deterministically:
+
+  * variables become projections built from swaps and drops,
+  * operation applications are built by pairing compiled arguments (`pairArgs`) and composing with a user generator.
+
+* A diagram-to-term readback exists for regression purposes:
+
+  * diagrams are evaluated on the telescope variables,
+  * `GLUser` nodes are interpreted via `mkOp`,
+  * the resulting term list is returned (or rejected if not single-output).
+
+This embedding is used to validate compatibility during migration before diagram rewriting becomes the primary engine.
+
+Current status:
+
+* Implemented: polygraph data model, cartesian embedding, and normalization via the compatibility wrapper.
+* Pending: true subdiagram/DPO rewriting, box constructs, and multi-output user generators.
+
+---
+
 ## 2. Presentations: signatures + equations
 
 ### 2.1 Equations
@@ -254,6 +298,8 @@ Before matching, rules are **freshened** against the target term to avoid variab
 `normalize(fuel, RS, t)` performs up to `fuel` rewrite steps using the first-redex strategy. If no redex exists, it returns the term unchanged.
 
 This is a **bounded**, strategy-dependent normalization; it is not guaranteed to compute a canonical normal form unless the rewrite system is confluent/terminating and the strategy is normalizing.
+
+Implementation note: in the current execution pipeline, normalization is routed through the polygraph compatibility layer: kernel term → cartesian diagram → term normalization (existing rewrite engine) → diagram → term readback. This preserves semantics while preparing for future diagram rewriting.
 
 ### 3.6 Joinability (bounded)
 
@@ -602,7 +648,11 @@ Given a selected run:
 
    * core/doctrine syntax: parse → core term → kernel term.
    * surface: parse surface term → solve `HasType` judgment → evaluate core outputs → kernel term.
-4. Normalize the kernel term with fuel.
+4. Normalize via the polygraph wrapper:
+
+   * compile the term to a cartesian diagram,
+   * normalize using the existing term rewrite engine,
+   * read back the normalized diagram to a kernel term.
 5. Compile normalized term to `CatExpr` (a syntax tree over ops/vars).
 6. Evaluate the normalized term with the chosen model:
 

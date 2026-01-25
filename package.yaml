@@ -9,7 +9,6 @@ copyright:           "2026 Author name here"
 extra-source-files:
 - README.md
 - CHANGELOG.md
-- ROADMAP.md
 - examples/README.md
 data-files:
 - examples/monoid.llang
@@ -131,6 +130,7 @@ tests:
     - Test.Kernel.SortCtorTele
     - Test.Kernel.Rewrite
     - Test.Kernel.RewriteSystem
+    - Test.Kernel.Regression
     - Test.Frontend.ModelRestriction
     - Test.Frontend.SyntaxModel
     - Test.Frontend.Loader
@@ -142,4 +142,7 @@ tests:
     - Test.Surface2.Determinism
     - Test.Surface2.Elab
     - Test.CLI
+    - Test.CLI.Golden
+    - Test.Poly.Basic
+    - Test.Poly.Compat
     - Paths_llang
