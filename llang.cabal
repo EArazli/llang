@@ -64,19 +64,37 @@ data-files:
     examples/pushout/nat_bool_plus.run.llang
     examples/pushout/ambiguous_model_restriction.llang
     examples/poly/README.md
+    examples/poly/cat.poly.llang
+    examples/poly/cat.run.llang
+    examples/poly/ccc.poly.llang
+    examples/poly/ccc.run.llang
     examples/poly/planar_monoid.poly.llang
     examples/poly/planar_monoid.run.llang
     examples/poly/planar_monoid.ssa.run.llang
     examples/poly/cart_monoid.poly.llang
     examples/poly/cart_monoid.run.llang
     examples/poly/cart_monoid.term.run.llang
+    examples/poly/monoid.run.llang
     examples/poly/no_dup_error.run.llang
     examples/poly/subdiagram_match.poly.llang
     examples/poly/monoid_to_string.llang
+    examples/poly/bool.models.llang
+    examples/poly/stlc_bool.term.run.llang
+    examples/poly/peano.poly.llang
+    examples/poly/peano.models.llang
+    examples/poly/peano.run.llang
+    examples/poly/ski.poly.llang
+    examples/poly/ski.run.llang
+    examples/poly/morphism_term.llang
+    examples/poly/pushout_basic.poly.llang
+    examples/poly/pushout_basic.run.llang
+    examples/poly/runspec.multi.llang
     examples/runspec/multi.llang
     stdlib/syntax.llang
     stdlib/nat.llang
     stdlib/bool.llang
+    stdlib/poly.nat.llang
+    stdlib/poly.bool.llang
     stdlib/native.models.llang
     stdlib/struct.planar.llang
     stdlib/struct.symmetric.llang

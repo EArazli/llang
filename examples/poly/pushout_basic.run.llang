@@ -1,0 +1,9 @@
+import "./pushout_basic.poly.llang";
+
+polyrun main where {
+  doctrine Both;
+  mode M;
+  show normalized;
+}
+---
+Left_inl_g ; Right_inr_g

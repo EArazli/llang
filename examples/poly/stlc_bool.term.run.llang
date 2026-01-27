@@ -1,0 +1,16 @@
+import "../../stdlib/poly.bool.llang";
+import "./bool.models.llang";
+
+polyrun main where {
+  doctrine Bool;
+  mode M;
+  surface CartTermSurface;
+  model BoolNative;
+  show normalized;
+  show value;
+}
+---
+term {
+  in;
+  out if(T, F, T);
+}

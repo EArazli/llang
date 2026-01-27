@@ -1,0 +1,20 @@
+import "../../stdlib/struct.cartesian.llang";
+
+polydoctrine SKI extends StructCartesian where {
+  type T @M;
+
+  gen s : [] -> [T] @M;
+  gen k : [] -> [T] @M;
+  gen i : [] -> [T] @M;
+  gen app : [T, T] -> [T] @M;
+
+  rule computational beta_i -> : [T] -> [T] @M =
+    (i * id[T]) ; app == id[T]
+
+  rule computational beta_k -> : [T, T] -> [T] @M =
+    (((k * id[T]) ; app) * id[T]) ; app == id[T] * drop
+
+  rule computational beta_s -> : [T, T, T] -> [T] @M =
+    (((((s * id[T]) ; app) * id[T]) ; app) * id[T]) ; app ==
+      (id[T] * id[T] * dup) ; (id[T] * swap * id[T]) ; (app * app) ; app
+}

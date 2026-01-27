@@ -1,0 +1,9 @@
+import "./cat.poly.llang";
+
+polyrun main where {
+  doctrine Cat;
+  mode M;
+  show normalized;
+}
+---
+f ; g ; h

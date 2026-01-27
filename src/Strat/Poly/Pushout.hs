@@ -41,10 +41,16 @@ computePolyPushout name f g = do
   ensureInjective "type" (M.elems typeMapG)
   ensureInjective "gen" (M.elems genMapF)
   ensureInjective "gen" (M.elems genMapG)
-  let renameTypesB = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList typeMapF ]
-  let renameTypesC = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList typeMapG ]
-  let renameGensB = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList genMapF ]
-  let renameGensC = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList genMapG ]
+  let renameTypesB0 = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList typeMapF ]
+  let renameTypesC0 = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList typeMapG ]
+  let renameGensB0 = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList genMapF ]
+  let renameGensC0 = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList genMapG ]
+  let prefixB = sanitizePrefix (dName (morTgt f)) <> "_inl"
+  let prefixC = sanitizePrefix (dName (morTgt g)) <> "_inr"
+  let renameTypesB = M.union renameTypesB0 (disjointTypeRenames prefixB (morSrc f) renameTypesB0 (morTgt f))
+  let renameTypesC = M.union renameTypesC0 (disjointTypeRenames prefixC (morSrc f) renameTypesC0 (morTgt g))
+  let renameGensB = M.union renameGensB0 (disjointGenRenames prefixB (morSrc f) renameGensB0 (morTgt f))
+  let renameGensC = M.union renameGensC0 (disjointGenRenames prefixC (morSrc f) renameGensC0 (morTgt g))
   b' <- renameDoctrine renameTypesB renameGensB (morTgt f)
   c' <- renameDoctrine renameTypesC renameGensC (morTgt g)
   merged <- mergeDoctrineList [morSrc f, b', c']
@@ -176,6 +182,78 @@ ensureInjective label images =
     go seen (x:rest)
       | x `S.member` seen = Just x
       | otherwise = go (S.insert x seen) rest
+
+disjointTypeRenames :: Text -> Doctrine -> M.Map (ModeName, TypeName) TypeName -> Doctrine -> M.Map (ModeName, TypeName) TypeName
+disjointTypeRenames prefix src interfaceRen tgt =
+  foldl add M.empty (M.toList (dTypes tgt))
+  where
+    srcNames = namesByMode [ (mode, name) | (mode, name, _) <- allTypes src ]
+    add acc (mode, table) =
+      let reserved = M.findWithDefault S.empty mode srcNames
+      in M.union acc (renameMode mode reserved (M.keys table))
+    renameMode mode reserved names =
+      let (_, mp) = foldl (step mode) (reserved, M.empty) names
+      in mp
+    step mode (used, mp) name =
+      let key = (mode, name)
+      in if M.member key interfaceRen
+        then (used, mp)
+        else
+          let (name', used') = freshTypeName prefix name used
+          in (used', M.insert key name' mp)
+
+disjointGenRenames :: Text -> Doctrine -> M.Map (ModeName, GenName) GenName -> Doctrine -> M.Map (ModeName, GenName) GenName
+disjointGenRenames prefix src interfaceRen tgt =
+  foldl add M.empty (M.toList (dGens tgt))
+  where
+    srcNames = namesByMode [ (mode, gdName gen) | (mode, gen) <- allGens src ]
+    add acc (mode, table) =
+      let reserved = M.findWithDefault S.empty mode srcNames
+          names = map gdName (M.elems table)
+          (_, mp) = foldl (step mode) (reserved, M.empty) names
+      in M.union acc mp
+    step mode (used, mp) name =
+      let key = (mode, name)
+      in if M.member key interfaceRen
+        then (used, mp)
+        else
+          let (name', used') = freshGenName prefix name used
+          in (used', M.insert key name' mp)
+
+namesByMode :: (Ord a) => [(ModeName, a)] -> M.Map ModeName (S.Set a)
+namesByMode pairs =
+  foldl add M.empty pairs
+  where
+    add mp (mode, name) =
+      let set = M.findWithDefault S.empty mode mp
+      in M.insert mode (S.insert name set) mp
+
+sanitizePrefix :: Text -> Text
+sanitizePrefix = T.map (\c -> if c == '.' then '_' else c)
+
+freshTypeName :: Text -> TypeName -> S.Set TypeName -> (TypeName, S.Set TypeName)
+freshTypeName prefix (TypeName base) used =
+  let baseName = prefix <> "_" <> base
+      candidate = TypeName baseName
+  in freshen candidate (\n -> TypeName (baseName <> "_" <> T.pack (show n))) used
+
+freshGenName :: Text -> GenName -> S.Set GenName -> (GenName, S.Set GenName)
+freshGenName prefix (GenName base) used =
+  let baseName = prefix <> "_" <> base
+      candidate = GenName baseName
+  in freshen candidate (\n -> GenName (baseName <> "_" <> T.pack (show n))) used
+
+freshen :: (Ord a) => a -> (Int -> a) -> S.Set a -> (a, S.Set a)
+freshen candidate mk used =
+  if candidate `S.member` used
+    then go 1
+    else (candidate, S.insert candidate used)
+  where
+    go n =
+      let cand = mk n
+      in if cand `S.member` used
+        then go (n + 1)
+        else (cand, S.insert cand used)
 
 renameDoctrine :: M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, GenName) GenName -> Doctrine -> Either Text Doctrine
 renameDoctrine tyRen genRen doc = do

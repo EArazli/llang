@@ -1,0 +1,9 @@
+import "./planar_monoid.poly.llang";
+
+polyrun main where {
+  doctrine PlanarMonoid;
+  mode M;
+  show normalized;
+}
+---
+(unit * unit) ; mul

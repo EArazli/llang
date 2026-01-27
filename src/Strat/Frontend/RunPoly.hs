@@ -27,6 +27,7 @@ import Strat.Poly.Surface (PolySurfaceDef(..), PolySurfaceKind(..))
 import Strat.Poly.Surface.SSA (elabSSA)
 import qualified Strat.Poly.Surface.CartTerm as CartTerm
 import Strat.Poly.Eval (evalDiagram)
+import Strat.Poly.Morphism (Morphism(..), applyMorphismDiagram)
 import Strat.Model.Spec (ModelSpec)
 import Strat.Backend (Value(..))
 
@@ -83,12 +84,13 @@ runPolyWithEnv env spec = do
       case psKind surf of
         SurfaceSSA -> elabSSA doc mode (prExprText spec)
         SurfaceCartTerm -> CartTerm.elabCartTerm doc mode (prExprText spec)
+  (doc', diag') <- applyMorphisms env doc diag (prMorphisms spec)
   -- TODO: cartesian surface handled by builtin in resolveSurface below
-  if S.null (freeTyVarsDiagram diag)
+  if S.null (freeTyVarsDiagram diag')
     then Right ()
     else Left "polyrun: unresolved type variables in diagram"
-  let rules = rulesFromPolicy (prPolicy spec) (dCells2 doc)
-  status <- normalize (prFuel spec) rules diag
+  let rules = rulesFromPolicy (prPolicy spec) (dCells2 doc')
+  status <- normalize (prFuel spec) rules diag'
   let norm =
         case status of
           Finished d -> d
@@ -97,18 +99,18 @@ runPolyWithEnv env spec = do
     Nothing -> Right Nothing
     Just name -> do
       (docName, modelSpec) <- lookupPolyModel env name
-      if docName /= prDoctrine spec
+      if docName /= dName doc'
         then Left "polyrun: model doctrine mismatch"
         else do
           if null (dIn norm)
             then do
-              vals <- evalDiagram doc modelSpec norm []
+              vals <- evalDiagram doc' modelSpec norm []
               pure (Just vals)
             else Left "polyrun: value requires closed diagram"
-  output <- renderPolyRunResult spec diag norm mValue
+  output <- renderPolyRunResult spec diag' norm mValue
   pure PolyRunResult
-    { prDoctrineDef = doc
-    , prInput = diag
+    { prDoctrineDef = doc'
+    , prInput = diag'
     , prNormalized = norm
     , prOutput = output
     }
@@ -186,6 +188,25 @@ lookupPolyModel env name =
   case M.lookup name (mePolyModels env) of
     Nothing -> Left ("Unknown polymodel: " <> name)
     Just spec -> Right spec
+
+applyMorphisms :: ModuleEnv -> Doctrine -> Diagram -> [Text] -> Either Text (Doctrine, Diagram)
+applyMorphisms env doc diag names =
+  foldl step (Right (doc, diag)) names
+  where
+    step acc name = do
+      (doc0, diag0) <- acc
+      mor <- lookupPolyMorphism env name
+      if morSrc mor /= doc0
+        then Left ("polyrun: morphism source mismatch for " <> name)
+        else do
+          diag' <- applyMorphismDiagram mor diag0
+          pure (morTgt mor, diag')
+
+lookupPolyMorphism :: ModuleEnv -> Text -> Either Text Morphism
+lookupPolyMorphism env name =
+  case M.lookup name (mePolyMorphisms env) of
+    Nothing -> Left ("Unknown polymorphism: " <> name)
+    Just mor -> Right mor
 
 renderValues :: [Value] -> Text
 renderValues vals =

@@ -211,6 +211,7 @@ data RawPolyRun = RawPolyRun
   , rprMode :: Maybe Text
   , rprSurface :: Maybe Text
   , rprModel :: Maybe Text
+  , rprMorphisms :: [Text]
   , rprPolicy :: Maybe Text
   , rprFuel :: Maybe Int
   , rprShowFlags :: [RawRunShow]

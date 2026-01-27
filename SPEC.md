@@ -239,7 +239,8 @@ polydoctrine <Name> = coproduct <Left> <Right>;
 
 - `pushout` requires morphisms with **renaming/inclusion** behavior (single‑generator images) and injective interface maps.
 - The pushout produces canonical morphisms `<Name>.inl`, `<Name>.inr`, and `<Name>.glue`.
-- `coproduct` is implemented as a pushout over an empty interface.
+- Non‑interface generators and types are automatically **disjoint‑renamed** in the pushout (prefixing by the target doctrine name plus `_inl`/`_inr`) to avoid collisions.
+- `coproduct` is implemented as a pushout over an empty interface (so all symbols are renamed disjointly).
 
 ### 6.2 Polymorphisms
 
@@ -314,6 +315,7 @@ polyrun <Name> where {
   mode <Mode>;          -- required if the doctrine has multiple modes
   surface <Surface>;    -- optional; chooses SSA or CartTerm surface
   model <PolyModel>;    -- optional; required for show value
+  apply <PolyMorphism>; -- optional; may be repeated, applied in order
   policy <RewritePolicy>;
   fuel <N>;
   show normalized;
@@ -328,9 +330,10 @@ The run pipeline:
 
 1. Parses either a diagram expression or a surface program.
 2. Elaborates it against the chosen doctrine/mode.
-3. Normalizes via the polygraph rewrite engine (filtered by the policy; default `UseStructuralAsBidirectional`).
-4. Optionally evaluates via a polymodel (closed diagrams only).
-5. Prints the normalized diagram, input, and/or value depending on flags.
+3. Applies any `apply` polymorphisms in order, updating the current doctrine each time.
+4. Normalizes via the polygraph rewrite engine (filtered by the policy; default `UseStructuralAsBidirectional`).
+5. Optionally evaluates via a polymodel (closed diagrams only, and the model must match the final doctrine).
+6. Prints the normalized diagram, input, and/or value depending on flags.
 
 `show cat` is unsupported for `polyrun`.
 

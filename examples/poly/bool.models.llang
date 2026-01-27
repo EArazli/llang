@@ -1,0 +1,8 @@
+import "../../stdlib/poly.bool.llang";
+
+polymodel BoolNative : Bool where {
+  default = symbolic;
+  op T() = true;
+  op F() = false;
+  op if(c,t,e) = if c then t else e;
+}

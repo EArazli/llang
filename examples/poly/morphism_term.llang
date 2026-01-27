@@ -1,0 +1,28 @@
+polydoctrine Invol where {
+  mode M;
+  type A @M;
+  gen f : [A] -> [A] @M;
+  rule computational inv -> : [A] -> [A] @M =
+    f ; f == id[A]
+}
+
+polydoctrine Invol2 where {
+  mode M;
+  type A @M;
+  gen g : [A] -> [A] @M;
+  rule computational inv -> : [A] -> [A] @M =
+    g ; g == id[A]
+}
+
+polymorphism Double : Invol -> Invol2 where {
+  gen f @ M -> g ; g
+}
+
+polyrun main where {
+  doctrine Invol;
+  mode M;
+  apply Double;
+  show normalized;
+}
+---
+f

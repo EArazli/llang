@@ -13,6 +13,7 @@ data PolyRunSpec = PolyRunSpec
   , prMode :: Maybe Text
   , prSurface :: Maybe Text
   , prModel :: Maybe Text
+  , prMorphisms :: [Text]
   , prPolicy :: RewritePolicy
   , prFuel :: Int
   , prShowFlags :: [RunShow]

@@ -1139,6 +1139,7 @@ data PolyRunItem
   | PolyRunMode Text
   | PolyRunSurface Text
   | PolyRunModel Text
+  | PolyRunApply Text
   | PolyRunPolicy Text
   | PolyRunFuel Int
   | PolyRunShow RawRunShow
@@ -1156,6 +1157,7 @@ polyRunItem =
     <|> polyModeItem
     <|> polySurfaceItem
     <|> polyModelItem
+    <|> polyApplyItem
     <|> polyRunPolicyItem
     <|> polyRunFuelItem
     <|> polyShowItem
@@ -1187,6 +1189,13 @@ polyModelItem = do
   name <- ident
   optionalSemi
   pure (PolyRunModel name)
+
+polyApplyItem :: Parser PolyRunItem
+polyApplyItem = do
+  _ <- symbol "apply"
+  name <- ident
+  optionalSemi
+  pure (PolyRunApply name)
 
 polyRunPolicyItem :: Parser PolyRunItem
 polyRunPolicyItem = do
@@ -1354,6 +1363,7 @@ buildPolyRun name items exprText =
         , rprMode = modeName
         , rprSurface = surfaceName
         , rprModel = modelName
+        , rprMorphisms = applies
         , rprPolicy = policyName
         , rprFuel = fuel
         , rprShowFlags = flags
@@ -1364,6 +1374,7 @@ buildPolyRun name items exprText =
     modeName = firstJust [ m | PolyRunMode m <- items ]
     surfaceName = firstJust [ s | PolyRunSurface s <- items ]
     modelName = firstJust [ m | PolyRunModel m <- items ]
+    applies = [ n | PolyRunApply n <- items ]
     policyName = firstJust [ p | PolyRunPolicy p <- items ]
     fuel = firstJust [ f | PolyRunFuel f <- items ]
     flags = [ s | PolyRunShow s <- items ]

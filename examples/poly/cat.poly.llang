@@ -1,0 +1,11 @@
+polydoctrine Cat where {
+  mode M;
+  type A @M;
+  type B @M;
+  type C @M;
+  type D @M;
+
+  gen f : [A] -> [B] @M;
+  gen g : [B] -> [C] @M;
+  gen h : [C] -> [D] @M;
+}

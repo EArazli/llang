@@ -1,0 +1,16 @@
+import "./peano.poly.llang";
+import "./peano.models.llang";
+
+polyrun main where {
+  doctrine Peano;
+  mode M;
+  surface CartTermSurface;
+  model PeanoNative;
+  show normalized;
+  show value;
+}
+---
+term {
+  in;
+  out add(S(Z), S(Z));
+}

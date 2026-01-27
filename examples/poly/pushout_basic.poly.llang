@@ -1,0 +1,25 @@
+polydoctrine Base where {
+  mode M;
+  type A @M;
+  gen f : [A] -> [A] @M;
+}
+
+polydoctrine Left extends Base where {
+  gen g : [A] -> [A] @M;
+  gen extra : [A] -> [A] @M;
+}
+
+polydoctrine Right extends Base where {
+  gen g : [A] -> [A] @M;
+  gen extra : [A] -> [A] @M;
+}
+
+polymorphism LeftFromBase : Base -> Left where {
+  gen f @ M -> f
+}
+
+polymorphism RightFromBase : Base -> Right where {
+  gen f @ M -> f
+}
+
+polydoctrine Both = pushout LeftFromBase RightFromBase;

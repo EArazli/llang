@@ -41,6 +41,7 @@ elabPolyRun raw = do
     , prMode = KAST.rprMode raw
     , prSurface = KAST.rprSurface raw
     , prModel = KAST.rprModel raw
+    , prMorphisms = KAST.rprMorphisms raw
     , prPolicy = policy
     , prFuel = fuel
     , prShowFlags = flags
