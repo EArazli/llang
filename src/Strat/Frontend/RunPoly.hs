@@ -11,7 +11,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import qualified Data.IntMap.Strict as IM
 import Strat.Frontend.Loader (loadModule)
 import Strat.Frontend.Env
 import Strat.Poly.RunSpec
@@ -24,7 +23,6 @@ import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Frontend.RunSpec (RunShow(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
-import Strat.Poly.TypeExpr (TyVar(..), TypeExpr(..))
 import Strat.Poly.Surface (PolySurfaceDef(..), PolySurfaceKind(..))
 import Strat.Poly.Surface.SSA (elabSSA)
 import qualified Strat.Poly.Surface.CartTerm as CartTerm
@@ -86,7 +84,7 @@ runPolyWithEnv env spec = do
         SurfaceSSA -> elabSSA doc mode (prExprText spec)
         SurfaceCartTerm -> CartTerm.elabCartTerm doc mode (prExprText spec)
   -- TODO: cartesian surface handled by builtin in resolveSurface below
-  if S.null (freeVars diag)
+  if S.null (freeTyVarsDiagram diag)
     then Right ()
     else Left "polyrun: unresolved type variables in diagram"
   let rules = rulesFromPolicy (prPolicy spec) (dCells2 doc)
@@ -194,12 +192,3 @@ renderValues vals =
   case vals of
     [v] -> T.pack (show v)
     _ -> T.pack (show vals)
-
-freeVars :: Diagram -> S.Set TyVar
-freeVars diag = S.fromList (concatMap varsInTy (IM.elems (dPortTy diag)))
-
-varsInTy :: TypeExpr -> [TyVar]
-varsInTy ty =
-  case ty of
-    TVar v -> [v]
-    TCon _ args -> concatMap varsInTy args

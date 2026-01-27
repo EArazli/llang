@@ -15,6 +15,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Data.List (sortOn)
 import Strat.Poly.Graph
+import Strat.Poly.Diagram (freeTyVarsDiagram)
 import Strat.Poly.Doctrine (Doctrine)
 import Strat.Poly.TypeExpr (TypeExpr(..), TyVar)
 import Strat.Poly.UnifyTy
@@ -29,16 +30,16 @@ data Match = Match
   } deriving (Eq, Show)
 
 findFirstMatch :: Doctrine -> Diagram -> Diagram -> Either Text (Maybe Match)
-findFirstMatch _ lhs host = findFirstMatchWithTyVars (freeVars lhs) lhs host
+findFirstMatch _ lhs host = findFirstMatchWithTyVars (freeTyVarsDiagram lhs) lhs host
 
 findAllMatches :: Doctrine -> Diagram -> Diagram -> Either Text [Match]
-findAllMatches _ lhs host = findAllMatchesWithTyVars (freeVars lhs) lhs host
+findAllMatches _ lhs host = findAllMatchesWithTyVars (freeTyVarsDiagram lhs) lhs host
 
 findFirstMatchNoDoc :: Diagram -> Diagram -> Either Text (Maybe Match)
-findFirstMatchNoDoc lhs host = findFirstMatchWithTyVars (freeVars lhs) lhs host
+findFirstMatchNoDoc lhs host = findFirstMatchWithTyVars (freeTyVarsDiagram lhs) lhs host
 
 findAllMatchesNoDoc :: Diagram -> Diagram -> Either Text [Match]
-findAllMatchesNoDoc lhs host = findAllMatchesWithTyVars (freeVars lhs) lhs host
+findAllMatchesNoDoc lhs host = findAllMatchesWithTyVars (freeTyVarsDiagram lhs) lhs host
 
 findFirstMatchWithTyVars :: S.Set TyVar -> Diagram -> Diagram -> Either Text (Maybe Match)
 findFirstMatchWithTyVars flex lhs host = do
@@ -99,7 +100,7 @@ payloadCompatible :: EdgePayload -> EdgePayload -> Bool
 payloadCompatible p h =
   case (p, h) of
     (PGen g1, PGen g2) -> g1 == g2
-    (PBox n1 d1, PBox n2 d2) -> n1 == n2 && d1 == d2
+    (PBox n1 _, PBox n2 _) -> n1 == n2
     _ -> False
 
 portsCompatible :: Match -> [PortId] -> [PortId] -> Bool
@@ -234,12 +235,3 @@ danglingOk lhs host match =
         Just Nothing -> True
         Nothing -> False
     portKey (PortId k) = k
-
-freeVars :: Diagram -> S.Set TyVar
-freeVars diag = S.fromList (concatMap varsInTy (IM.elems (dPortTy diag)))
-
-varsInTy :: TypeExpr -> [TyVar]
-varsInTy ty =
-  case ty of
-    TVar v -> [v]
-    TCon _ args -> concatMap varsInTy args

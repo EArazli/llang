@@ -38,6 +38,7 @@ applyMorphismDiagram mor diagSrc = do
   validateDiagram diagTgt
   pure diagTgt
   where
+    modeSrc = dMode diagSrc
     edgeIds = IM.keys (dEdges diagSrc)
     step acc edgeKey = do
       diagTgt <- acc
@@ -46,11 +47,10 @@ applyMorphismDiagram mor diagSrc = do
         Just edgeSrc ->
           case ePayload edgeSrc of
             PGen genName -> do
-              genDecl <- lookupGen (morSrc mor) genName
+              genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
               subst <- instantiateGen genDecl diagSrc edgeSrc
-              let mode = gdMode genDecl
-              let substTgt = M.map (applyTypeMapTy mor mode) subst
-              case M.lookup (mode, genName) (morGenMap mor) of
+              let substTgt = M.map (applyTypeMapTy mor modeSrc) subst
+              case M.lookup (modeSrc, genName) (morGenMap mor) of
                 Nothing -> Left "applyMorphismDiagram: missing generator mapping"
                 Just image -> do
                   let instImage = applySubstDiagram substTgt image
@@ -108,11 +108,11 @@ allGens :: Doctrine -> [GenDecl]
 allGens doc =
   concatMap M.elems (M.elems (dGens doc))
 
-lookupGen :: Doctrine -> GenName -> Either Text GenDecl
-lookupGen doc name =
-  case [g | table <- M.elems (dGens doc), g <- M.elems table, gdName g == name] of
-    (g:_) -> Right g
-    [] -> Left "applyMorphismDiagram: unknown generator"
+lookupGenInMode :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
+lookupGenInMode doc mode name =
+  case M.lookup mode (dGens doc) >>= M.lookup name of
+    Nothing -> Left "applyMorphismDiagram: unknown generator"
+    Just gd -> Right gd
 
 instantiateGen :: GenDecl -> Diagram -> Edge -> Either Text Subst
 instantiateGen gen diag edge = do

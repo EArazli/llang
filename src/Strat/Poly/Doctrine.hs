@@ -10,7 +10,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import qualified Data.IntMap.Strict as IM
 import Strat.Poly.ModeTheory (ModeTheory(..), ModeName(..), ModDecl(..))
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names (GenName(..))
@@ -115,13 +114,3 @@ checkType doc mode tyvars ty =
           if arity == length args
             then mapM_ (checkType doc mode tyvars) args
             else Left "validateDoctrine: type constructor arity mismatch"
-
-freeTyVarsDiagram :: Diagram -> S.Set TyVar
-freeTyVarsDiagram diag =
-  S.fromList (concatMap varsInTy (IM.elems (dPortTy diag)))
-
-varsInTy :: TypeExpr -> [TyVar]
-varsInTy ty =
-  case ty of
-    TVar v -> [v]
-    TCon _ args -> concatMap varsInTy args

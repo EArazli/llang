@@ -25,7 +25,6 @@ import qualified Strat.Kernel.DSL.AST as KAST
 import Strat.Kernel.DSL.AST (RawRunShow(..))
 import Strat.Frontend.Env (ModuleEnv(..))
 import Strat.Poly.Cell2 (Cell2(..))
-import qualified Data.IntMap.Strict as IM
 import Strat.Kernel.RewriteSystem (RewritePolicy(..))
 
 
@@ -114,7 +113,7 @@ elabPolyMorphism env raw = do
       gen <- lookupGen src mode (GenName (KAST.rpmgSrcGen decl))
       let tyVars = gdTyVars gen
       diag <- elabDiagExpr tgt mode tyVars (KAST.rpmgRhs decl)
-      let free = freeVars diag
+      let free = freeTyVarsDiagram diag
       let allowed = S.fromList tyVars
       if S.isSubsetOf free allowed
         then Right ()
@@ -227,9 +226,10 @@ elabPolyItem _ doc item =
       cod <- elabContext doc mode ruleVars (rprCod decl)
       lhs <- withRule (elabDiagExpr doc mode ruleVars (rprLHS decl))
       rhs <- withRule (elabDiagExpr doc mode ruleVars (rprRHS decl))
-      lhs' <- unifyBoundary dom cod lhs
-      rhs' <- unifyBoundary dom cod rhs
-      let free = S.union (freeVars lhs') (freeVars rhs')
+      let rigid = S.fromList ruleVars
+      lhs' <- unifyBoundary rigid dom cod lhs
+      rhs' <- unifyBoundary rigid dom cod rhs
+      let free = S.union (freeTyVarsDiagram lhs') (freeTyVarsDiagram rhs')
       let allowed = S.fromList ruleVars
       if S.isSubsetOf free allowed
         then pure ()
@@ -282,6 +282,7 @@ elabDiagExpr :: Doctrine -> ModeName -> [TyVar] -> RawDiagExpr -> Either Text Di
 elabDiagExpr doc mode ruleVars expr =
   evalFresh (build expr)
   where
+    rigid = S.fromList ruleVars
     build e =
       case e of
         RDId ctx -> do
@@ -303,7 +304,17 @@ elabDiagExpr doc mode ruleVars expr =
         RDComp a b -> do
           d1 <- build a
           d2 <- build b
-          liftEither (compD d2 d1)
+          cod1 <- liftEither (diagramCod d1)
+          dom2 <- liftEither (diagramDom d2)
+          let free = S.union (freeTyVarsDiagram d1) (freeTyVarsDiagram d2)
+          let flex = S.difference free rigid
+          subst <- liftEither $
+            case unifyCtxFlex flex cod1 dom2 of
+              Left err -> Left ("diagram composition boundary mismatch: " <> err)
+              Right s -> Right s
+          let d1' = applySubstDiagram subst d1
+          let d2' = applySubstDiagram subst d2
+          liftEither (compD d2' d1')
         RDTensor a b -> do
           d1 <- build a
           d2 <- build b
@@ -315,24 +326,29 @@ lookupGen doc mode name =
     Nothing -> Left "unknown generator"
     Just gd -> Right gd
 
-unifyBoundary :: Context -> Context -> Diagram -> Either Text Diagram
-unifyBoundary dom cod diag = do
+unifyBoundary :: S.Set TyVar -> Context -> Context -> Diagram -> Either Text Diagram
+unifyBoundary rigid dom cod diag = do
   domDiag <- diagramDom diag
-  s1 <- unifyCtx domDiag dom
+  let flex0 = S.difference (freeTyVarsDiagram diag) rigid
+  s1 <- unifyCtxFlex flex0 domDiag dom
   let diag1 = applySubstDiagram s1 diag
   codDiag <- diagramCod diag1
-  s2 <- unifyCtx codDiag cod
+  let flex1 = S.difference (freeTyVarsDiagram diag1) rigid
+  s2 <- unifyCtxFlex flex1 codDiag cod
   let diag2 = applySubstDiagram s2 diag1
   pure diag2
 
-freeVars :: Diagram -> S.Set TyVar
-freeVars diag = S.fromList (concatMap varsInTy (IM.elems (dPortTy diag)))
-
-varsInTy :: TypeExpr -> [TyVar]
-varsInTy ty =
-  case ty of
-    TVar v -> [v]
-    TCon _ args -> concatMap varsInTy args
+unifyCtxFlex :: S.Set TyVar -> Context -> Context -> Either Text Subst
+unifyCtxFlex flex ctx1 ctx2
+  | length ctx1 /= length ctx2 = Left "unifyCtxFlex: length mismatch"
+  | otherwise = foldl step (Right M.empty) (zip ctx1 ctx2)
+  where
+    step acc (a, b) = do
+      s <- acc
+      let a' = applySubstTy s a
+      let b' = applySubstTy s b
+      s' <- unifyTyFlex flex a' b'
+      pure (composeSubst s' s)
 
 -- Freshening monad
 

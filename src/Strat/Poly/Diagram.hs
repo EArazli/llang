@@ -8,13 +8,15 @@ module Strat.Poly.Diagram
   , diagramDom
   , diagramCod
   , applySubstDiagram
+  , freeTyVarsDiagram
   ) where
 
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Set as S
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.TypeExpr (Context)
+import Strat.Poly.TypeExpr (Context, TypeExpr(..), TyVar)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.UnifyTy
 
@@ -104,6 +106,22 @@ applySubstDiagram subst diag =
   let dPortTy' = IM.map (applySubstTy subst) (dPortTy diag)
       dEdges' = IM.map (mapEdgePayload subst) (dEdges diag)
   in diag { dPortTy = dPortTy', dEdges = dEdges' }
+
+freeTyVarsDiagram :: Diagram -> S.Set TyVar
+freeTyVarsDiagram diag =
+  let portVars = S.fromList (concatMap varsInTy (IM.elems (dPortTy diag)))
+      boxVars = S.unions
+        [ freeTyVarsDiagram inner
+        | edge <- IM.elems (dEdges diag)
+        , PBox _ inner <- [ePayload edge]
+        ]
+  in S.union portVars boxVars
+
+varsInTy :: TypeExpr -> [TyVar]
+varsInTy ty =
+  case ty of
+    TVar v -> [v]
+    TCon _ args -> concatMap varsInTy args
 
 mapEdgePayload :: Subst -> Edge -> Edge
 mapEdgePayload subst edge =
