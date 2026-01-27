@@ -2,6 +2,7 @@
 module Strat.Poly.UnifyTy
   ( Subst
   , unifyTy
+  , unifyTyFlex
   , unifyCtx
   , applySubstTy
   , applySubstCtx
@@ -11,6 +12,7 @@ module Strat.Poly.UnifyTy
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Strat.Poly.TypeExpr
 
 
@@ -18,6 +20,9 @@ type Subst = M.Map TyVar TypeExpr
 
 unifyTy :: TypeExpr -> TypeExpr -> Either Text Subst
 unifyTy t1 t2 = unifyWith M.empty t1 t2
+
+unifyTyFlex :: S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text Subst
+unifyTyFlex flex t1 t2 = unifyWithFlex flex M.empty t1 t2
 
 unifyCtx :: Context -> Context -> Either Text Subst
 unifyCtx ctx1 ctx2
@@ -28,6 +33,36 @@ unifyCtx ctx1 ctx2
       s <- acc
       s' <- unifyWith s a b
       pure (composeSubst s' s)
+
+unifyWithFlex :: S.Set TyVar -> Subst -> TypeExpr -> TypeExpr -> Either Text Subst
+unifyWithFlex flex subst t1 t2 =
+  case (applySubstTy subst t1, applySubstTy subst t2) of
+    (TVar v, t) ->
+      unifyVar flex subst v t
+    (t, TVar v) ->
+      unifyVar flex subst v t
+    (TCon n as, TCon m bs)
+      | n == m && length as == length bs ->
+          foldl step (Right subst) (zip as bs)
+      | otherwise ->
+          Left ("unifyTyFlex: cannot unify " <> renderTy (TCon n as) <> " with " <> renderTy (TCon m bs))
+    (ta, tb) ->
+      Left ("unifyTyFlex: cannot unify " <> renderTy ta <> " with " <> renderTy tb)
+  where
+    step acc (a, b) = do
+      s <- acc
+      s' <- unifyWithFlex flex s a b
+      pure (composeSubst s' s)
+
+unifyVar :: S.Set TyVar -> Subst -> TyVar -> TypeExpr -> Either Text Subst
+unifyVar flex subst v t
+  | v `S.member` flex =
+      bindVar subst v t
+  | otherwise =
+      case t of
+        TVar v' | v' == v -> Right subst
+        TVar v' | v' `S.member` flex -> bindVar subst v' (TVar v)
+        _ -> Left ("unifyTyFlex: rigid variable mismatch " <> renderVar v <> " with " <> renderTy t)
 
 unifyWith :: Subst -> TypeExpr -> TypeExpr -> Either Text Subst
 unifyWith subst t1 t2 =

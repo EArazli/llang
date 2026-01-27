@@ -8,21 +8,22 @@ import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import Strat.Poly.Graph
 import Strat.Poly.TypeExpr
-import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.ModeTheory (ModeName(..))
 
 
-renderDiagram :: Diagram -> Text
-renderDiagram diag =
-  let diag' = canonicalizeDiagram diag
-  in
-  T.intercalate "\n"
-    [ "mode: " <> renderMode (dMode diag')
-    , "in: [" <> renderPorts diag' (dIn diag') <> "]"
-    , "out: [" <> renderPorts diag' (dOut diag') <> "]"
-    , "edges:"
-    , renderEdges (IM.elems (dEdges diag'))
-    ]
+renderDiagram :: Diagram -> Either Text Text
+renderDiagram diag = do
+  diag' <- canonicalizeDiagram diag
+  edgesTxt <- renderEdges (IM.elems (dEdges diag'))
+  pure $
+    T.intercalate "\n"
+      [ "mode: " <> renderMode (dMode diag')
+      , "in: [" <> renderPorts diag' (dIn diag') <> "]"
+      , "out: [" <> renderPorts diag' (dOut diag') <> "]"
+      , "edges:"
+      , edgesTxt
+      ]
 
 renderMode :: ModeName -> Text
 renderMode (ModeName t) = t
@@ -37,17 +38,35 @@ renderPorts diag ports =
         Just ty -> renderPortId p <> ":" <> renderType ty
     portKey (PortId k) = k
 
-renderEdges :: [Edge] -> Text
-renderEdges edges =
-  T.intercalate "\n" (map renderEdge edges)
+renderEdges :: [Edge] -> Either Text Text
+renderEdges edges = do
+  rendered <- mapM renderEdge edges
+  pure (T.intercalate "\n" rendered)
   where
     renderEdge e =
-      "  " <> renderEdgeId (eId e) <> ": " <> renderGen (eGen e)
-        <> " [" <> renderPortList (eIns e) <> "] -> [" <> renderPortList (eOuts e) <> "]"
+      case ePayload e of
+        PGen g ->
+          Right ("  " <> renderEdgeId (eId e) <> ": " <> renderGen g
+            <> " [" <> renderPortList (eIns e) <> "] -> [" <> renderPortList (eOuts e) <> "]")
+        PBox name inner -> do
+          innerTxt <- renderDiagram inner
+          let header =
+                "  " <> renderEdgeId (eId e) <> ": box " <> renderBox name
+                  <> " [" <> renderPortList (eIns e) <> "] -> [" <> renderPortList (eOuts e) <> "]"
+          let body = indent innerTxt
+          Right (header <> "\n" <> body)
     renderPortList = T.intercalate ", " . map renderPortId
+
+indent :: Text -> Text
+indent txt =
+  let ls = T.lines txt
+  in T.intercalate "\n" (map ("    " <>) ls)
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
+
+renderBox :: BoxName -> Text
+renderBox (BoxName t) = t
 
 renderPortId :: PortId -> Text
 renderPortId (PortId k) = "p" <> T.pack (show k)

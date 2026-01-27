@@ -12,7 +12,8 @@ The project implements a polygraph-based kernel and a DSL (“llang”) for desc
 2. **Diagrams**: open hypergraphs with ordered boundaries.
 3. **Rewriting**: deterministic, fuel‑bounded subdiagram rewriting (DPO‑style).
 4. **Morphisms**: structure‑preserving translations between doctrines, checked by normalization/joinability.
-5. **Runs**: diagram‑level normalization pipelines (`polyrun`).
+5. **Surfaces and models**: diagram surfaces (`polysurface`) and evaluator models (`polymodel`).
+6. **Runs**: diagram‑level normalization/evaluation pipelines (`polyrun`).
 
 Legacy GAT syntax, Surface2, and model evaluation remain implemented but are treated as **legacy surfaces**; they are not the kernel reference in this document.
 
@@ -102,9 +103,15 @@ Cell2 = { name, class, orient, tyvars, lhs, rhs }
 A diagram is an **open directed hypergraph** with **ports as vertices** and generator instances as hyperedges:
 
 - **Ports** have types.
-- **Edges** have ordered input ports and ordered output ports.
+- **Edges** have ordered input ports and ordered output ports; each edge payload is either
+  a **generator instance** or a **box** containing a nested diagram.
 - **Boundary** consists of ordered input ports and ordered output ports.
 - **Linearity invariant**: each port has at most one producer and at most one consumer.
+
+For a **box** edge, the nested diagram must:
+
+- share the outer diagram’s mode, and
+- have input/output boundary types matching the edge’s input/output port types.
 
 The internal representation (`Strat.Poly.Graph`) stores:
 
@@ -127,6 +134,8 @@ The internal representation (`Strat.Poly.Graph`) stores:
 - edge incidences are consistent,
 - producer/consumer maps agree with edges,
 - linearity (≤1 producer/consumer per port).
+
+For box edges, validation recurses into the nested diagram and checks boundary agreement.
 
 It is enforced after composition, tensor, rewrite steps, and morphism application.
 
@@ -151,6 +160,8 @@ Constraints:
 
 Matching order is deterministic (by edge id, then adjacent edges, then candidate host edges by id).
 
+Boxes are **opaque** to matching unless the pattern explicitly contains a box edge.
+
 ### 4.2 Rewrite step
 
 A rewrite step replaces a matched subdiagram `L` by `R`:
@@ -168,14 +179,16 @@ A rewrite step replaces a matched subdiagram `L` by `R`:
 
 Normalization is deterministic for a fixed rule order and fuel.
 
+Rewriting is **outermost‑leftmost** with respect to boxes: a top‑level rewrite is attempted first; if none applies, the engine searches inside box edges in edge‑id order.
+
 ---
 
 ## 5. Morphisms
 
 A morphism `F : D → E` consists of:
 
-- a **type constructor map** (`TypeName ↦ TypeExpr`),
-- a **generator map** (`GenName ↦ Diagram`),
+- a **mode‑indexed type map** (`(ModeName, TypeName) ↦ TypeExpr`),
+- a **mode‑indexed generator map** (`(ModeName, GenName) ↦ Diagram`),
 - rewrite policy and fuel for equation checking.
 
 ### 5.1 Applying a morphism
@@ -183,7 +196,7 @@ A morphism `F : D → E` consists of:
 To apply `F` to a diagram:
 
 1. Map all port types using the type map.
-2. For each edge, instantiate the generator mapping (using unification to recover type parameters).
+2. For each edge, instantiate the generator mapping (using unification to recover type parameters), in the edge’s mode.
 3. Splice the mapped diagram into the host by boundary identification.
 
 ### 5.2 Morphism checking
@@ -217,14 +230,40 @@ polydoctrine <Name> [extends <Base>] where {
 }
 ```
 
-### 6.2 Types and contexts
+Polydoctrines can also be defined as colimits of existing polydoctrines:
+
+```
+polydoctrine <Name> = pushout <morphism> <morphism>;
+polydoctrine <Name> = coproduct <Left> <Right>;
+```
+
+- `pushout` requires morphisms with **renaming/inclusion** behavior (single‑generator images) and injective interface maps.
+- The pushout produces canonical morphisms `<Name>.inl`, `<Name>.inr`, and `<Name>.glue`.
+- `coproduct` is implemented as a pushout over an empty interface.
+
+### 6.2 Polymorphisms
+
+```
+polymorphism <Name> : <Src> -> <Tgt> where {
+  type <SrcType> @<Mode> -> <TgtTypeExpr> @<Mode>;
+  gen  <SrcGen>  @<Mode> -> <DiagExpr>;
+  policy <RewritePolicy>;
+  fuel <N>;
+}
+```
+
+- Every source generator must be mapped.
+- Type mappings must be constructor templates in the target doctrine.
+- Generator mappings must elaborate to diagrams in the target doctrine/mode.
+
+### 6.3 Types and contexts
 
 - A context is a bracketed list: `[A, B, ...]` or `[]`.
 - Types are either:
   - lowercase identifiers (type variables), or
   - uppercase constructors with optional argument lists.
 
-### 6.3 Diagram expressions
+### 6.4 Diagram expressions
 
 ```
 id[<Ctx>]
@@ -237,29 +276,63 @@ Composition/tensor are parsed with the usual precedence (`*` binds tighter than 
 
 ---
 
+### 6.5 Polysurfaces
+
+```
+polysurface <Name> : doctrine <PolyDoctrine> mode <Mode> where { }
+```
+
+Polysurfaces select a **diagram surface language**:
+
+- **SSA surface** (declared via `polysurface`): expects a `diag { ... }` block with
+  `in`, assignment statements, optional `box` statements, and `out`.
+- **CartTermSurface** (built‑in): expects a `term { ... }` block and elaborates
+  function‑style terms to diagrams by inserting `dup`/`drop` from the doctrine.
+
+### 6.6 Polymodels
+
+```
+polymodel <Name> : <PolyDoctrine> where {
+  default symbolic;
+  op <GenName>(args...) = <expr>;
+}
+```
+
+Polymodels use the same expression language as legacy models. Evaluation is defined
+only for **closed** diagrams and is currently restricted to **acyclic** diagrams.
+Generators `dup`, `drop`, and `swap` have built‑in interpretations.
+
+---
+
 ## 7. Runs
 
-`polyrun` blocks evaluate diagram expressions directly:
+`polyrun` blocks evaluate diagram expressions or surface programs:
 
 ```
 polyrun <Name> where {
   doctrine <PolyDoctrine>;
+  mode <Mode>;          -- required if the doctrine has multiple modes
+  surface <Surface>;    -- optional; chooses SSA or CartTerm surface
+  model <PolyModel>;    -- optional; required for show value
+  policy <RewritePolicy>;
   fuel <N>;
   show normalized;
   show input;        -- optional
+  show value;        -- optional, requires model and closed diagram
 }
 ---
-<DiagExpr>
+<DiagExpr | SurfaceProgram>
 ```
 
 The run pipeline:
 
-1. Parses the diagram expression.
-2. Elaborates it against the chosen doctrine.
-3. Normalizes via the polygraph rewrite engine.
-4. Prints the normalized diagram (and input, if requested).
+1. Parses either a diagram expression or a surface program.
+2. Elaborates it against the chosen doctrine/mode.
+3. Normalizes via the polygraph rewrite engine (filtered by the policy; default `UseStructuralAsBidirectional`).
+4. Optionally evaluates via a polymodel (closed diagrams only).
+5. Prints the normalized diagram, input, and/or value depending on flags.
 
-Only diagram‑level output is produced for `polyrun` runs.
+`show cat` is unsupported for `polyrun`.
 
 ---
 

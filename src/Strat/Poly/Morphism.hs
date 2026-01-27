@@ -9,7 +9,6 @@ import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import Strat.Kernel.RewriteSystem (RewritePolicy(..))
-import Strat.Kernel.Types (Orientation(..), RuleClass(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Cell2
 import Strat.Poly.Graph
@@ -19,14 +18,15 @@ import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
+import Strat.Poly.ModeTheory (ModeName(..))
 
 
 data Morphism = Morphism
   { morName   :: Text
   , morSrc    :: Doctrine
   , morTgt    :: Doctrine
-  , morTypeMap :: M.Map TypeName TypeExpr
-  , morGenMap  :: M.Map GenName Diagram
+  , morTypeMap :: M.Map (ModeName, TypeName) TypeExpr
+  , morGenMap  :: M.Map (ModeName, GenName) Diagram
   , morPolicy  :: RewritePolicy
   , morFuel    :: Int
   } deriving (Eq, Show)
@@ -43,15 +43,21 @@ applyMorphismDiagram mor diagSrc = do
       diagTgt <- acc
       case IM.lookup edgeKey (dEdges diagSrc) of
         Nothing -> Left "applyMorphismDiagram: missing source edge"
-        Just edgeSrc -> do
-          genDecl <- lookupGen (morSrc mor) (eGen edgeSrc)
-          subst <- instantiateGen genDecl diagSrc edgeSrc
-          let substTgt = M.map (applyTypeMapTy mor) subst
-          case M.lookup (eGen edgeSrc) (morGenMap mor) of
-            Nothing -> Left "applyMorphismDiagram: missing generator mapping"
-            Just image -> do
-              let instImage = applySubstDiagram substTgt image
-              spliceEdge diagTgt edgeKey instImage
+        Just edgeSrc ->
+          case ePayload edgeSrc of
+            PGen genName -> do
+              genDecl <- lookupGen (morSrc mor) genName
+              subst <- instantiateGen genDecl diagSrc edgeSrc
+              let mode = gdMode genDecl
+              let substTgt = M.map (applyTypeMapTy mor mode) subst
+              case M.lookup (mode, genName) (morGenMap mor) of
+                Nothing -> Left "applyMorphismDiagram: missing generator mapping"
+                Just image -> do
+                  let instImage = applySubstDiagram substTgt image
+                  spliceEdge diagTgt edgeKey instImage
+            PBox name inner -> do
+              inner' <- applyMorphismDiagram mor inner
+              updateEdgePayload diagTgt edgeKey (PBox name inner')
 
 checkMorphism :: Morphism -> Either Text ()
 checkMorphism mor = do
@@ -62,16 +68,18 @@ checkMorphism mor = do
 checkGenMapping :: Morphism -> GenDecl -> Either Text ()
 checkGenMapping mor gen = do
   let mode = gdMode gen
-  let dom = map (applyTypeMapTy mor) (gdDom gen)
-  let cod = map (applyTypeMapTy mor) (gdCod gen)
-  image <- case M.lookup (gdName gen) (morGenMap mor) of
+  let dom = map (applyTypeMapTy mor mode) (gdDom gen)
+  let cod = map (applyTypeMapTy mor mode) (gdCod gen)
+  image <- case M.lookup (mode, gdName gen) (morGenMap mor) of
     Nothing -> Left "checkMorphism: missing generator mapping"
     Just d -> Right d
   if dMode image /= mode
     then Left "checkMorphism: generator mapping mode mismatch"
     else do
-      _ <- unifyCtx dom (diagramDom image)
-      _ <- unifyCtx cod (diagramCod image)
+      domImg <- diagramDom image
+      codImg <- diagramCod image
+      _ <- unifyCtx dom domImg
+      _ <- unifyCtx cod codImg
       pure ()
 
 checkCell :: Morphism -> Cell2 -> Either Text ()
@@ -84,9 +92,12 @@ checkCell mor cell = do
   statusR <- normalize fuel rules rhs
   case (statusL, statusR) of
     (Finished l, Finished r) ->
-      if canonicalizeDiagram l == canonicalizeDiagram r
-        then Right ()
-        else Left "checkMorphism: equation violation (normal forms differ)"
+      do
+        l' <- canonicalizeDiagram l
+        r' <- canonicalizeDiagram r
+        if l' == r'
+          then Right ()
+          else Left "checkMorphism: equation violation (normal forms differ)"
     _ -> do
       ok <- joinableWithin fuel rules lhs rhs
       if ok
@@ -127,7 +138,7 @@ spliceEdge diag edgeKey image = do
   let outs = eOuts edge
   diag1 <- deleteEdge diag edgeKey
   let imageShift = shiftDiagram (dNextPort diag1) (dNextEdge diag1) image
-  let diag2 = insertDiagram diag1 imageShift
+  diag2 <- insertDiagram diag1 imageShift
   let boundary = dIn imageShift <> dOut imageShift
   if length boundary /= length (ins <> outs)
     then Left "spliceEdge: boundary mismatch"
@@ -145,6 +156,14 @@ spliceEdge diag edgeKey image = do
         Just hostPort' -> do
           d' <- mergePorts d hostPort' hostPort
           pure (d', seen)
+
+updateEdgePayload :: Diagram -> Int -> EdgePayload -> Either Text Diagram
+updateEdgePayload diag edgeKey payload =
+  case IM.lookup edgeKey (dEdges diag) of
+    Nothing -> Left "updateEdgePayload: missing edge"
+    Just edge ->
+      let edge' = edge { ePayload = payload }
+      in Right diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
 
 deleteEdge :: Diagram -> Int -> Either Text Diagram
 deleteEdge diag edgeKey =
@@ -170,28 +189,33 @@ clearProducers d ports =
       mp = dProd d
   in d { dProd = foldl clearOne mp ports }
 
-insertDiagram :: Diagram -> Diagram -> Diagram
-insertDiagram base extra =
-  base
-    { dPortTy = IM.union (dPortTy base) (dPortTy extra)
-    , dProd = IM.union (dProd base) (dProd extra)
-    , dCons = IM.union (dCons base) (dCons extra)
-    , dEdges = IM.union (dEdges base) (dEdges extra)
+insertDiagram :: Diagram -> Diagram -> Either Text Diagram
+insertDiagram base extra = do
+  portTy <- unionDisjointIntMap "insertDiagram ports" (dPortTy base) (dPortTy extra)
+  prod <- unionDisjointIntMap "insertDiagram producers" (dProd base) (dProd extra)
+  cons <- unionDisjointIntMap "insertDiagram consumers" (dCons base) (dCons extra)
+  edges <- unionDisjointIntMap "insertDiagram edges" (dEdges base) (dEdges extra)
+  pure base
+    { dPortTy = portTy
+    , dProd = prod
+    , dCons = cons
+    , dEdges = edges
     , dNextPort = dNextPort extra
     , dNextEdge = dNextEdge extra
     }
 
 applyTypeMapDiagram :: Morphism -> Diagram -> Diagram
 applyTypeMapDiagram mor diag =
-  diag { dPortTy = IM.map (applyTypeMapTy mor) (dPortTy diag) }
+  let mode = dMode diag
+  in diag { dPortTy = IM.map (applyTypeMapTy mor mode) (dPortTy diag) }
 
-applyTypeMapTy :: Morphism -> TypeExpr -> TypeExpr
-applyTypeMapTy mor ty =
+applyTypeMapTy :: Morphism -> ModeName -> TypeExpr -> TypeExpr
+applyTypeMapTy mor mode ty =
   case ty of
     TVar v -> TVar v
     TCon name args ->
-      let args' = map (applyTypeMapTy mor) args
-      in case M.lookup name (morTypeMap mor) of
+      let args' = map (applyTypeMapTy mor mode) args
+      in case M.lookup (mode, name) (morTypeMap mor) of
           Nothing -> TCon name args'
           Just tmpl -> applyTemplate args' tmpl
   where
@@ -206,38 +230,3 @@ applyTypeMapTy mor ty =
     isVar _ = False
     extractVar (TVar v) = v
     extractVar _ = TyVar "_"
-
-rulesFromPolicy :: RewritePolicy -> [Cell2] -> [RewriteRule]
-rulesFromPolicy policy cells = concatMap (rulesForCell policy) cells
-
-rulesForCell :: RewritePolicy -> Cell2 -> [RewriteRule]
-rulesForCell policy cell =
-  case policy of
-    UseStructuralAsBidirectional ->
-      case c2Class cell of
-        Structural -> both
-        Computational -> oriented
-    UseOnlyComputationalLR ->
-      case c2Class cell of
-        Computational ->
-          case c2Orient cell of
-            LR -> [mk (c2LHS cell) (c2RHS cell)]
-            Bidirectional -> [mk (c2LHS cell) (c2RHS cell)]
-            _ -> []
-        Structural -> []
-    UseAllOriented -> oriented
-  where
-    mk lhs rhs =
-      RewriteRule
-        { rrName = c2Name cell
-        , rrLHS = lhs
-        , rrRHS = rhs
-        , rrTyVars = c2TyVars cell
-        }
-    both = [mk (c2LHS cell) (c2RHS cell), mk (c2RHS cell) (c2LHS cell)]
-    oriented =
-      case c2Orient cell of
-        LR -> [mk (c2LHS cell) (c2RHS cell)]
-        RL -> [mk (c2RHS cell) (c2LHS cell)]
-        Bidirectional -> both
-        Unoriented -> []

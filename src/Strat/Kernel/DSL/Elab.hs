@@ -23,7 +23,11 @@ import Strat.Model.Spec
 import Strat.Frontend.Env (ModuleEnv(..), SyntaxDef)
 import qualified Strat.Frontend.Env as Env
 import Strat.Frontend.RunSpec
-import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyRun)
+import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyRun, elabPolyMorphism)
+import Strat.Poly.Pushout
+import Strat.Poly.Doctrine (Doctrine)
+import qualified Strat.Poly.Morphism as PolyMorph
+import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Surface2.Elab
 import Strat.Surface2.SyntaxSpec
 import Strat.Kernel.Morphism
@@ -92,6 +96,47 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
           doc <- elabPolyDoctrine env polyDecl
           let env' = env { mePolyDoctrines = M.insert name doc (mePolyDoctrines env) }
           pure (env', rawRuns)
+        DeclPolyDoctrinePushout name leftMor rightMor -> do
+          ensureAbsent "polydoctrine" name (mePolyDoctrines env)
+          f <- lookupPolyMorphism env leftMor
+          g <- lookupPolyMorphism env rightMor
+          PolyPushoutResult doc inl inr glue <- computePolyPushout name f g
+          ensureAbsent "polymorphism" (PolyMorph.morName inl) (mePolyMorphisms env)
+          ensureAbsent "polymorphism" (PolyMorph.morName inr) (mePolyMorphisms env)
+          ensureAbsent "polymorphism" (PolyMorph.morName glue) (mePolyMorphisms env)
+          let env' = env
+                { mePolyDoctrines = M.insert name doc (mePolyDoctrines env)
+                , mePolyMorphisms =
+                    M.insert (PolyMorph.morName glue) glue
+                    (M.insert (PolyMorph.morName inl) inl
+                    (M.insert (PolyMorph.morName inr) inr (mePolyMorphisms env)))
+                }
+          pure (env', rawRuns)
+        DeclPolyDoctrineCoproduct name leftDoc rightDoc -> do
+          ensureAbsent "polydoctrine" name (mePolyDoctrines env)
+          left <- lookupPolyDoctrine env leftDoc
+          right <- lookupPolyDoctrine env rightDoc
+          PolyPushoutResult doc inl inr glue <- computePolyCoproduct name left right
+          ensureAbsent "polymorphism" (PolyMorph.morName inl) (mePolyMorphisms env)
+          ensureAbsent "polymorphism" (PolyMorph.morName inr) (mePolyMorphisms env)
+          ensureAbsent "polymorphism" (PolyMorph.morName glue) (mePolyMorphisms env)
+          let env' = env
+                { mePolyDoctrines = M.insert name doc (mePolyDoctrines env)
+                , mePolyMorphisms =
+                    M.insert (PolyMorph.morName glue) glue
+                    (M.insert (PolyMorph.morName inl) inl
+                    (M.insert (PolyMorph.morName inr) inr (mePolyMorphisms env)))
+                }
+          pure (env', rawRuns)
+        DeclPolySurface surfDecl -> do
+          let name = rpsName surfDecl
+          ensureAbsent "polysurface" name (mePolySurfaces env)
+          doc <- case M.lookup (rpsDoctrine surfDecl) (mePolyDoctrines env) of
+            Nothing -> Left ("Unknown polydoctrine: " <> rpsDoctrine surfDecl)
+            Just d -> Right d
+          def <- elabPolySurfaceDecl doc surfDecl
+          let env' = env { mePolySurfaces = M.insert name def (mePolySurfaces env) }
+          pure (env', rawRuns)
         DeclSyntaxWhere decl -> do
           let name = rsnName decl
           ensureAbsent "syntax" name (meSyntaxes env)
@@ -104,6 +149,12 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
           _ <- lookupDoctrine env doc
           let env' = env { meModels = M.insert name (doc, spec) (meModels env) }
           pure (env', rawRuns)
+        DeclPolyModelWhere name doc items -> do
+          ensureAbsent "polymodel" name (mePolyModels env)
+          spec <- elabModelSpec name items
+          _ <- lookupPolyDoctrine env doc
+          let env' = env { mePolyModels = M.insert name (doc, spec) (mePolyModels env) }
+          pure (env', rawRuns)
         DeclSurfaceWhere surfDecl -> do
           let name = rsdName surfDecl
           ensureAbsent "surface" name (meSurfaces env)
@@ -115,6 +166,12 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
           ensureAbsent "morphism" name (meMorphisms env)
           morph <- elabMorphismDecl env morphDecl
           let env' = env { meMorphisms = M.insert name morph (meMorphisms env) }
+          pure (env', rawRuns)
+        DeclPolyMorphism morphDecl -> do
+          let name = rpmName morphDecl
+          ensureAbsent "polymorphism" name (mePolyMorphisms env)
+          morph <- elabPolyMorphism env morphDecl
+          let env' = env { mePolyMorphisms = M.insert name morph (mePolyMorphisms env) }
           pure (env', rawRuns)
         DeclImplements implDecl -> do
           (key, morphName) <- elabImplements env implDecl
@@ -160,6 +217,18 @@ lookupMorphism :: ModuleEnv -> Text -> Either Text Morphism
 lookupMorphism env name =
   case M.lookup name (meMorphisms env) of
     Nothing -> Left ("Unknown morphism: " <> name)
+    Just mor -> Right mor
+
+lookupPolyDoctrine :: ModuleEnv -> Text -> Either Text Doctrine
+lookupPolyDoctrine env name =
+  case M.lookup name (mePolyDoctrines env) of
+    Nothing -> Left ("Unknown polydoctrine: " <> name)
+    Just doc -> Right doc
+
+lookupPolyMorphism :: ModuleEnv -> Text -> Either Text PolyMorph.Morphism
+lookupPolyMorphism env name =
+  case M.lookup name (mePolyMorphisms env) of
+    Nothing -> Left ("Unknown polymorphism: " <> name)
     Just mor -> Right mor
 
 buildFromBase :: Text -> Text -> ModuleEnv -> Presentation -> Either Text Morphism

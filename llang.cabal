@@ -66,10 +66,13 @@ data-files:
     examples/poly/README.md
     examples/poly/planar_monoid.poly.llang
     examples/poly/planar_monoid.run.llang
+    examples/poly/planar_monoid.ssa.run.llang
     examples/poly/cart_monoid.poly.llang
     examples/poly/cart_monoid.run.llang
+    examples/poly/cart_monoid.term.run.llang
     examples/poly/no_dup_error.run.llang
     examples/poly/subdiagram_match.poly.llang
+    examples/poly/monoid_to_string.llang
     examples/runspec/multi.llang
     stdlib/syntax.llang
     stdlib/nat.llang
@@ -125,6 +128,7 @@ library
       Strat.Poly.DSL.AST
       Strat.Poly.DSL.Elab
       Strat.Poly.DSL.Parse
+      Strat.Poly.Eval
       Strat.Poly.Graph
       Strat.Poly.Match
       Strat.Poly.ModeTheory
@@ -132,8 +136,12 @@ library
       Strat.Poly.Names
       Strat.Poly.Normalize
       Strat.Poly.Pretty
+      Strat.Poly.Pushout
       Strat.Poly.Rewrite
       Strat.Poly.RunSpec
+      Strat.Poly.Surface
+      Strat.Poly.Surface.CartTerm
+      Strat.Poly.Surface.SSA
       Strat.Poly.TypeExpr
       Strat.Poly.UnifyTy
       Strat.Surface

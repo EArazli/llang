@@ -6,6 +6,7 @@ module Test.Poly.DSL
 import Test.Tasty
 import Test.Tasty.HUnit
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Kernel.DSL.Parse (parseRawFile)
@@ -18,6 +19,7 @@ import Strat.Poly.Doctrine
 import Strat.Poly.Rewrite (rulesFromDoctrine, rewriteOnce)
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Pretty (renderDiagram)
+import Paths_llang (getDataFileName)
 
 
 tests :: TestTree
@@ -25,6 +27,7 @@ tests =
   testGroup
     "Poly.DSL"
     [ testCase "parse/elab monoid doctrine and normalize" testPolyDSLNormalize
+    , testCase "polymorphism declared in example file" testPolyMorphismDSL
     ]
 
 testPolyDSLNormalize :: Assertion
@@ -69,6 +72,26 @@ testPolyDSLNormalize = do
         Right r -> pure r
       case step of
         Nothing -> assertFailure "expected a rewrite step"
-        Just expected ->
-          renderDiagram d @?= renderDiagram expected
+        Just expected -> do
+          got <- case renderDiagram d of
+            Left err -> assertFailure (T.unpack err)
+            Right txt -> pure txt
+          want <- case renderDiagram expected of
+            Left err -> assertFailure (T.unpack err)
+            Right txt -> pure txt
+          got @?= want
     OutOfFuel _ -> assertFailure "expected normalization to finish"
+
+testPolyMorphismDSL :: Assertion
+testPolyMorphismDSL = do
+  path <- getDataFileName "examples/poly/monoid_to_string.llang"
+  src <- TIO.readFile path
+  env <- case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right e -> pure e
+  case M.lookup "MonoidToString" (mePolyMorphisms env) of
+    Nothing -> assertFailure "expected polymorphism MonoidToString"
+    Just _ -> pure ()

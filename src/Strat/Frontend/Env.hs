@@ -15,6 +15,8 @@ import Strat.Surface2.Def (SurfaceDef)
 import Strat.Surface2.SyntaxSpec (SurfaceSyntaxSpec)
 import Strat.Kernel.Morphism (Morphism)
 import Strat.Poly.Doctrine (Doctrine)
+import qualified Strat.Poly.Morphism as PolyMorph
+import Strat.Poly.Surface (PolySurfaceDef)
 import Strat.Poly.RunSpec (PolyRunSpec)
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
@@ -30,6 +32,9 @@ data ModuleEnv = ModuleEnv
   { meDoctrines     :: M.Map Text Presentation
   , meRawDoctrines  :: M.Map Text Presentation
   , mePolyDoctrines :: M.Map Text Doctrine
+  , mePolyMorphisms :: M.Map Text PolyMorph.Morphism
+  , mePolySurfaces  :: M.Map Text PolySurfaceDef
+  , mePolyModels    :: M.Map Text (Text, ModelSpec)
   , meSyntaxes      :: M.Map Text SyntaxDef
   , meSurfaces      :: M.Map Text SurfaceDef
   , meMorphisms     :: M.Map Text Morphism
@@ -46,6 +51,9 @@ emptyEnv = ModuleEnv
   { meDoctrines = M.empty
   , meRawDoctrines = M.empty
   , mePolyDoctrines = M.empty
+  , mePolyMorphisms = M.empty
+  , mePolySurfaces = M.empty
+  , mePolyModels = M.empty
   , meSyntaxes = M.empty
   , meSurfaces = M.empty
   , meMorphisms = M.empty
@@ -61,6 +69,9 @@ mergeEnv a b = do
   docs <- mergeMap "doctrine" meDoctrines
   rawDocs <- mergeMap "raw doctrine" meRawDoctrines
   polyDocs <- mergeMap "polydoctrine" mePolyDoctrines
+  polyMorphs <- mergeMap "polymorphism" mePolyMorphisms
+  polySurfs <- mergeMap "polysurface" mePolySurfaces
+  polyModels <- mergeMap "polymodel" mePolyModels
   syns <- mergeMap "syntax" meSyntaxes
   surfs <- mergeMap "surface" meSurfaces
   morphs <- mergeMap "morphism" meMorphisms
@@ -73,6 +84,9 @@ mergeEnv a b = do
     { meDoctrines = docs
     , meRawDoctrines = rawDocs
     , mePolyDoctrines = polyDocs
+    , mePolyMorphisms = polyMorphs
+    , mePolySurfaces = polySurfs
+    , mePolyModels = polyModels
     , meSyntaxes = syns
     , meSurfaces = surfs
     , meMorphisms = morphs

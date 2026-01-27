@@ -1,0 +1,16 @@
+import "./planar_monoid.poly.llang";
+
+polysurface PlanarSSA : doctrine PlanarMonoid mode M where { }
+
+polyrun main where {
+  doctrine PlanarMonoid;
+  mode M;
+  surface PlanarSSA;
+  show normalized;
+}
+---
+diag {
+  in x:A, y:A;
+  t <- mul(x,y);
+  out t;
+}

@@ -38,6 +38,7 @@ tests =
     , testCase "multi-run default main" testMultiRunDefault
     , testCase "multi-run selection" testMultiRunSelect
     , testCase "poly no-dup error" testPolyNoDupError
+    , testCase "poly cart term surface with model" testPolyCartTermModel
     ]
 
 
@@ -202,6 +203,16 @@ testPolyNoDupError = do
     Left err ->
       assertBool "expected boundary mismatch" ("boundary mismatch" `T.isInfixOf` err)
     Right _ -> assertFailure "expected failure for no-dup example"
+
+testPolyCartTermModel :: Assertion
+testPolyCartTermModel = do
+  path <- getDataFileName "examples/poly/cart_monoid.term.run.llang"
+  result <- runCLI (CLIOptions path Nothing)
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> do
+      assertBool "expected value output" ("value:" `T.isInfixOf` out)
+      assertBool "expected string value" ("VString" `T.isInfixOf` out)
 
 collectOps :: Term -> [OpName]
 collectOps tm =

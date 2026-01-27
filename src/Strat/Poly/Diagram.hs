@@ -45,23 +45,24 @@ compD :: Diagram -> Diagram -> Either Text Diagram
 compD g f
   | dMode g /= dMode f = Left "diagram composition mode mismatch"
   | otherwise = do
-      let domG = diagramDom g
-      let codF = diagramCod f
+      domG <- diagramDom g
+      codF <- diagramCod f
       subst <- case unifyCtx codF domG of
         Left err -> Left ("diagram composition boundary mismatch: " <> err)
         Right s -> Right s
       let f' = applySubstDiagram subst f
       let g' = applySubstDiagram subst g
       let gShift = shiftDiagram (dNextPort f') (dNextEdge f') g'
-      let merged = (unionDiagram f' gShift) { dIn = dIn f', dOut = dOut gShift }
+      merged <- unionDiagram f' gShift
+      let merged' = merged { dIn = dIn f', dOut = dOut gShift }
       let outsF = dOut f'
       let insG = dIn gShift
       if length outsF /= length insG
         then Left "diagram composition boundary mismatch"
         else do
-          merged' <- foldl step (Right merged) (zip outsF insG)
-          validateDiagram merged'
-          pure merged'
+          merged'' <- foldl step (Right merged') (zip outsF insG)
+          validateDiagram merged''
+          pure merged''
   where
     step acc (pOut, pIn) = do
       d <- acc
@@ -72,7 +73,7 @@ tensorD f g
   | dMode f /= dMode g = Left "diagram tensor mode mismatch"
   | otherwise = do
       let gShift = shiftDiagram (dNextPort f) (dNextEdge f) g
-      let merged = unionDiagram f gShift
+      merged <- unionDiagram f gShift
       let result = merged
             { dIn = dIn f <> dIn gShift
             , dOut = dOut f <> dOut gShift
@@ -80,27 +81,35 @@ tensorD f g
       validateDiagram result
       pure result
 
-diagramDom :: Diagram -> Context
-diagramDom diag = map (lookupPort "diagramDom") (dIn diag)
+diagramDom :: Diagram -> Either Text Context
+diagramDom diag = mapM (lookupPort "diagramDom") (dIn diag)
   where
     lookupPort label pid =
       case IM.lookup (portKey pid) (dPortTy diag) of
-        Nothing -> error (label <> ": missing port type")
-        Just ty -> ty
+        Nothing -> Left (label <> ": missing port type")
+        Just ty -> Right ty
     portKey (PortId k) = k
 
-diagramCod :: Diagram -> Context
-diagramCod diag = map (lookupPort "diagramCod") (dOut diag)
+diagramCod :: Diagram -> Either Text Context
+diagramCod diag = mapM (lookupPort "diagramCod") (dOut diag)
   where
     lookupPort label pid =
       case IM.lookup (portKey pid) (dPortTy diag) of
-        Nothing -> error (label <> ": missing port type")
-        Just ty -> ty
+        Nothing -> Left (label <> ": missing port type")
+        Just ty -> Right ty
     portKey (PortId k) = k
 
 applySubstDiagram :: Subst -> Diagram -> Diagram
 applySubstDiagram subst diag =
-  diag { dPortTy = IM.map (applySubstTy subst) (dPortTy diag) }
+  let dPortTy' = IM.map (applySubstTy subst) (dPortTy diag)
+      dEdges' = IM.map (mapEdgePayload subst) (dEdges diag)
+  in diag { dPortTy = dPortTy', dEdges = dEdges' }
+
+mapEdgePayload :: Subst -> Edge -> Edge
+mapEdgePayload subst edge =
+  case ePayload edge of
+    PGen g -> edge { ePayload = PGen g }
+    PBox name inner -> edge { ePayload = PBox name (applySubstDiagram subst inner) }
 
 allocPorts :: Context -> Diagram -> ([PortId], Diagram)
 allocPorts [] diag = ([], diag)
@@ -109,12 +118,17 @@ allocPorts (ty:rest) diag =
       (pids, diag2) = allocPorts rest diag1
   in (pid : pids, diag2)
 
-unionDiagram :: Diagram -> Diagram -> Diagram
-unionDiagram left right = left
-  { dPortTy = IM.union (dPortTy left) (dPortTy right)
-  , dProd = IM.union (dProd left) (dProd right)
-  , dCons = IM.union (dCons left) (dCons right)
-  , dEdges = IM.union (dEdges left) (dEdges right)
-  , dNextPort = dNextPort right
-  , dNextEdge = dNextEdge right
-  }
+unionDiagram :: Diagram -> Diagram -> Either Text Diagram
+unionDiagram left right = do
+  portTy <- unionDisjointIntMap "unionDiagram ports" (dPortTy left) (dPortTy right)
+  prod <- unionDisjointIntMap "unionDiagram producers" (dProd left) (dProd right)
+  cons <- unionDisjointIntMap "unionDiagram consumers" (dCons left) (dCons right)
+  edges <- unionDisjointIntMap "unionDiagram edges" (dEdges left) (dEdges right)
+  pure left
+    { dPortTy = portTy
+    , dProd = prod
+    , dCons = cons
+    , dEdges = edges
+    , dNextPort = dNextPort right
+    , dNextEdge = dNextEdge right
+    }

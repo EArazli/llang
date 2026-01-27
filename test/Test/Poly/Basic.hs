@@ -6,10 +6,12 @@ module Test.Poly.Basic
 import Test.Tasty
 import Test.Tasty.HUnit
 import qualified Data.Text as T
+import qualified Data.IntMap.Strict as IM
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram
+import Strat.Poly.Graph (EdgeId(..), validateDiagram, unionDisjointIntMap)
 
 
 tests :: TestTree
@@ -19,6 +21,8 @@ tests =
     [ testCase "diagram dom/cod" testDiagramDomCod
     , testCase "compD rejects boundary mismatch" testCompMismatch
     , testCase "tensorD rejects mode mismatch" testTensorModeMismatch
+    , testCase "validateDiagram detects stale incidence" testValidateStaleIncidence
+    , testCase "unionDisjointIntMap rejects collisions" testUnionDisjoint
     ]
 
 
@@ -30,8 +34,14 @@ testDiagramDomCod = do
   case genD mode ctx ctx (GenName "f") of
     Left err -> assertFailure (T.unpack err)
     Right diag -> do
-      diagramDom diag @?= ctx
-      diagramCod diag @?= ctx
+      dom <- case diagramDom diag of
+        Left err -> assertFailure (T.unpack err)
+        Right d -> pure d
+      cod <- case diagramCod diag of
+        Left err -> assertFailure (T.unpack err)
+        Right d -> pure d
+      dom @?= ctx
+      cod @?= ctx
 
 
 testCompMismatch :: Assertion
@@ -56,3 +66,23 @@ testTensorModeMismatch = do
   case tensorD d1 d2 of
     Left _ -> pure ()
     Right _ -> assertFailure "expected mode mismatch"
+
+testValidateStaleIncidence :: Assertion
+testValidateStaleIncidence = do
+  let mode = ModeName "Cart"
+  let a = TCon (TypeName "A") []
+  diag <- case genD mode [a] [a] (GenName "f") of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  let bad = diag { dProd = IM.insert 0 (Just (EdgeId 99)) (dProd diag) }
+  case validateDiagram bad of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected validation failure for stale incidence"
+
+testUnionDisjoint :: Assertion
+testUnionDisjoint = do
+  let left = IM.fromList [(0 :: Int, "a")]
+  let right = IM.fromList [(0 :: Int, "b")]
+  case unionDisjointIntMap "test" left right of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected union collision error"

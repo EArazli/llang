@@ -86,11 +86,11 @@ checkCell doc cell = do
   if dMode (c2LHS cell) /= dMode (c2RHS cell)
     then Left "validateDoctrine: cell has mode mismatch"
     else do
-      let ctxL = diagramDom (c2LHS cell)
-      let ctxR = diagramDom (c2RHS cell)
+      ctxL <- diagramDom (c2LHS cell)
+      ctxR <- diagramDom (c2RHS cell)
       _ <- unifyCtx ctxL ctxR
-      let codL = diagramCod (c2LHS cell)
-      let codR = diagramCod (c2RHS cell)
+      codL <- diagramCod (c2LHS cell)
+      codR <- diagramCod (c2RHS cell)
       _ <- unifyCtx codL codR
       let vars = freeTyVarsDiagram (c2LHS cell) <> freeTyVarsDiagram (c2RHS cell)
       let allowed = S.fromList (c2TyVars cell)

@@ -31,7 +31,7 @@ testMonoidMorphism :: Assertion
 testMonoidMorphism = do
   docSrc <- either (assertFailure . T.unpack) pure mkMonoid
   docTgt <- either (assertFailure . T.unpack) pure mkStringMonoid
-  let typeMap = M.fromList [(TypeName "A", TCon (TypeName "Str") [])]
+  let typeMap = M.fromList [((modeM, TypeName "A"), TCon (TypeName "Str") [])]
   unitImg <- either (assertFailure . T.unpack) pure (genD modeM [] [TCon (TypeName "Str") []] (GenName "empty"))
   mulImg <- either (assertFailure . T.unpack) pure (genD modeM [TCon (TypeName "Str") [], TCon (TypeName "Str") []] [TCon (TypeName "Str") []] (GenName "append"))
   let mor = Morphism
@@ -39,7 +39,7 @@ testMonoidMorphism = do
         , morSrc = docSrc
         , morTgt = docTgt
         , morTypeMap = typeMap
-        , morGenMap = M.fromList [(GenName "unit", unitImg), (GenName "mul", mulImg)]
+        , morGenMap = M.fromList [((modeM, GenName "unit"), unitImg), ((modeM, GenName "mul"), mulImg)]
         , morPolicy = UseAllOriented
         , morFuel = 20
         }

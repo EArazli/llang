@@ -3,6 +3,7 @@ module Strat.Poly.Rewrite
   ( RewriteRule(..)
   , rewriteOnce
   , rewriteAll
+  , rulesFromPolicy
   , rulesFromDoctrine
   ) where
 
@@ -14,9 +15,9 @@ import Strat.Poly.Graph
 import Strat.Poly.Diagram
 import Strat.Poly.Match
 import Strat.Poly.TypeExpr (TyVar)
-import Strat.Poly.UnifyTy
 import Strat.Poly.Cell2
-import Strat.Kernel.Types (Orientation(..))
+import Strat.Kernel.RewriteSystem (RewritePolicy(..))
+import Strat.Kernel.Types (Orientation(..), RuleClass(..))
 import Strat.Poly.Doctrine (Doctrine(..))
 
 
@@ -28,34 +29,88 @@ data RewriteRule = RewriteRule
   } deriving (Eq, Show)
 
 rewriteOnce :: [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnce rules diag = go rules
+rewriteOnce rules diag = do
+  top <- rewriteOnceTop rules diag
+  case top of
+    Just _ -> pure top
+    Nothing -> rewriteOnceInBoxes rules diag
+
+rewriteOnceTop :: [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceTop rules diag = go rules
   where
     go [] = Right Nothing
     go (r:rs) = do
       if dMode (rrLHS r) /= dMode diag
         then go rs
         else do
-          mMatch <- findFirstMatchNoDoc (rrLHS r) diag
-          case mMatch of
-            Nothing -> go rs
-            Just match -> do
-              diag' <- applyMatch r match diag
-              pure (Just (canonicalizeDiagram diag'))
+          matches <- findAllMatchesWithTyVars (S.fromList (rrTyVars r)) (rrLHS r) diag
+          tryMatches matches
+      where
+        tryMatches [] = go rs
+        tryMatches (m:ms) =
+          case applyMatch r m diag of
+            Left _ -> tryMatches ms
+            Right d -> do
+              canon <- canonicalizeDiagram d
+              pure (Just canon)
+
+rewriteOnceInBoxes :: [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceInBoxes rules diag =
+  go (IM.toAscList (dEdges diag))
+  where
+    go [] = Right Nothing
+    go ((edgeKey, edge):rest) =
+      case ePayload edge of
+        PGen _ -> go rest
+        PBox name inner -> do
+          innerRes <- rewriteOnce rules inner
+          case innerRes of
+            Nothing -> go rest
+            Just inner' -> do
+              let edge' = edge { ePayload = PBox name inner' }
+              let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+              canon <- canonicalizeDiagram diag'
+              pure (Just canon)
 
 rewriteAll :: Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
 rewriteAll cap rules diag = do
-  results <- go [] rules
-  pure (take cap results)
+  top <- rewriteAllTop rules diag
+  inner <- rewriteAllInBoxes cap rules diag
+  pure (take cap (top <> inner))
   where
-    go acc [] = Right acc
-    go acc (r:rs) = do
-      if dMode (rrLHS r) /= dMode diag
-        then go acc rs
-        else do
-          matches <- findAllMatchesNoDoc (rrLHS r) diag
-          let diags = [ applyMatch r m diag | m <- matches ]
-          applied <- sequence diags
-          go (acc <> map canonicalizeDiagram applied) rs
+    rewriteAllTop rules' diag' = go [] rules'
+      where
+        go acc [] = Right acc
+        go acc (r:rs) = do
+          if dMode (rrLHS r) /= dMode diag'
+            then go acc rs
+            else do
+              matches <- findAllMatchesWithTyVars (S.fromList (rrTyVars r)) (rrLHS r) diag'
+              applied <- foldl collect (Right []) matches
+              canon <- mapM canonicalizeDiagram applied
+              go (acc <> canon) rs
+          where
+            collect acc m =
+              case acc of
+                Left err -> Left err
+                Right ds ->
+                  case applyMatch r m diag' of
+                    Left _ -> Right ds
+                    Right d -> Right (ds <> [d])
+    rewriteAllInBoxes cap' rules' diag' = do
+      let edges = IM.toAscList (dEdges diag')
+      fmap concat (mapM (rewriteInEdge cap' rules' diag') edges)
+    rewriteInEdge cap' rules' diag' (edgeKey, edge) =
+      case ePayload edge of
+        PGen _ -> Right []
+        PBox name inner -> do
+          innerRes <- rewriteAll cap' rules' inner
+          mapM
+            (\d -> do
+              let edge' = edge { ePayload = PBox name d }
+              let diag'' = diag' { dEdges = IM.insert edgeKey edge' (dEdges diag') }
+              canonicalizeDiagram diag'')
+            innerRes
 
 -- no doctrine needed for matching at the moment
 
@@ -66,7 +121,7 @@ applyMatch rule match host = do
   host1 <- deleteMatchedEdges host (M.elems (mEdges match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPorts match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs
-  let host3 = insertDiagram host2 rhsShift
+  host3 <- insertDiagram host2 rhsShift
   let lhsBoundary = dIn lhs <> dOut lhs
   let rhsBoundary = dIn rhsShift <> dOut rhsShift
   if length lhsBoundary /= length rhsBoundary
@@ -143,30 +198,58 @@ deletePort diag pid =
         in Right d1
       _ -> Left "rewriteOnce: cannot delete port with remaining incidence"
 
-insertDiagram :: Diagram -> Diagram -> Diagram
-insertDiagram base extra =
-  base
-    { dPortTy = IM.union (dPortTy base) (dPortTy extra)
-    , dProd = IM.union (dProd base) (dProd extra)
-    , dCons = IM.union (dCons base) (dCons extra)
-    , dEdges = IM.union (dEdges base) (dEdges extra)
+insertDiagram :: Diagram -> Diagram -> Either Text Diagram
+insertDiagram base extra = do
+  portTy <- unionDisjointIntMap "insertDiagram ports" (dPortTy base) (dPortTy extra)
+  prod <- unionDisjointIntMap "insertDiagram producers" (dProd base) (dProd extra)
+  cons <- unionDisjointIntMap "insertDiagram consumers" (dCons base) (dCons extra)
+  edges <- unionDisjointIntMap "insertDiagram edges" (dEdges base) (dEdges extra)
+  pure base
+    { dPortTy = portTy
+    , dProd = prod
+    , dCons = cons
+    , dEdges = edges
     , dNextPort = dNextPort extra
     , dNextEdge = dNextEdge extra
     }
 
 rulesFromDoctrine :: Doctrine -> [RewriteRule]
-rulesFromDoctrine doc = concatMap fromCell (dCells2 doc)
+rulesFromDoctrine doc = rulesFromPolicy UseAllOriented (dCells2 doc)
+
+rulesFromPolicy :: RewritePolicy -> [Cell2] -> [RewriteRule]
+rulesFromPolicy policy cells = concatMap (rulesForCell policy) cells
+
+rulesForCell :: RewritePolicy -> Cell2 -> [RewriteRule]
+rulesForCell policy cell =
+  case policy of
+    UseStructuralAsBidirectional ->
+      case c2Class cell of
+        Structural -> both
+        Computational -> oriented
+    UseOnlyComputationalLR ->
+      case c2Class cell of
+        Computational ->
+          case c2Orient cell of
+            LR -> [mk (c2LHS cell) (c2RHS cell)]
+            Bidirectional -> [mk (c2LHS cell) (c2RHS cell)]
+            _ -> []
+        Structural -> []
+    UseAllOriented -> oriented
   where
-    fromCell cell =
-      case c2Orient cell of
-        LR -> [mkRule cell (c2LHS cell) (c2RHS cell)]
-        RL -> [mkRule cell (c2RHS cell) (c2LHS cell)]
-        Bidirectional -> [mkRule cell (c2LHS cell) (c2RHS cell), mkRule cell (c2RHS cell) (c2LHS cell)]
-        Unoriented -> []
-    mkRule cell lhs rhs =
+    mk lhs rhs =
       RewriteRule
         { rrName = c2Name cell
         , rrLHS = lhs
         , rrRHS = rhs
         , rrTyVars = c2TyVars cell
         }
+    oriented =
+      case c2Orient cell of
+        LR -> [mk (c2LHS cell) (c2RHS cell)]
+        RL -> [mk (c2RHS cell) (c2LHS cell)]
+        Bidirectional -> [mk (c2LHS cell) (c2RHS cell), mk (c2RHS cell) (c2LHS cell)]
+        Unoriented -> []
+    both =
+      [ mk (c2LHS cell) (c2RHS cell)
+      , mk (c2RHS cell) (c2LHS cell)
+      ]

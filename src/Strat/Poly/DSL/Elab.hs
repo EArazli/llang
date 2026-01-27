@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.DSL.Elab
   ( elabPolyDoctrine
+  , elabPolyMorphism
   , elabPolyRun
   , elabDiagExpr
   ) where
@@ -18,22 +19,30 @@ import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
 import Strat.Poly.RunSpec
+import Strat.Poly.Morphism
 import Strat.Frontend.RunSpec (RunShow(..))
 import qualified Strat.Kernel.DSL.AST as KAST
 import Strat.Kernel.DSL.AST (RawRunShow(..))
 import Strat.Frontend.Env (ModuleEnv(..))
 import Strat.Poly.Cell2 (Cell2(..))
 import qualified Data.IntMap.Strict as IM
+import Strat.Kernel.RewriteSystem (RewritePolicy(..))
 
 
 elabPolyRun :: KAST.RawPolyRun -> Either Text PolyRunSpec
 elabPolyRun raw = do
   let fuel = maybe 50 id (KAST.rprFuel raw)
   let flags = if null (KAST.rprShowFlags raw) then [ShowNormalized] else map toShow (KAST.rprShowFlags raw)
+  let policyName = maybe "UseStructuralAsBidirectional" id (KAST.rprPolicy raw)
+  policy <- parsePolicy policyName
   ensureShowFlags flags
   pure PolyRunSpec
     { prName = KAST.rprName raw
     , prDoctrine = KAST.rprDoctrine raw
+    , prMode = KAST.rprMode raw
+    , prSurface = KAST.rprSurface raw
+    , prModel = KAST.rprModel raw
+    , prPolicy = policy
     , prFuel = fuel
     , prShowFlags = flags
     , prExprText = KAST.rprExprText raw
@@ -46,9 +55,104 @@ elabPolyRun raw = do
         RawShowValue -> ShowValue
         RawShowCat -> ShowCat
     ensureShowFlags flags =
-      if any (`elem` [ShowValue, ShowCat]) flags
-        then Left "polyrun: unsupported show flag (value/cat)"
+      if ShowCat `elem` flags
+        then Left "polyrun: unsupported show flag (cat)"
+        else if ShowValue `elem` flags && KAST.rprModel raw == Nothing
+          then Left "polyrun: show value requires model"
+          else Right ()
+
+elabPolyMorphism :: ModuleEnv -> KAST.RawPolyMorphism -> Either Text Morphism
+elabPolyMorphism env raw = do
+  src <- lookupPolyDoctrine env (KAST.rpmSrc raw)
+  tgt <- lookupPolyDoctrine env (KAST.rpmTgt raw)
+  let policyName = maybe "UseStructuralAsBidirectional" id (KAST.rpmPolicy raw)
+  policy <- parsePolicy policyName
+  let fuel = maybe 50 id (KAST.rpmFuel raw)
+  typeMap <- foldM (addTypeMap src tgt) M.empty [ t | KAST.RPMType t <- KAST.rpmItems raw ]
+  genMap <- foldM (addGenMap src tgt) M.empty [ g | KAST.RPMGen g <- KAST.rpmItems raw ]
+  ensureAllGenMapped src genMap
+  let mor = Morphism
+        { morName = KAST.rpmName raw
+        , morSrc = src
+        , morTgt = tgt
+        , morTypeMap = typeMap
+        , morGenMap = genMap
+        , morPolicy = policy
+        , morFuel = fuel
+        }
+  case checkMorphism mor of
+    Left err -> Left ("polymorphism " <> KAST.rpmName raw <> ": " <> err)
+    Right () -> Right mor
+  where
+    lookupPolyDoctrine env' name =
+      case M.lookup name (mePolyDoctrines env') of
+        Nothing -> Left ("Unknown polydoctrine: " <> name)
+        Just doc -> Right doc
+    addTypeMap src tgt mp decl = do
+      let modeSrc = ModeName (KAST.rpmtSrcMode decl)
+      let modeTgt = ModeName (KAST.rpmtTgtMode decl)
+      if modeSrc /= modeTgt
+        then Left "polymorphism: mode mapping not supported"
         else Right ()
+      ensureMode src modeSrc
+      ensureMode tgt modeSrc
+      let name = TypeName (KAST.rpmtSrcType decl)
+      arity <- case M.lookup modeSrc (dTypes src) >>= M.lookup name of
+        Nothing -> Left "polymorphism: unknown source type"
+        Just a -> Right a
+      let vars = rawTypeVars (KAST.rpmtTgtType decl)
+      tgtExpr <- elabTypeExpr tgt modeSrc (map TyVar vars) (KAST.rpmtTgtType decl)
+      ensureTemplate arity tgtExpr
+      let key = (modeSrc, name)
+      if M.member key mp
+        then Left "polymorphism: duplicate type mapping"
+        else Right (M.insert key tgtExpr mp)
+    addGenMap src tgt mp decl = do
+      let mode = ModeName (KAST.rpmgMode decl)
+      ensureMode src mode
+      ensureMode tgt mode
+      gen <- lookupGen src mode (GenName (KAST.rpmgSrcGen decl))
+      let tyVars = gdTyVars gen
+      diag <- elabDiagExpr tgt mode tyVars (KAST.rpmgRhs decl)
+      let free = freeVars diag
+      let allowed = S.fromList tyVars
+      if S.isSubsetOf free allowed
+        then Right ()
+        else Left "polymorphism: generator mapping uses undeclared type variables"
+      let key = (mode, gdName gen)
+      if M.member key mp
+        then Left "polymorphism: duplicate generator mapping"
+        else Right (M.insert key diag mp)
+    ensureTemplate arity expr =
+      case expr of
+        TCon _ params
+          | length params == arity && all isVar params && distinct params -> Right ()
+          | otherwise -> Left "polymorphism: type mapping must be a constructor with matching type variables"
+        _ -> Left "polymorphism: type mapping must be a constructor with matching type variables"
+    isVar (TVar _) = True
+    isVar _ = False
+    distinct params =
+      let vars = [ v | TVar v <- params ]
+      in length vars == length (S.fromList vars)
+    rawTypeVars expr =
+      S.toList (varsInRawType expr)
+    varsInRawType expr =
+      case expr of
+        RPTVar name -> S.singleton name
+        RPTCon _ args -> S.unions (map varsInRawType args)
+    ensureAllGenMapped src mp = do
+      let gens = [ (mode, gdName g) | (mode, table) <- M.toList (dGens src), g <- M.elems table ]
+      case [ (m, g) | (m, g) <- gens, M.notMember (m, g) mp ] of
+        [] -> Right ()
+        _ -> Left "polymorphism: missing generator mapping"
+
+parsePolicy :: Text -> Either Text RewritePolicy
+parsePolicy name =
+  case name of
+    "UseOnlyComputationalLR" -> Right UseOnlyComputationalLR
+    "UseStructuralAsBidirectional" -> Right UseStructuralAsBidirectional
+    "UseAllOriented" -> Right UseAllOriented
+    _ -> Left ("Unknown policy: " <> name)
 
 elabPolyDoctrine :: ModuleEnv -> RawPolyDoctrine -> Either Text Doctrine
 elabPolyDoctrine env raw = do
@@ -213,9 +317,11 @@ lookupGen doc mode name =
 
 unifyBoundary :: Context -> Context -> Diagram -> Either Text Diagram
 unifyBoundary dom cod diag = do
-  s1 <- unifyCtx (diagramDom diag) dom
+  domDiag <- diagramDom diag
+  s1 <- unifyCtx domDiag dom
   let diag1 = applySubstDiagram s1 diag
-  s2 <- unifyCtx (diagramCod diag1) cod
+  codDiag <- diagramCod diag1
+  s2 <- unifyCtx codDiag cod
   let diag2 = applySubstDiagram s2 diag1
   pure diag2
 

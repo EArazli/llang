@@ -57,10 +57,13 @@ data-files:
 - examples/poly/README.md
 - examples/poly/planar_monoid.poly.llang
 - examples/poly/planar_monoid.run.llang
+- examples/poly/planar_monoid.ssa.run.llang
 - examples/poly/cart_monoid.poly.llang
 - examples/poly/cart_monoid.run.llang
+- examples/poly/cart_monoid.term.run.llang
 - examples/poly/no_dup_error.run.llang
 - examples/poly/subdiagram_match.poly.llang
+- examples/poly/monoid_to_string.llang
 - examples/runspec/multi.llang
 - stdlib/syntax.llang
 - stdlib/nat.llang

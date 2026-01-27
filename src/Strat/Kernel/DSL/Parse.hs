@@ -40,8 +40,11 @@ decl =
   importDecl
     <|> doctrineDecl
     <|> polyDoctrineDecl
+    <|> polyMorphismDecl
+    <|> polySurfaceDecl
     <|> syntaxDecl
     <|> modelDecl
+    <|> polyModelDecl
     <|> surfaceDecl
     <|> morphismDecl
     <|> implementsDecl
@@ -80,11 +83,28 @@ polyDoctrineDecl :: Parser RawDecl
 polyDoctrineDecl = do
   _ <- symbol "polydoctrine"
   name <- ident
-  mExt <- optional (symbol "extends" *> ident)
-  _ <- symbol "where"
-  items <- polyBlock
-  optionalSemi
-  pure (DeclPolyDoctrine (PolyAST.RawPolyDoctrine name mExt items))
+  (polyPushoutDecl name <|> polyCoproductDecl name <|> polyWhereDecl name)
+  where
+    polyWhereDecl docName = do
+      mExt <- optional (symbol "extends" *> ident)
+      _ <- symbol "where"
+      items <- polyBlock
+      optionalSemi
+      pure (DeclPolyDoctrine (PolyAST.RawPolyDoctrine docName mExt items))
+    polyPushoutDecl docName = try $ do
+      _ <- symbol "="
+      _ <- symbol "pushout"
+      leftMor <- qualifiedIdent
+      rightMor <- qualifiedIdent
+      optionalSemi
+      pure (DeclPolyDoctrinePushout docName leftMor rightMor)
+    polyCoproductDecl docName = try $ do
+      _ <- symbol "="
+      _ <- symbol "coproduct"
+      leftDoc <- qualifiedIdent
+      rightDoc <- qualifiedIdent
+      optionalSemi
+      pure (DeclPolyDoctrineCoproduct docName leftDoc rightDoc)
 
 syntaxDecl :: Parser RawDecl
 syntaxDecl = do
@@ -118,6 +138,17 @@ modelDecl = do
   optionalSemi
   pure (DeclModelWhere name doc items)
 
+polyModelDecl :: Parser RawDecl
+polyModelDecl = do
+  _ <- symbol "polymodel"
+  name <- ident
+  _ <- symbol ":"
+  doc <- ident
+  _ <- symbol "where"
+  items <- modelBlock
+  optionalSemi
+  pure (DeclPolyModelWhere name doc items)
+
 surfaceDecl :: Parser RawDecl
 surfaceDecl = do
   _ <- symbol "surface"
@@ -140,6 +171,21 @@ morphismDecl = do
   mcheck <- optional morphismCheck
   optionalSemi
   pure (DeclMorphismWhere (RawMorphismDecl name src tgt items mcheck))
+
+polyMorphismDecl :: Parser RawDecl
+polyMorphismDecl = do
+  _ <- symbol "polymorphism"
+  name <- qualifiedIdent
+  _ <- symbol ":"
+  src <- ident
+  _ <- symbol "->"
+  tgt <- ident
+  _ <- symbol "where"
+  items <- polyMorphismBlock
+  optionalSemi
+  case buildPolyMorphism name src tgt items of
+    Left err -> fail (T.unpack err)
+    Right decl -> pure (DeclPolyMorphism decl)
 
 implementsDecl :: Parser RawDecl
 implementsDecl = do
@@ -179,6 +225,21 @@ polyRunDecl = do
   case buildPolyRun name items exprText of
     Left err -> fail (T.unpack err)
     Right run -> pure (DeclPolyRun run)
+
+polySurfaceDecl :: Parser RawDecl
+polySurfaceDecl = do
+  _ <- symbol "polysurface"
+  name <- ident
+  _ <- symbol ":"
+  _ <- symbol "doctrine"
+  doc <- ident
+  _ <- symbol "mode"
+  mode <- ident
+  _ <- symbol "where"
+  _ <- symbol "{"
+  _ <- symbol "}"
+  optionalSemi
+  pure (DeclPolySurface (RawPolySurfaceDecl name doc mode))
 
 runBody :: Parser Text
 runBody = do
@@ -994,6 +1055,78 @@ morphismCheck = do
 
 -- Run block
 
+data PolyMorphismItem
+  = PolyMorphismType RawPolyTypeMap
+  | PolyMorphismGen RawPolyGenMap
+  | PolyMorphismPolicy Text
+  | PolyMorphismFuel Int
+
+polyMorphismBlock :: Parser [PolyMorphismItem]
+polyMorphismBlock = do
+  _ <- symbol "{"
+  items <- many polyMorphismItem
+  _ <- symbol "}"
+  pure items
+
+polyMorphismItem :: Parser PolyMorphismItem
+polyMorphismItem =
+  polyTypeMapItem
+    <|> polyGenMapItem
+    <|> polyPolicyItem
+    <|> polyFuelItem
+
+polyTypeMapItem :: Parser PolyMorphismItem
+polyTypeMapItem = do
+  _ <- symbol "type"
+  src <- ident
+  _ <- symbol "@"
+  srcMode <- ident
+  _ <- symbol "->"
+  tgt <- polyTypeExpr
+  _ <- symbol "@"
+  tgtMode <- ident
+  optionalSemi
+  pure (PolyMorphismType (RawPolyTypeMap src srcMode tgt tgtMode))
+
+polyGenMapItem :: Parser PolyMorphismItem
+polyGenMapItem = do
+  _ <- symbol "gen"
+  src <- ident
+  _ <- symbol "@"
+  mode <- ident
+  _ <- symbol "->"
+  rhs <- polyDiagExpr
+  optionalSemi
+  pure (PolyMorphismGen (RawPolyGenMap src mode rhs))
+
+polyPolicyItem :: Parser PolyMorphismItem
+polyPolicyItem = do
+  _ <- symbol "policy"
+  name <- ident
+  optionalSemi
+  pure (PolyMorphismPolicy name)
+
+polyFuelItem :: Parser PolyMorphismItem
+polyFuelItem = do
+  _ <- symbol "fuel"
+  n <- fromIntegral <$> integer
+  optionalSemi
+  pure (PolyMorphismFuel n)
+
+buildPolyMorphism :: Text -> Text -> Text -> [PolyMorphismItem] -> Either Text RawPolyMorphism
+buildPolyMorphism name src tgt items =
+  Right RawPolyMorphism
+    { rpmName = name
+    , rpmSrc = src
+    , rpmTgt = tgt
+    , rpmItems = [ RPMType i | PolyMorphismType i <- items ] <> [ RPMGen j | PolyMorphismGen j <- items ]
+    , rpmPolicy = firstJust [ p | PolyMorphismPolicy p <- items ]
+    , rpmFuel = firstJust [ f | PolyMorphismFuel f <- items ]
+    }
+  where
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
+
 runBlock :: Parser [RunItem]
 runBlock = do
   _ <- symbol "{"
@@ -1003,6 +1136,10 @@ runBlock = do
 
 data PolyRunItem
   = PolyRunDoctrine Text
+  | PolyRunMode Text
+  | PolyRunSurface Text
+  | PolyRunModel Text
+  | PolyRunPolicy Text
   | PolyRunFuel Int
   | PolyRunShow RawRunShow
 
@@ -1016,7 +1153,11 @@ polyRunBlock = do
 polyRunItem :: Parser PolyRunItem
 polyRunItem =
   polyDoctrineItem
-    <|> polyFuelItem
+    <|> polyModeItem
+    <|> polySurfaceItem
+    <|> polyModelItem
+    <|> polyRunPolicyItem
+    <|> polyRunFuelItem
     <|> polyShowItem
 
 polyDoctrineItem :: Parser PolyRunItem
@@ -1026,8 +1167,36 @@ polyDoctrineItem = do
   optionalSemi
   pure (PolyRunDoctrine name)
 
-polyFuelItem :: Parser PolyRunItem
-polyFuelItem = do
+polyModeItem :: Parser PolyRunItem
+polyModeItem = do
+  _ <- keyword "mode"
+  name <- ident
+  optionalSemi
+  pure (PolyRunMode name)
+
+polySurfaceItem :: Parser PolyRunItem
+polySurfaceItem = do
+  _ <- symbol "surface"
+  name <- ident
+  optionalSemi
+  pure (PolyRunSurface name)
+
+polyModelItem :: Parser PolyRunItem
+polyModelItem = do
+  _ <- keyword "model"
+  name <- ident
+  optionalSemi
+  pure (PolyRunModel name)
+
+polyRunPolicyItem :: Parser PolyRunItem
+polyRunPolicyItem = do
+  _ <- symbol "policy"
+  name <- ident
+  optionalSemi
+  pure (PolyRunPolicy name)
+
+polyRunFuelItem :: Parser PolyRunItem
+polyRunFuelItem = do
   _ <- symbol "fuel"
   n <- fromIntegral <$> integer
   optionalSemi
@@ -1182,12 +1351,20 @@ buildPolyRun name items exprText =
       Right RawPolyRun
         { rprName = name
         , rprDoctrine = doc
+        , rprMode = modeName
+        , rprSurface = surfaceName
+        , rprModel = modelName
+        , rprPolicy = policyName
         , rprFuel = fuel
         , rprShowFlags = flags
         , rprExprText = exprText
         }
   where
     doctrineName = firstJust [ d | PolyRunDoctrine d <- items ]
+    modeName = firstJust [ m | PolyRunMode m <- items ]
+    surfaceName = firstJust [ s | PolyRunSurface s <- items ]
+    modelName = firstJust [ m | PolyRunModel m <- items ]
+    policyName = firstJust [ p | PolyRunPolicy p <- items ]
     fuel = firstJust [ f | PolyRunFuel f <- items ]
     flags = [ s | PolyRunShow s <- items ]
     firstJust [] = Nothing
@@ -1258,6 +1435,9 @@ identRaw = T.pack <$> ((:) <$> letterChar <*> many identChar)
 
 identChar :: Parser Char
 identChar = alphaNumChar <|> char '_' <|> char '-' <|> char '\''
+
+keyword :: Text -> Parser Text
+keyword kw = lexeme (try (string kw <* notFollowedBy identChar))
 
 stringLiteral :: Parser Text
 stringLiteral = lexeme (T.pack <$> (char '"' *> manyTill L.charLiteral (char '"')))

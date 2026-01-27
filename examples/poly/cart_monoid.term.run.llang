@@ -1,0 +1,21 @@
+import "./cart_monoid.poly.llang";
+
+polymodel CartMonoidNative : CartMonoid where {
+  default = symbolic;
+  op unit() = "";
+  op mul(a,b) = a ++ b;
+}
+
+polyrun main where {
+  doctrine CartMonoid;
+  mode M;
+  surface CartTermSurface;
+  model CartMonoidNative;
+  show normalized;
+  show value;
+}
+---
+term {
+  in;
+  out mul(unit, unit);
+}

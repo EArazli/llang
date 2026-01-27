@@ -47,6 +47,6 @@ expectedCartMonoid =
     , "in: [p0:A]"
     , "out: [p1:A]"
     , "edges:"
-    , "  e0: dup [p0] -> [p2, p3]"
-    , "  e1: mul [p2, p3] -> [p1]"
+    , "  e0: mul [p2, p3] -> [p1]"
+    , "  e1: dup [p0] -> [p2, p3]"
     ]

@@ -8,6 +8,12 @@ poly/no_dup_error.run.llang is a negative example that fails due to a boundary m
 
 poly/subdiagram_match.poly.llang is a small doctrine intended to exercise true subdiagram matching.
 
+poly/planar_monoid.ssa.run.llang demonstrates the SSA polysurface; run it to see a wire‑named diagram elaborate and normalize.
+
+poly/cart_monoid.term.run.llang uses the CartTermSurface and a polymodel to normalize and evaluate a duplicated term.
+
+poly/monoid_to_string.llang defines a polymorphism between two polydoctrines (monoid → string monoid).
+
 Legacy examples (term kernel + Surface2)
 
 cat.llang + cat.run.llang demonstrate a small category doctrine with a direct core run using CombDefault syntax; run `examples/cat.run.llang` and expect normalized/value output for a fully-qualified core term.

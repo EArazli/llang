@@ -9,12 +9,14 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
-import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..))
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
+import Strat.Poly.Match (findFirstMatchNoDoc)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Pretty (renderDiagram)
+import qualified Data.IntMap.Strict as IM
 
 
 tests :: TestTree
@@ -24,6 +26,9 @@ tests =
     [ testCase "simple local rewrite" testSimpleRewrite
     , testCase "subdiagram rewrite across composition" testSubdiagramRewrite
     , testCase "dangling condition rejects match" testDanglingReject
+    , testCase "matching requires injective host mapping" testInjectiveMatch
+    , testCase "non-injective match does not trigger rewrite" testNonInjectiveRewrite
+    , testCase "rewrite inside box" testRewriteInsideBox
     , testCase "normalize deterministic" testNormalizeDeterminism
     ]
 
@@ -63,7 +68,10 @@ testSimpleRewrite = do
     Right r -> pure r
   case res of
     Nothing -> assertFailure "expected rewrite"
-    Just d -> renderDiagram d @?= renderDiagram (rrRHS rule)
+    Just d -> do
+      got <- require (renderDiagram d)
+      expected <- require (renderDiagram (rrRHS rule))
+      got @?= expected
 
 testSubdiagramRewrite :: Assertion
 testSubdiagramRewrite = do
@@ -102,6 +110,67 @@ testDanglingReject = do
   case res of
     Nothing -> pure ()
     Just _ -> assertFailure "expected dangling match rejection"
+
+testInjectiveMatch :: Assertion
+testInjectiveMatch = do
+  g <- require (mkGen "f" [aTy] [aTy])
+  pat <- require (tensorD g g)
+  let host = g
+  res <- case findFirstMatchNoDoc pat host of
+    Left err -> assertFailure (T.unpack err)
+    Right m -> pure m
+  case res of
+    Nothing -> pure ()
+    Just _ -> assertFailure "expected no match due to non-injective mapping"
+
+testNonInjectiveRewrite :: Assertion
+testNonInjectiveRewrite = do
+  g <- require (mkGen "f" [aTy] [aTy])
+  lhs <- require (tensorD g g)
+  let rule = RewriteRule
+        { rrName = "dup"
+        , rrLHS = lhs
+        , rrRHS = lhs
+        , rrTyVars = []
+        }
+  res <- case rewriteOnce [rule] g of
+    Left err -> assertFailure (T.unpack err)
+    Right r -> pure r
+  case res of
+    Nothing -> pure ()
+    Just _ -> assertFailure "expected no rewrite due to non-injective match"
+
+testRewriteInsideBox :: Assertion
+testRewriteInsideBox = do
+  f <- require (mkGen "f" [aTy] [aTy])
+  g <- require (mkGen "g" [aTy] [aTy])
+  let rule = RewriteRule
+        { rrName = "boxrule"
+        , rrLHS = f
+        , rrRHS = g
+        , rrTyVars = []
+        }
+  let (inP, d0) = freshPort aTy (emptyDiagram modeName)
+  let (outP, d1) = freshPort aTy d0
+  let boxEdge = PBox (BoxName "B") f
+  d2 <- require (addEdgePayload boxEdge [inP] [outP] d1)
+  let host = d2 { dIn = [inP], dOut = [outP] }
+  res <- case rewriteOnce [rule] host of
+    Left err -> assertFailure (T.unpack err)
+    Right r -> pure r
+  case res of
+    Nothing -> assertFailure "expected rewrite inside box"
+    Just d -> do
+      let edges = IM.elems (dEdges d)
+      case edges of
+        [edge] ->
+          case ePayload edge of
+            PBox _ inner -> do
+              got <- require (renderDiagram inner)
+              expected <- require (renderDiagram g)
+              got @?= expected
+            _ -> assertFailure "expected box edge"
+        _ -> assertFailure "expected single box edge"
 
 testNormalizeDeterminism :: Assertion
 testNormalizeDeterminism = do
