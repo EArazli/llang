@@ -1,0 +1,11 @@
+import "./nat_bool.poly.llang";
+
+polydoctrine NatBoolPlus extends NatBool where {
+  gen isZero : [Nat_inl_Nat] -> [Bool_inr_Bool] @M;
+
+  rule computational isZeroZ -> : [] -> [Bool_inr_Bool] @M =
+    Nat_inl_Z ; isZero == Bool_inr_T
+
+  rule computational isZeroS -> : [Nat_inl_Nat] -> [Bool_inr_Bool] @M =
+    Nat_inl_S ; isZero == drop{Nat_inl_Nat} ; Bool_inr_F
+}

@@ -28,20 +28,24 @@ import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Kernel.RewriteSystem (RewritePolicy(..))
 
 
-elabPolyRun :: KAST.RawPolyRun -> Either Text PolyRunSpec
-elabPolyRun raw = do
+elabPolyRun :: Text -> KAST.RawPolyRun -> Either Text PolyRunSpec
+elabPolyRun name raw = do
+  doctrine <- maybe (Left "polyrun: missing doctrine") Right (KAST.rprDoctrine raw)
   let fuel = maybe 50 id (KAST.rprFuel raw)
   let flags = if null (KAST.rprShowFlags raw) then [ShowNormalized] else map toShow (KAST.rprShowFlags raw)
   let policyName = maybe "UseStructuralAsBidirectional" id (KAST.rprPolicy raw)
   policy <- parsePolicy policyName
   ensureShowFlags flags
   pure PolyRunSpec
-    { prName = KAST.rprName raw
-    , prDoctrine = KAST.rprDoctrine raw
+    { prName = name
+    , prDoctrine = doctrine
     , prMode = KAST.rprMode raw
     , prSurface = KAST.rprSurface raw
+    , prSurfaceSyntax = KAST.rprSurfaceSyntax raw
+    , prCoreDoctrine = KAST.rprCoreDoctrine raw
     , prModel = KAST.rprModel raw
     , prMorphisms = KAST.rprMorphisms raw
+    , prUses = KAST.rprUses raw
     , prPolicy = policy
     , prFuel = fuel
     , prShowFlags = flags
@@ -55,11 +59,9 @@ elabPolyRun raw = do
         RawShowValue -> ShowValue
         RawShowCat -> ShowCat
     ensureShowFlags flags =
-      if ShowCat `elem` flags
-        then Left "polyrun: unsupported show flag (cat)"
-        else if ShowValue `elem` flags && KAST.rprModel raw == Nothing
-          then Left "polyrun: show value requires model"
-          else Right ()
+      if ShowValue `elem` flags && KAST.rprModel raw == Nothing
+        then Left "polyrun: show value requires model"
+        else Right ()
 
 elabPolyMorphism :: ModuleEnv -> KAST.RawPolyMorphism -> Either Text Morphism
 elabPolyMorphism env raw = do
@@ -80,9 +82,11 @@ elabPolyMorphism env raw = do
         , morPolicy = policy
         , morFuel = fuel
         }
-  case checkMorphism mor of
-    Left err -> Left ("polymorphism " <> KAST.rpmName raw <> ": " <> err)
-    Right () -> Right mor
+  if isRenamingMorphism mor
+    then Right mor
+    else case checkMorphism mor of
+      Left err -> Left ("polymorphism " <> KAST.rpmName raw <> ": " <> err)
+      Right () -> Right mor
   where
     lookupPolyDoctrine env' name =
       case M.lookup name (mePolyDoctrines env') of

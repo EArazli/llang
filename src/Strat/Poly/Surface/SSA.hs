@@ -6,6 +6,7 @@ module Strat.Poly.Surface.SSA
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Void (Void)
 import Control.Monad (void)
 import Text.Megaparsec
@@ -19,7 +20,7 @@ import Strat.Poly.TypeExpr
 import Strat.Poly.DSL.AST (RawPolyTypeExpr(..))
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (PortId, addEdgePayload, EdgePayload(..), validateDiagram, emptyDiagram, freshPort, diagramPortType)
+import Strat.Poly.Graph (PortId, addEdgePayload, EdgePayload(..), validateDiagram, emptyDiagram, freshPort)
 import Strat.Poly.UnifyTy
 
 
@@ -35,6 +36,12 @@ data GenCall = GenCall
   { gcName :: Text
   , gcTyArgs :: [RawPolyTypeExpr]
   , gcArgs :: [Text]
+  } deriving (Eq, Show)
+
+data Wire = Wire
+  { wName :: Text
+  , wPort :: PortId
+  , wType :: TypeExpr
   } deriving (Eq, Show)
 
 -- Parser
@@ -65,14 +72,16 @@ commaSep p = p `sepBy` symbol ","
 polyTypeExpr :: Parser RawPolyTypeExpr
 polyTypeExpr = lexeme $ do
   name <- identRaw
+  mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
   case T.uncons name of
     Nothing -> fail "empty type"
     Just (c, _) ->
-      if isLower c
-        then pure (RPTVar name)
-        else do
-          mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
-          pure (RPTCon name (maybe [] id mArgs))
+      case mArgs of
+        Just args -> pure (RPTCon name args)
+        Nothing ->
+          if isLower c
+            then pure (RPTVar name)
+            else pure (RPTCon name [])
 
 ssaProgram :: Parser [SSAStmt]
 ssaProgram = do
@@ -157,7 +166,7 @@ elabSSA doc mode src = do
 
 elabSSAStmts :: Doctrine -> ModeName -> [SSAStmt] -> Either Text Diagram
 elabSSAStmts doc mode stmts = do
-  (env, diag, seenIn, seenOut) <- foldl step (Right (M.empty, emptyDiagram mode, False, False)) stmts
+  (ctx, diag, seenIn, seenOut) <- foldl step (Right ([], emptyDiagram mode, False, False)) stmts
   if not seenIn
     then Left "ssa: missing in declaration"
     else if not seenOut
@@ -165,53 +174,56 @@ elabSSAStmts doc mode stmts = do
       else Right diag
   where
     step acc stmt = do
-      (env, diag, seenIn, seenOut) <- acc
+      (ctx, diag, seenIn, seenOut) <- acc
       case stmt of
         SSAIn items ->
-          if seenIn || not (M.null env)
+          if seenIn || not (null ctx)
             then Left "ssa: duplicate in declaration"
             else do
-              (ports, diag') <- allocInputs doc mode items diag
-              let env' = M.fromList ports
-              let diag'' = diag' { dIn = map snd ports }
-              pure (env', diag'', True, seenOut)
-        SSAAssign outs call -> do
+              ensureUnique "ssa: duplicate input declaration" (map fst items)
+              (wires, diag') <- allocInputs doc mode items diag
+              let diag'' = diag' { dIn = map wPort wires }
+              pure (wires, diag'', True, seenOut)
+        SSAAssign outs call ->
           if seenOut
             then Left "ssa: assignments after out"
             else do
-              (diag', env') <- applyCall doc mode env diag outs call
-              pure (env', diag', seenIn, seenOut)
+              (diag', ctx') <- applyCall doc mode ctx diag outs call
+              pure (ctx', diag', seenIn, seenOut)
         SSABox outs name ins inner -> do
           if seenOut
             then Left "ssa: assignments after out"
             else do
-              (diag', env') <- applyBox doc mode env diag outs name ins inner
-              pure (env', diag', seenIn, seenOut)
+              (diag', ctx') <- applyBox doc mode ctx diag outs name ins inner
+              pure (ctx', diag', seenIn, seenOut)
         SSAOut names ->
           if seenOut
             then Left "ssa: duplicate out declaration"
             else do
-              ports <- mapM (lookupWire env) names
-              let diag' = diag { dOut = ports }
-              pure (env, diag', seenIn, True)
+              ensureOutOrder ctx names
+              let diag' = diag { dOut = map wPort ctx }
+              pure (ctx, diag', seenIn, True)
 
-allocInputs :: Doctrine -> ModeName -> [(Text, RawPolyTypeExpr)] -> Diagram -> Either Text ([(Text, PortId)], Diagram)
+allocInputs :: Doctrine -> ModeName -> [(Text, RawPolyTypeExpr)] -> Diagram -> Either Text ([Wire], Diagram)
 allocInputs doc mode items diag =
   foldl step (Right ([], diag)) items
   where
     step acc (name, rawTy) = do
-      (ports, d) <- acc
+      (wires, d) <- acc
       ty <- elabType doc mode rawTy
       let (pid, d') = freshPort ty d
-      pure (ports <> [(name, pid)], d')
+      pure (wires <> [Wire name pid ty], d')
 
-applyCall :: Doctrine -> ModeName -> M.Map Text PortId -> Diagram -> [Text] -> GenCall -> Either Text (Diagram, M.Map Text PortId)
-applyCall doc mode env diag outs call = do
+applyCall :: Doctrine -> ModeName -> [Wire] -> Diagram -> [Text] -> GenCall -> Either Text (Diagram, [Wire])
+applyCall doc mode ctx diag outs call = do
+  ensureUnique "ssa: duplicate output name" outs
   let genName = GenName (gcName call)
   gen <- lookupGen doc mode genName
   let args = gcArgs call
-  ins <- mapM (lookupWire env) args
-  insTy <- mapM (requirePortType diag) ins
+  ensureUnique "ssa: duplicate input name" args
+  (idx, slice) <- findSlice ctx args
+  let ins = map wPort slice
+  let insTy = map wType slice
   subst <-
     if null (gcTyArgs call)
       then unifyCtx (gdDom gen) insTy
@@ -228,13 +240,20 @@ applyCall doc mode env diag outs call = do
     else do
       (outPorts, diag') <- allocPortsLocal cod diag
       diag'' <- addEdgePayload (PGen genName) ins outPorts diag'
-      let env' = foldl (\m (n,p) -> M.insert n p m) env (zip outs outPorts)
-      pure (diag'', env')
+      let outWires = zipWith3 Wire outs outPorts cod
+      let (before, rest) = splitAt idx ctx
+      let after = drop (length args) rest
+      ensureFreshOutputs outs before after
+      let ctx' = before <> outWires <> after
+      pure (diag'', ctx')
 
-applyBox :: Doctrine -> ModeName -> M.Map Text PortId -> Diagram -> [Text] -> Text -> [Text] -> [SSAStmt] -> Either Text (Diagram, M.Map Text PortId)
-applyBox doc mode env diag outs name ins inner = do
-  insPorts <- mapM (lookupWire env) ins
-  insTy <- mapM (requirePortType diag) insPorts
+applyBox :: Doctrine -> ModeName -> [Wire] -> Diagram -> [Text] -> Text -> [Text] -> [SSAStmt] -> Either Text (Diagram, [Wire])
+applyBox doc mode ctx diag outs name ins inner = do
+  ensureUnique "ssa: duplicate output name" outs
+  ensureUnique "ssa: duplicate input name" ins
+  (idx, slice) <- findSlice ctx ins
+  let insPorts = map wPort slice
+  let insTy = map wType slice
   innerDiag <- elabSSAStmts doc mode inner
   domInner <- diagramDom innerDiag
   codInner <- diagramCod innerDiag
@@ -244,20 +263,12 @@ applyBox doc mode env diag outs name ins inner = do
     else do
       (outPorts, diag') <- allocPortsLocal codInner diag
       diag'' <- addEdgePayload (PBox (BoxName name) innerDiag) insPorts outPorts diag'
-      let env' = foldl (\m (n,p) -> M.insert n p m) env (zip outs outPorts)
-      pure (diag'', env')
-
-lookupWire :: M.Map Text PortId -> Text -> Either Text PortId
-lookupWire env name =
-  case M.lookup name env of
-    Nothing -> Left "ssa: unknown wire"
-    Just p -> Right p
-
-requirePortType :: Diagram -> PortId -> Either Text TypeExpr
-requirePortType diag pid =
-  case diagramPortType diag pid of
-    Nothing -> Left "ssa: missing port type"
-    Just ty -> Right ty
+      let outWires = zipWith3 Wire outs outPorts codInner
+      let (before, rest) = splitAt idx ctx
+      let after = drop (length ins) rest
+      ensureFreshOutputs outs before after
+      let ctx' = before <> outWires <> after
+      pure (diag'', ctx')
 
 elabType :: Doctrine -> ModeName -> RawPolyTypeExpr -> Either Text TypeExpr
 elabType doc mode expr =
@@ -287,3 +298,60 @@ allocPortsLocal (ty:rest) diag =
   in do
     (pids, diag2) <- allocPortsLocal rest diag1
     pure (pid : pids, diag2)
+
+ensureUnique :: Text -> [Text] -> Either Text ()
+ensureUnique msg names =
+  let dup = findDup names
+  in case dup of
+    Nothing -> Right ()
+    Just _ -> Left msg
+  where
+    findDup xs = go S.empty xs
+    go _ [] = Nothing
+    go seen (x:rest)
+      | x `S.member` seen = Just x
+      | otherwise = go (S.insert x seen) rest
+
+ensureFreshOutputs :: [Text] -> [Wire] -> [Wire] -> Either Text ()
+ensureFreshOutputs outs before after =
+  let existing = S.fromList (map wName (before <> after))
+  in if any (`S.member` existing) outs
+    then Left "ssa: output name already in use"
+    else Right ()
+
+ensureOutOrder :: [Wire] -> [Text] -> Either Text ()
+ensureOutOrder ctx names =
+  let ctxNames = map wName ctx
+      ctxSet = S.fromList ctxNames
+      nameSet = S.fromList names
+  in if any (`S.notMember` ctxSet) names
+    then Left "ssa: unknown wire in out"
+    else if length names /= length ctxNames
+      then Left "ssa: out must list all remaining wires"
+      else if names /= ctxNames
+        then Left "ssa: out must preserve order (use swap)"
+        else Right ()
+
+findSlice :: [Wire] -> [Text] -> Either Text (Int, [Wire])
+findSlice ctx names
+  | null names = Right (length ctx, [])
+  | otherwise = do
+      idxs <- mapM (indexOf ctx) names
+      let start = head idxs
+      let expected = [start .. start + length names - 1]
+      if idxs == expected
+        then Right (start, take (length names) (drop start ctx))
+        else Left "ssa: inputs must be contiguous and ordered"
+  where
+    indexOf ctx' name =
+      case findIndex ((== name) . wName) ctx' of
+        Nothing -> Left "ssa: unknown wire"
+        Just i -> Right i
+
+findIndex :: (a -> Bool) -> [a] -> Maybe Int
+findIndex p = go 0
+  where
+    go _ [] = Nothing
+    go i (x:xs)
+      | p x = Just i
+      | otherwise = go (i + 1) xs

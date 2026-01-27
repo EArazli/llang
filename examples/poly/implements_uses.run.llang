@@ -1,0 +1,27 @@
+polydoctrine Iface where {
+  mode M;
+  type A @M;
+  gen f : [A] -> [A] @M;
+}
+
+polydoctrine Target extends Iface where {
+  gen g : [A] -> [A] @M;
+}
+
+polyimplements Iface for Target using Target.fromBase;
+
+polysurface IfaceSSA : doctrine Iface mode M where { }
+
+polyrun main where {
+  doctrine Target;
+  surface IfaceSSA;
+  uses: Iface;
+  show normalized;
+}
+---
+diag {
+  in x:A;
+  y <- f(x);
+  out y;
+}
+---

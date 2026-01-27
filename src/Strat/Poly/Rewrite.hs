@@ -51,7 +51,7 @@ rewriteOnceTop rules diag = go rules
           case applyMatch r m diag of
             Left _ -> tryMatches ms
             Right d -> do
-              canon <- canonicalizeDiagram d
+              canon <- renumberDiagram d
               pure (Just canon)
 
 rewriteOnceInBoxes :: [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
@@ -69,7 +69,7 @@ rewriteOnceInBoxes rules diag =
             Just inner' -> do
               let edge' = edge { ePayload = PBox name inner' }
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-              canon <- canonicalizeDiagram diag'
+              canon <- renumberDiagram diag'
               pure (Just canon)
 
 rewriteAll :: Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
@@ -87,7 +87,7 @@ rewriteAll cap rules diag = do
             else do
               matches <- findAllMatchesWithTyVars (S.fromList (rrTyVars r)) (rrLHS r) diag'
               applied <- foldl collect (Right []) matches
-              canon <- mapM canonicalizeDiagram applied
+              canon <- mapM renumberDiagram applied
               go (acc <> canon) rs
           where
             collect acc m =
@@ -109,7 +109,7 @@ rewriteAll cap rules diag = do
             (\d -> do
               let edge' = edge { ePayload = PBox name d }
               let diag'' = diag' { dEdges = IM.insert edgeKey edge' (dEdges diag') }
-              canonicalizeDiagram diag'')
+              renumberDiagram diag'')
             innerRes
 
 -- no doctrine needed for matching at the moment

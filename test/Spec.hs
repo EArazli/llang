@@ -30,6 +30,7 @@ import qualified Test.Poly.Basic as PolyBasic
 import qualified Test.Poly.Rewrite as PolyRewrite
 import qualified Test.Poly.DSL as PolyDSL
 import qualified Test.Poly.Morphism as PolyMorphism
+import qualified Test.Poly.Eval as PolyEval
 
 main :: IO ()
 main =
@@ -61,8 +62,9 @@ main =
       , Surface2Determinism.tests
       , CLI.tests
       , CLIGolden.tests
-      , PolyBasic.tests
-      , PolyRewrite.tests
-      , PolyDSL.tests
-      , PolyMorphism.tests
+    , PolyBasic.tests
+    , PolyRewrite.tests
+    , PolyDSL.tests
+    , PolyMorphism.tests
+    , PolyEval.tests
       ]

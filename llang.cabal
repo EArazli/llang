@@ -68,6 +68,13 @@ data-files:
     examples/poly/cat.run.llang
     examples/poly/ccc.poly.llang
     examples/poly/ccc.run.llang
+    examples/poly/ccc_surface/ccc.poly.llang
+    examples/poly/ccc_surface/stlc.runspec.llang
+    examples/poly/ccc_surface/stlc.run.llang
+    examples/poly/ccc_surface/stlc.lam1.run.llang
+    examples/poly/ccc_surface/stlc.lam2.run.llang
+    examples/poly/ccc_surface/stlc.lam3.run.llang
+    examples/poly/ccc_surface/stlc.pair.run.llang
     examples/poly/planar_monoid.poly.llang
     examples/poly/planar_monoid.run.llang
     examples/poly/planar_monoid.ssa.run.llang
@@ -78,6 +85,7 @@ data-files:
     examples/poly/no_dup_error.run.llang
     examples/poly/subdiagram_match.poly.llang
     examples/poly/monoid_to_string.llang
+    examples/poly/implements_uses.run.llang
     examples/poly/bool.models.llang
     examples/poly/stlc_bool.term.run.llang
     examples/poly/peano.poly.llang
@@ -88,7 +96,18 @@ data-files:
     examples/poly/morphism_term.llang
     examples/poly/pushout_basic.poly.llang
     examples/poly/pushout_basic.run.llang
+    examples/poly/pushout/category_bool_nat_base.poly.llang
+    examples/poly/pushout/pushout_extend.poly.llang
+    examples/poly/pushout/comm_monoid.poly.llang
+    examples/poly/pushout/nat_bool.poly.llang
+    examples/poly/pushout/nat_bool.models.llang
+    examples/poly/pushout/nat_bool.run.llang
+    examples/poly/pushout/nat_bool_plus.poly.llang
+    examples/poly/pushout/nat_bool_plus.models.llang
+    examples/poly/pushout/nat_bool_plus.run.llang
+    examples/poly/pushout/ambiguous_model_restriction.llang
     examples/poly/runspec.multi.llang
+    examples/poly/runspec/multi.llang
     examples/runspec/multi.llang
     stdlib/syntax.llang
     stdlib/nat.llang
@@ -99,6 +118,7 @@ data-files:
     stdlib/struct.planar.llang
     stdlib/struct.symmetric.llang
     stdlib/struct.cartesian.llang
+    stdlib/struct.cartesian.models.llang
 
 source-repository head
   type: git
@@ -159,6 +179,7 @@ library
       Strat.Poly.RunSpec
       Strat.Poly.Surface
       Strat.Poly.Surface.CartTerm
+      Strat.Poly.Surface.CoreTerm
       Strat.Poly.Surface.SSA
       Strat.Poly.TypeExpr
       Strat.Poly.UnifyTy

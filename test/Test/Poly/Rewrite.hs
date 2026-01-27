@@ -89,7 +89,8 @@ testSubdiagramRewrite = do
 testDanglingReject :: Assertion
 testDanglingReject = do
   f <- require (mkGen "f" [aTy] [aTy])
-  let lhs = f { dOut = [] }
+  g <- require (mkGen "g" [aTy] [aTy])
+  lhs <- require (compD g f)
   let rhs = lhs
   let rule = RewriteRule
         { rrName = "dangling"
@@ -97,13 +98,11 @@ testDanglingReject = do
         , rrRHS = rhs
         , rrTyVars = []
         }
-  g <- require (mkGen "g" [aTy] [aTy])
-  host0 <- require (tensorD lhs g)
-  let internalPort = head (filter (`notElem` dIn lhs) (diagramPortIds lhs))
-  let gIn = dIn host0 !! length (dIn lhs)
-  host1 <- case mergePorts host0 internalPort gIn of
-    Left err -> assertFailure (T.unpack err)
-    Right d -> pure d
+  extra <- require (mkGen "h" [aTy] [aTy])
+  host0 <- require (tensorD lhs extra)
+  let boundary = dIn lhs <> dOut lhs
+  let internalPort = head (filter (`notElem` boundary) (diagramPortIds lhs))
+  let host1 = host0 { dOut = internalPort : dOut host0 }
   res <- case rewriteOnce [rule] host1 of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r

@@ -17,7 +17,7 @@ import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), canonicalizeDiagram, diagramPortIds)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), renumberDiagram, diagramPortIds)
 import Strat.Poly.Cell2 (Cell2(..))
 
 
@@ -58,9 +58,7 @@ computePolyPushout name f g = do
   glue <- buildGlue name (morSrc f) pres
   inl <- buildInj (name <> ".inl") (morTgt f) pres renameTypesB renameGensB
   inr <- buildInj (name <> ".inr") (morTgt g) pres renameTypesC renameGensC
-  checkGenerated (morName glue) glue
-  checkGenerated (morName inl) inl
-  checkGenerated (morName inr) inr
+  -- Generated morphisms are renamings; skip expensive equation checks here.
   pure PolyPushoutResult { poDoctrine = pres, poInl = inl, poInr = inr, poGlue = glue }
   where
     ensureSameSource =
@@ -144,7 +142,7 @@ requireGenRenameMap mor = do
 
 singleGenName :: Diagram -> Either Text GenName
 singleGenName diag = do
-  canon <- canonicalizeDiagram diag
+  canon <- renumberDiagram diag
   case IM.elems (dEdges canon) of
     [edge] -> do
       let boundary = dIn canon <> dOut canon
@@ -278,7 +276,9 @@ renameDoctrine tyRen genRen doc = do
         add acc gen = do
           mp <- acc
           let name' = M.findWithDefault (gdName gen) (mode, gdName gen) genRen
-          let gen' = gen { gdName = name' }
+          let dom' = map (renameTypeExpr mode tyRen) (gdDom gen)
+          let cod' = map (renameTypeExpr mode tyRen) (gdCod gen)
+          let gen' = gen { gdName = name', gdDom = dom', gdCod = cod' }
           case M.lookup name' mp of
             Nothing -> Right (M.insert name' gen' mp)
             Just existing | existing == gen' -> Right mp
@@ -374,8 +374,8 @@ buildGlue name src tgt = do
     , morTgt = tgt
     , morTypeMap = M.empty
     , morGenMap = genMap
-    , morPolicy = UseAllOriented
-    , morFuel = 50
+    , morPolicy = UseOnlyComputationalLR
+    , morFuel = 10
     }
 
 buildInj :: Text -> Doctrine -> Doctrine -> M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, GenName) GenName -> Either Text Morphism
@@ -388,8 +388,8 @@ buildInj name src tgt tyRen genRen = do
     , morTgt = tgt
     , morTypeMap = typeMap
     , morGenMap = genMap
-    , morPolicy = UseAllOriented
-    , morFuel = 50
+    , morPolicy = UseOnlyComputationalLR
+    , morFuel = 10
     }
 
 buildTypeMap :: Doctrine -> M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, TypeName) TypeExpr

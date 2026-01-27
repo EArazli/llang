@@ -1,0 +1,6 @@
+import "./stlc.runspec.llang";
+
+polyrun main using STLCinCCC
+---
+fst (true, false)
+---

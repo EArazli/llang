@@ -1,0 +1,30 @@
+import "../../../stdlib/struct.cartesian.llang";
+
+polydoctrine CCC_Bool extends StructCartesian where {
+  type Obj @M;
+  type Hom a b @M;
+
+  type Unit @M;
+  type Bool @M;
+  type prod a b @M;
+  type exp a b @M;
+
+  gen id a : [] -> [Hom(a, a)] @M;
+  gen comp a b c : [Hom(b, c), Hom(a, b)] -> [Hom(a, c)] @M;
+
+
+  gen exl a b : [] -> [Hom(prod(a, b), a)] @M;
+  gen exr a b : [] -> [Hom(prod(a, b), b)] @M;
+
+  gen pair a b c : [Hom(c, a), Hom(c, b)] -> [Hom(c, prod(a, b))] @M;
+
+  gen curry a b c : [Hom(prod(c, a), b)] -> [Hom(c, exp(a, b))] @M;
+  gen eval a b : [] -> [Hom(prod(exp(a, b), a), b)] @M;
+  gen terminal a : [] -> [Hom(a, Unit)] @M;
+
+  gen T : [] -> [Hom(Unit, Bool)] @M;
+  gen F : [] -> [Hom(Unit, Bool)] @M;
+}
+
+polydoctrine CCC extends CCC_Bool where {
+}

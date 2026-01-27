@@ -3,11 +3,13 @@ module Strat.Poly.Morphism
   ( Morphism(..)
   , applyMorphismDiagram
   , checkMorphism
+  , isRenamingMorphism
   ) where
 
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Set as S
 import Strat.Kernel.RewriteSystem (RewritePolicy(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Cell2
@@ -19,6 +21,7 @@ import Strat.Poly.UnifyTy
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
 import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Kernel.Types (RuleClass(..), Orientation(..))
 
 
 data Morphism = Morphism
@@ -62,8 +65,22 @@ applyMorphismDiagram mor diagSrc = do
 checkMorphism :: Morphism -> Either Text ()
 checkMorphism mor = do
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
-  mapM_ (checkCell mor) (dCells2 (morSrc mor))
+  let cells = filter (cellEnabled (morPolicy mor)) (dCells2 (morSrc mor))
+  fastOk <- inclusionFastPath mor
+  if fastOk
+    then Right ()
+    else do
+      renameOk <- renamingFastPath mor cells
+      if renameOk
+        then Right ()
+        else mapM_ (checkCell mor) cells
   pure ()
+
+isRenamingMorphism :: Morphism -> Bool
+isRenamingMorphism mor =
+  case (buildTypeRenaming mor, buildGenRenaming mor) of
+    (Just _tyRen, Just _genRen) -> True
+    _ -> False
 
 checkGenMapping :: Morphism -> GenDecl -> Either Text ()
 checkGenMapping mor gen = do
@@ -93,9 +110,10 @@ checkCell mor cell = do
   case (statusL, statusR) of
     (Finished l, Finished r) ->
       do
-        l' <- canonicalizeDiagram l
-        r' <- canonicalizeDiagram r
-        if l' == r'
+        l' <- renumberDiagram l
+        r' <- renumberDiagram r
+        ok <- diagramIsoEq l' r'
+        if ok
           then Right ()
           else Left "checkMorphism: equation violation (normal forms differ)"
     _ -> do
@@ -104,9 +122,141 @@ checkCell mor cell = do
         then Right ()
         else Left "checkMorphism: equation undecided or violated"
 
+inclusionFastPath :: Morphism -> Either Text Bool
+inclusionFastPath mor
+  | not (M.null (morTypeMap mor)) = Right False
+  | otherwise = do
+      okGens <- allM (genIsIdentity mor) (allGens (morSrc mor))
+      if not okGens
+        then Right False
+        else do
+          let tgtCells = M.fromList [(c2Name c, c) | c <- dCells2 (morTgt mor)]
+          allM (cellMatches tgtCells) (dCells2 (morSrc mor))
+  where
+    genIsIdentity m gen = do
+      let mode = gdMode gen
+      let name = gdName gen
+      let dom = gdDom gen
+      let cod = gdCod gen
+      case M.lookup (mode, name) (morGenMap m) of
+        Nothing -> Right False
+        Just image -> do
+          expected <- genD mode dom cod name
+          diagramIsoEq expected image
+    cellMatches tgtMap cell =
+      case M.lookup (c2Name cell) tgtMap of
+        Nothing -> Right False
+        Just tgt ->
+          if c2Class cell /= c2Class tgt || c2Orient cell /= c2Orient tgt
+            then Right False
+            else do
+              okL <- diagramIsoEq (c2LHS cell) (c2LHS tgt)
+              okR <- diagramIsoEq (c2RHS cell) (c2RHS tgt)
+              pure (okL && okR)
+
+renamingFastPath :: Morphism -> [Cell2] -> Either Text Bool
+renamingFastPath mor srcCells = do
+  let tgt = morTgt mor
+  case (buildTypeRenaming mor, buildGenRenaming mor) of
+    (Just _tyRen, Just _genRen) -> do
+      let tgtSig = S.fromList [ (c2Name c, c2Class c, c2Orient c) | c <- dCells2 tgt ]
+      allM (\cell -> Right ((c2Name cell, c2Class cell, c2Orient cell) `S.member` tgtSig)) srcCells
+    _ -> Right False
+
+buildTypeRenaming :: Morphism -> Maybe (M.Map (ModeName, TypeName) TypeName)
+buildTypeRenaming mor = do
+  let src = morSrc mor
+  mp <- foldl step (Just M.empty) (allTypes src)
+  if injective (M.elems mp)
+    then Just mp
+    else Nothing
+  where
+    step acc (mode, name, arity) = do
+      mp <- acc
+      let key = (mode, name)
+      let mapped =
+            case M.lookup key (morTypeMap mor) of
+              Nothing -> Just name
+              Just expr ->
+                case expr of
+                  TCon tgt params
+                    | length params == arity && all isVar params && distinct params -> Just tgt
+                  _ -> Nothing
+      case mapped of
+        Nothing -> Nothing
+        Just tgt -> Just (M.insert key tgt mp)
+    isVar (TVar _) = True
+    isVar _ = False
+    distinct params =
+      let vars = [ v | TVar v <- params ]
+      in length vars == length (S.fromList vars)
+
+buildGenRenaming :: Morphism -> Maybe (M.Map (ModeName, GenName) GenName)
+buildGenRenaming mor = do
+  mp <- foldl step (Just M.empty) (allGens (morSrc mor))
+  if injective (M.elems mp)
+    then Just mp
+    else Nothing
+  where
+    step acc gen = do
+      mp <- acc
+      let mode = gdMode gen
+      let name = gdName gen
+      diag <- M.lookup (mode, name) (morGenMap mor)
+      case singleGenNameMaybe diag of
+        Nothing -> Nothing
+        Just tgt -> Just (M.insert (mode, name) tgt mp)
+
+singleGenNameMaybe :: Diagram -> Maybe GenName
+singleGenNameMaybe diag =
+  case renumberDiagram diag of
+    Left _ -> Nothing
+    Right canon ->
+      case IM.elems (dEdges canon) of
+        [edge] ->
+          let boundary = dIn canon <> dOut canon
+              edgePorts = eIns edge <> eOuts edge
+              allPorts = diagramPortIds canon
+          in case ePayload edge of
+            PGen g
+              | boundary == edgePorts && length allPorts == length boundary -> Just g
+            _ -> Nothing
+        _ -> Nothing
+
+injective :: Ord a => [a] -> Bool
+injective xs =
+  let set = S.fromList xs
+  in length xs == S.size set
+
+cellEnabled :: RewritePolicy -> Cell2 -> Bool
+cellEnabled policy cell =
+  case policy of
+    UseStructuralAsBidirectional -> True
+    UseOnlyComputationalLR ->
+      c2Class cell == Computational && (c2Orient cell == LR || c2Orient cell == Bidirectional)
+    UseAllOriented ->
+      case c2Orient cell of
+        Unoriented -> False
+        _ -> True
+
+allM :: (a -> Either Text Bool) -> [a] -> Either Text Bool
+allM _ [] = Right True
+allM f (x:xs) = do
+  ok <- f x
+  if ok
+    then allM f xs
+    else Right False
+
 allGens :: Doctrine -> [GenDecl]
 allGens doc =
   concatMap M.elems (M.elems (dGens doc))
+
+allTypes :: Doctrine -> [(ModeName, TypeName, Int)]
+allTypes doc =
+  [ (mode, name, arity)
+  | (mode, table) <- M.toList (dTypes doc)
+  , (name, arity) <- M.toList table
+  ]
 
 lookupGenInMode :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGenInMode doc mode name =

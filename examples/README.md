@@ -14,6 +14,8 @@ poly/cart_monoid.term.run.llang uses the CartTermSurface and a polymodel to norm
 
 poly/monoid_to_string.llang defines a polymorphism between two polydoctrines (monoid → string monoid).
 
+poly/implements_uses.run.llang demonstrates polyimplements defaults resolved via polyrun uses.
+
 Legacy examples (term kernel + Surface2)
 
 cat.llang + cat.run.llang demonstrate a small category doctrine with a direct core run using CombDefault syntax; run `examples/cat.run.llang` and expect normalized/value output for a fully-qualified core term.
@@ -23,7 +25,7 @@ ccc.llang + ccc.syntax.llang + ccc.run.llang define the CCC doctrine and a core 
   Poly equivalent: poly/ccc.poly.llang + poly/ccc.run.llang.
 
 ccc_surface/ (ccc.doctrine.llang, ccc.interface.llang, stlc.surface.llang, stlc.syntax.llang, stlc.runspec.llang, and stlc.*.run.llang) demonstrates the Surface2 STLC layer over CCC; run `examples/ccc_surface/stlc.run.llang` or the lam/pair variants to see surface input elaborate into core terms and print normalized/value/cat.
-  Poly equivalent (surface demo): poly/stlc_bool.term.run.llang.
+  Poly equivalent: poly/ccc_surface/ccc.poly.llang + poly/ccc_surface/stlc.*.llang (legacy surface compiled into poly diagrams).
 
 monoid.llang + monoid.syntax.llang + monoid.models.llang + monoid.run.llang show a monoid doctrine with computational rules and a string model; run `examples/monoid.run.llang` (or `examples/monoid.alt.run.llang`) and expect normalized/value/cat for a parsed monoid term.
   Poly equivalents: poly/monoid.run.llang (planar) and poly/cart_monoid.term.run.llang (cartesian + model).
@@ -38,25 +40,25 @@ morphism_term.llang demonstrates morphism interpretation on terms; load it with 
   Poly equivalent: poly/morphism_term.llang (uses polyrun apply).
 
 runspec/multi.llang demonstrates multiple runs in a single file; run it to see the two runs execute in sequence with their respective outputs.
-  Poly equivalent: poly/runspec.multi.llang.
+  Poly equivalent: poly/runspec/multi.llang (polyrun_spec).
 
 pushout/category_bool_nat_base.llang defines Category/BoolExt/NatExt and their pushout Both; other pushout examples import this as shared boilerplate.
-  Poly equivalent: poly/pushout_basic.poly.llang (shared base + pushout).
+  Poly equivalent: poly/pushout/category_bool_nat_base.poly.llang.
 
 pushout/pushout_basic.llang just imports the base pushout definitions; pushout/pushout_basic.run.llang runs a core term in doctrine Both to exercise pushout normalization and open resolution.
   Poly equivalent: poly/pushout_basic.run.llang.
 
 pushout/pushout_extend.llang extends Both and adds cross-fragment rules using qualified names; load it to confirm qualified sorts/ops parse and elaborate.
-  Poly equivalent: poly/pushout_basic.poly.llang (pushout + renamed non-interface symbols).
+  Poly equivalent: poly/pushout/pushout_extend.poly.llang.
 
 pushout/comm_monoid.llang demonstrates assembling a commutative monoid via pushout over a semigroup interface.
-  Poly equivalent: poly/pushout_basic.poly.llang (pushout over a shared interface).
+  Poly equivalent: poly/pushout/comm_monoid.poly.llang.
 
 pushout/nat_bool.llang + pushout/nat_bool.models.llang + pushout/nat_bool.run.llang demonstrate model restriction: a Nat term is run using a NatBool model via the injection morphism; run `examples/pushout/nat_bool.run.llang` and expect normalized/value output for a Nat term.
-  Poly equivalent: poly/pushout_basic.run.llang (pushout + renamed injections; poly evaluation currently uses same-doctrine models only).
+  Poly equivalent: poly/pushout/nat_bool.poly.llang + poly/pushout/nat_bool.models.llang + poly/pushout/nat_bool.run.llang (model restriction uses the generated injection).
 
 pushout/nat_bool_plus.llang + pushout/nat_bool_plus.models.llang + pushout/nat_bool_plus.run.llang extend NatBool with a cross-fragment op (Nat -> Bool) and model it; run `examples/pushout/nat_bool_plus.run.llang` and expect normalized/value output.
-  Poly equivalent: poly/pushout_basic.poly.llang (pushout + renamed non-interface gens).
+  Poly equivalent: poly/pushout/nat_bool_plus.poly.llang + poly/pushout/nat_bool_plus.models.llang + poly/pushout/nat_bool_plus.run.llang.
 
 pushout/ambiguous_model_restriction.llang demonstrates the expected error when multiple morphisms exist from a run doctrine to a model doctrine; load it to see the ambiguity failure.
-  Poly equivalent: poly/pushout_basic.poly.llang (pushout example; poly model restriction is not implemented).
+  Poly equivalent: poly/pushout/ambiguous_model_restriction.llang (poly model restriction reports ambiguity).

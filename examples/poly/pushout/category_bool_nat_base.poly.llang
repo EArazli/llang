@@ -1,0 +1,22 @@
+polydoctrine Category where {
+  mode M;
+  type Obj @M;
+  gen a : [] -> [Obj] @M;
+  gen f : [Obj] -> [Obj] @M;
+}
+
+polydoctrine BoolExt extends Category where {
+  gen g : [Obj] -> [Obj] @M;
+
+  rule computational rB -> : [Obj] -> [Obj] @M =
+    f == g
+}
+
+polydoctrine NatExt extends Category where {
+  gen h : [Obj] -> [Obj] @M;
+
+  rule computational rN -> : [Obj] -> [Obj] @M =
+    f == h
+}
+
+polydoctrine Both = pushout BoolExt.fromBase NatExt.fromBase;

@@ -14,12 +14,4 @@ polydoctrine Right extends Base where {
   gen extra : [A] -> [A] @M;
 }
 
-polymorphism LeftFromBase : Base -> Left where {
-  gen f @ M -> f
-}
-
-polymorphism RightFromBase : Base -> Right where {
-  gen f @ M -> f
-}
-
-polydoctrine Both = pushout LeftFromBase RightFromBase;
+polydoctrine Both = pushout Left.fromBase Right.fromBase;

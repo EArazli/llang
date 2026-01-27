@@ -115,7 +115,9 @@ diffEnv full base = ModuleEnv
   , meMorphisms = M.difference (meMorphisms full) (meMorphisms base)
   , meModels = M.difference (meModels full) (meModels base)
   , meImplDefaults = diffImplDefaults (meImplDefaults full) (meImplDefaults base)
+  , mePolyImplDefaults = diffImplDefaults (mePolyImplDefaults full) (mePolyImplDefaults base)
   , meRunSpecs = M.difference (meRunSpecs full) (meRunSpecs base)
+  , mePolyRunSpecs = M.difference (mePolyRunSpecs full) (mePolyRunSpecs base)
   , meRuns = meRuns full
   , mePolyRuns = mePolyRuns full
   }

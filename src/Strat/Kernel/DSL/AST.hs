@@ -43,12 +43,15 @@ module Strat.Kernel.DSL.AST
   , RawPolyTypeMap(..)
   , RawPolyGenMap(..)
   , RawPolySurfaceDecl(..)
+  , RawPolyImplementsDecl(..)
   , RawImplementsDecl(..)
   , RawRun(..)
   , RawRunSpec(..)
   , RawNamedRun(..)
   , RawRunShow(..)
   , RawPolyRun(..)
+  , RawPolyRunSpec(..)
+  , RawPolyNamedRun(..)
   , RawFile(..)
   ) where
 
@@ -123,9 +126,11 @@ data RawDecl
   | DeclMorphismWhere RawMorphismDecl
   | DeclPolyMorphism RawPolyMorphism
   | DeclImplements RawImplementsDecl
+  | DeclPolyImplements RawPolyImplementsDecl
   | DeclRunSpec Text RawRunSpec
   | DeclRun RawNamedRun
-  | DeclPolyRun RawPolyRun
+  | DeclPolyRunSpec Text RawPolyRunSpec
+  | DeclPolyRun RawPolyNamedRun
   deriving (Eq, Show)
 
 
@@ -206,16 +211,30 @@ data RawRun = RawRun
   deriving (Eq, Show)
 
 data RawPolyRun = RawPolyRun
-  { rprName :: Text
-  , rprDoctrine :: Text
+  { rprDoctrine :: Maybe Text
   , rprMode :: Maybe Text
   , rprSurface :: Maybe Text
+  , rprSurfaceSyntax :: Maybe Text
+  , rprCoreDoctrine :: Maybe Text
   , rprModel :: Maybe Text
   , rprMorphisms :: [Text]
+  , rprUses :: [Text]
   , rprPolicy :: Maybe Text
   , rprFuel :: Maybe Int
   , rprShowFlags :: [RawRunShow]
   , rprExprText :: Text
+  }
+  deriving (Eq, Show)
+
+data RawPolyRunSpec = RawPolyRunSpec
+  { rprsPolyRun :: RawPolyRun
+  }
+  deriving (Eq, Show)
+
+data RawPolyNamedRun = RawPolyNamedRun
+  { rprnName :: Text
+  , rprnUsing :: Maybe Text
+  , rprnRun :: RawPolyRun
   }
   deriving (Eq, Show)
 
@@ -414,6 +433,12 @@ data RawPolySurfaceDecl = RawPolySurfaceDecl
   { rpsName :: Text
   , rpsDoctrine :: Text
   , rpsMode :: Text
+  } deriving (Eq, Show)
+
+data RawPolyImplementsDecl = RawPolyImplementsDecl
+  { rpidInterface :: Text
+  , rpidTarget :: Text
+  , rpidMorphism :: Text
   } deriving (Eq, Show)
 
 data RawImplementsDecl = RawImplementsDecl

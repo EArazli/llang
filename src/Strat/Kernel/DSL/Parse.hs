@@ -48,8 +48,10 @@ decl =
     <|> surfaceDecl
     <|> morphismDecl
     <|> implementsDecl
+    <|> polyImplementsDecl
     <|> runSpecDecl
     <|> runDecl
+    <|> polyRunSpecDecl
     <|> polyRunDecl
 
 importDecl :: Parser RawDecl
@@ -198,6 +200,17 @@ implementsDecl = do
   optionalSemi
   pure (DeclImplements (RawImplementsDecl iface tgt name))
 
+polyImplementsDecl :: Parser RawDecl
+polyImplementsDecl = do
+  _ <- symbol "polyimplements"
+  iface <- ident
+  _ <- symbol "for"
+  tgt <- ident
+  _ <- symbol "using"
+  name <- qualifiedIdent
+  optionalSemi
+  pure (DeclPolyImplements (RawPolyImplementsDecl iface tgt name))
+
 runSpecDecl :: Parser RawDecl
 runSpecDecl = do
   _ <- symbol "run_spec"
@@ -216,15 +229,24 @@ runDecl = do
   exprText <- runBody
   pure (DeclRun (RawNamedRun name using (buildRun items exprText)))
 
+polyRunSpecDecl :: Parser RawDecl
+polyRunSpecDecl = do
+  _ <- symbol "polyrun_spec"
+  name <- ident
+  _ <- symbol "where"
+  items <- polyRunBlock
+  optionalSemi
+  pure (DeclPolyRunSpec name (RawPolyRunSpec (buildPolyRun items "")))
+
 polyRunDecl :: Parser RawDecl
 polyRunDecl = do
   _ <- symbol "polyrun"
   name <- ident
+  using <- optional (symbol "using" *> ident)
   items <- option [] (symbol "where" *> polyRunBlock)
   exprText <- runBody
-  case buildPolyRun name items exprText of
-    Left err -> fail (T.unpack err)
-    Right run -> pure (DeclPolyRun run)
+  let run = buildPolyRun items exprText
+  pure (DeclPolyRun (RawPolyNamedRun name using run))
 
 polySurfaceDecl :: Parser RawDecl
 polySurfaceDecl = do
@@ -419,14 +441,16 @@ polyContext = do
 polyTypeExpr :: Parser PolyAST.RawPolyTypeExpr
 polyTypeExpr = lexeme $ do
   name <- identRaw
+  mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
   case T.uncons name of
     Nothing -> fail "empty type name"
     Just (c, _) ->
-      if isLower c
-        then pure (PolyAST.RPTVar name)
-        else do
-          mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
-          pure (PolyAST.RPTCon name (maybe [] id mArgs))
+      case mArgs of
+        Just args -> pure (PolyAST.RPTCon name args)
+        Nothing ->
+          if isLower c
+            then pure (PolyAST.RPTVar name)
+            else pure (PolyAST.RPTCon name [])
 
 polyDiagExpr :: Parser PolyAST.RawDiagExpr
 polyDiagExpr = makeExprParser polyDiagTerm operators
@@ -438,7 +462,7 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 
 polyDiagTerm :: Parser PolyAST.RawDiagExpr
 polyDiagTerm =
-  polyIdTerm <|> polyGenTerm <|> parens polyDiagExpr
+  try polyIdTerm <|> polyGenTerm <|> parens polyDiagExpr
 
 polyIdTerm :: Parser PolyAST.RawDiagExpr
 polyIdTerm = do
@@ -1138,8 +1162,11 @@ data PolyRunItem
   = PolyRunDoctrine Text
   | PolyRunMode Text
   | PolyRunSurface Text
+  | PolyRunSurfaceSyntax Text
+  | PolyRunCoreDoctrine Text
   | PolyRunModel Text
   | PolyRunApply Text
+  | PolyRunUses [Text]
   | PolyRunPolicy Text
   | PolyRunFuel Int
   | PolyRunShow RawRunShow
@@ -1155,9 +1182,12 @@ polyRunItem :: Parser PolyRunItem
 polyRunItem =
   polyDoctrineItem
     <|> polyModeItem
+    <|> polySurfaceSyntaxItem
     <|> polySurfaceItem
+    <|> polyCoreDoctrineItem
     <|> polyModelItem
     <|> polyApplyItem
+    <|> polyUsesItem
     <|> polyRunPolicyItem
     <|> polyRunFuelItem
     <|> polyShowItem
@@ -1183,6 +1213,20 @@ polySurfaceItem = do
   optionalSemi
   pure (PolyRunSurface name)
 
+polySurfaceSyntaxItem :: Parser PolyRunItem
+polySurfaceSyntaxItem = do
+  _ <- symbol "surface_syntax"
+  name <- ident
+  optionalSemi
+  pure (PolyRunSurfaceSyntax name)
+
+polyCoreDoctrineItem :: Parser PolyRunItem
+polyCoreDoctrineItem = do
+  _ <- symbol "core_doctrine"
+  name <- ident
+  optionalSemi
+  pure (PolyRunCoreDoctrine name)
+
 polyModelItem :: Parser PolyRunItem
 polyModelItem = do
   _ <- keyword "model"
@@ -1196,6 +1240,14 @@ polyApplyItem = do
   name <- ident
   optionalSemi
   pure (PolyRunApply name)
+
+polyUsesItem :: Parser PolyRunItem
+polyUsesItem = do
+  _ <- symbol "uses"
+  _ <- optional (symbol ":")
+  names <- ident `sepBy1` symbol ","
+  optionalSemi
+  pure (PolyRunUses names)
 
 polyRunPolicyItem :: Parser PolyRunItem
 polyRunPolicyItem = do
@@ -1352,29 +1404,31 @@ buildRun items exprText =
     firstJust [] = Nothing
     firstJust (x:_) = Just x
 
-buildPolyRun :: Text -> [PolyRunItem] -> Text -> Either Text RawPolyRun
-buildPolyRun name items exprText =
-  case doctrineName of
-    Nothing -> Left "polyrun: missing doctrine"
-    Just doc ->
-      Right RawPolyRun
-        { rprName = name
-        , rprDoctrine = doc
-        , rprMode = modeName
-        , rprSurface = surfaceName
-        , rprModel = modelName
-        , rprMorphisms = applies
-        , rprPolicy = policyName
-        , rprFuel = fuel
-        , rprShowFlags = flags
-        , rprExprText = exprText
-        }
+buildPolyRun :: [PolyRunItem] -> Text -> RawPolyRun
+buildPolyRun items exprText =
+  RawPolyRun
+    { rprDoctrine = doctrineName
+    , rprMode = modeName
+    , rprSurface = surfaceName
+    , rprSurfaceSyntax = surfaceSyntaxName
+    , rprCoreDoctrine = coreDoctrineName
+    , rprModel = modelName
+    , rprMorphisms = applies
+    , rprUses = uses
+    , rprPolicy = policyName
+    , rprFuel = fuel
+    , rprShowFlags = flags
+    , rprExprText = exprText
+    }
   where
     doctrineName = firstJust [ d | PolyRunDoctrine d <- items ]
     modeName = firstJust [ m | PolyRunMode m <- items ]
     surfaceName = firstJust [ s | PolyRunSurface s <- items ]
+    surfaceSyntaxName = firstJust [ s | PolyRunSurfaceSyntax s <- items ]
+    coreDoctrineName = firstJust [ d | PolyRunCoreDoctrine d <- items ]
     modelName = firstJust [ m | PolyRunModel m <- items ]
     applies = [ n | PolyRunApply n <- items ]
+    uses = concat [ ns | PolyRunUses ns <- items ]
     policyName = firstJust [ p | PolyRunPolicy p <- items ]
     fuel = firstJust [ f | PolyRunFuel f <- items ]
     flags = [ s | PolyRunShow s <- items ]

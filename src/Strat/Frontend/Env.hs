@@ -10,7 +10,7 @@ import Strat.Kernel.Presentation (Presentation)
 import Strat.Syntax.Spec (SyntaxSpec)
 import Strat.Model.Spec (ModelSpec)
 import Strat.Frontend.RunSpec (RunSpec)
-import Strat.Kernel.DSL.AST (RawRun)
+import Strat.Kernel.DSL.AST (RawRun, RawPolyRun)
 import Strat.Surface2.Def (SurfaceDef)
 import Strat.Surface2.SyntaxSpec (SurfaceSyntaxSpec)
 import Strat.Kernel.Morphism (Morphism)
@@ -40,7 +40,9 @@ data ModuleEnv = ModuleEnv
   , meMorphisms     :: M.Map Text Morphism
   , meModels        :: M.Map Text (Text, ModelSpec)
   , meImplDefaults  :: M.Map (Text, Text) [Text]
+  , mePolyImplDefaults :: M.Map (Text, Text) [Text]
   , meRunSpecs      :: M.Map Text RawRun
+  , mePolyRunSpecs  :: M.Map Text RawPolyRun
   , meRuns          :: M.Map Text RunSpec
   , mePolyRuns      :: M.Map Text PolyRunSpec
   }
@@ -59,7 +61,9 @@ emptyEnv = ModuleEnv
   , meMorphisms = M.empty
   , meModels = M.empty
   , meImplDefaults = M.empty
+  , mePolyImplDefaults = M.empty
   , meRunSpecs = M.empty
+  , mePolyRunSpecs = M.empty
   , meRuns = M.empty
   , mePolyRuns = M.empty
   }
@@ -77,7 +81,9 @@ mergeEnv a b = do
   morphs <- mergeMap "morphism" meMorphisms
   mods <- mergeMap "model" meModels
   let impls = mergeImplDefaults (meImplDefaults a) (meImplDefaults b)
+  let polyImpls = mergeImplDefaults (mePolyImplDefaults a) (mePolyImplDefaults b)
   specs <- mergeMap "run_spec" meRunSpecs
+  polySpecs <- mergeMap "polyrun_spec" mePolyRunSpecs
   runs <- mergeMap "run" meRuns
   polyRuns <- mergeMap "polyrun" mePolyRuns
   pure ModuleEnv
@@ -92,7 +98,9 @@ mergeEnv a b = do
     , meMorphisms = morphs
     , meModels = mods
     , meImplDefaults = impls
+    , mePolyImplDefaults = polyImpls
     , meRunSpecs = specs
+    , mePolyRunSpecs = polySpecs
     , meRuns = runs
     , mePolyRuns = polyRuns
     }

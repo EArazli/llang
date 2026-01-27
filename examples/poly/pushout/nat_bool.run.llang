@@ -1,0 +1,15 @@
+import "./nat_bool.poly.llang";
+import "./nat_bool.models.llang";
+
+polyrun main where {
+  doctrine Nat;
+  mode M;
+  model NatBoolNative;
+  policy UseOnlyComputationalLR;
+  fuel 50;
+  show normalized;
+  show value;
+}
+---
+(Z * (Z ; S)) ; add
+---

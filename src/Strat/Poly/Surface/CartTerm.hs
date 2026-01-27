@@ -72,14 +72,16 @@ commaSep p = p `sepBy` symbol ","
 polyTypeExpr :: Parser RawPolyTypeExpr
 polyTypeExpr = lexeme $ do
   name <- identRaw
+  mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
   case T.uncons name of
     Nothing -> fail "empty type"
     Just (c, _) ->
-      if isLower c
-        then pure (RPTVar name)
-        else do
-          mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
-          pure (RPTCon name (maybe [] id mArgs))
+      case mArgs of
+        Just args -> pure (RPTCon name args)
+        Nothing ->
+          if isLower c
+            then pure (RPTVar name)
+            else pure (RPTCon name [])
 
 programParser :: Parser Program
 programParser = do

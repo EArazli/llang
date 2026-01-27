@@ -32,6 +32,8 @@ cat.poly.llang + cat.run.llang
 
 ccc.poly.llang + ccc.run.llang
   A minimal cartesian doctrine with an eval‑like generator; normalizes a simple diagram.
+ccc_surface/ccc.poly.llang + ccc_surface/stlc.*.llang
+  Ports the legacy STLC surface + syntax pipeline to poly by compiling core terms to diagrams.
 
 bool.models.llang + stlc_bool.term.run.llang
   Boolean cartesian doctrine with if‑rules; demonstrates CartTermSurface evaluation.
@@ -47,6 +49,11 @@ morphism_term.llang
 
 pushout_basic.poly.llang + pushout_basic.run.llang
   A small pushout that demonstrates automatic disjoint renaming for non‑interface gens.
+pushout/*
+  Poly pushout parity examples (category/bool/nat base, commutative monoid, nat/bool coproduct, and model restriction).
 
-runspec.multi.llang
-  Two polyruns in a single file to mirror the legacy multi‑run example.
+implements_uses.run.llang
+  Demonstrates polyimplements + polyrun uses with an SSA surface over an interface doctrine.
+
+runspec/multi.llang
+  Two polyruns in a single file to mirror the legacy multi‑run example (polyrun_spec).

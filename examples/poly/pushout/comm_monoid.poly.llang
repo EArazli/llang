@@ -1,0 +1,26 @@
+import "../../../stdlib/struct.symmetric.llang";
+
+polydoctrine Semigroup extends StructSymmetric where {
+  type Obj @M;
+  gen m : [Obj, Obj] -> [Obj] @M;
+
+  rule structural assoc = : [Obj, Obj, Obj] -> [Obj] @M =
+    (m * id[Obj]) ; m == (id[Obj] * m) ; m
+}
+
+polydoctrine Monoid extends Semigroup where {
+  gen e : [] -> [Obj] @M;
+
+  rule computational unitL -> : [Obj] -> [Obj] @M =
+    (e * id[Obj]) ; m == id[Obj]
+
+  rule computational unitR -> : [Obj] -> [Obj] @M =
+    (id[Obj] * e) ; m == id[Obj]
+}
+
+polydoctrine Commutative extends Semigroup where {
+  rule structural comm = : [Obj, Obj] -> [Obj] @M =
+    m == swap{Obj, Obj} ; m
+}
+
+polydoctrine CommMonoid = pushout Monoid.fromBase Commutative.fromBase;

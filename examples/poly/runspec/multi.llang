@@ -1,0 +1,17 @@
+import "../cart_monoid.poly.llang";
+
+polyrun_spec Base where {
+  doctrine CartMonoid;
+  show normalized;
+  show cat;
+}
+
+polyrun main using Base
+---
+dup{A} ; mul
+---
+
+polyrun beta using Base where { fuel 1; }
+---
+dup{A} ; mul
+---

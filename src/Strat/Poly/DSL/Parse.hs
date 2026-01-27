@@ -33,7 +33,7 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 
 polyDiagTerm :: Parser RawDiagExpr
 polyDiagTerm =
-  polyIdTerm <|> polyGenTerm <|> parens polyDiagExpr
+  try polyIdTerm <|> polyGenTerm <|> parens polyDiagExpr
 
 polyIdTerm :: Parser RawDiagExpr
 polyIdTerm = do
@@ -57,14 +57,16 @@ polyContext = do
 polyTypeExpr :: Parser RawPolyTypeExpr
 polyTypeExpr = lexeme $ do
   name <- identRaw
+  mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
   case T.uncons name of
     Nothing -> fail "empty type name"
     Just (c, _) ->
-      if isLower c
-        then pure (RPTVar name)
-        else do
-          mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
-          pure (RPTCon name (maybe [] id mArgs))
+      case mArgs of
+        Just args -> pure (RPTCon name args)
+        Nothing ->
+          if isLower c
+            then pure (RPTVar name)
+            else pure (RPTCon name [])
 
 -- Helpers
 

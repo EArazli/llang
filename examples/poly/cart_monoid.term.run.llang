@@ -1,7 +1,11 @@
 import "./cart_monoid.poly.llang";
+import "../../stdlib/struct.cartesian.models.llang";
 
 polymodel CartMonoidNative : CartMonoid where {
   default = symbolic;
+  op dup(x) = [x, x];
+  op drop(x) = [];
+  op swap(x,y) = [y, x];
   op unit() = "";
   op mul(a,b) = a ++ b;
 }

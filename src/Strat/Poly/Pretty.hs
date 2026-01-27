@@ -14,7 +14,7 @@ import Strat.Poly.ModeTheory (ModeName(..))
 
 renderDiagram :: Diagram -> Either Text Text
 renderDiagram diag = do
-  diag' <- canonicalizeDiagram diag
+  diag' <- renumberDiagram diag
   edgesTxt <- renderEdges (IM.elems (dEdges diag'))
   pure $
     T.intercalate "\n"

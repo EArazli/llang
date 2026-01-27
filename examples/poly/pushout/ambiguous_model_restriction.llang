@@ -1,0 +1,25 @@
+import "./nat_bool.poly.llang";
+import "./nat_bool.models.llang";
+
+polymorphism NatToNatBoolAlt : Nat -> NatBool where {
+  type Nat @M -> Nat_inl_Nat @M;
+  gen dup @M -> dup{a}
+  gen drop @M -> drop{a}
+  gen swap @M -> swap{a, b}
+  gen Z @M -> Nat_inl_Z
+  gen S @M -> Nat_inl_S
+  gen add @M -> Nat_inl_add
+  policy UseOnlyComputationalLR;
+  fuel 10;
+}
+
+polyrun main where {
+  doctrine Nat;
+  mode M;
+  model NatBoolNative;
+  show normalized;
+  show value;
+}
+---
+(Z * (Z ; S)) ; add
+---

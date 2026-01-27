@@ -40,6 +40,9 @@ tests =
     , testCase "poly no-dup error" testPolyNoDupError
     , testCase "poly cart term surface with model" testPolyCartTermModel
     , testCase "poly morphism apply" testPolyMorphismApply
+    , testCase "poly run_spec default" testPolyRunSpecDefault
+    , testCase "poly run_spec select" testPolyRunSpecSelect
+    , testCase "poly implements uses" testPolyImplementsUses
     ]
 
 
@@ -215,6 +218,26 @@ testPolyCartTermModel = do
       assertBool "expected value output" ("value:" `T.isInfixOf` out)
       assertBool "expected string value" ("VString" `T.isInfixOf` out)
 
+testPolyRunSpecDefault :: Assertion
+testPolyRunSpecDefault = do
+  path <- getDataFileName "examples/poly/runspec/multi.llang"
+  result <- runCLI (CLIOptions path Nothing)
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> do
+      assertBool "expected normalized output" ("normalized:" `T.isInfixOf` out)
+      assertBool "expected cat output" ("cat:" `T.isInfixOf` out)
+
+testPolyRunSpecSelect :: Assertion
+testPolyRunSpecSelect = do
+  path <- getDataFileName "examples/poly/runspec/multi.llang"
+  result <- runCLI (CLIOptions path (Just "beta"))
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> do
+      assertBool "expected normalized output" ("normalized:" `T.isInfixOf` out)
+      assertBool "expected cat output" ("cat:" `T.isInfixOf` out)
+
 testPolyMorphismApply :: Assertion
 testPolyMorphismApply = do
   path <- getDataFileName "examples/poly/morphism_term.llang"
@@ -224,6 +247,16 @@ testPolyMorphismApply = do
     Right out -> do
       assertBool "expected normalized output" ("normalized:" `T.isInfixOf` out)
       assertBool "expected morphism to eliminate edges" (not ("e0:" `T.isInfixOf` out))
+
+testPolyImplementsUses :: Assertion
+testPolyImplementsUses = do
+  path <- getDataFileName "examples/poly/implements_uses.run.llang"
+  result <- runCLI (CLIOptions path Nothing)
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> do
+      assertBool "expected normalized output" ("normalized:" `T.isInfixOf` out)
+      assertBool "expected f edge" ("f" `T.isInfixOf` out)
 
 collectOps :: Term -> [OpName]
 collectOps tm =

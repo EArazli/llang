@@ -106,28 +106,15 @@ evalEdges model doc mode env edges =
 
 
 evalGen :: PolyModel -> Doctrine -> ModeName -> GenName -> [Value] -> Either Text [Value]
-evalGen model doc mode name args
-  | name == GenName "dup" =
-      case args of
-        [v] -> Right [v, v]
-        _ -> Left "poly eval: dup expects one input"
-  | name == GenName "drop" =
-      case args of
-        [_] -> Right []
-        _ -> Left "poly eval: drop expects one input"
-  | name == GenName "swap" =
-      case args of
-        [a, b] -> Right [b, a]
-        _ -> Left "poly eval: swap expects two inputs"
-  | otherwise = do
-      gen <- lookupGen doc mode name
-      let codLen = length (gdCod gen)
-      val <- pmInterp model name args
-      if codLen == 1
-        then Right [val]
-        else case val of
-          VList xs | length xs == codLen -> Right xs
-          _ -> Left "poly eval: expected list output"
+evalGen model doc mode name args = do
+  gen <- lookupGen doc mode name
+  let codLen = length (gdCod gen)
+  val <- pmInterp model name args
+  if codLen == 1
+    then Right [val]
+    else case val of
+      VList xs | length xs == codLen -> Right xs
+      _ -> Left "poly eval: expected list output"
 
 lookupGen :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGen doc mode name =

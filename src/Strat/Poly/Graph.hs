@@ -11,7 +11,8 @@ module Strat.Poly.Graph
   , addEdgePayload
   , validateDiagram
   , mergePorts
-  , canonicalizeDiagram
+  , renumberDiagram
+  , diagramIsoEq
   , shiftDiagram
   , diagramPortType
   , diagramPortIds
@@ -24,6 +25,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
+import Data.List (elemIndex)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.TypeExpr (TypeExpr)
 import Strat.Poly.Names (GenName(..), BoxName(..))
@@ -55,6 +57,14 @@ data Diagram = Diagram
   , dNextPort :: Int
   , dNextEdge :: Int
   } deriving (Eq, Ord, Show)
+
+data IsoState = IsoState
+  { isPortMap :: M.Map PortId PortId
+  , isEdgeMap :: M.Map EdgeId EdgeId
+  , isUsedPorts :: S.Set PortId
+  , isUsedEdges :: S.Set EdgeId
+  , isQueue :: [(PortId, PortId)]
+  } deriving (Eq, Show)
 
 
 emptyDiagram :: ModeName -> Diagram
@@ -145,10 +155,15 @@ ensureFreeProducer diag pid =
 validateDiagram :: Diagram -> Either Text ()
 validateDiagram diag = do
   ensureKeysets
+  ensureBoundaryUnique "inputs" (dIn diag)
+  ensureBoundaryUnique "outputs" (dOut diag)
   mapM_ (ensurePortExists diag) (dIn diag)
   mapM_ (ensurePortExists diag) (dOut diag)
+  mapM_ (ensureBoundaryEndpoint "input" (dProd diag)) (dIn diag)
+  mapM_ (ensureBoundaryEndpoint "output" (dCons diag)) (dOut diag)
   mapM_ checkEdge (IM.elems (dEdges diag))
   mapM_ checkPort (IM.keys (dPortTy diag))
+  ensureSerializable
   pure ()
   where
     ensureKeysets =
@@ -158,6 +173,16 @@ validateDiagram diag = do
       in if ksTy == ksProd && ksTy == ksCons
         then Right ()
         else Left "validateDiagram: port map keysets mismatch"
+    ensureBoundaryUnique label ports =
+      let s = S.fromList ports
+      in if S.size s == length ports
+        then Right ()
+        else Left ("validateDiagram: duplicate ports in boundary " <> label)
+    ensureBoundaryEndpoint label mp pid =
+      case IM.lookup (portKey pid) mp of
+        Just Nothing -> Right ()
+        Just (Just _) -> Left ("validateDiagram: boundary " <> label <> " has incident edge")
+        Nothing -> Left "validateDiagram: missing incidence entry"
     checkEdge edge = do
       mapM_ (ensurePortExists diag) (eIns edge <> eOuts edge)
       ensureNoDuplicates "ins" (eIns edge)
@@ -177,6 +202,7 @@ validateDiagram diag = do
     checkPort k = do
       checkEndpoint "producer" (IM.lookup k (dProd diag)) eOuts
       checkEndpoint "consumer" (IM.lookup k (dCons diag)) eIns
+      checkBoundaryCompleteness k
       where
         checkEndpoint label entry sel =
           case entry of
@@ -187,6 +213,17 @@ validateDiagram diag = do
                 then Right ()
                 else Left ("validateDiagram: " <> label <> " back-pointer mismatch")
             Nothing -> Left "validateDiagram: missing incidence entry"
+        checkBoundaryCompleteness k =
+          let pid = PortId k
+              prodMissing = IM.lookup k (dProd diag) == Just Nothing
+              consMissing = IM.lookup k (dCons diag) == Just Nothing
+              inBoundary = pid `elem` dIn diag
+              outBoundary = pid `elem` dOut diag
+          in if prodMissing && not inBoundary
+            then Left "validateDiagram: missing boundary input for open port"
+            else if consMissing && not outBoundary
+              then Left "validateDiagram: missing boundary output for open port"
+              else Right ()
     requireEdge eid =
       case IM.lookup (edgeKey eid) (dEdges diag) of
         Nothing -> Left "validateDiagram: missing edge referenced by incidence"
@@ -220,6 +257,46 @@ validateDiagram diag = do
       in if S.null s
         then Right ()
         else Left "validateDiagram: port appears in both inputs and outputs"
+    ensureSerializable =
+      if serializable (dIn diag) (IM.elems (dEdges diag))
+        then Right ()
+        else Left "validateDiagram: diagram is not serializable (explicit swap required)"
+
+    serializable ctx edges =
+      case edges of
+        [] -> ctx == dOut diag
+        _ ->
+          let steps = concatMap (fireOptions ctx) edges
+          in any (\(edge, ctx') -> serializable ctx' (removeEdge edge edges)) steps
+
+    removeEdge edge = filter (\e -> eId e /= eId edge)
+
+    fireOptions ctx edge =
+      let ins = eIns edge
+          outs = eOuts edge
+      in case ins of
+        [] -> [ (edge, insertAt i outs ctx) | i <- [0 .. length ctx] ]
+        _ ->
+          case contiguousIndex ctx ins of
+            Nothing -> []
+            Just idx -> [(edge, spliceAt idx (length ins) outs ctx)]
+
+    contiguousIndex ctx ins =
+      case elemIndex (head ins) ctx of
+        Nothing -> Nothing
+        Just idx ->
+          if take (length ins) (drop idx ctx) == ins
+            then Just idx
+            else Nothing
+
+    spliceAt idx n outs ctx =
+      let (before, rest) = splitAt idx ctx
+          after = drop n rest
+      in before <> outs <> after
+
+    insertAt idx outs ctx =
+      let (before, after) = splitAt idx ctx
+      in before <> outs <> after
 
 mergePorts :: Diagram -> PortId -> PortId -> Either Text Diagram
 mergePorts diag keep drop
@@ -303,8 +380,8 @@ shiftDiagram portOff edgeOff diag =
       , dNextEdge = dNextEdge diag + edgeOff
       }
 
-canonicalizeDiagram :: Diagram -> Either Text Diagram
-canonicalizeDiagram diag = do
+renumberDiagram :: Diagram -> Either Text Diagram
+renumberDiagram diag = do
   let (portMap, nextPort) = assignPorts diag
   let edgeMap = assignEdges diag
   dPortTy' <- buildPortMap portMap (dPortTy diag)
@@ -372,16 +449,152 @@ canonicalizeDiagram diag = do
       case payload of
         PGen g -> Right (PGen g)
         PBox name inner -> do
-          inner' <- canonicalizeDiagram inner
+          inner' <- renumberDiagram inner
           Right (PBox name inner')
     requirePort mp pid =
       case M.lookup pid mp of
-        Nothing -> Left "canonicalizeDiagram: missing port mapping"
+        Nothing -> Left "renumberDiagram: missing port mapping"
         Just v -> Right v
     requireEdge mp eid =
       case M.lookup eid mp of
-        Nothing -> Left "canonicalizeDiagram: missing edge mapping"
+        Nothing -> Left "renumberDiagram: missing edge mapping"
         Just v -> Right v
+
+diagramIsoEq :: Diagram -> Diagram -> Either Text Bool
+diagramIsoEq left right
+  | dMode left /= dMode right = Right False
+  | length (dIn left) /= length (dIn right) = Right False
+  | length (dOut left) /= length (dOut right) = Right False
+  | IM.size (dPortTy left) /= IM.size (dPortTy right) = Right False
+  | IM.size (dEdges left) /= IM.size (dEdges right) = Right False
+  | otherwise = do
+      let initPairs = zip (dIn left) (dIn right) <> zip (dOut left) (dOut right)
+      st0 <- foldl addInit (Right emptyState) initPairs
+      isoSearch st0
+  where
+    emptyState = IsoState M.empty M.empty S.empty S.empty []
+    addInit acc (p1, p2) = do
+      st <- acc
+      addPortPair st p1 p2
+    isoSearch st = do
+      st' <- propagate st
+      if M.size (isEdgeMap st') == IM.size (dEdges left) && M.size (isPortMap st') == IM.size (dPortTy left)
+        then Right True
+        else do
+          case nextUnmappedEdge st' of
+            Nothing -> Right False
+            Just e1 -> do
+              let candidates = filter (edgeCompatible e1) (unmappedEdges st')
+              tryCandidates st' e1 candidates
+    tryCandidates _ _ [] = Right False
+    tryCandidates st e1 (e2:rest) = do
+      case tryMapEdge st e1 e2 of
+        Left _ -> tryCandidates st e1 rest
+        Right st' -> do
+          ok <- isoSearch st'
+          if ok then Right True else tryCandidates st e1 rest
+
+    propagate st0 =
+      case isQueue st0 of
+        [] -> Right st0
+        ((p1, p2):rest) -> do
+          st1 <- checkPortTypes st0 p1 p2
+          st2 <- mapIncidentEdges st1 p1 p2
+          propagate st2 { isQueue = rest }
+
+    checkPortTypes st p1 p2 = do
+      ty1 <- requirePortType left p1
+      ty2 <- requirePortType right p2
+      if ty1 == ty2
+        then Right st
+        else Left "diagramIsoEq: port type mismatch"
+
+    mapIncidentEdges st p1 p2 = do
+      st1 <- mapEndpoint "producer" (lookupEdge left (dProd left) p1) (lookupEdge right (dProd right) p2) st
+      mapEndpoint "consumer" (lookupEdge left (dCons left) p1) (lookupEdge right (dCons right) p2) st1
+
+    mapEndpoint _ Nothing Nothing st = Right st
+    mapEndpoint _ (Just e1) (Just e2) st = addEdgePair st e1 e2
+    mapEndpoint label _ _ _ = Left ("diagramIsoEq: " <> label <> " incidence mismatch")
+
+    lookupEdge diag mp pid =
+      case IM.lookup (portKey pid) mp of
+        Just (Just eid) -> IM.lookup (edgeKey eid) (dEdges diag)
+        Just Nothing -> Nothing
+        Nothing -> Nothing
+
+    addPortPair st p1 p2 =
+      case M.lookup p1 (isPortMap st) of
+        Just mapped ->
+          if mapped == p2 then Right st else Left "diagramIsoEq: port mapping conflict"
+        Nothing ->
+          if p2 `S.member` isUsedPorts st
+            then Left "diagramIsoEq: target port already used"
+            else Right st
+              { isPortMap = M.insert p1 p2 (isPortMap st)
+              , isUsedPorts = S.insert p2 (isUsedPorts st)
+              , isQueue = isQueue st <> [(p1, p2)]
+              }
+
+    addEdgePair st e1 e2 =
+      case M.lookup (eId e1) (isEdgeMap st) of
+        Just mapped ->
+          if mapped == eId e2 then Right st else Left "diagramIsoEq: edge mapping conflict"
+        Nothing ->
+          if eId e2 `S.member` isUsedEdges st
+            then Left "diagramIsoEq: target edge already used"
+            else do
+              ensureEdgeCompatible e1 e2
+              st' <- foldl addPort (Right st
+                { isEdgeMap = M.insert (eId e1) (eId e2) (isEdgeMap st)
+                , isUsedEdges = S.insert (eId e2) (isUsedEdges st)
+                }) (zip (eIns e1) (eIns e2) <> zip (eOuts e1) (eOuts e2))
+              pure st'
+      where
+        addPort acc (p1, p2) = do
+          st' <- acc
+          addPortPair st' p1 p2
+
+    ensureEdgeCompatible e1 e2 = do
+      if length (eIns e1) /= length (eIns e2) || length (eOuts e1) /= length (eOuts e2)
+        then Left "diagramIsoEq: edge arity mismatch"
+        else payloadCompatible (ePayload e1) (ePayload e2)
+
+    payloadCompatible p1 p2 =
+      case (p1, p2) of
+        (PGen g1, PGen g2) ->
+          if g1 == g2 then Right () else Left "diagramIsoEq: generator mismatch"
+        (PBox n1 d1, PBox n2 d2) ->
+          if n1 /= n2
+            then Left "diagramIsoEq: box name mismatch"
+            else do
+              ok <- diagramIsoEq d1 d2
+              if ok then Right () else Left "diagramIsoEq: box diagram mismatch"
+        _ -> Left "diagramIsoEq: payload mismatch"
+
+    requirePortType diag pid =
+      case diagramPortType diag pid of
+        Nothing -> Left "diagramIsoEq: missing port type"
+        Just ty -> Right ty
+
+    nextUnmappedEdge st =
+      let candidates = filter (\e -> M.notMember (eId e) (isEdgeMap st)) (IM.elems (dEdges left))
+      in case candidates of
+        [] -> Nothing
+        _ -> Just (head candidates)
+
+    unmappedEdges st =
+      [ e
+      | e <- IM.elems (dEdges right)
+      , eId e `S.notMember` isUsedEdges st
+      ]
+
+    edgeCompatible e1 e2 =
+      case ensureEdgeCompatible e1 e2 of
+        Right _ -> True
+        Left _ -> False
+
+    tryMapEdge st e1 e2 = addEdgePair st e1 e2
 
 unionDisjointIntMap :: Text -> IM.IntMap a -> IM.IntMap a -> Either Text (IM.IntMap a)
 unionDisjointIntMap label left right =

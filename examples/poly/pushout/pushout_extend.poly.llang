@@ -1,0 +1,8 @@
+import "./category_bool_nat_base.poly.llang";
+
+polydoctrine BothPlus extends Both where {
+  gen k : [Obj] -> [Obj] @M;
+
+  rule computational agree -> : [Obj] -> [Obj] @M =
+    BoolExt_inl_g == NatExt_inr_h
+}
