@@ -44,6 +44,9 @@ tests =
     , testCase "poly run_spec default" testPolyRunSpecDefault
     , testCase "poly run_spec select" testPolyRunSpecSelect
     , testCase "poly implements uses" testPolyImplementsUses
+    , testCase "poly STLC surface lam1" testPolySTLCLam1
+    , testCase "poly STLC surface app1" testPolySTLCApp1
+    , testCase "poly STLC surface pair1" testPolySTLCPair1
     ]
 
 
@@ -228,6 +231,31 @@ testPolyCartTermModel = do
     Right out -> do
       assertBool "expected value output" ("value:" `T.isInfixOf` out)
       assertBool "expected string value" ("VString" `T.isInfixOf` out)
+
+testPolySTLCLam1 :: Assertion
+testPolySTLCLam1 = do
+  path <- getDataFileName "examples/poly/ccc_surface/stlc.lam1.run.llang"
+  runPolyExample path
+
+testPolySTLCApp1 :: Assertion
+testPolySTLCApp1 = do
+  path <- getDataFileName "examples/poly/ccc_surface/stlc.app1.run.llang"
+  runPolyExample path
+
+testPolySTLCPair1 :: Assertion
+testPolySTLCPair1 = do
+  path <- getDataFileName "examples/poly/ccc_surface/stlc.pair1.run.llang"
+  runPolyExample path
+
+runPolyExample :: FilePath -> Assertion
+runPolyExample path = do
+  result <- runCLI (CLIOptions path Nothing)
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> do
+      assertBool "expected normalized output" ("normalized:" `T.isInfixOf` out)
+      assertBool "expected cat output" ("cat:" `T.isInfixOf` out)
+      assertBool "expected value output" ("value:" `T.isInfixOf` out)
 
 testPolyRunSpecDefault :: Assertion
 testPolyRunSpecDefault = do

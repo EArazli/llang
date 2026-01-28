@@ -33,6 +33,8 @@ tests =
     , testCase "polymorphism declared in example file" testPolyMorphismDSL
     , testCase "polydoctrine extends produces fromBase morphism" testPolyFromBaseMorphism
     , testCase "poly pushout renames gen types" testPolyPushoutRenamesTypes
+    , testCase "polymorphism type map binder arity mismatch fails" testTypeMapBinderMismatch
+    , testCase "polymorphism type map unknown binder fails" testTypeMapUnknownVar
     ]
 
 testPolyDSLNormalize :: Assertion
@@ -166,3 +168,39 @@ testPolyPushoutRenamesTypes = do
   let leftTy = TCon (TypeName "Left_inl_A") []
   gdDom genLeft @?= [leftTy]
   gdCod genLeft @?= [leftTy]
+
+testTypeMapBinderMismatch :: Assertion
+testTypeMapBinderMismatch = do
+  let src = T.unlines
+        [ "polydoctrine D where {"
+        , "  mode M;"
+        , "  type T a b @M;"
+        , "}"
+        , "polymorphism Bad : D -> D where {"
+        , "  type T(a) @M -> T(a) @M;"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left _ -> pure ()
+        Right _ -> assertFailure "expected binder arity mismatch to fail"
+
+testTypeMapUnknownVar :: Assertion
+testTypeMapUnknownVar = do
+  let src = T.unlines
+        [ "polydoctrine D where {"
+        , "  mode M;"
+        , "  type T a @M;"
+        , "}"
+        , "polymorphism Bad : D -> D where {"
+        , "  type T(a) @M -> T(b) @M;"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left _ -> pure ()
+        Right _ -> assertFailure "expected unknown binder to fail"

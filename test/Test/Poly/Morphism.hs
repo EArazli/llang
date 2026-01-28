@@ -25,13 +25,14 @@ tests =
   testGroup
     "Poly.Morphism"
     [ testCase "monoid morphism to string monoid" testMonoidMorphism
+    , testCase "type map can reorder parameters" testTypeMapReorder
     ]
 
 testMonoidMorphism :: Assertion
 testMonoidMorphism = do
   docSrc <- either (assertFailure . T.unpack) pure mkMonoid
   docTgt <- either (assertFailure . T.unpack) pure mkStringMonoid
-  let typeMap = M.fromList [((modeM, TypeName "A"), TCon (TypeName "Str") [])]
+  let typeMap = M.fromList [((modeM, TypeName "A"), TypeTemplate [] (TCon (TypeName "Str") []))]
   unitImg <- either (assertFailure . T.unpack) pure (genD modeM [] [TCon (TypeName "Str") []] (GenName "empty"))
   mulImg <- either (assertFailure . T.unpack) pure (genD modeM [TCon (TypeName "Str") [], TCon (TypeName "Str") []] [TCon (TypeName "Str") []] (GenName "append"))
   let mor = Morphism
@@ -40,6 +41,51 @@ testMonoidMorphism = do
         , morTgt = docTgt
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((modeM, GenName "unit"), unitImg), ((modeM, GenName "mul"), mulImg)]
+        , morPolicy = UseAllOriented
+        , morFuel = 20
+        }
+  case checkMorphism mor of
+    Left err -> assertFailure (show err)
+    Right () -> pure ()
+
+testTypeMapReorder :: Assertion
+testTypeMapReorder = do
+  let mode = ModeName "M"
+  let a = TyVar "a"
+  let b = TyVar "b"
+  let prod = TypeName "Prod"
+  let pair = TypeName "Pair"
+  let genName = GenName "g"
+  let genSrc = GenDecl genName mode [a, b] [TCon prod [TVar a, TVar b]] [TCon prod [TVar a, TVar b]]
+  let genTgt = GenDecl genName mode [a, b] [TCon pair [TVar a, TVar b]] [TCon pair [TVar a, TVar b]]
+  let docSrc = Doctrine
+        { dName = "Src"
+        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dTypes = M.fromList [(mode, M.fromList [(prod, 2)])]
+        , dGens = M.fromList [(mode, M.fromList [(genName, genSrc)])]
+        , dCells2 = []
+        }
+  let docTgt = Doctrine
+        { dName = "Tgt"
+        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dTypes = M.fromList [(mode, M.fromList [(pair, 2)])]
+        , dGens = M.fromList [(mode, M.fromList [(genName, genTgt)])]
+        , dCells2 = []
+        }
+  docSrc' <- case validateDoctrine docSrc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure docSrc
+  docTgt' <- case validateDoctrine docTgt of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure docTgt
+  img <- either (assertFailure . T.unpack) pure (genD mode [TCon pair [TVar b, TVar a]] [TCon pair [TVar b, TVar a]] genName)
+  let typeMap = M.fromList [((mode, prod), TypeTemplate [a, b] (TCon pair [TVar b, TVar a]))]
+  let mor = Morphism
+        { morName = "SwapProd"
+        , morSrc = docSrc'
+        , morTgt = docTgt'
+        , morTypeMap = typeMap
+        , morGenMap = M.fromList [((mode, genName), img)]
         , morPolicy = UseAllOriented
         , morFuel = 20
         }

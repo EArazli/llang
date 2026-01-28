@@ -522,12 +522,9 @@ diagramIsoEq left right
       case (p1, p2) of
         (PGen g1, PGen g2) ->
           if g1 == g2 then Right () else Left "diagramIsoEq: generator mismatch"
-        (PBox n1 d1, PBox n2 d2) ->
-          if n1 /= n2
-            then Left "diagramIsoEq: box name mismatch"
-            else do
-              ok <- diagramIsoEq d1 d2
-              if ok then Right () else Left "diagramIsoEq: box diagram mismatch"
+        (PBox _ d1, PBox _ d2) -> do
+          ok <- diagramIsoEq d1 d2
+          if ok then Right () else Left "diagramIsoEq: box diagram mismatch"
         _ -> Left "diagramIsoEq: payload mismatch"
 
     requirePortType diag pid =

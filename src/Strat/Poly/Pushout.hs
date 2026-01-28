@@ -10,13 +10,15 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
+import Control.Monad (filterM)
 import Strat.Kernel.RewriteSystem (RewritePolicy(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.TypeExpr
+import Strat.Poly.UnifyTy (applySubstCtx)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Diagram
+import Strat.Poly.Diagram (Diagram(..), applySubstDiagram, genD)
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), renumberDiagram, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 
@@ -115,19 +117,22 @@ requireTypeRenameMap mor = do
     typeImage m (mode, name, arity) = do
       tgtName <- case M.lookup (mode, name) (morTypeMap m) of
         Nothing -> Right name
-        Just tmpl -> do
-          case tmpl of
-            TCon t params
-              | length params == arity && all isVar params && distinct params -> Right t
-              | otherwise -> Left "poly pushout requires renaming type maps"
-            _ -> Left "poly pushout requires renaming type maps"
+        Just tmpl -> templateTarget tmpl arity
       ensureTypeExists (morTgt m) mode tgtName arity
       pure ((mode, name), tgtName)
+    templateTarget tmpl arity =
+      case ttBody tmpl of
+        TCon t params
+          | length (ttParams tmpl) == arity
+          , length params == arity
+          , all isVar params
+          , let vars = [ v | TVar v <- params ]
+          , length vars == length (S.fromList vars)
+          , S.fromList vars == S.fromList (ttParams tmpl)
+          -> Right t
+        _ -> Left "poly pushout requires renaming type maps"
     isVar (TVar _) = True
     isVar _ = False
-    distinct params =
-      let vars = [ v | TVar v <- params ]
-      in length vars == length (S.fromList vars)
 
 requireGenRenameMap :: Morphism -> Either Text (M.Map (ModeName, GenName) GenName)
 requireGenRenameMap mor = do
@@ -392,33 +397,63 @@ mergeDoctrine a b = do
           mp <- acc
           case M.lookup (gdName gen) mp of
             Nothing -> Right (M.insert (gdName gen) gen mp)
-            Just g | g == gen -> Right mp
+            Just g | genDeclAlphaEq g gen -> Right mp
             _ -> Left "poly pushout: generator conflict"
 
 mergeCells :: [Cell2] -> [Cell2] -> Either Text [Cell2]
-mergeCells left right = do
-  (mp, order) <- foldl insertCell (Right (M.empty, [])) left
-  (mp', order') <- foldl insertCell (Right (mp, order)) right
-  pure [ mp' M.! key | key <- order' ]
+mergeCells left right =
+  foldl insertCell (Right []) (left <> right)
   where
     insertCell acc cell = do
-      (mp, order) <- acc
-      let key = cellKey cell
-      case M.lookup key mp of
-        Nothing -> Right (M.insert key cell mp, order <> [key])
-        Just existing -> do
-          ensureCompatible existing cell
-          Right (mp, order)
-    cellKey cell = (dMode (c2LHS cell), c2Name cell)
-    ensureCompatible a b =
-      if c2Class a /= c2Class b || c2Orient a /= c2Orient b
-        then Left "poly pushout: cell conflict"
-        else do
-          okL <- diagramIsoEq (c2LHS a) (c2LHS b)
-          okR <- diagramIsoEq (c2RHS a) (c2RHS b)
-          if okL && okR
-            then Right ()
-            else Left "poly pushout: cell conflict"
+      cells <- acc
+      match <- findMatch cell cells
+      case match of
+        Nothing -> Right (cells <> [cell])
+        Just existing ->
+          if c2Class existing == c2Class cell && c2Orient existing == c2Orient cell
+            then Right cells
+            else Left ("poly pushout: cell conflict (" <> c2Name existing <> ", " <> c2Name cell <> ")")
+
+    findMatch cell cells = do
+      matches <- filterM (cellBodyEq cell) cells
+      case matches of
+        [] -> Right Nothing
+        (c:_) -> Right (Just c)
+
+    cellBodyEq a b = do
+      if dMode (c2LHS a) /= dMode (c2LHS b)
+        then Right False
+        else if length (c2TyVars a) /= length (c2TyVars b)
+          then Right False
+          else do
+            b' <- alphaRenameCellTo (c2TyVars b) (c2TyVars a) b
+            okL <- isoOrFalse (c2LHS a) (c2LHS b')
+            okR <- isoOrFalse (c2RHS a) (c2RHS b')
+            pure (okL && okR)
+
+    isoOrFalse d1 d2 =
+      case diagramIsoEq d1 d2 of
+        Left _ -> Right False
+        Right ok -> Right ok
+
+genDeclAlphaEq :: GenDecl -> GenDecl -> Bool
+genDeclAlphaEq g1 g2 =
+  gdMode g1 == gdMode g2
+    && gdName g1 == gdName g2
+    && length (gdTyVars g1) == length (gdTyVars g2)
+    && let subst = M.fromList (zip (gdTyVars g2) (map TVar (gdTyVars g1)))
+           dom2 = applySubstCtx subst (gdDom g2)
+           cod2 = applySubstCtx subst (gdCod g2)
+       in dom2 == gdDom g1 && cod2 == gdCod g1
+
+alphaRenameCellTo :: [TyVar] -> [TyVar] -> Cell2 -> Either Text Cell2
+alphaRenameCellTo from to cell
+  | length from /= length to = Left "poly pushout: alpha rename arity mismatch"
+  | otherwise =
+      let subst = M.fromList (zip from (map TVar to))
+          lhs' = applySubstDiagram subst (c2LHS cell)
+          rhs' = applySubstDiagram subst (c2RHS cell)
+      in Right cell { c2TyVars = to, c2LHS = lhs', c2RHS = rhs' }
 
 buildGlue :: Text -> Doctrine -> Doctrine -> Either Text Morphism
 buildGlue name src tgt = do
@@ -447,7 +482,7 @@ buildInj name src tgt tyRen genRen = do
     , morFuel = 10
     }
 
-buildTypeMap :: Doctrine -> M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, TypeName) TypeExpr
+buildTypeMap :: Doctrine -> M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, TypeName) TypeTemplate
 buildTypeMap doc renames =
   M.fromList
     [ ((mode, name), renameTemplate (renameType mode name) arity)
@@ -459,7 +494,7 @@ buildTypeMap doc renames =
     renameType mode name = M.findWithDefault name (mode, name) renames
     renameTemplate tgtName arity =
       let vars = [ TyVar ("a" <> T.pack (show i)) | i <- [0..arity-1] ]
-      in TCon tgtName (map TVar vars)
+      in TypeTemplate vars (TCon tgtName (map TVar vars))
 
 buildGenMap :: Doctrine -> Doctrine -> M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, GenName) GenName -> Either Text (M.Map (ModeName, GenName) Diagram)
 buildGenMap src tgt tyRen genRen =

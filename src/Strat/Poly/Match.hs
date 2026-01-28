@@ -100,7 +100,7 @@ payloadCompatible :: EdgePayload -> EdgePayload -> Bool
 payloadCompatible p h =
   case (p, h) of
     (PGen g1, PGen g2) -> g1 == g2
-    (PBox n1 _, PBox n2 _) -> n1 == n2
+    (PBox _ _, PBox _ _) -> True
     _ -> False
 
 portsCompatible :: Match -> [PortId] -> [PortId] -> Bool

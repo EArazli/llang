@@ -6,6 +6,7 @@ module Strat.Poly.UnifyTy
   , unifyCtx
   , applySubstTy
   , applySubstCtx
+  , normalizeSubst
   , composeSubst
   ) where
 
@@ -84,11 +85,13 @@ unifyWith subst t1 t2 =
 
 bindVar :: Subst -> TyVar -> TypeExpr -> Either Text Subst
 bindVar subst v t
-  | t == TVar v = Right subst
-  | occurs v t = Left ("unifyTy: occurs check failed for " <> renderVar v <> " in " <> renderTy t)
+  | t' == TVar v = Right subst
+  | occurs v t' = Left ("unifyTy: occurs check failed for " <> renderVar v <> " in " <> renderTy t')
   | otherwise =
-      let subst' = M.insert v t (M.map (applySubstTy (M.singleton v t)) subst)
-      in Right subst'
+      let subst' = M.insert v t' (M.map (applySubstTy (M.singleton v t')) subst)
+      in Right (normalizeSubst subst')
+  where
+    t' = applySubstTy subst t
 
 occurs :: TyVar -> TypeExpr -> Bool
 occurs v t =
@@ -97,21 +100,35 @@ occurs v t =
     TCon _ args -> any (occurs v) args
 
 applySubstTy :: Subst -> TypeExpr -> TypeExpr
-applySubstTy subst ty =
-  case ty of
-    TVar v ->
-      case M.lookup v subst of
-        Nothing -> TVar v
-        Just t -> t
-    TCon n args -> TCon n (map (applySubstTy subst) args)
+applySubstTy subst ty = go S.empty ty
+  where
+    go seen expr =
+      case expr of
+        TVar v ->
+          case M.lookup v subst of
+            Nothing -> TVar v
+            Just t ->
+              if v `S.member` seen
+                then TVar v
+                else go (S.insert v seen) t
+        TCon n args -> TCon n (map (go seen) args)
 
 applySubstCtx :: Subst -> Context -> Context
 applySubstCtx subst = map (applySubstTy subst)
 
+normalizeSubst :: Subst -> Subst
+normalizeSubst subst =
+  M.fromList
+    [ (v, t')
+    | (v, t) <- M.toList subst
+    , let t' = applySubstTy subst t
+    , t' /= TVar v
+    ]
+
 composeSubst :: Subst -> Subst -> Subst
 composeSubst s2 s1 =
   let s1' = M.map (applySubstTy s2) s1
-  in M.union s1' s2
+  in normalizeSubst (M.union s1' s2)
 
 renderTy :: TypeExpr -> Text
 renderTy = T.pack . show

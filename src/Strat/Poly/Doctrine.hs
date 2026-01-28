@@ -75,6 +75,7 @@ checkGen :: Doctrine -> ModeName -> GenDecl -> Either Text ()
 checkGen doc mode gd
   | gdMode gd /= mode = Left "validateDoctrine: generator stored under wrong mode"
   | otherwise = do
+      ensureDistinctTyVars ("validateDoctrine: duplicate generator tyvars in " <> renderGen (gdName gd)) (gdTyVars gd)
       checkContext doc mode (gdTyVars gd) (gdDom gd)
       checkContext doc mode (gdTyVars gd) (gdCod gd)
 
@@ -82,6 +83,7 @@ checkCell :: Doctrine -> Cell2 -> Either Text ()
 checkCell doc cell = do
   validateDiagram (c2LHS cell)
   validateDiagram (c2RHS cell)
+  ensureDistinctTyVars ("validateDoctrine: duplicate cell tyvars in " <> c2Name cell) (c2TyVars cell)
   if dMode (c2LHS cell) /= dMode (c2RHS cell)
     then Left "validateDoctrine: cell has mode mismatch"
     else do
@@ -114,3 +116,13 @@ checkType doc mode tyvars ty =
           if arity == length args
             then mapM_ (checkType doc mode tyvars) args
             else Left "validateDoctrine: type constructor arity mismatch"
+
+ensureDistinctTyVars :: Text -> [TyVar] -> Either Text ()
+ensureDistinctTyVars label vars =
+  let set = S.fromList vars
+  in if S.size set == length vars
+    then Right ()
+    else Left label
+
+renderGen :: GenName -> Text
+renderGen (GenName t) = t

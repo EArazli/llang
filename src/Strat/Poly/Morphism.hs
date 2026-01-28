@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Morphism
   ( Morphism(..)
+  , TypeTemplate(..)
   , applyMorphismDiagram
   , checkMorphism
   ) where
@@ -27,10 +28,15 @@ data Morphism = Morphism
   { morName   :: Text
   , morSrc    :: Doctrine
   , morTgt    :: Doctrine
-  , morTypeMap :: M.Map (ModeName, TypeName) TypeExpr
+  , morTypeMap :: M.Map (ModeName, TypeName) TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) Diagram
   , morPolicy  :: RewritePolicy
   , morFuel    :: Int
+  } deriving (Eq, Show)
+
+data TypeTemplate = TypeTemplate
+  { ttParams :: [TyVar]
+  , ttBody :: TypeExpr
   } deriving (Eq, Show)
 
 applyMorphismDiagram :: Morphism -> Diagram -> Either Text Diagram
@@ -234,22 +240,28 @@ buildTypeRenaming mor = do
       let mapped =
             case M.lookup key (morTypeMap mor) of
               Nothing -> Just name
-              Just expr ->
-                case expr of
-                  TCon tgt params
-                    | length params == arity && all isVar params && distinct params -> Just tgt
-                  _ -> Nothing
+              Just tmpl -> renamingTarget tmpl arity
       case mapped of
         Nothing -> Nothing
         Just tgtName ->
           case M.lookup mode (dTypes tgt) >>= M.lookup tgtName of
             Just a | a == arity -> Just (M.insert key tgtName mp)
             _ -> Nothing
+
+    renamingTarget tmpl arity =
+      case ttBody tmpl of
+        TCon tgtName params
+          | length (ttParams tmpl) == arity
+          , length params == arity
+          , all isVar params
+          , let vars = [ v | TVar v <- params ]
+          , length vars == length (S.fromList vars)
+          , S.fromList vars == S.fromList (ttParams tmpl)
+          -> Just tgtName
+        _ -> Nothing
+
     isVar (TVar _) = True
     isVar _ = False
-    distinct params =
-      let vars = [ v | TVar v <- params ]
-      in length vars == length (S.fromList vars)
 
 buildGenRenaming :: Morphism -> Maybe (M.Map (ModeName, GenName) GenName)
 buildGenRenaming mor = do
@@ -455,16 +467,6 @@ applyTypeMapTy mor mode ty =
       let args' = map (applyTypeMapTy mor mode) args
       in case M.lookup (mode, name) (morTypeMap mor) of
           Nothing -> TCon name args'
-          Just tmpl -> applyTemplate args' tmpl
-  where
-    applyTemplate args tmpl =
-      case tmpl of
-        TCon name params ->
-          if length params == length args && all isVar params
-            then applySubstTy (M.fromList (zip (map extractVar params) args)) (TCon name params)
-            else tmpl
-        _ -> tmpl
-    isVar (TVar _) = True
-    isVar _ = False
-    extractVar (TVar v) = v
-    extractVar _ = TyVar "_"
+          Just tmpl ->
+            let subst = M.fromList (zip (ttParams tmpl) args')
+            in applySubstTy subst (ttBody tmpl)

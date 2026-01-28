@@ -65,7 +65,9 @@ data-files:
 - examples/poly/ccc_surface/stlc.lam1.run.llang
 - examples/poly/ccc_surface/stlc.lam2.run.llang
 - examples/poly/ccc_surface/stlc.lam3.run.llang
+- examples/poly/ccc_surface/stlc.app1.run.llang
 - examples/poly/ccc_surface/stlc.pair.run.llang
+- examples/poly/ccc_surface/stlc.pair1.run.llang
 - examples/poly/planar_monoid.poly.llang
 - examples/poly/planar_monoid.run.llang
 - examples/poly/planar_monoid.ssa.run.llang
@@ -200,4 +202,7 @@ tests:
     - Test.Poly.Rewrite
     - Test.Poly.DSL
     - Test.Poly.Morphism
+    - Test.Poly.Eval
+    - Test.Poly.Pushout
+    - Test.Poly.CCC
     - Paths_llang

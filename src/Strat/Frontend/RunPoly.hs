@@ -27,23 +27,11 @@ import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Surface (PolySurfaceDef(..), PolySurfaceKind(..))
 import Strat.Poly.Surface.SSA (elabSSA)
 import qualified Strat.Poly.Surface.CartTerm as CartTerm
-import qualified Strat.Poly.Surface.STLC as STLC
-import Strat.Poly.Surface.CoreTerm (elabCoreTerm)
+import Strat.Poly.Surface.LegacyAdapter (elabLegacySurfaceDiagram)
 import Strat.Poly.Eval (evalDiagram)
 import Strat.Poly.Morphism (Morphism(..), applyMorphismDiagram)
 import Strat.Model.Spec (ModelSpec)
 import Strat.Backend (Value(..))
-import Strat.Frontend.Run (buildMorphismEnv)
-import Strat.Kernel.Presentation (Presentation)
-import qualified Strat.Kernel.Morphism as KMorph
-import Strat.Kernel.Syntax (Term(..))
-import Strat.Surface2.Def
-import Strat.Surface2.Syntax (SurfaceSyntaxInstance(..), instantiateSurfaceSyntax)
-import Strat.Surface2.SyntaxSpec (SurfaceSyntaxSpec)
-import Strat.Surface2.Engine (GoalArg(..), SolveEnv(..), SolveResult(..), solveJudgment, renderSolveError, emptyCtx)
-import Strat.Surface2.CoreEval (CoreVal(..), CoreEnv, evalCoreExpr)
-import Strat.Surface2.Term (STerm(..), Ix(..), JudgName(..))
-import Strat.Surface2.Pattern (MVar(..), MatchSubst(..), MetaSubst(..), instantiateMeta, resolvePlaceholders)
 
 
 data PolyRunResult = PolyRunResult
@@ -101,16 +89,10 @@ runPolyWithEnv env spec = do
           diag <- case psKind surf of
             SurfaceSSA -> elabSSA docSurface mode (prExprText spec)
             SurfaceCartTerm -> CartTerm.elabCartTerm docTarget mode (prExprText spec)
-            SurfaceSTLC -> STLC.elabSTLC docTarget mode (prExprText spec)
           pure (docSurface, mode, diag)
         Nothing -> do
-          surf <- lookupLegacySurface env name
-          corePres <- lookupCoreDoctrine env spec
-          surfSynName <- maybe (Left "polyrun: missing surface_syntax") Right (prSurfaceSyntax spec)
-          surfSynSpec <- lookupSurfaceSyntax env surfSynName
           mode <- resolveMode docTarget spec Nothing
-          coreTerm <- elabLegacySurfaceTerm env corePres surf surfSynSpec (prExprText spec) (prFuel spec)
-          diag <- elabCoreTerm docTarget mode coreTerm
+          diag <- elabLegacySurfaceDiagram env spec docTarget mode name (prExprText spec)
           pure (docTarget, mode, diag)
   morphsFromUses <- resolveUses env (prDoctrine spec) (prUses spec)
   (docUsed, diagUsed) <- applyMorphisms env docSurface diag morphsFromUses
@@ -179,7 +161,6 @@ resolveMode doc spec mSurface =
     Just surf ->
       case psKind surf of
         SurfaceCartTerm -> resolveModeDefault doc spec
-        SurfaceSTLC -> resolveModeDefault doc spec
         SurfaceSSA ->
           case prMode spec of
             Nothing -> Right (psMode surf)
@@ -205,7 +186,6 @@ resolveMode doc spec mSurface =
 
 lookupPolySurface :: ModuleEnv -> Text -> Either Text (Maybe PolySurfaceDef)
 lookupPolySurface _ "CartTermSurface" = Right (Just CartTerm.builtinSurface)
-lookupPolySurface _ "STLCSurface" = Right (Just STLC.builtinSurface)
 lookupPolySurface env name = Right (M.lookup name (mePolySurfaces env))
 
 resolveSurfaceDocMode :: ModuleEnv -> Doctrine -> PolyRunSpec -> Maybe PolySurfaceDef -> Either Text (Doctrine, ModeName)
@@ -217,9 +197,6 @@ resolveSurfaceDocMode env docTarget spec mSurface =
     Just surf ->
       case psKind surf of
         SurfaceCartTerm -> do
-          mode <- resolveMode docTarget spec (Just surf)
-          pure (docTarget, mode)
-        SurfaceSTLC -> do
           mode <- resolveMode docTarget spec (Just surf)
           pure (docTarget, mode)
         SurfaceSSA -> do
@@ -249,117 +226,6 @@ findUniquePolyMorphism env src tgt =
     [m] -> Right m
     [] -> Left ("Model restriction requires polymorphism from " <> dName src <> " to " <> dName tgt <> "; none found")
     ms -> Left ("Model restriction ambiguous: multiple polymorphisms from " <> dName src <> " to " <> dName tgt <> " (" <> T.intercalate ", " (map morName ms) <> ")")
-
-lookupLegacySurface :: ModuleEnv -> Text -> Either Text SurfaceDef
-lookupLegacySurface env name =
-  case M.lookup name (meSurfaces env) of
-    Nothing -> Left ("Unknown surface: " <> name)
-    Just surf -> Right surf
-
-lookupSurfaceSyntax :: ModuleEnv -> Text -> Either Text SurfaceSyntaxSpec
-lookupSurfaceSyntax env name =
-  case M.lookup name (meSyntaxes env) of
-    Nothing -> Left ("Unknown surface_syntax: " <> name)
-    Just def ->
-      case def of
-        SyntaxSurface spec -> Right spec
-        SyntaxDoctrine _ -> Left ("Syntax is for doctrine, not surface: " <> name)
-
-lookupCoreDoctrine :: ModuleEnv -> PolyRunSpec -> Either Text Presentation
-lookupCoreDoctrine env spec =
-  let name = maybe (prDoctrine spec) id (prCoreDoctrine spec)
-  in case M.lookup name (meDoctrines env) of
-      Nothing -> Left ("Unknown doctrine: " <> name)
-      Just pres -> Right pres
-
-elabLegacySurfaceTerm :: ModuleEnv -> Presentation -> SurfaceDef -> SurfaceSyntaxSpec -> Text -> Int -> Either Text Term
-elabLegacySurfaceTerm env pres surf surfSynSpec src fuel = do
-  morphs <- buildMorphismEnv env pres surf []
-  surfSyntax <- instantiateSurfaceSyntax surf surfSynSpec
-  surfaceTerm <- ssiParseTm surfSyntax src
-  let goalArgs = buildSurfaceGoal surf surfaceTerm
-  solveRes <-
-    case solveJudgment surf (JudgName "HasType") goalArgs fuel of
-      Left err -> Left (renderSolveError err)
-      Right res -> Right res
-  let coreExpr =
-        case srOutputs solveRes of
-          (c:_) -> c
-          _ -> CoreVar "e"
-  coreEnv <- buildCoreEnv pres surf morphs (srEnv solveRes)
-  coreVal <- evalCoreExpr pres surf morphs coreEnv coreExpr
-  case coreVal of
-    CVCore t -> Right t
-    _ -> Left "surface elaboration did not produce core term"
-
-buildSurfaceGoal :: SurfaceDef -> STerm -> [GoalArg]
-buildSurfaceGoal surf tm =
-  case M.lookup (JudgName "HasType") (sdJudgments surf) of
-    Nothing -> [GCtx emptyCtx, GSurf tm, GSurf (SFree (holeName 0))]
-    Just decl ->
-      let params = jdParams decl
-          surfArgs = [ tm ]
-          (args, _, _) = foldl build ([], surfArgs, 0 :: Int) params
-      in args
-  where
-    holeName :: Int -> Text
-    holeName i = "_h" <> T.pack (show i)
-    build (acc, surfArgs, holeIdx) param =
-      case jpSort param of
-        PCtx -> (acc <> [GCtx emptyCtx], surfArgs, holeIdx)
-        PSurf _ ->
-          case surfArgs of
-            (x:xs) -> (acc <> [GSurf x], xs, holeIdx)
-            [] -> (acc <> [GSurf (SFree (holeName holeIdx))], [], holeIdx + 1)
-        PNat -> (acc <> [GNat 0], surfArgs, holeIdx)
-        PCore -> (acc, surfArgs, holeIdx)
-
-buildCoreEnv :: Presentation -> SurfaceDef -> M.Map Text KMorph.Morphism -> SolveEnv -> Either Text CoreEnv
-buildCoreEnv pres surf morphs env = do
-  envSurf <- buildSurfEnv
-  let envNats = M.fromList [ (k, CVNat v) | (k, v) <- M.toList (msNats (seMatch env)) ]
-  let envCtx = M.map CVCtx (seCtxs env)
-  let envPlace = M.map CVSurf (seSurfVars env)
-  let base = M.unions [envSurf, envNats, envCtx, envPlace]
-  evalCoreBindings base (seCore env)
-  where
-    renderMVar (MVar t) = t
-    buildSurfEnv = do
-      pairs <- mapM toPair (M.toList (msTerms (seMatch env)))
-      pure (M.fromList pairs)
-    toPair (mv, ms) = do
-      tm <- instantiateMeta ms (map Ix [0 .. msArity ms - 1])
-      tm' <- resolvePlaceholders (seMatch env) tm
-      pure (renderMVar mv, CVSurf tm')
-
-    evalCoreBindings env0 pending0 = go env0 pending0
-      where
-        go envAcc pending
-          | M.null pending = Right envAcc
-          | otherwise = do
-              (env', pending', progressed) <- foldM (step pending) (envAcc, pending, False) (M.toList pending)
-              if progressed
-                then go env' pending'
-                else Left "core binding dependency cycle or unresolved reference"
-
-        step pending (envAcc, pendingAcc, progressed) (name, expr) =
-          case evalCoreBinding pres surf morphs envAcc (name, expr) of
-            Right env' -> Right (env', M.delete name pendingAcc, True)
-            Left err ->
-              case missingCoreVar err of
-                Just var | M.member var pending -> Right (envAcc, pendingAcc, progressed)
-                _ -> Left err
-
-        missingCoreVar msg = T.stripPrefix "unknown core var: " msg
-
-evalCoreBinding :: Presentation -> SurfaceDef -> M.Map Text KMorph.Morphism -> CoreEnv -> (Text, CoreExpr) -> Either Text CoreEnv
-evalCoreBinding pres surf morphs env (name, expr) = do
-  val <- evalCoreExpr pres surf morphs env expr
-  case val of
-    CVCore t -> Right (M.insert name (CVCore t) env)
-    CVNat n -> Right (M.insert name (CVNat n) env)
-    CVCtx c -> Right (M.insert name (CVCtx c) env)
-    CVSurf s -> Right (M.insert name (CVSurf s) env)
 
 applyMorphisms :: ModuleEnv -> Doctrine -> Diagram -> [Text] -> Either Text (Doctrine, Diagram)
 applyMorphisms env doc diag names =

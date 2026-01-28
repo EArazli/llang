@@ -453,21 +453,6 @@ polyTypeExpr = lexeme $ do
             then pure (PolyAST.RPTVar name)
             else pure (PolyAST.RPTCon name [])
 
-polyTypeTemplate :: Parser PolyAST.RawPolyTypeExpr
-polyTypeTemplate = do
-  expr <- polyTypeExpr
-  case expr of
-    PolyAST.RPTCon _ args
-      | all isVar args && distinctVars args -> pure expr
-      | otherwise -> fail "type map target must be a constructor with distinct variables"
-    PolyAST.RPTVar _ -> fail "type map target must be a constructor"
-  where
-    isVar (PolyAST.RPTVar _) = True
-    isVar _ = False
-    distinctVars vars =
-      let names = [ n | PolyAST.RPTVar n <- vars ]
-      in length names == length (S.fromList names)
-
 polyDiagExpr :: Parser PolyAST.RawDiagExpr
 polyDiagExpr = makeExprParser polyDiagTerm operators
   where
@@ -1128,14 +1113,15 @@ polyTypeMapItem :: Parser PolyMorphismItem
 polyTypeMapItem = do
   _ <- symbol "type"
   src <- ident
+  params <- option [] (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
   _ <- symbol "@"
   srcMode <- ident
   _ <- symbol "->"
-  tgt <- polyTypeTemplate
+  tgt <- polyTypeExpr
   _ <- symbol "@"
   tgtMode <- ident
   optionalSemi
-  pure (PolyMorphismType (RawPolyTypeMap src srcMode tgt tgtMode))
+  pure (PolyMorphismType (RawPolyTypeMap src params srcMode tgt tgtMode))
 
 polyGenMapItem :: Parser PolyMorphismItem
 polyGenMapItem = do

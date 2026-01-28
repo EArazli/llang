@@ -72,6 +72,7 @@ GenDecl = { name, mode, tyvars, dom, cod }
 
 - `dom` and `cod` are contexts in the generator’s mode.
 - `tyvars` are schematic type parameters for generic generators.
+- `tyvars` are **binders**: their names are α‑irrelevant, and duplicates are rejected.
 
 ### 2.2 2‑cells
 
@@ -83,6 +84,7 @@ Cell2 = { name, class, orient, tyvars, lhs, rhs }
 
 - `lhs` and `rhs` are diagrams of the same mode.
 - Their boundaries must unify (same context lengths; types unify under a substitution).
+- `tyvars` are **binders**: their names are α‑irrelevant, and duplicates are rejected.
 
 ### 2.3 Validation
 
@@ -118,6 +120,10 @@ The internal representation (`Strat.Poly.Graph`) stores:
 - port types, producer/consumer incidence maps,
 - edge table, and
 - boundary port lists.
+
+Box names are **metadata only**: diagram equality and matching ignore the `BoxName`,
+but the box *structure* still matters (matching only penetrates boxes when the pattern
+explicitly contains a box edge).
 
 ### 3.2 Constructors
 
@@ -161,6 +167,7 @@ Constraints:
 Matching order is deterministic (by edge id, then adjacent edges, then candidate host edges by id).
 
 Boxes are **opaque** to matching unless the pattern explicitly contains a box edge.
+Box names are ignored during matching.
 
 ### 4.2 Rewrite step
 
@@ -187,7 +194,7 @@ Rewriting is **outermost‑leftmost** with respect to boxes: a top‑level rewri
 
 A morphism `F : D → E` consists of:
 
-- a **mode‑indexed type map** (`(ModeName, TypeName) ↦ TypeExpr`),
+- a **mode‑indexed type map** (`(ModeName, TypeName) ↦ (a1…an ⊢ τ)` templates),
 - a **mode‑indexed generator map** (`(ModeName, GenName) ↦ Diagram`),
 - rewrite policy and fuel for equation checking.
 
@@ -195,7 +202,7 @@ A morphism `F : D → E` consists of:
 
 To apply `F` to a diagram:
 
-1. Map all port types using the type map.
+1. Map all port types using the type map templates.
 2. For each edge, instantiate the generator mapping (using unification to recover type parameters), in the edge’s mode.
 3. Splice the mapped diagram into the host by boundary identification.
 
@@ -246,7 +253,7 @@ polydoctrine <Name> = coproduct <Left> <Right>;
 
 ```
 polymorphism <Name> : <Src> -> <Tgt> where {
-  type <SrcType> @<Mode> -> <TgtTypeExpr> @<Mode>;
+  type <SrcType>(a1,...,an) @<Mode> -> <TgtTypeExpr> @<Mode>;
   gen  <SrcGen>  @<Mode> -> <DiagExpr>;
   policy <RewritePolicy>;
   fuel <N>;
@@ -254,7 +261,10 @@ polymorphism <Name> : <Src> -> <Tgt> where {
 ```
 
 - Every source generator must be mapped.
-- Type mappings must be constructor templates in the target doctrine.
+- Type mappings are **templates with explicit binders**: the RHS may be any type expression
+  whose free variables are a subset of `{a1,...,an}`.
+- When a polymorphism is used as a **pushout leg**, its type mappings must be **invertible renamings**
+  (constructor rename + parameter permutation).
 - Generator mappings must elaborate to diagrams in the target doctrine/mode.
 
 ### 6.3 Types and contexts
@@ -335,7 +345,7 @@ The run pipeline:
 5. Optionally evaluates via a polymodel (closed diagrams only, and the model must match the final doctrine).
 6. Prints the normalized diagram, input, and/or value depending on flags.
 
-`show cat` is unsupported for `polyrun`.
+`show cat` prints the category/typing view of the normalized diagram.
 
 ---
 

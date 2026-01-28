@@ -103,13 +103,18 @@ elabPolyMorphism env raw = do
       arity <- case M.lookup modeSrc (dTypes src) >>= M.lookup name of
         Nothing -> Left "polymorphism: unknown source type"
         Just a -> Right a
-      let vars = rawTypeVars (KAST.rpmtTgtType decl)
-      tgtExpr <- elabTypeExpr tgt modeSrc (map TyVar vars) (KAST.rpmtTgtType decl)
-      ensureTemplate arity tgtExpr
+      let params = map TyVar (KAST.rpmtParams decl)
+      if length params /= arity
+        then Left "polymorphism: type mapping binder arity mismatch"
+        else Right ()
+      if length params == length (S.fromList params)
+        then Right ()
+        else Left "polymorphism: duplicate type mapping binders"
+      tgtExpr <- elabTypeExpr tgt modeSrc params (KAST.rpmtTgtType decl)
       let key = (modeSrc, name)
       if M.member key mp
         then Left "polymorphism: duplicate type mapping"
-        else Right (M.insert key tgtExpr mp)
+        else Right (M.insert key (TypeTemplate params tgtExpr) mp)
     addGenMap src tgt mp decl = do
       let mode = ModeName (KAST.rpmgMode decl)
       ensureMode src mode
@@ -126,23 +131,7 @@ elabPolyMorphism env raw = do
       if M.member key mp
         then Left "polymorphism: duplicate generator mapping"
         else Right (M.insert key diag mp)
-    ensureTemplate arity expr =
-      case expr of
-        TCon _ params
-          | length params == arity && all isVar params && distinct params -> Right ()
-          | otherwise -> Left "polymorphism: type mapping must be a constructor with matching type variables"
-        _ -> Left "polymorphism: type mapping must be a constructor with matching type variables"
-    isVar (TVar _) = True
-    isVar _ = False
-    distinct params =
-      let vars = [ v | TVar v <- params ]
-      in length vars == length (S.fromList vars)
-    rawTypeVars expr =
-      S.toList (varsInRawType expr)
-    varsInRawType expr =
-      case expr of
-        RPTVar name -> S.singleton name
-        RPTCon _ args -> S.unions (map varsInRawType args)
+    -- no template restriction; any target type expression using only params is allowed
     ensureAllGenMapped src mp = do
       let gens = [ (mode, gdName g) | (mode, table) <- M.toList (dGens src), g <- M.elems table ]
       case [ (m, g) | (m, g) <- gens, M.notMember (m, g) mp ] of
@@ -295,15 +284,19 @@ elabDiagExpr doc mode ruleVars expr =
         RDGen name mArgs -> do
           gen <- liftEither (lookupGen doc mode (GenName name))
           let tyVars = gdTyVars gen
-          subst <- case mArgs of
-            Nothing -> freshSubst tyVars
+          renameSubst <- freshSubst tyVars
+          let dom0 = applySubstCtx renameSubst (gdDom gen)
+          let cod0 = applySubstCtx renameSubst (gdCod gen)
+          (dom, cod) <- case mArgs of
+            Nothing -> pure (dom0, cod0)
             Just args -> do
               args' <- mapM (liftEither . elabTypeExpr doc mode ruleVars) args
               if length args' /= length tyVars
                 then liftEither (Left "generator type argument mismatch")
-                else pure (M.fromList (zip tyVars args'))
-          let dom = applySubstCtx subst (gdDom gen)
-          let cod = applySubstCtx subst (gdCod gen)
+                else do
+                  freshVars <- liftEither (extractFreshVars tyVars renameSubst)
+                  let subst = M.fromList (zip freshVars args')
+                  pure (applySubstCtx subst dom0, applySubstCtx subst cod0)
           liftEither (genD mode dom cod (gdName gen))
         RDBox name innerExpr -> do
           inner <- build innerExpr
@@ -402,6 +395,15 @@ freshSubst :: [TyVar] -> Fresh Subst
 freshSubst vars = do
   pairs <- mapM freshVar vars
   pure (M.fromList pairs)
+
+extractFreshVars :: [TyVar] -> Subst -> Either Text [TyVar]
+extractFreshVars vars subst =
+  mapM lookupVar vars
+  where
+    lookupVar v =
+      case M.lookup v subst of
+        Just (TVar v') -> Right v'
+        _ -> Left "internal error: expected fresh type variable"
 
 freshVar :: TyVar -> Fresh (TyVar, TypeExpr)
 freshVar (TyVar base) = do

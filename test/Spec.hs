@@ -31,6 +31,8 @@ import qualified Test.Poly.Rewrite as PolyRewrite
 import qualified Test.Poly.DSL as PolyDSL
 import qualified Test.Poly.Morphism as PolyMorphism
 import qualified Test.Poly.Eval as PolyEval
+import qualified Test.Poly.Pushout as PolyPushout
+import qualified Test.Poly.CCC as PolyCCC
 
 main :: IO ()
 main =
@@ -67,4 +69,6 @@ main =
     , PolyDSL.tests
     , PolyMorphism.tests
     , PolyEval.tests
+    , PolyPushout.tests
+    , PolyCCC.tests
       ]
