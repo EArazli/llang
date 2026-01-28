@@ -254,7 +254,6 @@ runPolyExample path = do
     Left err -> assertFailure (T.unpack err)
     Right out -> do
       assertBool "expected normalized output" ("normalized:" `T.isInfixOf` out)
-      assertBool "expected cat output" ("cat:" `T.isInfixOf` out)
       assertBool "expected value output" ("value:" `T.isInfixOf` out)
 
 testPolyRunSpecDefault :: Assertion
@@ -265,7 +264,6 @@ testPolyRunSpecDefault = do
     Left err -> assertFailure (T.unpack err)
     Right out -> do
       assertBool "expected normalized output" ("normalized:" `T.isInfixOf` out)
-      assertBool "expected cat output" ("cat:" `T.isInfixOf` out)
 
 testPolyRunSpecSelect :: Assertion
 testPolyRunSpecSelect = do
@@ -275,7 +273,6 @@ testPolyRunSpecSelect = do
     Left err -> assertFailure (T.unpack err)
     Right out -> do
       assertBool "expected normalized output" ("normalized:" `T.isInfixOf` out)
-      assertBool "expected cat output" ("cat:" `T.isInfixOf` out)
 
 testPolyMorphismApply :: Assertion
 testPolyMorphismApply = do

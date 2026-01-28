@@ -324,6 +324,8 @@ polyrun <Name> where {
   doctrine <PolyDoctrine>;
   mode <Mode>;          -- required if the doctrine has multiple modes
   surface <Surface>;    -- optional; chooses SSA or CartTerm surface
+  surface_syntax <SurfaceSyntax>; -- required for legacy Surface2 surfaces
+  core_doctrine <Doctrine>;       -- optional; defaults to doctrine (legacy Surface2 elaboration)
   model <PolyModel>;    -- optional; required for show value
   apply <PolyMorphism>; -- optional; may be repeated, applied in order
   policy <RewritePolicy>;
@@ -345,7 +347,9 @@ The run pipeline:
 5. Optionally evaluates via a polymodel (closed diagrams only, and the model must match the final doctrine).
 6. Prints the normalized diagram, input, and/or value depending on flags.
 
-`show cat` prints the category/typing view of the normalized diagram.
+If `surface` refers to a legacy Surface2 surface (i.e. not a poly surface), `surface_syntax` is required and `core_doctrine` selects the kernel doctrine used for surface elaboration (defaults to `doctrine`).
+
+`show cat` is currently not supported for polyruns.
 
 ---
 

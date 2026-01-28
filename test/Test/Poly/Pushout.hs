@@ -6,16 +6,18 @@ module Test.Poly.Pushout
 import Test.Tasty
 import Test.Tasty.HUnit
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
-import Strat.Poly.TypeExpr (TyVar(..), TypeExpr(..))
+import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeExpr(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD, idD)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Poly.Morphism (Morphism(..))
+import Strat.Poly.Morphism (Morphism(..), TypeTemplate(..), applyMorphismDiagram)
 import Strat.Poly.Pushout (computePolyPushout, PolyPushoutResult(..))
+import Strat.Poly.Graph (diagramIsoEq)
 import Strat.Kernel.Types (RuleClass(..), Orientation(..))
 import Strat.Kernel.RewriteSystem (RewritePolicy(..))
 
@@ -25,6 +27,7 @@ tests =
   testGroup
     "Poly.Pushout"
     [ testCase "pushout dedups equations by body" testPushoutDedupByBody
+    , testCase "pushout type permutation commutes" testPushoutTypePermutationCommutes
     ]
 
 
@@ -96,3 +99,69 @@ mkInclusionMorph name src tgt tyVar =
       , morPolicy = UseAllOriented
       , morFuel = 10
       }
+
+testPushoutTypePermutationCommutes :: Assertion
+testPushoutTypePermutationCommutes = do
+  let mode = ModeName "M"
+  let prod = TypeName "Prod"
+  let pair = TypeName "Pair"
+  let aVar = TyVar "a"
+  let bVar = TyVar "b"
+  base <- case mkTypeDoctrine mode "A" [(prod, 2)] of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  left <- case mkTypeDoctrine mode "B" [(pair, 2)] of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  right <- case mkTypeDoctrine mode "C" [(prod, 2)] of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  let tmplF = TypeTemplate [aVar, bVar] (TCon pair [TVar bVar, TVar aVar])
+  let morF = Morphism
+        { morName = "f"
+        , morSrc = base
+        , morTgt = left
+        , morTypeMap = M.fromList [((mode, prod), tmplF)]
+        , morGenMap = M.empty
+        , morPolicy = UseAllOriented
+        , morFuel = 10
+        }
+  let morG = Morphism
+        { morName = "g"
+        , morSrc = base
+        , morTgt = right
+        , morTypeMap = M.empty
+        , morGenMap = M.empty
+        , morPolicy = UseAllOriented
+        , morFuel = 10
+        }
+  res <- case computePolyPushout "P" morF morG of
+    Left err -> assertFailure (T.unpack err)
+    Right r -> pure r
+  let diagA = idD mode [TCon prod [TVar aVar, TVar bVar]]
+  d1 <- case applyMorphismDiagram morF diagA of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  d2 <- case applyMorphismDiagram (poInl res) d1 of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  d3 <- case applyMorphismDiagram (poGlue res) diagA of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  iso <- case diagramIsoEq d2 d3 of
+    Left err -> assertFailure (T.unpack err)
+    Right ok -> pure ok
+  assertBool "expected pushout type permutation to commute" iso
+
+mkTypeDoctrine :: ModeName -> Text -> [(TypeName, Int)] -> Either Text Doctrine
+mkTypeDoctrine mode name types = do
+  let doc = Doctrine
+        { dName = name
+        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dTypes = M.fromList [(mode, M.fromList types)]
+        , dGens = M.empty
+        , dCells2 = []
+        }
+  case validateDoctrine doc of
+    Left err -> Left err
+    Right () -> Right doc

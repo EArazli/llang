@@ -60,9 +60,11 @@ elabPolyRun name raw = do
         RawShowValue -> ShowValue
         RawShowCat -> ShowCat
     ensureShowFlags flags =
-      if ShowValue `elem` flags && KAST.rprModel raw == Nothing
-        then Left "polyrun: show value requires model"
-        else Right ()
+      if ShowCat `elem` flags
+        then Left "polyrun: show cat is not supported"
+        else if ShowValue `elem` flags && KAST.rprModel raw == Nothing
+          then Left "polyrun: show value requires model"
+          else Right ()
 
 elabPolyMorphism :: ModuleEnv -> KAST.RawPolyMorphism -> Either Text Morphism
 elabPolyMorphism env raw = do

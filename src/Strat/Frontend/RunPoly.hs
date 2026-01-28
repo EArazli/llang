@@ -145,7 +145,7 @@ renderPolyRunResult spec input norm mValue = do
       Just vals -> Right ("value:\n" <> renderValues vals)
     else Right ""
   catTxt <- if ShowCat `elem` prShowFlags spec
-    then fmap ("cat:\n" <>) (renderDiagram norm)
+    then Left "polyrun: show cat is not supported"
     else Right ""
   pure (T.intercalate "\n" (filter (not . T.null) [inputTxt, normTxt, valueTxt, catTxt]))
 

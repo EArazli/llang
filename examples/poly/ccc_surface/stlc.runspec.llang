@@ -19,6 +19,5 @@ polyrun_spec STLCinCCC where {
   policy UseOnlyComputationalLR;
   fuel 200;
   show normalized;
-  show cat;
   show value;
 }
