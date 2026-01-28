@@ -181,6 +181,7 @@ library
       Strat.Poly.Surface.CartTerm
       Strat.Poly.Surface.CoreTerm
       Strat.Poly.Surface.SSA
+      Strat.Poly.Surface.STLC
       Strat.Poly.TypeExpr
       Strat.Poly.UnifyTy
       Strat.Surface

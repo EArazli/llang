@@ -17,7 +17,7 @@ import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), renumberDiagram, diagramPortIds)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), renumberDiagram, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 
 
@@ -51,14 +51,18 @@ computePolyPushout name f g = do
   let renameTypesC = M.union renameTypesC0 (disjointTypeRenames prefixC (morSrc f) renameTypesC0 (morTgt g))
   let renameGensB = M.union renameGensB0 (disjointGenRenames prefixB (morSrc f) renameGensB0 (morTgt f))
   let renameGensC = M.union renameGensC0 (disjointGenRenames prefixC (morSrc f) renameGensC0 (morTgt g))
-  b' <- renameDoctrine renameTypesB renameGensB (morTgt f)
-  c' <- renameDoctrine renameTypesC renameGensC (morTgt g)
+  let renameCellsB = disjointCellRenames prefixB (morSrc f) (morTgt f)
+  let renameCellsC = disjointCellRenames prefixC (morSrc f) (morTgt g)
+  b' <- renameDoctrine renameTypesB renameGensB renameCellsB (morTgt f)
+  c' <- renameDoctrine renameTypesC renameGensC renameCellsC (morTgt g)
   merged <- mergeDoctrineList [morSrc f, b', c']
   let pres = merged { dName = name }
   glue <- buildGlue name (morSrc f) pres
   inl <- buildInj (name <> ".inl") (morTgt f) pres renameTypesB renameGensB
   inr <- buildInj (name <> ".inr") (morTgt g) pres renameTypesC renameGensC
-  -- Generated morphisms are renamings; skip expensive equation checks here.
+  checkGenerated "glue" glue
+  checkGenerated "inl" inl
+  checkGenerated "inr" inr
   pure PolyPushoutResult { poDoctrine = pres, poInl = inl, poInr = inr, poGlue = glue }
   where
     ensureSameSource =
@@ -218,6 +222,22 @@ disjointGenRenames prefix src interfaceRen tgt =
           let (name', used') = freshGenName prefix name used
           in (used', M.insert key name' mp)
 
+disjointCellRenames :: Text -> Doctrine -> Doctrine -> M.Map (ModeName, Text) Text
+disjointCellRenames prefix src tgt =
+  snd (foldl step (srcNames, M.empty) (dCells2 tgt))
+  where
+    srcNames = namesByMode [ (dMode (c2LHS cell), c2Name cell) | cell <- dCells2 src ]
+    step (usedByMode, mp) cell =
+      let mode = dMode (c2LHS cell)
+          name = c2Name cell
+          used = M.findWithDefault S.empty mode usedByMode
+      in if name `S.member` used
+        then (usedByMode, mp)
+        else
+          let (name', used') = freshCellName prefix name used
+              usedByMode' = M.insert mode used' usedByMode
+          in (usedByMode', M.insert (mode, name) name' mp)
+
 namesByMode :: (Ord a) => [(ModeName, a)] -> M.Map ModeName (S.Set a)
 namesByMode pairs =
   foldl add M.empty pairs
@@ -241,6 +261,12 @@ freshGenName prefix (GenName base) used =
       candidate = GenName baseName
   in freshen candidate (\n -> GenName (baseName <> "_" <> T.pack (show n))) used
 
+freshCellName :: Text -> Text -> S.Set Text -> (Text, S.Set Text)
+freshCellName prefix base used =
+  let baseName = prefix <> "_" <> base
+      candidate = baseName
+  in freshen candidate (\n -> baseName <> "_" <> T.pack (show n)) used
+
 freshen :: (Ord a) => a -> (Int -> a) -> S.Set a -> (a, S.Set a)
 freshen candidate mk used =
   if candidate `S.member` used
@@ -253,11 +279,11 @@ freshen candidate mk used =
         then go (n + 1)
         else (cand, S.insert cand used)
 
-renameDoctrine :: M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, GenName) GenName -> Doctrine -> Either Text Doctrine
-renameDoctrine tyRen genRen doc = do
+renameDoctrine :: M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, GenName) GenName -> M.Map (ModeName, Text) Text -> Doctrine -> Either Text Doctrine
+renameDoctrine tyRen genRen cellRen doc = do
   types' <- M.traverseWithKey renameTypeTable (dTypes doc)
   gens' <- M.traverseWithKey renameGenTable (dGens doc)
-  let cells' = map (renameCell tyRen genRen) (dCells2 doc)
+  let cells' = map (renameCell tyRen genRen cellRen) (dCells2 doc)
   pure doc { dTypes = types', dGens = gens', dCells2 = cells' }
   where
     renameTypeTable mode table =
@@ -284,10 +310,13 @@ renameDoctrine tyRen genRen doc = do
             Just existing | existing == gen' -> Right mp
             _ -> Left "poly pushout: generator name collision"
 
-renameCell :: M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, GenName) GenName -> Cell2 -> Cell2
-renameCell tyRen genRen cell =
-  cell
-    { c2LHS = renameDiagram tyRen genRen (c2LHS cell)
+renameCell :: M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, GenName) GenName -> M.Map (ModeName, Text) Text -> Cell2 -> Cell2
+renameCell tyRen genRen cellRen cell =
+  let mode = dMode (c2LHS cell)
+      name' = M.findWithDefault (c2Name cell) (mode, c2Name cell) cellRen
+  in cell
+    { c2Name = name'
+    , c2LHS = renameDiagram tyRen genRen (c2LHS cell)
     , c2RHS = renameDiagram tyRen genRen (c2RHS cell)
     }
 
@@ -330,7 +359,8 @@ mergeDoctrine a b = do
     else do
       types <- mergeTypeTables (dTypes a) (dTypes b)
       gens <- mergeGenTables (dGens a) (dGens b)
-      pure a { dTypes = types, dGens = gens, dCells2 = dCells2 a <> dCells2 b }
+      cells <- mergeCells (dCells2 a) (dCells2 b)
+      pure a { dTypes = types, dGens = gens, dCells2 = cells }
   where
     mergeTypeTables left right =
       foldl mergeTypeMode (Right left) (M.toList right)
@@ -364,6 +394,31 @@ mergeDoctrine a b = do
             Nothing -> Right (M.insert (gdName gen) gen mp)
             Just g | g == gen -> Right mp
             _ -> Left "poly pushout: generator conflict"
+
+mergeCells :: [Cell2] -> [Cell2] -> Either Text [Cell2]
+mergeCells left right = do
+  (mp, order) <- foldl insertCell (Right (M.empty, [])) left
+  (mp', order') <- foldl insertCell (Right (mp, order)) right
+  pure [ mp' M.! key | key <- order' ]
+  where
+    insertCell acc cell = do
+      (mp, order) <- acc
+      let key = cellKey cell
+      case M.lookup key mp of
+        Nothing -> Right (M.insert key cell mp, order <> [key])
+        Just existing -> do
+          ensureCompatible existing cell
+          Right (mp, order)
+    cellKey cell = (dMode (c2LHS cell), c2Name cell)
+    ensureCompatible a b =
+      if c2Class a /= c2Class b || c2Orient a /= c2Orient b
+        then Left "poly pushout: cell conflict"
+        else do
+          okL <- diagramIsoEq (c2LHS a) (c2LHS b)
+          okR <- diagramIsoEq (c2RHS a) (c2RHS b)
+          if okL && okR
+            then Right ()
+            else Left "poly pushout: cell conflict"
 
 buildGlue :: Text -> Doctrine -> Doctrine -> Either Text Morphism
 buildGlue name src tgt = do

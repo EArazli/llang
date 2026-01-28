@@ -8,6 +8,7 @@ import Strat.Kernel.Types
 import Strat.Model.Spec (MExpr(..))
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Data.Text (Text)
+import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Functor (($>))
 import Data.Void (Void)
@@ -452,6 +453,21 @@ polyTypeExpr = lexeme $ do
             then pure (PolyAST.RPTVar name)
             else pure (PolyAST.RPTCon name [])
 
+polyTypeTemplate :: Parser PolyAST.RawPolyTypeExpr
+polyTypeTemplate = do
+  expr <- polyTypeExpr
+  case expr of
+    PolyAST.RPTCon _ args
+      | all isVar args && distinctVars args -> pure expr
+      | otherwise -> fail "type map target must be a constructor with distinct variables"
+    PolyAST.RPTVar _ -> fail "type map target must be a constructor"
+  where
+    isVar (PolyAST.RPTVar _) = True
+    isVar _ = False
+    distinctVars vars =
+      let names = [ n | PolyAST.RPTVar n <- vars ]
+      in length names == length (S.fromList names)
+
 polyDiagExpr :: Parser PolyAST.RawDiagExpr
 polyDiagExpr = makeExprParser polyDiagTerm operators
   where
@@ -462,7 +478,7 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 
 polyDiagTerm :: Parser PolyAST.RawDiagExpr
 polyDiagTerm =
-  try polyIdTerm <|> polyGenTerm <|> parens polyDiagExpr
+  try polyIdTerm <|> polyBoxTerm <|> polyGenTerm <|> parens polyDiagExpr
 
 polyIdTerm :: Parser PolyAST.RawDiagExpr
 polyIdTerm = do
@@ -475,6 +491,15 @@ polyGenTerm = do
   name <- ident
   mArgs <- optional (symbol "{" *> polyTypeExpr `sepBy` symbol "," <* symbol "}")
   pure (PolyAST.RDGen name mArgs)
+
+polyBoxTerm :: Parser PolyAST.RawDiagExpr
+polyBoxTerm = do
+  _ <- symbol "box"
+  name <- ident
+  _ <- symbol "{"
+  inner <- polyDiagExpr
+  _ <- symbol "}"
+  pure (PolyAST.RDBox name inner)
 
 
 binder :: Parser RawBinder
@@ -1106,7 +1131,7 @@ polyTypeMapItem = do
   _ <- symbol "@"
   srcMode <- ident
   _ <- symbol "->"
-  tgt <- polyTypeExpr
+  tgt <- polyTypeTemplate
   _ <- symbol "@"
   tgtMode <- ident
   optionalSemi

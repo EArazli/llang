@@ -38,6 +38,7 @@ tests =
     , testCase "multi-run default main" testMultiRunDefault
     , testCase "multi-run selection" testMultiRunSelect
     , testCase "poly no-dup error" testPolyNoDupError
+    , testCase "poly ambiguous model restriction" testPolyAmbiguousModelRestriction
     , testCase "poly cart term surface with model" testPolyCartTermModel
     , testCase "poly morphism apply" testPolyMorphismApply
     , testCase "poly run_spec default" testPolyRunSpecDefault
@@ -207,6 +208,16 @@ testPolyNoDupError = do
     Left err ->
       assertBool "expected boundary mismatch" ("boundary mismatch" `T.isInfixOf` err)
     Right _ -> assertFailure "expected failure for no-dup example"
+
+testPolyAmbiguousModelRestriction :: Assertion
+testPolyAmbiguousModelRestriction = do
+  path <- getDataFileName "examples/poly/pushout/ambiguous_model_restriction.llang"
+  result <- runCLI (CLIOptions path Nothing)
+  case result of
+    Left err -> do
+      assertBool "expected NatBool.inl in error" ("NatBool.inl" `T.isInfixOf` err)
+      assertBool "expected NatToNatBoolAlt in error" ("NatToNatBoolAlt" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected failure for ambiguous morphism"
 
 testPolyCartTermModel :: Assertion
 testPolyCartTermModel = do

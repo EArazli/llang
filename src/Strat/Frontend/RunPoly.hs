@@ -27,6 +27,7 @@ import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Surface (PolySurfaceDef(..), PolySurfaceKind(..))
 import Strat.Poly.Surface.SSA (elabSSA)
 import qualified Strat.Poly.Surface.CartTerm as CartTerm
+import qualified Strat.Poly.Surface.STLC as STLC
 import Strat.Poly.Surface.CoreTerm (elabCoreTerm)
 import Strat.Poly.Eval (evalDiagram)
 import Strat.Poly.Morphism (Morphism(..), applyMorphismDiagram)
@@ -100,6 +101,7 @@ runPolyWithEnv env spec = do
           diag <- case psKind surf of
             SurfaceSSA -> elabSSA docSurface mode (prExprText spec)
             SurfaceCartTerm -> CartTerm.elabCartTerm docTarget mode (prExprText spec)
+            SurfaceSTLC -> STLC.elabSTLC docTarget mode (prExprText spec)
           pure (docSurface, mode, diag)
         Nothing -> do
           surf <- lookupLegacySurface env name
@@ -177,6 +179,7 @@ resolveMode doc spec mSurface =
     Just surf ->
       case psKind surf of
         SurfaceCartTerm -> resolveModeDefault doc spec
+        SurfaceSTLC -> resolveModeDefault doc spec
         SurfaceSSA ->
           case prMode spec of
             Nothing -> Right (psMode surf)
@@ -202,6 +205,7 @@ resolveMode doc spec mSurface =
 
 lookupPolySurface :: ModuleEnv -> Text -> Either Text (Maybe PolySurfaceDef)
 lookupPolySurface _ "CartTermSurface" = Right (Just CartTerm.builtinSurface)
+lookupPolySurface _ "STLCSurface" = Right (Just STLC.builtinSurface)
 lookupPolySurface env name = Right (M.lookup name (mePolySurfaces env))
 
 resolveSurfaceDocMode :: ModuleEnv -> Doctrine -> PolyRunSpec -> Maybe PolySurfaceDef -> Either Text (Doctrine, ModeName)
@@ -213,6 +217,9 @@ resolveSurfaceDocMode env docTarget spec mSurface =
     Just surf ->
       case psKind surf of
         SurfaceCartTerm -> do
+          mode <- resolveMode docTarget spec (Just surf)
+          pure (docTarget, mode)
+        SurfaceSTLC -> do
           mode <- resolveMode docTarget spec (Just surf)
           pure (docTarget, mode)
         SurfaceSSA -> do
@@ -238,7 +245,7 @@ resolvePolyModelDiagram env doc diag modelDocName =
 
 findUniquePolyMorphism :: ModuleEnv -> Doctrine -> Doctrine -> Either Text Morphism
 findUniquePolyMorphism env src tgt =
-  case [ m | m <- M.elems (mePolyMorphisms env), morSrc m == src, morTgt m == tgt ] of
+  case [ m | m <- M.elems (mePolyMorphisms env), dName (morSrc m) == dName src, dName (morTgt m) == dName tgt ] of
     [m] -> Right m
     [] -> Left ("Model restriction requires polymorphism from " <> dName src <> " to " <> dName tgt <> "; none found")
     ms -> Left ("Model restriction ambiguous: multiple polymorphisms from " <> dName src <> " to " <> dName tgt <> " (" <> T.intercalate ", " (map morName ms) <> ")")
@@ -361,7 +368,7 @@ applyMorphisms env doc diag names =
     step acc name = do
       (doc0, diag0) <- acc
       mor <- lookupPolyMorphism env name
-      if morSrc mor /= doc0
+      if dName (morSrc mor) /= dName doc0
         then Left ("polyrun: morphism source mismatch for " <> name)
         else do
           diag' <- applyMorphismDiagram mor diag0

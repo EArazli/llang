@@ -25,7 +25,6 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
-import Data.List (elemIndex)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.TypeExpr (TypeExpr)
 import Strat.Poly.Names (GenName(..), BoxName(..))
@@ -163,7 +162,6 @@ validateDiagram diag = do
   mapM_ (ensureBoundaryEndpoint "output" (dCons diag)) (dOut diag)
   mapM_ checkEdge (IM.elems (dEdges diag))
   mapM_ checkPort (IM.keys (dPortTy diag))
-  ensureSerializable
   pure ()
   where
     ensureKeysets =
@@ -257,46 +255,6 @@ validateDiagram diag = do
       in if S.null s
         then Right ()
         else Left "validateDiagram: port appears in both inputs and outputs"
-    ensureSerializable =
-      if serializable (dIn diag) (IM.elems (dEdges diag))
-        then Right ()
-        else Left "validateDiagram: diagram is not serializable (explicit swap required)"
-
-    serializable ctx edges =
-      case edges of
-        [] -> ctx == dOut diag
-        _ ->
-          let steps = concatMap (fireOptions ctx) edges
-          in any (\(edge, ctx') -> serializable ctx' (removeEdge edge edges)) steps
-
-    removeEdge edge = filter (\e -> eId e /= eId edge)
-
-    fireOptions ctx edge =
-      let ins = eIns edge
-          outs = eOuts edge
-      in case ins of
-        [] -> [ (edge, insertAt i outs ctx) | i <- [0 .. length ctx] ]
-        _ ->
-          case contiguousIndex ctx ins of
-            Nothing -> []
-            Just idx -> [(edge, spliceAt idx (length ins) outs ctx)]
-
-    contiguousIndex ctx ins =
-      case elemIndex (head ins) ctx of
-        Nothing -> Nothing
-        Just idx ->
-          if take (length ins) (drop idx ctx) == ins
-            then Just idx
-            else Nothing
-
-    spliceAt idx n outs ctx =
-      let (before, rest) = splitAt idx ctx
-          after = drop n rest
-      in before <> outs <> after
-
-    insertAt idx outs ctx =
-      let (before, after) = splitAt idx ctx
-      in before <> outs <> after
 
 mergePorts :: Diagram -> PortId -> PortId -> Either Text Diagram
 mergePorts diag keep drop

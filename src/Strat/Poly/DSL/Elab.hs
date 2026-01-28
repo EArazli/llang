@@ -14,6 +14,7 @@ import Control.Monad (foldM)
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
+import Strat.Poly.Graph (emptyDiagram, freshPort, addEdgePayload, EdgePayload(..), validateDiagram)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
@@ -82,11 +83,9 @@ elabPolyMorphism env raw = do
         , morPolicy = policy
         , morFuel = fuel
         }
-  if isRenamingMorphism mor
-    then Right mor
-    else case checkMorphism mor of
-      Left err -> Left ("polymorphism " <> KAST.rpmName raw <> ": " <> err)
-      Right () -> Right mor
+  case checkMorphism mor of
+    Left err -> Left ("polymorphism " <> KAST.rpmName raw <> ": " <> err)
+    Right () -> Right mor
   where
     lookupPolyDoctrine env' name =
       case M.lookup name (mePolyDoctrines env') of
@@ -306,6 +305,16 @@ elabDiagExpr doc mode ruleVars expr =
           let dom = applySubstCtx subst (gdDom gen)
           let cod = applySubstCtx subst (gdCod gen)
           liftEither (genD mode dom cod (gdName gen))
+        RDBox name innerExpr -> do
+          inner <- build innerExpr
+          dom <- liftEither (diagramDom inner)
+          cod <- liftEither (diagramCod inner)
+          let (ins, diag0) = allocPorts dom (emptyDiagram mode)
+          let (outs, diag1) = allocPorts cod diag0
+          diag2 <- liftEither (addEdgePayload (PBox (BoxName name) inner) ins outs diag1)
+          let diag3 = diag2 { dIn = ins, dOut = outs }
+          liftEither (validateDiagram diag3)
+          pure diag3
         RDComp a b -> do
           d1 <- build a
           d2 <- build b
@@ -324,6 +333,12 @@ elabDiagExpr doc mode ruleVars expr =
           d1 <- build a
           d2 <- build b
           liftEither (tensorD d1 d2)
+
+    allocPorts [] diag = ([], diag)
+    allocPorts (ty:rest) diag =
+      let (pid, diag1) = freshPort ty diag
+          (pids, diag2) = allocPorts rest diag1
+      in (pid:pids, diag2)
 
 lookupGen :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGen doc mode name =

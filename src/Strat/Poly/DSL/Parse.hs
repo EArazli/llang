@@ -33,7 +33,7 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 
 polyDiagTerm :: Parser RawDiagExpr
 polyDiagTerm =
-  try polyIdTerm <|> polyGenTerm <|> parens polyDiagExpr
+  try polyIdTerm <|> polyBoxTerm <|> polyGenTerm <|> parens polyDiagExpr
 
 polyIdTerm :: Parser RawDiagExpr
 polyIdTerm = do
@@ -46,6 +46,15 @@ polyGenTerm = do
   name <- ident
   mArgs <- optional (symbol "{" *> polyTypeExpr `sepBy` symbol "," <* symbol "}")
   pure (RDGen name mArgs)
+
+polyBoxTerm :: Parser RawDiagExpr
+polyBoxTerm = do
+  _ <- symbol "box"
+  name <- ident
+  _ <- symbol "{"
+  inner <- polyDiagExpr
+  _ <- symbol "}"
+  pure (RDBox name inner)
 
 polyContext :: Parser RawPolyContext
 polyContext = do

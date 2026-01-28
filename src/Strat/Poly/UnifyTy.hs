@@ -102,7 +102,7 @@ applySubstTy subst ty =
     TVar v ->
       case M.lookup v subst of
         Nothing -> TVar v
-        Just t -> applySubstTy subst t
+        Just t -> t
     TCon n args -> TCon n (map (applySubstTy subst) args)
 
 applySubstCtx :: Subst -> Context -> Context

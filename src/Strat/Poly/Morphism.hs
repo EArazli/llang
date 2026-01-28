@@ -3,7 +3,6 @@ module Strat.Poly.Morphism
   ( Morphism(..)
   , applyMorphismDiagram
   , checkMorphism
-  , isRenamingMorphism
   ) where
 
 import Data.Text (Text)
@@ -76,12 +75,6 @@ checkMorphism mor = do
         else mapM_ (checkCell mor) cells
   pure ()
 
-isRenamingMorphism :: Morphism -> Bool
-isRenamingMorphism mor =
-  case (buildTypeRenaming mor, buildGenRenaming mor) of
-    (Just _tyRen, Just _genRen) -> True
-    _ -> False
-
 checkGenMapping :: Morphism -> GenDecl -> Either Text ()
 checkGenMapping mor gen = do
   let mode = gdMode gen
@@ -130,7 +123,7 @@ inclusionFastPath mor
       if not okGens
         then Right False
         else do
-          let tgtCells = M.fromList [(c2Name c, c) | c <- dCells2 (morTgt mor)]
+          let tgtCells = M.fromList [(cellKey c, c) | c <- dCells2 (morTgt mor)]
           allM (cellMatches tgtCells) (dCells2 (morSrc mor))
   where
     genIsIdentity m gen = do
@@ -142,26 +135,89 @@ inclusionFastPath mor
         Nothing -> Right False
         Just image -> do
           expected <- genD mode dom cod name
-          diagramIsoEq expected image
+          isoOrFalse expected image
     cellMatches tgtMap cell =
-      case M.lookup (c2Name cell) tgtMap of
+      case M.lookup (cellKey cell) tgtMap of
         Nothing -> Right False
         Just tgt ->
           if c2Class cell /= c2Class tgt || c2Orient cell /= c2Orient tgt
             then Right False
             else do
-              okL <- diagramIsoEq (c2LHS cell) (c2LHS tgt)
-              okR <- diagramIsoEq (c2RHS cell) (c2RHS tgt)
+              okL <- isoOrFalse (c2LHS cell) (c2LHS tgt)
+              okR <- isoOrFalse (c2RHS cell) (c2RHS tgt)
               pure (okL && okR)
 
 renamingFastPath :: Morphism -> [Cell2] -> Either Text Bool
 renamingFastPath mor srcCells = do
   let tgt = morTgt mor
   case (buildTypeRenaming mor, buildGenRenaming mor) of
-    (Just _tyRen, Just _genRen) -> do
-      let tgtSig = S.fromList [ (c2Name c, c2Class c, c2Orient c) | c <- dCells2 tgt ]
-      allM (\cell -> Right ((c2Name cell, c2Class cell, c2Orient cell) `S.member` tgtSig)) srcCells
+    (Just tyRen, Just genRen) -> do
+      mTgtMap <- buildCellMap (dCells2 tgt)
+      nameOk <- case mTgtMap of
+        Nothing -> Right False
+        Just tgtMap -> allM (cellMatchesRenaming tyRen genRen tgtMap) srcCells
+      if nameOk
+        then Right True
+        else matchCellsByBody tyRen genRen srcCells (dCells2 tgt)
     _ -> Right False
+  where
+    buildCellMap cells =
+      let dup = firstDup (map cellKey cells)
+      in case dup of
+        Just _ -> Right Nothing
+        Nothing -> Right (Just (M.fromList [ (cellKey c, c) | c <- cells ]))
+    firstDup xs = go S.empty xs
+      where
+        go _ [] = Nothing
+        go seen (x:rest)
+          | x `S.member` seen = Just x
+          | otherwise = go (S.insert x seen) rest
+    cellMatchesRenaming tyRen genRen tgtMap cell =
+      case M.lookup (cellKey cell) tgtMap of
+        Nothing -> Right False
+        Just tgt ->
+          if c2Class cell /= c2Class tgt || c2Orient cell /= c2Orient tgt
+            then Right False
+            else do
+              let lhsRen = renameDiagram tyRen genRen (c2LHS cell)
+              let rhsRen = renameDiagram tyRen genRen (c2RHS cell)
+              okL <- isoOrFalse lhsRen (c2LHS tgt)
+              okR <- isoOrFalse rhsRen (c2RHS tgt)
+              pure (okL && okR)
+
+    matchCellsByBody tyRen genRen cells tgtCells =
+      go tgtCells cells
+      where
+        go _ [] = Right True
+        go remaining (cell:rest) = do
+          matches <- foldl (collectMatches cell) (Right []) remaining
+          if null matches
+            then Right False
+            else go remaining rest
+        collectMatches cell acc tgt = do
+          hits <- acc
+          ok <- matchesCell cell tgt
+          if ok then Right (hits <> [tgt]) else Right hits
+        matchesCell cell tgt =
+          if dMode (c2LHS cell) /= dMode (c2LHS tgt)
+            || c2Class cell /= c2Class tgt
+            || c2Orient cell /= c2Orient tgt
+            then Right False
+            else do
+              let lhsRen = renameDiagram tyRen genRen (c2LHS cell)
+              let rhsRen = renameDiagram tyRen genRen (c2RHS cell)
+              okL <- isoOrFalse lhsRen (c2LHS tgt)
+              okR <- isoOrFalse rhsRen (c2RHS tgt)
+              pure (okL && okR)
+
+isoOrFalse :: Diagram -> Diagram -> Either Text Bool
+isoOrFalse d1 d2 =
+  case diagramIsoEq d1 d2 of
+    Left _ -> Right False
+    Right ok -> Right ok
+
+cellKey :: Cell2 -> (ModeName, Text)
+cellKey cell = (dMode (c2LHS cell), c2Name cell)
 
 buildTypeRenaming :: Morphism -> Maybe (M.Map (ModeName, TypeName) TypeName)
 buildTypeRenaming mor = do
@@ -171,6 +227,7 @@ buildTypeRenaming mor = do
     then Just mp
     else Nothing
   where
+    tgt = morTgt mor
     step acc (mode, name, arity) = do
       mp <- acc
       let key = (mode, name)
@@ -184,7 +241,10 @@ buildTypeRenaming mor = do
                   _ -> Nothing
       case mapped of
         Nothing -> Nothing
-        Just tgt -> Just (M.insert key tgt mp)
+        Just tgtName ->
+          case M.lookup mode (dTypes tgt) >>= M.lookup tgtName of
+            Just a | a == arity -> Just (M.insert key tgtName mp)
+            _ -> Nothing
     isVar (TVar _) = True
     isVar _ = False
     distinct params =
@@ -198,6 +258,7 @@ buildGenRenaming mor = do
     then Just mp
     else Nothing
   where
+    tgt = morTgt mor
     step acc gen = do
       mp <- acc
       let mode = gdMode gen
@@ -205,7 +266,10 @@ buildGenRenaming mor = do
       diag <- M.lookup (mode, name) (morGenMap mor)
       case singleGenNameMaybe diag of
         Nothing -> Nothing
-        Just tgt -> Just (M.insert (mode, name) tgt mp)
+        Just tgtName ->
+          case M.lookup mode (dGens tgt) >>= M.lookup tgtName of
+            Nothing -> Nothing
+            Just _ -> Just (M.insert (mode, name) tgtName mp)
 
 singleGenNameMaybe :: Diagram -> Maybe GenName
 singleGenNameMaybe diag =
@@ -222,6 +286,30 @@ singleGenNameMaybe diag =
               | boundary == edgePorts && length allPorts == length boundary -> Just g
             _ -> Nothing
         _ -> Nothing
+
+renameDiagram :: M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, GenName) GenName -> Diagram -> Diagram
+renameDiagram tyRen genRen diag =
+  let mode = dMode diag
+      dPortTy' = IM.map (renameTypeExpr mode tyRen) (dPortTy diag)
+      dEdges' = IM.map (renameEdge mode) (dEdges diag)
+  in diag { dPortTy = dPortTy', dEdges = dEdges' }
+  where
+    renameEdge mode edge =
+      case ePayload edge of
+        PGen gen ->
+          let gen' = M.findWithDefault gen (mode, gen) genRen
+          in edge { ePayload = PGen gen' }
+        PBox name inner ->
+          let inner' = renameDiagram tyRen genRen inner
+          in edge { ePayload = PBox name inner' }
+
+renameTypeExpr :: ModeName -> M.Map (ModeName, TypeName) TypeName -> TypeExpr -> TypeExpr
+renameTypeExpr mode ren ty =
+  case ty of
+    TVar v -> TVar v
+    TCon name args ->
+      let name' = M.findWithDefault name (mode, name) ren
+      in TCon name' (map (renameTypeExpr mode ren) args)
 
 injective :: Ord a => [a] -> Bool
 injective xs =

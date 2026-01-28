@@ -16,6 +16,7 @@ import Strat.Poly.Doctrine (Doctrine)
 data PolySurfaceKind
   = SurfaceSSA
   | SurfaceCartTerm
+  | SurfaceSTLC
   deriving (Eq, Show)
 
 
