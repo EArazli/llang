@@ -21,6 +21,7 @@ import Strat.Poly.ModeTheory (ModeName)
 data PolyModel = PolyModel
   { pmInterp :: GenName -> [Value] -> Either Text Value
   , pmDefault :: DefaultBehavior
+  , pmHasClause :: GenName -> Bool
   }
 
 instantiatePolyModel :: ModelSpec -> PolyModel
@@ -32,6 +33,7 @@ instantiatePolyModel spec =
             Just f -> f args
             Nothing -> defaultInterp (msDefault spec) name args
       , pmDefault = msDefault spec
+      , pmHasClause = \(GenName name) -> M.member name clauseMap
       }
   where
     mkClause clause args =
@@ -147,15 +149,21 @@ evalGenSymbolic :: PolyModel -> Doctrine -> ModeName -> GenName -> [Value] -> Ei
 evalGenSymbolic model doc mode name args = do
   gen <- lookupGen doc mode name
   let codLen = length (gdCod gen)
-  case pmInterp model name args of
-    Right val ->
-      if codLen == 1
-        then Right [val]
-        else case val of
+  if codLen == 1
+    then do
+      val <- pmInterp model name args
+      Right [val]
+    else if pmHasClause model name
+      then do
+        val <- pmInterp model name args
+        case val of
           VList xs | length xs == codLen -> Right xs
           _ -> Left "poly eval: expected list output"
-    Left _ ->
-      Right [VList [VAtom (renderGen name <> "#" <> T.pack (show i)), VList args] | i <- [0 .. codLen - 1]]
+      else
+        case pmDefault model of
+          DefaultSymbolic ->
+            Right [VList (VAtom (renderGen name <> "#" <> T.pack (show i)) : args) | i <- [0 .. codLen - 1]]
+          DefaultError msg -> Left msg
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
@@ -195,12 +203,21 @@ evalGen :: PolyModel -> Doctrine -> ModeName -> GenName -> [Value] -> Either Tex
 evalGen model doc mode name args = do
   gen <- lookupGen doc mode name
   let codLen = length (gdCod gen)
-  val <- pmInterp model name args
   if codLen == 1
-    then Right [val]
-    else case val of
-      VList xs | length xs == codLen -> Right xs
-      _ -> Left "poly eval: expected list output"
+    then do
+      val <- pmInterp model name args
+      Right [val]
+    else if pmHasClause model name
+      then do
+        val <- pmInterp model name args
+        case val of
+          VList xs | length xs == codLen -> Right xs
+          _ -> Left "poly eval: expected list output"
+      else
+        case pmDefault model of
+          DefaultSymbolic ->
+            Right [VList (VAtom (renderGen name <> "#" <> T.pack (show i)) : args) | i <- [0 .. codLen - 1]]
+          DefaultError msg -> Left msg
 
 lookupGen :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGen doc mode name =

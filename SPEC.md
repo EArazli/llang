@@ -218,6 +218,13 @@ rule LHS diagrams:
 Joinability is checked with bounded search (fuel + breadth cap), and the engine can
 return witnesses (a meeting diagram with rewrite paths).
 
+**Current limitations (known, not fixed yet):**
+
+- Overlap enumeration includes **non‑maximal** connected overlaps, so coherence
+  obligations can be larger than the minimal critical branching set.
+- Joinability uses **bounded search** (fuel + breadth cap), so it can report a
+  failure for a joinable peak when the cap is exceeded.
+
 ---
 
 ## 5. Morphisms
@@ -420,9 +427,9 @@ Elaboration semantics:
 
 - Input binders introduce a fresh input port of the annotated type.
 - Variable occurrences elaborate to wire references to that port.
-- Multiple uses insert `dup`/`swap` to supply copies; zero uses insert `drop`.
-  Therefore any surface with binders requires the doctrine mode to provide
-  `dup`, `drop`, and `swap` with the cartesian shapes.
+- Multiple uses insert `dup` to supply copies (left‑associated duplication);
+  zero uses insert `drop`. Therefore any surface with binders requires the
+  doctrine mode to provide `dup` and `drop` with the cartesian shapes.
 
 Optional `context <ctx> = <Type>` enables CCC‑style context threading:
 

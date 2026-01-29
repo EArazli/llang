@@ -95,7 +95,7 @@ testEvalCycleLetrec = do
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   let doc = mkCycleDoctrine mode a
-  let model = ModelSpec "NoModel" [] (DefaultError "missing")
+  let model = ModelSpec "NoModel" [] DefaultSymbolic
   res <- case evalDiagram doc model diag [] of
     Left err -> assertFailure (T.unpack err)
     Right vals -> pure vals
@@ -111,7 +111,7 @@ testEvalCycleBindings = do
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   let doc = mkCycleDoctrine mode a
-  let model = ModelSpec "NoModel" [] (DefaultError "missing")
+  let model = ModelSpec "NoModel" [] DefaultSymbolic
   res <- case evalDiagram doc model diag [] of
     Left err -> assertFailure (T.unpack err)
     Right vals -> pure vals
@@ -133,7 +133,7 @@ testEvalCycleInBox = do
     Right d -> pure d
   let outer = d1 { dIn = [], dOut = [outP] }
   let doc = mkCycleDoctrine mode a
-  let model = ModelSpec "NoModel" [] (DefaultError "missing")
+  let model = ModelSpec "NoModel" [] DefaultSymbolic
   res <- case evalDiagram doc model outer [] of
     Left err -> assertFailure (T.unpack err)
     Right vals -> pure vals

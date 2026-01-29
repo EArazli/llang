@@ -76,10 +76,10 @@ expectedCoherenceDemo :: Text
 expectedCoherenceDemo =
   T.intercalate "\n"
     [ "coherence:"
-    , "  obligations: 2"
-    , "  join: 2"
+    , "  obligations: 1"
+    , "  join: 1"
     , "  commute: 0"
-    , "  failures: 2"
+    , "  failures: 1"
     , ""
     , "  failure 1: s.lr vs c.lr (NeedsJoin)"
     , "  overlap:"
@@ -99,32 +99,13 @@ expectedCoherenceDemo =
     , "    out: [p1:A]"
     , "    edges:"
     , "      e0: g [p0] -> [p1]"
-    , ""
-    , "  failure 2: c.lr vs s.lr (NeedsJoin)"
-    , "  overlap:"
-    , "    mode: M"
-    , "    in: [p0:A]"
-    , "    out: [p1:A]"
-    , "    edges:"
-    , "      e0: f [p0] -> [p1]"
-    , "  left:"
-    , "    mode: M"
-    , "    in: [p0:A]"
-    , "    out: [p1:A]"
-    , "    edges:"
-    , "      e0: g [p0] -> [p1]"
-    , "  right:"
-    , "    mode: M"
-    , "    in: [p0:A]"
-    , "    out: [p0:A]"
-    , "    edges:"
     ]
 
 expectedLoopDemo :: Text
 expectedLoopDemo =
   T.intercalate "\n"
     [ "value:"
-    , "VList [VAtom \"letrec\",VList [VList [VAtom \"$p0\",VAtom \"$p2\"],VList [VAtom \"$p1\",VAtom \"dup\"],VList [VAtom \"$p2\",VList [VAtom \"f\",VAtom \"$p1\"]]],VAtom \"$p0\"]"
+    , "VList [VAtom \"letrec\",VList [VList [VAtom \"$p0\",VList [VAtom \"dup#1\",VAtom \"$p2\"]],VList [VAtom \"$p1\",VList [VAtom \"dup#0\",VAtom \"$p2\"]],VList [VAtom \"$p2\",VList [VAtom \"f\",VAtom \"$p1\"]]],VAtom \"$p0\"]"
     ]
 
 expectedStlcLam :: Text

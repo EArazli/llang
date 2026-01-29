@@ -133,18 +133,15 @@ unifyCtxFlex flex ctx1 ctx2
 data CartesianOps = CartesianOps
   { coDup :: GenDecl
   , coDrop :: GenDecl
-  , coSwap :: GenDecl
   } deriving (Eq, Show)
 
 requireCartesian :: Doctrine -> ModeName -> Either Text CartesianOps
 requireCartesian doc mode = do
   dup <- requireGen doc mode "dup"
   dropGen <- requireGen doc mode "drop"
-  swap <- requireGen doc mode "swap"
   ensureDupShape dup
   ensureDropShape dropGen
-  ensureSwapShape swap
-  pure CartesianOps { coDup = dup, coDrop = dropGen, coSwap = swap }
+  pure CartesianOps { coDup = dup, coDrop = dropGen }
 
 requireGen :: Doctrine -> ModeName -> Text -> Either Text GenDecl
 requireGen doc mode name =
@@ -165,12 +162,6 @@ ensureDropShape gen =
     ([v], [Ty.TVar v1], []) | v == v1 -> Right ()
     _ -> Left "surface: drop has wrong type"
 
-ensureSwapShape :: GenDecl -> Either Text ()
-ensureSwapShape gen =
-  case (gdTyVars gen, gdDom gen, gdCod gen) of
-    ([a, b], [Ty.TVar a1, Ty.TVar b1], [Ty.TVar b2, Ty.TVar a2])
-      | a == a1 && a == a2 && b == b1 && b == b2 -> Right ()
-    _ -> Left "surface: swap has wrong type"
 
 
 -- Elaboration core

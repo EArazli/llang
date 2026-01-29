@@ -61,4 +61,4 @@ testCoherenceTimeout = do
   case timed of
     Nothing -> assertFailure "coherence check timed out"
     Just (Left err) -> assertFailure (T.unpack err)
-    Just (Right count) -> count @?= 2
+    Just (Right count) -> count @?= 1

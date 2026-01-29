@@ -125,7 +125,7 @@ findMeet nodes1 nodes2 = go 0
       if eq then Right (Just j) else findIsoIndex d ns (j + 1)
 
 pathFrom :: [Node] -> Int -> [Diagram]
-pathFrom nodes idx = reverse (go idx [])
+pathFrom nodes idx = go idx []
   where
     go i acc =
       case indexMaybe nodes i of

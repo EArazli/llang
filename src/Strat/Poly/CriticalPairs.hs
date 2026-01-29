@@ -61,11 +61,18 @@ criticalPairsForDoctrine mode policy doc =
 
 criticalPairsForRules :: CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
 criticalPairsForRules mode rules = do
-  pairs <- fmap concat (mapM (pairsForRule rules) rules)
-  dedupCriticalPairs pairs
+  let indexed = zip [0 :: Int ..] rules
+  let pairs =
+        [ (r1, r2)
+        | (i, r1) <- indexed
+        , (j, r2) <- indexed
+        , i <= j
+        , allowedPairSym mode r1 r2
+        ]
+  pairsOut <- fmap concat (mapM (uncurry criticalPairsForPair) pairs)
+  dedupCriticalPairs pairsOut
   where
-    pairsForRule allRules r1 =
-      fmap concat (mapM (criticalPairsForPair r1) (filter (allowedPair mode r1) allRules))
+    allowedPairSym m a b = allowedPair m a b || allowedPair m b a
 
 allowedPair :: CPMode -> RuleInfo -> RuleInfo -> Bool
 allowedPair mode r1 r2 =
@@ -505,14 +512,18 @@ dedupCriticalPairs pairs = go [] pairs
       if ok then Right True else anyIso p xs
 
     isoTriple a b = do
-      ok1 <- isoEqOrFalse (cpOverlap a) (cpOverlap b)
-      if ok1
-        then do
-          ok2 <- isoEqOrFalse (cpLeft a) (cpLeft b)
-          if ok2
-            then isoEqOrFalse (cpRight a) (cpRight b)
-            else Right False
-        else Right False
+      okOverlap <- isoEqOrFalse (cpOverlap a) (cpOverlap b)
+      if not okOverlap
+        then Right False
+        else do
+          okDirect <- do
+            okLeft <- isoEqOrFalse (cpLeft a) (cpLeft b)
+            if okLeft then isoEqOrFalse (cpRight a) (cpRight b) else Right False
+          if okDirect
+            then Right True
+            else do
+              okSwap <- isoEqOrFalse (cpLeft a) (cpRight b)
+              if okSwap then isoEqOrFalse (cpRight a) (cpLeft b) else Right False
 
     isoEqOrFalse x y =
       case diagramIsoEq x y of
