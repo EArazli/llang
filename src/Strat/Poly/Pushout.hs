@@ -12,13 +12,14 @@ import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import Control.Monad (filterM, foldM)
 import Strat.Kernel.RewriteSystem (RewritePolicy(..))
+import Strat.Kernel.Types (RuleClass(..), Orientation(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
-import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy (applySubstCtx)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Diagram (Diagram(..), applySubstDiagram, genD)
+import Strat.Poly.Diagram (Diagram(..), applySubstDiagram, genD, diagramDom, diagramCod)
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), renumberDiagram, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 
@@ -459,19 +460,74 @@ mergeCells left right =
   where
     insertCell acc cell = do
       cells <- acc
-      match <- findMatch cell cells
-      case match of
-        Nothing -> Right (cells <> [cell])
+      case findNameCollision cell cells of
         Just existing ->
-          if c2Class existing == c2Class cell && c2Orient existing == c2Orient cell
-            then Right cells
-            else Left ("poly pushout: cell conflict (" <> c2Name existing <> ", " <> c2Name cell <> ")")
+          if bodiesIso cell existing
+            then Right (replaceCell existing (mergeCell existing cell) cells)
+            else Left ("poly pushout: cell name conflict (" <> c2Name existing <> ", " <> c2Name cell <> ") " <> renderCellDiff existing cell)
+        Nothing -> do
+          match <- findMatch cell cells
+          case match of
+            Nothing -> Right (cells <> [cell])
+            Just existing ->
+              Right (replaceCell existing (mergeCell existing cell) cells)
 
     findMatch cell cells = do
       matches <- filterM (cellBodyEq cell) cells
       case matches of
         [] -> Right Nothing
         (c:_) -> Right (Just c)
+
+    findNameCollision cell cells =
+      case filter (\c -> c2Name c == c2Name cell) cells of
+        (c:_) -> Just c
+        [] -> Nothing
+
+    bodiesIso a b =
+      case cellBodyEq a b of
+        Left _ -> False
+        Right ok -> ok
+
+    replaceCell target newCell cells =
+      let (before, after) = break (\c -> c2Name c == c2Name target) cells
+      in case after of
+          [] -> cells
+          (_:rest) -> before <> [newCell] <> rest
+
+    mergeCell existing incoming =
+      let mergedClass =
+            if c2Class existing == Structural || c2Class incoming == Structural
+              then Structural
+              else Computational
+          mergedOrient = orientJoin (c2Orient existing) (c2Orient incoming)
+      in existing { c2Class = mergedClass, c2Orient = mergedOrient }
+
+    orientJoin a b =
+      case (a, b) of
+        (Bidirectional, _) -> Bidirectional
+        (_, Bidirectional) -> Bidirectional
+        (LR, RL) -> Bidirectional
+        (RL, LR) -> Bidirectional
+        (LR, LR) -> LR
+        (RL, RL) -> RL
+        (Unoriented, x) -> x
+        (x, Unoriented) -> x
+
+    renderCellDiff a b =
+      "(" <> renderCellHeader a <> " vs " <> renderCellHeader b <> ")"
+
+    renderCellHeader cell =
+      let modeTxt = renderMode (dMode (c2LHS cell))
+          domTxt = renderCtx (diagramDom (c2LHS cell))
+          codTxt = renderCtx (diagramCod (c2LHS cell))
+      in "mode=" <> modeTxt <> ", dom=" <> domTxt <> ", cod=" <> codTxt
+
+    renderCtx res =
+      case res of
+        Left _ -> "<error>"
+        Right ctx -> T.pack (show ctx)
+
+    renderMode (ModeName t) = t
 
     cellBodyEq a b = do
       if dMode (c2LHS a) /= dMode (c2LHS b)

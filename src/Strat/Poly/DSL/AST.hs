@@ -63,6 +63,7 @@ data RawDiagExpr
   = RDId RawPolyContext
   | RDGen Text (Maybe [RawPolyTypeExpr])
   | RDBox Text RawDiagExpr
+  | RDLoop RawDiagExpr
   | RDComp RawDiagExpr RawDiagExpr
   | RDTensor RawDiagExpr RawDiagExpr
   deriving (Eq, Show)

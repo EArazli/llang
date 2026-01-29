@@ -15,7 +15,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Data.List (sortOn)
 import Strat.Poly.Graph
-import Strat.Poly.Diagram (freeTyVarsDiagram)
+import Strat.Poly.Diagram (applySubstDiagram, freeTyVarsDiagram)
 import Strat.Poly.Doctrine (Doctrine)
 import Strat.Poly.TypeExpr (TypeExpr(..), TyVar)
 import Strat.Poly.UnifyTy
@@ -76,9 +76,13 @@ findAllMatchesInternal flex lhs host = do
     tryCandidates acc match adj allEdgeIds edge (cand:cands) = do
       case extendMatch flex lhs host match edge cand of
         Left _ -> tryCandidates acc match adj allEdgeIds edge cands
-        Right match' -> do
-          acc' <- go acc match' adj allEdgeIds (IM.elems (dEdges lhs)) (IM.elems (dEdges host))
+        Right matches -> do
+          acc' <- foldl step (Right acc) matches
           tryCandidates acc' match adj allEdgeIds edge cands
+      where
+        step acc0 m = do
+          acc1 <- acc0
+          go acc1 m adj allEdgeIds (IM.elems (dEdges lhs)) (IM.elems (dEdges host))
 
 lookupEdge :: Diagram -> EdgeId -> Either Text Edge
 lookupEdge diag eid =
@@ -112,37 +116,56 @@ portsCompatible match pats hosts =
         Nothing -> h `S.notMember` mUsedHostPorts match
         Just h' -> h' == h
 
-extendMatch :: S.Set TyVar -> Diagram -> Diagram -> Match -> Edge -> Edge -> Either Text Match
+extendMatch :: S.Set TyVar -> Diagram -> Diagram -> Match -> Edge -> Edge -> Either Text [Match]
 extendMatch flex lhs host match patEdge hostEdge = do
   if M.member (eId patEdge) (mEdges match)
-    then Left "extendMatch: edge already mapped"
+    then Right []
     else if eId hostEdge `S.member` mUsedHostEdges match
-      then Left "extendMatch: host edge already used"
+      then Right []
       else do
         let pairs = zip (eIns patEdge <> eOuts patEdge) (eIns hostEdge <> eOuts hostEdge)
-        (portMap, usedPorts, subst) <- foldl step (Right (mPorts match, mUsedHostPorts match, mTySub match)) pairs
-        let edgeMap = M.insert (eId patEdge) (eId hostEdge) (mEdges match)
-        let usedEdges = S.insert (eId hostEdge) (mUsedHostEdges match)
-        pure match { mPorts = portMap, mEdges = edgeMap, mTySub = subst, mUsedHostPorts = usedPorts, mUsedHostEdges = usedEdges }
+        substs <- payloadSubsts flex lhs host match patEdge hostEdge
+        fmap concat (mapM (extendWithSubst pairs) substs)
   where
-    step acc (p, h) = do
-      (portMap, usedPorts, subst) <- acc
-      case M.lookup p portMap of
-        Just h' ->
-          if h' == h
-            then Right (portMap, usedPorts, subst)
-            else Left "extendMatch: port mapping conflict"
-        Nothing ->
-          if h `S.member` usedPorts
-            then Left "extendMatch: host port already used"
-            else do
-              subst' <- unifyPorts subst p h
-              pure (M.insert p h portMap, S.insert h usedPorts, subst')
+    extendWithSubst pairs subst0 =
+      case foldl step (Right (mPorts match, mUsedHostPorts match, subst0)) pairs of
+        Left _ -> Right []
+        Right (portMap, usedPorts, subst) ->
+          let edgeMap = M.insert (eId patEdge) (eId hostEdge) (mEdges match)
+              usedEdges = S.insert (eId hostEdge) (mUsedHostEdges match)
+          in Right [match { mPorts = portMap, mEdges = edgeMap, mTySub = subst, mUsedHostPorts = usedPorts, mUsedHostEdges = usedEdges }]
+      where
+        step acc (p, h) = do
+          (portMap, usedPorts, subst) <- acc
+          case M.lookup p portMap of
+            Just h' ->
+              if h' == h
+                then Right (portMap, usedPorts, subst)
+                else Left "extendMatch: port mapping conflict"
+            Nothing ->
+              if h `S.member` usedPorts
+                then Left "extendMatch: host port already used"
+                else do
+                  subst' <- unifyPorts subst p h
+                  pure (M.insert p h portMap, S.insert h usedPorts, subst')
     unifyPorts subst p h = do
       pTy <- requirePortType lhs p
       hTy <- requirePortType host h
       s1 <- unifyTyFlex flex (applySubstTy subst pTy) hTy
       pure (composeSubst s1 subst)
+
+payloadSubsts :: S.Set TyVar -> Diagram -> Diagram -> Match -> Edge -> Edge -> Either Text [Subst]
+payloadSubsts flex _ _ match patEdge hostEdge =
+  case (ePayload patEdge, ePayload hostEdge) of
+    (PGen g1, PGen g2) ->
+      if g1 == g2 then Right [mTySub match] else Right []
+    (PBox _ d1, PBox _ d2) -> do
+      let subst = mTySub match
+      let d1' = applySubstDiagram subst d1
+      let d2' = applySubstDiagram subst d2
+      subs <- diagramIsoMatchWithTyVars flex d1' d2'
+      Right (map (`composeSubst` subst) subs)
+    _ -> Right []
 
 requirePortType :: Diagram -> PortId -> Either Text TypeExpr
 requirePortType diag pid =

@@ -14,7 +14,7 @@ import Control.Monad (foldM)
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (emptyDiagram, freshPort, addEdgePayload, EdgePayload(..), validateDiagram)
+import Strat.Poly.Graph (emptyDiagram, freshPort, addEdgePayload, EdgePayload(..), validateDiagram, mergePorts)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
@@ -42,8 +42,6 @@ elabPolyRun name raw = do
     , prDoctrine = doctrine
     , prMode = KAST.rprMode raw
     , prSurface = KAST.rprSurface raw
-    , prSurfaceSyntax = KAST.rprSurfaceSyntax raw
-    , prCoreDoctrine = KAST.rprCoreDoctrine raw
     , prModel = KAST.rprModel raw
     , prMorphisms = KAST.rprMorphisms raw
     , prUses = KAST.rprUses raw
@@ -59,6 +57,7 @@ elabPolyRun name raw = do
         RawShowInput -> ShowInput
         RawShowValue -> ShowValue
         RawShowCat -> ShowCat
+        RawShowCoherence -> ShowCoherence
     ensureShowFlags flags =
       if ShowCat `elem` flags
         then Left "polyrun: show cat is not supported"
@@ -310,6 +309,15 @@ elabDiagExpr doc mode ruleVars expr =
           let diag3 = diag2 { dIn = ins, dOut = outs }
           liftEither (validateDiagram diag3)
           pure diag3
+        RDLoop innerExpr -> do
+          inner <- build innerExpr
+          case (dIn inner, dOut inner) of
+            ([pIn], pOut:pOuts) -> do
+              diag1 <- liftEither (mergePorts inner pOut pIn)
+              let diag2 = diag1 { dIn = [], dOut = pOuts }
+              liftEither (validateDiagram diag2)
+              pure diag2
+            _ -> liftEither (Left "loop: expected exactly one input and at least one output")
         RDComp a b -> do
           d1 <- build a
           d2 <- build b

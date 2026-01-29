@@ -1,39 +1,51 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Surface
-  ( PolySurfaceKind(..)
-  , PolySurfaceDef(..)
+  ( PolySurfaceDef(..)
+  , SurfaceSpec(..)
+  , LexerSpec(..)
+  , ExprSpec(..)
+  , ExprRule(..)
+  , InfixAssoc(..)
+  , InfixRule(..)
+  , AppRule(..)
+  , PatItem(..)
+  , Action(..)
+  , ElabRule(..)
+  , TemplateExpr(..)
+  , SurfaceAST(..)
   , elabPolySurfaceDecl
   ) where
 
 import Data.Text (Text)
+import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), mtModes)
-import Strat.Poly.Doctrine (dModes)
-import Strat.Kernel.DSL.AST (RawPolySurfaceDecl(..))
-import Strat.Poly.Doctrine (Doctrine)
+import Strat.Poly.Doctrine (Doctrine(..))
+import Strat.Poly.Surface.Spec
 
 
-data PolySurfaceKind
-  = SurfaceSSA
-  | SurfaceCartTerm
-  deriving (Eq, Show)
-
-
-data PolySurfaceDef = PolySurfaceDef
-  { psName :: Text
-  , psDoctrine :: Text
-  , psMode :: ModeName
-  , psKind :: PolySurfaceKind
-  } deriving (Eq, Show)
-
-elabPolySurfaceDecl :: Doctrine -> RawPolySurfaceDecl -> Either Text PolySurfaceDef
-elabPolySurfaceDecl doc decl = do
-  let mode = ModeName (rpsMode decl)
+elabPolySurfaceDecl :: Text -> Doctrine -> SurfaceSpec -> Either Text PolySurfaceDef
+elabPolySurfaceDecl name doc spec = do
+  let mode = ModeName (ssMode spec)
   if mode `S.member` mtModes (dModes doc)
-    then Right PolySurfaceDef
-      { psName = rpsName decl
-      , psDoctrine = rpsDoctrine decl
+    then validateSpec spec >> pure PolySurfaceDef
+      { psName = name
+      , psDoctrine = ssDoctrine spec
       , psMode = mode
-      , psKind = SurfaceSSA
+      , psSpec = spec { ssName = name }
       }
     else Left "polysurface: unknown mode"
+
+validateSpec :: SurfaceSpec -> Either Text ()
+validateSpec spec =
+  do
+    require "lexer" (ssLexer spec)
+    require "expr" (ssExprSpec spec)
+    if M.null (ssElabRules spec)
+      then Left "polysurface: elaborate block is required"
+      else Right ()
+  where
+    require label field =
+      case field of
+        Nothing -> Left ("polysurface: missing " <> label)
+        Just _ -> Right ()

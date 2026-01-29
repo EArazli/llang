@@ -1,0 +1,104 @@
+{-# LANGUAGE OverloadedStrings #-}
+module Strat.Poly.Surface.Spec
+  ( PolySurfaceDef(..)
+  , SurfaceSpec(..)
+  , LexerSpec(..)
+  , ExprSpec(..)
+  , ExprRule(..)
+  , InfixAssoc(..)
+  , InfixRule(..)
+  , AppRule(..)
+  , PatItem(..)
+  , Action(..)
+  , ElabRule(..)
+  , TemplateExpr(..)
+  , SurfaceAST(..)
+  ) where
+
+import Data.Text (Text)
+import qualified Data.Map.Strict as M
+import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.TypeExpr (TypeExpr)
+
+data PolySurfaceDef = PolySurfaceDef
+  { psName :: Text
+  , psDoctrine :: Text
+  , psMode :: ModeName
+  , psSpec :: SurfaceSpec
+  } deriving (Eq, Show)
+
+data SurfaceSpec = SurfaceSpec
+  { ssName :: Text
+  , ssDoctrine :: Text
+  , ssMode :: Text
+  , ssContext :: Maybe (Text, TypeExpr)
+  , ssLexer :: Maybe LexerSpec
+  , ssExprSpec :: Maybe ExprSpec
+  , ssElabRules :: M.Map Text ElabRule
+  } deriving (Eq, Show)
+
+data LexerSpec = LexerSpec
+  { lsKeywords :: [Text]
+  , lsSymbols :: [Text]
+  } deriving (Eq, Show)
+
+data ExprSpec = ExprSpec
+  { esAtoms :: [ExprRule]
+  , esPrefixes :: [ExprRule]
+  , esInfixes :: [InfixRule]
+  , esApp :: Maybe AppRule
+  } deriving (Eq, Show)
+
+data ExprRule = ExprRule
+  { erPattern :: [PatItem]
+  , erAction :: Action
+  } deriving (Eq, Show)
+
+data InfixAssoc = AssocL | AssocR
+  deriving (Eq, Show)
+
+data InfixRule = InfixRule
+  { irAssoc :: InfixAssoc
+  , irPrec :: Int
+  , irToken :: Text
+  , irAction :: Action
+  } deriving (Eq, Show)
+
+newtype AppRule = AppRule
+  { arAction :: Action
+  } deriving (Eq, Show)
+
+data PatItem
+  = PatLit Text
+  | PatIdent
+  | PatExpr
+  | PatType
+  deriving (Eq, Show)
+
+data Action
+  = ActionCtor Text [Text]
+  | ActionExpr
+  deriving (Eq, Show)
+
+data ElabRule = ElabRule
+  { erCtor :: Text
+  , erArgs :: [Text]
+  , erTemplate :: TemplateExpr
+  } deriving (Eq, Show)
+
+data TemplateExpr
+  = TId [TypeExpr]
+  | TGen Text (Maybe [TypeExpr])
+  | TBox Text TemplateExpr
+  | TLoop TemplateExpr
+  | TComp TemplateExpr TemplateExpr
+  | TTensor TemplateExpr TemplateExpr
+  | THole Int
+  | TVar Text
+  deriving (Eq, Show)
+
+data SurfaceAST
+  = SAIdent Text
+  | SAType TypeExpr
+  | SANode Text [SurfaceAST]
+  deriving (Eq, Show)

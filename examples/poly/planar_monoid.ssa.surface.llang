@@ -1,20 +1,7 @@
-polydoctrine Iface where {
-  mode M;
-  type A @M;
-  gen dup a : [a] -> [a, a] @M;
-  gen drop a : [a] -> [] @M;
-  gen swap a b : [a, b] -> [b, a] @M;
-  gen f : [A] -> [A] @M;
-}
+import "./cart_monoid.poly.llang";
 
-polydoctrine Target extends Iface where {
-  gen g : [A] -> [A] @M;
-}
-
-polyimplements Iface for Target using Target.fromBase;
-
-polysurface IfaceSSA where {
-  doctrine Iface;
+polysurface PlanarSSA where {
+  doctrine CartMonoid;
   mode M;
 
   lexer {
@@ -48,16 +35,3 @@ polysurface IfaceSSA where {
     LET(x, val, body) => $1 * $2;;
   }
 }
-
-polyrun main where {
-  doctrine Target;
-  surface IfaceSSA;
-  uses: Iface;
-  show normalized;
-}
----
-diag {
-  in x:A;
-  out f(x);
-}
----

@@ -12,8 +12,6 @@ data PolyRunSpec = PolyRunSpec
   , prDoctrine :: Text
   , prMode :: Maybe Text
   , prSurface :: Maybe Text
-  , prSurfaceSyntax :: Maybe Text
-  , prCoreDoctrine :: Maybe Text
   , prModel :: Maybe Text
   , prMorphisms :: [Text]
   , prUses :: [Text]

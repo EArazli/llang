@@ -7,6 +7,7 @@ import Strat.Kernel.DSL.AST
 import Strat.Kernel.Types
 import Strat.Model.Spec (MExpr(..))
 import qualified Strat.Poly.DSL.AST as PolyAST
+import Strat.Poly.Surface.Parse (surfaceSpecBlock)
 import Data.Text (Text)
 import qualified Data.Set as S
 import qualified Data.Text as T
@@ -253,16 +254,10 @@ polySurfaceDecl :: Parser RawDecl
 polySurfaceDecl = do
   _ <- symbol "polysurface"
   name <- ident
-  _ <- symbol ":"
-  _ <- symbol "doctrine"
-  doc <- ident
-  _ <- symbol "mode"
-  mode <- ident
   _ <- symbol "where"
-  _ <- symbol "{"
-  _ <- symbol "}"
+  spec <- surfaceSpecBlock
   optionalSemi
-  pure (DeclPolySurface (RawPolySurfaceDecl name doc mode))
+  pure (DeclPolySurface (RawPolySurfaceDecl name spec))
 
 runBody :: Parser Text
 runBody = do
@@ -1173,8 +1168,6 @@ data PolyRunItem
   = PolyRunDoctrine Text
   | PolyRunMode Text
   | PolyRunSurface Text
-  | PolyRunSurfaceSyntax Text
-  | PolyRunCoreDoctrine Text
   | PolyRunModel Text
   | PolyRunApply Text
   | PolyRunUses [Text]
@@ -1193,9 +1186,7 @@ polyRunItem :: Parser PolyRunItem
 polyRunItem =
   polyDoctrineItem
     <|> polyModeItem
-    <|> polySurfaceSyntaxItem
     <|> polySurfaceItem
-    <|> polyCoreDoctrineItem
     <|> polyModelItem
     <|> polyApplyItem
     <|> polyUsesItem
@@ -1223,20 +1214,6 @@ polySurfaceItem = do
   name <- ident
   optionalSemi
   pure (PolyRunSurface name)
-
-polySurfaceSyntaxItem :: Parser PolyRunItem
-polySurfaceSyntaxItem = do
-  _ <- symbol "surface_syntax"
-  name <- ident
-  optionalSemi
-  pure (PolyRunSurfaceSyntax name)
-
-polyCoreDoctrineItem :: Parser PolyRunItem
-polyCoreDoctrineItem = do
-  _ <- symbol "core_doctrine"
-  name <- ident
-  optionalSemi
-  pure (PolyRunCoreDoctrine name)
 
 polyModelItem :: Parser PolyRunItem
 polyModelItem = do
@@ -1384,6 +1361,7 @@ showFlag =
     <|> (symbol "value" $> RawShowValue)
     <|> (symbol "cat" $> RawShowCat)
     <|> (symbol "input" $> RawShowInput)
+    <|> (symbol "coherence" $> RawShowCoherence)
 
 buildRun :: [RunItem] -> Text -> RawRun
 buildRun items exprText =
@@ -1421,8 +1399,6 @@ buildPolyRun items exprText =
     { rprDoctrine = doctrineName
     , rprMode = modeName
     , rprSurface = surfaceName
-    , rprSurfaceSyntax = surfaceSyntaxName
-    , rprCoreDoctrine = coreDoctrineName
     , rprModel = modelName
     , rprMorphisms = applies
     , rprUses = uses
@@ -1435,8 +1411,6 @@ buildPolyRun items exprText =
     doctrineName = firstJust [ d | PolyRunDoctrine d <- items ]
     modeName = firstJust [ m | PolyRunMode m <- items ]
     surfaceName = firstJust [ s | PolyRunSurface s <- items ]
-    surfaceSyntaxName = firstJust [ s | PolyRunSurfaceSyntax s <- items ]
-    coreDoctrineName = firstJust [ d | PolyRunCoreDoctrine d <- items ]
     modelName = firstJust [ m | PolyRunModel m <- items ]
     applies = [ n | PolyRunApply n <- items ]
     uses = concat [ ns | PolyRunUses ns <- items ]

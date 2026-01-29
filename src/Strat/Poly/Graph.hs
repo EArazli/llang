@@ -13,6 +13,7 @@ module Strat.Poly.Graph
   , mergePorts
   , renumberDiagram
   , diagramIsoEq
+  , diagramIsoMatchWithTyVars
   , shiftDiagram
   , diagramPortType
   , diagramPortIds
@@ -26,8 +27,9 @@ import qualified Data.IntSet as IS
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.TypeExpr (TypeExpr)
+import Strat.Poly.TypeExpr (TypeExpr, TyVar)
 import Strat.Poly.Names (GenName(..), BoxName(..))
+import Strat.Poly.UnifyTy (Subst, unifyTyFlex, applySubstTy, composeSubst)
 
 
 newtype PortId = PortId Int deriving (Eq, Ord, Show)
@@ -63,6 +65,15 @@ data IsoState = IsoState
   , isUsedPorts :: S.Set PortId
   , isUsedEdges :: S.Set EdgeId
   , isQueue :: [(PortId, PortId)]
+  } deriving (Eq, Show)
+
+data IsoMatchState = IsoMatchState
+  { imsPortMap :: M.Map PortId PortId
+  , imsEdgeMap :: M.Map EdgeId EdgeId
+  , imsUsedPorts :: S.Set PortId
+  , imsUsedEdges :: S.Set EdgeId
+  , imsQueue :: [(PortId, PortId)]
+  , imsSubst :: Subst
   } deriving (Eq, Show)
 
 
@@ -559,3 +570,171 @@ unionDisjointIntMap label left right =
   in if null overlap
     then Right (IM.union left right)
     else Left (label <> ": key collision " <> T.pack (show overlap))
+
+diagramIsoMatchWithTyVars :: S.Set TyVar -> Diagram -> Diagram -> Either Text [Subst]
+diagramIsoMatchWithTyVars flex left right
+  | dMode left /= dMode right = Right []
+  | length (dIn left) /= length (dIn right) = Right []
+  | length (dOut left) /= length (dOut right) = Right []
+  | IM.size (dPortTy left) /= IM.size (dPortTy right) = Right []
+  | IM.size (dEdges left) /= IM.size (dEdges right) = Right []
+  | otherwise = do
+      let initPairs = zip (dIn left) (dIn right) <> zip (dOut left) (dOut right)
+      st0 <- foldl addInit (Right (Just emptyState)) initPairs
+      case st0 of
+        Nothing -> Right []
+        Just st -> fmap (map imsSubst) (isoSearch st)
+  where
+    emptyState = IsoMatchState M.empty M.empty S.empty S.empty [] M.empty
+
+    addInit acc (p1, p2) = do
+      mSt <- acc
+      case mSt of
+        Nothing -> Right Nothing
+        Just st ->
+          case addPortPair st p1 p2 of
+            Nothing -> Right Nothing
+            Just st' -> Right (Just st')
+
+    isoSearch st = do
+      states <- propagate st
+      fmap concat (mapM expand states)
+
+    expand st =
+      if M.size (imsEdgeMap st) == IM.size (dEdges left) && M.size (imsPortMap st) == IM.size (dPortTy left)
+        then Right [st]
+        else do
+          case nextUnmappedEdge st of
+            Nothing -> Right []
+            Just e1 -> do
+              let candidates = filter (edgeCompatible e1) (unmappedEdges st)
+              fmap concat (mapM (tryCandidate st e1) candidates)
+
+    tryCandidate st e1 e2 = do
+      states <- tryMapEdge st e1 e2
+      fmap concat (mapM isoSearch states)
+
+    propagate st0 =
+      case imsQueue st0 of
+        [] -> Right [st0]
+        ((p1, p2):rest) -> do
+          let stBase = st0 { imsQueue = rest }
+          st1s <- checkPortTypes stBase p1 p2
+          st2s <- fmap concat (mapM (mapIncidentEdges p1 p2) st1s)
+          fmap concat (mapM propagate st2s)
+
+    checkPortTypes st p1 p2 = do
+      ty1 <- requirePortType left p1
+      ty2 <- requirePortType right p2
+      let subst = imsSubst st
+      case unifyTyFlex flex (applySubstTy subst ty1) (applySubstTy subst ty2) of
+        Left _ -> Right []
+        Right s1 ->
+          let subst' = composeSubst s1 subst
+          in Right [st { imsSubst = subst' }]
+
+    mapIncidentEdges p1 p2 st = do
+      st1s <- mapEndpoint "producer" (lookupEdge left (dProd left) p1) (lookupEdge right (dProd right) p2) st
+      fmap concat (mapM (mapEndpoint "consumer" (lookupEdge left (dCons left) p1) (lookupEdge right (dCons right) p2)) st1s)
+
+    mapEndpoint _ Nothing Nothing st = Right [st]
+    mapEndpoint _ (Just e1) (Just e2) st = addEdgePair st e1 e2
+    mapEndpoint _ _ _ _ = Right []
+
+    lookupEdge diag mp pid =
+      case IM.lookup (portKey pid) mp of
+        Just (Just eid) -> IM.lookup (edgeKey eid) (dEdges diag)
+        Just Nothing -> Nothing
+        Nothing -> Nothing
+
+    addPortPair st p1 p2 =
+      case M.lookup p1 (imsPortMap st) of
+        Just mapped ->
+          if mapped == p2 then Just st else Nothing
+        Nothing ->
+          if p2 `S.member` imsUsedPorts st
+            then Nothing
+            else Just st
+              { imsPortMap = M.insert p1 p2 (imsPortMap st)
+              , imsUsedPorts = S.insert p2 (imsUsedPorts st)
+              , imsQueue = imsQueue st <> [(p1, p2)]
+              }
+
+    addEdgePair st e1 e2 =
+      case M.lookup (eId e1) (imsEdgeMap st) of
+        Just mapped ->
+          if mapped == eId e2 then Right [st] else Right []
+        Nothing ->
+          if eId e2 `S.member` imsUsedEdges st
+            then Right []
+            else do
+              subs <- payloadSubsts st (ePayload e1) (ePayload e2)
+              fmap concat (mapM (attachEdge st e1 e2) subs)
+
+    attachEdge st e1 e2 subst = do
+      if length (eIns e1) /= length (eIns e2) || length (eOuts e1) /= length (eOuts e2)
+        then Right []
+        else do
+          let st0 = st
+                { imsEdgeMap = M.insert (eId e1) (eId e2) (imsEdgeMap st)
+                , imsUsedEdges = S.insert (eId e2) (imsUsedEdges st)
+                , imsSubst = subst
+                }
+          foldl addPorts (Right [st0]) (zip (eIns e1) (eIns e2) <> zip (eOuts e1) (eOuts e2))
+      where
+        addPorts acc (p1, p2) = do
+          states <- acc
+          pure [ st'' | st' <- states, Just st'' <- [addPortPair st' p1 p2] ]
+
+    payloadSubsts st p1 p2 =
+      case (p1, p2) of
+        (PGen g1, PGen g2) ->
+          if g1 == g2 then Right [imsSubst st] else Right []
+        (PBox _ d1, PBox _ d2) -> do
+          let subst = imsSubst st
+          let d1' = applySubstDiagramLocal subst d1
+          let d2' = applySubstDiagramLocal subst d2
+          subs <- diagramIsoMatchWithTyVars flex d1' d2'
+          Right (map (`composeSubst` subst) subs)
+        _ -> Right []
+
+    requirePortType diag pid =
+      case diagramPortType diag pid of
+        Nothing -> Left "diagramIsoMatchWithTyVars: missing port type"
+        Just ty -> Right ty
+
+    nextUnmappedEdge st =
+      let candidates = filter (\e -> M.notMember (eId e) (imsEdgeMap st)) (IM.elems (dEdges left))
+      in case candidates of
+        [] -> Nothing
+        _ -> Just (head candidates)
+
+    unmappedEdges st =
+      [ e
+      | e <- IM.elems (dEdges right)
+      , eId e `S.notMember` imsUsedEdges st
+      ]
+
+    edgeCompatible e1 e2 =
+      length (eIns e1) == length (eIns e2)
+        && length (eOuts e1) == length (eOuts e2)
+        && payloadCompatible (ePayload e1) (ePayload e2)
+
+    payloadCompatible p1 p2 =
+      case (p1, p2) of
+        (PGen g1, PGen g2) -> g1 == g2
+        (PBox _ _, PBox _ _) -> True
+        _ -> False
+
+    tryMapEdge st e1 e2 = addEdgePair st e1 e2
+
+applySubstDiagramLocal :: Subst -> Diagram -> Diagram
+applySubstDiagramLocal subst diag =
+  let dPortTy' = IM.map (applySubstTy subst) (dPortTy diag)
+      dEdges' = IM.map (mapEdgePayloadLocal subst) (dEdges diag)
+  in diag { dPortTy = dPortTy', dEdges = dEdges' }
+  where
+    mapEdgePayloadLocal s edge =
+      case ePayload edge of
+        PGen g -> edge { ePayload = PGen g }
+        PBox name inner -> edge { ePayload = PBox name (applySubstDiagramLocal s inner) }

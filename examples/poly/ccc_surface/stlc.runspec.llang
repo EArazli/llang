@@ -1,6 +1,4 @@
-import "./ccc.poly.llang";
-import "../../ccc_surface/stlc.surface.llang";
-import "../../ccc_surface/stlc.syntax.llang";
+import "./stlc.surface.llang";
 
 polymodel CCCSymbolic : CCC where {
   default = symbolic;
@@ -12,12 +10,9 @@ polymodel CCCSymbolic : CCC where {
 
 polyrun_spec STLCinCCC where {
   doctrine CCC;
-  core_doctrine CCC;
   surface STLC;
-  surface_syntax STLC_Syntax;
   model CCCSymbolic;
   policy UseOnlyComputationalLR;
   fuel 200;
   show normalized;
-  show value;
 }

@@ -32,7 +32,11 @@ import qualified Test.Poly.DSL as PolyDSL
 import qualified Test.Poly.Morphism as PolyMorphism
 import qualified Test.Poly.Eval as PolyEval
 import qualified Test.Poly.Pushout as PolyPushout
+import qualified Test.Poly.Coherence as PolyCoherence
 import qualified Test.Poly.CCC as PolyCCC
+import qualified Test.Poly.Surface as PolySurface
+import qualified Test.Poly.NoLegacy as PolyNoLegacy
+import qualified Test.Poly.StdlibCoherence as PolyStdlibCoherence
 
 main :: IO ()
 main =
@@ -70,5 +74,9 @@ main =
     , PolyMorphism.tests
     , PolyEval.tests
     , PolyPushout.tests
+    , PolyCoherence.tests
     , PolyCCC.tests
+    , PolySurface.tests
+    , PolyNoLegacy.tests
+    , PolyStdlibCoherence.tests
       ]

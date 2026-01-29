@@ -60,6 +60,7 @@ data-files:
 - examples/poly/ccc.poly.llang
 - examples/poly/ccc.run.llang
 - examples/poly/ccc_surface/ccc.poly.llang
+- examples/poly/ccc_surface/stlc.surface.llang
 - examples/poly/ccc_surface/stlc.runspec.llang
 - examples/poly/ccc_surface/stlc.run.llang
 - examples/poly/ccc_surface/stlc.lam1.run.llang
@@ -70,12 +71,19 @@ data-files:
 - examples/poly/ccc_surface/stlc.pair1.run.llang
 - examples/poly/planar_monoid.poly.llang
 - examples/poly/planar_monoid.run.llang
+- examples/poly/planar_monoid.ssa.surface.llang
 - examples/poly/planar_monoid.ssa.run.llang
 - examples/poly/cart_monoid.poly.llang
 - examples/poly/cart_monoid.run.llang
 - examples/poly/cart_monoid.term.run.llang
 - examples/poly/monoid.run.llang
 - examples/poly/no_dup_error.run.llang
+- examples/poly/box_match.poly.llang
+- examples/poly/box_match.run.llang
+- examples/poly/coherence_demo.poly.llang
+- examples/poly/coherence_demo.run.llang
+- examples/poly/loop_demo.poly.llang
+- examples/poly/loop_demo.run.llang
 - examples/poly/subdiagram_match.poly.llang
 - examples/poly/monoid_to_string.llang
 - examples/poly/implements_uses.run.llang
@@ -205,4 +213,8 @@ tests:
     - Test.Poly.Eval
     - Test.Poly.Pushout
     - Test.Poly.CCC
+    - Test.Poly.Coherence
+    - Test.Poly.Surface
+    - Test.Poly.NoLegacy
+    - Test.Poly.StdlibCoherence
     - Paths_llang

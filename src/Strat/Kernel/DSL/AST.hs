@@ -57,6 +57,7 @@ module Strat.Kernel.DSL.AST
 
 import Strat.Kernel.Types
 import Strat.Model.Spec (MExpr)
+import Strat.Poly.Surface.Spec (SurfaceSpec)
 import Data.Text (Text)
 import qualified Strat.Poly.DSL.AST as PolyAST
 
@@ -192,6 +193,7 @@ data RawRunShow
   | RawShowValue
   | RawShowCat
   | RawShowInput
+  | RawShowCoherence
   deriving (Eq, Ord, Show)
 
 
@@ -214,8 +216,6 @@ data RawPolyRun = RawPolyRun
   { rprDoctrine :: Maybe Text
   , rprMode :: Maybe Text
   , rprSurface :: Maybe Text
-  , rprSurfaceSyntax :: Maybe Text
-  , rprCoreDoctrine :: Maybe Text
   , rprModel :: Maybe Text
   , rprMorphisms :: [Text]
   , rprUses :: [Text]
@@ -432,8 +432,7 @@ data RawPolyGenMap = RawPolyGenMap
 
 data RawPolySurfaceDecl = RawPolySurfaceDecl
   { rpsName :: Text
-  , rpsDoctrine :: Text
-  , rpsMode :: Text
+  , rpsSpec :: SurfaceSpec
   } deriving (Eq, Show)
 
 data RawPolyImplementsDecl = RawPolyImplementsDecl

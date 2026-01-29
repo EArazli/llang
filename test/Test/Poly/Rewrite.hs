@@ -7,13 +7,15 @@ import Test.Tasty
 import Test.Tasty.HUnit
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TyVar(..))
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
-import Strat.Poly.Match (findFirstMatchNoDoc)
+import Strat.Poly.Match (Match(..), findFirstMatchNoDoc, findFirstMatchWithTyVars)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Pretty (renderDiagram)
 import qualified Data.IntMap.Strict as IM
@@ -29,6 +31,10 @@ tests =
     , testCase "matching requires injective host mapping" testInjectiveMatch
     , testCase "non-injective match does not trigger rewrite" testNonInjectiveRewrite
     , testCase "rewrite inside box" testRewriteInsideBox
+    , testCase "box mismatch rejects" testBoxMismatchRejects
+    , testCase "box match accepts" testBoxMatchAccepts
+    , testCase "nested boxes match" testNestedBoxesMatch
+    , testCase "type vars unify through boxes" testBoxTypeVarUnify
     , testCase "normalize deterministic" testNormalizeDeterminism
     ]
 
@@ -171,6 +177,90 @@ testRewriteInsideBox = do
             _ -> assertFailure "expected box edge"
         _ -> assertFailure "expected single box edge"
 
+testBoxMismatchRejects :: Assertion
+testBoxMismatchRejects = do
+  f <- require (mkGen "f" [aTy] [aTy])
+  g <- require (mkGen "g" [aTy] [aTy])
+  lhs <- require (mkBoxDiagram "B" f aTy)
+  rhs <- require (mkBoxDiagram "B" g aTy)
+  let rule = RewriteRule
+        { rrName = "box-mismatch"
+        , rrLHS = lhs
+        , rrRHS = rhs
+        , rrTyVars = []
+        }
+  host <- require (mkBoxDiagram "B" g aTy)
+  res <- case rewriteOnce [rule] host of
+    Left err -> assertFailure (T.unpack err)
+    Right r -> pure r
+  case res of
+    Nothing -> pure ()
+    Just _ -> assertFailure "expected box mismatch to reject"
+
+testBoxMatchAccepts :: Assertion
+testBoxMatchAccepts = do
+  f1 <- require (mkGen "f" [aTy] [aTy])
+  f2 <- require (mkGen "f" [aTy] [aTy])
+  g <- require (mkGen "g" [aTy] [aTy])
+  lhs <- require (mkBoxDiagram "B" f1 aTy)
+  rhs <- require (mkBoxDiagram "B" g aTy)
+  let rule = RewriteRule
+        { rrName = "box-match"
+        , rrLHS = lhs
+        , rrRHS = rhs
+        , rrTyVars = []
+        }
+  host <- require (mkBoxDiagram "B" f2 aTy)
+  res <- case rewriteOnce [rule] host of
+    Left err -> assertFailure (T.unpack err)
+    Right r -> pure r
+  case res of
+    Nothing -> assertFailure "expected box match to succeed"
+    Just d -> do
+      let edges = IM.elems (dEdges d)
+      case edges of
+        [edge] ->
+          case ePayload edge of
+            PBox _ inner -> do
+              got <- require (renderDiagram inner)
+              expected <- require (renderDiagram g)
+              got @?= expected
+            _ -> assertFailure "expected box edge"
+        _ -> assertFailure "expected single box edge"
+
+testNestedBoxesMatch :: Assertion
+testNestedBoxesMatch = do
+  f <- require (mkGen "f" [aTy] [aTy])
+  inner <- require (mkBoxDiagram "Inner" f aTy)
+  lhs <- require (mkBoxDiagram "Outer" inner aTy)
+  host <- require (mkBoxDiagram "Outer" inner aTy)
+  res <- case findFirstMatchNoDoc lhs host of
+    Left err -> assertFailure (T.unpack err)
+    Right m -> pure m
+  case res of
+    Nothing -> assertFailure "expected nested box match"
+    Just _ -> pure ()
+
+testBoxTypeVarUnify :: Assertion
+testBoxTypeVarUnify = do
+  let aVar = TyVar "a"
+  let aVarTy = TVar aVar
+  let aName = TypeName "A"
+  let aConcrete = TCon aName []
+  fVar <- require (mkGen "f" [aVarTy] [aVarTy])
+  fConcrete <- require (mkGen "f" [aConcrete] [aConcrete])
+  lhs <- require (mkBoxDiagram "B" fVar aVarTy)
+  host <- require (mkBoxDiagram "B" fConcrete aConcrete)
+  res <- case findFirstMatchWithTyVars (S.singleton aVar) lhs host of
+    Left err -> assertFailure (T.unpack err)
+    Right m -> pure m
+  case res of
+    Nothing -> assertFailure "expected type-var unification through box"
+    Just m ->
+      case M.lookup aVar (mTySub m) of
+        Nothing -> assertFailure "expected substitution for type variable"
+        Just ty -> ty @?= aConcrete
+
 testNormalizeDeterminism :: Assertion
 testNormalizeDeterminism = do
   rule <- either (assertFailure . T.unpack) pure assocRule
@@ -185,3 +275,11 @@ testNormalizeDeterminism = do
     (Finished a, Finished b) -> a @?= b
     (OutOfFuel a, OutOfFuel b) -> a @?= b
     _ -> assertFailure "expected same normalization status"
+
+mkBoxDiagram :: Text -> Diagram -> TypeExpr -> Either Text Diagram
+mkBoxDiagram name inner ty = do
+  let (inP, d0) = freshPort ty (emptyDiagram modeName)
+  let (outP, d1) = freshPort ty d0
+  let boxEdge = PBox (BoxName name) inner
+  d2 <- addEdgePayload boxEdge [inP] [outP] d1
+  pure d2 { dIn = [inP], dOut = [outP] }

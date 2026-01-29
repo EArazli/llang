@@ -10,6 +10,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.IntMap.Strict as IM
 import Strat.Poly.ModeTheory (ModeTheory(..), ModeName(..), ModDecl(..))
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names (GenName(..))
@@ -83,6 +84,9 @@ checkCell :: Doctrine -> Cell2 -> Either Text ()
 checkCell doc cell = do
   validateDiagram (c2LHS cell)
   validateDiagram (c2RHS cell)
+  if IM.size (dEdges (c2LHS cell)) <= 0
+    then Left "validateDoctrine: empty LHS rules are disallowed (use an explicit marker generator if you need insertion)"
+    else Right ()
   ensureDistinctTyVars ("validateDoctrine: duplicate cell tyvars in " <> c2Name cell) (c2TyVars cell)
   if dMode (c2LHS cell) /= dMode (c2RHS cell)
     then Left "validateDoctrine: cell has mode mismatch"
@@ -93,7 +97,12 @@ checkCell doc cell = do
       codL <- diagramCod (c2LHS cell)
       codR <- diagramCod (c2RHS cell)
       _ <- unifyCtx codL codR
-      let vars = freeTyVarsDiagram (c2LHS cell) <> freeTyVarsDiagram (c2RHS cell)
+      let lhsVars = freeTyVarsDiagram (c2LHS cell)
+      let rhsVars = freeTyVarsDiagram (c2RHS cell)
+      if S.isSubsetOf rhsVars lhsVars
+        then Right ()
+        else Left "validateDoctrine: RHS introduces fresh type variables"
+      let vars = S.union lhsVars rhsVars
       let allowed = S.fromList (c2TyVars cell)
       if S.isSubsetOf vars allowed
         then Right ()

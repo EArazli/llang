@@ -3,6 +3,8 @@ module Strat.Poly.Normalize
   ( NormalizationStatus(..)
   , normalize
   , joinableWithin
+  , JoinWitness(..)
+  , joinableWithinWitness
   ) where
 
 import Data.Text (Text)
@@ -15,6 +17,12 @@ data NormalizationStatus a
   = Finished a
   | OutOfFuel a
   deriving (Eq, Show)
+
+data JoinWitness = JoinWitness
+  { jwMeet  :: Diagram
+  , jwLeft  :: [Diagram]
+  , jwRight :: [Diagram]
+  } deriving (Eq, Show)
 
 normalize :: Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
 normalize fuel rules diag
@@ -42,6 +50,99 @@ joinableWithin fuel rules d1 d2
       reach1 <- reachable rules cap fuel d1'
       reach2 <- reachable rules cap fuel d2'
       anyIso reach1 reach2
+
+joinableWithinWitness :: Int -> [RewriteRule] -> Diagram -> Diagram -> Either Text (Maybe JoinWitness)
+joinableWithinWitness fuel rules d1 d2
+  | fuel < 0 = Right Nothing
+  | otherwise = do
+      let cap = 50
+      nodes1 <- reachableWithParents rules cap fuel d1
+      nodes2 <- reachableWithParents rules cap fuel d2
+      meet <- findMeet nodes1 nodes2
+      case meet of
+        Nothing -> Right Nothing
+        Just (i1, i2) -> do
+          let path1 = pathFrom nodes1 i1
+          let path2 = pathFrom nodes2 i2
+          let meetDiag = nodeDiag (nodes1 !! i1)
+          Right (Just JoinWitness { jwMeet = meetDiag, jwLeft = path1, jwRight = path2 })
+
+data Node = Node
+  { nodeDiag :: Diagram
+  , nodeParent :: Maybe Int
+  , nodeDepth :: Int
+  } deriving (Eq, Show)
+
+reachableWithParents :: [RewriteRule] -> Int -> Int -> Diagram -> Either Text [Node]
+reachableWithParents rules cap fuel start = do
+  start' <- renumberDiagram start
+  go [Node start' Nothing 0] [0]
+  where
+    go nodes [] = Right nodes
+    go nodes (idx:rest) =
+      case indexMaybe nodes idx of
+        Nothing -> Right nodes
+        Just node ->
+          if nodeDepth node >= fuel
+            then go nodes rest
+            else do
+              next0 <- rewriteAll cap rules (nodeDiag node)
+              next <- mapM renumberDiagram next0
+              (nodes', newIdxs) <- foldl (insertIfNew idx (nodeDepth node + 1)) (Right (nodes, [])) next
+              go nodes' (rest <> newIdxs)
+
+    insertIfNew parent depth acc diag = do
+      (nodes, newIdxs) <- acc
+      present <- isIsoNode diag nodes
+      if present
+        then Right (nodes, newIdxs)
+        else do
+          let idx = length nodes
+          Right (nodes <> [Node diag (Just parent) depth], newIdxs <> [idx])
+
+isIsoNode :: Diagram -> [Node] -> Either Text Bool
+isIsoNode _ [] = Right False
+isIsoNode d (n:ns) = do
+  eq <- isoEqOrFalse d (nodeDiag n)
+  if eq then Right True else isIsoNode d ns
+
+findMeet :: [Node] -> [Node] -> Either Text (Maybe (Int, Int))
+findMeet nodes1 nodes2 = go 0
+  where
+    go i =
+      if i >= length nodes1
+        then Right Nothing
+        else do
+          let d1 = nodeDiag (nodes1 !! i)
+          j <- findIsoIndex d1 nodes2 0
+          case j of
+            Nothing -> go (i + 1)
+            Just idx -> Right (Just (i, idx))
+
+    findIsoIndex _ [] _ = Right Nothing
+    findIsoIndex d (n:ns) j = do
+      eq <- isoEqOrFalse d (nodeDiag n)
+      if eq then Right (Just j) else findIsoIndex d ns (j + 1)
+
+pathFrom :: [Node] -> Int -> [Diagram]
+pathFrom nodes idx = reverse (go idx [])
+  where
+    go i acc =
+      case indexMaybe nodes i of
+        Nothing -> acc
+        Just node ->
+          let acc' = nodeDiag node : acc
+          in case nodeParent node of
+            Nothing -> acc'
+            Just p -> go p acc'
+
+indexMaybe :: [a] -> Int -> Maybe a
+indexMaybe xs i
+  | i < 0 = Nothing
+  | otherwise =
+      case drop i xs of
+        (y:_) -> Just y
+        [] -> Nothing
 
 reachable :: [RewriteRule] -> Int -> Int -> Diagram -> Either Text [Diagram]
 reachable rules cap fuel start =
@@ -74,5 +175,11 @@ anyIso (x:xs) ys = do
 isIsoMember :: Diagram -> [Diagram] -> Either Text Bool
 isIsoMember _ [] = Right False
 isIsoMember d (x:xs) = do
-  eq <- diagramIsoEq d x
+  eq <- isoEqOrFalse d x
   if eq then Right True else isIsoMember d xs
+
+isoEqOrFalse :: Diagram -> Diagram -> Either Text Bool
+isoEqOrFalse a b =
+  case diagramIsoEq a b of
+    Left _ -> Right False
+    Right ok -> Right ok

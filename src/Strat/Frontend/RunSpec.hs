@@ -12,6 +12,7 @@ data RunShow
   | ShowValue
   | ShowCat
   | ShowInput
+  | ShowCoherence
   deriving (Eq, Ord, Show)
 
 

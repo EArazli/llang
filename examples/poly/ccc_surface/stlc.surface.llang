@@ -1,0 +1,42 @@
+import "./ccc.poly.llang";
+
+polysurface STLC where {
+  doctrine CCC;
+  mode M;
+  context ctx = Unit;
+
+  lexer {
+    keywords: lam, true, false, fst, snd;
+    symbols: "(", ")", ".", ":", ",";
+  }
+
+  expr {
+    atom:
+      ident => VAR(name)
+    | "true" => TRUE
+    | "false" => FALSE
+    | "(" <expr> "," <expr> ")" => PAIR(lhs, rhs)
+    | "(" <expr> ")" => <expr>
+    ;
+
+    prefix:
+      "lam" ident ":" <type> "." <expr> => LAM(x, ty, body)
+    | "fst" <expr> => FST(p)
+    | "snd" <expr> => SND(p)
+    ;
+
+    application:
+      <expr> <expr> => APP(fn, arg);
+  }
+
+  elaborate {
+    VAR(x) => $x;;
+    TRUE => (T * terminal{ctx}) ; comp;;
+    FALSE => (F * terminal{ctx}) ; comp;;
+    PAIR(a, b) => ($1 * $2) ; pair;;
+    FST(p) => (exl * $1) ; comp;;
+    SND(p) => (exr * $1) ; comp;;
+    APP(f, x) => (eval * (($1 * $2) ; pair)) ; comp;;
+    LAM(x, ty, body) => $1 ; curry;;
+  }
+}

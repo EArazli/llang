@@ -19,10 +19,10 @@ subdiagram_match.poly.llang
   A small doctrine with a rule intended to match as a subdiagram inside larger graphs.
 
 planar_monoid.ssa.run.llang
-  Uses the SSA polysurface to build a monoid diagram with named wires.
+  Uses the SSA polysurface to build a monoid diagram with named wires (see planar_monoid.ssa.surface.llang).
 
 cart_monoid.term.run.llang
-  Uses the CartTermSurface plus a polymodel to normalize and evaluate a duplicated term.
+  Uses a CartTerm polysurface plus a polymodel to normalize and evaluate a duplicated term.
 
 monoid_to_string.llang
   Declares a polymorphism from a monoid doctrine to a string monoid doctrine.
@@ -33,10 +33,10 @@ cat.poly.llang + cat.run.llang
 ccc.poly.llang + ccc.run.llang
   A minimal cartesian doctrine with an eval‑like generator; normalizes a simple diagram.
 ccc_surface/ccc.poly.llang + ccc_surface/stlc.*.llang
-  Ports the legacy STLC surface + syntax pipeline to poly by compiling core terms to diagrams.
+  Defines a polysurface for STLC-in-CCC and runs surface terms as poly diagrams.
 
 bool.models.llang + stlc_bool.term.run.llang
-  Boolean cartesian doctrine with if‑rules; demonstrates CartTermSurface evaluation.
+  Boolean cartesian doctrine with if‑rules; demonstrates polysurface evaluation.
 
 peano.poly.llang + peano.models.llang + peano.run.llang
   Peano naturals with add rules and a native model; normalizes and evaluates a term.

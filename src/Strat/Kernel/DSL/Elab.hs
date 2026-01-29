@@ -29,6 +29,7 @@ import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Poly.Diagram (genD)
 import Strat.Poly.Surface (elabPolySurfaceDecl)
+import Strat.Poly.Surface.Spec (ssDoctrine)
 import Strat.Poly.RunSpec (PolyRunSpec)
 import Strat.Surface2.Elab
 import Strat.Surface2.SyntaxSpec
@@ -139,10 +140,11 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
         DeclPolySurface surfDecl -> do
           let name = rpsName surfDecl
           ensureAbsent "polysurface" name (mePolySurfaces env)
-          doc <- case M.lookup (rpsDoctrine surfDecl) (mePolyDoctrines env) of
-            Nothing -> Left ("Unknown polydoctrine: " <> rpsDoctrine surfDecl)
+          let spec = rpsSpec surfDecl
+          doc <- case M.lookup (ssDoctrine spec) (mePolyDoctrines env) of
+            Nothing -> Left ("Unknown polydoctrine: " <> ssDoctrine spec)
             Just d -> Right d
-          def <- elabPolySurfaceDecl doc surfDecl
+          def <- elabPolySurfaceDecl name doc spec
           let env' = env { mePolySurfaces = M.insert name def (mePolySurfaces env) }
           pure (env', rawRuns, rawPolyRuns)
         DeclSyntaxWhere decl -> do
@@ -806,6 +808,7 @@ elabRun raw = do
         RawShowValue -> ShowValue
         RawShowCat -> ShowCat
         RawShowInput -> ShowInput
+        RawShowCoherence -> ShowCoherence
 
 elabRuns :: ModuleEnv -> [RawNamedRun] -> Either Text (M.Map Text RunSpec)
 elabRuns env raws = foldM step M.empty raws
@@ -875,8 +878,6 @@ mergeRawPolyRun base override =
         { rprDoctrine = pick rprDoctrine
         , rprMode = pick rprMode
         , rprSurface = pick rprSurface
-        , rprSurfaceSyntax = pick rprSurfaceSyntax
-        , rprCoreDoctrine = pick rprCoreDoctrine
         , rprModel = pick rprModel
         , rprMorphisms = rprMorphisms b <> rprMorphisms override
         , rprUses = rprUses b <> rprUses override

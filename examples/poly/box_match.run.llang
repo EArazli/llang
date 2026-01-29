@@ -1,0 +1,9 @@
+import "./box_match.poly.llang";
+
+polyrun main where {
+  doctrine BoxMatch;
+  show normalized;
+}
+---
+box B { g }
+---

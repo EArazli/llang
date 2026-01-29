@@ -23,11 +23,11 @@ import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Frontend.RunSpec (RunShow(..))
+import Strat.Poly.Coherence (checkCoherence, renderCoherenceReport)
+import Strat.Poly.CriticalPairs (CPMode(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
-import Strat.Poly.Surface (PolySurfaceDef(..), PolySurfaceKind(..))
-import Strat.Poly.Surface.SSA (elabSSA)
-import qualified Strat.Poly.Surface.CartTerm as CartTerm
-import Strat.Poly.Surface.LegacyAdapter (elabLegacySurfaceDiagram)
+import Strat.Poly.Surface (PolySurfaceDef(..))
+import Strat.Poly.Surface.Elab (elabSurfaceExpr)
 import Strat.Poly.Eval (evalDiagram)
 import Strat.Poly.Morphism (Morphism(..), applyMorphismDiagram)
 import Strat.Model.Spec (ModelSpec)
@@ -82,18 +82,11 @@ runPolyWithEnv env spec = do
       diag <- elabDiagExpr docTarget mode [] rawExpr
       pure (docTarget, mode, diag)
     Just name -> do
-      mPolySurf <- lookupPolySurface env name
-      case mPolySurf of
-        Just surf -> do
-          (docSurface, mode) <- resolveSurfaceDocMode env docTarget spec (Just surf)
-          diag <- case psKind surf of
-            SurfaceSSA -> elabSSA docSurface mode (prExprText spec)
-            SurfaceCartTerm -> CartTerm.elabCartTerm docTarget mode (prExprText spec)
-          pure (docSurface, mode, diag)
-        Nothing -> do
-          mode <- resolveMode docTarget spec Nothing
-          diag <- elabLegacySurfaceDiagram env spec docTarget mode name (prExprText spec)
-          pure (docTarget, mode, diag)
+      surf <- lookupPolySurface env name
+      docSurface <- lookupPolyDoctrine env (psDoctrine surf)
+      mode <- resolveMode docSurface spec (Just surf)
+      diag <- elabSurfaceExpr docSurface surf (prExprText spec)
+      pure (docSurface, mode, diag)
   morphsFromUses <- resolveUses env (prDoctrine spec) (prUses spec)
   (docUsed, diagUsed) <- applyMorphisms env docSurface diag morphsFromUses
   if not (null (prUses spec)) && dName docUsed /= dName docTarget
@@ -103,7 +96,6 @@ runPolyWithEnv env spec = do
   if null (prMorphisms spec) && dName doc' /= dName docTarget
     then Left "polyrun: morphism chain did not reach target doctrine"
     else Right ()
-  -- TODO: cartesian surface handled by builtin in resolveSurface below
   if S.null (freeTyVarsDiagram diag')
     then Right ()
     else Left "polyrun: unresolved type variables in diagram"
@@ -113,17 +105,24 @@ runPolyWithEnv env spec = do
         case status of
           Finished d -> d
           OutOfFuel d -> d
-  mValue <- case prModel spec of
-    Nothing -> Right Nothing
-    Just name -> do
-      (docName, modelSpec) <- lookupPolyModel env name
-      (docModel, diagModel) <- resolvePolyModelDiagram env doc' norm docName
-      if null (dIn diagModel)
-        then do
-          vals <- evalDiagram docModel modelSpec diagModel []
-          pure (Just vals)
-        else Left "polyrun: value requires closed diagram"
-  output <- renderPolyRunResult spec diag' norm mValue
+  mValue <- if ShowValue `elem` prShowFlags spec
+    then case prModel spec of
+      Nothing -> Left "polyrun: show value requires model"
+      Just name -> do
+        (docName, modelSpec) <- lookupPolyModel env name
+        (docModel, diagModel) <- resolvePolyModelDiagram env doc' norm docName
+        if null (dIn diagModel)
+          then do
+            vals <- evalDiagram docModel modelSpec diagModel []
+            pure (Just vals)
+          else Left "polyrun: value requires closed diagram"
+    else Right Nothing
+  coherenceTxt <- if ShowCoherence `elem` prShowFlags spec
+    then do
+      results <- checkCoherence CP_StructuralVsComputational (prPolicy spec) (prFuel spec) doc'
+      renderCoherenceReport results
+    else Right ""
+  output <- renderPolyRunResult spec diag' norm mValue coherenceTxt
   pure PolyRunResult
     { prDoctrineDef = doc'
     , prInput = diag'
@@ -131,8 +130,8 @@ runPolyWithEnv env spec = do
     , prOutput = output
     }
 
-renderPolyRunResult :: PolyRunSpec -> Diagram -> Diagram -> Maybe [Value] -> Either Text Text
-renderPolyRunResult spec input norm mValue = do
+renderPolyRunResult :: PolyRunSpec -> Diagram -> Diagram -> Maybe [Value] -> Text -> Either Text Text
+renderPolyRunResult spec input norm mValue coherenceTxt = do
   inputTxt <- if ShowInput `elem` prShowFlags spec
     then fmap ("input:\n" <>) (renderDiagram input)
     else Right ""
@@ -147,7 +146,10 @@ renderPolyRunResult spec input norm mValue = do
   catTxt <- if ShowCat `elem` prShowFlags spec
     then Left "polyrun: show cat is not supported"
     else Right ""
-  pure (T.intercalate "\n" (filter (not . T.null) [inputTxt, normTxt, valueTxt, catTxt]))
+  let cohTxt = if ShowCoherence `elem` prShowFlags spec
+        then coherenceTxt
+        else ""
+  pure (T.intercalate "\n" (filter (not . T.null) [inputTxt, normTxt, valueTxt, catTxt, cohTxt]))
 
 lookupPolyDoctrine :: ModuleEnv -> Text -> Either Text Doctrine
 lookupPolyDoctrine env name =
@@ -159,16 +161,13 @@ resolveMode :: Doctrine -> PolyRunSpec -> Maybe PolySurfaceDef -> Either Text Mo
 resolveMode doc spec mSurface =
   case mSurface of
     Just surf ->
-      case psKind surf of
-        SurfaceCartTerm -> resolveModeDefault doc spec
-        SurfaceSSA ->
-          case prMode spec of
-            Nothing -> Right (psMode surf)
-            Just name ->
-              let mode = ModeName name
-              in if mode == psMode surf
-                then Right mode
-                else Left "polyrun: mode does not match surface"
+      case prMode spec of
+        Nothing -> Right (psMode surf)
+        Just name ->
+          let mode = ModeName name
+          in if mode == psMode surf
+            then Right mode
+            else Left "polyrun: mode does not match surface"
     Nothing -> resolveModeDefault doc spec
   where
     resolveModeDefault d s =
@@ -184,25 +183,11 @@ resolveMode doc spec mSurface =
             [] -> Left "polyrun: doctrine has no modes"
             _ -> Left "polyrun: multiple modes; specify mode"
 
-lookupPolySurface :: ModuleEnv -> Text -> Either Text (Maybe PolySurfaceDef)
-lookupPolySurface _ "CartTermSurface" = Right (Just CartTerm.builtinSurface)
-lookupPolySurface env name = Right (M.lookup name (mePolySurfaces env))
-
-resolveSurfaceDocMode :: ModuleEnv -> Doctrine -> PolyRunSpec -> Maybe PolySurfaceDef -> Either Text (Doctrine, ModeName)
-resolveSurfaceDocMode env docTarget spec mSurface =
-  case mSurface of
-    Nothing -> do
-      mode <- resolveMode docTarget spec Nothing
-      pure (docTarget, mode)
-    Just surf ->
-      case psKind surf of
-        SurfaceCartTerm -> do
-          mode <- resolveMode docTarget spec (Just surf)
-          pure (docTarget, mode)
-        SurfaceSSA -> do
-          docSurface <- lookupPolyDoctrine env (psDoctrine surf)
-          mode <- resolveMode docSurface spec (Just surf)
-          pure (docSurface, mode)
+lookupPolySurface :: ModuleEnv -> Text -> Either Text PolySurfaceDef
+lookupPolySurface env name =
+  case M.lookup name (mePolySurfaces env) of
+    Nothing -> Left ("Unknown polysurface: " <> name)
+    Just surf -> Right surf
 
 lookupPolyModel :: ModuleEnv -> Text -> Either Text (Text, ModelSpec)
 lookupPolyModel env name =

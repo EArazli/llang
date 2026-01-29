@@ -7,11 +7,13 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.List as L
+import qualified Data.Graph as G
 import Strat.Backend (Value(..), RuntimeError(..))
 import Strat.Model.Spec (ModelSpec(..), OpClause(..), DefaultBehavior(..), MExpr(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), PortId)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), PortId(..), EdgeId(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.ModeTheory (ModeName)
 
@@ -61,8 +63,15 @@ evalDiagramWithModel model doc diag inputs = do
     then Left "poly eval: input arity mismatch"
     else do
       let env0 = M.fromList (zip (dIn diag) inputs)
-      env <- evalEdges model doc (dMode diag) env0 (IM.toAscList (dEdges diag))
-      mapM (lookupPort env) (dOut diag)
+      let comps = sccOrder diag
+      (envFinal, bindings) <- evalSCCs model doc (dMode diag) env0 M.empty comps
+      outputs <- mapM (lookupPort envFinal) (dOut diag)
+      if M.null bindings
+        then Right outputs
+        else do
+          let bindingList = renderBindings bindings
+          let wrap v = VList [VAtom "letrec", bindingList, v]
+          Right (map wrap outputs)
   where
     lookupPort env pid =
       case M.lookup pid env of
@@ -70,24 +79,27 @@ evalDiagramWithModel model doc diag inputs = do
         Just v -> Right v
 
 
-evalEdges :: PolyModel -> Doctrine -> ModeName -> M.Map PortId Value -> [(Int, Edge)] -> Either Text (M.Map PortId Value)
-evalEdges _ _ _ env [] = Right env
-evalEdges model doc mode env edges =
-  case readyPartition env edges of
-    ([], _) -> Left "poly eval: diagram has cycle or missing inputs"
-    (ready, rest) -> do
-      env' <- foldl step (Right env) ready
-      evalEdges model doc mode env' rest
+evalSCCs :: PolyModel -> Doctrine -> ModeName -> M.Map PortId Value -> M.Map PortId Value -> [G.SCC Edge] -> Either Text (M.Map PortId Value, M.Map PortId Value)
+evalSCCs _ _ _ env bindings [] = Right (env, bindings)
+evalSCCs model doc mode env bindings (comp:rest) =
+  case comp of
+    G.AcyclicSCC edge -> do
+      env' <- evalAcyclicEdge model doc mode env edge
+      evalSCCs model doc mode env' bindings rest
+    G.CyclicSCC edges -> do
+      (env', bindings') <- evalCyclic model doc mode env bindings edges
+      evalSCCs model doc mode env' bindings' rest
+
+evalAcyclicEdge :: PolyModel -> Doctrine -> ModeName -> M.Map PortId Value -> Edge -> Either Text (M.Map PortId Value)
+evalAcyclicEdge model doc mode env edge = do
+  args <- mapM (lookupPort env) (eIns edge)
+  outs <- case ePayload edge of
+    PGen name -> evalGen model doc mode name args
+    PBox _ inner -> evalDiagramWithModel model doc inner args
+  if length outs /= length (eOuts edge)
+    then Left "poly eval: output arity mismatch"
+    else assignOutputs env (zip (eOuts edge) outs)
   where
-    step acc (_, edge) = do
-      env' <- acc
-      args <- mapM (lookupPort env') (eIns edge)
-      outs <- case ePayload edge of
-        PGen name -> evalGen model doc mode name args
-        PBox _ inner -> evalDiagramWithModel model doc inner args
-      if length outs /= length (eOuts edge)
-        then Left "poly eval: output arity mismatch"
-        else assignOutputs env' (zip (eOuts edge) outs)
     lookupPort env' pid =
       case M.lookup pid env' of
         Nothing -> Left "poly eval: missing input value"
@@ -99,10 +111,84 @@ evalEdges model doc mode env edges =
       case M.lookup pid mp of
         Just _ -> Left "poly eval: output already assigned"
         Nothing -> Right (M.insert pid val mp)
-    readyPartition env' =
-      foldr
-        (\e (rs, ns) -> if all (`M.member` env') (eIns (snd e)) then (e:rs, ns) else (rs, e:ns))
-        ([], [])
+
+evalCyclic :: PolyModel -> Doctrine -> ModeName -> M.Map PortId Value -> M.Map PortId Value -> [Edge] -> Either Text (M.Map PortId Value, M.Map PortId Value)
+evalCyclic model doc mode env bindings edges = do
+  let producedPorts = concatMap eOuts edges
+  env' <- foldl assignPlaceholder (Right env) producedPorts
+  bindings' <- foldl (computeEdge env') (Right bindings) (sortEdges edges)
+  pure (env', bindings')
+  where
+    assignPlaceholder acc pid = do
+      mp <- acc
+      let var = portVar pid
+      Right (M.insert pid (VAtom var) mp)
+
+    computeEdge env' acc edge = do
+      binds <- acc
+      args <- mapM (lookupPort env') (eIns edge)
+      outs <- case ePayload edge of
+        PGen name -> evalGenSymbolic model doc mode name args
+        PBox _ inner -> evalDiagramWithModel model doc inner args
+      if length outs /= length (eOuts edge)
+        then Left "poly eval: output arity mismatch"
+        else do
+          let binds' = foldl addBind binds (zip (eOuts edge) outs)
+          Right binds'
+
+    lookupPort env' pid =
+      case M.lookup pid env' of
+        Nothing -> Left "poly eval: missing input value"
+        Just v -> Right v
+
+    addBind mp (pid, val) = M.insert pid val mp
+
+evalGenSymbolic :: PolyModel -> Doctrine -> ModeName -> GenName -> [Value] -> Either Text [Value]
+evalGenSymbolic model doc mode name args = do
+  gen <- lookupGen doc mode name
+  let codLen = length (gdCod gen)
+  case pmInterp model name args of
+    Right val ->
+      if codLen == 1
+        then Right [val]
+        else case val of
+          VList xs | length xs == codLen -> Right xs
+          _ -> Left "poly eval: expected list output"
+    Left _ ->
+      Right [VList [VAtom (renderGen name <> "#" <> T.pack (show i)), VList args] | i <- [0 .. codLen - 1]]
+
+renderGen :: GenName -> Text
+renderGen (GenName t) = t
+
+renderBindings :: M.Map PortId Value -> Value
+renderBindings bindings =
+  let pairs = [ (pid, val) | (pid, val) <- M.toList bindings ]
+      sorted = L.sortOn (\(PortId k, _) -> k) pairs
+      toBinding (pid, val) = VList [VAtom (portVar pid), val]
+  in VList (map toBinding sorted)
+
+portVar :: PortId -> Text
+portVar (PortId k) = "$p" <> T.pack (show k)
+
+sortEdges :: [Edge] -> [Edge]
+sortEdges = L.sortOn (\e -> edgeKey (eId e))
+  where
+    edgeKey (EdgeId k) = k
+
+sccOrder :: Diagram -> [G.SCC Edge]
+sccOrder diag =
+  reverse
+    (G.stronglyConnComp
+      [ (edge, eId edge, outgoing edge)
+      | edge <- IM.elems (dEdges diag)
+      ])
+  where
+    outgoing edge =
+      [ eid
+      | p <- eOuts edge
+      , Just (Just eid) <- [IM.lookup (portKey p) (dCons diag)]
+      ]
+    portKey (PortId k) = k
 
 
 evalGen :: PolyModel -> Doctrine -> ModeName -> GenName -> [Value] -> Either Text [Value]

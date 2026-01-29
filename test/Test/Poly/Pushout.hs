@@ -28,7 +28,13 @@ tests =
     "Poly.Pushout"
     [ testCase "pushout dedups equations by body" testPushoutDedupByBody
     , testCase "pushout type permutation commutes" testPushoutTypePermutationCommutes
+    , testCase "pushout merges cell orientations" testPushoutMergeOrient
+    , testCase "pushout merges cell classes" testPushoutMergeClass
+    , testCase "pushout rejects name conflict with different bodies" testPushoutNameConflict
     ]
+
+require :: Either Text a -> IO a
+require = either (assertFailure . T.unpack) pure
 
 
 testPushoutDedupByBody :: Assertion
@@ -99,6 +105,144 @@ mkInclusionMorph name src tgt tyVar =
       , morPolicy = UseAllOriented
       , morFuel = 10
       }
+
+testPushoutMergeOrient :: Assertion
+testPushoutMergeOrient = do
+  let mode = ModeName "M"
+  base <- require (mkCellDoctrine mode "A" Computational LR)
+  left <- require (mkCellDoctrine mode "B" Computational LR)
+  right <- require (mkCellDoctrine mode "C" Computational RL)
+  let morLeft = mkIdMorph "fLeft" base left
+  let morRight = mkIdMorph "fRight" base right
+  res <- case computePolyPushout "P" morLeft morRight of
+    Left err -> assertFailure (T.unpack err)
+    Right r -> pure r
+  let cells = dCells2 (poDoctrine res)
+  case findCell "eq" cells of
+    Nothing -> assertFailure "expected merged cell"
+    Just cell ->
+      c2Orient cell @?= Bidirectional
+
+testPushoutMergeClass :: Assertion
+testPushoutMergeClass = do
+  let mode = ModeName "M"
+  base <- require (mkCellDoctrine mode "A" Computational LR)
+  left <- require (mkCellDoctrine mode "B" Structural LR)
+  right <- require (mkCellDoctrine mode "C" Computational LR)
+  let morLeft = mkIdMorph "fLeft" base left
+  let morRight = mkIdMorph "fRight" base right
+  res <- case computePolyPushout "P" morLeft morRight of
+    Left err -> assertFailure (T.unpack err)
+    Right r -> pure r
+  let cells = dCells2 (poDoctrine res)
+  case findCell "eq" cells of
+    Nothing -> assertFailure "expected merged cell"
+    Just cell ->
+      c2Class cell @?= Structural
+
+testPushoutNameConflict :: Assertion
+testPushoutNameConflict = do
+  let mode = ModeName "M"
+  base <- require (mkCellDoctrine mode "A" Computational LR)
+  left <- require (mkCellDoctrine mode "B" Computational LR)
+  right <- require (mkCellDoctrineWithAlt mode "C" Computational LR)
+  let morLeft = mkIdMorph "fLeft" base left
+  let morRight = mkIdMorph "fRight" base right
+  case computePolyPushout "P" morLeft morRight of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected name conflict error"
+
+mkCellDoctrine :: ModeName -> Text -> RuleClass -> Orientation -> Either Text Doctrine
+mkCellDoctrine mode name cls orient = do
+  let aName = TypeName "A"
+  let gen = GenDecl
+        { gdName = GenName "f"
+        , gdMode = mode
+        , gdTyVars = []
+        , gdDom = [TCon aName []]
+        , gdCod = [TCon aName []]
+        }
+  lhs <- genD mode [TCon aName []] [TCon aName []] (gdName gen)
+  let cell = Cell2
+        { c2Name = "eq"
+        , c2Class = cls
+        , c2Orient = orient
+        , c2TyVars = []
+        , c2LHS = lhs
+        , c2RHS = lhs
+        }
+  let doc = Doctrine
+        { dName = name
+        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dTypes = M.fromList [(mode, M.fromList [(aName, 0)])]
+        , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
+        , dCells2 = [cell]
+        }
+  case validateDoctrine doc of
+    Left err -> Left err
+    Right () -> Right doc
+
+mkCellDoctrineWithAlt :: ModeName -> Text -> RuleClass -> Orientation -> Either Text Doctrine
+mkCellDoctrineWithAlt mode name cls orient = do
+  let aName = TypeName "A"
+  let genF = GenDecl
+        { gdName = GenName "f"
+        , gdMode = mode
+        , gdTyVars = []
+        , gdDom = [TCon aName []]
+        , gdCod = [TCon aName []]
+        }
+  let genG = GenDecl
+        { gdName = GenName "g"
+        , gdMode = mode
+        , gdTyVars = []
+        , gdDom = [TCon aName []]
+        , gdCod = [TCon aName []]
+        }
+  lhs <- genD mode [TCon aName []] [TCon aName []] (gdName genG)
+  let cell = Cell2
+        { c2Name = "eq"
+        , c2Class = cls
+        , c2Orient = orient
+        , c2TyVars = []
+        , c2LHS = lhs
+        , c2RHS = lhs
+        }
+  let doc = Doctrine
+        { dName = name
+        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dTypes = M.fromList [(mode, M.fromList [(aName, 0)])]
+        , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
+        , dCells2 = [cell]
+        }
+  case validateDoctrine doc of
+    Left err -> Left err
+    Right () -> Right doc
+
+mkIdMorph :: Text -> Doctrine -> Doctrine -> Morphism
+mkIdMorph name src tgt =
+  let mode = ModeName "M"
+      diag = case genD mode [TCon (TypeName "A") []] [TCon (TypeName "A") []] (GenName "f") of
+        Left _ -> error "mkIdMorph: genD failed"
+        Right d -> d
+      genMap = M.fromList [((mode, GenName "f"), diag)]
+  in Morphism
+      { morName = name
+      , morSrc = src
+      , morTgt = tgt
+      , morTypeMap = M.empty
+      , morGenMap = genMap
+      , morPolicy = UseAllOriented
+      , morFuel = 10
+      }
+
+findCell :: Text -> [Cell2] -> Maybe Cell2
+findCell name = go
+  where
+    go [] = Nothing
+    go (c:cs)
+      | c2Name c == name = Just c
+      | otherwise = go cs
 
 testPushoutTypePermutationCommutes :: Assertion
 testPushoutTypePermutationCommutes = do

@@ -8,9 +8,9 @@ poly/no_dup_error.run.llang is a negative example that fails due to a boundary m
 
 poly/subdiagram_match.poly.llang is a small doctrine intended to exercise true subdiagram matching.
 
-poly/planar_monoid.ssa.run.llang demonstrates the SSA polysurface; run it to see a wire‑named diagram elaborate and normalize.
+poly/planar_monoid.ssa.run.llang demonstrates the SSA polysurface; run it to see a wire‑named diagram elaborate and normalize (surface spec in poly/planar_monoid.ssa.surface.llang).
 
-poly/cart_monoid.term.run.llang uses the CartTermSurface and a polymodel to normalize and evaluate a duplicated term.
+poly/cart_monoid.term.run.llang uses a CartTerm polysurface and a polymodel to normalize and evaluate a duplicated term.
 
 poly/monoid_to_string.llang defines a polymorphism between two polydoctrines (monoid → string monoid).
 
@@ -25,10 +25,10 @@ ccc.llang + ccc.syntax.llang + ccc.run.llang define the CCC doctrine and a core 
   Poly equivalent: poly/ccc.poly.llang + poly/ccc.run.llang.
 
 ccc_surface/ (ccc.doctrine.llang, ccc.interface.llang, stlc.surface.llang, stlc.syntax.llang, stlc.runspec.llang, and stlc.*.run.llang) demonstrates the Surface2 STLC layer over CCC; run `examples/ccc_surface/stlc.run.llang` or the lam/pair variants to see surface input elaborate into core terms and print normalized/value/cat.
-  Poly equivalent: poly/ccc_surface/ccc.poly.llang + poly/ccc_surface/stlc.*.llang (legacy surface compiled into poly diagrams).
+  Poly equivalent: poly/ccc_surface/ccc.poly.llang + poly/ccc_surface/stlc.*.llang (polysurface STLC elaborates directly to poly diagrams).
 
 monoid.llang + monoid.syntax.llang + monoid.models.llang + monoid.run.llang show a monoid doctrine with computational rules and a string model; run `examples/monoid.run.llang` (or `examples/monoid.alt.run.llang`) and expect normalized/value/cat for a parsed monoid term.
-  Poly equivalents: poly/monoid.run.llang (planar) and poly/cart_monoid.term.run.llang (cartesian + model).
+  Poly equivalents: poly/monoid.run.llang (planar) and poly/cart_monoid.term.run.llang (cartesian + model via polysurface).
 
 peano.llang + peano.syntax.llang + peano.models.llang + peano.run.llang show Peano naturals with a model-backed evaluator; run `examples/peano.run.llang` to see normalized/value output for a Peano term (there is also `examples/peano.js.run.llang` using the JS model).
   Poly equivalent: poly/peano.poly.llang + poly/peano.models.llang + poly/peano.run.llang.

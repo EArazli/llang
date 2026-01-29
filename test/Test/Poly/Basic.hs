@@ -19,7 +19,6 @@ import Strat.Poly.Diagram
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Kernel.Types (RuleClass(..), Orientation(..))
-import Strat.Poly.Surface.SSA (elabSSA)
 import Strat.Poly.Graph
   ( Diagram(..)
   , EdgeId(..)
@@ -47,7 +46,6 @@ tests =
     , testCase "validateDiagram detects unused input" testValidateUnusedInput
     , testCase "validateDiagram detects duplicate outputs" testValidateDuplicateOutputs
     , testCase "diagram iso equality ignores ids" testDiagramIsoEq
-    , testCase "ssa rejects swapped output order" testSSASwappedOut
     , testCase "unionDisjointIntMap rejects collisions" testUnionDisjoint
     , testCase "applySubstTy chases substitutions" testApplySubstChase
     , testCase "applySubstTy handles cycles" testApplySubstCycle
@@ -55,6 +53,9 @@ tests =
     , testCase "diagram iso ignores box names" testDiagramIsoBoxName
     , testCase "validateDoctrine rejects duplicate gen tyvars" testDuplicateGenTyVars
     , testCase "validateDoctrine rejects duplicate cell tyvars" testDuplicateCellTyVars
+    , testCase "validateDoctrine rejects RHS fresh tyvars" testRejectRHSTyVars
+    , testCase "validateDoctrine accepts RHS vars from LHS" testAcceptRHSTyVars
+    , testCase "validateDoctrine rejects empty LHS rule" testRejectEmptyLHS
     ]
 
 require :: Either Text a -> IO a
@@ -164,27 +165,6 @@ testDiagramIsoEq = do
     Right ok ->
       if ok then pure () else assertFailure "expected diagrams to be iso-equivalent"
 
-testSSASwappedOut :: Assertion
-testSSASwappedOut = do
-  let mode = ModeName "M"
-  let a = TCon (TypeName "A") []
-  let doc = Doctrine
-        { dName = "SSA"
-        , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", 0)])]
-        , dGens = M.empty
-        , dCells2 = []
-        }
-  let program = T.unlines
-        [ "diag {"
-        , "  in x:A, y:A;"
-        , "  out y, x;"
-        , "}"
-        ]
-  case elabSSA doc mode program of
-    Left _ -> pure ()
-    Right _ -> assertFailure "expected SSA to reject swapped output order"
-
 testUnionDisjoint :: Assertion
 testUnionDisjoint = do
   let left = IM.fromList [(0 :: Int, "a")]
@@ -274,6 +254,97 @@ testDuplicateCellTyVars = do
   case validateDoctrine doc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected duplicate cell tyvars to be rejected"
+
+testRejectRHSTyVars :: Assertion
+testRejectRHSTyVars = do
+  let mode = ModeName "M"
+  let aName = TypeName "A"
+  let bVar = TyVar "b"
+  let gen = GenDecl
+        { gdName = GenName "f"
+        , gdMode = mode
+        , gdTyVars = []
+        , gdDom = [TCon aName []]
+        , gdCod = [TCon aName []]
+        }
+  lhs <- require (genD mode [TCon aName []] [TCon aName []] (gdName gen))
+  rhs <- require (genD mode [TVar bVar] [TVar bVar] (gdName gen))
+  let cell = Cell2
+        { c2Name = "rhs_fresh"
+        , c2Class = Computational
+        , c2Orient = LR
+        , c2TyVars = [bVar]
+        , c2LHS = lhs
+        , c2RHS = rhs
+        }
+  let doc = Doctrine
+        { dName = "D"
+        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dTypes = M.fromList [(mode, M.fromList [(aName, 0)])]
+        , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
+        , dCells2 = [cell]
+        }
+  case validateDoctrine doc of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected RHS fresh tyvars to be rejected"
+
+testAcceptRHSTyVars :: Assertion
+testAcceptRHSTyVars = do
+  let mode = ModeName "M"
+  let aName = TypeName "A"
+  let aVar = TyVar "a"
+  let gen = GenDecl
+        { gdName = GenName "f"
+        , gdMode = mode
+        , gdTyVars = [aVar]
+        , gdDom = [TVar aVar]
+        , gdCod = [TVar aVar]
+        }
+  lhs <- require (genD mode [TVar aVar] [TVar aVar] (gdName gen))
+  rhs <- require (genD mode [TVar aVar] [TVar aVar] (gdName gen))
+  let cell = Cell2
+        { c2Name = "rhs_ok"
+        , c2Class = Computational
+        , c2Orient = LR
+        , c2TyVars = [aVar]
+        , c2LHS = lhs
+        , c2RHS = rhs
+        }
+  let doc = Doctrine
+        { dName = "D"
+        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dTypes = M.fromList [(mode, M.fromList [(aName, 0)])]
+        , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
+        , dCells2 = [cell]
+        }
+  case validateDoctrine doc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+
+testRejectEmptyLHS :: Assertion
+testRejectEmptyLHS = do
+  let mode = ModeName "M"
+  let aName = TypeName "A"
+  let lhs = idD mode [TCon aName []]
+  let rhs = idD mode [TCon aName []]
+  let cell = Cell2
+        { c2Name = "empty_lhs"
+        , c2Class = Computational
+        , c2Orient = LR
+        , c2TyVars = []
+        , c2LHS = lhs
+        , c2RHS = rhs
+        }
+  let doc = Doctrine
+        { dName = "D"
+        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dTypes = M.fromList [(mode, M.fromList [(aName, 0)])]
+        , dGens = M.empty
+        , dCells2 = [cell]
+        }
+  case validateDoctrine doc of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected empty LHS rule to be rejected"
 
 buildIsoDiagram :: ModeName -> TypeExpr -> Either Text Diagram
 buildIsoDiagram mode a = do
