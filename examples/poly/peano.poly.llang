@@ -1,4 +1,0 @@
-import "../../stdlib/poly.nat.llang";
-
-polydoctrine Peano extends Nat where {
-}

@@ -18,8 +18,7 @@ import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Morphism (Morphism(..), TypeTemplate(..), applyMorphismDiagram)
 import Strat.Poly.Pushout (computePolyPushout, PolyPushoutResult(..))
 import Strat.Poly.Graph (diagramIsoEq)
-import Strat.Kernel.Types (RuleClass(..), Orientation(..))
-import Strat.Kernel.RewriteSystem (RewritePolicy(..))
+import Strat.Common.Rules (RuleClass(..), Orientation(..), RewritePolicy(..))
 
 
 tests :: TestTree

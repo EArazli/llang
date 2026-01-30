@@ -1,0 +1,17 @@
+doctrine Base where {
+  mode M;
+  type A @M;
+  gen f : [A] -> [A] @M;
+}
+
+doctrine Left extends Base where {
+  gen g : [A] -> [A] @M;
+  gen extra : [A] -> [A] @M;
+}
+
+doctrine Right extends Base where {
+  gen g : [A] -> [A] @M;
+  gen extra : [A] -> [A] @M;
+}
+
+doctrine Both = pushout Left.fromBase Right.fromBase;

@@ -1,0 +1,8 @@
+import "./cart_monoid.llang";
+
+run main where {
+  doctrine CartMonoid;
+  show normalized;
+}
+---
+dup{A} ; mul

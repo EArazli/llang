@@ -1,0 +1,14 @@
+doctrine Subdiagram where {
+  mode M;
+  type A @M;
+
+  gen f : [A] -> [A] @M;
+  gen g : [A] -> [A] @M;
+  gen h : [A] -> [A] @M;
+
+  rule computational swap_fg -> : [A] -> [A] @M =
+    f ; g == g ; f
+
+  -- In a larger diagram, this rule can match across previous compositions,
+  -- demonstrating true subdiagram rewriting.
+}

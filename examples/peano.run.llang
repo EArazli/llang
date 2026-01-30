@@ -1,19 +1,49 @@
 import "./peano.llang";
-import "./peano.syntax.llang";
 import "./peano.models.llang";
 
+surface PeanoTerm where {
+  doctrine Peano;
+  mode M;
+
+  lexer {
+    keywords: term, in, out;
+    symbols: "(", ")", "{", "}", ":", ";", ",";
+  }
+
+  expr {
+    atom:
+      ident "(" <expr> ")" => CALL(name, args)
+    | ident => VAR(name)
+    | "out" <expr> => OUT(expr)
+    | "term" "{" <expr> "}" => DIAG(expr)
+    | "(" <expr> ")" => <expr>
+    ;
+
+    prefix:
+      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+    ;
+
+    infixr 10 "," => LIST(lhs, rhs);
+  }
+
+  elaborate {
+    VAR(x) => $x;;
+    LIST(a, b) => $1 * $2;;
+    OUT(e) => $1;;
+    DIAG(e) => $1;;
+    IN(x, ty, body) => $1;;
+  }
+}
+
 run main where {
-  doctrine Nat;
-  open Nat;
-
-  syntax PeanoSyntax;
-  model NatModel;
-
-  policy UseOnlyComputationalLR;
-  fuel 200;
-
+  doctrine Peano;
+  mode M;
+  surface PeanoTerm;
+  model PeanoNative;
   show normalized;
   show value;
 }
 ---
-S(S(Z)) * (S(Z) + S(S(Z)))
+term {
+  out add(S(Z), S(Z))
+}

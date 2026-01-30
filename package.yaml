@@ -10,42 +10,45 @@ extra-source-files:
 - README.md
 - CHANGELOG.md
 - examples/README.md
-- SPEC-LEGACY.md
 data-files:
-- examples/monoid.llang
-- examples/monoid.syntax.llang
-- examples/monoid.syntax.alt.llang
-- examples/monoid.models.llang
-- examples/monoid.models.int.llang
-- examples/monoid.run.llang
-- examples/monoid.alt.run.llang
+- examples/bool.models.llang
+- examples/box_match.llang
+- examples/box_match.run.llang
+- examples/cart_monoid.llang
+- examples/cart_monoid.run.llang
+- examples/cart_monoid.term.run.llang
 - examples/cat.llang
 - examples/cat.run.llang
 - examples/ccc.llang
-- examples/ccc.syntax.llang
 - examples/ccc.run.llang
-- examples/peano.llang
-- examples/peano.syntax.llang
-- examples/peano.models.llang
-- examples/peano.run.llang
-- examples/ski.llang
-- examples/ski.syntax.llang
-- examples/ski.run.llang
-- examples/ccc_surface/ccc.doctrine.llang
-- examples/ccc_surface/ccc.interface.llang
-- examples/ccc_surface/stlc.surface.llang
-- examples/ccc_surface/stlc.syntax.llang
-- examples/ccc_surface/stlc.run.llang
+- examples/ccc_surface/ccc.llang
+- examples/ccc_surface/stlc.app1.run.llang
 - examples/ccc_surface/stlc.lam1.run.llang
 - examples/ccc_surface/stlc.lam2.run.llang
 - examples/ccc_surface/stlc.lam3.run.llang
 - examples/ccc_surface/stlc.pair.run.llang
+- examples/ccc_surface/stlc.pair1.run.llang
+- examples/ccc_surface/stlc.run.llang
 - examples/ccc_surface/stlc.runspec.llang
+- examples/ccc_surface/stlc.surface.llang
+- examples/coherence_demo.llang
+- examples/coherence_demo.run.llang
+- examples/implements_uses.run.llang
+- examples/loop_demo.llang
+- examples/loop_demo.run.llang
+- examples/monoid.run.llang
+- examples/monoid_to_string.llang
 - examples/morphism_term.llang
+- examples/no_dup_error.run.llang
+- examples/peano.llang
+- examples/peano.models.llang
+- examples/peano.run.llang
+- examples/planar_monoid.llang
+- examples/planar_monoid.run.llang
+- examples/planar_monoid.ssa.run.llang
+- examples/planar_monoid.ssa.surface.llang
+- examples/pushout/ambiguous_model_restriction.llang
 - examples/pushout/category_bool_nat_base.llang
-- examples/pushout/pushout_basic.llang
-- examples/pushout/pushout_basic.run.llang
-- examples/pushout/pushout_extend.llang
 - examples/pushout/comm_monoid.llang
 - examples/pushout/nat_bool.llang
 - examples/pushout/nat_bool.models.llang
@@ -53,73 +56,21 @@ data-files:
 - examples/pushout/nat_bool_plus.llang
 - examples/pushout/nat_bool_plus.models.llang
 - examples/pushout/nat_bool_plus.run.llang
-- examples/pushout/ambiguous_model_restriction.llang
-- examples/poly/README.md
-- examples/poly/cat.poly.llang
-- examples/poly/cat.run.llang
-- examples/poly/ccc.poly.llang
-- examples/poly/ccc.run.llang
-- examples/poly/ccc_surface/ccc.poly.llang
-- examples/poly/ccc_surface/stlc.surface.llang
-- examples/poly/ccc_surface/stlc.runspec.llang
-- examples/poly/ccc_surface/stlc.run.llang
-- examples/poly/ccc_surface/stlc.lam1.run.llang
-- examples/poly/ccc_surface/stlc.lam2.run.llang
-- examples/poly/ccc_surface/stlc.lam3.run.llang
-- examples/poly/ccc_surface/stlc.app1.run.llang
-- examples/poly/ccc_surface/stlc.pair.run.llang
-- examples/poly/ccc_surface/stlc.pair1.run.llang
-- examples/poly/planar_monoid.poly.llang
-- examples/poly/planar_monoid.run.llang
-- examples/poly/planar_monoid.ssa.surface.llang
-- examples/poly/planar_monoid.ssa.run.llang
-- examples/poly/cart_monoid.poly.llang
-- examples/poly/cart_monoid.run.llang
-- examples/poly/cart_monoid.term.run.llang
-- examples/poly/monoid.run.llang
-- examples/poly/no_dup_error.run.llang
-- examples/poly/box_match.poly.llang
-- examples/poly/box_match.run.llang
-- examples/poly/coherence_demo.poly.llang
-- examples/poly/coherence_demo.run.llang
-- examples/poly/loop_demo.poly.llang
-- examples/poly/loop_demo.run.llang
-- examples/poly/subdiagram_match.poly.llang
-- examples/poly/monoid_to_string.llang
-- examples/poly/implements_uses.run.llang
-- examples/poly/bool.models.llang
-- examples/poly/stlc_bool.term.run.llang
-- examples/poly/peano.poly.llang
-- examples/poly/peano.models.llang
-- examples/poly/peano.run.llang
-- examples/poly/ski.poly.llang
-- examples/poly/ski.run.llang
-- examples/poly/morphism_term.llang
-- examples/poly/pushout_basic.poly.llang
-- examples/poly/pushout_basic.run.llang
-- examples/poly/pushout/category_bool_nat_base.poly.llang
-- examples/poly/pushout/pushout_extend.poly.llang
-- examples/poly/pushout/comm_monoid.poly.llang
-- examples/poly/pushout/nat_bool.poly.llang
-- examples/poly/pushout/nat_bool.models.llang
-- examples/poly/pushout/nat_bool.run.llang
-- examples/poly/pushout/nat_bool_plus.poly.llang
-- examples/poly/pushout/nat_bool_plus.models.llang
-- examples/poly/pushout/nat_bool_plus.run.llang
-- examples/poly/pushout/ambiguous_model_restriction.llang
-- examples/poly/runspec.multi.llang
-- examples/poly/runspec/multi.llang
+- examples/pushout/pushout_extend.llang
+- examples/pushout_basic.llang
+- examples/pushout_basic.run.llang
 - examples/runspec/multi.llang
-- stdlib/syntax.llang
-- stdlib/nat.llang
+- examples/runspec.multi.llang
+- examples/ski.llang
+- examples/ski.run.llang
+- examples/stlc_bool.term.run.llang
+- examples/subdiagram_match.llang
 - stdlib/bool.llang
-- stdlib/poly.nat.llang
-- stdlib/poly.bool.llang
-- stdlib/native.models.llang
-- stdlib/struct.planar.llang
-- stdlib/struct.symmetric.llang
+- stdlib/nat.llang
 - stdlib/struct.cartesian.llang
 - stdlib/struct.cartesian.models.llang
+- stdlib/struct.planar.llang
+- stdlib/struct.symmetric.llang
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -180,32 +131,8 @@ tests:
     - QuickCheck
     - tasty-quickcheck
     other-modules:
-    - Test.Backend
-    - Test.Kernel.Basic
-    - Test.Kernel.CriticalPairsDependent
-    - Test.Kernel.Coherence
-    - Test.Kernel.CriticalPairs
-    - Test.Kernel.DSL
-    - Test.Kernel.Fixtures
-    - Test.Kernel.Morphism
-    - Test.Kernel.Pushout
-    - Test.Kernel.SortCtorTele
-    - Test.Kernel.Rewrite
-    - Test.Kernel.RewriteSystem
-    - Test.Kernel.Regression
-    - Test.Kernel.FreeTele
-    - Test.Frontend.ModelRestriction
-    - Test.Frontend.SyntaxModel
-    - Test.Frontend.Loader
-    - Test.Frontend.Implements
-    - Test.Surface
-    - Test.Surface2.Term
-    - Test.Surface2.Pattern
-    - Test.Surface2.CoreEval
-    - Test.Surface2.Determinism
-    - Test.Surface2.Elab
-    - Test.CLI
     - Test.CLI.Golden
+    - Test.NoPolyPrefixes
     - Test.Poly.Basic
     - Test.Poly.Rewrite
     - Test.Poly.DSL

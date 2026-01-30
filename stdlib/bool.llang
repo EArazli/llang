@@ -1,9 +1,15 @@
-doctrine Bool where {
-  sort Bool;
-  op T : Bool;
-  op F : Bool;
+import "./struct.cartesian.llang";
 
-  op if : (c:Bool) (x:Bool) (y:Bool) -> Bool;
-  computational ifT : (x:Bool) (y:Bool) |- if(T, ?x, ?y) -> ?x;
-  computational ifF : (x:Bool) (y:Bool) |- if(F, ?x, ?y) -> ?y;
+doctrine Bool extends StructCartesian where {
+  type Bool @M;
+
+  gen T : [] -> [Bool] @M;
+  gen F : [] -> [Bool] @M;
+  gen if : [Bool, Bool, Bool] -> [Bool] @M;
+
+  rule computational ifT -> : [Bool, Bool] -> [Bool] @M =
+    (T * id[Bool] * id[Bool]) ; if == id[Bool] * drop
+
+  rule computational ifF -> : [Bool, Bool] -> [Bool] @M =
+    (F * id[Bool] * id[Bool]) ; if == drop * id[Bool]
 }

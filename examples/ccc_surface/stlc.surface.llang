@@ -1,92 +1,42 @@
-import "./ccc.doctrine.llang";
+import "./ccc.llang";
 
 surface STLC where {
-  requires ccc : CCC_Bool;
-  context_sort Ty;
-  derive contexts using ccc;
+  doctrine CCC;
+  mode M;
+  context ctx = Unit;
 
-  sort Ty;
-  sort Tm;
+  lexer {
+    keywords: lam, true, false, fst, snd;
+    symbols: "(", ")", ".", ":", ",";
+  }
 
-  con BoolTy : Ty;
-  con UnitTy : Ty;
-  con ProdTy : (a:Ty) (b:Ty) -> Ty;
-  con ArrTy  : (a:Ty) (b:Ty) -> Ty;
+  expr {
+    atom:
+      ident => VAR(name)
+    | "true" => TRUE
+    | "false" => FALSE
+    | "(" <expr> "," <expr> ")" => PAIR(lhs, rhs)
+    | "(" <expr> ")" => <expr>
+    ;
 
-  con True  : Tm;
-  con False : Tm;
+    prefix:
+      "lam" ident ":" <type> "." <expr> => LAM(x, ty, body)
+    | "fst" <expr> => FST(p)
+    | "snd" <expr> => SND(p)
+    ;
 
-  con Pair  : (x:Tm) (y:Tm) -> Tm;
-  con Fst   : (p:Tm) -> Tm;
-  con Snd   : (p:Tm) -> Tm;
+    application:
+      <expr> <expr> => APP(fn, arg);
+  }
 
-  con Lam : (A:Ty) (body : [x:A] Tm) -> Tm;
-  con App : (f:Tm) (x:Tm) -> Tm;
-
-  judgement HasType : (Γ:Ctx) (t:Tm) (A:Ty) => (e:Core);
-
-  define tyObj(UnitTy) = ccc.Unit;
-  define tyObj(BoolTy) = ccc.Bool;
-  define tyObj(ProdTy(A,B)) = ccc.prod(tyObj(A), tyObj(B));
-  define tyObj(ArrTy(A,B)) = ccc.exp(tyObj(A), tyObj(B));
-
-  rule true :
-    --------------------------------
-    HasType(Γ, True, BoolTy) => ccc.comp(ctxObj(Γ), ccc.Unit, tyObj(BoolTy),
-                                         ccc.T,
-                                         ccc.terminal(ctxObj(Γ)));
-
-  rule false :
-    --------------------------------
-    HasType(Γ, False, BoolTy) => ccc.comp(ctxObj(Γ), ccc.Unit, tyObj(BoolTy),
-                                          ccc.F,
-                                          ccc.terminal(ctxObj(Γ)));
-
-  rule lam :
-    premise HasType(Γ, body, B) => eBody under (Γ, x:A);
-    -----------------------------------------------
-    HasType(Γ, Lam(A, body), ArrTy(A,B))
-      => ccc.curry(tyObj(A), tyObj(B), ctxObj(Γ), eBody);
-
-  rule app :
-    premise HasType(Γ, f, ArrTy(A,B)) => eF;
-    premise HasType(Γ, x, A)         => eX;
-    -----------------------------------------------
-    HasType(Γ, App(f,x), B)
-      => ccc.comp(ctxObj(Γ),
-                  ccc.prod(ccc.exp(tyObj(A), tyObj(B)), tyObj(A)),
-                  tyObj(B),
-                  ccc.eval(tyObj(A), tyObj(B)),
-                  ccc.pair(ccc.exp(tyObj(A), tyObj(B)),
-                           tyObj(A),
-                           ctxObj(Γ),
-                           eF,
-                           eX));
-
-  rule pair :
-    premise HasType(Γ, x, A) => eX;
-    premise HasType(Γ, y, B) => eY;
-    -----------------------------------------------
-    HasType(Γ, Pair(x,y), ProdTy(A,B))
-      => ccc.pair(tyObj(A), tyObj(B), ctxObj(Γ), eX, eY);
-
-  rule fst :
-    premise HasType(Γ, p, ProdTy(A,B)) => eP;
-    -----------------------------------------------
-    HasType(Γ, Fst(p), A)
-      => ccc.comp(ctxObj(Γ),
-                  ccc.prod(tyObj(A), tyObj(B)),
-                  tyObj(A),
-                  ccc.exl(tyObj(A), tyObj(B)),
-                  eP);
-
-  rule snd :
-    premise HasType(Γ, p, ProdTy(A,B)) => eP;
-    -----------------------------------------------
-    HasType(Γ, Snd(p), B)
-      => ccc.comp(ctxObj(Γ),
-                  ccc.prod(tyObj(A), tyObj(B)),
-                  tyObj(B),
-                  ccc.exr(tyObj(A), tyObj(B)),
-                  eP);
+  elaborate {
+    VAR(x) => $x;;
+    TRUE => (T * terminal{ctx}) ; comp;;
+    FALSE => (F * terminal{ctx}) ; comp;;
+    PAIR(a, b) => ($1 * $2) ; pair;;
+    FST(p) => (exl * $1) ; comp;;
+    SND(p) => (exr * $1) ; comp;;
+    APP(f, x) => (eval * (($1 * $2) ; pair)) ; comp;;
+    LAM(x, ty, body) => $1 ; curry;;
+  }
 }

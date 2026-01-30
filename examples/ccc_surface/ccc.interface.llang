@@ -1,3 +1,0 @@
-import "./ccc.doctrine.llang";
-
-implements CCC_Bool for CCC using CCC.fromBase;

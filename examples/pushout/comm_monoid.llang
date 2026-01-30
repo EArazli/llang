@@ -1,18 +1,26 @@
-doctrine Semigroup where {
-  sort Obj;
-  op m : (x:Obj) (y:Obj) -> Obj;
-  structural assoc : (x:Obj) (y:Obj) (z:Obj) |-
-    m(m(?x, ?y), ?z) = m(?x, m(?y, ?z));
+import "../../stdlib/struct.symmetric.llang";
+
+doctrine Semigroup extends StructSymmetric where {
+  type Obj @M;
+  gen m : [Obj, Obj] -> [Obj] @M;
+
+  rule structural assoc = : [Obj, Obj, Obj] -> [Obj] @M =
+    (m * id[Obj]) ; m == (id[Obj] * m) ; m
 }
 
 doctrine Monoid extends Semigroup where {
-  op e : Obj;
-  computational unitL : (x:Obj) |- m(e, ?x) -> ?x;
-  computational unitR : (x:Obj) |- m(?x, e) -> ?x;
+  gen e : [] -> [Obj] @M;
+
+  rule computational unitL -> : [Obj] -> [Obj] @M =
+    (e * id[Obj]) ; m == id[Obj]
+
+  rule computational unitR -> : [Obj] -> [Obj] @M =
+    (id[Obj] * e) ; m == id[Obj]
 }
 
 doctrine Commutative extends Semigroup where {
-  structural comm : (x:Obj) (y:Obj) |- m(?x, ?y) = m(?y, ?x);
+  rule structural comm = : [Obj, Obj] -> [Obj] @M =
+    m == swap{Obj, Obj} ; m
 }
 
 doctrine CommMonoid = pushout Monoid.fromBase Commutative.fromBase;

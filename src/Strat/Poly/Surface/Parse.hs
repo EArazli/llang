@@ -78,9 +78,9 @@ surfaceSpec = do
         }
   let spec = foldl applySpec spec0 items
   if T.null (ssDoctrine spec)
-    then fail "polysurface: missing doctrine"
+    then fail "surface: missing doctrine"
     else if T.null (ssMode spec)
-      then fail "polysurface: missing mode"
+      then fail "surface: missing mode"
       else pure spec
   where
     applySpec spec item =

@@ -15,8 +15,8 @@ import Strat.Poly.CriticalPairs
 import Strat.Poly.Normalize (JoinWitness(..), joinableWithinWitness)
 import Strat.Poly.Rewrite (rulesFromPolicy, RewriteRule)
 import Strat.Poly.Doctrine (Doctrine(..))
-import Strat.Kernel.RewriteSystem (RewritePolicy)
-import Strat.Kernel.Types (RuleClass(..))
+import Strat.Common.Rules (RewritePolicy)
+import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Poly.Graph (Diagram(..))
 

@@ -1,16 +1,28 @@
 doctrine Invol where {
-  sort Obj;
-  op f : (x:Obj) -> Obj;
-  computational inv : (x:Obj) |- f(f(?x)) -> ?x;
+  mode M;
+  type A @M;
+  gen f : [A] -> [A] @M;
+  rule computational inv -> : [A] -> [A] @M =
+    f ; f == id[A]
 }
 
 doctrine Invol2 where {
-  sort Obj;
-  op g : (x:Obj) -> Obj;
-  computational inv : (x:Obj) |- g(g(?x)) -> ?x;
+  mode M;
+  type A @M;
+  gen g : [A] -> [A] @M;
+  rule computational inv -> : [A] -> [A] @M =
+    g ; g == id[A]
 }
 
 morphism Double : Invol -> Invol2 where {
-  sort Obj = Obj;
-  op f(x) = g(g(?x));
+  gen f @ M -> g ; g
 }
+
+run main where {
+  doctrine Invol;
+  mode M;
+  apply Double;
+  show normalized;
+}
+---
+f

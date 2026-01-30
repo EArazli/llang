@@ -7,11 +7,8 @@ module Strat.CLI
 
 import Strat.Frontend.Loader (loadModule)
 import Strat.Frontend.Run (runWithEnv, selectRun, RunResult(..))
-import Strat.Frontend.RunPoly (runPolyWithEnv, selectPolyRun, PolyRunResult(..))
-import Strat.Frontend.Env
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Map.Strict as M
 
 
 data CLIOptions = CLIOptions
@@ -33,19 +30,12 @@ runCLI opts = do
   case envResult of
     Left err -> pure (Left err)
     Right env ->
-      if not (M.null (mePolyRuns env))
-        then case selectPolyRun env (optRun opts) of
-          Left err -> pure (Left err)
-          Right spec ->
-            case runPolyWithEnv env spec of
-              Left err -> pure (Left err)
-              Right res -> pure (Right (prOutput res))
-        else case selectRun env (optRun opts) of
-          Left err -> pure (Left err)
-          Right spec ->
-            case runWithEnv env spec of
-              Left err -> pure (Left err)
-              Right res -> pure (Right (rrOutput res))
+      case selectRun env (optRun opts) of
+        Left err -> pure (Left err)
+        Right spec ->
+          case runWithEnv env spec of
+            Left err -> pure (Left err)
+            Right res -> pure (Right (prOutput res))
 
 usage :: Text
 usage =

@@ -3,7 +3,7 @@ module Strat.Poly.Cell2
   ) where
 
 import Data.Text (Text)
-import Strat.Kernel.Types (RuleClass, Orientation)
+import Strat.Common.Rules (RuleClass, Orientation)
 import Strat.Poly.TypeExpr (TyVar)
 import Strat.Poly.Diagram (Diagram)
 

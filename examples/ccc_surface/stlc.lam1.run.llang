@@ -3,3 +3,4 @@ import "./stlc.runspec.llang";
 run main using STLCinCCC
 ---
 lam x:Bool. x
+---

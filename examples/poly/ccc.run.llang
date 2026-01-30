@@ -1,9 +1,0 @@
-import "./ccc.poly.llang";
-
-polyrun main where {
-  doctrine CCC;
-  mode M;
-  show normalized;
-}
----
-eval

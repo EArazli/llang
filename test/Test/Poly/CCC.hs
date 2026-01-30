@@ -10,14 +10,14 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Paths_llang (getDataFileName)
 import Strat.Frontend.Loader (loadModule)
-import Strat.Frontend.Env (ModuleEnv(..))
+import Strat.Frontend.Env (meDoctrines)
 import Strat.Poly.Doctrine (Doctrine(..))
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Graph (diagramIsoEq, renumberDiagram)
 import Strat.Poly.Diagram (Diagram)
-import Strat.Kernel.RewriteSystem (RewritePolicy(..))
+import Strat.Common.Rules (RewritePolicy(..))
 
 
 tests :: TestTree
@@ -42,13 +42,13 @@ testBetaAppReduces = do
 
 loadCCC :: IO Doctrine
 loadCCC = do
-  path <- getDataFileName "examples/poly/ccc_surface/ccc.poly.llang"
+  path <- getDataFileName "examples/ccc_surface/ccc.llang"
   envResult <- loadModule path
   env <- case envResult of
     Left err -> assertFailure (T.unpack err)
     Right env -> pure env
-  case M.lookup "CCC" (mePolyDoctrines env) of
-    Nothing -> assertFailure "poly doctrine CCC not found"
+  case M.lookup "CCC" (meDoctrines env) of
+    Nothing -> assertFailure "doctrine CCC not found"
     Just doc -> pure doc
 
 requireCell :: Text -> Doctrine -> IO Cell2

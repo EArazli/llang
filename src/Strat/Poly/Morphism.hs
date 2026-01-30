@@ -10,7 +10,7 @@ import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
-import Strat.Kernel.RewriteSystem (RewritePolicy(..))
+import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Cell2
 import Strat.Poly.Graph
@@ -21,7 +21,7 @@ import Strat.Poly.UnifyTy
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Kernel.Types (RuleClass(..), Orientation(..))
+import Strat.Common.Rules (RuleClass(..), Orientation(..))
 
 
 data Morphism = Morphism

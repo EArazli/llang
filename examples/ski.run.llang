@@ -1,18 +1,9 @@
 import "./ski.llang";
-import "./ski.syntax.llang";
 
 run main where {
   doctrine SKI;
-  open SKI;
-
-  syntax SKISyntax;
-  model Symbolic;
-
-  policy UseOnlyComputationalLR;
-  fuel 80;
-
+  mode M;
   show normalized;
-  show value;
 }
 ---
-K @ a @ b
+(((((s * k) ; app) * k) ; app) * id[T]) ; app

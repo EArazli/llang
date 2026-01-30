@@ -1,17 +1,22 @@
 doctrine Category where {
-  sort Obj;
-  op a : Obj;
-  op f : (x:Obj) -> Obj;
+  mode M;
+  type Obj @M;
+  gen a : [] -> [Obj] @M;
+  gen f : [Obj] -> [Obj] @M;
 }
 
 doctrine BoolExt extends Category where {
-  op g : (x:Obj) -> Obj;
-  computational rB : (x:Obj) |- f(?x) -> g(?x);
+  gen g : [Obj] -> [Obj] @M;
+
+  rule computational rB -> : [Obj] -> [Obj] @M =
+    f == g
 }
 
 doctrine NatExt extends Category where {
-  op h : (x:Obj) -> Obj;
-  computational rN : (x:Obj) |- f(?x) -> h(?x);
+  gen h : [Obj] -> [Obj] @M;
+
+  rule computational rN -> : [Obj] -> [Obj] @M =
+    f == h
 }
 
 doctrine Both = pushout BoolExt.fromBase NatExt.fromBase;

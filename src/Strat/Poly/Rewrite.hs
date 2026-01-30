@@ -16,8 +16,8 @@ import Strat.Poly.Diagram
 import Strat.Poly.Match
 import Strat.Poly.TypeExpr (TyVar)
 import Strat.Poly.Cell2
-import Strat.Kernel.RewriteSystem (RewritePolicy(..))
-import Strat.Kernel.Types (Orientation(..), RuleClass(..))
+import Strat.Common.Rules (RewritePolicy(..))
+import Strat.Common.Rules (Orientation(..), RuleClass(..))
 import Strat.Poly.Doctrine (Doctrine(..))
 
 

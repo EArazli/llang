@@ -1,64 +1,59 @@
-Polygraph examples (current kernel)
+Polygraph examples
 
-poly/planar_monoid.poly.llang + poly/planar_monoid.run.llang demonstrate a planar monoid with explicit generators and rules; run the .run file to see normalized diagram output.
+planar_monoid.llang
+  Planar monoid in a single mode (no implicit swap/dup/drop). Includes unit/assoc rules.
+planar_monoid.run.llang
+  Normalizes a closed planar monoid diagram.
+monoid.run.llang
+  A short monoid normalization run that mirrors the legacy monoid example.
 
-poly/cart_monoid.poly.llang + poly/cart_monoid.run.llang add explicit cartesian structure (dup/drop/swap) and normalize a diagram that uses dup.
+cart_monoid.llang
+  Monoid over an explicit cartesian structural library (dup/drop/swap generators).
+cart_monoid.run.llang
+  Uses dup to build a square-like diagram and normalizes it.
 
-poly/no_dup_error.run.llang is a negative example that fails due to a boundary mismatch (no implicit duplication).
+no_dup_error.run.llang
+  Demonstrates a boundary mismatch when composing without dup.
 
-poly/subdiagram_match.poly.llang is a small doctrine intended to exercise true subdiagram matching.
+subdiagram_match.llang
+  A small doctrine with a rule intended to match as a subdiagram inside larger graphs.
 
-poly/planar_monoid.ssa.run.llang demonstrates the SSA polysurface; run it to see a wire‑named diagram elaborate and normalize (surface spec in poly/planar_monoid.ssa.surface.llang).
+planar_monoid.ssa.run.llang
+  Uses the SSA surface to build a monoid diagram with named wires (see planar_monoid.ssa.surface.llang).
 
-poly/cart_monoid.term.run.llang uses a CartTerm polysurface and a polymodel to normalize and evaluate a duplicated term.
+cart_monoid.term.run.llang
+  Uses a CartTerm surface plus a model to normalize and evaluate a duplicated term.
 
-poly/monoid_to_string.llang defines a polymorphism between two polydoctrines (monoid → string monoid).
+monoid_to_string.llang
+  Declares a morphism from a monoid doctrine to a string monoid doctrine.
 
-poly/implements_uses.run.llang demonstrates polyimplements defaults resolved via polyrun uses.
+cat.llang + cat.run.llang
+  A tiny typed chain of generators showing categorical composition in the diagram kernel.
 
-Legacy examples (term kernel + Surface2)
+ccc.llang + ccc.run.llang
+  A minimal cartesian doctrine with an eval‑like generator; normalizes a simple diagram.
+ccc_surface/ccc.llang + ccc_surface/stlc.*.llang
+  Defines a surface for STLC-in-CCC and runs surface terms as diagrams.
 
-cat.llang + cat.run.llang demonstrate a small category doctrine with a direct core run using CombDefault syntax; run `examples/cat.run.llang` and expect normalized/value output for a fully-qualified core term.
-  Poly equivalent: poly/cat.poly.llang + poly/cat.run.llang.
+bool.models.llang + stlc_bool.term.run.llang
+  Boolean cartesian doctrine with if‑rules; demonstrates surface evaluation.
 
-ccc.llang + ccc.syntax.llang + ccc.run.llang define the CCC doctrine and a core syntax for it; run `examples/ccc.run.llang` to see normalized/value/cat output for a CCC expression.
-  Poly equivalent: poly/ccc.poly.llang + poly/ccc.run.llang.
+peano.llang + peano.models.llang + peano.run.llang
+  Peano naturals with add rules and a native model; normalizes and evaluates a term.
 
-ccc_surface/ (ccc.doctrine.llang, ccc.interface.llang, stlc.surface.llang, stlc.syntax.llang, stlc.runspec.llang, and stlc.*.run.llang) demonstrates the Surface2 STLC layer over CCC; run `examples/ccc_surface/stlc.run.llang` or the lam/pair variants to see surface input elaborate into core terms and print normalized/value/cat.
-  Poly equivalent: poly/ccc_surface/ccc.poly.llang + poly/ccc_surface/stlc.*.llang (polysurface STLC elaborates directly to poly diagrams).
+ski.llang + ski.run.llang
+  SKI combinators as string‑diagram rewriting with explicit app/dup/drop/swap.
 
-monoid.llang + monoid.syntax.llang + monoid.models.llang + monoid.run.llang show a monoid doctrine with computational rules and a string model; run `examples/monoid.run.llang` (or `examples/monoid.alt.run.llang`) and expect normalized/value/cat for a parsed monoid term.
-  Poly equivalents: poly/monoid.run.llang (planar) and poly/cart_monoid.term.run.llang (cartesian + model via polysurface).
+morphism_term.llang
+  Defines a morphism and uses run apply to normalize after mapping.
 
-peano.llang + peano.syntax.llang + peano.models.llang + peano.run.llang show Peano naturals with a model-backed evaluator; run `examples/peano.run.llang` to see normalized/value output for a Peano term (there is also `examples/peano.js.run.llang` using the JS model).
-  Poly equivalent: poly/peano.poly.llang + poly/peano.models.llang + poly/peano.run.llang.
+pushout_basic.llang + pushout_basic.run.llang
+  A small pushout that demonstrates automatic disjoint renaming for non‑interface gens.
+pushout/*
+  Poly pushout parity examples (category/bool/nat base, commutative monoid, nat/bool coproduct, and model restriction).
 
-ski.llang + ski.syntax.llang + ski.run.llang demonstrate a tiny SKI combinator calculus; run `examples/ski.run.llang` and expect normalized output for a combinator term.
-  Poly equivalent: poly/ski.poly.llang + poly/ski.run.llang.
+implements_uses.run.llang
+  Demonstrates implements + run uses with an SSA surface over an interface doctrine.
 
-morphism_term.llang demonstrates morphism interpretation on terms; load it with the CLI to check that the morphism and its check pass (no run block output is expected).
-  Poly equivalent: poly/morphism_term.llang (uses polyrun apply).
-
-runspec/multi.llang demonstrates multiple runs in a single file; run it to see the two runs execute in sequence with their respective outputs.
-  Poly equivalent: poly/runspec/multi.llang (polyrun_spec).
-
-pushout/category_bool_nat_base.llang defines Category/BoolExt/NatExt and their pushout Both; other pushout examples import this as shared boilerplate.
-  Poly equivalent: poly/pushout/category_bool_nat_base.poly.llang.
-
-pushout/pushout_basic.llang just imports the base pushout definitions; pushout/pushout_basic.run.llang runs a core term in doctrine Both to exercise pushout normalization and open resolution.
-  Poly equivalent: poly/pushout_basic.run.llang.
-
-pushout/pushout_extend.llang extends Both and adds cross-fragment rules using qualified names; load it to confirm qualified sorts/ops parse and elaborate.
-  Poly equivalent: poly/pushout/pushout_extend.poly.llang.
-
-pushout/comm_monoid.llang demonstrates assembling a commutative monoid via pushout over a semigroup interface.
-  Poly equivalent: poly/pushout/comm_monoid.poly.llang.
-
-pushout/nat_bool.llang + pushout/nat_bool.models.llang + pushout/nat_bool.run.llang demonstrate model restriction: a Nat term is run using a NatBool model via the injection morphism; run `examples/pushout/nat_bool.run.llang` and expect normalized/value output for a Nat term.
-  Poly equivalent: poly/pushout/nat_bool.poly.llang + poly/pushout/nat_bool.models.llang + poly/pushout/nat_bool.run.llang (model restriction uses the generated injection).
-
-pushout/nat_bool_plus.llang + pushout/nat_bool_plus.models.llang + pushout/nat_bool_plus.run.llang extend NatBool with a cross-fragment op (Nat -> Bool) and model it; run `examples/pushout/nat_bool_plus.run.llang` and expect normalized/value output.
-  Poly equivalent: poly/pushout/nat_bool_plus.poly.llang + poly/pushout/nat_bool_plus.models.llang + poly/pushout/nat_bool_plus.run.llang.
-
-pushout/ambiguous_model_restriction.llang demonstrates the expected error when multiple morphisms exist from a run doctrine to a model doctrine; load it to see the ambiguity failure.
-  Poly equivalent: poly/pushout/ambiguous_model_restriction.llang (poly model restriction reports ambiguity).
+runspec/multi.llang
+  Two runs in a single file to mirror the legacy multi‑run example (run_spec).

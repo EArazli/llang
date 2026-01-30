@@ -11,6 +11,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Control.Monad (foldM)
+import Strat.DSL.AST (RawRun(..), RawRunShow(..), RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..))
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
@@ -19,36 +20,33 @@ import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
-import Strat.Poly.RunSpec
 import Strat.Poly.Morphism
-import Strat.Frontend.RunSpec (RunShow(..))
-import qualified Strat.Kernel.DSL.AST as KAST
-import Strat.Kernel.DSL.AST (RawRunShow(..))
 import Strat.Frontend.Env (ModuleEnv(..))
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Kernel.RewriteSystem (RewritePolicy(..))
+import Strat.Common.Rules (RewritePolicy(..))
+import Strat.RunSpec (RunShow(..), RunSpec(..))
 
 
-elabPolyRun :: Text -> KAST.RawPolyRun -> Either Text PolyRunSpec
+elabPolyRun :: Text -> RawRun -> Either Text RunSpec
 elabPolyRun name raw = do
-  doctrine <- maybe (Left "polyrun: missing doctrine") Right (KAST.rprDoctrine raw)
-  let fuel = maybe 50 id (KAST.rprFuel raw)
-  let flags = if null (KAST.rprShowFlags raw) then [ShowNormalized] else map toShow (KAST.rprShowFlags raw)
-  let policyName = maybe "UseStructuralAsBidirectional" id (KAST.rprPolicy raw)
+  doctrine <- maybe (Left "run: missing doctrine") Right (rrDoctrine raw)
+  let fuel = maybe 50 id (rrFuel raw)
+  let flags = if null (rrShowFlags raw) then [ShowNormalized] else map toShow (rrShowFlags raw)
+  let policyName = maybe "UseStructuralAsBidirectional" id (rrPolicy raw)
   policy <- parsePolicy policyName
   ensureShowFlags flags
-  pure PolyRunSpec
+  pure RunSpec
     { prName = name
     , prDoctrine = doctrine
-    , prMode = KAST.rprMode raw
-    , prSurface = KAST.rprSurface raw
-    , prModel = KAST.rprModel raw
-    , prMorphisms = KAST.rprMorphisms raw
-    , prUses = KAST.rprUses raw
+    , prMode = rrMode raw
+    , prSurface = rrSurface raw
+    , prModel = rrModel raw
+    , prMorphisms = rrMorphisms raw
+    , prUses = rrUses raw
     , prPolicy = policy
     , prFuel = fuel
     , prShowFlags = flags
-    , prExprText = KAST.rprExprText raw
+    , prExprText = rrExprText raw
     }
   where
     toShow s =
@@ -60,23 +58,23 @@ elabPolyRun name raw = do
         RawShowCoherence -> ShowCoherence
     ensureShowFlags flags =
       if ShowCat `elem` flags
-        then Left "polyrun: show cat is not supported"
-        else if ShowValue `elem` flags && KAST.rprModel raw == Nothing
-          then Left "polyrun: show value requires model"
+        then Left "run: show cat is not supported"
+        else if ShowValue `elem` flags && rrModel raw == Nothing
+          then Left "run: show value requires model"
           else Right ()
 
-elabPolyMorphism :: ModuleEnv -> KAST.RawPolyMorphism -> Either Text Morphism
+elabPolyMorphism :: ModuleEnv -> RawPolyMorphism -> Either Text Morphism
 elabPolyMorphism env raw = do
-  src <- lookupPolyDoctrine env (KAST.rpmSrc raw)
-  tgt <- lookupPolyDoctrine env (KAST.rpmTgt raw)
-  let policyName = maybe "UseStructuralAsBidirectional" id (KAST.rpmPolicy raw)
+  src <- lookupPolyDoctrine env (rpmSrc raw)
+  tgt <- lookupPolyDoctrine env (rpmTgt raw)
+  let policyName = maybe "UseStructuralAsBidirectional" id (rpmPolicy raw)
   policy <- parsePolicy policyName
-  let fuel = maybe 50 id (KAST.rpmFuel raw)
-  typeMap <- foldM (addTypeMap src tgt) M.empty [ t | KAST.RPMType t <- KAST.rpmItems raw ]
-  genMap <- foldM (addGenMap src tgt) M.empty [ g | KAST.RPMGen g <- KAST.rpmItems raw ]
+  let fuel = maybe 50 id (rpmFuel raw)
+  typeMap <- foldM (addTypeMap src tgt) M.empty [ t | RPMType t <- rpmItems raw ]
+  genMap <- foldM (addGenMap src tgt) M.empty [ g | RPMGen g <- rpmItems raw ]
   ensureAllGenMapped src genMap
   let mor = Morphism
-        { morName = KAST.rpmName raw
+        { morName = rpmName raw
         , morSrc = src
         , morTgt = tgt
         , morTypeMap = typeMap
@@ -85,59 +83,59 @@ elabPolyMorphism env raw = do
         , morFuel = fuel
         }
   case checkMorphism mor of
-    Left err -> Left ("polymorphism " <> KAST.rpmName raw <> ": " <> err)
+    Left err -> Left ("morphism " <> rpmName raw <> ": " <> err)
     Right () -> Right mor
   where
     lookupPolyDoctrine env' name =
-      case M.lookup name (mePolyDoctrines env') of
-        Nothing -> Left ("Unknown polydoctrine: " <> name)
+      case M.lookup name (meDoctrines env') of
+        Nothing -> Left ("Unknown doctrine: " <> name)
         Just doc -> Right doc
     addTypeMap src tgt mp decl = do
-      let modeSrc = ModeName (KAST.rpmtSrcMode decl)
-      let modeTgt = ModeName (KAST.rpmtTgtMode decl)
+      let modeSrc = ModeName (rpmtSrcMode decl)
+      let modeTgt = ModeName (rpmtTgtMode decl)
       if modeSrc /= modeTgt
-        then Left "polymorphism: mode mapping not supported"
+        then Left "morphism: mode mapping not supported"
         else Right ()
       ensureMode src modeSrc
       ensureMode tgt modeSrc
-      let name = TypeName (KAST.rpmtSrcType decl)
+      let name = TypeName (rpmtSrcType decl)
       arity <- case M.lookup modeSrc (dTypes src) >>= M.lookup name of
-        Nothing -> Left "polymorphism: unknown source type"
+        Nothing -> Left "morphism: unknown source type"
         Just a -> Right a
-      let params = map TyVar (KAST.rpmtParams decl)
+      let params = map TyVar (rpmtParams decl)
       if length params /= arity
-        then Left "polymorphism: type mapping binder arity mismatch"
+        then Left "morphism: type mapping binder arity mismatch"
         else Right ()
       if length params == length (S.fromList params)
         then Right ()
-        else Left "polymorphism: duplicate type mapping binders"
-      tgtExpr <- elabTypeExpr tgt modeSrc params (KAST.rpmtTgtType decl)
+        else Left "morphism: duplicate type mapping binders"
+      tgtExpr <- elabTypeExpr tgt modeSrc params (rpmtTgtType decl)
       let key = (modeSrc, name)
       if M.member key mp
-        then Left "polymorphism: duplicate type mapping"
+        then Left "morphism: duplicate type mapping"
         else Right (M.insert key (TypeTemplate params tgtExpr) mp)
     addGenMap src tgt mp decl = do
-      let mode = ModeName (KAST.rpmgMode decl)
+      let mode = ModeName (rpmgMode decl)
       ensureMode src mode
       ensureMode tgt mode
-      gen <- lookupGen src mode (GenName (KAST.rpmgSrcGen decl))
+      gen <- lookupGen src mode (GenName (rpmgSrcGen decl))
       let tyVars = gdTyVars gen
-      diag <- elabDiagExpr tgt mode tyVars (KAST.rpmgRhs decl)
+      diag <- elabDiagExpr tgt mode tyVars (rpmgRhs decl)
       let free = freeTyVarsDiagram diag
       let allowed = S.fromList tyVars
       if S.isSubsetOf free allowed
         then Right ()
-        else Left "polymorphism: generator mapping uses undeclared type variables"
+        else Left "morphism: generator mapping uses undeclared type variables"
       let key = (mode, gdName gen)
       if M.member key mp
-        then Left "polymorphism: duplicate generator mapping"
+        then Left "morphism: duplicate generator mapping"
         else Right (M.insert key diag mp)
     -- no template restriction; any target type expression using only params is allowed
     ensureAllGenMapped src mp = do
       let gens = [ (mode, gdName g) | (mode, table) <- M.toList (dGens src), g <- M.elems table ]
       case [ (m, g) | (m, g) <- gens, M.notMember (m, g) mp ] of
         [] -> Right ()
-        _ -> Left "polymorphism: missing generator mapping"
+        _ -> Left "morphism: missing generator mapping"
 
 parsePolicy :: Text -> Either Text RewritePolicy
 parsePolicy name =
@@ -152,8 +150,8 @@ elabPolyDoctrine env raw = do
   base <- case rpdExtends raw of
     Nothing -> Right Nothing
     Just name ->
-      case M.lookup name (mePolyDoctrines env) of
-        Nothing -> Left ("Unknown polydoctrine: " <> name)
+      case M.lookup name (meDoctrines env) of
+        Nothing -> Left ("Unknown doctrine: " <> name)
         Just doc -> Right (Just doc)
   let start = seedDoctrine (rpdName raw) base
   doc <- foldM (elabPolyItem env) start (rpdItems raw)

@@ -3,9 +3,9 @@ module Strat.Frontend.Loader
   ( loadModule
   ) where
 
-import Strat.Kernel.DSL.Parse (parseRawFile)
-import Strat.Kernel.DSL.AST (RawFile(..), RawDecl(..))
-import Strat.Kernel.DSL.Elab (elabRawFileWithEnv)
+import Strat.DSL.Parse (parseRawFile)
+import Strat.DSL.AST (RawFile(..), RawDecl(..))
+import Strat.DSL.Elab (elabRawFileWithEnv)
 import Strat.Frontend.Env
 import Data.Text (Text)
 import qualified Data.Text.IO as TIO
@@ -66,7 +66,7 @@ loadModuleWith st path isMain = do
                             Left err -> pure (Left err)
                             Right envFull ->
                               let envLocal = diffEnv envFull envBase
-                              in if not isMain && (not (M.null (meRuns envLocal)) || not (M.null (mePolyRuns envLocal)))
+                              in if not isMain && not (M.null (meRuns envLocal))
                                 then pure (Left "runs are only allowed in the main file")
                                 else do
                                   let deps = S.insert absPath importDeps
@@ -105,21 +105,12 @@ envFromDeps st deps =
 diffEnv :: ModuleEnv -> ModuleEnv -> ModuleEnv
 diffEnv full base = ModuleEnv
   { meDoctrines = M.difference (meDoctrines full) (meDoctrines base)
-  , meRawDoctrines = M.difference (meRawDoctrines full) (meRawDoctrines base)
-  , mePolyDoctrines = M.difference (mePolyDoctrines full) (mePolyDoctrines base)
-  , mePolyMorphisms = M.difference (mePolyMorphisms full) (mePolyMorphisms base)
-  , mePolySurfaces = M.difference (mePolySurfaces full) (mePolySurfaces base)
-  , mePolyModels = M.difference (mePolyModels full) (mePolyModels base)
-  , meSyntaxes = M.difference (meSyntaxes full) (meSyntaxes base)
-  , meSurfaces = M.difference (meSurfaces full) (meSurfaces base)
   , meMorphisms = M.difference (meMorphisms full) (meMorphisms base)
+  , meSurfaces = M.difference (meSurfaces full) (meSurfaces base)
   , meModels = M.difference (meModels full) (meModels base)
   , meImplDefaults = diffImplDefaults (meImplDefaults full) (meImplDefaults base)
-  , mePolyImplDefaults = diffImplDefaults (mePolyImplDefaults full) (mePolyImplDefaults base)
   , meRunSpecs = M.difference (meRunSpecs full) (meRunSpecs base)
-  , mePolyRunSpecs = M.difference (mePolyRunSpecs full) (mePolyRunSpecs base)
-  , meRuns = meRuns full
-  , mePolyRuns = mePolyRuns full
+  , meRuns = M.difference (meRuns full) (meRuns base)
   }
 
 diffImplDefaults :: M.Map (Text, Text) [Text] -> M.Map (Text, Text) [Text] -> M.Map (Text, Text) [Text]

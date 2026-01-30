@@ -1,19 +1,18 @@
-import "./ccc.interface.llang";
 import "./stlc.surface.llang";
-import "./stlc.syntax.llang";
-import "../ccc.syntax.llang";
-import "../../stdlib/syntax.llang";
+
+model CCCSymbolic : CCC where {
+  default = symbolic;
+
+  op dup(x) = [x, x];
+  op drop(x) = [];
+  op swap(x, y) = [y, x];
+}
 
 run_spec STLCinCCC where {
   doctrine CCC;
-  open CCC;
-  syntax CCCSyntax;
-  model Symbolic;
   surface STLC;
-  surface_syntax STLC_Syntax;
+  model CCCSymbolic;
   policy UseOnlyComputationalLR;
   fuel 200;
   show normalized;
-  show cat;
-  show value;
 }

@@ -1,11 +1,16 @@
-import "../ccc_surface/stlc.runspec.llang";
+import "../cart_monoid.llang";
 
-run main using STLCinCCC
+run_spec Base where {
+  doctrine CartMonoid;
+  show normalized;
+}
+
+run main using Base
 ---
-(lam x:Bool. x) true
+dup{A} ; mul
 ---
 
-run beta using STLCinCCC where { policy UseOnlyComputationalLR; }
+run beta using Base where { fuel 1; }
 ---
-(lam x:Bool. x) false
+dup{A} ; mul
 ---

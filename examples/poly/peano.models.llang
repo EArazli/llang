@@ -1,8 +1,0 @@
-import "./peano.poly.llang";
-
-polymodel PeanoNative : Peano where {
-  default = symbolic;
-  op Z() = 0;
-  op S(n) = n + 1;
-  op add(a,b) = a + b;
-}

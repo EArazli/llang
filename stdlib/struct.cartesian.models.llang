@@ -1,6 +1,6 @@
 import "./struct.cartesian.llang";
 
-polymodel StructCartesianNative : StructCartesian where {
+model StructCartesianNative : StructCartesian where {
   op dup(x) = [x, x];
   op drop(x) = [];
   op swap(x,y) = [y, x];

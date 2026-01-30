@@ -1,0 +1,29 @@
+doctrine Monoid where {
+  mode M;
+  type A @M;
+
+  gen unit : [] -> [A] @M;
+  gen mul : [A, A] -> [A] @M;
+
+  rule computational assoc -> : [A, A, A] -> [A] @M =
+    (mul * id[A]) ; mul == (id[A] * mul) ; mul
+}
+
+doctrine StringMonoid where {
+  mode M;
+  type Str @M;
+
+  gen empty : [] -> [Str] @M;
+  gen append : [Str, Str] -> [Str] @M;
+
+  rule computational assoc -> : [Str, Str, Str] -> [Str] @M =
+    (append * id[Str]) ; append == (id[Str] * append) ; append
+}
+
+morphism MonoidToString : Monoid -> StringMonoid where {
+  type A @M -> Str @M;
+  gen unit @M -> empty
+  gen mul @M -> append
+  policy UseAllOriented;
+  fuel 20;
+}

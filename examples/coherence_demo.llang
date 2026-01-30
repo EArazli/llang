@@ -1,0 +1,13 @@
+doctrine CoherenceDemo where {
+  mode M;
+  type A @M;
+
+  gen f : [A] -> [A] @M;
+  gen g : [A] -> [A] @M;
+
+  rule structural s -> : [A] -> [A] @M =
+    f == id[A]
+
+  rule computational c -> : [A] -> [A] @M =
+    f == g
+}

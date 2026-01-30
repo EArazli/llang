@@ -1,7 +1,0 @@
-polydoctrine LoopDemo where {
-  mode M;
-  type A @M;
-
-  gen dup : [A] -> [A, A] @M;
-  gen f : [A] -> [A] @M;
-}

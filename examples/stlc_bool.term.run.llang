@@ -1,0 +1,49 @@
+import "../stdlib/bool.llang";
+import "./bool.models.llang";
+
+surface BoolTerm where {
+  doctrine Bool;
+  mode M;
+
+  lexer {
+    keywords: term, in, out;
+    symbols: "(", ")", "{", "}", ":", ";", ",";
+  }
+
+  expr {
+    atom:
+      ident "(" <expr> ")" => CALL(name, args)
+    | ident => VAR(name)
+    | "out" <expr> => OUT(expr)
+    | "term" "{" <expr> "}" => DIAG(expr)
+    | "(" <expr> ")" => <expr>
+    ;
+
+    prefix:
+      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+    ;
+
+    infixr 10 "," => LIST(lhs, rhs);
+  }
+
+  elaborate {
+    VAR(x) => $x;;
+    LIST(a, b) => $1 * $2;;
+    OUT(e) => $1;;
+    DIAG(e) => $1;;
+    IN(x, ty, body) => $1;;
+  }
+}
+
+run main where {
+  doctrine Bool;
+  mode M;
+  surface BoolTerm;
+  model BoolNative;
+  show normalized;
+  show value;
+}
+---
+term {
+  out if(T, F, T)
+}

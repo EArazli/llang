@@ -15,13 +15,13 @@ tests :: TestTree
 tests =
   testGroup
     "CLI.Golden"
-    [ testCase "planar_monoid.run.llang output" (goldenRun "examples/poly/planar_monoid.run.llang" expectedPlanarMonoid)
-    , testCase "cart_monoid.run.llang output" (goldenRun "examples/poly/cart_monoid.run.llang" expectedCartMonoid)
-    , testCase "box_match.run.llang output" (goldenRun "examples/poly/box_match.run.llang" expectedBoxMatch)
-    , testCase "coherence_demo.run.llang output" (goldenRun "examples/poly/coherence_demo.run.llang" expectedCoherenceDemo)
-    , testCase "loop_demo.run.llang output" (goldenRun "examples/poly/loop_demo.run.llang" expectedLoopDemo)
-    , testCase "stlc.lam1.run.llang output" (goldenRun "examples/poly/ccc_surface/stlc.lam1.run.llang" expectedStlcLam)
-    , testCase "stlc.app1.run.llang output" (goldenRun "examples/poly/ccc_surface/stlc.app1.run.llang" expectedStlcApp)
+    [ testCase "planar_monoid.run.llang output" (goldenRun "examples/planar_monoid.run.llang" expectedPlanarMonoid)
+    , testCase "cart_monoid.run.llang output" (goldenRun "examples/cart_monoid.run.llang" expectedCartMonoid)
+    , testCase "box_match.run.llang output" (goldenRun "examples/box_match.run.llang" expectedBoxMatch)
+    , testCase "coherence_demo.run.llang output" (goldenRun "examples/coherence_demo.run.llang" expectedCoherenceDemo)
+    , testCase "loop_demo.run.llang output" (goldenRun "examples/loop_demo.run.llang" expectedLoopDemo)
+    , testCase "stlc.lam1.run.llang output" (goldenRun "examples/ccc_surface/stlc.lam1.run.llang" expectedStlcLam)
+    , testCase "stlc.app1.run.llang output" (goldenRun "examples/ccc_surface/stlc.app1.run.llang" expectedStlcApp)
     ]
 
 

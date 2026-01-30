@@ -18,7 +18,7 @@ import Strat.Poly.Names (BoxName(..))
 import Strat.Poly.Diagram
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Kernel.Types (RuleClass(..), Orientation(..))
+import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.Graph
   ( Diagram(..)
   , EdgeId(..)

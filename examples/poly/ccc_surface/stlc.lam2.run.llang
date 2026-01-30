@@ -1,6 +1,0 @@
-import "./stlc.runspec.llang";
-
-polyrun main using STLCinCCC
----
-lam x:Bool. lam y:Bool. x
----

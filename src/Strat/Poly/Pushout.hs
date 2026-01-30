@@ -11,8 +11,8 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import Control.Monad (filterM, foldM)
-import Strat.Kernel.RewriteSystem (RewritePolicy(..))
-import Strat.Kernel.Types (RuleClass(..), Orientation(..))
+import Strat.Common.Rules (RewritePolicy(..))
+import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
 import Strat.Poly.ModeTheory (ModeName(..))

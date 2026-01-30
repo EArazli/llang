@@ -34,7 +34,7 @@ elabPolySurfaceDecl name doc spec = do
       , psMode = mode
       , psSpec = spec { ssName = name }
       }
-    else Left "polysurface: unknown mode"
+    else Left "surface: unknown mode"
 
 validateSpec :: SurfaceSpec -> Either Text ()
 validateSpec spec =
@@ -42,10 +42,10 @@ validateSpec spec =
     require "lexer" (ssLexer spec)
     require "expr" (ssExprSpec spec)
     if M.null (ssElabRules spec)
-      then Left "polysurface: elaborate block is required"
+      then Left "surface: elaborate block is required"
       else Right ()
   where
     require label field =
       case field of
-        Nothing -> Left ("polysurface: missing " <> label)
+        Nothing -> Left ("surface: missing " <> label)
         Just _ -> Right ()

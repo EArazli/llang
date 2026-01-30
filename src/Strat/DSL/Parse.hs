@@ -1,0 +1,635 @@
+{-# LANGUAGE OverloadedStrings #-}
+module Strat.DSL.Parse
+  ( parseRawFile
+  ) where
+
+import Strat.DSL.AST
+import Strat.Common.Rules
+import Strat.Model.Spec (MExpr(..))
+import qualified Strat.Poly.DSL.AST as PolyAST
+import Strat.Poly.Surface.Parse (surfaceSpecBlock)
+import Data.Text (Text)
+import qualified Data.Text as T
+import Data.Functor (($>))
+import Data.Void (Void)
+import Text.Megaparsec
+import Text.Megaparsec.Char
+import qualified Text.Megaparsec.Char.Lexer as L
+import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
+import Control.Monad (void)
+import Data.Char (isLower)
+
+type Parser = Parsec Void Text
+
+parseRawFile :: Text -> Either Text RawFile
+parseRawFile input =
+  case runParser (sc *> rawFile <* eof) "<dsl>" input of
+    Left err -> Left (T.pack (errorBundlePretty err))
+    Right rf -> Right rf
+
+rawFile :: Parser RawFile
+rawFile = do
+  decls <- many (sc *> decl)
+  pure (RawFile decls)
+
+-- Declarations
+
+decl :: Parser RawDecl
+decl =
+  importDecl
+    <|> doctrineDecl
+    <|> morphismDecl
+    <|> surfaceDecl
+    <|> modelDecl
+    <|> implementsDecl
+    <|> runSpecDecl
+    <|> runDecl
+
+importDecl :: Parser RawDecl
+importDecl = do
+  _ <- symbol "import"
+  path <- stringLiteral
+  optionalSemi
+  pure (DeclImport (T.unpack path))
+
+doctrineDecl :: Parser RawDecl
+doctrineDecl = do
+  _ <- symbol "doctrine"
+  name <- ident
+  (pushoutDecl name <|> coproductDecl name <|> whereDecl name)
+  where
+    whereDecl docName = do
+      mExt <- optional (symbol "extends" *> ident)
+      _ <- symbol "where"
+      items <- polyBlock
+      optionalSemi
+      pure (DeclDoctrine (PolyAST.RawPolyDoctrine docName mExt items))
+    pushoutDecl docName = try $ do
+      _ <- symbol "="
+      _ <- symbol "pushout"
+      leftMor <- qualifiedIdent
+      rightMor <- qualifiedIdent
+      optionalSemi
+      pure (DeclDoctrinePushout docName leftMor rightMor)
+    coproductDecl docName = try $ do
+      _ <- symbol "="
+      _ <- symbol "coproduct"
+      leftDoc <- qualifiedIdent
+      rightDoc <- qualifiedIdent
+      optionalSemi
+      pure (DeclDoctrineCoproduct docName leftDoc rightDoc)
+
+surfaceDecl :: Parser RawDecl
+surfaceDecl = do
+  _ <- symbol "surface"
+  name <- ident
+  _ <- symbol "where"
+  spec <- surfaceSpecBlock
+  optionalSemi
+  pure (DeclSurface name spec)
+
+modelDecl :: Parser RawDecl
+modelDecl = do
+  _ <- symbol "model"
+  name <- ident
+  _ <- symbol ":"
+  doc <- ident
+  _ <- symbol "where"
+  items <- modelBlock
+  optionalSemi
+  pure (DeclModel name doc items)
+
+morphismDecl :: Parser RawDecl
+morphismDecl = do
+  _ <- symbol "morphism"
+  name <- qualifiedIdent
+  _ <- symbol ":"
+  src <- ident
+  _ <- symbol "->"
+  tgt <- ident
+  _ <- symbol "where"
+  items <- morphismBlock
+  optionalSemi
+  case buildPolyMorphism name src tgt items of
+    Left err -> fail (T.unpack err)
+    Right decl' -> pure (DeclMorphism decl')
+
+implementsDecl :: Parser RawDecl
+implementsDecl = do
+  _ <- symbol "implements"
+  iface <- ident
+  _ <- symbol "for"
+  tgt <- ident
+  _ <- symbol "using"
+  name <- qualifiedIdent
+  optionalSemi
+  pure (DeclImplements iface tgt name)
+
+runSpecDecl :: Parser RawDecl
+runSpecDecl = do
+  _ <- symbol "run_spec"
+  name <- ident
+  _ <- symbol "where"
+  items <- runBlock
+  optionalSemi
+  pure (DeclRunSpec name (RawRunSpec (buildRun items "")))
+
+runDecl :: Parser RawDecl
+runDecl = do
+  _ <- symbol "run"
+  name <- ident
+  using <- optional (symbol "using" *> ident)
+  items <- option [] (symbol "where" *> runBlock)
+  exprText <- runBody
+  pure (DeclRun (RawNamedRun name using (buildRun items exprText)))
+
+runBody :: Parser Text
+runBody = do
+  _ <- delimiterLine
+  body <- T.pack <$> manyTill anySingle (lookAhead (try delimiterLine <|> eof))
+  _ <- optional (try delimiterLine)
+  pure (T.strip body)
+
+delimiterLine :: Parser ()
+delimiterLine = do
+  _ <- optional (many (char ' ' <|> char '\t'))
+  _ <- string "---"
+  _ <- optional (many (char ' ' <|> char '\t'))
+  void eol <|> eof
+
+-- Poly doctrine blocks
+
+polyBlock :: Parser [PolyAST.RawPolyItem]
+polyBlock = do
+  _ <- symbol "{"
+  items <- many polyItem
+  _ <- symbol "}"
+  pure items
+
+polyItem :: Parser PolyAST.RawPolyItem
+polyItem =
+  polyModeDecl
+    <|> (PolyAST.RPType <$> polyTypeDecl)
+    <|> (PolyAST.RPGen <$> polyGenDecl)
+    <|> (PolyAST.RPRule <$> polyRuleDecl)
+
+polyModeDecl :: Parser PolyAST.RawPolyItem
+polyModeDecl = do
+  _ <- symbol "mode"
+  name <- ident
+  optionalSemi
+  pure (PolyAST.RPMode name)
+
+polyTypeDecl :: Parser PolyAST.RawPolyTypeDecl
+polyTypeDecl = do
+  _ <- symbol "type"
+  name <- ident
+  vars <- many ident
+  _ <- symbol "@"
+  mode <- ident
+  optionalSemi
+  pure PolyAST.RawPolyTypeDecl
+    { PolyAST.rptName = name
+    , PolyAST.rptVars = vars
+    , PolyAST.rptMode = mode
+    }
+
+polyGenDecl :: Parser PolyAST.RawPolyGenDecl
+polyGenDecl = do
+  _ <- symbol "gen"
+  name <- ident
+  vars <- many ident
+  _ <- symbol ":"
+  dom <- polyContext
+  _ <- symbol "->"
+  cod <- polyContext
+  _ <- symbol "@"
+  mode <- ident
+  optionalSemi
+  pure PolyAST.RawPolyGenDecl
+    { PolyAST.rpgName = name
+    , PolyAST.rpgVars = vars
+    , PolyAST.rpgDom = dom
+    , PolyAST.rpgCod = cod
+    , PolyAST.rpgMode = mode
+    }
+
+polyRuleDecl :: Parser PolyAST.RawPolyRuleDecl
+polyRuleDecl = do
+  _ <- symbol "rule"
+  cls <- (symbol "computational" $> Computational) <|> (symbol "structural" $> Structural)
+  name <- ident
+  orient <- orientation
+  vars <- many ident
+  _ <- symbol ":"
+  dom <- polyContext
+  _ <- symbol "->"
+  cod <- polyContext
+  _ <- symbol "@"
+  mode <- ident
+  _ <- symbol "="
+  lhs <- polyDiagExpr
+  _ <- symbol "=="
+  rhs <- polyDiagExpr
+  optionalSemi
+  pure PolyAST.RawPolyRuleDecl
+    { PolyAST.rprClass = cls
+    , PolyAST.rprName = name
+    , PolyAST.rprOrient = orient
+    , PolyAST.rprVars = vars
+    , PolyAST.rprDom = dom
+    , PolyAST.rprCod = cod
+    , PolyAST.rprMode = mode
+    , PolyAST.rprLHS = lhs
+    , PolyAST.rprRHS = rhs
+    }
+
+polyContext :: Parser PolyAST.RawPolyContext
+polyContext = do
+  _ <- symbol "["
+  tys <- polyTypeExpr `sepBy` symbol ","
+  _ <- symbol "]"
+  pure tys
+
+polyTypeExpr :: Parser PolyAST.RawPolyTypeExpr
+polyTypeExpr = lexeme $ do
+  name <- identRaw
+  mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
+  case T.uncons name of
+    Nothing -> fail "empty type name"
+    Just (c, _) ->
+      case mArgs of
+        Just args -> pure (PolyAST.RPTCon name args)
+        Nothing ->
+          if isLower c
+            then pure (PolyAST.RPTVar name)
+            else pure (PolyAST.RPTCon name [])
+
+polyDiagExpr :: Parser PolyAST.RawDiagExpr
+polyDiagExpr = makeExprParser polyDiagTerm operators
+  where
+    operators =
+      [ [ InfixL (symbol "*" $> PolyAST.RDTensor) ]
+      , [ InfixL (symbol ";" $> PolyAST.RDComp) ]
+      ]
+
+polyDiagTerm :: Parser PolyAST.RawDiagExpr
+polyDiagTerm =
+  try polyIdTerm <|> polyLoopTerm <|> polyBoxTerm <|> polyGenTerm <|> parens polyDiagExpr
+
+polyIdTerm :: Parser PolyAST.RawDiagExpr
+polyIdTerm = do
+  _ <- symbol "id"
+  ctx <- polyContext
+  pure (PolyAST.RDId ctx)
+
+polyGenTerm :: Parser PolyAST.RawDiagExpr
+polyGenTerm = do
+  name <- ident
+  mArgs <- optional (symbol "{" *> polyTypeExpr `sepBy` symbol "," <* symbol "}")
+  pure (PolyAST.RDGen name mArgs)
+
+polyBoxTerm :: Parser PolyAST.RawDiagExpr
+polyBoxTerm = do
+  _ <- symbol "box"
+  name <- ident
+  _ <- symbol "{"
+  inner <- polyDiagExpr
+  _ <- symbol "}"
+  pure (PolyAST.RDBox name inner)
+
+polyLoopTerm :: Parser PolyAST.RawDiagExpr
+polyLoopTerm = do
+  _ <- symbol "loop"
+  _ <- symbol "{"
+  inner <- polyDiagExpr
+  _ <- symbol "}"
+  pure (PolyAST.RDLoop inner)
+
+orientation :: Parser Orientation
+orientation =
+  (symbol "<->" $> Bidirectional)
+    <|> (symbol "->" $> LR)
+    <|> (symbol "<-" $> RL)
+    <|> (symbol "=" $> Unoriented)
+
+-- Morphism block
+
+data MorphismItem
+  = MorphismType RawPolyTypeMap
+  | MorphismGen RawPolyGenMap
+  | MorphismPolicy Text
+  | MorphismFuel Int
+
+morphismBlock :: Parser [MorphismItem]
+morphismBlock = do
+  _ <- symbol "{"
+  items <- many morphismItem
+  _ <- symbol "}"
+  pure items
+
+morphismItem :: Parser MorphismItem
+morphismItem =
+  morphismTypeMap
+    <|> morphismGenMap
+    <|> morphismPolicy
+    <|> morphismFuel
+
+morphismTypeMap :: Parser MorphismItem
+morphismTypeMap = do
+  _ <- symbol "type"
+  src <- ident
+  params <- option [] (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
+  _ <- symbol "@"
+  srcMode <- ident
+  _ <- symbol "->"
+  tgt <- polyTypeExpr
+  _ <- symbol "@"
+  tgtMode <- ident
+  optionalSemi
+  pure (MorphismType (RawPolyTypeMap src params srcMode tgt tgtMode))
+
+morphismGenMap :: Parser MorphismItem
+morphismGenMap = do
+  _ <- symbol "gen"
+  src <- ident
+  _ <- symbol "@"
+  mode <- ident
+  _ <- symbol "->"
+  rhs <- polyDiagExpr
+  optionalSemi
+  pure (MorphismGen (RawPolyGenMap src mode rhs))
+
+morphismPolicy :: Parser MorphismItem
+morphismPolicy = do
+  _ <- symbol "policy"
+  name <- ident
+  optionalSemi
+  pure (MorphismPolicy name)
+
+morphismFuel :: Parser MorphismItem
+morphismFuel = do
+  _ <- symbol "fuel"
+  n <- fromIntegral <$> integer
+  optionalSemi
+  pure (MorphismFuel n)
+
+buildPolyMorphism :: Text -> Text -> Text -> [MorphismItem] -> Either Text RawPolyMorphism
+buildPolyMorphism name src tgt items =
+  Right RawPolyMorphism
+    { rpmName = name
+    , rpmSrc = src
+    , rpmTgt = tgt
+    , rpmItems = [ RPMType i | MorphismType i <- items ] <> [ RPMGen j | MorphismGen j <- items ]
+    , rpmPolicy = firstJust [ p | MorphismPolicy p <- items ]
+    , rpmFuel = firstJust [ f | MorphismFuel f <- items ]
+    }
+  where
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
+
+-- Run block
+
+data RunItem
+  = RunDoctrine Text
+  | RunMode Text
+  | RunSurface Text
+  | RunModel Text
+  | RunApply Text
+  | RunUses [Text]
+  | RunPolicy Text
+  | RunFuel Int
+  | RunShow RawRunShow
+
+runBlock :: Parser [RunItem]
+runBlock = do
+  _ <- symbol "{"
+  items <- many runItem
+  _ <- symbol "}"
+  pure items
+
+runItem :: Parser RunItem
+runItem =
+  runDoctrineItem
+    <|> runModeItem
+    <|> runSurfaceItem
+    <|> runModelItem
+    <|> runApplyItem
+    <|> runUsesItem
+    <|> runPolicyItem
+    <|> runFuelItem
+    <|> runShowItem
+
+runDoctrineItem :: Parser RunItem
+runDoctrineItem = do
+  _ <- symbol "doctrine"
+  name <- ident
+  optionalSemi
+  pure (RunDoctrine name)
+
+runModeItem :: Parser RunItem
+runModeItem = do
+  _ <- keyword "mode"
+  name <- ident
+  optionalSemi
+  pure (RunMode name)
+
+runSurfaceItem :: Parser RunItem
+runSurfaceItem = do
+  _ <- symbol "surface"
+  name <- ident
+  optionalSemi
+  pure (RunSurface name)
+
+runModelItem :: Parser RunItem
+runModelItem = do
+  _ <- keyword "model"
+  name <- ident
+  optionalSemi
+  pure (RunModel name)
+
+runApplyItem :: Parser RunItem
+runApplyItem = do
+  _ <- symbol "apply"
+  name <- ident
+  optionalSemi
+  pure (RunApply name)
+
+runUsesItem :: Parser RunItem
+runUsesItem = do
+  _ <- symbol "uses"
+  _ <- optional (symbol ":")
+  names <- ident `sepBy1` symbol ","
+  optionalSemi
+  pure (RunUses names)
+
+runPolicyItem :: Parser RunItem
+runPolicyItem = do
+  _ <- symbol "policy"
+  name <- ident
+  optionalSemi
+  pure (RunPolicy name)
+
+runFuelItem :: Parser RunItem
+runFuelItem = do
+  _ <- symbol "fuel"
+  n <- fromIntegral <$> integer
+  optionalSemi
+  pure (RunFuel n)
+
+runShowItem :: Parser RunItem
+runShowItem = do
+  _ <- symbol "show"
+  flag <- showFlag
+  optionalSemi
+  pure (RunShow flag)
+
+buildRun :: [RunItem] -> Text -> RawRun
+buildRun items exprText =
+  RawRun
+    { rrDoctrine = firstJust [ d | RunDoctrine d <- items ]
+    , rrMode = firstJust [ m | RunMode m <- items ]
+    , rrSurface = firstJust [ s | RunSurface s <- items ]
+    , rrModel = firstJust [ m | RunModel m <- items ]
+    , rrMorphisms = [ n | RunApply n <- items ]
+    , rrUses = concat [ ns | RunUses ns <- items ]
+    , rrPolicy = firstJust [ p | RunPolicy p <- items ]
+    , rrFuel = firstJust [ f | RunFuel f <- items ]
+    , rrShowFlags = [ s | RunShow s <- items ]
+    , rrExprText = exprText
+    }
+  where
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
+
+showFlag :: Parser RawRunShow
+showFlag =
+  (symbol "normalized" $> RawShowNormalized)
+    <|> (symbol "value" $> RawShowValue)
+    <|> (symbol "cat" $> RawShowCat)
+    <|> (symbol "input" $> RawShowInput)
+    <|> (symbol "coherence" $> RawShowCoherence)
+
+-- Model block
+
+modelBlock :: Parser [RawModelItem]
+modelBlock = do
+  _ <- symbol "{"
+  items <- many modelItem
+  _ <- symbol "}"
+  pure items
+
+modelItem :: Parser RawModelItem
+modelItem = defaultItem <|> opItem
+
+defaultItem :: Parser RawModelItem
+defaultItem = do
+  _ <- symbol "default"
+  _ <- symbol "="
+  def <- (symbol "symbolic" $> RawDefaultSymbolic) <|> (symbol "error" *> (RawDefaultError <$> stringLiteral))
+  optionalSemi
+  pure (RMDefault def)
+
+opItem :: Parser RawModelItem
+opItem = do
+  _ <- symbol "op"
+  name <- qualifiedIdent
+  args <- optional (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
+  _ <- symbol "="
+  expr' <- mexpr
+  optionalSemi
+  pure (RMOp (RawModelClause name (maybe [] id args) expr'))
+
+-- Model expressions
+
+mexpr :: Parser MExpr
+mexpr = ifExpr <|> makeExprParser mterm mops
+
+ifExpr :: Parser MExpr
+ifExpr = do
+  _ <- symbol "if"
+  cond <- mexpr
+  _ <- symbol "then"
+  t <- mexpr
+  _ <- symbol "else"
+  e <- mexpr
+  pure (MIf cond t e)
+
+mterm :: Parser MExpr
+mterm =
+  choice
+    [ parens mexpr
+    , MInt . fromIntegral <$> integer
+    , MBool True <$ symbol "true"
+    , MBool False <$ symbol "false"
+    , MString <$> stringLiteral
+    , listExpr
+    , MVar <$> ident
+    ]
+
+listExpr :: Parser MExpr
+listExpr = do
+  _ <- symbol "["
+  xs <- mexpr `sepBy` symbol ","
+  _ <- symbol "]"
+  pure (MList xs)
+
+mops :: [[Operator Parser MExpr]]
+mops =
+  [ [binary "*" (MBinOp "*")]
+  , [binary "++" (MBinOp "++"), binary "+" (MBinOp "+")]
+  , [binary "==" (MBinOp "==")]
+  ]
+
+binary :: Text -> (MExpr -> MExpr -> MExpr) -> Operator Parser MExpr
+binary name f = InfixL (f <$ symbol name)
+
+-- Helpers
+
+sc :: Parser ()
+sc = L.space space1 lineComment empty
+
+lineComment :: Parser ()
+lineComment = try $ do
+  _ <- string "--"
+  notFollowedBy (char '-')
+  void (manyTill anySingle (void eol <|> eof))
+
+lexeme :: Parser a -> Parser a
+lexeme = L.lexeme sc
+
+symbol :: Text -> Parser Text
+symbol = L.symbol sc
+
+parens :: Parser a -> Parser a
+parens p = symbol "(" *> p <* symbol ")"
+
+optionalSemi :: Parser ()
+optionalSemi = void (optional (symbol ";"))
+
+qualifiedIdent :: Parser Text
+qualifiedIdent = lexeme qualifiedIdentRaw
+
+qualifiedIdentRaw :: Parser Text
+qualifiedIdentRaw = do
+  first <- identRaw
+  rest <- many (char '.' *> identRaw)
+  pure (T.intercalate "." (first : rest))
+
+ident :: Parser Text
+ident = lexeme identRaw
+
+identRaw :: Parser Text
+identRaw = T.pack <$> ((:) <$> letterChar <*> many identChar)
+
+identChar :: Parser Char
+identChar = alphaNumChar <|> char '_' <|> char '-' <|> char '\''
+
+keyword :: Text -> Parser Text
+keyword kw = lexeme (try (string kw <* notFollowedBy identChar))
+
+stringLiteral :: Parser Text
+stringLiteral = lexeme (T.pack <$> (char '"' *> manyTill L.charLiteral (char '"')))
+
+integer :: Parser Integer
+integer = lexeme L.decimal

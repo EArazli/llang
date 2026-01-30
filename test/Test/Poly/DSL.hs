@@ -9,9 +9,9 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Kernel.DSL.Parse (parseRawFile)
-import Strat.Kernel.DSL.Elab (elabRawFile)
-import Strat.Frontend.Env (mePolyDoctrines, mePolyMorphisms, ModuleEnv(..))
+import Strat.DSL.Parse (parseRawFile)
+import Strat.DSL.Elab (elabRawFile)
+import Strat.Frontend.Env (meDoctrines, meMorphisms)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
@@ -30,17 +30,17 @@ tests =
   testGroup
     "Poly.DSL"
     [ testCase "parse/elab monoid doctrine and normalize" testPolyDSLNormalize
-    , testCase "polymorphism declared in example file" testPolyMorphismDSL
-    , testCase "polydoctrine extends produces fromBase morphism" testPolyFromBaseMorphism
-    , testCase "poly pushout renames gen types" testPolyPushoutRenamesTypes
-    , testCase "polymorphism type map binder arity mismatch fails" testTypeMapBinderMismatch
-    , testCase "polymorphism type map unknown binder fails" testTypeMapUnknownVar
+    , testCase "morphism declared in example file" testPolyMorphismDSL
+    , testCase "doctrine extends produces fromBase morphism" testPolyFromBaseMorphism
+    , testCase "pushout renames gen types" testPolyPushoutRenamesTypes
+    , testCase "morphism type map binder arity mismatch fails" testTypeMapBinderMismatch
+    , testCase "morphism type map unknown binder fails" testTypeMapUnknownVar
     ]
 
 testPolyDSLNormalize :: Assertion
 testPolyDSLNormalize = do
   let src = T.unlines
-        [ "polydoctrine Monoid where {"
+        [ "doctrine Monoid where {"
         , "  mode M;"
         , "  type A @M;"
         , "  gen unit : [] -> [A] @M;"
@@ -55,8 +55,8 @@ testPolyDSLNormalize = do
       case elabRawFile rf of
         Left err -> assertFailure (T.unpack err)
         Right e -> pure e
-  doc <- case M.lookup "Monoid" (mePolyDoctrines env) of
-    Nothing -> assertFailure "expected Monoid polydoctrine"
+  doc <- case M.lookup "Monoid" (meDoctrines env) of
+    Nothing -> assertFailure "expected Monoid doctrine"
     Just d -> pure d
   mode <- case S.toList (mtModes (dModes doc)) of
     [m] -> pure m
@@ -91,7 +91,7 @@ testPolyDSLNormalize = do
 
 testPolyMorphismDSL :: Assertion
 testPolyMorphismDSL = do
-  path <- getDataFileName "examples/poly/monoid_to_string.llang"
+  path <- getDataFileName "examples/monoid_to_string.llang"
   src <- TIO.readFile path
   env <- case parseRawFile src of
     Left err -> assertFailure (T.unpack err)
@@ -99,19 +99,19 @@ testPolyMorphismDSL = do
       case elabRawFile rf of
         Left err -> assertFailure (T.unpack err)
         Right e -> pure e
-  case M.lookup "MonoidToString" (mePolyMorphisms env) of
-    Nothing -> assertFailure "expected polymorphism MonoidToString"
+  case M.lookup "MonoidToString" (meMorphisms env) of
+    Nothing -> assertFailure "expected morphism MonoidToString"
     Just _ -> pure ()
 
 testPolyFromBaseMorphism :: Assertion
 testPolyFromBaseMorphism = do
   let src = T.unlines
-        [ "polydoctrine Base where {"
+        [ "doctrine Base where {"
         , "  mode M;"
         , "  type A @M;"
         , "  gen f : [A] -> [A] @M;"
         , "}"
-        , "polydoctrine Ext extends Base where {"
+        , "doctrine Ext extends Base where {"
         , "  gen g : [A] -> [A] @M;"
         , "}"
         ]
@@ -121,8 +121,8 @@ testPolyFromBaseMorphism = do
       case elabRawFile rf of
         Left err -> assertFailure (T.unpack err)
         Right e -> pure e
-  mor <- case M.lookup "Ext.fromBase" (mePolyMorphisms env) of
-    Nothing -> assertFailure "expected polymorphism Ext.fromBase"
+  mor <- case M.lookup "Ext.fromBase" (meMorphisms env) of
+    Nothing -> assertFailure "expected morphism Ext.fromBase"
     Just m -> pure m
   case checkMorphism mor of
     Left err -> assertFailure (T.unpack err)
@@ -131,18 +131,18 @@ testPolyFromBaseMorphism = do
 testPolyPushoutRenamesTypes :: Assertion
 testPolyPushoutRenamesTypes = do
   let src = T.unlines
-        [ "polydoctrine Base where {"
+        [ "doctrine Base where {"
         , "  mode M;"
         , "}"
-        , "polydoctrine Left extends Base where {"
+        , "doctrine Left extends Base where {"
         , "  type A @M;"
         , "  gen f : [A] -> [A] @M;"
         , "}"
-        , "polydoctrine Right extends Base where {"
+        , "doctrine Right extends Base where {"
         , "  type B @M;"
         , "  gen g : [B] -> [B] @M;"
         , "}"
-        , "polydoctrine Push = pushout Left.fromBase Right.fromBase;"
+        , "doctrine Push = pushout Left.fromBase Right.fromBase;"
         ]
   env <- case parseRawFile src of
     Left err -> assertFailure (T.unpack err)
@@ -150,8 +150,8 @@ testPolyPushoutRenamesTypes = do
       case elabRawFile rf of
         Left err -> assertFailure (T.unpack err)
         Right e -> pure e
-  doc <- case M.lookup "Push" (mePolyDoctrines env) of
-    Nothing -> assertFailure "expected Push polydoctrine"
+  doc <- case M.lookup "Push" (meDoctrines env) of
+    Nothing -> assertFailure "expected Push doctrine"
     Just d -> pure d
   let mode = ModeName "M"
   types <- case M.lookup mode (dTypes doc) of
@@ -172,11 +172,11 @@ testPolyPushoutRenamesTypes = do
 testTypeMapBinderMismatch :: Assertion
 testTypeMapBinderMismatch = do
   let src = T.unlines
-        [ "polydoctrine D where {"
+        [ "doctrine D where {"
         , "  mode M;"
         , "  type T a b @M;"
         , "}"
-        , "polymorphism Bad : D -> D where {"
+        , "morphism Bad : D -> D where {"
         , "  type T(a) @M -> T(a) @M;"
         , "}"
         ]
@@ -190,11 +190,11 @@ testTypeMapBinderMismatch = do
 testTypeMapUnknownVar :: Assertion
 testTypeMapUnknownVar = do
   let src = T.unlines
-        [ "polydoctrine D where {"
+        [ "doctrine D where {"
         , "  mode M;"
         , "  type T a @M;"
         , "}"
-        , "polymorphism Bad : D -> D where {"
+        , "morphism Bad : D -> D where {"
         , "  type T(a) @M -> T(b) @M;"
         , "}"
         ]

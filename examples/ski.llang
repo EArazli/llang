@@ -1,22 +1,20 @@
-doctrine SKI where {
-  sort T;
+import "../stdlib/struct.cartesian.llang";
 
-  op app : (f:T) (x:T) -> T;
+doctrine SKI extends StructCartesian where {
+  type T @M;
 
-  op S : T;
-  op K : T;
-  op I : T;
+  gen s : [] -> [T] @M;
+  gen k : [] -> [T] @M;
+  gen i : [] -> [T] @M;
+  gen app : [T, T] -> [T] @M;
 
-  op a : T;
-  op b : T;
+  rule computational beta_i -> : [T] -> [T] @M =
+    (i * id[T]) ; app == id[T]
 
-  computational i : (x:T) |-
-    app(I, ?x) -> ?x;
+  rule computational beta_k -> : [T, T] -> [T] @M =
+    (((k * id[T]) ; app) * id[T]) ; app == id[T] * drop
 
-  computational k : (x:T) (y:T) |-
-    app(app(K, ?x), ?y) -> ?x;
-
-  computational s : (f:T) (g:T) (x:T) |-
-    app(app(app(S, ?f), ?g), ?x)
-      -> app(app(?f, ?x), app(?g, ?x));
+  rule computational beta_s -> : [T, T, T] -> [T] @M =
+    (((((s * id[T]) ; app) * id[T]) ; app) * id[T]) ; app ==
+      (id[T] * id[T] * dup) ; (id[T] * swap * id[T]) ; (app * app) ; app
 }

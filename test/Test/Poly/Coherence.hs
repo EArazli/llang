@@ -18,8 +18,7 @@ import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Coherence (checkCoherence, ObligationResult(..))
 import Strat.Poly.CriticalPairs (CPMode(..))
-import Strat.Kernel.RewriteSystem (RewritePolicy(..))
-import Strat.Kernel.Types (Orientation(..), RuleClass(..))
+import Strat.Common.Rules (RewritePolicy(..), Orientation(..), RuleClass(..))
 
 
 tests :: TestTree

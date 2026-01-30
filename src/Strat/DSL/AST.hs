@@ -1,0 +1,120 @@
+{-# LANGUAGE OverloadedStrings #-}
+module Strat.DSL.AST
+  ( RawDecl(..)
+  , RawFile(..)
+  , RawModelItem(..)
+  , RawDefault(..)
+  , RawModelClause(..)
+  , RawRunShow(..)
+  , RawRun(..)
+  , RawRunSpec(..)
+  , RawNamedRun(..)
+  , RawPolyMorphism(..)
+  , RawPolyMorphismItem(..)
+  , RawPolyTypeMap(..)
+  , RawPolyGenMap(..)
+  ) where
+
+import Data.Text (Text)
+import Strat.Model.Spec (MExpr)
+import Strat.Poly.Surface.Spec (SurfaceSpec)
+import qualified Strat.Poly.DSL.AST as PolyAST
+
+
+data RawDecl
+  = DeclImport FilePath
+  | DeclDoctrine PolyAST.RawPolyDoctrine
+  | DeclDoctrinePushout Text Text Text
+  | DeclDoctrineCoproduct Text Text Text
+  | DeclSurface Text SurfaceSpec
+  | DeclModel Text Text [RawModelItem]
+  | DeclMorphism RawPolyMorphism
+  | DeclImplements Text Text Text
+  | DeclRunSpec Text RawRunSpec
+  | DeclRun RawNamedRun
+  deriving (Eq, Show)
+
+newtype RawFile = RawFile [RawDecl]
+  deriving (Eq, Show)
+
+
+data RawModelItem
+  = RMDefault RawDefault
+  | RMOp RawModelClause
+  deriving (Eq, Show)
+
+data RawDefault
+  = RawDefaultSymbolic
+  | RawDefaultError Text
+  deriving (Eq, Show)
+
+data RawModelClause = RawModelClause
+  { rmcOp :: Text
+  , rmcArgs :: [Text]
+  , rmcExpr :: MExpr
+  } deriving (Eq, Show)
+
+
+data RawRunShow
+  = RawShowNormalized
+  | RawShowValue
+  | RawShowCat
+  | RawShowInput
+  | RawShowCoherence
+  deriving (Eq, Ord, Show)
+
+
+data RawRun = RawRun
+  { rrDoctrine :: Maybe Text
+  , rrMode :: Maybe Text
+  , rrSurface :: Maybe Text
+  , rrModel :: Maybe Text
+  , rrMorphisms :: [Text]
+  , rrUses :: [Text]
+  , rrPolicy :: Maybe Text
+  , rrFuel :: Maybe Int
+  , rrShowFlags :: [RawRunShow]
+  , rrExprText :: Text
+  } deriving (Eq, Show)
+
+newtype RawRunSpec = RawRunSpec
+  { rrsRun :: RawRun
+  } deriving (Eq, Show)
+
+data RawNamedRun = RawNamedRun
+  { rnrName :: Text
+  , rnrUsing :: Maybe Text
+  , rnrRun :: RawRun
+  } deriving (Eq, Show)
+
+
+data RawPolyMorphism = RawPolyMorphism
+  { rpmName :: Text
+  , rpmSrc :: Text
+  , rpmTgt :: Text
+  , rpmItems :: [RawPolyMorphismItem]
+  , rpmPolicy :: Maybe Text
+  , rpmFuel :: Maybe Int
+  } deriving (Eq, Show)
+
+
+data RawPolyMorphismItem
+  = RPMType RawPolyTypeMap
+  | RPMGen RawPolyGenMap
+  deriving (Eq, Show)
+
+
+data RawPolyTypeMap = RawPolyTypeMap
+  { rpmtSrcType :: Text
+  , rpmtParams :: [Text]
+  , rpmtSrcMode :: Text
+  , rpmtTgtType :: PolyAST.RawPolyTypeExpr
+  , rpmtTgtMode :: Text
+  } deriving (Eq, Show)
+
+
+data RawPolyGenMap = RawPolyGenMap
+  { rpmgSrcGen :: Text
+  , rpmgMode :: Text
+  , rpmgRhs :: PolyAST.RawDiagExpr
+  } deriving (Eq, Show)

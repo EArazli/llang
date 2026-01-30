@@ -1,6 +1,6 @@
 # Polygraph kernel specification (implemented)
 
-This document specifies the **polygraph kernel** implemented in the project. It is the primary semantic reference for the current implementation. The previous (GAT/term) kernel is now **legacy**; see `SPEC-LEGACY.md`.
+This document specifies the **polygraph kernel** implemented in the project. It is the primary semantic reference for the current implementation.
 
 ---
 
@@ -12,10 +12,8 @@ The project implements a polygraph-based kernel and a DSL (“llang”) for desc
 2. **Diagrams**: open hypergraphs with ordered boundaries.
 3. **Rewriting**: deterministic, fuel‑bounded subdiagram rewriting (DPO‑style).
 4. **Morphisms**: structure‑preserving translations between doctrines, checked by normalization/joinability.
-5. **Surfaces and models**: diagram surfaces (`polysurface`) and evaluator models (`polymodel`).
-6. **Runs**: diagram‑level normalization/evaluation pipelines (`polyrun`).
-
-Legacy GAT syntax, Surface2, and model evaluation remain implemented but are treated as **legacy surfaces**; they are not the kernel reference in this document.
+5. **Surfaces and models**: diagram surfaces (`surface`) and evaluator models (`model`).
+6. **Runs**: diagram‑level normalization/evaluation pipelines (`run`).
 
 ---
 
@@ -260,12 +258,12 @@ This mirrors the implementation’s `checkMorphism` behavior.
 
 ## 6. Polygraph DSL
 
-The DSL introduces `polydoctrine` blocks and diagram expressions.
+The DSL introduces `doctrine` blocks and diagram expressions.
 
-### 6.1 Polydoctrine
+### 6.1 Doctrine
 
 ```
-polydoctrine <Name> [extends <Base>] where {
+doctrine <Name> [extends <Base>] where {
   mode <ModeName>;
   type <TypeName> [<tyvar> ...] @<ModeName>;
   gen  <GenName>  [<tyvar> ...] : <Ctx> -> <Ctx> @<ModeName>;
@@ -274,11 +272,11 @@ polydoctrine <Name> [extends <Base>] where {
 }
 ```
 
-Polydoctrines can also be defined as colimits of existing polydoctrines:
+Doctrines can also be defined as colimits of existing doctrines:
 
 ```
-polydoctrine <Name> = pushout <morphism> <morphism>;
-polydoctrine <Name> = coproduct <Left> <Right>;
+doctrine <Name> = pushout <morphism> <morphism>;
+doctrine <Name> = coproduct <Left> <Right>;
 ```
 
 - `pushout` requires morphisms with **renaming/inclusion** behavior (single‑generator images) and injective interface maps.
@@ -290,10 +288,10 @@ polydoctrine <Name> = coproduct <Left> <Right>;
   (`Bidirectional` dominates; `LR` + `RL` ⇒ `Bidirectional`; `Unoriented` is identity).
   If bodies differ, the pushout fails with a name‑collision error.
 
-### 6.2 Polymorphisms
+### 6.2 Morphisms
 
 ```
-polymorphism <Name> : <Src> -> <Tgt> where {
+morphism <Name> : <Src> -> <Tgt> where {
   type <SrcType>(a1,...,an) @<Mode> -> <TgtTypeExpr> @<Mode>;
   gen  <SrcGen>  @<Mode> -> <DiagExpr>;
   policy <RewritePolicy>;
@@ -304,7 +302,7 @@ polymorphism <Name> : <Src> -> <Tgt> where {
 - Every source generator must be mapped.
 - Type mappings are **templates with explicit binders**: the RHS may be any type expression
   whose free variables are a subset of `{a1,...,an}`.
-- When a polymorphism is used as a **pushout leg**, its type mappings must be **invertible renamings**
+- When a morphism is used as a **pushout leg**, its type mappings must be **invertible renamings**
   (constructor rename + parameter permutation).
 - Generator mappings must elaborate to diagrams in the target doctrine/mode.
 
@@ -335,14 +333,14 @@ outputs become the outputs of the looped diagram. The result has **no inputs** a
 
 ---
 
-### 6.5 Polysurfaces
+### 6.5 Surfaces
 
-Polysurfaces are **poly artifacts**: they define a surface language and its
+Surfaces define a surface language and its
 elaboration to diagrams.
 
 ```
-polysurface <Name> where {
-  doctrine <PolyDoctrine>;
+surface <Name> where {
+  doctrine <Doctrine>;
   mode <Mode>;
   context <ctx> = <Type>;  -- optional
 
@@ -436,16 +434,16 @@ Optional `context <ctx> = <Type>` enables CCC‑style context threading:
 - The binder variable is interpreted as `Hom(prod(ctx, ty), ty)`.
 - The `ctx` type variable is updated to `prod(ctx, ty)` while elaborating the body.
 
-### 6.6 Polymodels
+### 6.6 Models
 
 ```
-polymodel <Name> : <PolyDoctrine> where {
+model <Name> : <Doctrine> where {
   default symbolic;
   op <GenName>(args...) = <expr>;
 }
 ```
 
-Polymodels use the same expression language as legacy models. Evaluation is defined
+Models use the same expression language for generator clauses. Evaluation is defined
 only for **closed** diagrams (no boundary inputs/outputs).
 
 **Cycles are supported** using SCC‑based evaluation:
@@ -458,22 +456,22 @@ only for **closed** diagrams (no boundary inputs/outputs).
   [letrec, [[ $p0, expr0 ], [ $p1, expr1 ], ...], body]
   ```
 
-Generators (including `dup`, `drop`, and `swap`) are interpreted only via the polymodel
+Generators (including `dup`, `drop`, and `swap`) are interpreted only via the model
 clauses or the model’s default behavior; no special built‑ins are assumed.
 
 ---
 
 ## 7. Runs
 
-`polyrun` blocks evaluate diagram expressions or surface programs:
+`run` blocks evaluate diagram expressions or surface programs:
 
 ```
-polyrun <Name> where {
-  doctrine <PolyDoctrine>;
+run <Name> where {
+  doctrine <Doctrine>;
   mode <Mode>;          -- required if the doctrine has multiple modes
-  surface <Surface>;    -- optional; parses with a polysurface definition
-  model <PolyModel>;    -- optional; required for show value
-  apply <PolyMorphism>; -- optional; may be repeated, applied in order
+  surface <Surface>;    -- optional; parses with a surface definition
+  model <Model>;        -- optional; required for show value
+  apply <Morphism>;     -- optional; may be repeated, applied in order
   policy <RewritePolicy>;
   fuel <N>;
   show normalized;
@@ -489,16 +487,10 @@ The run pipeline:
 
 1. Parses either a diagram expression or a surface program.
 2. Elaborates it against the chosen doctrine/mode.
-3. Applies any `apply` polymorphisms in order, updating the current doctrine each time.
+3. Applies any `apply` morphisms in order, updating the current doctrine each time.
 4. Normalizes via the polygraph rewrite engine (filtered by the policy; default `UseStructuralAsBidirectional`).
-5. Optionally evaluates via a polymodel (closed diagrams only, and the model must match the final doctrine).
+5. Optionally evaluates via a model (closed diagrams only, and the model must match the final doctrine).
 6. Optionally checks coherence (critical branchings) and renders a report.
 7. Prints the requested outputs depending on flags.
 
-`show cat` is currently not supported for polyruns.
-
----
-
-## 8. Legacy kernel note
-
-The earlier GAT/term kernel (presentations, terms, Surface2, and model evaluation) remains implemented as a **legacy surface**. It is no longer the primary kernel reference; see `SPEC-LEGACY.md` for the previous formalism.
+`show cat` is currently not supported for runs.

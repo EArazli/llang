@@ -21,12 +21,12 @@ tests =
 
 polyExamples :: [FilePath]
 polyExamples =
-  [ "examples/poly/planar_monoid.ssa.run.llang"
-  , "examples/poly/cart_monoid.term.run.llang"
-  , "examples/poly/stlc_bool.term.run.llang"
-  , "examples/poly/peano.run.llang"
-  , "examples/poly/ccc_surface/stlc.lam1.run.llang"
-  , "examples/poly/implements_uses.run.llang"
+  [ "examples/planar_monoid.ssa.run.llang"
+  , "examples/cart_monoid.term.run.llang"
+  , "examples/stlc_bool.term.run.llang"
+  , "examples/peano.run.llang"
+  , "examples/ccc_surface/stlc.lam1.run.llang"
+  , "examples/implements_uses.run.llang"
   ]
 
 

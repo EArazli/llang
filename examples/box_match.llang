@@ -1,0 +1,10 @@
+doctrine BoxMatch where {
+  mode M;
+  type A @M;
+
+  gen f : [A] -> [A] @M;
+  gen g : [A] -> [A] @M;
+
+  rule computational box_rule -> : [A] -> [A] @M =
+    box B { f } == id[A]
+}

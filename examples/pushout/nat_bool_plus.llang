@@ -1,8 +1,11 @@
 import "./nat_bool.llang";
 
 doctrine NatBoolPlus extends NatBool where {
-  op isZero : (n:Nat.Nat) -> Bool.Bool;
+  gen isZero : [Nat_inl_Nat] -> [Bool_inr_Bool] @M;
 
-  computational isZeroZ : |- isZero(Nat.Z) -> Bool.T;
-  computational isZeroS : (n:Nat.Nat) |- isZero(Nat.S(?n)) -> Bool.F;
+  rule computational isZeroZ -> : [] -> [Bool_inr_Bool] @M =
+    Nat_inl_Z ; isZero == Bool_inr_T
+
+  rule computational isZeroS -> : [Nat_inl_Nat] -> [Bool_inr_Bool] @M =
+    Nat_inl_S ; isZero == drop{Nat_inl_Nat} ; Bool_inr_F
 }

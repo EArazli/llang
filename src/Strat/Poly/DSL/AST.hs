@@ -10,7 +10,7 @@ module Strat.Poly.DSL.AST
   ) where
 
 import Data.Text (Text)
-import Strat.Kernel.Types (RuleClass, Orientation)
+import Strat.Common.Rules (RuleClass, Orientation)
 
 
 data RawPolyDoctrine = RawPolyDoctrine

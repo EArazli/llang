@@ -20,8 +20,8 @@ import Strat.Poly.UnifyTy (Subst, applySubstTy, unifyTyFlex, composeSubst)
 import Strat.Poly.Rewrite (RewriteRule(..))
 import Strat.Poly.Doctrine (Doctrine(..))
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Kernel.RewriteSystem (RewritePolicy(..))
-import Strat.Kernel.Types (RuleClass(..), Orientation(..))
+import Strat.Common.Rules (RewritePolicy(..))
+import Strat.Common.Rules (RuleClass(..), Orientation(..))
 
 
 data CPMode = CP_All | CP_OnlyStructural | CP_StructuralVsComputational

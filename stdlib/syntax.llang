@@ -1,4 +1,0 @@
-syntax CombDefault where {
-  allow call;
-  varprefix "?";
-}

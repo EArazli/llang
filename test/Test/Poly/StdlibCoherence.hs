@@ -11,10 +11,10 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Strat.Frontend.Loader (loadModule)
-import Strat.Frontend.Env (mePolyDoctrines)
+import Strat.Frontend.Env (meDoctrines)
 import Strat.Poly.Coherence (checkCoherence)
 import Strat.Poly.CriticalPairs (CPMode(..))
-import Strat.Kernel.RewriteSystem (RewritePolicy(..))
+import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.Doctrine (Doctrine)
 import Paths_llang (getDataFileName)
 
@@ -39,19 +39,19 @@ lookupDoc name docs =
 
 testStdlibCoherence :: Assertion
 testStdlibCoherence = do
-  path <- getDataFileName "examples/poly/cart_monoid.poly.llang"
+  path <- getDataFileName "examples/cart_monoid.llang"
   env <- require =<< loadModule path
-  assertBool "expected StructCartesian loaded" (M.member "StructCartesian" (mePolyDoctrines env))
-  doc <- lookupDoc "CartMonoid" (mePolyDoctrines env)
+  assertBool "expected StructCartesian loaded" (M.member "StructCartesian" (meDoctrines env))
+  doc <- lookupDoc "CartMonoid" (meDoctrines env)
   res <- require (checkCoherence CP_StructuralVsComputational UseAllOriented 4 doc)
   assertBool "expected no obligations" (null res)
 
 
 testCoherenceTimeout :: Assertion
 testCoherenceTimeout = do
-  path <- getDataFileName "examples/poly/coherence_demo.poly.llang"
+  path <- getDataFileName "examples/coherence_demo.llang"
   env <- require =<< loadModule path
-  doc <- lookupDoc "CoherenceDemo" (mePolyDoctrines env)
+  doc <- lookupDoc "CoherenceDemo" (meDoctrines env)
   let action =
         evaluate $
           case checkCoherence CP_StructuralVsComputational UseAllOriented 2 doc of

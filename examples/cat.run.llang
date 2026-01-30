@@ -1,16 +1,9 @@
 import "./cat.llang";
-import "../stdlib/syntax.llang";
 
 run main where {
   doctrine Cat;
-  syntax CombDefault;
-  model Symbolic;
-
-  policy UseOnlyComputationalLR;
-  fuel 40;
-
+  mode M;
   show normalized;
-  show value;
 }
 ---
-Cat.comp(Cat.A,Cat.B,Cat.D, Cat.comp(Cat.B,Cat.C,Cat.D, Cat.h, Cat.g), Cat.comp(Cat.A,Cat.A,Cat.B, Cat.f, Cat.id(Cat.A)))
+f ; g ; h

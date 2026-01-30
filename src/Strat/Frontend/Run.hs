@@ -4,48 +4,40 @@ module Strat.Frontend.Run
   , runFile
   , runWithEnv
   , selectRun
-  , buildMorphismEnv
   , renderRunResult
   ) where
 
-import Strat.Frontend.Loader (loadModule)
-import Strat.Frontend.Env
-import Strat.Frontend.RunSpec
-import Strat.Kernel.Morphism.Util (identityMorphism)
-import Strat.Kernel.Presentation (Presentation(..))
-import Strat.Kernel.RewriteSystem (compileRewriteSystem, RewriteSystem)
-import Strat.Kernel.Syntax (Term(..))
-import Strat.Kernel.Morphism
-import Strat.Surface (defaultInstance, elaborate)
-import Strat.Syntax.Spec (SyntaxSpec, SyntaxInstance(..), instantiateSyntax)
-import Strat.Model.Spec (ModelSpec(..), DefaultBehavior(..), instantiateModel)
-import Strat.Backend (Value(..), RuntimeError(..), evalTerm)
-import Strat.Backend.Concat (CatExpr(..), compileTerm)
-import Strat.Surface2.Def
-import Strat.Surface2.Elab ()
-import Strat.Surface2.Syntax (SurfaceSyntaxInstance(..), instantiateSurfaceSyntax)
-import Strat.Surface2.SyntaxSpec (SurfaceSyntaxSpec)
-import Strat.Surface2.Engine
-import Strat.Surface2.CoreEval
-import Strat.Surface2.Term (STerm(..), Ix(..), JudgName(..))
-import Strat.Surface2.Pattern (MVar(..), MatchSubst(..), MetaSubst(..), instantiateMeta, resolvePlaceholders)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
-import Control.Monad (foldM)
+import qualified Data.Set as S
+import Strat.Frontend.Loader (loadModule)
+import Strat.Frontend.Env
+import Strat.RunSpec
+import Strat.Poly.DSL.Parse (parseDiagExpr)
+import Strat.Poly.DSL.Elab (elabDiagExpr)
+import Strat.Poly.Doctrine
+import Strat.Poly.Diagram
+import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
+import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.Pretty (renderDiagram)
+import Strat.Poly.Coherence (checkCoherence, renderCoherenceReport)
+import Strat.Poly.CriticalPairs (CPMode(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.Surface (PolySurfaceDef(..))
+import Strat.Poly.Surface.Elab (elabSurfaceExpr)
+import Strat.Poly.Eval (evalDiagram)
+import Strat.Poly.Morphism (Morphism(..), applyMorphismDiagram)
+import Strat.Model.Spec (ModelSpec)
+import Strat.Backend (Value(..))
 
 
 data RunResult = RunResult
-  { rrPresentation :: Presentation
-  , rrInputTerm :: Term
-  , rrNormalized :: Term
-  , rrPrintedNormalized :: Text
-  , rrCatExpr :: CatExpr
-  , rrValue :: Value
-  , rrPrintedInput :: Maybe Text
-  , rrOutput :: Text
-  }
-  deriving (Eq, Show)
+  { prDoctrineDef :: Doctrine
+  , prInput :: Diagram
+  , prNormalized :: Diagram
+  , prOutput :: Text
+  } deriving (Eq, Show)
 
 runFile :: FilePath -> Maybe Text -> IO (Either Text RunResult)
 runFile path mRunName = do
@@ -80,286 +72,177 @@ selectRun env mName =
 
 runWithEnv :: ModuleEnv -> RunSpec -> Either Text RunResult
 runWithEnv env spec = do
-  pres <- lookupDoctrine env (runDoctrine spec)
-  rs <- compileRewriteSystem (runPolicy spec) pres
-  (modelDocName, modelSpec) <- lookupModel env (runModel spec) (runDoctrine spec)
-  (term, printedInput, printNorm) <- case runSurface spec of
+  docTarget <- lookupDoctrine env (prDoctrine spec)
+  (docSurface, mode, diag) <- case prSurface spec of
     Nothing -> do
-      syntaxName <- maybe (Left "run: missing syntax") Right (runSyntax spec)
-      syntaxSpec <- lookupDoctrineSyntax env syntaxName
-      syntaxInstance <- instantiateSyntax pres (runOpen spec) syntaxSpec
-      comb <- siParse syntaxInstance (runExprText spec)
-      t <-
-        case elaborate (defaultInstance pres) comb of
-          Left err -> Left ("Elaboration error: " <> T.pack (show err))
-          Right t' -> Right t'
-      let printNorm = siPrint syntaxInstance
-      pure (t, Just (siPrint syntaxInstance t), printNorm)
-    Just surfName -> do
-      surf <- lookupSpec "surface" surfName (meSurfaces env)
-      surfSynName <- maybe (Left "run: missing surface_syntax") Right (runSurfaceSyntax spec)
-      surfSynSpec <- lookupSurfaceSyntax env surfSynName
-      morphs <- buildMorphismEnv env pres surf (runUses spec)
-      surfSyntax <- instantiateSurfaceSyntax surf surfSynSpec
-      surfaceTerm <- ssiParseTm surfSyntax (runExprText spec)
-      let goalArgs = buildSurfaceGoal surf surfaceTerm
-      solveRes <-
-        case solveJudgment surf (JudgName "HasType") goalArgs (runFuel spec) of
-          Left err -> Left (renderSolveError err)
-          Right res -> Right res
-      let coreExpr =
-            case srOutputs solveRes of
-              (c:_) -> c
-              _ -> CoreVar "e"
-      coreEnv <- buildCoreEnv pres surf morphs (srEnv solveRes)
-      coreVal <- evalCoreExpr pres surf morphs coreEnv coreExpr
-      coreTerm <- case coreVal of
-        CVCore t -> Right t
-        _ -> Left "surface elaboration did not produce core term"
-      let printNorm =
-            case chooseCoreSyntax env spec pres of
-              Just coreSyn -> coreSyn
-              Nothing -> T.pack . show
-      let inputText = ssiPrintTm surfSyntax surfaceTerm
-      pure (coreTerm, Just inputText, printNorm)
-  let (norm, _ok) = normalizeStatus (runFuel spec) rs term
-  let printedNorm = printNorm norm
-  let cat = compileTerm norm
-  modelPres <- lookupDoctrine env modelDocName
-  model <- instantiateModel modelPres (runOpen spec) modelSpec
-  evalTerm' <- resolveModelTerm env pres modelPres norm
-  val <-
-    case evalTerm model evalTerm' of
-      Left err -> Left ("Evaluation error: " <> renderRuntimeError err)
-      Right v -> Right v
-  let output = renderRunResult spec printedNorm cat val printedInput
+      mode <- resolveMode docTarget spec Nothing
+      rawExpr <- parseDiagExpr (prExprText spec)
+      diag <- elabDiagExpr docTarget mode [] rawExpr
+      pure (docTarget, mode, diag)
+    Just name -> do
+      surf <- lookupSurface env name
+      docSurface <- lookupDoctrine env (psDoctrine surf)
+      mode <- resolveMode docSurface spec (Just surf)
+      diag <- elabSurfaceExpr docSurface surf (prExprText spec)
+      pure (docSurface, mode, diag)
+  morphsFromUses <- resolveUses env (prDoctrine spec) (prUses spec)
+  (docUsed, diagUsed) <- applyMorphisms env docSurface diag morphsFromUses
+  if not (null (prUses spec)) && dName docUsed /= dName docTarget
+    then Left "run: uses did not reach target doctrine"
+    else Right ()
+  (doc', diag') <- applyMorphisms env docUsed diagUsed (prMorphisms spec)
+  if null (prMorphisms spec) && dName doc' /= dName docTarget
+    then Left "run: morphism chain did not reach target doctrine"
+    else Right ()
+  if S.null (freeTyVarsDiagram diag')
+    then Right ()
+    else Left "run: unresolved type variables in diagram"
+  let rules = rulesFromPolicy (prPolicy spec) (dCells2 doc')
+  status <- normalize (prFuel spec) rules diag'
+  let norm =
+        case status of
+          Finished d -> d
+          OutOfFuel d -> d
+  mValue <- if ShowValue `elem` prShowFlags spec
+    then case prModel spec of
+      Nothing -> Left "run: show value requires model"
+      Just name -> do
+        (docName, modelSpec) <- lookupModel env name
+        (docModel, diagModel) <- resolveModelDiagram env doc' norm docName
+        if null (dIn diagModel)
+          then do
+            vals <- evalDiagram docModel modelSpec diagModel []
+            pure (Just vals)
+          else Left "run: value requires closed diagram"
+    else Right Nothing
+  coherenceTxt <- if ShowCoherence `elem` prShowFlags spec
+    then do
+      results <- checkCoherence CP_StructuralVsComputational (prPolicy spec) (prFuel spec) doc'
+      renderCoherenceReport results
+    else Right ""
+  output <- renderRunResult spec diag' norm mValue coherenceTxt
   pure RunResult
-    { rrPresentation = pres
-    , rrInputTerm = term
-    , rrNormalized = norm
-    , rrPrintedNormalized = printedNorm
-    , rrCatExpr = cat
-    , rrValue = val
-    , rrPrintedInput = printedInput
-    , rrOutput = output
+    { prDoctrineDef = doc'
+    , prInput = diag'
+    , prNormalized = norm
+    , prOutput = output
     }
 
-lookupSpec :: Text -> Text -> M.Map Text a -> Either Text a
-lookupSpec label name mp =
-  case M.lookup name mp of
-    Nothing -> Left ("Unknown " <> label <> ": " <> name)
-    Just v -> Right v
+renderRunResult :: RunSpec -> Diagram -> Diagram -> Maybe [Value] -> Text -> Either Text Text
+renderRunResult spec input norm mValue coherenceTxt = do
+  inputTxt <- if ShowInput `elem` prShowFlags spec
+    then fmap ("input:\n" <>) (renderDiagram input)
+    else Right ""
+  normTxt <- if ShowNormalized `elem` prShowFlags spec
+    then fmap ("normalized:\n" <>) (renderDiagram norm)
+    else Right ""
+  valueTxt <- if ShowValue `elem` prShowFlags spec
+    then case mValue of
+      Nothing -> Left "run: show value requires model"
+      Just vals -> Right ("value:\n" <> renderValues vals)
+    else Right ""
+  catTxt <- if ShowCat `elem` prShowFlags spec
+    then Left "run: show cat is not supported"
+    else Right ""
+  let cohTxt = if ShowCoherence `elem` prShowFlags spec
+        then coherenceTxt
+        else ""
+  pure (T.intercalate "\n" (filter (not . T.null) [inputTxt, normTxt, valueTxt, catTxt, cohTxt]))
 
-lookupDoctrineSyntax :: ModuleEnv -> Text -> Either Text SyntaxSpec
-lookupDoctrineSyntax env name =
-  case M.lookup name (meSyntaxes env) of
-    Nothing -> Left ("Unknown syntax: " <> name)
-    Just def ->
-      case def of
-        SyntaxDoctrine spec -> Right spec
-        SyntaxSurface _ -> Left ("Syntax is for surface, not doctrine: " <> name)
-
-lookupSurfaceSyntax :: ModuleEnv -> Text -> Either Text SurfaceSyntaxSpec
-lookupSurfaceSyntax env name =
-  case M.lookup name (meSyntaxes env) of
-    Nothing -> Left ("Unknown syntax: " <> name)
-    Just def ->
-      case def of
-        SyntaxSurface spec -> Right spec
-        SyntaxDoctrine _ -> Left ("Syntax is for doctrine, not surface: " <> name)
-
-lookupModel :: ModuleEnv -> Text -> Text -> Either Text (Text, ModelSpec)
-lookupModel env name runDocName =
-  case M.lookup name (meModels env) of
-    Nothing ->
-      if name == "Symbolic"
-        then Right (runDocName, ModelSpec { msName = "Symbolic", msClauses = [], msDefault = DefaultSymbolic })
-        else Left ("Unknown model: " <> name)
-    Just spec -> Right spec
-
-lookupDoctrine :: ModuleEnv -> Text -> Either Text Presentation
+lookupDoctrine :: ModuleEnv -> Text -> Either Text Doctrine
 lookupDoctrine env name =
   case M.lookup name (meDoctrines env) of
     Nothing -> Left ("Unknown doctrine: " <> name)
-    Just pres -> Right pres
+    Just doc -> Right doc
 
-resolveModelTerm :: ModuleEnv -> Presentation -> Presentation -> Term -> Either Text Term
-resolveModelTerm env runPres modelPres term =
-  if runPres == modelPres
-    then Right term
+resolveMode :: Doctrine -> RunSpec -> Maybe PolySurfaceDef -> Either Text ModeName
+resolveMode doc spec mSurface =
+  case mSurface of
+    Just surf ->
+      case prMode spec of
+        Nothing -> Right (psMode surf)
+        Just name ->
+          let mode = ModeName name
+          in if mode == psMode surf
+            then Right mode
+            else Left "run: mode does not match surface"
+    Nothing -> resolveModeDefault doc spec
+  where
+    resolveModeDefault d s =
+      case prMode s of
+        Just name ->
+          let mode = ModeName name
+          in if mode `S.member` mtModes (dModes d)
+            then Right mode
+            else Left ("run: unknown mode " <> name)
+        Nothing ->
+          case S.toList (mtModes (dModes d)) of
+            [m] -> Right m
+            [] -> Left "run: doctrine has no modes"
+            _ -> Left "run: multiple modes; specify mode"
+
+lookupSurface :: ModuleEnv -> Text -> Either Text PolySurfaceDef
+lookupSurface env name =
+  case M.lookup name (meSurfaces env) of
+    Nothing -> Left ("Unknown surface: " <> name)
+    Just surf -> Right surf
+
+lookupModel :: ModuleEnv -> Text -> Either Text (Text, ModelSpec)
+lookupModel env name =
+  case M.lookup name (meModels env) of
+    Nothing -> Left ("Unknown model: " <> name)
+    Just spec -> Right spec
+
+resolveModelDiagram :: ModuleEnv -> Doctrine -> Diagram -> Text -> Either Text (Doctrine, Diagram)
+resolveModelDiagram env doc diag modelDocName =
+  if dName doc == modelDocName
+    then Right (doc, diag)
     else do
-      mor <- findUniqueMorphism env runPres modelPres
-      Right (applyMorphismTerm mor term)
+      target <- lookupDoctrine env modelDocName
+      mor <- findUniqueMorphism env doc target
+      diag' <- applyMorphismDiagram mor diag
+      pure (morTgt mor, diag')
 
-findUniqueMorphism :: ModuleEnv -> Presentation -> Presentation -> Either Text Morphism
+findUniqueMorphism :: ModuleEnv -> Doctrine -> Doctrine -> Either Text Morphism
 findUniqueMorphism env src tgt =
-  case [ m | m <- M.elems (meMorphisms env), morSrc m == src, morTgt m == tgt ] of
+  case [ m | m <- M.elems (meMorphisms env), dName (morSrc m) == dName src, dName (morTgt m) == dName tgt ] of
     [m] -> Right m
-    [] -> Left ("Model restriction requires morphism from " <> presName src <> " to " <> presName tgt <> "; none found")
-    ms -> Left ("Model restriction ambiguous: multiple morphisms from " <> presName src <> " to " <> presName tgt <> " (" <> T.intercalate ", " (map morName ms) <> ")")
+    [] -> Left ("Model restriction requires morphism from " <> dName src <> " to " <> dName tgt <> "; none found")
+    ms -> Left ("Model restriction ambiguous: multiple morphisms from " <> dName src <> " to " <> dName tgt <> " (" <> T.intercalate ", " (map morName ms) <> ")")
 
-buildMorphismEnv :: ModuleEnv -> Presentation -> SurfaceDef -> [(Text, Text)] -> Either Text (M.Map Text Morphism)
-buildMorphismEnv env pres surf uses = do
-  explicit <- ensureNoDupUses uses
-  let reqs = sdRequires surf
-  let reqAliases = map srAlias reqs
-  case filter (`notElem` reqAliases) (M.keys explicit) of
-    (bad:_) -> Left ("Unknown required alias in run: " <> bad)
-    [] -> pure ()
-  morphs <- mapM (resolveRequirement explicit) reqs
-  pure (M.fromList morphs)
+applyMorphisms :: ModuleEnv -> Doctrine -> Diagram -> [Text] -> Either Text (Doctrine, Diagram)
+applyMorphisms env doc diag names =
+  foldl step (Right (doc, diag)) names
   where
-    ensureNoDupUses pairs =
-      case dupKey pairs of
-        Just k -> Left ("Duplicate implements alias: " <> k)
-        Nothing -> Right (M.fromList pairs)
-    dupKey = go M.empty
-      where
-        go _ [] = Nothing
-        go seen ((k,_):rest)
-          | M.member k seen = Just k
-          | otherwise = go (M.insert k () seen) rest
+    step acc name = do
+      (doc0, diag0) <- acc
+      mor <- lookupMorphism env name
+      if dName (morSrc mor) /= dName doc0
+        then Left ("run: morphism source mismatch for " <> name)
+        else do
+          diag' <- applyMorphismDiagram mor diag0
+          pure (morTgt mor, diag')
 
-    resolveRequirement explicit req = do
-      let alias = srAlias req
-      case M.lookup alias explicit of
-        Just name -> do
-          mor <- lookupMorphism name
-          ensureMorphMatch alias req mor
-        Nothing -> do
-          mDefault <- resolveDefault alias req
-          case mDefault of
-            Just pair -> Right pair
-            Nothing ->
-              if srPres req == pres
-                then do
-                  let mor = identityMorphism pres
-                  pair <- ensureMorphMatch alias req mor
-                  case checkMorphism (mcPolicy (morCheck mor)) (mcFuel (morCheck mor)) mor of
-                    Left err -> Left ("identity morphism check failed: " <> T.pack (show err))
-                    Right () -> Right pair
-                else do
-                  let candidates =
-                        [ m
-                        | m <- M.elems (meMorphisms env)
-                        , morSrc m == srPres req
-                        , morTgt m == pres
-                        ]
-                  case candidates of
-                    [m] -> Right (alias, m)
-                    [] -> Left ("Missing implementation for alias: " <> alias)
-                    _ -> Left ("Ambiguous implementation for alias: " <> alias)
-      where
-        resolveDefault alias req' =
-          case M.lookup (presName (srPres req'), presName pres) (meImplDefaults env) of
-            Nothing -> Right Nothing
-            Just names -> do
-              mors <- mapM lookupMorphism names
-              let matches = [ pair | mor <- mors, Right pair <- [ensureMorphMatch alias req' mor] ]
-              case matches of
-                [] -> Right Nothing
-                [pair] -> Right (Just pair)
-                _ -> Left ("Ambiguous default implements for alias: " <> alias)
+lookupMorphism :: ModuleEnv -> Text -> Either Text Morphism
+lookupMorphism env name =
+  case M.lookup name (meMorphisms env) of
+    Nothing -> Left ("Unknown morphism: " <> name)
+    Just mor -> Right mor
 
-    lookupMorphism name =
-      case M.lookup name (meMorphisms env) of
-        Nothing -> Left ("Unknown morphism: " <> name)
-        Just m -> Right m
-
-    ensureMorphMatch alias req mor =
-      if morSrc mor /= srPres req
-        then Left ("Morphism source does not match required interface for alias: " <> alias)
-        else if morTgt mor /= pres
-          then Left ("Morphism target does not match run doctrine for alias: " <> alias)
-          else Right (alias, mor)
-
-renderRunResult :: RunSpec -> Text -> CatExpr -> Value -> Maybe Text -> Text
-renderRunResult spec norm cat val inputTxt =
-  T.unlines (concat [inputOut, normOut, valOut, catOut])
+resolveUses :: ModuleEnv -> Text -> [Text] -> Either Text [Text]
+resolveUses env target uses =
+  foldl step (Right []) uses
   where
-    inputOut = if ShowInput `elem` runShowFlags spec then maybe [] (\t -> ["input: " <> t]) inputTxt else []
-    normOut = if ShowNormalized `elem` runShowFlags spec then ["normalized: " <> norm] else []
-    valOut = if ShowValue `elem` runShowFlags spec then ["value: " <> T.pack (show val)] else []
-    catOut = if ShowCat `elem` runShowFlags spec then ["cat: " <> T.pack (show cat)] else []
+    step acc iface = do
+      names <- acc
+      case M.lookup (iface, target) (meImplDefaults env) of
+        Nothing -> Left ("Missing implements for interface: " <> iface)
+        Just [name] -> Right (names <> [name])
+        Just [] -> Left ("Missing implements for interface: " <> iface)
+        Just _ -> Left ("Ambiguous implements for interface: " <> iface)
 
-buildSurfaceGoal :: SurfaceDef -> STerm -> [GoalArg]
-buildSurfaceGoal surf tm =
-  case M.lookup (JudgName "HasType") (sdJudgments surf) of
-    Nothing -> [GCtx emptyCtx, GSurf tm, GSurf (SFree (holeName 0))]
-    Just decl ->
-      let params = jdParams decl
-          surfArgs = [ tm ]
-          (args, _, _) = foldl build ([], surfArgs, 0 :: Int) params
-      in args
-  where
-    holeName :: Int -> Text
-    holeName i = "_h" <> T.pack (show i)
-    build (acc, surfArgs, holeIdx) param =
-      case jpSort param of
-        PCtx -> (acc <> [GCtx emptyCtx], surfArgs, holeIdx)
-        PSurf _ ->
-          case surfArgs of
-            (x:xs) -> (acc <> [GSurf x], xs, holeIdx)
-            [] -> (acc <> [GSurf (SFree (holeName holeIdx))], [], holeIdx + 1)
-        PNat -> (acc <> [GNat 0], surfArgs, holeIdx)
-        PCore -> (acc, surfArgs, holeIdx)
-
-chooseCoreSyntax :: ModuleEnv -> RunSpec -> Presentation -> Maybe (Term -> Text)
-chooseCoreSyntax env spec pres =
-  case runSyntax spec of
-    Nothing -> Nothing
-    Just name ->
-      case lookupDoctrineSyntax env name of
-        Left _ -> Nothing
-        Right syn ->
-          case instantiateSyntax pres (runOpen spec) syn of
-            Left _ -> Nothing
-            Right inst -> Just (siPrint inst)
-
-buildCoreEnv :: Presentation -> SurfaceDef -> M.Map Text Morphism -> SolveEnv -> Either Text CoreEnv
-buildCoreEnv pres surf morphs env = do
-  envSurf <- buildSurfEnv
-  let envNats = M.fromList [ (k, CVNat v) | (k, v) <- M.toList (msNats (seMatch env)) ]
-  let envCtx = M.map CVCtx (seCtxs env)
-  let envPlace = M.map CVSurf (seSurfVars env)
-  let base = M.unions [envSurf, envNats, envCtx, envPlace]
-  evalCoreBindings base (seCore env)
-  where
-    renderMVar (MVar t) = t
-    buildSurfEnv = do
-      pairs <- mapM toPair (M.toList (msTerms (seMatch env)))
-      pure (M.fromList pairs)
-    toPair (mv, ms) = do
-      tm <- instantiateMeta ms (map Ix [0 .. msArity ms - 1])
-      tm' <- resolvePlaceholders (seMatch env) tm
-      pure (renderMVar mv, CVSurf tm')
-
-    evalCoreBindings env0 pending0 = go env0 pending0
-      where
-        go envAcc pending
-          | M.null pending = Right envAcc
-          | otherwise = do
-              (env', pending', progressed) <- foldM (step pending) (envAcc, pending, False) (M.toList pending)
-              if progressed
-                then go env' pending'
-                else Left "core binding dependency cycle or unresolved reference"
-
-        step pending (envAcc, pendingAcc, progressed) (name, expr) =
-          case evalCoreBinding pres surf morphs envAcc (name, expr) of
-            Right env' -> Right (env', M.delete name pendingAcc, True)
-            Left err ->
-              case missingCoreVar err of
-                Just var | M.member var pending -> Right (envAcc, pendingAcc, progressed)
-                _ -> Left err
-
-        missingCoreVar msg = T.stripPrefix "unknown core var: " msg
-
-evalCoreBinding :: Presentation -> SurfaceDef -> M.Map Text Morphism -> CoreEnv -> (Text, CoreExpr) -> Either Text CoreEnv
-evalCoreBinding pres surf morphs env (name, expr) = do
-  val <- evalCoreExpr pres surf morphs env expr
-  case val of
-    CVCore t -> Right (M.insert name (CVCore t) env)
-    _ -> Right (M.insert name val env)
-
-renderRuntimeError :: RuntimeError -> Text
-renderRuntimeError (RuntimeError msg) = msg
+renderValues :: [Value] -> Text
+renderValues vals =
+  case vals of
+    [v] -> T.pack (show v)
+    _ -> T.pack (show vals)

@@ -9,8 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Kernel.RewriteSystem (RewritePolicy(..))
-import Strat.Kernel.Types (RuleClass(..), Orientation(..))
+import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names

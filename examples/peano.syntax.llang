@@ -1,9 +1,0 @@
-syntax PeanoSyntax where {
-  print atom "Z" = Z;
-  print prefix 9 "S" = S;
-  print infixl 6 "+" = add;
-  print infixl 7 "*" = mul;
-
-  allow call;
-  varprefix "?";
-}

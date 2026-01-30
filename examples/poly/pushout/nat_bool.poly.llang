@@ -1,5 +1,0 @@
-import "../../../stdlib/struct.cartesian.llang";
-import "../../../stdlib/poly.nat.llang";
-import "../../../stdlib/poly.bool.llang";
-
-polydoctrine NatBool = pushout Nat.fromBase Bool.fromBase;
