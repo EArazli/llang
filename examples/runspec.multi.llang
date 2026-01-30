@@ -7,7 +7,7 @@ run main where {
 }
 ---
 (unit * unit) ; mul
-
+---
 run beta where {
   doctrine PlanarMonoid;
   mode M;
@@ -15,3 +15,4 @@ run beta where {
 }
 ---
 (unit * unit) ; mul ; (unit * unit) ; mul
+---
