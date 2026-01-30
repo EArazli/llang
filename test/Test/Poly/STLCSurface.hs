@@ -24,6 +24,8 @@ tests =
   testGroup
     "Poly.STLCSurface"
     [ testCase "lam2 weakens outer var" testLam2Weakening
+    , testCase "lam id uses exr projection" testLamId
+    , testCase "lam3 weakens multiple times" testLam3Weakening
     ]
 
 testLam2Weakening :: Assertion
@@ -32,6 +34,27 @@ testLam2Weakening = do
   case elabSurfaceExpr doc surf "lam x:Bool. lam y:Bool. x" of
     Left err -> assertFailure (T.unpack err)
     Right diag -> do
+      assertNoInputs diag
+      assertHasGen "exl" diag
+      assertHasGen "comp" diag
+
+testLamId :: Assertion
+testLamId = do
+  (doc, surf) <- loadSTLCSurface
+  case elabSurfaceExpr doc surf "lam x:Bool. x" of
+    Left err -> assertFailure (T.unpack err)
+    Right diag -> do
+      assertNoInputs diag
+      assertHasGen "exr" diag
+      assertHasGen "curry" diag
+
+testLam3Weakening :: Assertion
+testLam3Weakening = do
+  (doc, surf) <- loadSTLCSurface
+  case elabSurfaceExpr doc surf "lam x:Bool. lam y:Bool. lam z:Bool. x" of
+    Left err -> assertFailure (T.unpack err)
+    Right diag -> do
+      assertNoInputs diag
       assertHasGen "exl" diag
       assertHasGen "comp" diag
 
@@ -56,3 +79,7 @@ assertHasGen name diag =
   in if GenName name `elem` payloads
       then pure ()
       else assertFailure ("expected gen " <> T.unpack name)
+
+assertNoInputs :: Diagram -> Assertion
+assertNoInputs diag =
+  assertEqual "closed term should have no diagram inputs" [] (dIn diag)

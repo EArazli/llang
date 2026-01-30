@@ -50,6 +50,7 @@ elabSurfaceExpr doc surf src = do
 
 data ElabEnv = ElabEnv
   { eeVars :: M.Map Text TypeExpr
+  , eeVarDefs :: M.Map Text Diagram
   , eeTypeSubst :: Subst
   , eeCtxVar :: Maybe TyVar
   } deriving (Eq, Show)
@@ -57,9 +58,9 @@ data ElabEnv = ElabEnv
 initEnv :: SurfaceSpec -> ElabEnv
 initEnv spec =
   case ssContext spec of
-    Nothing -> ElabEnv M.empty M.empty Nothing
+    Nothing -> ElabEnv M.empty M.empty M.empty Nothing
     Just (ctxName, ty) ->
-      ElabEnv M.empty (M.singleton (TyVar ctxName) ty) (Just (TyVar ctxName))
+      ElabEnv M.empty M.empty (M.singleton (TyVar ctxName) ty) (Just (TyVar ctxName))
 
 
 -- Diagrams with variable uses and tags
@@ -336,17 +337,32 @@ elabChildren doc mode spec cart env binder bodyIndex exprInfos = do
       pure (idx, d)
 
 extendEnv :: Doctrine -> ModeName -> ElabEnv -> BinderInfo -> Fresh ElabEnv
-extendEnv _doc _mode env (BinderInfo _ (BinderInput varName tyAnn)) = do
-  let (varTy, mCtx) = computeInputVarType env tyAnn
-  let subst' = maybe (eeTypeSubst env) (\(ctxVar, ctxTy) -> M.insert ctxVar ctxTy (eeTypeSubst env)) mCtx
-  pure env
-    { eeVars = M.insert varName varTy (eeVars env)
-    , eeTypeSubst = subst'
-    }
+extendEnv doc mode env (BinderInfo _ (BinderInput varName tyAnn)) = do
+  let ty0 = applySubstTy (eeTypeSubst env) tyAnn
+  case lookupCtxVar env of
+    Nothing ->
+      pure env
+        { eeVars = M.insert varName ty0 (eeVars env)
+        , eeVarDefs = M.delete varName (eeVarDefs env)
+        }
+    Just (ctxVar, ctxTy) -> do
+      let newCtx = Ty.TCon (TypeName "prod") [ctxTy, ty0]
+      let varTy = Ty.TCon (TypeName "Hom") [newCtx, ty0]
+      exrDecl <- liftEither (requireExr doc mode)
+      exrDiag <- genDFromDecl mode env exrDecl (Just [ctxTy, ty0])
+      let subst' = M.insert ctxVar newCtx (eeTypeSubst env)
+      pure env
+        { eeVars = M.insert varName varTy (eeVars env)
+        , eeVarDefs = M.insert varName exrDiag (eeVarDefs env)
+        , eeTypeSubst = subst'
+        }
 extendEnv _doc _mode env (BinderInfo _ (BinderValue varName _)) = do
   fresh <- freshTyVar (TyVar varName)
   let ty = Ty.TVar fresh
-  pure env { eeVars = M.insert varName ty (eeVars env) }
+  pure env
+    { eeVars = M.insert varName ty (eeVars env)
+    , eeVarDefs = M.delete varName (eeVarDefs env)
+    }
 
 lookupCtxVar :: ElabEnv -> Maybe (TyVar, TypeExpr)
 lookupCtxVar env =
@@ -411,6 +427,19 @@ ensureExlShape gen =
       | a == a1 && a == a2 && b == b1 -> Right ()
     _ -> Left "surface: exl has wrong type"
 
+requireExr :: Doctrine -> ModeName -> Either Text GenDecl
+requireExr doc mode = do
+  exr <- requireGen doc mode "exr"
+  ensureExrShape exr
+  pure exr
+
+ensureExrShape :: GenDecl -> Either Text ()
+ensureExrShape gen =
+  case (gdTyVars gen, gdDom gen, gdCod gen) of
+    ([a, b], [], [Ty.TCon (TypeName "Hom") [Ty.TCon (TypeName "prod") [Ty.TVar a1, Ty.TVar b1], Ty.TVar b2]])
+      | a == a1 && b == b1 && b == b2 -> Right ()
+    _ -> Left "surface: exr has wrong type"
+
 ensureCompShape :: GenDecl -> Either Text ()
 ensureCompShape gen =
   case (gdTyVars gen, gdDom gen, gdCod gen) of
@@ -426,20 +455,25 @@ ensureCompShape gen =
 elabVarRef :: Doctrine -> ModeName -> ElabEnv -> Subst -> Text -> TypeExpr -> Fresh SurfDiag
 elabVarRef doc mode env subst name ty = do
   let ty' = applySubstTy subst ty
+  let base0 =
+        case M.lookup name (eeVarDefs env) of
+          Just def -> emptySurf def
+          Nothing -> varSurf mode name ty'
+  let base = applySubstSurf subst base0
   case lookupCtxVar env of
-    Nothing -> pure (varSurf mode name ty')
+    Nothing -> pure base
     Just (_ctxVar, ctxTy0) -> do
       let ctxTy = applySubstTy subst ctxTy0
       case splitHom ty' of
-        Nothing -> pure (varSurf mode name ty')
+        Nothing -> pure base
         Just (dom, cod) ->
           if ctxTy == dom
-            then pure (varSurf mode name ty')
+            then pure base
             else do
               (exlDecl, compDecl) <- liftEither (requireCtxThreadOps doc mode)
               steps <- liftEither (prodPeelSteps ctxTy dom)
               proj <- buildProjection doc mode env exlDecl compDecl ctxTy steps
-              applyWeakening doc mode env compDecl name dom cod ctxTy proj
+              applyWeakeningVal mode env compDecl dom cod ctxTy base proj
 
 buildProjection :: Doctrine -> ModeName -> ElabEnv -> GenDecl -> GenDecl -> TypeExpr -> [ProdStep] -> Fresh SurfDiag
 buildProjection _doc mode env exlDecl compDecl ctxCur steps =
@@ -458,13 +492,11 @@ buildProjection _doc mode env exlDecl compDecl ctxCur steps =
       let compSurfDiag = emptySurf compDiag
       liftEither (tensorSurf exl acc >>= \t -> compSurf t compSurfDiag)
 
-applyWeakening :: Doctrine -> ModeName -> ElabEnv -> GenDecl -> Text -> TypeExpr -> TypeExpr -> TypeExpr -> SurfDiag -> Fresh SurfDiag
-applyWeakening _doc mode env compDecl name dom cod ctxCur proj = do
-  let varTy = Ty.TCon (TypeName "Hom") [dom, cod]
-  let varDiag = varSurf mode name varTy
+applyWeakeningVal :: ModeName -> ElabEnv -> GenDecl -> TypeExpr -> TypeExpr -> TypeExpr -> SurfDiag -> SurfDiag -> Fresh SurfDiag
+applyWeakeningVal mode env compDecl dom cod ctxCur base proj = do
   compDiag <- genDFromDecl mode env compDecl (Just [ctxCur, dom, cod])
   let compSurfDiag = emptySurf compDiag
-  liftEither (tensorSurf varDiag proj >>= \t -> compSurf t compSurfDiag)
+  liftEither (tensorSurf base proj >>= \t -> compSurf t compSurfDiag)
 
 
 -- Template evaluation
@@ -521,12 +553,15 @@ applyBinder :: Doctrine -> ModeName -> CartesianOps -> ElabEnv -> Maybe BinderIn
 applyBinder _doc _mode _cart _env Nothing _holeMap sd = pure sd
 applyBinder doc mode cart env (Just binder) holeMap sd =
   case binder of
-    BinderInfo _ (BinderInput varName tyAnn) -> do
-      let (varTy, _mCtx) = computeInputVarType env tyAnn
-      let (source, diag1) = freshPort varTy (sdDiag sd)
-      let sd1 = sd { sdDiag = diag1 }
-      sd2 <- connectVar doc mode cart varName source varTy sd1 True
-      pure sd2
+    BinderInfo _ (BinderInput varName tyAnn) ->
+      case lookupCtxVar env of
+        Just _ -> pure sd
+        Nothing -> do
+          let (varTy, _mCtx) = computeInputVarType env tyAnn
+          let (source, diag1) = freshPort varTy (sdDiag sd)
+          let sd1 = sd { sdDiag = diag1 }
+          sd2 <- connectVar doc mode cart varName source varTy sd1 True
+          pure sd2
     BinderInfo _ (BinderValue varName valueArgIdx) -> do
       let holeIdx = M.lookup valueArgIdx holeMap
       case holeIdx of

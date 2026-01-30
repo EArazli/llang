@@ -113,10 +113,11 @@ expectedStlcLam =
   T.intercalate "\n"
     [ "normalized:"
     , "mode: M"
-    , "in: [p0:Hom(prod(Unit, Bool), Bool)]"
-    , "out: [p1:Hom(Unit, exp(Bool, Bool))]"
+    , "in: []"
+    , "out: [p0:Hom(Unit, exp(Bool, Bool))]"
     , "edges:"
-    , "  e0: curry [p0] -> [p1]"
+    , "  e0: exr [] -> [p1]"
+    , "  e1: curry [p1] -> [p0]"
     ]
 
 expectedStlcApp :: Text
@@ -124,11 +125,10 @@ expectedStlcApp =
   T.intercalate "\n"
     [ "normalized:"
     , "mode: M"
-    , "in: [p0:Hom(prod(Unit, Bool), Bool)]"
-    , "out: [p1:Hom(Unit, Bool)]"
+    , "in: []"
+    , "out: [p0:Hom(Unit, Bool)]"
     , "edges:"
-    , "  e0: T [] -> [p2]"
-    , "  e1: id [] -> [p3]"
-    , "  e2: pair [p3, p2] -> [p4]"
-    , "  e3: comp [p0, p4] -> [p1]"
+    , "  e0: T [] -> [p0]"
+    , "  e1: id [] -> [p1]"
+    , "  e2: drop [p1] -> []"
     ]
