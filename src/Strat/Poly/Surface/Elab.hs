@@ -171,7 +171,7 @@ elabAst doc mode spec cart env ast =
   case ast of
     SAIdent name ->
       case M.lookup name (eeVars env) of
-        Just ty -> pure (varSurf mode name (applySubstTy (eeTypeSubst env) ty))
+        Just ty -> elabVarRef doc mode env (eeTypeSubst env) name ty
         Nothing -> elabZeroArgGen doc mode env name
     SAType _ -> liftEither (Left "surface: unexpected type where expression expected")
     SANode ctor args ->
@@ -367,6 +367,106 @@ computeInputVarType env tyAnn =
       in (varTy, Just (ctxVar, newCtx))
 
 
+data ProdStep = ProdStep
+  { psCur :: TypeExpr
+  , psLeft :: TypeExpr
+  , psRight :: TypeExpr
+  } deriving (Eq, Show)
+
+splitHom :: TypeExpr -> Maybe (TypeExpr, TypeExpr)
+splitHom ty =
+  case ty of
+    Ty.TCon (TypeName "Hom") [dom, cod] -> Just (dom, cod)
+    _ -> Nothing
+
+splitProd :: TypeExpr -> Maybe (TypeExpr, TypeExpr)
+splitProd ty =
+  case ty of
+    Ty.TCon (TypeName "prod") [l, r] -> Just (l, r)
+    _ -> Nothing
+
+prodPeelSteps :: TypeExpr -> TypeExpr -> Either Text [ProdStep]
+prodPeelSteps ctxCur dom = go ctxCur []
+  where
+    go cur acc
+      | cur == dom = Right (reverse acc)
+      | otherwise =
+          case splitProd cur of
+            Just (l, r) -> go l (ProdStep cur l r : acc)
+            Nothing ->
+              Left ("surface: cannot weaken from ctx " <> T.pack (show ctxCur) <> " to " <> T.pack (show dom))
+
+requireCtxThreadOps :: Doctrine -> ModeName -> Either Text (GenDecl, GenDecl)
+requireCtxThreadOps doc mode = do
+  exl <- requireGen doc mode "exl"
+  comp <- requireGen doc mode "comp"
+  ensureExlShape exl
+  ensureCompShape comp
+  pure (exl, comp)
+
+ensureExlShape :: GenDecl -> Either Text ()
+ensureExlShape gen =
+  case (gdTyVars gen, gdDom gen, gdCod gen) of
+    ([a, b], [], [Ty.TCon (TypeName "Hom") [Ty.TCon (TypeName "prod") [Ty.TVar a1, Ty.TVar b1], Ty.TVar a2]])
+      | a == a1 && a == a2 && b == b1 -> Right ()
+    _ -> Left "surface: exl has wrong type"
+
+ensureCompShape :: GenDecl -> Either Text ()
+ensureCompShape gen =
+  case (gdTyVars gen, gdDom gen, gdCod gen) of
+    ( [a, b, c]
+      , [ Ty.TCon (TypeName "Hom") [Ty.TVar b1, Ty.TVar c1]
+        , Ty.TCon (TypeName "Hom") [Ty.TVar a1, Ty.TVar b2]
+        ]
+      , [Ty.TCon (TypeName "Hom") [Ty.TVar a2, Ty.TVar c2]]
+      )
+      | a == a1 && a == a2 && b == b1 && b == b2 && c == c1 && c == c2 -> Right ()
+    _ -> Left "surface: comp has wrong type"
+
+elabVarRef :: Doctrine -> ModeName -> ElabEnv -> Subst -> Text -> TypeExpr -> Fresh SurfDiag
+elabVarRef doc mode env subst name ty = do
+  let ty' = applySubstTy subst ty
+  case lookupCtxVar env of
+    Nothing -> pure (varSurf mode name ty')
+    Just (_ctxVar, ctxTy0) -> do
+      let ctxTy = applySubstTy subst ctxTy0
+      case splitHom ty' of
+        Nothing -> pure (varSurf mode name ty')
+        Just (dom, cod) ->
+          if ctxTy == dom
+            then pure (varSurf mode name ty')
+            else do
+              (exlDecl, compDecl) <- liftEither (requireCtxThreadOps doc mode)
+              steps <- liftEither (prodPeelSteps ctxTy dom)
+              proj <- buildProjection doc mode env exlDecl compDecl ctxTy steps
+              applyWeakening doc mode env compDecl name dom cod ctxTy proj
+
+buildProjection :: Doctrine -> ModeName -> ElabEnv -> GenDecl -> GenDecl -> TypeExpr -> [ProdStep] -> Fresh SurfDiag
+buildProjection _doc mode env exlDecl compDecl ctxCur steps =
+  case steps of
+    [] -> liftEither (Left "surface: empty projection steps")
+    (step0:rest) -> do
+      acc <- exlDiag step0
+      foldM (composeStep ctxCur) acc rest
+  where
+    exlDiag step = do
+      diag <- genDFromDecl mode env exlDecl (Just [psLeft step, psRight step])
+      pure (emptySurf diag)
+    composeStep ctxRoot acc step = do
+      exl <- exlDiag step
+      compDiag <- genDFromDecl mode env compDecl (Just [ctxRoot, psCur step, psLeft step])
+      let compSurfDiag = emptySurf compDiag
+      liftEither (tensorSurf exl acc >>= \t -> compSurf t compSurfDiag)
+
+applyWeakening :: Doctrine -> ModeName -> ElabEnv -> GenDecl -> Text -> TypeExpr -> TypeExpr -> TypeExpr -> SurfDiag -> Fresh SurfDiag
+applyWeakening _doc mode env compDecl name dom cod ctxCur proj = do
+  let varTy = Ty.TCon (TypeName "Hom") [dom, cod]
+  let varDiag = varSurf mode name varTy
+  compDiag <- genDFromDecl mode env compDecl (Just [ctxCur, dom, cod])
+  let compSurfDiag = emptySurf compDiag
+  liftEither (tensorSurf varDiag proj >>= \t -> compSurf t compSurfDiag)
+
+
 -- Template evaluation
 
 evalTemplate :: Doctrine -> ModeName -> SurfaceSpec -> CartesianOps -> ElabEnv -> M.Map Text SurfaceAST -> Subst -> HoleMap -> [SurfDiag] -> TemplateExpr -> Fresh SurfDiag
@@ -382,7 +482,7 @@ evalTemplate doc mode _spec _cart env paramMap subst holeMap childList templ =
         _ -> liftEither (Left "surface: unknown variable placeholder")
       case M.lookup varName (eeVars env) of
         Nothing -> elabZeroArgGen doc mode env varName
-        Just ty -> pure (varSurf mode varName (applySubstTy subst ty))
+        Just ty -> elabVarRef doc mode env subst varName ty
     TId ctx -> do
       let ctx' = map (applySubstTy subst) ctx
       pure (emptySurf (idD mode ctx'))

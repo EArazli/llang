@@ -12,6 +12,7 @@ import qualified Test.Poly.Pushout as PolyPushout
 import qualified Test.Poly.Coherence as PolyCoherence
 import qualified Test.Poly.CCC as PolyCCC
 import qualified Test.Poly.Surface as PolySurface
+import qualified Test.Poly.STLCSurface as PolySTLCSurface
 import qualified Test.Poly.NoLegacy as PolyNoLegacy
 import qualified Test.Poly.StdlibCoherence as PolyStdlibCoherence
 
@@ -30,6 +31,7 @@ main =
       , PolyCoherence.tests
       , PolyCCC.tests
       , PolySurface.tests
+      , PolySTLCSurface.tests
       , PolyNoLegacy.tests
       , PolyStdlibCoherence.tests
       , NoPolyPrefixes.tests
