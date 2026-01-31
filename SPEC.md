@@ -245,6 +245,7 @@ return witnesses (a meeting diagram with rewrite paths).
 
 A morphism `F : D → E` consists of:
 
+- a **mode map** (a total mapping from source modes to target modes),
 - a **mode-indexed type map** (`TypeRef ↦ (a1…an ⊢ τ)` templates),
 - a **mode‑indexed generator map** (`(ModeName, GenName) ↦ Diagram`),
 - rewrite policy and fuel for equation checking.
@@ -253,8 +254,11 @@ A morphism `F : D → E` consists of:
 
 To apply `F` to a diagram:
 
-1. Map all port types using the type map templates.
-2. For each edge, instantiate the generator mapping (using unification to recover type parameters), in the edge’s mode.
+1. Map the diagram mode using the mode map, and map all port types using the type map
+   templates (type‑variable modes are mapped by the mode map; unmapped constructors keep
+   their name and only their mode is translated).
+2. For each edge in source mode `m`, instantiate the generator mapping (using unification
+   to recover type parameters), then apply it in target mode `mapMode(m)`.
 3. Splice the mapped diagram into the host by boundary identification.
 
 ### 5.2 Morphism checking
@@ -268,7 +272,8 @@ For each source 2‑cell `L == R`:
 
 This mirrors the implementation’s `checkMorphism` behavior.
 
-**Current limitation:** mode mapping is identity only (modes are not translated).
+The mode map must be total on source modes and must land in modes that exist in the
+target doctrine; generator mappings must elaborate to diagrams in the mapped target mode.
 
 ---
 
@@ -299,6 +304,7 @@ doctrine <Name> = coproduct <Left> <Right>;
 ```
 
 - `pushout` requires morphisms with **renaming/inclusion** behavior (single‑generator images) and injective interface maps.
+- `pushout` additionally requires **mode‑preserving** morphisms (the mode map must be the identity).
 - The pushout produces canonical morphisms `<Name>.inl`, `<Name>.inr`, and `<Name>.glue`.
 - Non‑interface generators and types are automatically **disjoint‑renamed** in the pushout (prefixing by the target doctrine name plus `_inl`/`_inr`) to avoid collisions.
 - `coproduct` is implemented as a pushout over an empty interface (so all symbols are renamed disjointly).
@@ -311,6 +317,7 @@ doctrine <Name> = coproduct <Left> <Right>;
 
 ```
 morphism <Name> : <Src> -> <Tgt> where {
+  mode <SrcMode> -> <TgtMode>;
   type <SrcType>(<tyvar> [, ...]) @<Mode> -> <TgtTypeExpr> @<Mode>;
   gen  <SrcGen>  @<Mode> -> <DiagExpr>;
   policy <RewritePolicy>;
@@ -319,12 +326,16 @@ morphism <Name> : <Src> -> <Tgt> where {
 ```
 
 - Every source generator must be mapped.
+- Mode mappings are optional; if omitted, each source mode maps to the same‑named target
+  mode (and it is an error if that target mode does not exist).
+- The mode map is total on source modes; duplicate mode mappings are rejected.
 - Type mappings are **templates with explicit binders**: the RHS may be any type expression
   whose free variables are a subset of `{a1,...,an}`.
-- Binder modes are checked against the source type's mode signature.
+- Binder modes are checked against the source type's mode signature **mapped by the mode map**.
+- The target `@<Mode>` on a type mapping must equal the mode map of the source type’s mode.
 - When a morphism is used as a **pushout leg**, its type mappings must be **invertible renamings**
   (constructor rename + parameter permutation).
-- Generator mappings must elaborate to diagrams in the target doctrine/mode.
+- Generator mappings must elaborate to diagrams in the target doctrine/mode `mapMode(<Mode>)`.
 
 ### 6.3 Types and contexts
 
@@ -367,11 +378,29 @@ surface <Name> where {
   mode <Mode>;
   context <ctx> = <Type>;  -- optional
 
+  structural { ... }       -- optional
   lexer { ... }
   expr  { ... }
   elaborate { ... }
 }
 ```
+
+#### Structural block
+
+```
+structural {
+  discipline: linear | affine | relevant | cartesian;
+  dup: <GenName>;    -- optional
+  drop: <GenName>;   -- optional
+}
+```
+
+- The block is optional. If omitted, it defaults to **cartesian** with `dup`/`drop`
+  generators named `dup` and `drop`.
+- If present, `discipline` defaults to `cartesian`, and `dup`/`drop` default to unset.
+- `relevant`/`cartesian` require `dup`; `affine`/`cartesian` require `drop`.
+- The configured `dup` and `drop` generators must exist in the surface mode and have
+  the shapes `dup(a) : a → (a, a)` and `drop(a) : a → []`.
 
 #### Lexer
 
@@ -434,7 +463,7 @@ generators) plus **placeholders**:
 A constructor named `CALL` with arguments `(name, arg)` is treated as a generator
 call: `name` is the generator name, and `arg` elaborates to its argument diagram.
 
-#### Binding rules + cartesian structure
+#### Binding rules + structural discipline
 
 Binding is inferred by syntax:
 
@@ -448,9 +477,13 @@ Elaboration semantics:
 
 - Input binders introduce a fresh input port of the annotated type.
 - Variable occurrences elaborate to wire references to that port.
-- Multiple uses insert `dup` to supply copies (left‑associated duplication);
-  zero uses insert `drop`. Therefore any surface with binders requires the
-  doctrine mode to provide `dup` and `drop` with the cartesian shapes.
+- Variable uses are checked against the discipline:
+  - **linear**: exactly once (0 or >1 uses is an error).
+  - **affine**: at most once; 0 uses insert `drop`.
+  - **relevant**: at least once; multiple uses insert `dup`
+    (left‑associated duplication).
+  - **cartesian**: any number of uses; 0 uses insert `drop`,
+    >1 uses insert `dup` (left‑associated duplication).
 
 Optional `context <ctx> = <Type>` enables CCC‑style context threading:
 

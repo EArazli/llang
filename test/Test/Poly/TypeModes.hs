@@ -17,6 +17,7 @@ import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.Diagram (diagramDom)
 import Strat.Poly.UnifyTy (unifyTy)
+import Strat.Poly.Graph (emptyDiagram, freshPort, validateDiagram)
 
 
 tests :: TestTree
@@ -27,6 +28,7 @@ tests =
     , testCase "unqualified constructor ambiguity rejected" testAmbiguousConstructor
     , testCase "argument mode mismatch rejected" testArgModeMismatch
     , testCase "unify rejects mode mismatch" testUnifyModeMismatch
+    , testCase "validateDiagram rejects port mode mismatch" testValidateDiagramModeMismatch
     ]
 
 modeC :: ModeName
@@ -119,3 +121,13 @@ testUnifyModeMismatch = do
     Left err ->
       assertBool "expected mode mismatch" ("mode mismatch" `T.isInfixOf` err)
     Right _ -> assertFailure "expected mode mismatch failure"
+
+testValidateDiagramModeMismatch :: Assertion
+testValidateDiagramModeMismatch = do
+  let modeM = ModeName "M"
+  let badTy = tcon modeC "A" []
+  let (_p0, diag) = freshPort badTy (emptyDiagram modeM)
+  case validateDiagram diag of
+    Left err ->
+      assertBool "expected port mode mismatch" ("wrong mode" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected validateDiagram to reject mode mismatch"

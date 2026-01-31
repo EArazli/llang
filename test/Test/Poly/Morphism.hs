@@ -25,6 +25,7 @@ tests =
     "Poly.Morphism"
     [ testCase "monoid morphism to string monoid" testMonoidMorphism
     , testCase "type map can reorder parameters" testTypeMapReorder
+    , testCase "cross-mode morphism applies mode map" testCrossModeMorphism
     ]
 
 tvar :: ModeName -> Text -> TyVar
@@ -33,10 +34,15 @@ tvar mode name = TyVar { tvName = name, tvMode = mode }
 tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
 tcon mode name args = TCon (TypeRef mode (TypeName name)) args
 
+identityModeMap :: Doctrine -> M.Map ModeName ModeName
+identityModeMap doc =
+  M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]
+
 testMonoidMorphism :: Assertion
 testMonoidMorphism = do
   docSrc <- either (assertFailure . T.unpack) pure mkMonoid
   docTgt <- either (assertFailure . T.unpack) pure mkStringMonoid
+  let modeMap = identityModeMap docSrc
   let typeMap = M.fromList [(TypeRef modeM (TypeName "A"), TypeTemplate [] (tcon modeM "Str" []))]
   unitImg <- either (assertFailure . T.unpack) pure (genD modeM [] [tcon modeM "Str" []] (GenName "empty"))
   mulImg <- either (assertFailure . T.unpack) pure (genD modeM [tcon modeM "Str" [], tcon modeM "Str" []] [tcon modeM "Str" []] (GenName "append"))
@@ -44,6 +50,7 @@ testMonoidMorphism = do
         { morName = "MonoidToStr"
         , morSrc = docSrc
         , morTgt = docTgt
+        , morModeMap = modeMap
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((modeM, GenName "unit"), unitImg), ((modeM, GenName "mul"), mulImg)]
         , morPolicy = UseAllOriented
@@ -89,6 +96,7 @@ testTypeMapReorder = do
         { morName = "SwapProd"
         , morSrc = docSrc'
         , morTgt = docTgt'
+        , morModeMap = identityModeMap docSrc'
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((mode, genName), img)]
         , morPolicy = UseAllOriented
@@ -97,6 +105,58 @@ testTypeMapReorder = do
   case checkMorphism mor of
     Left err -> assertFailure (show err)
     Right () -> pure ()
+
+testCrossModeMorphism :: Assertion
+testCrossModeMorphism = do
+  let modeC = ModeName "C"
+  let modeV = ModeName "V"
+  let aRef = TypeRef modeC (TypeName "A")
+  let bRef = TypeRef modeV (TypeName "B")
+  let aTy = TCon aRef []
+  let bTy = TCon bRef []
+  let fGen = GenDecl (GenName "f") modeC [] [aTy] [aTy]
+  let gGen = GenDecl (GenName "g") modeV [] [bTy] [bTy]
+  let docSrc = Doctrine
+        { dName = "Src"
+        , dModes = ModeTheory (S.singleton modeC) M.empty []
+        , dTypes = M.fromList [(modeC, M.fromList [(TypeName "A", TypeSig [])])]
+        , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
+        , dCells2 = []
+        }
+  let docTgt = Doctrine
+        { dName = "Tgt"
+        , dModes = ModeTheory (S.singleton modeV) M.empty []
+        , dTypes = M.fromList [(modeV, M.fromList [(TypeName "B", TypeSig [])])]
+        , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
+        , dCells2 = []
+        }
+  docSrc' <- case validateDoctrine docSrc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure docSrc
+  docTgt' <- case validateDoctrine docTgt of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure docTgt
+  img <- either (assertFailure . T.unpack) pure (genD modeV [bTy] [bTy] (GenName "g"))
+  let mor = Morphism
+        { morName = "CtoV"
+        , morSrc = docSrc'
+        , morTgt = docTgt'
+        , morModeMap = M.fromList [(modeC, modeV)]
+        , morTypeMap = M.fromList [(aRef, TypeTemplate [] bTy)]
+        , morGenMap = M.fromList [((modeC, GenName "f"), img)]
+        , morPolicy = UseAllOriented
+        , morFuel = 20
+        }
+  case checkMorphism mor of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  srcDiag <- either (assertFailure . T.unpack) pure (genD modeC [aTy] [aTy] (GenName "f"))
+  tgtDiag <- either (assertFailure . T.unpack) pure (applyMorphismDiagram mor srcDiag)
+  dMode tgtDiag @?= modeV
+  dom <- either (assertFailure . T.unpack) pure (diagramDom tgtDiag)
+  cod <- either (assertFailure . T.unpack) pure (diagramCod tgtDiag)
+  dom @?= [bTy]
+  cod @?= [bTy]
 
 modeM :: ModeName
 modeM = ModeName "M"

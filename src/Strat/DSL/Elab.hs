@@ -7,6 +7,7 @@ module Strat.DSL.Elab
 import Control.Monad (foldM)
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
 import Strat.Frontend.Env
@@ -15,6 +16,7 @@ import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, elabPolyRun)
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import Strat.Poly.Diagram (genD)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
+import Strat.Poly.ModeTheory (ModeTheory(..))
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePolyCoproduct)
 import Strat.Poly.Surface (elabPolySurfaceDecl)
@@ -214,6 +216,7 @@ buildPolyFromBase baseName newName env newDoc = do
         { PolyMorph.morName = morName
         , PolyMorph.morSrc = baseDoc
         , PolyMorph.morTgt = newDoc
+        , PolyMorph.morModeMap = identityModeMap baseDoc
         , PolyMorph.morTypeMap = M.empty
         , PolyMorph.morGenMap = genMap
         , PolyMorph.morPolicy = UseStructuralAsBidirectional
@@ -232,3 +235,5 @@ buildPolyFromBase baseName newName env newDoc = do
     genImage (mode, gen) = do
       img <- genD mode (gdDom gen) (gdCod gen) (gdName gen)
       pure ((mode, gdName gen), img)
+    identityModeMap doc =
+      M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]

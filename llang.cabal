@@ -49,6 +49,7 @@ data-files:
     examples/loop_demo.run.llang
     examples/monoid.run.llang
     examples/monoid_to_string.llang
+    examples/mode_map_demo.run.llang
     examples/morphism_term.llang
     examples/no_dup_error.run.llang
     examples/peano.llang
@@ -125,9 +126,7 @@ library
       Strat.Poly.UnifyTy
       Strat.RunSpec
   other-modules:
-      Paths_llang
-  autogen-modules:
-      Paths_llang
+      Strat.Poly.TypePretty
   hs-source-dirs:
       src
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints

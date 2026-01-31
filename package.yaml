@@ -40,6 +40,7 @@ data-files:
 - examples/loop_demo.run.llang
 - examples/monoid.run.llang
 - examples/monoid_to_string.llang
+- examples/mode_map_demo.run.llang
 - examples/morphism_term.llang
 - examples/no_dup_error.run.llang
 - examples/peano.llang
@@ -106,6 +107,8 @@ ghc-options:
 
 library:
   source-dirs: src
+  other-modules:
+  - Strat.Poly.TypePretty
 
 executables:
   llang-exe:

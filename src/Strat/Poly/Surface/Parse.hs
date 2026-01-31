@@ -19,6 +19,7 @@ import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
 
 import Strat.Poly.Surface.Spec
 import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..))
+import Strat.Poly.Names (GenName(..))
 
 
 -- Spec parser
@@ -59,6 +60,7 @@ data SpecItem
   = ItemDoctrine Text
   | ItemMode Text
   | ItemContext Text RawPolyTypeExpr
+  | ItemStructural StructuralSpec
   | ItemLexer LexerSpec
   | ItemExpr ExprSpec
   | ItemElab [ElabRule]
@@ -71,6 +73,7 @@ surfaceSpec = do
         , ssDoctrine = ""
         , ssMode = ""
         , ssContext = Nothing
+        , ssStructural = defaultStructuralSpec
         , ssLexer = Nothing
         , ssExprSpec = Nothing
         , ssElabRules = M.empty
@@ -87,6 +90,7 @@ surfaceSpec = do
         ItemDoctrine t -> spec { ssDoctrine = t }
         ItemMode t -> spec { ssMode = t }
         ItemContext name ty -> spec { ssContext = Just (name, ty) }
+        ItemStructural s -> spec { ssStructural = s }
         ItemLexer l -> spec { ssLexer = Just l }
         ItemExpr e -> spec { ssExprSpec = Just e }
         ItemElab rules -> spec { ssElabRules = foldl insertRule (ssElabRules spec) rules }
@@ -99,10 +103,60 @@ surfaceItem =
     [ ItemDoctrine <$> (symbol "doctrine" *> ident <* optionalSemi)
     , ItemMode <$> (symbol "mode" *> ident <* optionalSemi)
     , ItemContext <$> (symbol "context" *> ident <* symbol "=") <*> (typeExpr <* optionalSemi)
+    , ItemStructural <$> structuralBlock
     , ItemLexer <$> lexerBlock
     , ItemExpr <$> exprBlock
     , ItemElab <$> elaborateBlock
     ]
+
+defaultStructuralSpec :: StructuralSpec
+defaultStructuralSpec =
+  StructuralSpec
+    { ssDiscipline = Cartesian
+    , ssDupGen = Just (GenName "dup")
+    , ssDropGen = Just (GenName "drop")
+    }
+
+data StructuralItem
+  = StructDiscipline VarDiscipline
+  | StructDup GenName
+  | StructDrop GenName
+
+structuralBlock :: Parser StructuralSpec
+structuralBlock = do
+  _ <- symbol "structural"
+  _ <- symbol "{"
+  items <- many structuralItem
+  _ <- symbol "}"
+  let spec0 = StructuralSpec { ssDiscipline = Cartesian, ssDupGen = Nothing, ssDropGen = Nothing }
+  pure (foldl applyStructural spec0 items)
+  where
+    applyStructural spec item =
+      case item of
+        StructDiscipline d -> spec { ssDiscipline = d }
+        StructDup name -> spec { ssDupGen = Just name }
+        StructDrop name -> spec { ssDropGen = Just name }
+
+structuralItem :: Parser StructuralItem
+structuralItem =
+  choice
+    [ StructDiscipline <$> (symbol "discipline" *> symbol ":" *> discipline <* optionalSemi)
+    , StructDup <$> (symbol "dup" *> symbol ":" *> genName <* optionalSemi)
+    , StructDrop <$> (symbol "drop" *> symbol ":" *> genName <* optionalSemi)
+    ]
+
+discipline :: Parser VarDiscipline
+discipline = do
+  name <- ident
+  case name of
+    "linear" -> pure Linear
+    "affine" -> pure Affine
+    "relevant" -> pure Relevant
+    "cartesian" -> pure Cartesian
+    _ -> fail "unknown discipline"
+
+genName :: Parser GenName
+genName = GenName <$> ident
 
 optionalSemi :: Parser ()
 optionalSemi = void (optional (symbol ";"))

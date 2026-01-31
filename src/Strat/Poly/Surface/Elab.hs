@@ -39,9 +39,9 @@ elabSurfaceExpr :: Doctrine -> PolySurfaceDef -> Text -> Either Text Diagram
 elabSurfaceExpr doc surf src = do
   let spec = psSpec surf
   ast <- parseSurfaceExpr spec src
-  cart <- requireCartesian doc (psMode surf)
+  ops <- requireStructuralOps doc (psMode surf) (ssStructural spec)
   env0 <- initEnv doc (psMode surf) spec
-  diag <- evalFresh (elabAst doc (psMode surf) spec cart env0 ast)
+  diag <- evalFresh (elabAst doc (psMode surf) spec ops env0 ast)
   if M.null (sdUses diag)
     then validateDiagram (sdDiag diag) >> pure (sdDiag diag)
     else Left "surface: unresolved variables"
@@ -62,6 +62,9 @@ initEnv doc mode spec =
     Nothing -> Right (ElabEnv M.empty M.empty M.empty Nothing)
     Just (ctxName, rawTy) -> do
       ctxTy <- elabSurfaceTypeExpr doc mode rawTy
+      if typeMode ctxTy /= mode
+        then Left "surface: context type must be in surface mode"
+        else Right ()
       let ctxVar = TyVar { tvName = ctxName, tvMode = mode }
       pure (ElabEnv M.empty M.empty (M.singleton ctxVar ctxTy) (Just ctxVar))
 
@@ -174,20 +177,41 @@ unifyCtxFlex flex ctx1 ctx2
       pure (composeSubst s' s)
 
 
--- Cartesian structure
+-- Structural discipline
 
-data CartesianOps = CartesianOps
-  { coDup :: GenDecl
-  , coDrop :: GenDecl
+data StructuralOps = StructuralOps
+  { soDiscipline :: VarDiscipline
+  , soDup :: Maybe GenDecl
+  , soDrop :: Maybe GenDecl
   } deriving (Eq, Show)
 
-requireCartesian :: Doctrine -> ModeName -> Either Text CartesianOps
-requireCartesian doc mode = do
-  dup <- requireGen doc mode "dup"
-  dropGen <- requireGen doc mode "drop"
-  ensureDupShape dup
-  ensureDropShape dropGen
-  pure CartesianOps { coDup = dup, coDrop = dropGen }
+requireStructuralOps :: Doctrine -> ModeName -> StructuralSpec -> Either Text StructuralOps
+requireStructuralOps doc mode spec = do
+  dup <- mapM (requireGenDecl "dup") (ssDupGen spec)
+  dropGen <- mapM (requireGenDecl "drop") (ssDropGen spec)
+  mapM_ ensureDupShape dup
+  mapM_ ensureDropShape dropGen
+  case ssDiscipline spec of
+    Linear ->
+      pure StructuralOps { soDiscipline = Linear, soDup = Nothing, soDrop = Nothing }
+    Affine ->
+      case dropGen of
+        Nothing -> Left "surface structural: discipline affine requires drop generator"
+        Just gen -> pure StructuralOps { soDiscipline = Affine, soDup = Nothing, soDrop = Just gen }
+    Relevant ->
+      case dup of
+        Nothing -> Left "surface structural: discipline relevant requires dup generator"
+        Just gen -> pure StructuralOps { soDiscipline = Relevant, soDup = Just gen, soDrop = Nothing }
+    Cartesian ->
+      case (dup, dropGen) of
+        (Just d, Just dr) -> pure StructuralOps { soDiscipline = Cartesian, soDup = Just d, soDrop = Just dr }
+        (Nothing, _) -> Left "surface structural: discipline cartesian requires dup generator"
+        (_, Nothing) -> Left "surface structural: discipline cartesian requires drop generator"
+  where
+    requireGenDecl label name =
+      case M.lookup mode (dGens doc) >>= M.lookup name of
+        Nothing -> Left ("surface structural: missing " <> label <> " generator")
+        Just gen -> Right gen
 
 requireGen :: Doctrine -> ModeName -> Text -> Either Text GenDecl
 requireGen doc mode name =
@@ -200,19 +224,19 @@ ensureDupShape gen =
   case (gdTyVars gen, gdDom gen, gdCod gen) of
     ([v], [Ty.TVar v1], [Ty.TVar v2, Ty.TVar v3])
       | v == v1 && v == v2 && v == v3 -> Right ()
-    _ -> Left "surface: dup has wrong type"
+    _ -> Left "surface structural: configured dup generator has wrong type"
 
 ensureDropShape :: GenDecl -> Either Text ()
 ensureDropShape gen =
   case (gdTyVars gen, gdDom gen, gdCod gen) of
     ([v], [Ty.TVar v1], []) | v == v1 -> Right ()
-    _ -> Left "surface: drop has wrong type"
+    _ -> Left "surface structural: configured drop generator has wrong type"
 
 
 
 -- Elaboration core
 
-elabAst :: Doctrine -> ModeName -> SurfaceSpec -> CartesianOps -> ElabEnv -> SurfaceAST -> Fresh SurfDiag
+elabAst :: Doctrine -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> SurfaceAST -> Fresh SurfDiag
 elabAst doc mode spec cart env ast =
   case ast of
     SAIdent name ->
@@ -238,7 +262,7 @@ elabZeroArgGen doc mode env name = do
       pure (emptySurf diag)
     else liftEither (Left ("surface: unknown variable " <> name))
 
-elabCall :: Doctrine -> ModeName -> SurfaceSpec -> CartesianOps -> ElabEnv -> [SurfaceAST] -> Fresh SurfDiag
+elabCall :: Doctrine -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> [SurfaceAST] -> Fresh SurfDiag
 elabCall doc mode _spec _cart env args =
   case args of
     [SAIdent name, argExpr] -> do
@@ -272,7 +296,7 @@ buildGenCall _doc mode env gen argDiag = do
         Ty.TVar v -> S.singleton v
         Ty.TCon _ xs -> S.unions (map freeTyVarsTy xs)
 
-elabNode :: Doctrine -> ModeName -> SurfaceSpec -> CartesianOps -> ElabEnv -> ElabRule -> [SurfaceAST] -> Fresh SurfDiag
+elabNode :: Doctrine -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> ElabRule -> [SurfaceAST] -> Fresh SurfDiag
 elabNode doc mode spec cart env rule args = do
   let params = erArgs rule
   if length params /= length args
@@ -366,7 +390,7 @@ detectBinder params args =
 
 type HoleMap = M.Map Int Int
 
-elabChildren :: Doctrine -> ModeName -> SurfaceSpec -> CartesianOps -> ElabEnv -> Maybe BinderInfo -> Maybe Int -> [(Int, SurfaceAST)] -> Fresh ([(Int, SurfDiag)], HoleMap)
+elabChildren :: Doctrine -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> Maybe BinderInfo -> Maybe Int -> [(Int, SurfaceAST)] -> Fresh ([(Int, SurfDiag)], HoleMap)
 elabChildren doc mode spec cart env binder bodyIndex exprInfos = do
   let exprIndices = map fst exprInfos
   let holeMap = M.fromList (zip exprIndices [1..])
@@ -384,6 +408,9 @@ elabChildren doc mode spec cart env binder bodyIndex exprInfos = do
 extendEnv :: Doctrine -> ModeName -> ElabEnv -> BinderInfo -> Fresh ElabEnv
 extendEnv doc mode env (BinderInfo _ (BinderInput varName tyAnn)) = do
   tyAnn' <- liftEither (elabSurfaceTypeExpr doc mode tyAnn)
+  if typeMode tyAnn' /= mode
+    then liftEither (Left "surface: binder type must be in surface mode")
+    else pure ()
   let ty0 = applySubstTy (eeTypeSubst env) tyAnn'
   case lookupCtxVar env of
     Nothing ->
@@ -577,7 +604,7 @@ applyWeakeningVal mode env compDecl dom cod ctxCur base proj = do
 
 -- Template evaluation
 
-evalTemplate :: Doctrine -> ModeName -> SurfaceSpec -> CartesianOps -> ElabEnv -> M.Map Text SurfaceAST -> Subst -> HoleMap -> [SurfDiag] -> TemplateExpr -> Fresh SurfDiag
+evalTemplate :: Doctrine -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> M.Map Text SurfaceAST -> Subst -> HoleMap -> [SurfDiag] -> TemplateExpr -> Fresh SurfDiag
 evalTemplate doc mode _spec _cart env paramMap subst holeMap childList templ =
   case templ of
     THole n ->
@@ -637,7 +664,7 @@ buildTypeSubst doc mode env paramMap = do
 
 -- Apply binder after template evaluation
 
-applyBinder :: Doctrine -> ModeName -> CartesianOps -> ElabEnv -> Maybe BinderInfo -> HoleMap -> SurfDiag -> Fresh SurfDiag
+applyBinder :: Doctrine -> ModeName -> StructuralOps -> ElabEnv -> Maybe BinderInfo -> HoleMap -> SurfDiag -> Fresh SurfDiag
 applyBinder _doc _mode _cart _env Nothing _holeMap sd = pure sd
 applyBinder doc mode cart env (Just binder) holeMap sd =
   case binder of
@@ -690,11 +717,11 @@ unifyVarType varName ty sd =
         Ty.TVar v -> S.singleton v
         Ty.TCon _ xs -> S.unions (map varsInTy xs)
 
-connectVar :: Doctrine -> ModeName -> CartesianOps -> Text -> PortId -> TypeExpr -> SurfDiag -> Bool -> Fresh SurfDiag
-connectVar _doc _mode cart varName source ty sd sourceIsInput = do
+connectVar :: Doctrine -> ModeName -> StructuralOps -> Text -> PortId -> TypeExpr -> SurfDiag -> Bool -> Fresh SurfDiag
+connectVar _doc _mode ops varName source ty sd sourceIsInput = do
   let uses = M.findWithDefault [] varName (sdUses sd)
   let useInOutput = any (`elem` dOut (sdDiag sd)) uses
-  sd1 <- connectUses cart source ty uses sd
+  sd1 <- connectUses ops varName source ty uses sd
   let diag1 = sdDiag sd1
   let dIn' = if sourceIsInput then ensureIn source (dIn diag1) else dIn diag1
   let dOut' =
@@ -709,21 +736,41 @@ connectVar _doc _mode cart varName source ty sd sourceIsInput = do
     ensureIn p xs = if p `elem` xs then xs else p:xs
     removePort p = filter (/= p)
 
-connectUses :: CartesianOps -> PortId -> TypeExpr -> [PortId] -> SurfDiag -> Fresh SurfDiag
-connectUses cart source ty uses sd =
+connectUses :: StructuralOps -> Text -> PortId -> TypeExpr -> [PortId] -> SurfDiag -> Fresh SurfDiag
+connectUses ops varName source ty uses sd =
   case uses of
     [] -> do
-      let diag0 = sdDiag sd
-      diag1 <- liftEither (addEdgePayload (PGen (gdName (coDrop cart))) [source] [] diag0)
-      pure sd { sdDiag = diag1 }
+      case (soDiscipline ops, soDrop ops) of
+        (Affine, Just dropGen) -> addDrop dropGen
+        (Cartesian, Just dropGen) -> addDrop dropGen
+        (disc, _) ->
+          liftEither
+            (Left ("surface: variable " <> varName <> " dropped (uses 0) under " <> renderDiscipline disc))
     [p] -> do
       (diag1, uses1, tags1) <- mergePortsAll source p sd
       pure sd { sdDiag = diag1, sdUses = uses1, sdTags = tags1 }
     _ -> do
-      (outs, diag1) <- dupOutputs (coDup cart) source ty (sdDiag sd) (length uses)
+      case (soDiscipline ops, soDup ops) of
+        (Relevant, Just dupGen) -> addDup dupGen
+        (Cartesian, Just dupGen) -> addDup dupGen
+        (disc, _) ->
+          liftEither
+            (Left ("surface: variable " <> varName <> " duplicated (uses " <> T.pack (show (length uses)) <> ") under " <> renderDiscipline disc))
+  where
+    addDrop dropGen = do
+      let diag0 = sdDiag sd
+      diag1 <- liftEither (addEdgePayload (PGen (gdName dropGen)) [source] [] diag0)
+      pure sd { sdDiag = diag1 }
+    addDup dupGen = do
+      (outs, diag1) <- dupOutputs dupGen source ty (sdDiag sd) (length uses)
       let sd1 = sd { sdDiag = diag1 }
       foldM mergeOne sd1 (zip outs uses)
-  where
+    renderDiscipline disc =
+      case disc of
+        Linear -> "linear discipline"
+        Affine -> "affine discipline"
+        Relevant -> "relevant discipline"
+        Cartesian -> "cartesian discipline"
     mergeOne acc (outP, useP) = do
       (diag1, uses1, tags1) <- mergePortsAll outP useP acc
       let diag2 = diag1 { dIn = filter (/= outP) (dIn diag1) }

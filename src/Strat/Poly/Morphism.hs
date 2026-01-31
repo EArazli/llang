@@ -20,7 +20,7 @@ import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
-import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 
 
@@ -28,6 +28,7 @@ data Morphism = Morphism
   { morName   :: Text
   , morSrc    :: Doctrine
   , morTgt    :: Doctrine
+  , morModeMap :: M.Map ModeName ModeName
   , morTypeMap :: M.Map TypeRef TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) Diagram
   , morPolicy  :: RewritePolicy
@@ -39,36 +40,82 @@ data TypeTemplate = TypeTemplate
   , ttBody :: TypeExpr
   } deriving (Eq, Show)
 
+mapMode :: Morphism -> ModeName -> Either Text ModeName
+mapMode mor mode =
+  case M.lookup mode (morModeMap mor) of
+    Nothing -> Left "morphism: missing mode mapping"
+    Just mode' -> Right mode'
+
+mapTyVar :: Morphism -> TyVar -> Either Text TyVar
+mapTyVar mor v = do
+  mode' <- mapMode mor (tvMode v)
+  pure v { tvMode = mode' }
+
+mapTypeRef :: Morphism -> TypeRef -> Either Text TypeRef
+mapTypeRef mor ref = do
+  mode' <- mapMode mor (trMode ref)
+  pure ref { trMode = mode' }
+
+applyMorphismTy :: Morphism -> TypeExpr -> Either Text TypeExpr
+applyMorphismTy mor ty =
+  case ty of
+    TVar v -> TVar <$> mapTyVar mor v
+    TCon ref args -> do
+      args' <- mapM (applyMorphismTy mor) args
+      case M.lookup ref (morTypeMap mor) of
+        Nothing -> do
+          ref' <- mapTypeRef mor ref
+          pure (TCon ref' args')
+        Just tmpl -> do
+          let subst = M.fromList (zip (ttParams tmpl) args')
+          pure (applySubstTy subst (ttBody tmpl))
+
 applyMorphismDiagram :: Morphism -> Diagram -> Either Text Diagram
 applyMorphismDiagram mor diagSrc = do
-  let diagTgt0 = applyTypeMapDiagram mor diagSrc
+  modeTgt <- mapMode mor modeSrc
+  portTy <- mapM (applyMorphismTy mor) (dPortTy diagSrc)
+  let diagTgt0 = diagSrc { dMode = modeTgt, dPortTy = portTy }
+  let edgeIds = IM.keys (dEdges diagSrc)
+  let step acc edgeKey = do
+        diagTgt <- acc
+        case IM.lookup edgeKey (dEdges diagSrc) of
+          Nothing -> Left "applyMorphismDiagram: missing source edge"
+          Just edgeSrc ->
+            case ePayload edgeSrc of
+              PGen genName -> do
+                genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
+                subst <- instantiateGen genDecl diagSrc edgeSrc
+                substTgt <- mapSubst mor subst
+                case M.lookup (modeSrc, genName) (morGenMap mor) of
+                  Nothing -> Left "applyMorphismDiagram: missing generator mapping"
+                  Just image -> do
+                    if dMode image /= modeTgt
+                      then Left "applyMorphismDiagram: generator mapping mode mismatch"
+                      else Right ()
+                    let instImage = applySubstDiagram substTgt image
+                    spliceEdge diagTgt edgeKey instImage
+              PBox name inner -> do
+                inner' <- applyMorphismDiagram mor inner
+                updateEdgePayload diagTgt edgeKey (PBox name inner')
   diagTgt <- foldl step (Right diagTgt0) edgeIds
   validateDiagram diagTgt
   pure diagTgt
   where
     modeSrc = dMode diagSrc
-    edgeIds = IM.keys (dEdges diagSrc)
-    step acc edgeKey = do
-      diagTgt <- acc
-      case IM.lookup edgeKey (dEdges diagSrc) of
-        Nothing -> Left "applyMorphismDiagram: missing source edge"
-        Just edgeSrc ->
-          case ePayload edgeSrc of
-            PGen genName -> do
-              genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
-              subst <- instantiateGen genDecl diagSrc edgeSrc
-              let substTgt = M.map (applyTypeMapTy mor) subst
-              case M.lookup (modeSrc, genName) (morGenMap mor) of
-                Nothing -> Left "applyMorphismDiagram: missing generator mapping"
-                Just image -> do
-                  let instImage = applySubstDiagram substTgt image
-                  spliceEdge diagTgt edgeKey instImage
-            PBox name inner -> do
-              inner' <- applyMorphismDiagram mor inner
-              updateEdgePayload diagTgt edgeKey (PBox name inner')
+
+mapSubst :: Morphism -> Subst -> Either Text Subst
+mapSubst mor subst = do
+  pairs <- mapM mapOne (M.toList subst)
+  pure (M.fromList pairs)
+  where
+    mapOne (v, t) = do
+      v' <- mapTyVar mor v
+      t' <- applyMorphismTy mor t
+      pure (v', t')
 
 checkMorphism :: Morphism -> Either Text ()
 checkMorphism mor = do
+  validateModeMap mor
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
   let cells = filter (cellEnabled (morPolicy mor)) (dCells2 (morSrc mor))
   fastOk <- inclusionFastPath mor
@@ -81,15 +128,33 @@ checkMorphism mor = do
         else mapM_ (checkCell mor) cells
   pure ()
 
+validateModeMap :: Morphism -> Either Text ()
+validateModeMap mor = do
+  let srcModes = mtModes (dModes (morSrc mor))
+  let tgtModes = mtModes (dModes (morTgt mor))
+  case [ m | m <- S.toList srcModes, M.notMember m (morModeMap mor) ] of
+    (m:_) -> Left ("checkMorphism: missing mode mapping for " <> renderModeName m)
+    [] -> Right ()
+  case [ m | (_, m) <- M.toList (morModeMap mor), m `S.notMember` tgtModes ] of
+    (m:_) -> Left ("checkMorphism: unknown target mode " <> renderModeName m)
+    [] -> Right ()
+  where
+    renderModeName (ModeName name) = name
+
+modeMapIsIdentity :: Morphism -> Bool
+modeMapIsIdentity mor =
+  all (\m -> M.lookup m (morModeMap mor) == Just m) (S.toList (mtModes (dModes (morSrc mor))))
+
 checkGenMapping :: Morphism -> GenDecl -> Either Text ()
 checkGenMapping mor gen = do
-  let mode = gdMode gen
-  let dom = map (applyTypeMapTy mor) (gdDom gen)
-  let cod = map (applyTypeMapTy mor) (gdCod gen)
-  image <- case M.lookup (mode, gdName gen) (morGenMap mor) of
+  let modeSrc = gdMode gen
+  modeTgt <- mapMode mor modeSrc
+  dom <- mapM (applyMorphismTy mor) (gdDom gen)
+  cod <- mapM (applyMorphismTy mor) (gdCod gen)
+  image <- case M.lookup (modeSrc, gdName gen) (morGenMap mor) of
     Nothing -> Left "checkMorphism: missing generator mapping"
     Just d -> Right d
-  if dMode image /= mode
+  if dMode image /= modeTgt
     then Left "checkMorphism: generator mapping mode mismatch"
     else do
       domImg <- diagramDom image
@@ -123,6 +188,7 @@ checkCell mor cell = do
 
 inclusionFastPath :: Morphism -> Either Text Bool
 inclusionFastPath mor
+  | not (modeMapIsIdentity mor) = Right False
   | not (M.null (morTypeMap mor)) = Right False
   | otherwise = do
       okGens <- allM (genIsIdentity mor) (allGens (morSrc mor))
@@ -155,17 +221,20 @@ inclusionFastPath mor
 
 renamingFastPath :: Morphism -> [Cell2] -> Either Text Bool
 renamingFastPath mor srcCells = do
-  let tgt = morTgt mor
-  case (buildTypeRenaming mor, buildGenRenaming mor) of
-    (Just tyRen, Just genRen) -> do
-      mTgtMap <- buildCellMap (dCells2 tgt)
-      nameOk <- case mTgtMap of
-        Nothing -> Right False
-        Just tgtMap -> allM (cellMatchesRenaming tyRen genRen tgtMap) srcCells
-      if nameOk
-        then Right True
-        else matchCellsByBody tyRen genRen srcCells (dCells2 tgt)
-    _ -> Right False
+  if not (modeMapIsIdentity mor)
+    then Right False
+    else do
+      let tgt = morTgt mor
+      case (buildTypeRenaming mor, buildGenRenaming mor) of
+        (Just tyRen, Just genRen) -> do
+          mTgtMap <- buildCellMap (dCells2 tgt)
+          nameOk <- case mTgtMap of
+            Nothing -> Right False
+            Just tgtMap -> allM (cellMatchesRenaming tyRen genRen tgtMap) srcCells
+          if nameOk
+            then Right True
+            else matchCellsByBody tyRen genRen srcCells (dCells2 tgt)
+        _ -> Right False
   where
     buildCellMap cells =
       let dup = firstDup (map cellKey cells)
@@ -454,19 +523,3 @@ insertDiagram base extra = do
     , dNextPort = dNextPort extra
     , dNextEdge = dNextEdge extra
     }
-
-applyTypeMapDiagram :: Morphism -> Diagram -> Diagram
-applyTypeMapDiagram mor diag =
-  diag { dPortTy = IM.map (applyTypeMapTy mor) (dPortTy diag) }
-
-applyTypeMapTy :: Morphism -> TypeExpr -> TypeExpr
-applyTypeMapTy mor ty =
-  case ty of
-    TVar v -> TVar v
-    TCon ref args ->
-      let args' = map (applyTypeMapTy mor) args
-      in case M.lookup ref (morTypeMap mor) of
-          Nothing -> TCon ref args'
-          Just tmpl ->
-            let subst = M.fromList (zip (ttParams tmpl) args')
-            in applySubstTy subst (ttBody tmpl)

@@ -5,6 +5,12 @@ surface STLC where {
   mode M;
   context ctx = Unit;
 
+  structural {
+    discipline: cartesian;
+    dup: dup;
+    drop: drop;
+  }
+
   lexer {
     keywords: lam, true, false, fst, snd;
     symbols: "(", ")", ".", ":", ",";

@@ -11,7 +11,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Control.Monad (foldM)
-import Strat.DSL.AST (RawRun(..), RawRunShow(..), RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..))
+import Strat.DSL.AST (RawRun(..), RawRunShow(..), RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..))
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
@@ -70,13 +70,15 @@ elabPolyMorphism env raw = do
   let policyName = maybe "UseStructuralAsBidirectional" id (rpmPolicy raw)
   policy <- parsePolicy policyName
   let fuel = maybe 50 id (rpmFuel raw)
-  typeMap <- foldM (addTypeMap src tgt) M.empty [ t | RPMType t <- rpmItems raw ]
-  genMap <- foldM (addGenMap src tgt) M.empty [ g | RPMGen g <- rpmItems raw ]
+  modeMap <- buildModeMap src tgt [ m | RPMMode m <- rpmItems raw ]
+  typeMap <- foldM (addTypeMap src tgt modeMap) M.empty [ t | RPMType t <- rpmItems raw ]
+  genMap <- foldM (addGenMap src tgt modeMap) M.empty [ g | RPMGen g <- rpmItems raw ]
   ensureAllGenMapped src genMap
   let mor = Morphism
         { morName = rpmName raw
         , morSrc = src
         , morTgt = tgt
+        , morModeMap = modeMap
         , morTypeMap = typeMap
         , morGenMap = genMap
         , morPolicy = policy
@@ -90,36 +92,82 @@ elabPolyMorphism env raw = do
       case M.lookup name (meDoctrines env') of
         Nothing -> Left ("Unknown doctrine: " <> name)
         Just doc -> Right doc
-    addTypeMap src tgt mp decl = do
+    buildModeMap src tgt decls = do
+      let srcModes = mtModes (dModes src)
+      let tgtModes = mtModes (dModes tgt)
+      pairs <- mapM toPair decls
+      let dup = firstDup (map fst pairs)
+      case dup of
+        Just m -> Left ("morphism: duplicate mode mapping for " <> renderModeName m)
+        Nothing -> Right ()
+      let explicit = M.fromList pairs
+      let missing = [ m | m <- S.toList srcModes, M.notMember m explicit, m `S.notMember` tgtModes ]
+      case missing of
+        (m:_) -> Left ("morphism: missing mode mapping for " <> renderModeName m)
+        [] -> Right ()
+      let full =
+            M.fromList
+              [ (m, M.findWithDefault m m explicit)
+              | m <- S.toList srcModes
+              ]
+      pure full
+      where
+        toPair decl = do
+          let srcMode = ModeName (rpmmSrc decl)
+          let tgtMode = ModeName (rpmmTgt decl)
+          ensureMode src srcMode
+          ensureMode tgt tgtMode
+          pure (srcMode, tgtMode)
+        renderModeName (ModeName name) = name
+        firstDup xs = go S.empty xs
+          where
+            go _ [] = Nothing
+            go seen (x:rest)
+              | x `S.member` seen = Just x
+              | otherwise = go (S.insert x seen) rest
+    lookupModeMap modeMap mode =
+      case M.lookup mode modeMap of
+        Nothing -> Left "morphism: missing mode mapping"
+        Just mode' -> Right mode'
+    mapTyVarMode modeMap v = do
+      mode' <- lookupModeMap modeMap (tvMode v)
+      pure v { tvMode = mode' }
+    addTypeMap src tgt modeMap mp decl = do
       let modeSrc = ModeName (rpmtSrcMode decl)
-      let modeTgt = ModeName (rpmtTgtMode decl)
-      if modeSrc /= modeTgt
-        then Left "morphism: mode mapping not supported"
-        else Right ()
+      let modeTgtDecl = ModeName (rpmtTgtMode decl)
       ensureMode src modeSrc
-      ensureMode tgt modeSrc
+      ensureMode tgt modeTgtDecl
+      modeTgtExpected <- lookupModeMap modeMap modeSrc
+      if modeTgtDecl /= modeTgtExpected
+        then Left "morphism: target mode does not match mode map"
+        else Right ()
       let name = TypeName (rpmtSrcType decl)
       let ref = TypeRef modeSrc name
       sig <- lookupTypeSig src ref
-      params <- buildTypeMapParams (tsParams sig) (rpmtParams decl)
+      paramModesTgt <- mapM (lookupModeMap modeMap) (tsParams sig)
+      params <- buildTypeMapParams paramModesTgt (rpmtParams decl)
       tgtExpr <- elabTypeExpr tgt params (rpmtTgtType decl)
+      if typeMode tgtExpr /= modeTgtDecl
+        then Left ("morphism: target type expression mode mismatch (expected " <> rpmtTgtMode decl <> ")")
+        else Right ()
       let key = TypeRef modeSrc name
       if M.member key mp
         then Left "morphism: duplicate type mapping"
         else Right (M.insert key (TypeTemplate params tgtExpr) mp)
-    addGenMap src tgt mp decl = do
-      let mode = ModeName (rpmgMode decl)
-      ensureMode src mode
-      ensureMode tgt mode
-      gen <- lookupGen src mode (GenName (rpmgSrcGen decl))
-      let tyVars = gdTyVars gen
-      diag <- elabDiagExpr tgt mode tyVars (rpmgRhs decl)
+    addGenMap src tgt modeMap mp decl = do
+      let modeSrc = ModeName (rpmgMode decl)
+      ensureMode src modeSrc
+      modeTgt <- lookupModeMap modeMap modeSrc
+      ensureMode tgt modeTgt
+      gen <- lookupGen src modeSrc (GenName (rpmgSrcGen decl))
+      tyVarsTgt <- mapM (mapTyVarMode modeMap) (gdTyVars gen)
+      diag <- elabDiagExpr tgt modeTgt tyVarsTgt (rpmgRhs decl)
       let free = freeTyVarsDiagram diag
-      let allowed = S.fromList tyVars
+      let allowed = S.fromList tyVarsTgt
       if S.isSubsetOf free allowed
         then Right ()
         else Left "morphism: generator mapping uses undeclared type variables"
-      let key = (mode, gdName gen)
+      let key = (modeSrc, gdName gen)
       if M.member key mp
         then Left "morphism: duplicate generator mapping"
         else Right (M.insert key diag mp)

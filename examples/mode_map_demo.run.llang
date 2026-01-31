@@ -1,0 +1,26 @@
+doctrine Src where {
+  mode C;
+  type A @C;
+  gen f : [A] -> [A] @C;
+}
+
+doctrine Tgt where {
+  mode V;
+  type B @V;
+  gen g : [B] -> [B] @V;
+}
+
+morphism CtoV : Src -> Tgt where {
+  mode C -> V;
+  type A @C -> B @V;
+  gen f @C -> g
+}
+
+run main where {
+  doctrine Src;
+  apply CtoV;
+  show normalized;
+}
+---
+f
+---

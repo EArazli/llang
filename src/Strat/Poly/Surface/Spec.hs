@@ -2,6 +2,8 @@
 module Strat.Poly.Surface.Spec
   ( PolySurfaceDef(..)
   , SurfaceSpec(..)
+  , VarDiscipline(..)
+  , StructuralSpec(..)
   , LexerSpec(..)
   , ExprSpec(..)
   , ExprRule(..)
@@ -18,6 +20,7 @@ module Strat.Poly.Surface.Spec
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.Names (GenName)
 import Strat.Poly.DSL.AST (RawPolyTypeExpr)
 
 data PolySurfaceDef = PolySurfaceDef
@@ -32,9 +35,23 @@ data SurfaceSpec = SurfaceSpec
   , ssDoctrine :: Text
   , ssMode :: Text
   , ssContext :: Maybe (Text, RawPolyTypeExpr)
+  , ssStructural :: StructuralSpec
   , ssLexer :: Maybe LexerSpec
   , ssExprSpec :: Maybe ExprSpec
   , ssElabRules :: M.Map Text ElabRule
+  } deriving (Eq, Show)
+
+data VarDiscipline
+  = Linear
+  | Affine
+  | Relevant
+  | Cartesian
+  deriving (Eq, Show)
+
+data StructuralSpec = StructuralSpec
+  { ssDiscipline :: VarDiscipline
+  , ssDupGen :: Maybe GenName
+  , ssDropGen :: Maybe GenName
   } deriving (Eq, Show)
 
 data LexerSpec = LexerSpec

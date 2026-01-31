@@ -15,7 +15,7 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
-import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy (applySubstCtx)
 import Strat.Poly.Names (GenName(..))
@@ -37,6 +37,8 @@ type TypePermMap = M.Map TypeRef [Int]
 computePolyPushout :: Text -> Morphism -> Morphism -> Either Text PolyPushoutResult
 computePolyPushout name f g = do
   ensureSameSource
+  ensureIdentityModeMap f
+  ensureIdentityModeMap g
   ensureSameModes (morSrc f) (morTgt f)
   ensureSameModes (morSrc g) (morTgt g)
   (typeMapF, permMapF) <- requireTypeRenameMap f
@@ -77,6 +79,12 @@ computePolyPushout name f g = do
       if morSrc f == morSrc g
         then Right ()
         else Left "poly pushout requires morphisms with the same source"
+    ensureIdentityModeMap mor =
+      let modes = S.toList (mtModes (dModes (morSrc mor)))
+          ok = all (\m -> M.lookup m (morModeMap mor) == Just m) modes
+      in if ok
+        then Right ()
+        else Left "pushout requires mode-preserving morphisms"
 
 computePolyCoproduct :: Text -> Doctrine -> Doctrine -> Either Text PolyPushoutResult
 computePolyCoproduct name a b = do
@@ -88,10 +96,12 @@ computePolyCoproduct name a b = do
         , dGens = M.empty
         , dCells2 = []
         }
+  let modeMap = identityModeMap empty
   let morA = Morphism
         { morName = "coproduct.inl0"
         , morSrc = empty
         , morTgt = a
+        , morModeMap = modeMap
         , morTypeMap = M.empty
         , morGenMap = M.empty
         , morPolicy = UseAllOriented
@@ -101,6 +111,7 @@ computePolyCoproduct name a b = do
         { morName = "coproduct.inr0"
         , morSrc = empty
         , morTgt = b
+        , morModeMap = modeMap
         , morTypeMap = M.empty
         , morGenMap = M.empty
         , morPolicy = UseAllOriented
@@ -113,6 +124,10 @@ ensureSameModes a b =
   if dModes a == dModes b
     then Right ()
     else Left "poly pushout requires identical mode theories"
+
+identityModeMap :: Doctrine -> M.Map ModeName ModeName
+identityModeMap doc =
+  M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]
 
 requireTypeRenameMap :: Morphism -> Either Text (TypeRenameMap, TypePermMap)
 requireTypeRenameMap mor = do
@@ -577,6 +592,7 @@ buildGlue name src tgt = do
     { morName = name <> ".glue"
     , morSrc = src
     , morTgt = tgt
+    , morModeMap = identityModeMap src
     , morTypeMap = M.empty
     , morGenMap = genMap
     , morPolicy = UseOnlyComputationalLR
@@ -591,6 +607,7 @@ buildInj name src tgt tyRen permRen genRen = do
     { morName = name
     , morSrc = src
     , morTgt = tgt
+    , morModeMap = identityModeMap src
     , morTypeMap = typeMap
     , morGenMap = genMap
     , morPolicy = UseOnlyComputationalLR

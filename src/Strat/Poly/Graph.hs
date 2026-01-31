@@ -26,10 +26,11 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
-import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.TypeExpr (TypeExpr, TyVar)
+import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.TypeExpr (TypeExpr, TyVar, typeMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.UnifyTy (Subst, unifyTyFlex, applySubstTy, composeSubst)
+import Strat.Poly.TypePretty (renderType)
 
 
 newtype PortId = PortId Int deriving (Eq, Ord, Show)
@@ -172,6 +173,7 @@ validateDiagram diag = do
   mapM_ (ensureBoundaryEndpoint "input" (dProd diag)) (dIn diag)
   mapM_ (ensureBoundaryEndpoint "output" (dCons diag)) (dOut diag)
   mapM_ checkEdge (IM.elems (dEdges diag))
+  mapM_ checkPortMode (IM.toList (dPortTy diag))
   mapM_ checkPort (IM.keys (dPortTy diag))
   pure ()
   where
@@ -266,6 +268,18 @@ validateDiagram diag = do
       in if S.null s
         then Right ()
         else Left "validateDiagram: port appears in both inputs and outputs"
+    checkPortMode (k, ty) =
+      if typeMode ty == dMode diag
+        then Right ()
+        else
+          Left
+            ( "validateDiagram: port p" <> T.pack (show k)
+                <> " has type in wrong mode (diagram mode "
+                <> case dMode diag of ModeName name -> name
+                <> ", type "
+                <> renderType ty
+                <> ")"
+            )
 
 mergePorts :: Diagram -> PortId -> PortId -> Either Text Diagram
 mergePorts diag keep drop

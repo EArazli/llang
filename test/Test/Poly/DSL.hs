@@ -21,7 +21,7 @@ import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
 import Strat.Poly.Rewrite (rulesFromDoctrine, rewriteOnce)
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Pretty (renderDiagram)
-import Strat.Poly.Morphism (checkMorphism)
+import Strat.Poly.Morphism (Morphism(..), checkMorphism)
 import Paths_llang (getDataFileName)
 
 
@@ -35,6 +35,8 @@ tests =
     , testCase "pushout renames gen types" testPolyPushoutRenamesTypes
     , testCase "morphism type map binder arity mismatch fails" testTypeMapBinderMismatch
     , testCase "morphism type map unknown binder fails" testTypeMapUnknownVar
+    , testCase "morphism type map target mode mismatch fails" testTypeMapTargetModeMismatch
+    , testCase "morphism mode map parses and elaborates" testMorphismModeMap
     ]
 
 testPolyDSLNormalize :: Assertion
@@ -204,3 +206,55 @@ testTypeMapUnknownVar = do
       case elabRawFile rf of
         Left _ -> pure ()
         Right _ -> assertFailure "expected unknown binder to fail"
+
+testTypeMapTargetModeMismatch :: Assertion
+testTypeMapTargetModeMismatch = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  mode C;"
+        , "  type A @M;"
+        , "  type B @C;"
+        , "}"
+        , "morphism Bad : D -> D where {"
+        , "  type A @M -> C.B @M;"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left _ -> pure ()
+        Right _ -> assertFailure "expected target mode mismatch to fail"
+
+testMorphismModeMap :: Assertion
+testMorphismModeMap = do
+  let src = T.unlines
+        [ "doctrine Src where {"
+        , "  mode C;"
+        , "  type A @C;"
+        , "  gen f : [A] -> [A] @C;"
+        , "}"
+        , "doctrine Tgt where {"
+        , "  mode V;"
+        , "  type B @V;"
+        , "  gen g : [B] -> [B] @V;"
+        , "}"
+        , "morphism M : Src -> Tgt where {"
+        , "  mode C -> V;"
+        , "  type A @C -> B @V;"
+        , "  gen f @C -> g"
+        , "}"
+        ]
+  env <- case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right e -> pure e
+  mor <- case M.lookup "M" (meMorphisms env) of
+    Nothing -> assertFailure "expected morphism M"
+    Just m -> pure m
+  let modeC = ModeName "C"
+  let modeV = ModeName "V"
+  M.lookup modeC (morModeMap mor) @?= Just modeV

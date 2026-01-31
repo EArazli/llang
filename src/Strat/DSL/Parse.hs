@@ -343,7 +343,8 @@ orientation =
 -- Morphism block
 
 data MorphismItem
-  = MorphismType RawPolyTypeMap
+  = MorphismMode RawPolyModeMap
+  | MorphismType RawPolyTypeMap
   | MorphismGen RawPolyGenMap
   | MorphismPolicy Text
   | MorphismFuel Int
@@ -357,10 +358,20 @@ morphismBlock = do
 
 morphismItem :: Parser MorphismItem
 morphismItem =
-  morphismTypeMap
+  morphismModeMap
+    <|> morphismTypeMap
     <|> morphismGenMap
     <|> morphismPolicy
     <|> morphismFuel
+
+morphismModeMap :: Parser MorphismItem
+morphismModeMap = do
+  _ <- symbol "mode"
+  src <- ident
+  _ <- symbol "->"
+  tgt <- ident
+  optionalSemi
+  pure (MorphismMode (RawPolyModeMap src tgt))
 
 morphismTypeMap :: Parser MorphismItem
 morphismTypeMap = do
@@ -407,7 +418,10 @@ buildPolyMorphism name src tgt items =
     { rpmName = name
     , rpmSrc = src
     , rpmTgt = tgt
-    , rpmItems = [ RPMType i | MorphismType i <- items ] <> [ RPMGen j | MorphismGen j <- items ]
+    , rpmItems =
+        [ RPMMode m | MorphismMode m <- items ]
+          <> [ RPMType i | MorphismType i <- items ]
+          <> [ RPMGen j | MorphismGen j <- items ]
     , rpmPolicy = firstJust [ p | MorphismPolicy p <- items ]
     , rpmFuel = firstJust [ f | MorphismFuel f <- items ]
     }

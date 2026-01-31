@@ -30,6 +30,7 @@ tests =
     , testCase "pushout merges cell orientations" testPushoutMergeOrient
     , testCase "pushout merges cell classes" testPushoutMergeClass
     , testCase "pushout rejects name conflict with different bodies" testPushoutNameConflict
+    , testCase "pushout rejects non-identity mode maps" testPushoutRejectsModeMap
     ]
 
 require :: Either Text a -> IO a
@@ -40,6 +41,10 @@ tvar mode name = TyVar { tvName = name, tvMode = mode }
 
 tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
 tcon mode name args = TCon (TypeRef mode (TypeName name)) args
+
+identityModeMap :: Doctrine -> M.Map ModeName ModeName
+identityModeMap doc =
+  M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]
 
 
 testPushoutDedupByBody :: Assertion
@@ -105,6 +110,7 @@ mkInclusionMorph name src tgt tyVar =
       { morName = name
       , morSrc = src
       , morTgt = tgt
+      , morModeMap = identityModeMap src
       , morTypeMap = M.empty
       , morGenMap = genMap
       , morPolicy = UseAllOriented
@@ -235,6 +241,7 @@ mkIdMorph name src tgt =
       { morName = name
       , morSrc = src
       , morTgt = tgt
+      , morModeMap = identityModeMap src
       , morTypeMap = M.empty
       , morGenMap = genMap
       , morPolicy = UseAllOriented
@@ -270,6 +277,7 @@ testPushoutTypePermutationCommutes = do
         { morName = "f"
         , morSrc = base
         , morTgt = left
+        , morModeMap = identityModeMap base
         , morTypeMap = M.fromList [(TypeRef mode prod, tmplF)]
         , morGenMap = M.empty
         , morPolicy = UseAllOriented
@@ -279,6 +287,7 @@ testPushoutTypePermutationCommutes = do
         { morName = "g"
         , morSrc = base
         , morTgt = right
+        , morModeMap = identityModeMap base
         , morTypeMap = M.empty
         , morGenMap = M.empty
         , morPolicy = UseAllOriented
@@ -301,6 +310,46 @@ testPushoutTypePermutationCommutes = do
     Left err -> assertFailure (T.unpack err)
     Right ok -> pure ok
   assertBool "expected pushout type permutation to commute" iso
+
+testPushoutRejectsModeMap :: Assertion
+testPushoutRejectsModeMap = do
+  let modeM = ModeName "M"
+  let modeN = ModeName "N"
+  let modes = ModeTheory (S.fromList [modeM, modeN]) M.empty []
+  let base = Doctrine
+        { dName = "Base"
+        , dModes = modes
+        , dTypes = M.empty
+        , dGens = M.empty
+        , dCells2 = []
+        }
+  let left = base { dName = "Left" }
+  let right = base { dName = "Right" }
+  let modeMap = M.fromList [(modeM, modeN), (modeN, modeN)]
+  let morF = Morphism
+        { morName = "f"
+        , morSrc = base
+        , morTgt = left
+        , morModeMap = modeMap
+        , morTypeMap = M.empty
+        , morGenMap = M.empty
+        , morPolicy = UseAllOriented
+        , morFuel = 10
+        }
+  let morG = Morphism
+        { morName = "g"
+        , morSrc = base
+        , morTgt = right
+        , morModeMap = modeMap
+        , morTypeMap = M.empty
+        , morGenMap = M.empty
+        , morPolicy = UseAllOriented
+        , morFuel = 10
+        }
+  case computePolyPushout "P" morF morG of
+    Left err ->
+      assertBool "expected mode map rejection" ("mode-preserving" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected pushout to reject non-identity mode map"
 
 mkTypeDoctrine :: ModeName -> Text -> [(TypeName, Int)] -> Either Text Doctrine
 mkTypeDoctrine mode name types = do

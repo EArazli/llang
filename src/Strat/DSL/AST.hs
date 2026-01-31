@@ -11,6 +11,7 @@ module Strat.DSL.AST
   , RawNamedRun(..)
   , RawPolyMorphism(..)
   , RawPolyMorphismItem(..)
+  , RawPolyModeMap(..)
   , RawPolyTypeMap(..)
   , RawPolyGenMap(..)
   ) where
@@ -99,9 +100,15 @@ data RawPolyMorphism = RawPolyMorphism
 
 
 data RawPolyMorphismItem
-  = RPMType RawPolyTypeMap
+  = RPMMode RawPolyModeMap
+  | RPMType RawPolyTypeMap
   | RPMGen RawPolyGenMap
   deriving (Eq, Show)
+
+data RawPolyModeMap = RawPolyModeMap
+  { rpmmSrc :: Text
+  , rpmmTgt :: Text
+  } deriving (Eq, Show)
 
 
 data RawPolyTypeMap = RawPolyTypeMap
