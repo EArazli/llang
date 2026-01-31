@@ -30,15 +30,20 @@ Modes are identified by `ModeName` (text). In practice, examples use a single mo
 
 ### 1.2 Type expressions
 
-Types are **mode‑indexed objects**, not GAT sorts. The polygraph kernel uses a first‑order type language:
+Types are **mode-indexed objects**, not GAT sorts. The polygraph kernel uses a first-order type language:
 
 ```
-TypeExpr = TVar TyVar | TCon TypeName [TypeExpr]
+TypeRef  = { trMode :: ModeName, trName :: TypeName }
+TyVar    = { tvName :: Text, tvMode :: ModeName }
+TypeExpr = TVar TyVar | TCon TypeRef [TypeExpr]
 Context  = [TypeExpr]
 ```
 
-- `TyVar` and `TypeName` are textual names.
-- Type constructors have fixed **arity**.
+- `TypeRef` pairs a constructor name with its mode; nested constructors may come from other modes.
+- `TyVar` names are textual; variables are **mode-indexed**.
+- Type constructors have fixed **mode signatures** `(m1,...,mk) -> m`.
+- Within any binder list (generator, rule, or template), tyvar names must be unique by **name**
+  (uniqueness is not by `(name, mode)`).
 
 ### 1.3 Type unification
 
@@ -49,6 +54,11 @@ The kernel provides a unifier:
 
 with an **occurs check**. Composition and rule matching rely on this unifier to reconcile diagram boundaries.
 
+Unification respects modes:
+
+- `TVar v` can only unify with a type `t` when `tvMode v == typeMode t`.
+- `TCon r ...` only unifies with `TCon r ...` with the same `TypeRef` (mode + name).
+
 ---
 
 ## 2. Doctrines
@@ -56,9 +66,15 @@ with an **occurs check**. Composition and rule matching rely on this unifier to 
 A **polygraphic doctrine** packages:
 
 - a mode theory,
-- a per‑mode type constructor table (`TypeName -> arity`),
+- a per-mode type constructor table (`TypeName -> TypeSig`),
 - generator declarations, and
 - 2‑cells (rewrite rules).
+
+Where:
+
+```
+TypeSig = { tsParams :: [ModeName] }   -- parameter modes
+```
 
 ### 2.1 Generators
 
@@ -229,7 +245,7 @@ return witnesses (a meeting diagram with rewrite paths).
 
 A morphism `F : D → E` consists of:
 
-- a **mode‑indexed type map** (`(ModeName, TypeName) ↦ (a1…an ⊢ τ)` templates),
+- a **mode-indexed type map** (`TypeRef ↦ (a1…an ⊢ τ)` templates),
 - a **mode‑indexed generator map** (`(ModeName, GenName) ↦ Diagram`),
 - rewrite policy and fuel for equation checking.
 
@@ -265,12 +281,15 @@ The DSL introduces `doctrine` blocks and diagram expressions.
 ```
 doctrine <Name> [extends <Base>] where {
   mode <ModeName>;
-  type <TypeName> [<tyvar> ...] @<ModeName>;
-  gen  <GenName>  [<tyvar> ...] : <Ctx> -> <Ctx> @<ModeName>;
-  rule <class> <RuleName> <orient> [<tyvar> ...] : <Ctx> -> <Ctx> @<ModeName> =
+  type <TypeName> (<tyvar> [, ...]) @<ModeName>;
+  gen  <GenName>  (<tyvar> [, ...]) : <Ctx> -> <Ctx> @<ModeName>;
+  rule <class> <RuleName> <orient> (<tyvar> [, ...]) : <Ctx> -> <Ctx> @<ModeName> =
     <DiagExpr> == <DiagExpr>;
 }
 ```
+
+- A tyvar binder is `a` or `a@Mode`. If the mode is omitted, it defaults to the declaration mode.
+- Binder lists may be empty or omitted when no parameters are needed.
 
 Doctrines can also be defined as colimits of existing doctrines:
 
@@ -292,7 +311,7 @@ doctrine <Name> = coproduct <Left> <Right>;
 
 ```
 morphism <Name> : <Src> -> <Tgt> where {
-  type <SrcType>(a1,...,an) @<Mode> -> <TgtTypeExpr> @<Mode>;
+  type <SrcType>(<tyvar> [, ...]) @<Mode> -> <TgtTypeExpr> @<Mode>;
   gen  <SrcGen>  @<Mode> -> <DiagExpr>;
   policy <RewritePolicy>;
   fuel <N>;
@@ -302,6 +321,7 @@ morphism <Name> : <Src> -> <Tgt> where {
 - Every source generator must be mapped.
 - Type mappings are **templates with explicit binders**: the RHS may be any type expression
   whose free variables are a subset of `{a1,...,an}`.
+- Binder modes are checked against the source type's mode signature.
 - When a morphism is used as a **pushout leg**, its type mappings must be **invertible renamings**
   (constructor rename + parameter permutation).
 - Generator mappings must elaborate to diagrams in the target doctrine/mode.
@@ -311,7 +331,10 @@ morphism <Name> : <Src> -> <Tgt> where {
 - A context is a bracketed list: `[A, B, ...]` or `[]`.
 - Types are either:
   - lowercase identifiers (type variables), or
-  - uppercase constructors with optional argument lists.
+  - constructors with optional arguments, optionally qualified by mode:
+    `Mode.Type(args)` or `Type(args)`.
+- Unqualified constructors must be unique across all modes; otherwise they must be written
+  with a `Mode.` qualifier.
 
 ### 6.4 Diagram expressions
 

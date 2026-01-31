@@ -99,18 +99,11 @@ elabPolyMorphism env raw = do
       ensureMode src modeSrc
       ensureMode tgt modeSrc
       let name = TypeName (rpmtSrcType decl)
-      arity <- case M.lookup modeSrc (dTypes src) >>= M.lookup name of
-        Nothing -> Left "morphism: unknown source type"
-        Just a -> Right a
-      let params = map TyVar (rpmtParams decl)
-      if length params /= arity
-        then Left "morphism: type mapping binder arity mismatch"
-        else Right ()
-      if length params == length (S.fromList params)
-        then Right ()
-        else Left "morphism: duplicate type mapping binders"
-      tgtExpr <- elabTypeExpr tgt modeSrc params (rpmtTgtType decl)
-      let key = (modeSrc, name)
+      let ref = TypeRef modeSrc name
+      sig <- lookupTypeSig src ref
+      params <- buildTypeMapParams (tsParams sig) (rpmtParams decl)
+      tgtExpr <- elabTypeExpr tgt params (rpmtTgtType decl)
+      let key = TypeRef modeSrc name
       if M.member key mp
         then Left "morphism: duplicate type mapping"
         else Right (M.insert key (TypeTemplate params tgtExpr) mp)
@@ -181,19 +174,22 @@ elabPolyItem _ doc item =
       let mode = ModeName (rptMode decl)
       ensureMode doc mode
       let tname = TypeName (rptName decl)
-      let arity = length (rptVars decl)
+      ensureDistinctRawTyVarNames "duplicate type parameter name" (rptVars decl)
+      sigModes <- mapM (resolveTyVarMode doc mode) (rptVars decl)
+      let sig = TypeSig { tsParams = sigModes }
       let table = M.findWithDefault M.empty mode (dTypes doc)
       if M.member tname table
         then Left "duplicate type name"
         else do
-          let table' = M.insert tname arity table
+          let table' = M.insert tname sig table
           let types' = M.insert mode table' (dTypes doc)
           pure doc { dTypes = types' }
     RPGen decl -> do
       let mode = ModeName (rpgMode decl)
       ensureMode doc mode
       let gname = GenName (rpgName decl)
-      let vars = map TyVar (rpgVars decl)
+      vars <- mapM (resolveTyVarDecl doc mode) (rpgVars decl)
+      ensureDistinctTyVarNames "duplicate generator type parameter name" vars
       dom <- elabContext doc mode vars (rpgDom decl)
       cod <- elabContext doc mode vars (rpgCod decl)
       let gen = GenDecl
@@ -213,7 +209,8 @@ elabPolyItem _ doc item =
     RPRule decl -> do
       let mode = ModeName (rprMode decl)
       ensureMode doc mode
-      let ruleVars = map TyVar (rprVars decl)
+      ruleVars <- mapM (resolveTyVarDecl doc mode) (rprVars decl)
+      ensureDistinctTyVarNames "duplicate rule type parameter name" ruleVars
       dom <- elabContext doc mode ruleVars (rprDom decl)
       cod <- elabContext doc mode ruleVars (rprCod decl)
       lhs <- withRule (elabDiagExpr doc mode ruleVars (rprLHS decl))
@@ -247,28 +244,102 @@ ensureMode doc mode =
     then Right ()
     else Left "unknown mode"
 
-elabContext :: Doctrine -> ModeName -> [TyVar] -> RawPolyContext -> Either Text Context
-elabContext doc mode vars = mapM (elabTypeExpr doc mode vars)
+resolveTyVarMode :: Doctrine -> ModeName -> RawTyVarDecl -> Either Text ModeName
+resolveTyVarMode doc defaultMode decl = do
+  let mode = maybe defaultMode ModeName (rtvMode decl)
+  ensureMode doc mode
+  pure mode
 
-elabTypeExpr :: Doctrine -> ModeName -> [TyVar] -> RawPolyTypeExpr -> Either Text TypeExpr
-elabTypeExpr doc mode vars expr =
+resolveTyVarDecl :: Doctrine -> ModeName -> RawTyVarDecl -> Either Text TyVar
+resolveTyVarDecl doc defaultMode decl = do
+  mode <- resolveTyVarMode doc defaultMode decl
+  pure TyVar { tvName = rtvName decl, tvMode = mode }
+
+ensureDistinctRawTyVarNames :: Text -> [RawTyVarDecl] -> Either Text ()
+ensureDistinctRawTyVarNames label vars =
+  let names = map rtvName vars
+      set = S.fromList names
+  in if S.size set == length names then Right () else Left label
+
+ensureDistinctTyVarNames :: Text -> [TyVar] -> Either Text ()
+ensureDistinctTyVarNames label vars =
+  let names = map tvName vars
+      set = S.fromList names
+  in if S.size set == length names then Right () else Left label
+
+lookupTyVarByName :: [TyVar] -> Text -> Either Text TyVar
+lookupTyVarByName vars name =
+  case [v | v <- vars, tvName v == name] of
+    [v] -> Right v
+    [] -> Left ("unknown type variable: " <> name)
+    _ -> Left ("duplicate type variable name: " <> name)
+
+resolveTypeRef :: Doctrine -> RawTypeRef -> Either Text TypeRef
+resolveTypeRef doc raw =
+  case rtrMode raw of
+    Just modeName -> do
+      let mode = ModeName modeName
+      ensureMode doc mode
+      let tname = TypeName (rtrName raw)
+      case M.lookup mode (dTypes doc) >>= M.lookup tname of
+        Nothing -> Left ("unknown type constructor: " <> rtrName raw)
+        Just _ -> Right (TypeRef mode tname)
+    Nothing -> do
+      let tname = TypeName (rtrName raw)
+      let matches =
+            [ mode
+            | (mode, table) <- M.toList (dTypes doc)
+            , M.member tname table
+            ]
+      case matches of
+        [] -> Left ("unknown type constructor: " <> rtrName raw)
+        [mode] -> Right (TypeRef mode tname)
+        _ -> Left ("ambiguous type constructor: " <> rtrName raw <> " (qualify with Mode.)")
+
+buildTypeMapParams :: [ModeName] -> [RawTyVarDecl] -> Either Text [TyVar]
+buildTypeMapParams sigModes decls = do
+  if length sigModes /= length decls
+    then Left "morphism: type mapping binder arity mismatch"
+    else Right ()
+  params <- mapM buildOne (zip sigModes decls)
+  ensureDistinctTyVarNames "morphism: duplicate type mapping binders" params
+  pure params
+  where
+    buildOne (mode, decl) =
+      case rtvMode decl of
+        Nothing -> Right TyVar { tvName = rtvName decl, tvMode = mode }
+        Just modeName ->
+          let explicit = ModeName modeName
+          in if explicit == mode
+              then Right TyVar { tvName = rtvName decl, tvMode = explicit }
+              else Left "morphism: type mapping binder mode mismatch"
+
+elabContext :: Doctrine -> ModeName -> [TyVar] -> RawPolyContext -> Either Text Context
+elabContext doc expectedMode vars ctx = do
+  tys <- mapM (elabTypeExpr doc vars) ctx
+  let bad = filter (\ty -> typeMode ty /= expectedMode) tys
+  if null bad
+    then Right tys
+    else Left "boundary type must match generator mode"
+
+elabTypeExpr :: Doctrine -> [TyVar] -> RawPolyTypeExpr -> Either Text TypeExpr
+elabTypeExpr doc vars expr =
   case expr of
-    RPTVar name ->
-      let v = TyVar name
-      in if v `elem` vars
-        then Right (TVar v)
-        else Left ("unknown type variable: " <> name)
-    RPTCon name args -> do
-      let tname = TypeName name
-      let arity = M.lookup mode (dTypes doc) >>= M.lookup tname
-      case arity of
-        Nothing -> Left ("unknown type constructor: " <> name)
-        Just a ->
-          if a /= length args
-            then Left ("type constructor arity mismatch: " <> name)
-            else do
-              args' <- mapM (elabTypeExpr doc mode vars) args
-              pure (TCon tname args')
+    RPTVar name -> do
+      v <- lookupTyVarByName vars name
+      Right (TVar v)
+    RPTCon rawRef args -> do
+      ref <- resolveTypeRef doc rawRef
+      sig <- lookupTypeSig doc ref
+      let params = tsParams sig
+      if length params /= length args
+        then Left "type constructor arity mismatch"
+        else do
+          args' <- mapM (elabTypeExpr doc vars) args
+          let argModes = map typeMode args'
+          if and (zipWith (==) params argModes)
+            then Right (TCon ref args')
+            else Left "type constructor argument mode mismatch"
 
 elabDiagExpr :: Doctrine -> ModeName -> [TyVar] -> RawDiagExpr -> Either Text Diagram
 elabDiagExpr doc mode ruleVars expr =
@@ -289,11 +360,14 @@ elabDiagExpr doc mode ruleVars expr =
           (dom, cod) <- case mArgs of
             Nothing -> pure (dom0, cod0)
             Just args -> do
-              args' <- mapM (liftEither . elabTypeExpr doc mode ruleVars) args
+              args' <- mapM (liftEither . elabTypeExpr doc ruleVars) args
               if length args' /= length tyVars
                 then liftEither (Left "generator type argument mismatch")
                 else do
                   freshVars <- liftEither (extractFreshVars tyVars renameSubst)
+                  case zipWith (\v t -> tvMode v == typeMode t) freshVars args' of
+                    matches | and matches -> pure ()
+                    _ -> liftEither (Left "generator type argument mode mismatch")
                   let subst = M.fromList (zip freshVars args')
                   pure (applySubstCtx subst dom0, applySubstCtx subst cod0)
           liftEither (genD mode dom cod (gdName gen))
@@ -414,10 +488,11 @@ extractFreshVars vars subst =
         _ -> Left "internal error: expected fresh type variable"
 
 freshVar :: TyVar -> Fresh (TyVar, TypeExpr)
-freshVar (TyVar base) = do
+freshVar v = do
   n <- freshInt
-  let name = base <> T.pack ("#" <> show n)
-  pure (TyVar base, TVar (TyVar name))
+  let name = tvName v <> T.pack ("#" <> show n)
+  let fresh = TyVar { tvName = name, tvMode = tvMode v }
+  pure (v, TVar fresh)
 
 freshInt :: Fresh Int
 freshInt = Fresh (\n -> Right (n, n + 1))

@@ -1,13 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Doctrine
   ( GenDecl(..)
+  , TypeSig(..)
   , Doctrine(..)
+  , lookupTypeSig
   , validateDoctrine
   , cartMode
   ) where
 
 import Data.Text (Text)
-import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
@@ -31,10 +32,14 @@ data GenDecl = GenDecl
 data Doctrine = Doctrine
   { dName  :: Text
   , dModes :: ModeTheory
-  , dTypes :: M.Map ModeName (M.Map TypeName Int)
+  , dTypes :: M.Map ModeName (M.Map TypeName TypeSig)
   , dGens  :: M.Map ModeName (M.Map GenName GenDecl)
   , dCells2 :: [Cell2]
   } deriving (Eq, Show)
+
+data TypeSig = TypeSig
+  { tsParams :: [ModeName]
+  } deriving (Eq, Ord, Show)
 
 cartMode :: ModeName
 cartMode = ModeName "Cart"
@@ -47,6 +52,15 @@ validateDoctrine doc = do
   mapM_ (checkCell doc) (dCells2 doc)
   pure ()
 
+lookupTypeSig :: Doctrine -> TypeRef -> Either Text TypeSig
+lookupTypeSig doc ref =
+  case M.lookup (trMode ref) (dTypes doc) of
+    Nothing -> Left "lookupTypeSig: unknown mode for type"
+    Just table ->
+      case M.lookup (trName ref) table of
+        Nothing -> Left "lookupTypeSig: unknown type constructor"
+        Just sig -> Right sig
+
 checkModeTheory :: ModeTheory -> Either Text ()
 checkModeTheory mt = do
   if S.null (mtModes mt)
@@ -58,13 +72,14 @@ checkModeTheory mt = do
       | mdSrc decl `S.member` mtModes mt && mdTgt decl `S.member` mtModes mt = Right ()
       | otherwise = Left "validateDoctrine: modality uses unknown mode"
 
-checkTypeTable :: Doctrine -> (ModeName, M.Map TypeName Int) -> Either Text ()
+checkTypeTable :: Doctrine -> (ModeName, M.Map TypeName TypeSig) -> Either Text ()
 checkTypeTable doc (mode, table)
-  | mode `S.member` mtModes (dModes doc) = mapM_ checkArity (M.toList table)
+  | mode `S.member` mtModes (dModes doc) = mapM_ checkSig (M.toList table)
   | otherwise = Left "validateDoctrine: types for unknown mode"
   where
-    checkArity (_, arity)
-      | arity < 0 = Left "validateDoctrine: negative type arity"
+    checkSig (_, sig)
+      | any (`S.notMember` mtModes (dModes doc)) (tsParams sig) =
+          Left "validateDoctrine: type signature uses unknown mode"
       | otherwise = Right ()
 
 checkGenTable :: Doctrine -> (ModeName, M.Map GenName GenDecl) -> Either Text ()
@@ -76,6 +91,7 @@ checkGen :: Doctrine -> ModeName -> GenDecl -> Either Text ()
 checkGen doc mode gd
   | gdMode gd /= mode = Left "validateDoctrine: generator stored under wrong mode"
   | otherwise = do
+      checkTyVarModes doc (gdTyVars gd)
       ensureDistinctTyVars ("validateDoctrine: duplicate generator tyvars in " <> renderGen (gdName gd)) (gdTyVars gd)
       checkContext doc mode (gdTyVars gd) (gdDom gd)
       checkContext doc mode (gdTyVars gd) (gdCod gd)
@@ -87,6 +103,7 @@ checkCell doc cell = do
   if IM.size (dEdges (c2LHS cell)) <= 0
     then Left "validateDoctrine: empty LHS rules are disallowed (use an explicit marker generator if you need insertion)"
     else Right ()
+  checkTyVarModes doc (c2TyVars cell)
   ensureDistinctTyVars ("validateDoctrine: duplicate cell tyvars in " <> c2Name cell) (c2TyVars cell)
   if dMode (c2LHS cell) /= dMode (c2RHS cell)
     then Left "validateDoctrine: cell has mode mismatch"
@@ -109,29 +126,49 @@ checkCell doc cell = do
         else Left "validateDoctrine: cell uses undeclared type variables"
 
 checkContext :: Doctrine -> ModeName -> [TyVar] -> Context -> Either Text ()
-checkContext doc mode tyvars ctx = mapM_ (checkType doc mode tyvars) ctx
+checkContext doc expectedMode tyvars ctx = mapM_ (checkBoundaryType doc expectedMode tyvars) ctx
 
-checkType :: Doctrine -> ModeName -> [TyVar] -> TypeExpr -> Either Text ()
-checkType doc mode tyvars ty =
+checkBoundaryType :: Doctrine -> ModeName -> [TyVar] -> TypeExpr -> Either Text ()
+checkBoundaryType doc expectedMode tyvars ty = do
+  checkType doc tyvars ty
+  if typeMode ty == expectedMode
+    then Right ()
+    else Left "validateDoctrine: generator boundary mode mismatch"
+
+checkType :: Doctrine -> [TyVar] -> TypeExpr -> Either Text ()
+checkType doc tyvars ty =
   case ty of
     TVar v ->
       if v `elem` tyvars
-        then Right ()
+        then if tvMode v `S.member` mtModes (dModes doc)
+          then Right ()
+          else Left "validateDoctrine: type variable has unknown mode"
         else Left "validateDoctrine: unknown type variable"
-    TCon name args ->
-      case M.lookup mode (dTypes doc) >>= M.lookup name of
-        Nothing -> Left "validateDoctrine: unknown type constructor"
-        Just arity ->
-          if arity == length args
-            then mapM_ (checkType doc mode tyvars) args
-            else Left "validateDoctrine: type constructor arity mismatch"
+    TCon ref args -> do
+      sig <- lookupTypeSig doc ref
+      let params = tsParams sig
+      if length params /= length args
+        then Left "validateDoctrine: type constructor arity mismatch"
+        else do
+          mapM_ (checkType doc tyvars) args
+          let argModes = map typeMode args
+          if and (zipWith (==) params argModes)
+            then Right ()
+            else Left "validateDoctrine: type constructor argument mode mismatch"
 
 ensureDistinctTyVars :: Text -> [TyVar] -> Either Text ()
 ensureDistinctTyVars label vars =
-  let set = S.fromList vars
-  in if S.size set == length vars
+  let names = map tvName vars
+      set = S.fromList names
+  in if S.size set == length names
     then Right ()
     else Left label
+
+checkTyVarModes :: Doctrine -> [TyVar] -> Either Text ()
+checkTyVarModes doc vars =
+  if all (\v -> tvMode v `S.member` mtModes (dModes doc)) vars
+    then Right ()
+    else Left "validateDoctrine: type variable has unknown mode"
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t

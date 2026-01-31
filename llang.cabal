@@ -179,6 +179,7 @@ test-suite llang-test
       Test.Poly.Coherence
       Test.Poly.Surface
       Test.Poly.STLCSurface
+      Test.Poly.TypeModes
       Test.Poly.NoLegacy
       Test.Poly.StdlibCoherence
       Paths_llang

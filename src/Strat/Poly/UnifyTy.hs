@@ -15,6 +15,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.TypeExpr
+import Strat.Poly.ModeTheory (ModeName(..))
 
 
 type Subst = M.Map TyVar TypeExpr
@@ -85,6 +86,7 @@ unifyWith subst t1 t2 =
 
 bindVar :: Subst -> TyVar -> TypeExpr -> Either Text Subst
 bindVar subst v t
+  | tvMode v /= typeMode t = Left ("unifyTy: mode mismatch " <> renderVar v <> " with " <> renderTy t)
   | t' == TVar v = Right subst
   | occurs v t' = Left ("unifyTy: occurs check failed for " <> renderVar v <> " in " <> renderTy t')
   | otherwise =
@@ -131,7 +133,22 @@ composeSubst s2 s1 =
   in normalizeSubst (M.union s1' s2)
 
 renderTy :: TypeExpr -> Text
-renderTy = T.pack . show
+renderTy ty =
+  case ty of
+    TVar v -> renderVar v
+    TCon ref [] -> renderTypeRef ref
+    TCon ref args ->
+      renderTypeRef ref <> "(" <> T.intercalate ", " (map renderTy args) <> ")"
 
 renderVar :: TyVar -> Text
-renderVar = T.pack . show
+renderVar v = tvName v <> "@" <> renderMode (tvMode v)
+
+renderTypeRef :: TypeRef -> Text
+renderTypeRef ref =
+  renderMode (trMode ref) <> "." <> renderTypeName (trName ref)
+
+renderTypeName :: TypeName -> Text
+renderTypeName (TypeName n) = n
+
+renderMode :: ModeName -> Text
+renderMode (ModeName n) = n

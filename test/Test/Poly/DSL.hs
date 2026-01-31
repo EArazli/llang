@@ -17,7 +17,7 @@ import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
 import Strat.Poly.Rewrite (rulesFromDoctrine, rewriteOnce)
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Pretty (renderDiagram)
@@ -165,7 +165,7 @@ testPolyPushoutRenamesTypes = do
   genLeft <- case M.lookup (GenName "Left_inl_f") gens of
     Nothing -> assertFailure "expected Left_inl_f generator"
     Just g -> pure g
-  let leftTy = TCon (TypeName "Left_inl_A") []
+  let leftTy = TCon (TypeRef mode (TypeName "Left_inl_A")) []
   gdDom genLeft @?= [leftTy]
   gdCod genLeft @?= [leftTy]
 
@@ -174,7 +174,7 @@ testTypeMapBinderMismatch = do
   let src = T.unlines
         [ "doctrine D where {"
         , "  mode M;"
-        , "  type T a b @M;"
+        , "  type T (a@M, b@M) @M;"
         , "}"
         , "morphism Bad : D -> D where {"
         , "  type T(a) @M -> T(a) @M;"
@@ -192,7 +192,7 @@ testTypeMapUnknownVar = do
   let src = T.unlines
         [ "doctrine D where {"
         , "  mode M;"
-        , "  type T a @M;"
+        , "  type T (a@M) @M;"
         , "}"
         , "morphism Bad : D -> D where {"
         , "  type T(a) @M -> T(b) @M;"

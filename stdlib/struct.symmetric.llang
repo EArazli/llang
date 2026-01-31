@@ -1,8 +1,8 @@
 import "./struct.planar.llang";
 
 doctrine StructSymmetric extends StructPlanar where {
-  gen swap a b : [a, b] -> [b, a] @M;
+  gen swap (a@M, b@M) : [a, b] -> [b, a] @M;
 
-  rule structural swap_involutive = a b : [a, b] -> [a, b] @M =
+  rule structural swap_involutive = (a@M, b@M) : [a, b] -> [a, b] @M =
     swap ; swap == id[a, b]
 }

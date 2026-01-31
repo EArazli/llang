@@ -11,10 +11,10 @@ import Control.Monad (foldM)
 
 import Strat.Poly.Surface.Spec
 import Strat.Poly.Surface.Parse (parseSurfaceExpr)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
-import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), lookupTypeSig)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TyVar(..), Context)
+import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Context, typeMode)
 import qualified Strat.Poly.TypeExpr as Ty
 import Strat.Poly.UnifyTy (Subst, applySubstTy, applySubstCtx, unifyTyFlex, composeSubst)
 import Strat.Poly.Diagram (Diagram(..), idD, diagramDom, diagramCod, freeTyVarsDiagram, applySubstDiagram)
@@ -30,6 +30,7 @@ import Strat.Poly.Graph
   , diagramPortType
   , unionDisjointIntMap
   )
+import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..))
 
 
 -- Public entrypoint
@@ -39,7 +40,7 @@ elabSurfaceExpr doc surf src = do
   let spec = psSpec surf
   ast <- parseSurfaceExpr spec src
   cart <- requireCartesian doc (psMode surf)
-  let env0 = initEnv spec
+  env0 <- initEnv doc (psMode surf) spec
   diag <- evalFresh (elabAst doc (psMode surf) spec cart env0 ast)
   if M.null (sdUses diag)
     then validateDiagram (sdDiag diag) >> pure (sdDiag diag)
@@ -55,12 +56,56 @@ data ElabEnv = ElabEnv
   , eeCtxVar :: Maybe TyVar
   } deriving (Eq, Show)
 
-initEnv :: SurfaceSpec -> ElabEnv
-initEnv spec =
+initEnv :: Doctrine -> ModeName -> SurfaceSpec -> Either Text ElabEnv
+initEnv doc mode spec =
   case ssContext spec of
-    Nothing -> ElabEnv M.empty M.empty M.empty Nothing
-    Just (ctxName, ty) ->
-      ElabEnv M.empty M.empty (M.singleton (TyVar ctxName) ty) (Just (TyVar ctxName))
+    Nothing -> Right (ElabEnv M.empty M.empty M.empty Nothing)
+    Just (ctxName, rawTy) -> do
+      ctxTy <- elabSurfaceTypeExpr doc mode rawTy
+      let ctxVar = TyVar { tvName = ctxName, tvMode = mode }
+      pure (ElabEnv M.empty M.empty (M.singleton ctxVar ctxTy) (Just ctxVar))
+
+elabSurfaceTypeExpr :: Doctrine -> ModeName -> RawPolyTypeExpr -> Either Text TypeExpr
+elabSurfaceTypeExpr doc mode expr =
+  case expr of
+    RPTVar name ->
+      Right (Ty.TVar (TyVar { tvName = name, tvMode = mode }))
+    RPTCon rawRef args -> do
+      ref <- resolveTypeRefSurface doc rawRef
+      sig <- lookupTypeSig doc ref
+      let params = tsParams sig
+      if length params /= length args
+        then Left "surface: type constructor arity mismatch"
+        else do
+          args' <- mapM (elabSurfaceTypeExpr doc mode) args
+          let argModes = map typeMode args'
+          if and (zipWith (==) params argModes)
+            then Right (Ty.TCon ref args')
+            else Left "surface: type constructor argument mode mismatch"
+
+resolveTypeRefSurface :: Doctrine -> RawTypeRef -> Either Text TypeRef
+resolveTypeRefSurface doc raw =
+  case rtrMode raw of
+    Just modeName -> do
+      let mode = ModeName modeName
+      if mode `S.member` mtModes (dModes doc)
+        then Right ()
+        else Left "surface: unknown mode"
+      let tname = TypeName (rtrName raw)
+      case M.lookup mode (dTypes doc) >>= M.lookup tname of
+        Nothing -> Left "surface: unknown type constructor"
+        Just _ -> Right (TypeRef mode tname)
+    Nothing -> do
+      let tname = TypeName (rtrName raw)
+      let matches =
+            [ mode
+            | (mode, table) <- M.toList (dTypes doc)
+            , M.member tname table
+            ]
+      case matches of
+        [] -> Left "surface: unknown type constructor"
+        [mode] -> Right (TypeRef mode tname)
+        _ -> Left "surface: ambiguous type constructor (qualify with Mode.)"
 
 
 -- Diagrams with variable uses and tags
@@ -234,7 +279,7 @@ elabNode doc mode spec cart env rule args = do
     then liftEither (Left "surface: elaboration rule arity mismatch")
     else do
       let paramMap = M.fromList (zip params args)
-      let typeSubst = buildTypeSubst env paramMap
+      typeSubst <- liftEither (buildTypeSubst doc mode env paramMap)
       let (binder, bodyIndex, exprInfos) = detectBinder params args
       (childDiags, holeMap) <- elabChildren doc mode spec cart env binder bodyIndex exprInfos
       let childList = map snd childDiags
@@ -246,7 +291,7 @@ elabNode doc mode spec cart env rule args = do
 -- Detect binder information
 
 data BinderKind
-  = BinderInput Text TypeExpr
+  = BinderInput Text RawPolyTypeExpr
   | BinderValue Text Int
   deriving (Eq, Show)
 
@@ -338,7 +383,8 @@ elabChildren doc mode spec cart env binder bodyIndex exprInfos = do
 
 extendEnv :: Doctrine -> ModeName -> ElabEnv -> BinderInfo -> Fresh ElabEnv
 extendEnv doc mode env (BinderInfo _ (BinderInput varName tyAnn)) = do
-  let ty0 = applySubstTy (eeTypeSubst env) tyAnn
+  tyAnn' <- liftEither (elabSurfaceTypeExpr doc mode tyAnn)
+  let ty0 = applySubstTy (eeTypeSubst env) tyAnn'
   case lookupCtxVar env of
     Nothing ->
       pure env
@@ -346,8 +392,8 @@ extendEnv doc mode env (BinderInfo _ (BinderInput varName tyAnn)) = do
         , eeVarDefs = M.delete varName (eeVarDefs env)
         }
     Just (ctxVar, ctxTy) -> do
-      let newCtx = Ty.TCon (TypeName "prod") [ctxTy, ty0]
-      let varTy = Ty.TCon (TypeName "Hom") [newCtx, ty0]
+      let newCtx = Ty.TCon (prodRef mode) [ctxTy, ty0]
+      let varTy = Ty.TCon (homRef mode) [newCtx, ty0]
       exrDecl <- liftEither (requireExr doc mode)
       exrDiag <- genDFromDecl mode env exrDecl (Just [ctxTy, ty0])
       let subst' = M.insert ctxVar newCtx (eeTypeSubst env)
@@ -356,8 +402,8 @@ extendEnv doc mode env (BinderInfo _ (BinderInput varName tyAnn)) = do
         , eeVarDefs = M.insert varName exrDiag (eeVarDefs env)
         , eeTypeSubst = subst'
         }
-extendEnv _doc _mode env (BinderInfo _ (BinderValue varName _)) = do
-  fresh <- freshTyVar (TyVar varName)
+extendEnv _doc mode env (BinderInfo _ (BinderValue varName _)) = do
+  fresh <- freshTyVar (TyVar { tvName = varName, tvMode = mode })
   let ty = Ty.TVar fresh
   pure env
     { eeVars = M.insert varName ty (eeVars env)
@@ -372,15 +418,21 @@ lookupCtxVar env =
       ty <- M.lookup v (eeTypeSubst env)
       pure (v, ty)
 
-computeInputVarType :: ElabEnv -> TypeExpr -> (TypeExpr, Maybe (TyVar, TypeExpr))
-computeInputVarType env tyAnn =
+computeInputVarType :: ModeName -> ElabEnv -> TypeExpr -> (TypeExpr, Maybe (TyVar, TypeExpr))
+computeInputVarType mode env tyAnn =
   let ty0 = applySubstTy (eeTypeSubst env) tyAnn
   in case lookupCtxVar env of
     Nothing -> (ty0, Nothing)
     Just (ctxVar, ctxTy) ->
-      let newCtx = Ty.TCon (TypeName "prod") [ctxTy, ty0]
-          varTy = Ty.TCon (TypeName "Hom") [newCtx, ty0]
+      let newCtx = Ty.TCon (prodRef mode) [ctxTy, ty0]
+          varTy = Ty.TCon (homRef mode) [newCtx, ty0]
       in (varTy, Just (ctxVar, newCtx))
+
+prodRef :: ModeName -> TypeRef
+prodRef mode = TypeRef mode (TypeName "prod")
+
+homRef :: ModeName -> TypeRef
+homRef mode = TypeRef mode (TypeName "Hom")
 
 
 data ProdStep = ProdStep
@@ -389,25 +441,25 @@ data ProdStep = ProdStep
   , psRight :: TypeExpr
   } deriving (Eq, Show)
 
-splitHom :: TypeExpr -> Maybe (TypeExpr, TypeExpr)
-splitHom ty =
+splitHom :: ModeName -> TypeExpr -> Maybe (TypeExpr, TypeExpr)
+splitHom mode ty =
   case ty of
-    Ty.TCon (TypeName "Hom") [dom, cod] -> Just (dom, cod)
+    Ty.TCon (TypeRef m (TypeName "Hom")) [dom, cod] | m == mode -> Just (dom, cod)
     _ -> Nothing
 
-splitProd :: TypeExpr -> Maybe (TypeExpr, TypeExpr)
-splitProd ty =
+splitProd :: ModeName -> TypeExpr -> Maybe (TypeExpr, TypeExpr)
+splitProd mode ty =
   case ty of
-    Ty.TCon (TypeName "prod") [l, r] -> Just (l, r)
+    Ty.TCon (TypeRef m (TypeName "prod")) [l, r] | m == mode -> Just (l, r)
     _ -> Nothing
 
-prodPeelSteps :: TypeExpr -> TypeExpr -> Either Text [ProdStep]
-prodPeelSteps ctxCur dom = go ctxCur []
+prodPeelSteps :: ModeName -> TypeExpr -> TypeExpr -> Either Text [ProdStep]
+prodPeelSteps mode ctxCur dom = go ctxCur []
   where
     go cur acc
       | cur == dom = Right (reverse acc)
       | otherwise =
-          case splitProd cur of
+          case splitProd mode cur of
             Just (l, r) -> go l (ProdStep cur l r : acc)
             Nothing ->
               Left ("surface: cannot weaken from ctx " <> T.pack (show ctxCur) <> " to " <> T.pack (show dom))
@@ -422,9 +474,15 @@ requireCtxThreadOps doc mode = do
 
 ensureExlShape :: GenDecl -> Either Text ()
 ensureExlShape gen =
-  case (gdTyVars gen, gdDom gen, gdCod gen) of
-    ([a, b], [], [Ty.TCon (TypeName "Hom") [Ty.TCon (TypeName "prod") [Ty.TVar a1, Ty.TVar b1], Ty.TVar a2]])
-      | a == a1 && a == a2 && b == b1 -> Right ()
+  case (gdMode gen, gdTyVars gen, gdDom gen, gdCod gen) of
+    (mode, [a, b], [], [Ty.TCon (TypeRef homMode (TypeName "Hom")) [Ty.TCon (TypeRef prodMode (TypeName "prod")) [Ty.TVar a1, Ty.TVar b1], Ty.TVar a2]])
+      | homMode == mode
+        && prodMode == mode
+        && tvMode a == mode
+        && tvMode b == mode
+        && a == a1
+        && a == a2
+        && b == b1 -> Right ()
     _ -> Left "surface: exl has wrong type"
 
 requireExr :: Doctrine -> ModeName -> Either Text GenDecl
@@ -435,21 +493,39 @@ requireExr doc mode = do
 
 ensureExrShape :: GenDecl -> Either Text ()
 ensureExrShape gen =
-  case (gdTyVars gen, gdDom gen, gdCod gen) of
-    ([a, b], [], [Ty.TCon (TypeName "Hom") [Ty.TCon (TypeName "prod") [Ty.TVar a1, Ty.TVar b1], Ty.TVar b2]])
-      | a == a1 && b == b1 && b == b2 -> Right ()
+  case (gdMode gen, gdTyVars gen, gdDom gen, gdCod gen) of
+    (mode, [a, b], [], [Ty.TCon (TypeRef homMode (TypeName "Hom")) [Ty.TCon (TypeRef prodMode (TypeName "prod")) [Ty.TVar a1, Ty.TVar b1], Ty.TVar b2]])
+      | homMode == mode
+        && prodMode == mode
+        && tvMode a == mode
+        && tvMode b == mode
+        && a == a1
+        && b == b1
+        && b == b2 -> Right ()
     _ -> Left "surface: exr has wrong type"
 
 ensureCompShape :: GenDecl -> Either Text ()
 ensureCompShape gen =
-  case (gdTyVars gen, gdDom gen, gdCod gen) of
-    ( [a, b, c]
-      , [ Ty.TCon (TypeName "Hom") [Ty.TVar b1, Ty.TVar c1]
-        , Ty.TCon (TypeName "Hom") [Ty.TVar a1, Ty.TVar b2]
+  case (gdMode gen, gdTyVars gen, gdDom gen, gdCod gen) of
+    ( mode
+      , [a, b, c]
+      , [ Ty.TCon (TypeRef homMode1 (TypeName "Hom")) [Ty.TVar b1, Ty.TVar c1]
+        , Ty.TCon (TypeRef homMode2 (TypeName "Hom")) [Ty.TVar a1, Ty.TVar b2]
         ]
-      , [Ty.TCon (TypeName "Hom") [Ty.TVar a2, Ty.TVar c2]]
+      , [Ty.TCon (TypeRef homMode3 (TypeName "Hom")) [Ty.TVar a2, Ty.TVar c2]]
       )
-      | a == a1 && a == a2 && b == b1 && b == b2 && c == c1 && c == c2 -> Right ()
+      | homMode1 == mode
+        && homMode2 == mode
+        && homMode3 == mode
+        && tvMode a == mode
+        && tvMode b == mode
+        && tvMode c == mode
+        && a == a1
+        && a == a2
+        && b == b1
+        && b == b2
+        && c == c1
+        && c == c2 -> Right ()
     _ -> Left "surface: comp has wrong type"
 
 elabVarRef :: Doctrine -> ModeName -> ElabEnv -> Subst -> Text -> TypeExpr -> Fresh SurfDiag
@@ -464,14 +540,14 @@ elabVarRef doc mode env subst name ty = do
     Nothing -> pure base
     Just (_ctxVar, ctxTy0) -> do
       let ctxTy = applySubstTy subst ctxTy0
-      case splitHom ty' of
+      case splitHom mode ty' of
         Nothing -> pure base
         Just (dom, cod) ->
           if ctxTy == dom
             then pure base
             else do
               (exlDecl, compDecl) <- liftEither (requireCtxThreadOps doc mode)
-              steps <- liftEither (prodPeelSteps ctxTy dom)
+              steps <- liftEither (prodPeelSteps mode ctxTy dom)
               proj <- buildProjection doc mode env exlDecl compDecl ctxTy steps
               applyWeakeningVal mode env compDecl dom cod ctxTy base proj
 
@@ -516,11 +592,17 @@ evalTemplate doc mode _spec _cart env paramMap subst holeMap childList templ =
         Nothing -> elabZeroArgGen doc mode env varName
         Just ty -> elabVarRef doc mode env subst varName ty
     TId ctx -> do
-      let ctx' = map (applySubstTy subst) ctx
+      ctx'0 <- liftEither (mapM (elabSurfaceTypeExpr doc mode) ctx)
+      let ctx' = map (applySubstTy subst) ctx'0
       pure (emptySurf (idD mode ctx'))
     TGen name mArgs -> do
       gen <- liftEither (lookupGen doc mode (GenName name))
-      let args' = fmap (map (applySubstTy subst)) mArgs
+      args0 <- case mArgs of
+        Nothing -> pure Nothing
+        Just args -> do
+          tys <- liftEither (mapM (elabSurfaceTypeExpr doc mode) args)
+          pure (Just tys)
+      let args' = fmap (map (applySubstTy subst)) args0
       diag <- genDFromDecl mode env gen args'
       pure (emptySurf diag)
     TBox name inner -> do
@@ -538,13 +620,19 @@ evalTemplate doc mode _spec _cart env paramMap subst holeMap childList templ =
       d2 <- evalTemplate doc mode _spec _cart env paramMap subst holeMap childList b
       liftEither (tensorSurf d1 d2)
 
-buildTypeSubst :: ElabEnv -> M.Map Text SurfaceAST -> Subst
-buildTypeSubst env paramMap =
-  let local = M.fromList
-        [ (TyVar name, ty)
-        | (name, SAType ty) <- M.toList paramMap
-        ]
-  in M.union local (eeTypeSubst env)
+buildTypeSubst :: Doctrine -> ModeName -> ElabEnv -> M.Map Text SurfaceAST -> Either Text Subst
+buildTypeSubst doc mode env paramMap = do
+  pairs <- mapM toPair (M.toList paramMap)
+  let local = M.fromList (concat pairs)
+  pure (M.union local (eeTypeSubst env))
+  where
+    toPair (name, ast) =
+      case ast of
+        SAType rawTy -> do
+          ty <- elabSurfaceTypeExpr doc mode rawTy
+          let var = TyVar { tvName = name, tvMode = mode }
+          pure [(var, ty)]
+        _ -> pure []
 
 
 -- Apply binder after template evaluation
@@ -557,7 +645,8 @@ applyBinder doc mode cart env (Just binder) holeMap sd =
       case lookupCtxVar env of
         Just _ -> pure sd
         Nothing -> do
-          let (varTy, _mCtx) = computeInputVarType env tyAnn
+          tyAnn' <- liftEither (elabSurfaceTypeExpr doc mode tyAnn)
+          let (varTy, _mCtx) = computeInputVarType mode env tyAnn'
           let (source, diag1) = freshPort varTy (sdDiag sd)
           let sd1 = sd { sdDiag = diag1 }
           sd2 <- connectVar doc mode cart varName source varTy sd1 True
@@ -866,15 +955,17 @@ extractFreshVars vars subst =
         _ -> Left "internal error: expected fresh type variable"
 
 freshVar :: TyVar -> Fresh (TyVar, TypeExpr)
-freshVar (TyVar base) = do
+freshVar v = do
   n <- freshInt
-  let name = base <> T.pack ("#" <> show n)
-  pure (TyVar base, Ty.TVar (TyVar name))
+  let name = tvName v <> T.pack ("#" <> show n)
+  let fresh = v { tvName = name }
+  pure (v, Ty.TVar fresh)
 
 freshTyVar :: TyVar -> Fresh TyVar
-freshTyVar (TyVar base) = do
+freshTyVar v = do
   n <- freshInt
-  pure (TyVar (base <> T.pack ("#" <> show n)))
+  let name = tvName v <> T.pack ("#" <> show n)
+  pure v { tvName = name }
 
 freshInt :: Fresh Int
 freshInt = Fresh (\n -> Right (n, n + 1))

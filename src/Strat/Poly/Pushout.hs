@@ -31,6 +31,9 @@ data PolyPushoutResult = PolyPushoutResult
   , poGlue :: Morphism
   } deriving (Eq, Show)
 
+type TypeRenameMap = M.Map TypeRef TypeRef
+type TypePermMap = M.Map TypeRef [Int]
+
 computePolyPushout :: Text -> Morphism -> Morphism -> Either Text PolyPushoutResult
 computePolyPushout name f g = do
   ensureSameSource
@@ -44,8 +47,8 @@ computePolyPushout name f g = do
   ensureInjective "type" (M.elems typeMapG)
   ensureInjective "gen" (M.elems genMapF)
   ensureInjective "gen" (M.elems genMapG)
-  let renameTypesB0 = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList typeMapF ]
-  let renameTypesC0 = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList typeMapG ]
+  let renameTypesB0 = M.fromList [ (img, src) | (src, img) <- M.toList typeMapF ]
+  let renameTypesC0 = M.fromList [ (img, src) | (src, img) <- M.toList typeMapG ]
   let permTypesB0 = permMapF
   let permTypesC0 = permMapG
   let renameGensB0 = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList genMapF ]
@@ -111,34 +114,33 @@ ensureSameModes a b =
     then Right ()
     else Left "poly pushout requires identical mode theories"
 
-requireTypeRenameMap :: Morphism -> Either Text (M.Map (ModeName, TypeName) TypeName, M.Map (ModeName, TypeName) [Int])
+requireTypeRenameMap :: Morphism -> Either Text (TypeRenameMap, TypePermMap)
 requireTypeRenameMap mor = do
   let src = morSrc mor
   let types = allTypes src
   entries <- mapM (typeImage mor) types
-  let typeMap = M.fromList [ ((mode, name), tgtName) | (mode, name, tgtName, _) <- entries ]
+  let typeMap = M.fromList [ (srcRef, tgtRef) | (srcRef, tgtRef, _) <- entries ]
   permMap <- foldM insertPerm M.empty entries
   pure (typeMap, permMap)
   where
-    typeImage m (mode, name, arity) = do
-      (tgtName, mPerm) <- case M.lookup (mode, name) (morTypeMap m) of
-        Nothing -> Right (name, Nothing)
-        Just tmpl -> templateTarget tmpl arity
-      ensureTypeExists (morTgt m) mode tgtName arity
-      pure (mode, name, tgtName, mPerm)
-    insertPerm mp (mode, _name, tgtName, mPerm) =
+    typeImage m (srcRef, sig) = do
+      (tgtRef, mPerm) <- case M.lookup srcRef (morTypeMap m) of
+        Nothing -> Right (srcRef, Nothing)
+        Just tmpl -> templateTarget tmpl (length (tsParams sig))
+      ensureTypeExists (morTgt m) tgtRef (length (tsParams sig))
+      pure (srcRef, tgtRef, mPerm)
+    insertPerm mp (_srcRef, tgtRef, mPerm) =
       case mPerm of
         Nothing -> Right mp
         Just perm ->
-          let key = (mode, tgtName)
-          in case M.lookup key mp of
-              Nothing -> Right (M.insert key perm mp)
-              Just existing
-                | existing == perm -> Right mp
-                | otherwise -> Left "poly pushout: inconsistent type permutation"
+          case M.lookup tgtRef mp of
+            Nothing -> Right (M.insert tgtRef perm mp)
+            Just existing
+              | existing == perm -> Right mp
+              | otherwise -> Left "poly pushout: inconsistent type permutation"
     templateTarget tmpl arity =
       case ttBody tmpl of
-        TCon t params
+        TCon tgtRef params
           | length (ttParams tmpl) == arity
           , length params == arity
           , all isVar params
@@ -151,7 +153,7 @@ requireTypeRenameMap mor = do
             inv <- invertPermutation arity perm
             let ident = [0 .. arity - 1]
             let inv' = if perm == ident then Nothing else Just inv
-            pure (t, inv')
+            pure (tgtRef, inv')
         _ -> Left "poly pushout requires renaming type maps"
     lookupIndex mp v =
       case M.lookup v mp of
@@ -202,12 +204,13 @@ singleGenName diag = do
         _ -> Left "poly pushout requires generator mappings to be a single generator"
     _ -> Left "poly pushout requires generator mappings to be a single generator"
 
-ensureTypeExists :: Doctrine -> ModeName -> TypeName -> Int -> Either Text ()
-ensureTypeExists doc mode name arity =
-  case M.lookup mode (dTypes doc) >>= M.lookup name of
-    Nothing -> Left "poly pushout: target type missing"
-    Just a | a == arity -> Right ()
-    _ -> Left "poly pushout: target type arity mismatch"
+ensureTypeExists :: Doctrine -> TypeRef -> Int -> Either Text ()
+ensureTypeExists doc ref arity =
+  case lookupTypeSig doc ref of
+    Left _ -> Left "poly pushout: target type missing"
+    Right sig
+      | length (tsParams sig) == arity -> Right ()
+      | otherwise -> Left "poly pushout: target type arity mismatch"
 
 ensureGenExists :: Doctrine -> ModeName -> GenName -> Either Text ()
 ensureGenExists doc mode name =
@@ -227,24 +230,24 @@ ensureInjective label images =
       | x `S.member` seen = Just x
       | otherwise = go (S.insert x seen) rest
 
-disjointTypeRenames :: Text -> Doctrine -> M.Map (ModeName, TypeName) TypeName -> Doctrine -> M.Map (ModeName, TypeName) TypeName
+disjointTypeRenames :: Text -> Doctrine -> TypeRenameMap -> Doctrine -> TypeRenameMap
 disjointTypeRenames prefix src interfaceRen tgt =
   foldl add M.empty (M.toList (dTypes tgt))
   where
-    srcNames = namesByMode [ (mode, name) | (mode, name, _) <- allTypes src ]
+    srcNames = namesByMode [ (trMode ref, trName ref) | (ref, _) <- allTypes src ]
     add acc (mode, table) =
       let reserved = M.findWithDefault S.empty mode srcNames
-      in M.union acc (renameMode mode reserved (M.keys table))
-    renameMode mode reserved names =
-      let (_, mp) = foldl (step mode) (reserved, M.empty) names
-      in mp
+          names = M.keys table
+          (_, mp) = foldl (step mode) (reserved, M.empty) names
+      in M.union acc mp
     step mode (used, mp) name =
-      let key = (mode, name)
+      let key = TypeRef mode name
       in if M.member key interfaceRen
         then (used, mp)
         else
           let (name', used') = freshTypeName prefix name used
-          in (used', M.insert key name' mp)
+              key' = TypeRef mode name'
+          in (used', M.insert key key' mp)
 
 disjointGenRenames :: Text -> Doctrine -> M.Map (ModeName, GenName) GenName -> Doctrine -> M.Map (ModeName, GenName) GenName
 disjointGenRenames prefix src interfaceRen tgt =
@@ -321,7 +324,7 @@ freshen candidate mk used =
         then go (n + 1)
         else (cand, S.insert cand used)
 
-renameDoctrine :: M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, TypeName) [Int] -> M.Map (ModeName, GenName) GenName -> M.Map (ModeName, Text) Text -> Doctrine -> Either Text Doctrine
+renameDoctrine :: TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> M.Map (ModeName, Text) Text -> Doctrine -> Either Text Doctrine
 renameDoctrine tyRen permRen genRen cellRen doc = do
   types' <- M.traverseWithKey renameTypeTable (dTypes doc)
   gens' <- M.traverseWithKey renameGenTable (dGens doc)
@@ -331,28 +334,31 @@ renameDoctrine tyRen permRen genRen cellRen doc = do
     renameTypeTable mode table =
       foldl add (Right M.empty) (M.toList table)
       where
-        add acc (name, arity) = do
+        add acc (name, sig) = do
           mp <- acc
-          let name' = M.findWithDefault name (mode, name) tyRen
-          case M.lookup name' mp of
-            Nothing -> Right (M.insert name' arity mp)
-            Just a | a == arity -> Right mp
-            _ -> Left "poly pushout: type name collision"
+          let ref = TypeRef mode name
+          let ref' = M.findWithDefault ref ref tyRen
+          if trMode ref' /= mode
+            then Left "poly pushout: type rename mode mismatch"
+            else case M.lookup (trName ref') mp of
+              Nothing -> Right (M.insert (trName ref') sig mp)
+              Just existing | existing == sig -> Right mp
+              _ -> Left "poly pushout: type name collision"
     renameGenTable mode table =
       foldl add (Right M.empty) (M.elems table)
       where
         add acc gen = do
           mp <- acc
           let name' = M.findWithDefault (gdName gen) (mode, gdName gen) genRen
-          dom' <- mapM (renameTypeExpr mode tyRen permRen) (gdDom gen)
-          cod' <- mapM (renameTypeExpr mode tyRen permRen) (gdCod gen)
+          dom' <- mapM (renameTypeExpr tyRen permRen) (gdDom gen)
+          cod' <- mapM (renameTypeExpr tyRen permRen) (gdCod gen)
           let gen' = gen { gdName = name', gdDom = dom', gdCod = cod' }
           case M.lookup name' mp of
             Nothing -> Right (M.insert name' gen' mp)
             Just existing | existing == gen' -> Right mp
             _ -> Left "poly pushout: generator name collision"
 
-renameCell :: M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, TypeName) [Int] -> M.Map (ModeName, GenName) GenName -> M.Map (ModeName, Text) Text -> Cell2 -> Either Text Cell2
+renameCell :: TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> M.Map (ModeName, Text) Text -> Cell2 -> Either Text Cell2
 renameCell tyRen permRen genRen cellRen cell = do
   let mode = dMode (c2LHS cell)
   let name' = M.findWithDefault (c2Name cell) (mode, c2Name cell) cellRen
@@ -364,10 +370,10 @@ renameCell tyRen permRen genRen cellRen cell = do
     , c2RHS = rhs'
     }
 
-renameDiagram :: M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, TypeName) [Int] -> M.Map (ModeName, GenName) GenName -> Diagram -> Either Text Diagram
+renameDiagram :: TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> Diagram -> Either Text Diagram
 renameDiagram tyRen permRen genRen diag = do
   let mode = dMode diag
-  dPortTy' <- traverse (renameTypeExpr mode tyRen permRen) (dPortTy diag)
+  dPortTy' <- traverse (renameTypeExpr tyRen permRen) (dPortTy diag)
   dEdges' <- traverse (renameEdge mode) (dEdges diag)
   pure diag { dPortTy = dPortTy', dEdges = dEdges' }
   where
@@ -380,18 +386,18 @@ renameDiagram tyRen permRen genRen diag = do
           inner' <- renameDiagram tyRen permRen genRen inner
           pure edge { ePayload = PBox name inner' }
 
-renameTypeExpr :: ModeName -> M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, TypeName) [Int] -> TypeExpr -> Either Text TypeExpr
-renameTypeExpr mode ren permRen ty =
+renameTypeExpr :: TypeRenameMap -> TypePermMap -> TypeExpr -> Either Text TypeExpr
+renameTypeExpr ren permRen ty =
   case ty of
     TVar v -> Right (TVar v)
-    TCon name args -> do
-      args' <- mapM (renameTypeExpr mode ren permRen) args
-      let name' = M.findWithDefault name (mode, name) ren
-      case M.lookup (mode, name) permRen of
-        Nothing -> Right (TCon name' args')
+    TCon ref args -> do
+      args' <- mapM (renameTypeExpr ren permRen) args
+      let ref' = M.findWithDefault ref ref ren
+      case M.lookup ref permRen of
+        Nothing -> Right (TCon ref' args')
         Just perm -> do
           args'' <- applyPerm perm args'
-          Right (TCon name' args'')
+          Right (TCon ref' args'')
 
 applyPerm :: [Int] -> [a] -> Either Text [a]
 applyPerm perm args
@@ -431,12 +437,12 @@ mergeDoctrine a b = do
     mergeTypeTable left right =
       foldl add (Right left) (M.toList right)
       where
-        add acc (name, arity) = do
+        add acc (name, sig) = do
           mp <- acc
           case M.lookup name mp of
-            Nothing -> Right (M.insert name arity mp)
-            Just a | a == arity -> Right mp
-            _ -> Left "poly pushout: type arity conflict"
+            Nothing -> Right (M.insert name sig mp)
+            Just a | a == sig -> Right mp
+            _ -> Left "poly pushout: type signature conflict"
     mergeGenTables left right =
       foldl mergeGenMode (Right left) (M.toList right)
     mergeGenMode acc (mode, table) = do
@@ -577,7 +583,7 @@ buildGlue name src tgt = do
     , morFuel = 10
     }
 
-buildInj :: Text -> Doctrine -> Doctrine -> M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, TypeName) [Int] -> M.Map (ModeName, GenName) GenName -> Either Text Morphism
+buildInj :: Text -> Doctrine -> Doctrine -> TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> Either Text Morphism
 buildInj name src tgt tyRen permRen genRen = do
   typeMap <- buildTypeMap src tyRen permRen
   genMap <- buildGenMap src tgt tyRen permRen genRen
@@ -591,35 +597,37 @@ buildInj name src tgt tyRen permRen genRen = do
     , morFuel = 10
     }
 
-buildTypeMap :: Doctrine -> M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, TypeName) [Int] -> Either Text (M.Map (ModeName, TypeName) TypeTemplate)
+buildTypeMap :: Doctrine -> TypeRenameMap -> TypePermMap -> Either Text (M.Map TypeRef TypeTemplate)
 buildTypeMap doc renames permRen =
   foldM add M.empty (allTypes doc)
   where
-    renameType mode name = M.findWithDefault name (mode, name) renames
-    add mp (mode, name, arity) = do
-      let name' = renameType mode name
-      let mPerm = M.lookup (mode, name) permRen
-      if name' == name && mPerm == Nothing
+    add mp (ref, sig) = do
+      let ref' = M.findWithDefault ref ref renames
+      let mPerm = M.lookup ref permRen
+      if ref' == ref && mPerm == Nothing
         then Right mp
         else do
-          tmpl <- renameTemplate name' mPerm arity
-          Right (M.insert (mode, name) tmpl mp)
-    renameTemplate tgtName mPerm arity = do
-      let vars = [ TyVar ("a" <> T.pack (show i)) | i <- [0..arity-1] ]
+          tmpl <- renameTemplate ref' mPerm (tsParams sig)
+          Right (M.insert ref tmpl mp)
+    renameTemplate tgtRef mPerm paramModes = do
+      let vars =
+            [ TyVar { tvName = "a" <> T.pack (show i), tvMode = mode }
+            | (i, mode) <- zip [0..] paramModes
+            ]
       vars' <- case mPerm of
         Nothing -> Right vars
         Just perm -> applyPerm perm vars
-      pure (TypeTemplate vars (TCon tgtName (map TVar vars')))
+      pure (TypeTemplate vars (TCon tgtRef (map TVar vars')))
 
-buildGenMap :: Doctrine -> Doctrine -> M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, TypeName) [Int] -> M.Map (ModeName, GenName) GenName -> Either Text (M.Map (ModeName, GenName) Diagram)
+buildGenMap :: Doctrine -> Doctrine -> TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> Either Text (M.Map (ModeName, GenName) Diagram)
 buildGenMap src tgt tyRen permRen genRen =
   fmap M.fromList (mapM build (allGens src))
   where
     build (mode, gen) = do
       let genName = gdName gen
       let genName' = M.findWithDefault genName (mode, genName) genRen
-      dom <- mapM (renameTypeExpr mode tyRen permRen) (gdDom gen)
-      cod <- mapM (renameTypeExpr mode tyRen permRen) (gdCod gen)
+      dom <- mapM (renameTypeExpr tyRen permRen) (gdDom gen)
+      cod <- mapM (renameTypeExpr tyRen permRen) (gdCod gen)
       _ <- ensureGenExists tgt mode genName'
       d <- genD mode dom cod genName'
       pure ((mode, genName), d)
@@ -630,11 +638,11 @@ checkGenerated label mor =
     Left err -> Left ("poly pushout generated morphism " <> label <> " invalid: " <> err)
     Right () -> Right ()
 
-allTypes :: Doctrine -> [(ModeName, TypeName, Int)]
+allTypes :: Doctrine -> [(TypeRef, TypeSig)]
 allTypes doc =
-  [ (mode, name, arity)
+  [ (TypeRef mode name, sig)
   | (mode, table) <- M.toList (dTypes doc)
-  , (name, arity) <- M.toList table
+  , (name, sig) <- M.toList table
   ]
 
 allGens :: Doctrine -> [(ModeName, GenDecl)]

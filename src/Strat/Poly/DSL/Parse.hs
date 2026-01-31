@@ -74,16 +74,26 @@ polyContext = do
 polyTypeExpr :: Parser RawPolyTypeExpr
 polyTypeExpr = lexeme $ do
   name <- identRaw
+  mQual <- optional (try (char '.' *> identRaw))
   mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
-  case T.uncons name of
-    Nothing -> fail "empty type name"
-    Just (c, _) ->
-      case mArgs of
-        Just args -> pure (RPTCon name args)
-        Nothing ->
-          if isLower c
-            then pure (RPTVar name)
-            else pure (RPTCon name [])
+  case mQual of
+    Just qualName ->
+      let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }
+      in pure (RPTCon ref (maybe [] id mArgs))
+    Nothing ->
+      case T.uncons name of
+        Nothing -> fail "empty type name"
+        Just (c, _) ->
+          case mArgs of
+            Just args ->
+              let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
+              in pure (RPTCon ref args)
+            Nothing ->
+              if isLower c
+                then pure (RPTVar name)
+                else
+                  let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
+                  in pure (RPTCon ref [])
 
 -- Helpers
 

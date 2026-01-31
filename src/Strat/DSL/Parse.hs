@@ -10,6 +10,7 @@ import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.Surface.Parse (surfaceSpecBlock)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Maybe (fromMaybe)
 import Data.Functor (($>))
 import Data.Void (Void)
 import Text.Megaparsec
@@ -184,7 +185,7 @@ polyTypeDecl :: Parser PolyAST.RawPolyTypeDecl
 polyTypeDecl = do
   _ <- symbol "type"
   name <- ident
-  vars <- many ident
+  vars <- polyTyVarList
   _ <- symbol "@"
   mode <- ident
   optionalSemi
@@ -198,7 +199,7 @@ polyGenDecl :: Parser PolyAST.RawPolyGenDecl
 polyGenDecl = do
   _ <- symbol "gen"
   name <- ident
-  vars <- many ident
+  vars <- polyTyVarList
   _ <- symbol ":"
   dom <- polyContext
   _ <- symbol "->"
@@ -220,7 +221,7 @@ polyRuleDecl = do
   cls <- (symbol "computational" $> Computational) <|> (symbol "structural" $> Structural)
   name <- ident
   orient <- orientation
-  vars <- many ident
+  vars <- polyTyVarList
   _ <- symbol ":"
   dom <- polyContext
   _ <- symbol "->"
@@ -251,19 +252,45 @@ polyContext = do
   _ <- symbol "]"
   pure tys
 
+polyTyVarDecl :: Parser PolyAST.RawTyVarDecl
+polyTyVarDecl = do
+  name <- ident
+  mMode <- optional (symbol "@" *> ident)
+  pure PolyAST.RawTyVarDecl { PolyAST.rtvName = name, PolyAST.rtvMode = mMode }
+
+polyTyVarDeclBare :: Parser PolyAST.RawTyVarDecl
+polyTyVarDeclBare = do
+  name <- ident
+  pure PolyAST.RawTyVarDecl { PolyAST.rtvName = name, PolyAST.rtvMode = Nothing }
+
+polyTyVarList :: Parser [PolyAST.RawTyVarDecl]
+polyTyVarList =
+  try (symbol "(" *> polyTyVarDecl `sepBy` symbol "," <* symbol ")")
+    <|> many polyTyVarDeclBare
+
 polyTypeExpr :: Parser PolyAST.RawPolyTypeExpr
 polyTypeExpr = lexeme $ do
   name <- identRaw
+  mQual <- optional (try (char '.' *> identRaw))
   mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
-  case T.uncons name of
-    Nothing -> fail "empty type name"
-    Just (c, _) ->
-      case mArgs of
-        Just args -> pure (PolyAST.RPTCon name args)
-        Nothing ->
-          if isLower c
-            then pure (PolyAST.RPTVar name)
-            else pure (PolyAST.RPTCon name [])
+  case mQual of
+    Just qualName ->
+      let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Just name, PolyAST.rtrName = qualName }
+      in pure (PolyAST.RPTCon ref (fromMaybe [] mArgs))
+    Nothing ->
+      case T.uncons name of
+        Nothing -> fail "empty type name"
+        Just (c, _) ->
+          case mArgs of
+            Just args ->
+              let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
+              in pure (PolyAST.RPTCon ref args)
+            Nothing ->
+              if isLower c
+                then pure (PolyAST.RPTVar name)
+                else
+                  let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
+                  in pure (PolyAST.RPTCon ref [])
 
 polyDiagExpr :: Parser PolyAST.RawDiagExpr
 polyDiagExpr = makeExprParser polyDiagTerm operators
@@ -339,7 +366,7 @@ morphismTypeMap :: Parser MorphismItem
 morphismTypeMap = do
   _ <- symbol "type"
   src <- ident
-  params <- option [] (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
+  params <- option [] (symbol "(" *> polyTyVarDecl `sepBy` symbol "," <* symbol ")")
   _ <- symbol "@"
   srcMode <- ident
   _ <- symbol "->"

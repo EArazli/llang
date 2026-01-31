@@ -10,10 +10,10 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
-import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeExpr(..))
+import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD, idD)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Morphism (Morphism(..), TypeTemplate(..), applyMorphismDiagram)
 import Strat.Poly.Pushout (computePolyPushout, PolyPushoutResult(..))
@@ -35,21 +35,27 @@ tests =
 require :: Either Text a -> IO a
 require = either (assertFailure . T.unpack) pure
 
+tvar :: ModeName -> Text -> TyVar
+tvar mode name = TyVar { tvName = name, tvMode = mode }
+
+tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
+tcon mode name args = TCon (TypeRef mode (TypeName name)) args
+
 
 testPushoutDedupByBody :: Assertion
 testPushoutDedupByBody = do
   let mode = ModeName "M"
-  base <- case mkDoctrine mode "Interface" (TyVar "a") "eqI" of
+  base <- case mkDoctrine mode "Interface" (tvar mode "a") "eqI" of
     Left err -> assertFailure err
     Right d -> pure d
-  left <- case mkDoctrine mode "Left" (TyVar "a") "eqLeft" of
+  left <- case mkDoctrine mode "Left" (tvar mode "a") "eqLeft" of
     Left err -> assertFailure err
     Right d -> pure d
-  right <- case mkDoctrine mode "Right" (TyVar "b") "eqRight" of
+  right <- case mkDoctrine mode "Right" (tvar mode "b") "eqRight" of
     Left err -> assertFailure err
     Right d -> pure d
-  let morLeft = mkInclusionMorph "Left.in" base left (TyVar "a")
-  let morRight = mkInclusionMorph "Right.in" base right (TyVar "b")
+  let morLeft = mkInclusionMorph "Left.in" base left (tvar mode "a")
+  let morRight = mkInclusionMorph "Right.in" base right (tvar mode "b")
   res <- case computePolyPushout "Po" morLeft morRight of
     Left err -> assertFailure (show err)
     Right r -> pure r
@@ -158,10 +164,10 @@ mkCellDoctrine mode name cls orient = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
-        , gdDom = [TCon aName []]
-        , gdCod = [TCon aName []]
+        , gdDom = [tcon mode "A" []]
+        , gdCod = [tcon mode "A" []]
         }
-  lhs <- genD mode [TCon aName []] [TCon aName []] (gdName gen)
+  lhs <- genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName gen)
   let cell = Cell2
         { c2Name = "eq"
         , c2Class = cls
@@ -173,7 +179,7 @@ mkCellDoctrine mode name cls orient = do
   let doc = Doctrine
         { dName = name
         , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList [(aName, 0)])]
+        , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
         }
@@ -188,17 +194,17 @@ mkCellDoctrineWithAlt mode name cls orient = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
-        , gdDom = [TCon aName []]
-        , gdCod = [TCon aName []]
+        , gdDom = [tcon mode "A" []]
+        , gdCod = [tcon mode "A" []]
         }
   let genG = GenDecl
         { gdName = GenName "g"
         , gdMode = mode
         , gdTyVars = []
-        , gdDom = [TCon aName []]
-        , gdCod = [TCon aName []]
+        , gdDom = [tcon mode "A" []]
+        , gdCod = [tcon mode "A" []]
         }
-  lhs <- genD mode [TCon aName []] [TCon aName []] (gdName genG)
+  lhs <- genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName genG)
   let cell = Cell2
         { c2Name = "eq"
         , c2Class = cls
@@ -210,7 +216,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
   let doc = Doctrine
         { dName = name
         , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList [(aName, 0)])]
+        , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
         , dCells2 = [cell]
         }
@@ -221,7 +227,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
 mkIdMorph :: Text -> Doctrine -> Doctrine -> Morphism
 mkIdMorph name src tgt =
   let mode = ModeName "M"
-      diag = case genD mode [TCon (TypeName "A") []] [TCon (TypeName "A") []] (GenName "f") of
+      diag = case genD mode [tcon mode "A" []] [tcon mode "A" []] (GenName "f") of
         Left _ -> error "mkIdMorph: genD failed"
         Right d -> d
       genMap = M.fromList [((mode, GenName "f"), diag)]
@@ -248,8 +254,8 @@ testPushoutTypePermutationCommutes = do
   let mode = ModeName "M"
   let prod = TypeName "Prod"
   let pair = TypeName "Pair"
-  let aVar = TyVar "a"
-  let bVar = TyVar "b"
+  let aVar = tvar mode "a"
+  let bVar = tvar mode "b"
   base <- case mkTypeDoctrine mode "A" [(prod, 2)] of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -259,12 +265,12 @@ testPushoutTypePermutationCommutes = do
   right <- case mkTypeDoctrine mode "C" [(prod, 2)] of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
-  let tmplF = TypeTemplate [aVar, bVar] (TCon pair [TVar bVar, TVar aVar])
+  let tmplF = TypeTemplate [aVar, bVar] (TCon (TypeRef mode pair) [TVar bVar, TVar aVar])
   let morF = Morphism
         { morName = "f"
         , morSrc = base
         , morTgt = left
-        , morTypeMap = M.fromList [((mode, prod), tmplF)]
+        , morTypeMap = M.fromList [(TypeRef mode prod, tmplF)]
         , morGenMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 10
@@ -281,7 +287,7 @@ testPushoutTypePermutationCommutes = do
   res <- case computePolyPushout "P" morF morG of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
-  let diagA = idD mode [TCon prod [TVar aVar, TVar bVar]]
+  let diagA = idD mode [TCon (TypeRef mode prod) [TVar aVar, TVar bVar]]
   d1 <- case applyMorphismDiagram morF diagA of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -298,10 +304,11 @@ testPushoutTypePermutationCommutes = do
 
 mkTypeDoctrine :: ModeName -> Text -> [(TypeName, Int)] -> Either Text Doctrine
 mkTypeDoctrine mode name types = do
+  let types' = M.fromList [ (tname, TypeSig (replicate arity mode)) | (tname, arity) <- types ]
   let doc = Doctrine
         { dName = name
         , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList types)]
+        , dTypes = M.fromList [(mode, types')]
         , dGens = M.empty
         , dCells2 = []
         }

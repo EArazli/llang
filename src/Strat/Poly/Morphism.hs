@@ -28,7 +28,7 @@ data Morphism = Morphism
   { morName   :: Text
   , morSrc    :: Doctrine
   , morTgt    :: Doctrine
-  , morTypeMap :: M.Map (ModeName, TypeName) TypeTemplate
+  , morTypeMap :: M.Map TypeRef TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) Diagram
   , morPolicy  :: RewritePolicy
   , morFuel    :: Int
@@ -57,7 +57,7 @@ applyMorphismDiagram mor diagSrc = do
             PGen genName -> do
               genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
               subst <- instantiateGen genDecl diagSrc edgeSrc
-              let substTgt = M.map (applyTypeMapTy mor modeSrc) subst
+              let substTgt = M.map (applyTypeMapTy mor) subst
               case M.lookup (modeSrc, genName) (morGenMap mor) of
                 Nothing -> Left "applyMorphismDiagram: missing generator mapping"
                 Just image -> do
@@ -84,8 +84,8 @@ checkMorphism mor = do
 checkGenMapping :: Morphism -> GenDecl -> Either Text ()
 checkGenMapping mor gen = do
   let mode = gdMode gen
-  let dom = map (applyTypeMapTy mor mode) (gdDom gen)
-  let cod = map (applyTypeMapTy mor mode) (gdCod gen)
+  let dom = map (applyTypeMapTy mor) (gdDom gen)
+  let cod = map (applyTypeMapTy mor) (gdCod gen)
   image <- case M.lookup (mode, gdName gen) (morGenMap mor) of
     Nothing -> Left "checkMorphism: missing generator mapping"
     Just d -> Right d
@@ -225,7 +225,7 @@ isoOrFalse d1 d2 =
 cellKey :: Cell2 -> (ModeName, Text)
 cellKey cell = (dMode (c2LHS cell), c2Name cell)
 
-buildTypeRenaming :: Morphism -> Maybe (M.Map (ModeName, TypeName) TypeName)
+buildTypeRenaming :: Morphism -> Maybe (M.Map TypeRef TypeRef)
 buildTypeRenaming mor = do
   let src = morSrc mor
   mp <- foldl step (Just M.empty) (allTypes src)
@@ -234,30 +234,31 @@ buildTypeRenaming mor = do
     else Nothing
   where
     tgt = morTgt mor
-    step acc (mode, name, arity) = do
+    step acc (ref, sig) = do
       mp <- acc
-      let key = (mode, name)
       let mapped =
-            case M.lookup key (morTypeMap mor) of
-              Nothing -> Just name
-              Just tmpl -> renamingTarget tmpl arity
+            case M.lookup ref (morTypeMap mor) of
+              Nothing -> Just ref
+              Just tmpl -> renamingTarget tmpl (length (tsParams sig))
       case mapped of
         Nothing -> Nothing
-        Just tgtName ->
-          case M.lookup mode (dTypes tgt) >>= M.lookup tgtName of
-            Just a | a == arity -> Just (M.insert key tgtName mp)
+        Just tgtRef ->
+          case lookupTypeSig tgt tgtRef of
+            Right sigTgt
+              | length (tsParams sigTgt) == length (tsParams sig) ->
+                  Just (M.insert ref tgtRef mp)
             _ -> Nothing
 
     renamingTarget tmpl arity =
       case ttBody tmpl of
-        TCon tgtName params
+        TCon tgtRef params
           | length (ttParams tmpl) == arity
           , length params == arity
           , all isVar params
           , let vars = [ v | TVar v <- params ]
           , length vars == length (S.fromList vars)
           , S.fromList vars == S.fromList (ttParams tmpl)
-          -> Just tgtName
+          -> Just tgtRef
         _ -> Nothing
 
     isVar (TVar _) = True
@@ -299,10 +300,10 @@ singleGenNameMaybe diag =
             _ -> Nothing
         _ -> Nothing
 
-renameDiagram :: M.Map (ModeName, TypeName) TypeName -> M.Map (ModeName, GenName) GenName -> Diagram -> Diagram
+renameDiagram :: M.Map TypeRef TypeRef -> M.Map (ModeName, GenName) GenName -> Diagram -> Diagram
 renameDiagram tyRen genRen diag =
   let mode = dMode diag
-      dPortTy' = IM.map (renameTypeExpr mode tyRen) (dPortTy diag)
+      dPortTy' = IM.map (renameTypeExpr tyRen) (dPortTy diag)
       dEdges' = IM.map (renameEdge mode) (dEdges diag)
   in diag { dPortTy = dPortTy', dEdges = dEdges' }
   where
@@ -315,13 +316,13 @@ renameDiagram tyRen genRen diag =
           let inner' = renameDiagram tyRen genRen inner
           in edge { ePayload = PBox name inner' }
 
-renameTypeExpr :: ModeName -> M.Map (ModeName, TypeName) TypeName -> TypeExpr -> TypeExpr
-renameTypeExpr mode ren ty =
+renameTypeExpr :: M.Map TypeRef TypeRef -> TypeExpr -> TypeExpr
+renameTypeExpr ren ty =
   case ty of
     TVar v -> TVar v
-    TCon name args ->
-      let name' = M.findWithDefault name (mode, name) ren
-      in TCon name' (map (renameTypeExpr mode ren) args)
+    TCon ref args ->
+      let ref' = M.findWithDefault ref ref ren
+      in TCon ref' (map (renameTypeExpr ren) args)
 
 injective :: Ord a => [a] -> Bool
 injective xs =
@@ -351,11 +352,11 @@ allGens :: Doctrine -> [GenDecl]
 allGens doc =
   concatMap M.elems (M.elems (dGens doc))
 
-allTypes :: Doctrine -> [(ModeName, TypeName, Int)]
+allTypes :: Doctrine -> [(TypeRef, TypeSig)]
 allTypes doc =
-  [ (mode, name, arity)
+  [ (TypeRef mode name, sig)
   | (mode, table) <- M.toList (dTypes doc)
-  , (name, arity) <- M.toList table
+  , (name, sig) <- M.toList table
   ]
 
 lookupGenInMode :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
@@ -456,17 +457,16 @@ insertDiagram base extra = do
 
 applyTypeMapDiagram :: Morphism -> Diagram -> Diagram
 applyTypeMapDiagram mor diag =
-  let mode = dMode diag
-  in diag { dPortTy = IM.map (applyTypeMapTy mor mode) (dPortTy diag) }
+  diag { dPortTy = IM.map (applyTypeMapTy mor) (dPortTy diag) }
 
-applyTypeMapTy :: Morphism -> ModeName -> TypeExpr -> TypeExpr
-applyTypeMapTy mor mode ty =
+applyTypeMapTy :: Morphism -> TypeExpr -> TypeExpr
+applyTypeMapTy mor ty =
   case ty of
     TVar v -> TVar v
-    TCon name args ->
-      let args' = map (applyTypeMapTy mor mode) args
-      in case M.lookup (mode, name) (morTypeMap mor) of
-          Nothing -> TCon name args'
+    TCon ref args ->
+      let args' = map (applyTypeMapTy mor) args
+      in case M.lookup ref (morTypeMap mor) of
+          Nothing -> TCon ref args'
           Just tmpl ->
             let subst = M.fromList (zip (ttParams tmpl) args')
             in applySubstTy subst (ttBody tmpl)

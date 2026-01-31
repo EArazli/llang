@@ -9,8 +9,8 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..))
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..))
 import Strat.Poly.Graph (Diagram(..), emptyDiagram, freshPort, addEdgePayload, EdgePayload(..), validateDiagram)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Eval (evalDiagram)
@@ -29,18 +29,21 @@ tests =
     , testCase "cycle inside box returns letrec" testEvalCycleInBox
     ]
 
+tcon :: ModeName -> T.Text -> [TypeExpr] -> TypeExpr
+tcon mode name args = TCon (TypeRef mode (TypeName name)) args
+
 
 testEvalUnknownGen :: Assertion
 testEvalUnknownGen = do
   let mode = ModeName "M"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   diag <- case mkDupDiagram mode a of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   let doc = Doctrine
         { dName = "NoDup"
         , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", 0)])]
+        , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
         , dGens = M.empty
         , dCells2 = []
         }
@@ -53,7 +56,7 @@ testEvalUnknownGen = do
 testEvalMissingModel :: Assertion
 testEvalMissingModel = do
   let mode = ModeName "M"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   diag <- case mkDupDiagram mode a of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -67,7 +70,7 @@ testEvalMissingModel = do
   let doc = Doctrine
         { dName = "WithDup"
         , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", 0)])]
+        , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(GenName "dup", dupGen)])]
         , dCells2 = []
         }
@@ -90,7 +93,7 @@ mkDupDiagram mode a = do
 testEvalCycleLetrec :: Assertion
 testEvalCycleLetrec = do
   let mode = ModeName "M"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   diag <- case mkCycleDiagram mode a of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -106,7 +109,7 @@ testEvalCycleLetrec = do
 testEvalCycleBindings :: Assertion
 testEvalCycleBindings = do
   let mode = ModeName "M"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   diag <- case mkCycleDiagram mode a of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -123,7 +126,7 @@ testEvalCycleBindings = do
 testEvalCycleInBox :: Assertion
 testEvalCycleInBox = do
   let mode = ModeName "M"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   inner <- case mkCycleDiagram mode a of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -160,7 +163,7 @@ mkCycleDoctrine mode a =
   in Doctrine
       { dName = "Cycle"
       , dModes = ModeTheory (S.singleton mode) M.empty []
-      , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", 0)])]
+      , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
       , dGens = M.fromList [(mode, M.fromList [(gdName fGen, fGen), (gdName dupGen, dupGen)])]
       , dCells2 = []
       }

@@ -1,9 +1,9 @@
 doctrine Iface where {
   mode M;
   type A @M;
-  gen dup a : [a] -> [a, a] @M;
-  gen drop a : [a] -> [] @M;
-  gen swap a b : [a, b] -> [b, a] @M;
+  gen dup (a@M) : [a] -> [a, a] @M;
+  gen drop (a@M) : [a] -> [] @M;
+  gen swap (a@M, b@M) : [a, b] -> [b, a] @M;
   gen f : [A] -> [A] @M;
 }
 

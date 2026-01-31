@@ -12,7 +12,7 @@ import qualified Data.Set as S
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TyVar(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Match (Match(..), findFirstMatchNoDoc, findFirstMatchWithTyVars)
@@ -42,7 +42,10 @@ modeName :: ModeName
 modeName = ModeName "M"
 
 aTy :: TypeExpr
-aTy = TCon (TypeName "A") []
+aTy = TCon (TypeRef modeName (TypeName "A")) []
+
+tvar :: Text -> TyVar
+tvar name = TyVar { tvName = name, tvMode = modeName }
 
 mkGen :: Text -> [TypeExpr] -> [TypeExpr] -> Either Text Diagram
 mkGen name dom cod = genD modeName dom cod (GenName name)
@@ -243,10 +246,10 @@ testNestedBoxesMatch = do
 
 testBoxTypeVarUnify :: Assertion
 testBoxTypeVarUnify = do
-  let aVar = TyVar "a"
+  let aVar = tvar "a"
   let aVarTy = TVar aVar
   let aName = TypeName "A"
-  let aConcrete = TCon aName []
+  let aConcrete = TCon (TypeRef modeName aName) []
   fVar <- require (mkGen "f" [aVarTy] [aVarTy])
   fConcrete <- require (mkGen "f" [aConcrete] [aConcrete])
   lhs <- require (mkBoxDiagram "B" fVar aVarTy)

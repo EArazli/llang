@@ -27,13 +27,19 @@ tests =
     , testCase "type map can reorder parameters" testTypeMapReorder
     ]
 
+tvar :: ModeName -> Text -> TyVar
+tvar mode name = TyVar { tvName = name, tvMode = mode }
+
+tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
+tcon mode name args = TCon (TypeRef mode (TypeName name)) args
+
 testMonoidMorphism :: Assertion
 testMonoidMorphism = do
   docSrc <- either (assertFailure . T.unpack) pure mkMonoid
   docTgt <- either (assertFailure . T.unpack) pure mkStringMonoid
-  let typeMap = M.fromList [((modeM, TypeName "A"), TypeTemplate [] (TCon (TypeName "Str") []))]
-  unitImg <- either (assertFailure . T.unpack) pure (genD modeM [] [TCon (TypeName "Str") []] (GenName "empty"))
-  mulImg <- either (assertFailure . T.unpack) pure (genD modeM [TCon (TypeName "Str") [], TCon (TypeName "Str") []] [TCon (TypeName "Str") []] (GenName "append"))
+  let typeMap = M.fromList [(TypeRef modeM (TypeName "A"), TypeTemplate [] (tcon modeM "Str" []))]
+  unitImg <- either (assertFailure . T.unpack) pure (genD modeM [] [tcon modeM "Str" []] (GenName "empty"))
+  mulImg <- either (assertFailure . T.unpack) pure (genD modeM [tcon modeM "Str" [], tcon modeM "Str" []] [tcon modeM "Str" []] (GenName "append"))
   let mor = Morphism
         { morName = "MonoidToStr"
         , morSrc = docSrc
@@ -50,24 +56,24 @@ testMonoidMorphism = do
 testTypeMapReorder :: Assertion
 testTypeMapReorder = do
   let mode = ModeName "M"
-  let a = TyVar "a"
-  let b = TyVar "b"
+  let a = tvar mode "a"
+  let b = tvar mode "b"
   let prod = TypeName "Prod"
   let pair = TypeName "Pair"
   let genName = GenName "g"
-  let genSrc = GenDecl genName mode [a, b] [TCon prod [TVar a, TVar b]] [TCon prod [TVar a, TVar b]]
-  let genTgt = GenDecl genName mode [a, b] [TCon pair [TVar a, TVar b]] [TCon pair [TVar a, TVar b]]
+  let genSrc = GenDecl genName mode [a, b] [TCon (TypeRef mode prod) [TVar a, TVar b]] [TCon (TypeRef mode prod) [TVar a, TVar b]]
+  let genTgt = GenDecl genName mode [a, b] [TCon (TypeRef mode pair) [TVar a, TVar b]] [TCon (TypeRef mode pair) [TVar a, TVar b]]
   let docSrc = Doctrine
         { dName = "Src"
         , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList [(prod, 2)])]
+        , dTypes = M.fromList [(mode, M.fromList [(prod, TypeSig [mode, mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genSrc)])]
         , dCells2 = []
         }
   let docTgt = Doctrine
         { dName = "Tgt"
         , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList [(pair, 2)])]
+        , dTypes = M.fromList [(mode, M.fromList [(pair, TypeSig [mode, mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genTgt)])]
         , dCells2 = []
         }
@@ -77,8 +83,8 @@ testTypeMapReorder = do
   docTgt' <- case validateDoctrine docTgt of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
-  img <- either (assertFailure . T.unpack) pure (genD mode [TCon pair [TVar b, TVar a]] [TCon pair [TVar b, TVar a]] genName)
-  let typeMap = M.fromList [((mode, prod), TypeTemplate [a, b] (TCon pair [TVar b, TVar a]))]
+  img <- either (assertFailure . T.unpack) pure (genD mode [TCon (TypeRef mode pair) [TVar b, TVar a]] [TCon (TypeRef mode pair) [TVar b, TVar a]] genName)
+  let typeMap = M.fromList [(TypeRef mode prod, TypeTemplate [a, b] (TCon (TypeRef mode pair) [TVar b, TVar a]))]
   let mor = Morphism
         { morName = "SwapProd"
         , morSrc = docSrc'
@@ -96,15 +102,15 @@ modeM :: ModeName
 modeM = ModeName "M"
 
 aTy :: TypeExpr
-aTy = TCon (TypeName "A") []
+aTy = TCon (TypeRef modeM (TypeName "A")) []
 
 strTy :: TypeExpr
-strTy = TCon (TypeName "Str") []
+strTy = TCon (TypeRef modeM (TypeName "Str")) []
 
 mkMonoid :: Either Text Doctrine
 mkMonoid = do
   let mt = ModeTheory (S.singleton modeM) M.empty []
-  let types = M.fromList [(modeM, M.fromList [(TypeName "A", 0)])]
+  let types = M.fromList [(modeM, M.fromList [(TypeName "A", TypeSig [])])]
   assoc <- assocRule "assoc" aTy (GenName "mul")
   unitL <- unitRule "unitL" aTy (GenName "unit") (GenName "mul") True
   unitR <- unitRule "unitR" aTy (GenName "unit") (GenName "mul") False
@@ -123,7 +129,7 @@ mkMonoid = do
 mkStringMonoid :: Either Text Doctrine
 mkStringMonoid = do
   let mt = ModeTheory (S.singleton modeM) M.empty []
-  let types = M.fromList [(modeM, M.fromList [(TypeName "Str", 0)])]
+  let types = M.fromList [(modeM, M.fromList [(TypeName "Str", TypeSig [])])]
   assoc <- assocRule "assoc" strTy (GenName "append")
   unitL <- unitRule "unitL" strTy (GenName "empty") (GenName "append") True
   unitR <- unitRule "unitR" strTy (GenName "empty") (GenName "append") False

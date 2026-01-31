@@ -18,7 +18,7 @@ module Strat.Poly.Surface.Spec
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.TypeExpr (TypeExpr)
+import Strat.Poly.DSL.AST (RawPolyTypeExpr)
 
 data PolySurfaceDef = PolySurfaceDef
   { psName :: Text
@@ -31,7 +31,7 @@ data SurfaceSpec = SurfaceSpec
   { ssName :: Text
   , ssDoctrine :: Text
   , ssMode :: Text
-  , ssContext :: Maybe (Text, TypeExpr)
+  , ssContext :: Maybe (Text, RawPolyTypeExpr)
   , ssLexer :: Maybe LexerSpec
   , ssExprSpec :: Maybe ExprSpec
   , ssElabRules :: M.Map Text ElabRule
@@ -87,8 +87,8 @@ data ElabRule = ElabRule
   } deriving (Eq, Show)
 
 data TemplateExpr
-  = TId [TypeExpr]
-  | TGen Text (Maybe [TypeExpr])
+  = TId [RawPolyTypeExpr]
+  | TGen Text (Maybe [RawPolyTypeExpr])
   | TBox Text TemplateExpr
   | TLoop TemplateExpr
   | TComp TemplateExpr TemplateExpr
@@ -99,6 +99,6 @@ data TemplateExpr
 
 data SurfaceAST
   = SAIdent Text
-  | SAType TypeExpr
+  | SAType RawPolyTypeExpr
   | SANode Text [SurfaceAST]
   deriving (Eq, Show)

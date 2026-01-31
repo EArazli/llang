@@ -10,11 +10,11 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD)
 import Strat.Poly.Graph (Diagram)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Coherence (checkCoherence, ObligationResult(..))
 import Strat.Poly.CriticalPairs (CPMode(..))
@@ -36,7 +36,7 @@ modeName :: ModeName
 modeName = ModeName "M"
 
 aTy :: TypeExpr
-aTy = TCon (TypeName "A") []
+aTy = TCon (TypeRef modeName (TypeName "A")) []
 
 mkGenDecl :: Text -> GenDecl
 mkGenDecl name =
@@ -70,7 +70,7 @@ mkDoctrine cells =
   in Doctrine
       { dName = "D"
       , dModes = ModeTheory (S.singleton modeName) M.empty []
-      , dTypes = M.fromList [(modeName, M.fromList [(TypeName "A", 0)])]
+      , dTypes = M.fromList [(modeName, M.fromList [(TypeName "A", TypeSig [])])]
       , dGens = M.fromList [(modeName, M.fromList [(gdName g, g) | g <- gens])]
       , dCells2 = cells
       }

@@ -11,12 +11,12 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TyVar(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
 import Strat.Poly.UnifyTy (applySubstTy, normalizeSubst)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Names (BoxName(..))
 import Strat.Poly.Diagram
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.Graph
@@ -61,11 +61,17 @@ tests =
 require :: Either Text a -> IO a
 require = either (assertFailure . T.unpack) pure
 
+tvar :: ModeName -> Text -> TyVar
+tvar mode name = TyVar { tvName = name, tvMode = mode }
+
+tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
+tcon mode name args = TCon (TypeRef mode (TypeName name)) args
+
 
 testDiagramDomCod :: Assertion
 testDiagramDomCod = do
   let mode = ModeName "Cart"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   let ctx = [a]
   case genD mode ctx ctx (GenName "f") of
     Left err -> assertFailure (T.unpack err)
@@ -83,8 +89,8 @@ testDiagramDomCod = do
 testCompMismatch :: Assertion
 testCompMismatch = do
   let mode = ModeName "Cart"
-  let a = TCon (TypeName "A") []
-  let b = TCon (TypeName "B") []
+  let a = tcon mode "A" []
+  let b = tcon mode "B" []
   let g = idD mode [a]
   let f = idD mode [b]
   case compD g f of
@@ -96,9 +102,10 @@ testTensorModeMismatch :: Assertion
 testTensorModeMismatch = do
   let modeA = ModeName "A"
   let modeB = ModeName "B"
-  let a = TCon (TypeName "A") []
-  let d1 = idD modeA [a]
-  let d2 = idD modeB [a]
+  let aA = tcon modeA "A" []
+  let aB = tcon modeB "A" []
+  let d1 = idD modeA [aA]
+  let d2 = idD modeB [aB]
   case tensorD d1 d2 of
     Left _ -> pure ()
     Right _ -> assertFailure "expected mode mismatch"
@@ -106,7 +113,7 @@ testTensorModeMismatch = do
 testValidateStaleIncidence :: Assertion
 testValidateStaleIncidence = do
   let mode = ModeName "Cart"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   diag <- case genD mode [a] [a] (GenName "f") of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -118,7 +125,7 @@ testValidateStaleIncidence = do
 testValidateMissingOutputBoundary :: Assertion
 testValidateMissingOutputBoundary = do
   let mode = ModeName "Cart"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   diag <- case genD mode [a] [a] (GenName "f") of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -130,7 +137,7 @@ testValidateMissingOutputBoundary = do
 testValidateUnusedInput :: Assertion
 testValidateUnusedInput = do
   let mode = ModeName "Cart"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   let diag = idD mode [a]
   let bad = diag { dOut = [] }
   case validateDiagram bad of
@@ -140,7 +147,7 @@ testValidateUnusedInput = do
 testValidateDuplicateOutputs :: Assertion
 testValidateDuplicateOutputs = do
   let mode = ModeName "Cart"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   let diag = idD mode [a]
   case dOut diag of
     [p] -> do
@@ -153,7 +160,7 @@ testValidateDuplicateOutputs = do
 testDiagramIsoEq :: Assertion
 testDiagramIsoEq = do
   let mode = ModeName "Cart"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   diag <- case buildIsoDiagram mode a of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -175,28 +182,31 @@ testUnionDisjoint = do
 
 testApplySubstChase :: Assertion
 testApplySubstChase = do
-  let a = TyVar "a"
-  let b = TyVar "b"
-  let c = TCon (TypeName "C") []
+  let mode = ModeName "M"
+  let a = tvar mode "a"
+  let b = tvar mode "b"
+  let c = tcon mode "C" []
   let subst = M.fromList [(a, TVar b), (b, c)]
   applySubstTy subst (TVar a) @?= c
 
 testApplySubstCycle :: Assertion
 testApplySubstCycle = do
-  let a = TyVar "a"
-  let b = TyVar "b"
+  let mode = ModeName "M"
+  let a = tvar mode "a"
+  let b = tvar mode "b"
   let subst = M.fromList [(a, TVar b), (b, TVar a)]
   applySubstTy subst (TVar a) @?= TVar a
 
 testNormalizeSubstIdentity :: Assertion
 testNormalizeSubstIdentity = do
-  let a = TyVar "a"
+  let mode = ModeName "M"
+  let a = tvar mode "a"
   normalizeSubst (M.fromList [(a, TVar a)]) @?= M.empty
 
 testDiagramIsoBoxName :: Assertion
 testDiagramIsoBoxName = do
   let mode = ModeName "M"
-  let a = TCon (TypeName "A") []
+  let a = tcon mode "A" []
   let inner = idD mode [a]
   let (inP, d0) = freshPort a (emptyDiagram mode)
   let (outP, d1) = freshPort a d0
@@ -212,7 +222,7 @@ testDiagramIsoBoxName = do
 testDuplicateGenTyVars :: Assertion
 testDuplicateGenTyVars = do
   let mode = ModeName "M"
-  let a = TyVar "a"
+  let a = tvar mode "a"
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
@@ -234,7 +244,7 @@ testDuplicateGenTyVars = do
 testDuplicateCellTyVars :: Assertion
 testDuplicateCellTyVars = do
   let mode = ModeName "M"
-  let a = TyVar "a"
+  let a = tvar mode "a"
   let diag = idD mode [TVar a]
   let cell = Cell2
         { c2Name = "dupCellTyVars"
@@ -259,15 +269,15 @@ testRejectRHSTyVars :: Assertion
 testRejectRHSTyVars = do
   let mode = ModeName "M"
   let aName = TypeName "A"
-  let bVar = TyVar "b"
+  let bVar = tvar mode "b"
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
-        , gdDom = [TCon aName []]
-        , gdCod = [TCon aName []]
+        , gdDom = [tcon mode "A" []]
+        , gdCod = [tcon mode "A" []]
         }
-  lhs <- require (genD mode [TCon aName []] [TCon aName []] (gdName gen))
+  lhs <- require (genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName gen))
   rhs <- require (genD mode [TVar bVar] [TVar bVar] (gdName gen))
   let cell = Cell2
         { c2Name = "rhs_fresh"
@@ -280,7 +290,7 @@ testRejectRHSTyVars = do
   let doc = Doctrine
         { dName = "D"
         , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList [(aName, 0)])]
+        , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
         }
@@ -292,7 +302,7 @@ testAcceptRHSTyVars :: Assertion
 testAcceptRHSTyVars = do
   let mode = ModeName "M"
   let aName = TypeName "A"
-  let aVar = TyVar "a"
+  let aVar = tvar mode "a"
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
@@ -313,7 +323,7 @@ testAcceptRHSTyVars = do
   let doc = Doctrine
         { dName = "D"
         , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList [(aName, 0)])]
+        , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
         }
@@ -325,8 +335,8 @@ testRejectEmptyLHS :: Assertion
 testRejectEmptyLHS = do
   let mode = ModeName "M"
   let aName = TypeName "A"
-  let lhs = idD mode [TCon aName []]
-  let rhs = idD mode [TCon aName []]
+  let lhs = idD mode [tcon mode "A" []]
+  let rhs = idD mode [tcon mode "A" []]
   let cell = Cell2
         { c2Name = "empty_lhs"
         , c2Class = Computational
@@ -338,7 +348,7 @@ testRejectEmptyLHS = do
   let doc = Doctrine
         { dName = "D"
         , dModes = ModeTheory (S.singleton mode) M.empty []
-        , dTypes = M.fromList [(mode, M.fromList [(aName, 0)])]
+        , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.empty
         , dCells2 = [cell]
         }

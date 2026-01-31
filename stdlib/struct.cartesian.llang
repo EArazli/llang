@@ -1,18 +1,18 @@
 import "./struct.symmetric.llang";
 
 doctrine StructCartesian extends StructSymmetric where {
-  gen dup a : [a] -> [a, a] @M;
-  gen drop a : [a] -> [] @M;
+  gen dup (a@M) : [a] -> [a, a] @M;
+  gen drop (a@M) : [a] -> [] @M;
 
-  rule structural coassoc = a : [a] -> [a, a, a] @M =
+  rule structural coassoc = (a@M) : [a] -> [a, a, a] @M =
     dup ; (dup * id[a]) == dup ; (id[a] * dup)
 
-  rule structural counitL = a : [a] -> [a] @M =
+  rule structural counitL = (a@M) : [a] -> [a] @M =
     dup ; (drop * id[a]) == id[a]
 
-  rule structural counitR = a : [a] -> [a] @M =
+  rule structural counitR = (a@M) : [a] -> [a] @M =
     dup ; (id[a] * drop) == id[a]
 
-  rule structural cocomm = a : [a] -> [a, a] @M =
+  rule structural cocomm = (a@M) : [a] -> [a, a] @M =
     dup ; swap == dup
 }

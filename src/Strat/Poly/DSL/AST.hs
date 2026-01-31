@@ -4,6 +4,8 @@ module Strat.Poly.DSL.AST
   , RawPolyTypeDecl(..)
   , RawPolyGenDecl(..)
   , RawPolyRuleDecl(..)
+  , RawTypeRef(..)
+  , RawTyVarDecl(..)
   , RawPolyTypeExpr(..)
   , RawPolyContext
   , RawDiagExpr(..)
@@ -28,13 +30,13 @@ data RawPolyItem
 
 data RawPolyTypeDecl = RawPolyTypeDecl
   { rptName :: Text
-  , rptVars :: [Text]
+  , rptVars :: [RawTyVarDecl]
   , rptMode :: Text
   } deriving (Eq, Show)
 
 data RawPolyGenDecl = RawPolyGenDecl
   { rpgName :: Text
-  , rpgVars :: [Text]
+  , rpgVars :: [RawTyVarDecl]
   , rpgDom :: RawPolyContext
   , rpgCod :: RawPolyContext
   , rpgMode :: Text
@@ -44,7 +46,7 @@ data RawPolyRuleDecl = RawPolyRuleDecl
   { rprClass :: RuleClass
   , rprName :: Text
   , rprOrient :: Orientation
-  , rprVars :: [Text]
+  , rprVars :: [RawTyVarDecl]
   , rprDom :: RawPolyContext
   , rprCod :: RawPolyContext
   , rprMode :: Text
@@ -52,9 +54,19 @@ data RawPolyRuleDecl = RawPolyRuleDecl
   , rprRHS :: RawDiagExpr
   } deriving (Eq, Show)
 
+data RawTypeRef = RawTypeRef
+  { rtrMode :: Maybe Text
+  , rtrName :: Text
+  } deriving (Eq, Show)
+
+data RawTyVarDecl = RawTyVarDecl
+  { rtvName :: Text
+  , rtvMode :: Maybe Text
+  } deriving (Eq, Show)
+
 data RawPolyTypeExpr
   = RPTVar Text
-  | RPTCon Text [RawPolyTypeExpr]
+  | RPTCon RawTypeRef [RawPolyTypeExpr]
   deriving (Eq, Show)
 
 type RawPolyContext = [RawPolyTypeExpr]

@@ -18,8 +18,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
 
 import Strat.Poly.Surface.Spec
-import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TyVar(..))
-import qualified Strat.Poly.TypeExpr as Ty
+import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..))
 
 
 -- Spec parser
@@ -59,7 +58,7 @@ parseSurfaceSpec input =
 data SpecItem
   = ItemDoctrine Text
   | ItemMode Text
-  | ItemContext Text TypeExpr
+  | ItemContext Text RawPolyTypeExpr
   | ItemLexer LexerSpec
   | ItemExpr ExprSpec
   | ItemElab [ElabRule]
@@ -300,26 +299,36 @@ templateHole = lexeme $ do
       name <- identRaw
       pure (TVar name)
 
-contextExpr :: Parser [TypeExpr]
+contextExpr :: Parser [RawPolyTypeExpr]
 contextExpr = do
   _ <- symbol "["
   tys <- typeExpr `sepBy` symbol ","
   _ <- symbol "]"
   pure tys
 
-typeExpr :: Parser TypeExpr
+typeExpr :: Parser RawPolyTypeExpr
 typeExpr = lexeme $ do
   name <- identRaw
+  mQual <- optional (try (char '.' *> identRaw))
   mArgs <- optional (symbol "(" *> typeExpr `sepBy` symbol "," <* symbol ")")
-  case T.uncons name of
-    Nothing -> fail "empty type"
-    Just (c, _) ->
-      case mArgs of
-        Just args -> pure (Ty.TCon (TypeName name) args)
-        Nothing ->
-          if isLowerChar c
-            then pure (Ty.TVar (TyVar name))
-            else pure (Ty.TCon (TypeName name) [])
+  case mQual of
+    Just qualName ->
+      let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }
+      in pure (RPTCon ref (maybe [] id mArgs))
+    Nothing ->
+      case T.uncons name of
+        Nothing -> fail "empty type"
+        Just (c, _) ->
+          case mArgs of
+            Just args ->
+              let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
+              in pure (RPTCon ref args)
+            Nothing ->
+              if isLowerChar c
+                then pure (RPTVar name)
+                else
+                  let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
+                  in pure (RPTCon ref [])
   where
     isLowerChar ch = ch >= 'a' && ch <= 'z'
 
@@ -342,7 +351,7 @@ parseSurfaceExpr spec input =
 
 data Capture
   = CapIdent Text
-  | CapType TypeExpr
+  | CapType RawPolyTypeExpr
   | CapExpr SurfaceAST
   | CapSkip
   deriving (Eq, Show)

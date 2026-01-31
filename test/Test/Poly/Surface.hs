@@ -12,9 +12,9 @@ import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TyVar(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..))
 import Strat.Poly.Surface.Parse (parseSurfaceSpec)
 import Strat.Poly.Surface (PolySurfaceDef, elabPolySurfaceDecl)
 import Strat.Poly.Surface.Elab (elabSurfaceExpr)
@@ -66,7 +66,9 @@ mkDoctrine :: Doctrine
 mkDoctrine =
   let mode = ModeName "M"
       a = TypeName "A"
-      tyA = TCon a []
+      tyA = TCon (TypeRef mode a) []
+      aVar = TyVar { tvName = "a", tvMode = mode }
+      bVar = TyVar { tvName = "b", tvMode = mode }
       mkGen name tyVars dom cod = GenDecl
         { gdName = GenName name
         , gdMode = mode
@@ -74,9 +76,9 @@ mkDoctrine =
         , gdDom = dom
         , gdCod = cod
         }
-      genDup = mkGen "dup" [TyVar "a"] [TVar (TyVar "a")] [TVar (TyVar "a"), TVar (TyVar "a")]
-      genDrop = mkGen "drop" [TyVar "a"] [TVar (TyVar "a")] []
-      genSwap = mkGen "swap" [TyVar "a", TyVar "b"] [TVar (TyVar "a"), TVar (TyVar "b")] [TVar (TyVar "b"), TVar (TyVar "a")]
+      genDup = mkGen "dup" [aVar] [TVar aVar] [TVar aVar, TVar aVar]
+      genDrop = mkGen "drop" [aVar] [TVar aVar] []
+      genSwap = mkGen "swap" [aVar, bVar] [TVar aVar, TVar bVar] [TVar bVar, TVar aVar]
       genF = mkGen "f" [] [tyA, tyA] [tyA]
       genUnit = mkGen "unit" [] [] [tyA]
       gens = M.fromList
@@ -89,7 +91,7 @@ mkDoctrine =
   in Doctrine
       { dName = "TestDoc"
       , dModes = ModeTheory (S.singleton mode) M.empty []
-      , dTypes = M.fromList [(mode, M.fromList [(a, 0)])]
+      , dTypes = M.fromList [(mode, M.fromList [(a, TypeSig [])])]
       , dGens = M.fromList [(mode, gens)]
       , dCells2 = []
       }

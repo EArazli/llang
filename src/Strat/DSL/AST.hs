@@ -106,7 +106,7 @@ data RawPolyMorphismItem
 
 data RawPolyTypeMap = RawPolyTypeMap
   { rpmtSrcType :: Text
-  , rpmtParams :: [Text]
+  , rpmtParams :: [PolyAST.RawTyVarDecl]
   , rpmtSrcMode :: Text
   , rpmtTgtType :: PolyAST.RawPolyTypeExpr
   , rpmtTgtMode :: Text

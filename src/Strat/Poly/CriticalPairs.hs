@@ -153,7 +153,7 @@ rulesForCellWithClass policy cell =
 renameRule :: Text -> RewriteRule -> RewriteRule
 renameRule suffix rule =
   let ren = M.fromList [ (v, TVar (renameVar v)) | v <- rrTyVars rule ]
-      renameVar (TyVar t) = TyVar (t <> suffix)
+      renameVar v = v { tvName = tvName v <> suffix }
       lhs' = applySubstDiagram ren (rrLHS rule)
       rhs' = applySubstDiagram ren (rrRHS rule)
       tyvars' = map renameVar (rrTyVars rule)
