@@ -1,0 +1,10 @@
+import "../../lib/algebra/tiny_source.llang";
+
+run main where {
+  doctrine JS;
+  mode M;
+  model JSPretty;
+  show value;
+}
+---
+@mainProg

@@ -168,7 +168,8 @@ elabDoctrineEffects env name baseName effects = do
     [] ->
       insertDoctrine env (PolyAST.RawPolyDoctrine name (Just baseName) [])
     [e1] -> do
-      _ <- lookupDoctrine env e1
+      baseDoc <- lookupDoctrine env baseName
+      _ <- requireEffectFromBase env baseDoc e1
       insertDoctrine env (PolyAST.RawPolyDoctrine name (Just e1) [])
     _ -> do
       baseDoc <- lookupDoctrine env baseName

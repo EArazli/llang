@@ -60,7 +60,7 @@ testLam3Weakening = do
 
 loadSTLCSurface :: IO (Doctrine, PolySurfaceDef)
 loadSTLCSurface = do
-  path <- getDataFileName "examples/ccc_surface/stlc.surface.llang"
+  path <- getDataFileName "examples/lib/surfaces/ccc_surface/stlc.surface.llang"
   envResult <- loadModule path
   env <- case envResult of
     Left err -> assertFailure (T.unpack err)

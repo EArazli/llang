@@ -1,0 +1,9 @@
+import "../../lib/algebra/box_match.llang";
+
+run main where {
+  doctrine BoxMatch;
+  show normalized;
+}
+---
+box B { g }
+---

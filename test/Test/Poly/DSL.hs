@@ -93,7 +93,7 @@ testPolyDSLNormalize = do
 
 testPolyMorphismDSL :: Assertion
 testPolyMorphismDSL = do
-  path <- getDataFileName "examples/monoid_to_string.llang"
+  path <- getDataFileName "examples/lib/algebra/monoid_to_string.llang"
   src <- TIO.readFile path
   env <- case parseRawFile src of
     Left err -> assertFailure (T.unpack err)

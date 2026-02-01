@@ -42,7 +42,7 @@ testBetaAppReduces = do
 
 loadCCC :: IO Doctrine
 loadCCC = do
-  path <- getDataFileName "examples/ccc_surface/ccc.llang"
+  path <- getDataFileName "examples/lib/surfaces/ccc_surface/ccc.llang"
   envResult <- loadModule path
   env <- case envResult of
     Left err -> assertFailure (T.unpack err)

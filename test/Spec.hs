@@ -3,6 +3,7 @@ module Main (main) where
 import Test.Tasty
 import qualified Test.CLI.Golden as CLIGolden
 import qualified Test.DSL.Effects as DSLEffects
+import qualified Test.DSL.TermRefsInDecls as DSLTermRefsInDecls
 import qualified Test.DSL.Templates as DSLTemplates
 import qualified Test.Frontend.Coerce as FrontendCoerce
 import qualified Test.NoPolyPrefixes as NoPolyPrefixes
@@ -28,6 +29,7 @@ main =
       "All"
       [ CLIGolden.tests
       , DSLEffects.tests
+      , DSLTermRefsInDecls.tests
       , DSLTemplates.tests
       , FrontendCoerce.tests
       , PolyBasic.tests

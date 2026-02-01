@@ -1,0 +1,10 @@
+import "../../lib/algebra/hello_world.llang";
+
+run main where {
+  doctrine HelloWorld;
+  mode M;
+  model HelloModel;
+  show value;
+}
+---
+hello

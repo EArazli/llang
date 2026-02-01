@@ -1,6 +1,0 @@
-import "./stlc.runspec.llang";
-
-run main using STLCinCCC
----
-lam x:Bool. lam y:Bool. lam z:Bool. x
----

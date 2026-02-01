@@ -1,0 +1,15 @@
+doctrine JS where {
+  mode M;
+  type Code @M;
+
+  gen strLit : [] -> [Code] @M;
+  gen concat : [Code, Code] -> [Code] @M;
+  gen consoleLog : [Code] -> [Code] @M;
+}
+
+model JSPretty : JS where {
+  default = error "missing op";
+  op strLit() = "\"Hello, world!\"";
+  op concat(a, b) = a ++ b;
+  op consoleLog(x) = "console.log(" ++ x ++ ");";
+}

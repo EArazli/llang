@@ -39,7 +39,7 @@ lookupDoc name docs =
 
 testStdlibCoherence :: Assertion
 testStdlibCoherence = do
-  path <- getDataFileName "examples/cart_monoid.llang"
+  path <- getDataFileName "examples/lib/algebra/cart_monoid.llang"
   env <- require =<< loadModule path
   assertBool "expected StructCartesian loaded" (M.member "StructCartesian" (meDoctrines env))
   doc <- lookupDoc "CartMonoid" (meDoctrines env)
@@ -49,7 +49,7 @@ testStdlibCoherence = do
 
 testCoherenceTimeout :: Assertion
 testCoherenceTimeout = do
-  path <- getDataFileName "examples/coherence_demo.llang"
+  path <- getDataFileName "examples/lib/algebra/coherence_demo.llang"
   env <- require =<< loadModule path
   doc <- lookupDoc "CoherenceDemo" (meDoctrines env)
   let action =

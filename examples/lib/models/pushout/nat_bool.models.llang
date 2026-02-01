@@ -1,0 +1,13 @@
+import "../../pushout/nat_bool.llang";
+
+model NatBoolNative : NatBool where {
+  default = symbolic;
+
+  op Nat_inl_Z() = 0;
+  op Nat_inl_S(n) = n + 1;
+  op Nat_inl_add(a,b) = a + b;
+
+  op Bool_inr_T() = true;
+  op Bool_inr_F() = false;
+  op Bool_inr_if(c,x,y) = if c then x else y;
+}

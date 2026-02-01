@@ -1,0 +1,9 @@
+import "../../lib/pushout/pushout_basic.llang";
+
+run main where {
+  doctrine Both;
+  mode M;
+  show normalized;
+}
+---
+Left_inl_g ; Right_inr_g

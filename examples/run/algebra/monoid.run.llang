@@ -1,0 +1,9 @@
+import "../../lib/algebra/planar_monoid.llang";
+
+run main where {
+  doctrine PlanarMonoid;
+  mode M;
+  show normalized;
+}
+---
+(unit * unit) ; mul

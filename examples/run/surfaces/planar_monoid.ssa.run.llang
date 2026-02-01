@@ -1,0 +1,15 @@
+import "../../lib/surfaces/planar_monoid.ssa.surface.llang";
+
+run main where {
+  doctrine CartMonoid;
+  mode M;
+  surface PlanarSSA;
+  show normalized;
+}
+---
+diag {
+  in x:A;
+  in y:A;
+  out mul(x, y);
+}
+---

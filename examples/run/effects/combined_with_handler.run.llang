@@ -1,0 +1,31 @@
+import "../../lib/effects/combined.llang";
+
+doctrine Handled extends Base where {
+  type Err @M;
+  type Log @M;
+  gen handleRaise : [Err] -> [] @M;
+  gen handleTell : [Log] -> [] @M;
+}
+
+morphism Handle : Combined -> Handled where {
+  coercion;
+  gen id @M -> id;
+  gen raise @M -> handleRaise;
+  gen tell @M -> handleTell;
+}
+
+term CombinedProg where {
+  doctrine Combined;
+  mode M;
+}
+---
+tell * raise
+---
+
+run main where {
+  doctrine Handled;
+  mode M;
+  show normalized;
+}
+---
+@CombinedProg

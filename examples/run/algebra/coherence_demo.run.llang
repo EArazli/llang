@@ -1,0 +1,10 @@
+import "../../lib/algebra/coherence_demo.llang";
+
+run main where {
+  doctrine CoherenceDemo;
+  policy UseAllOriented;
+  show coherence;
+}
+---
+f
+---

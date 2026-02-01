@@ -1,0 +1,6 @@
+import "../../../lib/surfaces/ccc_surface/stlc.runspec.llang";
+
+run main using STLCinCCC
+---
+lam x:Bool. lam y:Bool. y
+---

@@ -1,0 +1,10 @@
+doctrine HelloWorld where {
+  mode M;
+  type Str @M;
+  gen hello : [] -> [Str] @M;
+}
+
+model HelloModel : HelloWorld where {
+  default = error "missing op";
+  op hello() = "Hello, world!";
+}

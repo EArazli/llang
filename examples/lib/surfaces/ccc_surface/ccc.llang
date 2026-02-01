@@ -1,0 +1,63 @@
+import "../../../../stdlib/struct.cartesian.llang";
+
+doctrine CCC_Bool extends StructCartesian where {
+  type Obj @M;
+  type Hom (a@M, b@M) @M;
+
+  type Unit @M;
+  type Bool @M;
+  type prod (a@M, b@M) @M;
+  type exp (a@M, b@M) @M;
+
+  gen id (a@M) : [] -> [Hom(a, a)] @M;
+  gen comp (a@M, b@M, c@M) : [Hom(b, c), Hom(a, b)] -> [Hom(a, c)] @M;
+
+
+  gen exl (a@M, b@M) : [] -> [Hom(prod(a, b), a)] @M;
+  gen exr (a@M, b@M) : [] -> [Hom(prod(a, b), b)] @M;
+
+  gen pair (a@M, b@M, c@M) : [Hom(c, a), Hom(c, b)] -> [Hom(c, prod(a, b))] @M;
+
+  gen curry (a@M, b@M, c@M) : [Hom(prod(c, a), b)] -> [Hom(c, exp(a, b))] @M;
+  gen eval (a@M, b@M) : [] -> [Hom(prod(exp(a, b), a), b)] @M;
+  gen terminal (a@M) : [] -> [Hom(a, Unit)] @M;
+
+  gen T : [] -> [Hom(Unit, Bool)] @M;
+  gen F : [] -> [Hom(Unit, Bool)] @M;
+
+  rule computational idL -> (a@M, b@M) : [Hom(a, b)] -> [Hom(a, b)] @M =
+    (id{b} * id[Hom(a, b)]) ; comp{a, b, b} == id[Hom(a, b)]
+
+  rule computational idR -> (a@M, b@M) : [Hom(a, b)] -> [Hom(a, b)] @M =
+    (id[Hom(a, b)] * id{a}) ; comp{a, a, b} == id[Hom(a, b)]
+
+  rule structural assoc = (a@M, b@M, c@M, d@M) : [Hom(c, d), Hom(b, c), Hom(a, b)] -> [Hom(a, d)] @M =
+    (id[Hom(c, d)] * comp{a, b, c}) ; comp{a, c, d} ==
+    (comp{b, c, d} * id[Hom(a, b)]) ; comp{a, b, d}
+
+  rule computational exl_pair -> (a@M, b@M, c@M) : [Hom(c, a), Hom(c, b)] -> [Hom(c, a)] @M =
+    (exl{a, b} * pair{a, b, c}) ; comp{c, prod(a, b), a} ==
+      id[Hom(c, a)] * drop{Hom(c, b)}
+
+  rule computational exr_pair -> (a@M, b@M, c@M) : [Hom(c, a), Hom(c, b)] -> [Hom(c, b)] @M =
+    (exr{a, b} * pair{a, b, c}) ; comp{c, prod(a, b), b} ==
+      drop{Hom(c, a)} * id[Hom(c, b)]
+
+  rule computational terminal_unit -> : [] -> [Hom(Unit, Unit)] @M =
+    terminal{Unit} == id{Unit}
+
+  rule computational beta -> (a@M, b@M, c@M) : [Hom(prod(c, a), b)] -> [Hom(prod(c, a), b)] @M =
+    (eval{a, b} *
+      (((curry{a, b, c} * exl{c, a}) ; comp{prod(c, a), c, exp(a, b)}) * exr{c, a} ; pair{exp(a, b), a, prod(c, a)})
+    ) ; comp{prod(c, a), prod(exp(a, b), a), b} ==
+    id[Hom(prod(c, a), b)]
+
+  rule computational beta_app -> (a@M, b@M, c@M) : [Hom(prod(c, a), b), Hom(c, a)] -> [Hom(c, b)] @M =
+    (eval{a, b} *
+      ((curry{a, b, c} * id[Hom(c, a)]) ; pair{exp(a, b), a, c})
+    ) ; comp{c, prod(exp(a, b), a), b} ==
+    (id[Hom(prod(c, a), b)] * ((id{c} * id[Hom(c, a)]) ; pair{c, a, c})) ; comp{c, prod(c, a), b}
+}
+
+doctrine CCC extends CCC_Bool where {
+}

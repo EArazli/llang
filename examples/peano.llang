@@ -1,4 +1,0 @@
-import "../stdlib/nat.llang";
-
-doctrine Peano extends Nat where {
-}

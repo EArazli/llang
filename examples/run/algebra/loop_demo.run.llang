@@ -1,0 +1,14 @@
+import "../../lib/algebra/loop_demo.llang";
+
+model LoopModel : LoopDemo where {
+  default = symbolic;
+}
+
+run main where {
+  doctrine LoopDemo;
+  model LoopModel;
+  show value;
+}
+---
+loop { dup ; (f * id[A]) }
+---

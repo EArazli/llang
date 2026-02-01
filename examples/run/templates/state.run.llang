@@ -1,0 +1,8 @@
+import "../../lib/templates/state.template.llang"
+
+run main where {
+  doctrine StateNat;
+  mode M;
+  show normalized;
+} ---
+get

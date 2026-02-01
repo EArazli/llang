@@ -31,7 +31,7 @@ testNoPolyPrefixes = do
     if useLocal
       then pure (examplesRoot, stdlibRoot)
       else do
-        ex <- takeDirectory <$> getDataFileName "examples/planar_monoid.run.llang"
+        ex <- takeDirectory <$> getDataFileName "examples/run/algebra/planar_monoid.run.llang"
         st <- takeDirectory <$> getDataFileName "stdlib/nat.llang"
         pure (ex, st)
   exampleFiles <- listLlangFiles examplesDir

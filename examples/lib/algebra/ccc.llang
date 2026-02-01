@@ -1,0 +1,8 @@
+import "../../../stdlib/struct.cartesian.llang";
+
+doctrine CCC extends StructCartesian where {
+  type A @M;
+  type B @M;
+
+  gen eval : [A, B] -> [A] @M;
+}

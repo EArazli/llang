@@ -15,15 +15,16 @@ tests :: TestTree
 tests =
   testGroup
     "CLI.Golden"
-    [ testCase "planar_monoid.run.llang output" (goldenRun "examples/planar_monoid.run.llang" expectedPlanarMonoid)
-    , testCase "cart_monoid.run.llang output" (goldenRun "examples/cart_monoid.run.llang" expectedCartMonoid)
-    , testCase "box_match.run.llang output" (goldenRun "examples/box_match.run.llang" expectedBoxMatch)
-    , testCase "coherence_demo.run.llang output" (goldenRun "examples/coherence_demo.run.llang" expectedCoherenceDemo)
-    , testCase "loop_demo.run.llang output" (goldenRun "examples/loop_demo.run.llang" expectedLoopDemo)
-    , testCase "mode_map_demo.run.llang output" (goldenRun "examples/mode_map_demo.run.llang" expectedModeMapDemo)
-    , testCase "term_ref.run.llang output" (goldenRun "examples/term_ref.run.llang" expectedTermRef)
-    , testCase "stlc.lam1.run.llang output" (goldenRun "examples/ccc_surface/stlc.lam1.run.llang" expectedStlcLam)
-    , testCase "stlc.app1.run.llang output" (goldenRun "examples/ccc_surface/stlc.app1.run.llang" expectedStlcApp)
+    [ testCase "planar_monoid.run.llang output" (goldenRun "examples/run/algebra/planar_monoid.run.llang" expectedPlanarMonoid)
+    , testCase "cart_monoid.run.llang output" (goldenRun "examples/run/algebra/cart_monoid.run.llang" expectedCartMonoid)
+    , testCase "box_match.run.llang output" (goldenRun "examples/run/algebra/box_match.run.llang" expectedBoxMatch)
+    , testCase "coherence_demo.run.llang output" (goldenRun "examples/run/algebra/coherence_demo.run.llang" expectedCoherenceDemo)
+    , testCase "loop_demo.run.llang output" (goldenRun "examples/run/algebra/loop_demo.run.llang" expectedLoopDemo)
+    , testCase "mode_map_demo.run.llang output" (goldenRun "examples/run/algebra/mode_map_demo.run.llang" expectedModeMapDemo)
+    , testCase "hello_world.run.llang output" (goldenRun "examples/run/algebra/hello_world.run.llang" expectedHelloWorld)
+    , testCase "term_ref.run.llang output" (goldenRun "examples/run/terms/term_ref.run.llang" expectedTermRef)
+    , testCase "stlc.lam1.run.llang output" (goldenRun "examples/run/surfaces/ccc_surface/stlc.lam1.run.llang" expectedStlcLam)
+    , testCase "stlc.app1.run.llang output" (goldenRun "examples/run/surfaces/ccc_surface/stlc.app1.run.llang" expectedStlcApp)
     ]
 
 
@@ -131,6 +132,13 @@ expectedModeMapDemo =
     , "out: [p1:V.B]"
     , "edges:"
     , "  e0: g [p0] -> [p1]"
+    ]
+
+expectedHelloWorld :: Text
+expectedHelloWorld =
+  T.intercalate "\n"
+    [ "value:"
+    , "VString \"Hello, world!\""
     ]
 
 expectedStlcLam :: Text

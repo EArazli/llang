@@ -1,0 +1,9 @@
+import "../../lib/algebra/cat.llang";
+
+run main where {
+  doctrine Cat;
+  mode M;
+  show normalized;
+}
+---
+f ; g ; h

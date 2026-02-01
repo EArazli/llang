@@ -1,0 +1,15 @@
+import "../../lib/pushout/nat_bool.llang";
+import "../../lib/models/pushout/nat_bool.models.llang";
+
+run main where {
+  doctrine Nat;
+  mode M;
+  model NatBoolNative;
+  policy UseOnlyComputationalLR;
+  fuel 50;
+  show normalized;
+  show value;
+}
+---
+(Z * (Z ; S)) ; add
+---

@@ -1,0 +1,9 @@
+import "../../lib/algebra/ccc.llang";
+
+run main where {
+  doctrine CCC;
+  mode M;
+  show normalized;
+}
+---
+eval

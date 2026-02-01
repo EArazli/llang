@@ -1,0 +1,8 @@
+import "../../lib/algebra/cart_monoid.llang";
+
+run main where {
+  doctrine CartMonoid;
+  show normalized;
+}
+---
+mul ; mul

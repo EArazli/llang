@@ -1,9 +1,0 @@
-import "./ski.llang";
-
-run main where {
-  doctrine SKI;
-  mode M;
-  show normalized;
-}
----
-(((((s * k) ; app) * k) ; app) * id[T]) ; app

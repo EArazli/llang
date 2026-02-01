@@ -21,6 +21,7 @@ tests =
     "DSL.Effects"
     [ testCase "effects empty extends base" testEffectsEmpty
     , testCase "effects singleton extends effect" testEffectsSingleton
+    , testCase "effects singleton fails when effect lacks fromBase" testEffectsSingletonMissingFromBase
     , testCase "effects multiple builds steps" testEffectsMultiple
     , testCase "effects fails when effect lacks fromBase" testEffectsMissingFromBase
     ]
@@ -63,6 +64,24 @@ testEffectsSingleton = do
   case M.lookup "Combined.fromBase" (meMorphisms env) of
     Nothing -> assertFailure "expected Combined.fromBase"
     Just mor -> dName (morSrc mor) @?= "E1"
+
+testEffectsSingletonMissingFromBase :: Assertion
+testEffectsSingletonMissingFromBase = do
+  let src = T.unlines
+        [ "doctrine Base where {"
+        , "  mode M;"
+        , "}"
+        , "doctrine E1 where {"
+        , "  mode M;"
+        , "}"
+        , "doctrine Combined = effects Base { E1 };"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertBool "expected missing fromBase error" ("E1.fromBase" `T.isInfixOf` err)
+        Right _ -> assertFailure "expected effects to fail"
 
 testEffectsMultiple :: Assertion
 testEffectsMultiple = do

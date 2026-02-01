@@ -1,0 +1,20 @@
+import "../codegen/js_ast.llang";
+
+doctrine Tiny where {
+  mode M;
+  type Unit @M;
+  gen main : [] -> [Unit] @M;
+}
+
+morphism CompileToJS : Tiny -> JS where {
+  coercion;
+  type Unit @M -> Code @M;
+  gen main @M -> strLit ; consoleLog;
+}
+
+term mainProg where {
+  doctrine Tiny;
+  mode M;
+}
+---
+main
