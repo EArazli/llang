@@ -9,7 +9,7 @@ doctrine Tiny where {
 morphism CompileToJS : Tiny -> JS where {
   coercion;
   type Unit @M -> Code @M;
-  gen main @M -> strLit ; consoleLog;
+  gen main @M -> strLit ; consoleLog
 }
 
 term mainProg where {

@@ -9,9 +9,11 @@ doctrine Handled extends Base where {
 
 morphism Handle : Combined -> Handled where {
   coercion;
-  gen id @M -> id;
-  gen raise @M -> handleRaise;
-  gen tell @M -> handleTell;
+  gen id @M -> id
+  type ExnE_inl_Err @M -> Err @M;
+  type WriterW_inr_Log @M -> Log @M;
+  gen ExnE_inl_raise @M -> handleRaise
+  gen WriterW_inr_tell @M -> handleTell
 }
 
 term CombinedProg where {
@@ -19,7 +21,7 @@ term CombinedProg where {
   mode M;
 }
 ---
-tell * raise
+WriterW_inr_tell * ExnE_inl_raise
 ---
 
 run main where {
