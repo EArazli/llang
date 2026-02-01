@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Frontend.Env
   ( ModuleEnv(..)
+  , TermDef(..)
   , emptyEnv
   , mergeEnv
   ) where
@@ -10,11 +11,19 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.DSL.AST (RawRunSpec)
 import Strat.Model.Spec (ModelSpec)
+import Strat.Poly.Diagram (Diagram)
 import Strat.Poly.Doctrine (Doctrine)
+import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Morphism (Morphism)
 import Strat.Poly.Surface (PolySurfaceDef)
 import Strat.RunSpec (RunSpec)
 
+
+data TermDef = TermDef
+  { tdDoctrine :: Text
+  , tdMode :: ModeName
+  , tdDiagram :: Diagram
+  } deriving (Eq, Show)
 
 data ModuleEnv = ModuleEnv
   { meDoctrines :: M.Map Text Doctrine
@@ -24,6 +33,7 @@ data ModuleEnv = ModuleEnv
   , meImplDefaults :: M.Map (Text, Text) [Text]
   , meRunSpecs :: M.Map Text RawRunSpec
   , meRuns :: M.Map Text RunSpec
+  , meTerms :: M.Map Text TermDef
   }
   deriving (Eq, Show)
 
@@ -36,6 +46,7 @@ emptyEnv = ModuleEnv
   , meImplDefaults = M.empty
   , meRunSpecs = M.empty
   , meRuns = M.empty
+  , meTerms = M.empty
   }
 
 mergeEnv :: ModuleEnv -> ModuleEnv -> Either Text ModuleEnv
@@ -47,6 +58,7 @@ mergeEnv a b = do
   let impls = mergeImplDefaults (meImplDefaults a) (meImplDefaults b)
   specs <- mergeMap "run_spec" meRunSpecs
   runs <- mergeMap "run" meRuns
+  terms <- mergeMap "term" meTerms
   pure ModuleEnv
     { meDoctrines = docs
     , meMorphisms = morphs
@@ -55,6 +67,7 @@ mergeEnv a b = do
     , meImplDefaults = impls
     , meRunSpecs = specs
     , meRuns = runs
+    , meTerms = terms
     }
   where
     mergeMap label f = mergeNamed label id (f a) (f b)

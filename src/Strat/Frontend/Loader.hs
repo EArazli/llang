@@ -111,6 +111,7 @@ diffEnv full base = ModuleEnv
   , meImplDefaults = diffImplDefaults (meImplDefaults full) (meImplDefaults base)
   , meRunSpecs = M.difference (meRunSpecs full) (meRunSpecs base)
   , meRuns = M.difference (meRuns full) (meRuns base)
+  , meTerms = M.difference (meTerms full) (meTerms base)
   }
 
 diffImplDefaults :: M.Map (Text, Text) [Text] -> M.Map (Text, Text) [Text] -> M.Map (Text, Text) [Text]

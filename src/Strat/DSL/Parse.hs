@@ -44,6 +44,7 @@ decl =
     <|> modelDecl
     <|> implementsDecl
     <|> runSpecDecl
+    <|> termDecl
     <|> runDecl
 
 importDecl :: Parser RawDecl
@@ -143,6 +144,14 @@ runDecl = do
   items <- option [] (symbol "where" *> runBlock)
   exprText <- runBody
   pure (DeclRun (RawNamedRun name using (buildRun items exprText)))
+
+termDecl :: Parser RawDecl
+termDecl = do
+  _ <- symbol "term"
+  name <- ident
+  items <- option [] (symbol "where" *> termBlock)
+  exprText <- runBody
+  pure (DeclTerm (RawNamedTerm name (buildTerm items exprText)))
 
 runBody :: Parser Text
 runBody = do
@@ -346,6 +355,7 @@ data MorphismItem
   = MorphismMode RawPolyModeMap
   | MorphismType RawPolyTypeMap
   | MorphismGen RawPolyGenMap
+  | MorphismCoercion
   | MorphismPolicy Text
   | MorphismFuel Int
 
@@ -361,6 +371,7 @@ morphismItem =
   morphismModeMap
     <|> morphismTypeMap
     <|> morphismGenMap
+    <|> morphismCoercionItem
     <|> morphismPolicy
     <|> morphismFuel
 
@@ -398,6 +409,12 @@ morphismGenMap = do
   optionalSemi
   pure (MorphismGen (RawPolyGenMap src mode rhs))
 
+morphismCoercionItem :: Parser MorphismItem
+morphismCoercionItem = do
+  _ <- symbol "coercion"
+  optionalSemi
+  pure MorphismCoercion
+
 morphismPolicy :: Parser MorphismItem
 morphismPolicy = do
   _ <- symbol "policy"
@@ -422,6 +439,7 @@ buildPolyMorphism name src tgt items =
         [ RPMMode m | MorphismMode m <- items ]
           <> [ RPMType i | MorphismType i <- items ]
           <> [ RPMGen j | MorphismGen j <- items ]
+          <> [ RPMCoercion | MorphismCoercion <- items ]
     , rpmPolicy = firstJust [ p | MorphismPolicy p <- items ]
     , rpmFuel = firstJust [ f | MorphismFuel f <- items ]
     }
@@ -538,6 +556,112 @@ buildRun items exprText =
     , rrFuel = firstJust [ f | RunFuel f <- items ]
     , rrShowFlags = [ s | RunShow s <- items ]
     , rrExprText = exprText
+    }
+  where
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
+
+-- Term block
+
+data TermItem
+  = TermDoctrine Text
+  | TermMode Text
+  | TermSurface Text
+  | TermApply Text
+  | TermUses [Text]
+  | TermPolicy Text
+  | TermFuel Int
+
+termBlock :: Parser [TermItem]
+termBlock = do
+  _ <- symbol "{"
+  items <- many termItem
+  _ <- symbol "}"
+  pure items
+
+termItem :: Parser TermItem
+termItem =
+  termDoctrineItem
+    <|> termModeItem
+    <|> termSurfaceItem
+    <|> termApplyItem
+    <|> termUsesItem
+    <|> termPolicyItem
+    <|> termFuelItem
+    <|> termModelForbidden
+    <|> termShowForbidden
+
+termDoctrineItem :: Parser TermItem
+termDoctrineItem = do
+  _ <- symbol "doctrine"
+  name <- ident
+  optionalSemi
+  pure (TermDoctrine name)
+
+termModeItem :: Parser TermItem
+termModeItem = do
+  _ <- keyword "mode"
+  name <- ident
+  optionalSemi
+  pure (TermMode name)
+
+termSurfaceItem :: Parser TermItem
+termSurfaceItem = do
+  _ <- symbol "surface"
+  name <- ident
+  optionalSemi
+  pure (TermSurface name)
+
+termApplyItem :: Parser TermItem
+termApplyItem = do
+  _ <- symbol "apply"
+  name <- ident
+  optionalSemi
+  pure (TermApply name)
+
+termUsesItem :: Parser TermItem
+termUsesItem = do
+  _ <- symbol "uses"
+  _ <- optional (symbol ":")
+  names <- ident `sepBy1` symbol ","
+  optionalSemi
+  pure (TermUses names)
+
+termPolicyItem :: Parser TermItem
+termPolicyItem = do
+  _ <- symbol "policy"
+  name <- ident
+  optionalSemi
+  pure (TermPolicy name)
+
+termFuelItem :: Parser TermItem
+termFuelItem = do
+  _ <- symbol "fuel"
+  n <- fromIntegral <$> integer
+  optionalSemi
+  pure (TermFuel n)
+
+termModelForbidden :: Parser TermItem
+termModelForbidden = do
+  _ <- keyword "model"
+  fail "term: model is not allowed"
+
+termShowForbidden :: Parser TermItem
+termShowForbidden = do
+  _ <- keyword "show"
+  fail "term: show is not allowed"
+
+buildTerm :: [TermItem] -> Text -> RawTerm
+buildTerm items exprText =
+  RawTerm
+    { rtDoctrine = firstJust [ d | TermDoctrine d <- items ]
+    , rtMode = firstJust [ m | TermMode m <- items ]
+    , rtSurface = firstJust [ s | TermSurface s <- items ]
+    , rtMorphisms = [ n | TermApply n <- items ]
+    , rtUses = concat [ ns | TermUses ns <- items ]
+    , rtPolicy = firstJust [ p | TermPolicy p <- items ]
+    , rtFuel = firstJust [ f | TermFuel f <- items ]
+    , rtExprText = exprText
     }
   where
     firstJust [] = Nothing

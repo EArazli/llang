@@ -12,9 +12,9 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
 import Strat.Frontend.Env
 import Strat.Model.Spec (ModelSpec(..), DefaultBehavior(..), OpClause(..))
-import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, elabPolyRun)
+import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, elabPolyRun, parsePolicy)
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
-import Strat.Poly.Diagram (genD)
+import Strat.Poly.Diagram (Diagram(..), genD)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
 import Strat.Poly.ModeTheory (ModeTheory(..))
 import qualified Strat.Poly.Morphism as PolyMorph
@@ -22,6 +22,7 @@ import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePol
 import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine)
 import Strat.RunSpec (RunSpec)
+import Strat.Frontend.Compile (compileDiagramArtifact)
 
 
 elabRawFile :: RawFile -> Either Text ModuleEnv
@@ -29,13 +30,14 @@ elabRawFile = elabRawFileWithEnv emptyEnv
 
 elabRawFileWithEnv :: ModuleEnv -> RawFile -> Either Text ModuleEnv
 elabRawFileWithEnv baseEnv (RawFile decls) = do
-  (env, rawRuns) <- foldM step (baseEnv, []) decls
-  runs <- elabRuns env rawRuns
-  pure env { meRuns = runs }
+  (env, rawTerms, rawRuns) <- foldM step (baseEnv, [], []) decls
+  envWithTerms <- elabTerms env rawTerms
+  runs <- elabRuns envWithTerms rawRuns
+  pure envWithTerms { meRuns = runs }
   where
-    step (env, rawRuns) decl =
+    step (env, rawTerms, rawRuns) decl =
       case decl of
-        DeclImport _ -> Right (env, rawRuns)
+        DeclImport _ -> Right (env, rawTerms, rawRuns)
         DeclDoctrine raw -> do
           let name = rpdName raw
           ensureAbsent "doctrine" name (meDoctrines env)
@@ -46,7 +48,7 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
               mor <- buildPolyFromBase base (rpdName raw) env doc
               pure env { meMorphisms = M.insert (PolyMorph.morName mor) mor (meMorphisms env) }
           let env'' = env' { meDoctrines = M.insert (rpdName raw) doc (meDoctrines env') }
-          pure (env'', rawRuns)
+          pure (env'', rawTerms, rawRuns)
         DeclDoctrinePushout name leftMor rightMor -> do
           ensureAbsent "doctrine" name (meDoctrines env)
           f <- lookupMorphism env leftMor
@@ -62,7 +64,7 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
                     (M.insert (PolyMorph.morName inl) inl
                     (M.insert (PolyMorph.morName inr) inr (meMorphisms env)))
                 }
-          pure (env', rawRuns)
+          pure (env', rawTerms, rawRuns)
         DeclDoctrineCoproduct name leftDoc rightDoc -> do
           ensureAbsent "doctrine" name (meDoctrines env)
           left <- lookupDoctrine env leftDoc
@@ -78,37 +80,39 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
                     (M.insert (PolyMorph.morName inl) inl
                     (M.insert (PolyMorph.morName inr) inr (meMorphisms env)))
                 }
-          pure (env', rawRuns)
+          pure (env', rawTerms, rawRuns)
         DeclSurface name spec -> do
           ensureAbsent "surface" name (meSurfaces env)
           doc <- lookupDoctrine env (ssDoctrine spec)
           def <- elabPolySurfaceDecl name doc spec
           let env' = env { meSurfaces = M.insert name def (meSurfaces env) }
-          pure (env', rawRuns)
+          pure (env', rawTerms, rawRuns)
         DeclModel name doc items -> do
           ensureAbsent "model" name (meModels env)
           spec <- elabModelSpec name items
           _ <- lookupDoctrine env doc
           let env' = env { meModels = M.insert name (doc, spec) (meModels env) }
-          pure (env', rawRuns)
+          pure (env', rawTerms, rawRuns)
         DeclMorphism morphDecl -> do
           let name = rpmName morphDecl
           ensureAbsent "morphism" name (meMorphisms env)
           morph <- elabPolyMorphism env morphDecl
           let env' = env { meMorphisms = M.insert name morph (meMorphisms env) }
-          pure (env', rawRuns)
+          pure (env', rawTerms, rawRuns)
         DeclImplements iface tgt morphName -> do
           (key, name) <- elabImplements env iface tgt morphName
           let defaults = M.findWithDefault [] key (meImplDefaults env)
           let defaults' = if name `elem` defaults then defaults else defaults <> [name]
           let env' = env { meImplDefaults = M.insert key defaults' (meImplDefaults env) }
-          pure (env', rawRuns)
+          pure (env', rawTerms, rawRuns)
         DeclRunSpec name rawSpec -> do
           ensureAbsent "run_spec" name (meRunSpecs env)
           let env' = env { meRunSpecs = M.insert name rawSpec (meRunSpecs env) }
-          pure (env', rawRuns)
+          pure (env', rawTerms, rawRuns)
         DeclRun rawRun ->
-          pure (env, rawRuns <> [rawRun])
+          pure (env, rawTerms, rawRuns <> [rawRun])
+        DeclTerm rawTerm ->
+          pure (env, rawTerms <> [rawTerm], rawRuns)
 
 
 ensureAbsent :: Text -> Text -> M.Map Text v -> Either Text ()
@@ -157,6 +161,43 @@ elabRuns env raws = foldM step M.empty raws
           let merged = mergeRawRun base (rnrRun raw)
           spec <- elabPolyRun name merged
           pure (M.insert name spec acc)
+
+elabTerms :: ModuleEnv -> [RawNamedTerm] -> Either Text ModuleEnv
+elabTerms env raws = foldM step env raws
+  where
+    step acc raw = do
+      let name = rntName raw
+      if M.member name (meTerms acc)
+        then Left ("Duplicate term name: " <> name)
+        else do
+          term <- elabTerm acc (rntTerm raw)
+          let terms' = M.insert name term (meTerms acc)
+          pure acc { meTerms = terms' }
+
+elabTerm :: ModuleEnv -> RawTerm -> Either Text TermDef
+elabTerm env raw = do
+  doctrine <- maybe (Left "term: missing doctrine") Right (rtDoctrine raw)
+  let fuel = maybe 50 id (rtFuel raw)
+  let policyName = maybe "UseStructuralAsBidirectional" id (rtPolicy raw)
+  policy <- parsePolicy policyName
+  (docFinal, _inputDiag, normDiag) <-
+    case compileDiagramArtifact
+      env
+      doctrine
+      (rtMode raw)
+      (rtSurface raw)
+      (rtUses raw)
+      (rtMorphisms raw)
+      policy
+      fuel
+      (rtExprText raw) of
+        Left err -> Left ("term: " <> err)
+        Right ok -> Right ok
+  pure TermDef
+    { tdDoctrine = dName docFinal
+    , tdMode = dMode normDiag
+    , tdDiagram = normDiag
+    }
 
 mergeRawRun :: Maybe RawRun -> RawRun -> RawRun
 mergeRawRun base override =
@@ -216,6 +257,7 @@ buildPolyFromBase baseName newName env newDoc = do
         { PolyMorph.morName = morName
         , PolyMorph.morSrc = baseDoc
         , PolyMorph.morTgt = newDoc
+        , PolyMorph.morIsCoercion = True
         , PolyMorph.morModeMap = identityModeMap baseDoc
         , PolyMorph.morTypeMap = M.empty
         , PolyMorph.morGenMap = genMap

@@ -74,6 +74,7 @@ type RawPolyContext = [RawPolyTypeExpr]
 data RawDiagExpr
   = RDId RawPolyContext
   | RDGen Text (Maybe [RawPolyTypeExpr])
+  | RDTermRef Text
   | RDBox Text RawDiagExpr
   | RDLoop RawDiagExpr
   | RDComp RawDiagExpr RawDiagExpr

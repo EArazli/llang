@@ -20,6 +20,7 @@ tests =
     , testCase "box_match.run.llang output" (goldenRun "examples/box_match.run.llang" expectedBoxMatch)
     , testCase "coherence_demo.run.llang output" (goldenRun "examples/coherence_demo.run.llang" expectedCoherenceDemo)
     , testCase "loop_demo.run.llang output" (goldenRun "examples/loop_demo.run.llang" expectedLoopDemo)
+    , testCase "term_ref.run.llang output" (goldenRun "examples/term_ref.run.llang" expectedTermRef)
     , testCase "stlc.lam1.run.llang output" (goldenRun "examples/ccc_surface/stlc.lam1.run.llang" expectedStlcLam)
     , testCase "stlc.app1.run.llang output" (goldenRun "examples/ccc_surface/stlc.app1.run.llang" expectedStlcApp)
     ]
@@ -106,6 +107,18 @@ expectedLoopDemo =
   T.intercalate "\n"
     [ "value:"
     , "VList [VAtom \"letrec\",VList [VList [VAtom \"$p0\",VList [VAtom \"dup#1\",VAtom \"$p2\"]],VList [VAtom \"$p1\",VList [VAtom \"dup#0\",VAtom \"$p2\"]],VList [VAtom \"$p2\",VList [VAtom \"f\",VAtom \"$p1\"]]],VAtom \"$p0\"]"
+    ]
+
+expectedTermRef :: Text
+expectedTermRef =
+  T.intercalate "\n"
+    [ "normalized:"
+    , "mode: M"
+    , "in: [p0:M.A]"
+    , "out: [p1:M.A]"
+    , "edges:"
+    , "  e0: f [p0] -> [p2]"
+    , "  e1: g [p2] -> [p1]"
     ]
 
 expectedStlcLam :: Text

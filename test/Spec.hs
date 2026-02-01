@@ -2,6 +2,7 @@ module Main (main) where
 
 import Test.Tasty
 import qualified Test.CLI.Golden as CLIGolden
+import qualified Test.Frontend.Coerce as FrontendCoerce
 import qualified Test.NoPolyPrefixes as NoPolyPrefixes
 import qualified Test.Poly.Basic as PolyBasic
 import qualified Test.Poly.Rewrite as PolyRewrite
@@ -23,6 +24,7 @@ main =
     testGroup
       "All"
       [ CLIGolden.tests
+      , FrontendCoerce.tests
       , PolyBasic.tests
       , PolyRewrite.tests
       , PolyDSL.tests

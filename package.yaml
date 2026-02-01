@@ -49,6 +49,8 @@ data-files:
 - examples/planar_monoid.llang
 - examples/planar_monoid.run.llang
 - examples/planar_monoid.ssa.run.llang
+- examples/term_ref.run.llang
+- examples/terms/term_defs.llang
 - examples/planar_monoid.ssa.surface.llang
 - examples/pushout/ambiguous_model_restriction.llang
 - examples/pushout/category_bool_nat_base.llang
@@ -108,6 +110,7 @@ ghc-options:
 library:
   source-dirs: src
   other-modules:
+  - Strat.Frontend.Compile
   - Strat.Poly.TypePretty
 
 executables:
@@ -137,6 +140,7 @@ tests:
     - tasty-quickcheck
     other-modules:
     - Test.CLI.Golden
+    - Test.Frontend.Coerce
     - Test.NoPolyPrefixes
     - Test.Poly.Basic
     - Test.Poly.Rewrite

@@ -4,13 +4,14 @@ module Strat.Poly.DSL.Elab
   , elabPolyMorphism
   , elabPolyRun
   , elabDiagExpr
+  , parsePolicy
   ) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Control.Monad (foldM)
+import Control.Monad (foldM, when)
 import Strat.DSL.AST (RawRun(..), RawRunShow(..), RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..))
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
@@ -21,7 +22,8 @@ import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
 import Strat.Poly.Morphism
-import Strat.Frontend.Env (ModuleEnv(..))
+import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
+import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.RunSpec (RunShow(..), RunSpec(..))
@@ -70,6 +72,8 @@ elabPolyMorphism env raw = do
   let policyName = maybe "UseStructuralAsBidirectional" id (rpmPolicy raw)
   policy <- parsePolicy policyName
   let fuel = maybe 50 id (rpmFuel raw)
+  let coercionFlags = [() | RPMCoercion <- rpmItems raw]
+  when (length coercionFlags > 1) (Left "morphism: duplicate coercion flag")
   modeMap <- buildModeMap src tgt [ m | RPMMode m <- rpmItems raw ]
   typeMap <- foldM (addTypeMap src tgt modeMap) M.empty [ t | RPMType t <- rpmItems raw ]
   genMap <- foldM (addGenMap src tgt modeMap) M.empty [ g | RPMGen g <- rpmItems raw ]
@@ -78,6 +82,7 @@ elabPolyMorphism env raw = do
         { morName = rpmName raw
         , morSrc = src
         , morTgt = tgt
+        , morIsCoercion = not (null coercionFlags)
         , morModeMap = modeMap
         , morTypeMap = typeMap
         , morGenMap = genMap
@@ -161,7 +166,7 @@ elabPolyMorphism env raw = do
       ensureMode tgt modeTgt
       gen <- lookupGen src modeSrc (GenName (rpmgSrcGen decl))
       tyVarsTgt <- mapM (mapTyVarMode modeMap) (gdTyVars gen)
-      diag <- elabDiagExpr tgt modeTgt tyVarsTgt (rpmgRhs decl)
+      diag <- elabDiagExpr env tgt modeTgt tyVarsTgt (rpmgRhs decl)
       let free = freeTyVarsDiagram diag
       let allowed = S.fromList tyVarsTgt
       if S.isSubsetOf free allowed
@@ -212,7 +217,7 @@ seedDoctrine name base =
     Just doc -> doc { dName = name }
 
 elabPolyItem :: ModuleEnv -> Doctrine -> RawPolyItem -> Either Text Doctrine
-elabPolyItem _ doc item =
+elabPolyItem env doc item =
   case item of
     RPMode name -> do
       let mode = ModeName name
@@ -261,8 +266,8 @@ elabPolyItem _ doc item =
       ensureDistinctTyVarNames "duplicate rule type parameter name" ruleVars
       dom <- elabContext doc mode ruleVars (rprDom decl)
       cod <- elabContext doc mode ruleVars (rprCod decl)
-      lhs <- withRule (elabDiagExpr doc mode ruleVars (rprLHS decl))
-      rhs <- withRule (elabDiagExpr doc mode ruleVars (rprRHS decl))
+      lhs <- withRule (elabDiagExpr env doc mode ruleVars (rprLHS decl))
+      rhs <- withRule (elabDiagExpr env doc mode ruleVars (rprRHS decl))
       let rigid = S.fromList ruleVars
       lhs' <- unifyBoundary rigid dom cod lhs
       rhs' <- unifyBoundary rigid dom cod rhs
@@ -389,8 +394,8 @@ elabTypeExpr doc vars expr =
             then Right (TCon ref args')
             else Left "type constructor argument mode mismatch"
 
-elabDiagExpr :: Doctrine -> ModeName -> [TyVar] -> RawDiagExpr -> Either Text Diagram
-elabDiagExpr doc mode ruleVars expr =
+elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [TyVar] -> RawDiagExpr -> Either Text Diagram
+elabDiagExpr env doc mode ruleVars expr =
   evalFresh (build expr)
   where
     rigid = S.fromList ruleVars
@@ -419,6 +424,21 @@ elabDiagExpr doc mode ruleVars expr =
                   let subst = M.fromList (zip freshVars args')
                   pure (applySubstCtx subst dom0, applySubstCtx subst cod0)
           liftEither (genD mode dom cod (gdName gen))
+        RDTermRef name -> do
+          term <- liftEither (lookupTerm env name)
+          if tdDoctrine term == dName doc
+            then
+              if tdMode term /= mode
+                then liftEither (Left ("term @" <> name <> " has mode " <> renderModeName (tdMode term) <> ", expected " <> renderModeName mode))
+                else pure (tdDiagram term)
+            else do
+              srcDoc <- liftEither (lookupDoctrine env (tdDoctrine term))
+              (doc', diag') <- liftEither (coerceDiagramTo env srcDoc (tdDiagram term) (dName doc))
+              if dName doc' /= dName doc
+                then liftEither (Left ("term @" <> name <> " has doctrine " <> tdDoctrine term <> ", expected " <> dName doc))
+                else if dMode diag' /= mode
+                  then liftEither (Left ("term @" <> name <> " has mode " <> renderModeName (dMode diag') <> ", expected " <> renderModeName mode))
+                  else pure diag'
         RDBox name innerExpr -> do
           inner <- build innerExpr
           dom <- liftEither (diagramDom inner)
@@ -462,6 +482,18 @@ elabDiagExpr doc mode ruleVars expr =
       let (pid, diag1) = freshPort ty diag
           (pids, diag2) = allocPorts rest diag1
       in (pid:pids, diag2)
+
+    lookupTerm env' name =
+      case M.lookup name (meTerms env') of
+        Nothing -> Left ("unknown term: " <> name)
+        Just term -> Right term
+
+    renderModeName (ModeName name) = name
+
+    lookupDoctrine env' name =
+      case M.lookup name (meDoctrines env') of
+        Nothing -> Left ("Unknown doctrine: " <> name)
+        Just doc' -> Right doc'
 
 lookupGen :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGen doc mode name =

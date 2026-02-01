@@ -9,6 +9,8 @@ module Strat.DSL.AST
   , RawRun(..)
   , RawRunSpec(..)
   , RawNamedRun(..)
+  , RawTerm(..)
+  , RawNamedTerm(..)
   , RawPolyMorphism(..)
   , RawPolyMorphismItem(..)
   , RawPolyModeMap(..)
@@ -33,6 +35,7 @@ data RawDecl
   | DeclImplements Text Text Text
   | DeclRunSpec Text RawRunSpec
   | DeclRun RawNamedRun
+  | DeclTerm RawNamedTerm
   deriving (Eq, Show)
 
 newtype RawFile = RawFile [RawDecl]
@@ -88,6 +91,21 @@ data RawNamedRun = RawNamedRun
   , rnrRun :: RawRun
   } deriving (Eq, Show)
 
+data RawTerm = RawTerm
+  { rtDoctrine :: Maybe Text
+  , rtMode :: Maybe Text
+  , rtSurface :: Maybe Text
+  , rtUses :: [Text]
+  , rtMorphisms :: [Text]
+  , rtPolicy :: Maybe Text
+  , rtFuel :: Maybe Int
+  , rtExprText :: Text
+  } deriving (Eq, Show)
+
+data RawNamedTerm = RawNamedTerm
+  { rntName :: Text
+  , rntTerm :: RawTerm
+  } deriving (Eq, Show)
 
 data RawPolyMorphism = RawPolyMorphism
   { rpmName :: Text
@@ -103,6 +121,7 @@ data RawPolyMorphismItem
   = RPMMode RawPolyModeMap
   | RPMType RawPolyTypeMap
   | RPMGen RawPolyGenMap
+  | RPMCoercion
   deriving (Eq, Show)
 
 data RawPolyModeMap = RawPolyModeMap

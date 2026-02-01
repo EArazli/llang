@@ -15,6 +15,7 @@ import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Doctrine (Doctrine(..), TypeSig(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
+import Strat.Frontend.Env (emptyEnv)
 import Strat.Poly.Diagram (diagramDom)
 import Strat.Poly.UnifyTy (unifyTy)
 import Strat.Poly.Graph (emptyDiagram, freshPort, validateDiagram)
@@ -70,7 +71,7 @@ testElabCrossMode = do
   raw <- case parseDiagExpr "id[V.Thunk(C.A)]" of
     Left err -> assertFailure (T.unpack err)
     Right expr -> pure expr
-  diag <- case elabDiagExpr doc modeV [] raw of
+  diag <- case elabDiagExpr emptyEnv doc modeV [] raw of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   dom <- case diagramDom diag of
@@ -89,7 +90,7 @@ testAmbiguousConstructor = do
   raw <- case parseDiagExpr "id[A]" of
     Left err -> assertFailure (T.unpack err)
     Right expr -> pure expr
-  case elabDiagExpr doc modeC [] raw of
+  case elabDiagExpr emptyEnv doc modeC [] raw of
     Left err ->
       assertBool "expected ambiguity error" ("ambiguous" `T.isInfixOf` err)
     Right _ -> assertFailure "expected ambiguity error"
@@ -105,7 +106,7 @@ testArgModeMismatch = do
   raw <- case parseDiagExpr "id[V.Thunk(V.A)]" of
     Left err -> assertFailure (T.unpack err)
     Right expr -> pure expr
-  case elabDiagExpr doc modeV [] raw of
+  case elabDiagExpr emptyEnv doc modeV [] raw of
     Left err ->
       assertBool "expected argument mode mismatch" ("argument mode mismatch" `T.isInfixOf` err)
     Right _ -> assertFailure "expected argument mode mismatch"

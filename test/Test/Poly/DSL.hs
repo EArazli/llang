@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
-import Strat.Frontend.Env (meDoctrines, meMorphisms)
+import Strat.Frontend.Env (emptyEnv, meDoctrines, meMorphisms)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
@@ -66,7 +66,7 @@ testPolyDSLNormalize = do
   rawExpr <- case parseDiagExpr "(mul * id[A]) ; mul" of
     Left err -> assertFailure (T.unpack err)
     Right e -> pure e
-  diag <- case elabDiagExpr doc mode [] rawExpr of
+  diag <- case elabDiagExpr emptyEnv doc mode [] rawExpr of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   let rules = rulesFromDoctrine doc

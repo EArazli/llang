@@ -28,6 +28,7 @@ data Morphism = Morphism
   { morName   :: Text
   , morSrc    :: Doctrine
   , morTgt    :: Doctrine
+  , morIsCoercion :: Bool
   , morModeMap :: M.Map ModeName ModeName
   , morTypeMap :: M.Map TypeRef TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) Diagram

@@ -1,0 +1,10 @@
+doctrine Base where {
+  mode M;
+  type A @M;
+  gen f : [A] -> [A] @M;
+}
+
+term t where {
+  doctrine Base;
+} ---
+f
