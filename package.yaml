@@ -49,8 +49,12 @@ data-files:
 - examples/planar_monoid.llang
 - examples/planar_monoid.run.llang
 - examples/planar_monoid.ssa.run.llang
+- examples/data/list.run.llang
+- examples/effects/combined.llang
 - examples/term_ref.run.llang
 - examples/terms/term_defs.llang
+- examples/templates/state.run.llang
+- examples/templates/state.template.llang
 - examples/planar_monoid.ssa.surface.llang
 - examples/pushout/ambiguous_model_restriction.llang
 - examples/pushout/category_bool_nat_base.llang
@@ -76,6 +80,10 @@ data-files:
 - stdlib/struct.cartesian.models.llang
 - stdlib/struct.planar.llang
 - stdlib/struct.symmetric.llang
+- stdlib/data/list.llang
+- stdlib/effects/exception.template.llang
+- stdlib/effects/nondet.llang
+- stdlib/effects/writer.template.llang
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -110,6 +118,7 @@ ghc-options:
 library:
   source-dirs: src
   other-modules:
+  - Strat.DSL.Template
   - Strat.Frontend.Compile
   - Strat.Poly.TypePretty
 
@@ -140,6 +149,8 @@ tests:
     - tasty-quickcheck
     other-modules:
     - Test.CLI.Golden
+    - Test.DSL.Effects
+    - Test.DSL.Templates
     - Test.Frontend.Coerce
     - Test.NoPolyPrefixes
     - Test.Poly.Basic
@@ -150,6 +161,7 @@ tests:
     - Test.Poly.Pushout
     - Test.Poly.CCC
     - Test.Poly.Coherence
+    - Test.Poly.DataMacro
     - Test.Poly.Surface
     - Test.Poly.STLCSurface
     - Test.Poly.TypeModes

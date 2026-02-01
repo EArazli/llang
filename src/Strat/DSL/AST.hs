@@ -9,6 +9,8 @@ module Strat.DSL.AST
   , RawRun(..)
   , RawRunSpec(..)
   , RawNamedRun(..)
+  , RawDoctrineTemplate(..)
+  , RawDoctrineInstantiate(..)
   , RawTerm(..)
   , RawNamedTerm(..)
   , RawPolyMorphism(..)
@@ -29,6 +31,13 @@ data RawDecl
   | DeclDoctrine PolyAST.RawPolyDoctrine
   | DeclDoctrinePushout Text Text Text
   | DeclDoctrineCoproduct Text Text Text
+  | DeclDoctrineEffects
+      { rdeName :: Text
+      , rdeBase :: Text
+      , rdeEffects :: [Text]
+      }
+  | DeclDoctrineTemplate RawDoctrineTemplate
+  | DeclDoctrineInstantiate RawDoctrineInstantiate
   | DeclSurface Text SurfaceSpec
   | DeclModel Text Text [RawModelItem]
   | DeclMorphism RawPolyMorphism
@@ -89,6 +98,18 @@ data RawNamedRun = RawNamedRun
   { rnrName :: Text
   , rnrUsing :: Maybe Text
   , rnrRun :: RawRun
+  } deriving (Eq, Show)
+
+data RawDoctrineTemplate = RawDoctrineTemplate
+  { rdtName :: Text
+  , rdtParams :: [Text]
+  , rdtBody :: PolyAST.RawPolyDoctrine
+  } deriving (Eq, Show)
+
+data RawDoctrineInstantiate = RawDoctrineInstantiate
+  { rdiName :: Text
+  , rdiTemplate :: Text
+  , rdiArgs :: [Text]
   } deriving (Eq, Show)
 
 data RawTerm = RawTerm

@@ -259,6 +259,23 @@ elabPolyItem env doc item =
           let table' = M.insert gname gen table
           let gens' = M.insert mode table' (dGens doc)
           pure doc { dGens = gens' }
+    RPData decl -> do
+      let modeName = rpdTyMode decl
+      let mode = ModeName modeName
+      ensureMode doc mode
+      let ctorNames = map rpdCtorName (rpdCtors decl)
+      ensureDistinct "data: duplicate constructor name" ctorNames
+      let existing = M.findWithDefault M.empty mode (dGens doc)
+      case [c | c <- ctorNames, M.member (GenName c) existing] of
+        (c:_) -> Left ("data: constructor name conflicts with generator " <> c)
+        [] -> Right ()
+      let typeDecl = RawPolyTypeDecl
+            { rptName = rpdTyName decl
+            , rptVars = rpdTyVars decl
+            , rptMode = modeName
+            }
+      let ctors = map (mkCtor modeName (rpdTyName decl) (rpdTyVars decl)) (rpdCtors decl)
+      foldM (elabPolyItem env) doc (RPType typeDecl : map RPGen ctors)
     RPRule decl -> do
       let mode = ModeName (rprMode decl)
       ensureMode doc mode
@@ -290,6 +307,27 @@ elabPolyItem env doc item =
           case action of
             Left err -> Left ("rule " <> rprName decl <> ": " <> err)
             Right x -> Right x
+
+ensureDistinct :: Text -> [Text] -> Either Text ()
+ensureDistinct label names =
+  let set = S.fromList names
+  in if S.size set == length names then Right () else Left label
+
+rpdCtorName :: RawPolyCtorDecl -> Text
+rpdCtorName = rpcName
+
+mkCtor :: Text -> Text -> [RawTyVarDecl] -> RawPolyCtorDecl -> RawPolyGenDecl
+mkCtor modeName tyName vars ctor =
+  let typeRef = RawTypeRef { rtrMode = Just modeName, rtrName = tyName }
+      args = map (RPTVar . rtvName) vars
+      cod = [RPTCon typeRef args]
+  in RawPolyGenDecl
+      { rpgName = rpcName ctor
+      , rpgVars = vars
+      , rpgDom = rpcArgs ctor
+      , rpgCod = cod
+      , rpgMode = modeName
+      }
 
 ensureMode :: Doctrine -> ModeName -> Either Text ()
 ensureMode doc mode =

@@ -20,6 +20,7 @@ tests =
     , testCase "box_match.run.llang output" (goldenRun "examples/box_match.run.llang" expectedBoxMatch)
     , testCase "coherence_demo.run.llang output" (goldenRun "examples/coherence_demo.run.llang" expectedCoherenceDemo)
     , testCase "loop_demo.run.llang output" (goldenRun "examples/loop_demo.run.llang" expectedLoopDemo)
+    , testCase "mode_map_demo.run.llang output" (goldenRun "examples/mode_map_demo.run.llang" expectedModeMapDemo)
     , testCase "term_ref.run.llang output" (goldenRun "examples/term_ref.run.llang" expectedTermRef)
     , testCase "stlc.lam1.run.llang output" (goldenRun "examples/ccc_surface/stlc.lam1.run.llang" expectedStlcLam)
     , testCase "stlc.app1.run.llang output" (goldenRun "examples/ccc_surface/stlc.app1.run.llang" expectedStlcApp)
@@ -119,6 +120,17 @@ expectedTermRef =
     , "edges:"
     , "  e0: f [p0] -> [p2]"
     , "  e1: g [p2] -> [p1]"
+    ]
+
+expectedModeMapDemo :: Text
+expectedModeMapDemo =
+  T.intercalate "\n"
+    [ "normalized:"
+    , "mode: V"
+    , "in: [p0:V.B]"
+    , "out: [p1:V.B]"
+    , "edges:"
+    , "  e0: g [p0] -> [p1]"
     ]
 
 expectedStlcLam :: Text

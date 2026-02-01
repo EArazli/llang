@@ -1,0 +1,7 @@
+doctrine ListData where {
+  mode M;
+  data List (a@M) @M where {
+    Nil  : [];
+    Cons : [a, List(a)];
+  }
+}

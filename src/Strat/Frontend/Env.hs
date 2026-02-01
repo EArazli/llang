@@ -9,7 +9,7 @@ module Strat.Frontend.Env
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.DSL.AST (RawRunSpec)
+import Strat.DSL.AST (RawDoctrineTemplate, RawRunSpec)
 import Strat.Model.Spec (ModelSpec)
 import Strat.Poly.Diagram (Diagram)
 import Strat.Poly.Doctrine (Doctrine)
@@ -34,6 +34,7 @@ data ModuleEnv = ModuleEnv
   , meRunSpecs :: M.Map Text RawRunSpec
   , meRuns :: M.Map Text RunSpec
   , meTerms :: M.Map Text TermDef
+  , meTemplates :: M.Map Text RawDoctrineTemplate
   }
   deriving (Eq, Show)
 
@@ -47,6 +48,7 @@ emptyEnv = ModuleEnv
   , meRunSpecs = M.empty
   , meRuns = M.empty
   , meTerms = M.empty
+  , meTemplates = M.empty
   }
 
 mergeEnv :: ModuleEnv -> ModuleEnv -> Either Text ModuleEnv
@@ -59,6 +61,7 @@ mergeEnv a b = do
   specs <- mergeMap "run_spec" meRunSpecs
   runs <- mergeMap "run" meRuns
   terms <- mergeMap "term" meTerms
+  templates <- mergeMap "doctrine_template" meTemplates
   pure ModuleEnv
     { meDoctrines = docs
     , meMorphisms = morphs
@@ -68,6 +71,7 @@ mergeEnv a b = do
     , meRunSpecs = specs
     , meRuns = runs
     , meTerms = terms
+    , meTemplates = templates
     }
   where
     mergeMap label f = mergeNamed label id (f a) (f b)

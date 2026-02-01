@@ -6,14 +6,17 @@ module Strat.DSL.Elab
 
 import Control.Monad (foldM)
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
 import Strat.Frontend.Env
 import Strat.Model.Spec (ModelSpec(..), DefaultBehavior(..), OpClause(..))
+import Strat.DSL.Template (instantiateTemplate)
 import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, elabPolyRun, parsePolicy)
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
+import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.Diagram (Diagram(..), genD)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
 import Strat.Poly.ModeTheory (ModeTheory(..))
@@ -39,31 +42,10 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
       case decl of
         DeclImport _ -> Right (env, rawTerms, rawRuns)
         DeclDoctrine raw -> do
-          let name = rpdName raw
-          ensureAbsent "doctrine" name (meDoctrines env)
-          doc <- elabPolyDoctrine env raw
-          env' <- case rpdExtends raw of
-            Nothing -> Right env
-            Just base -> do
-              mor <- buildPolyFromBase base (rpdName raw) env doc
-              pure env { meMorphisms = M.insert (PolyMorph.morName mor) mor (meMorphisms env) }
-          let env'' = env' { meDoctrines = M.insert (rpdName raw) doc (meDoctrines env') }
-          pure (env'', rawTerms, rawRuns)
+          env' <- insertDoctrine env raw
+          pure (env', rawTerms, rawRuns)
         DeclDoctrinePushout name leftMor rightMor -> do
-          ensureAbsent "doctrine" name (meDoctrines env)
-          f <- lookupMorphism env leftMor
-          g <- lookupMorphism env rightMor
-          PolyPushoutResult doc inl inr glue <- computePolyPushout name f g
-          ensureAbsent "morphism" (PolyMorph.morName inl) (meMorphisms env)
-          ensureAbsent "morphism" (PolyMorph.morName inr) (meMorphisms env)
-          ensureAbsent "morphism" (PolyMorph.morName glue) (meMorphisms env)
-          let env' = env
-                { meDoctrines = M.insert name doc (meDoctrines env)
-                , meMorphisms =
-                    M.insert (PolyMorph.morName glue) glue
-                    (M.insert (PolyMorph.morName inl) inl
-                    (M.insert (PolyMorph.morName inr) inr (meMorphisms env)))
-                }
+          env' <- insertPushout env name leftMor rightMor
           pure (env', rawTerms, rawRuns)
         DeclDoctrineCoproduct name leftDoc rightDoc -> do
           ensureAbsent "doctrine" name (meDoctrines env)
@@ -80,6 +62,16 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
                     (M.insert (PolyMorph.morName inl) inl
                     (M.insert (PolyMorph.morName inr) inr (meMorphisms env)))
                 }
+          pure (env', rawTerms, rawRuns)
+        DeclDoctrineTemplate tmpl -> do
+          ensureAbsent "doctrine_template" (rdtName tmpl) (meTemplates env)
+          let env' = env { meTemplates = M.insert (rdtName tmpl) tmpl (meTemplates env) }
+          pure (env', rawTerms, rawRuns)
+        DeclDoctrineInstantiate inst -> do
+          env' <- elabDoctrineInstantiate env inst
+          pure (env', rawTerms, rawRuns)
+        DeclDoctrineEffects name base effects -> do
+          env' <- elabDoctrineEffects env name base effects
           pure (env', rawTerms, rawRuns)
         DeclSurface name spec -> do
           ensureAbsent "surface" name (meSurfaces env)
@@ -120,6 +112,91 @@ ensureAbsent label name mp =
   if M.member name mp
     then Left ("Duplicate " <> label <> " name: " <> name)
     else Right ()
+
+insertDoctrine :: ModuleEnv -> PolyAST.RawPolyDoctrine -> Either Text ModuleEnv
+insertDoctrine env raw = do
+  let name = rpdName raw
+  ensureAbsent "doctrine" name (meDoctrines env)
+  doc <- elabPolyDoctrine env raw
+  env' <- case rpdExtends raw of
+    Nothing -> Right env
+    Just base -> do
+      mor <- buildPolyFromBase base name env doc
+      pure env { meMorphisms = M.insert (PolyMorph.morName mor) mor (meMorphisms env) }
+  let env'' = env' { meDoctrines = M.insert name doc (meDoctrines env') }
+  pure env''
+
+insertPushout :: ModuleEnv -> Text -> Text -> Text -> Either Text ModuleEnv
+insertPushout env name leftMor rightMor = do
+  ensureAbsent "doctrine" name (meDoctrines env)
+  f <- lookupMorphism env leftMor
+  g <- lookupMorphism env rightMor
+  insertPushoutWithMorphs env name f g
+
+insertPushoutWithMorphs :: ModuleEnv -> Text -> PolyMorph.Morphism -> PolyMorph.Morphism -> Either Text ModuleEnv
+insertPushoutWithMorphs env name f g = do
+  ensureAbsent "doctrine" name (meDoctrines env)
+  PolyPushoutResult doc inl inr glue <- computePolyPushout name f g
+  ensureAbsent "morphism" (PolyMorph.morName inl) (meMorphisms env)
+  ensureAbsent "morphism" (PolyMorph.morName inr) (meMorphisms env)
+  ensureAbsent "morphism" (PolyMorph.morName glue) (meMorphisms env)
+  let env' = env
+        { meDoctrines = M.insert name doc (meDoctrines env)
+        , meMorphisms =
+            M.insert (PolyMorph.morName glue) glue
+            (M.insert (PolyMorph.morName inl) inl
+            (M.insert (PolyMorph.morName inr) inr (meMorphisms env)))
+        }
+  pure env'
+
+elabDoctrineInstantiate :: ModuleEnv -> RawDoctrineInstantiate -> Either Text ModuleEnv
+elabDoctrineInstantiate env inst = do
+  tmpl <- lookupTemplate env (rdiTemplate inst)
+  raw <- instantiateTemplate tmpl (rdiName inst) (rdiArgs inst)
+  insertDoctrine env raw
+
+lookupTemplate :: ModuleEnv -> Text -> Either Text RawDoctrineTemplate
+lookupTemplate env name =
+  case M.lookup name (meTemplates env) of
+    Nothing -> Left ("Unknown doctrine_template: " <> name)
+    Just tmpl -> Right tmpl
+
+elabDoctrineEffects :: ModuleEnv -> Text -> Text -> [Text] -> Either Text ModuleEnv
+elabDoctrineEffects env name baseName effects = do
+  _ <- lookupDoctrine env baseName
+  case effects of
+    [] ->
+      insertDoctrine env (PolyAST.RawPolyDoctrine name (Just baseName) [])
+    [e1] -> do
+      _ <- lookupDoctrine env e1
+      insertDoctrine env (PolyAST.RawPolyDoctrine name (Just e1) [])
+    _ -> do
+      baseDoc <- lookupDoctrine env baseName
+      morphs <- mapM (requireEffectFromBase env baseDoc) effects
+      let stepName1 = stepName 1
+      env1 <- insertPushoutWithMorphs env stepName1 (head morphs) (morphs !! 1)
+      let rest = drop 2 morphs
+      (envFinal, lastStep) <- foldM pushoutStep (env1, stepName1) (zip [2..] rest)
+      insertDoctrine envFinal (PolyAST.RawPolyDoctrine name (Just lastStep) [])
+  where
+    stepName k = name <> "__step" <> T.pack (show k)
+    requireEffectFromBase env' baseDoc effectName = do
+      effDoc <- lookupDoctrine env' effectName
+      mor <- lookupMorphism env' (effectName <> ".fromBase")
+      if dName (PolyMorph.morSrc mor) /= dName baseDoc
+        then Left ("effects: " <> effectName <> ".fromBase has wrong source")
+        else if dName (PolyMorph.morTgt mor) /= dName effDoc
+          then Left ("effects: " <> effectName <> ".fromBase has wrong target")
+          else if not (modeMapIdentity mor)
+            then Left ("effects: " <> effectName <> ".fromBase must be mode-preserving")
+            else Right mor
+    modeMapIdentity mor =
+      let modes = S.toList (mtModes (dModes (PolyMorph.morSrc mor)))
+      in all (\m -> M.lookup m (PolyMorph.morModeMap mor) == Just m) modes
+    pushoutStep (envAcc, prevStep) (idx, mor) = do
+      glue <- lookupMorphism envAcc (prevStep <> ".glue")
+      env' <- insertPushoutWithMorphs envAcc (stepName idx) glue mor
+      pure (env', stepName idx)
 
 lookupDoctrine :: ModuleEnv -> Text -> Either Text Doctrine
 lookupDoctrine env name =

@@ -1,0 +1,15 @@
+doctrine Base where {
+  mode M;
+}
+
+doctrine_template State(BaseDoc, S) where {
+  doctrine State extends BaseDoc where {
+    mode M;
+    type S @M;
+    gen get : [] -> [S] @M;
+    gen put : [S] -> [] @M;
+  }
+}
+
+doctrine StateNat = instantiate State(Base, Nat);
+doctrine StateBool = instantiate State(Base, Bool);

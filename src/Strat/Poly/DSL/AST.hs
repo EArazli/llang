@@ -2,6 +2,8 @@ module Strat.Poly.DSL.AST
   ( RawPolyDoctrine(..)
   , RawPolyItem(..)
   , RawPolyTypeDecl(..)
+  , RawPolyCtorDecl(..)
+  , RawPolyDataDecl(..)
   , RawPolyGenDecl(..)
   , RawPolyRuleDecl(..)
   , RawTypeRef(..)
@@ -24,6 +26,7 @@ data RawPolyDoctrine = RawPolyDoctrine
 data RawPolyItem
   = RPMode Text
   | RPType RawPolyTypeDecl
+  | RPData RawPolyDataDecl
   | RPGen RawPolyGenDecl
   | RPRule RawPolyRuleDecl
   deriving (Eq, Show)
@@ -32,6 +35,18 @@ data RawPolyTypeDecl = RawPolyTypeDecl
   { rptName :: Text
   , rptVars :: [RawTyVarDecl]
   , rptMode :: Text
+  } deriving (Eq, Show)
+
+data RawPolyCtorDecl = RawPolyCtorDecl
+  { rpcName :: Text
+  , rpcArgs :: RawPolyContext
+  } deriving (Eq, Show)
+
+data RawPolyDataDecl = RawPolyDataDecl
+  { rpdTyName :: Text
+  , rpdTyVars :: [RawTyVarDecl]
+  , rpdTyMode :: Text
+  , rpdCtors :: [RawPolyCtorDecl]
   } deriving (Eq, Show)
 
 data RawPolyGenDecl = RawPolyGenDecl

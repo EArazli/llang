@@ -6,16 +6,8 @@ doctrine Invol where {
     f ; f == id[A]
 }
 
-doctrine Invol2 where {
-  mode M;
-  type A @M;
-  gen g : [A] -> [A] @M;
-  rule computational inv -> : [A] -> [A] @M =
-    g ; g == id[A]
-}
-
-morphism Double : Invol -> Invol2 where {
-  gen f @ M -> g ; g
+morphism Double : Invol -> Invol where {
+  gen f @ M -> f ; f
 }
 
 run main where {

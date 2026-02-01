@@ -1,23 +1,25 @@
-doctrine Src where {
+doctrine D where {
   mode C;
-  type A @C;
-  gen f : [A] -> [A] @C;
-}
-
-doctrine Tgt where {
   mode V;
+
+  type A @C;
   type B @V;
+
+  gen f : [A] -> [A] @C;
   gen g : [B] -> [B] @V;
 }
 
-morphism CtoV : Src -> Tgt where {
+morphism CtoV : D -> D where {
   mode C -> V;
+  mode V -> V;
   type A @C -> B @V;
   gen f @C -> g
+  gen g @V -> g
 }
 
 run main where {
-  doctrine Src;
+  doctrine D;
+  mode C;
   apply CtoV;
   show normalized;
 }

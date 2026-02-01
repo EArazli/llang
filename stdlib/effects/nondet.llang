@@ -1,0 +1,4 @@
+doctrine Nondet where {
+  mode M;
+  gen choose : [] -> [] @M;
+}

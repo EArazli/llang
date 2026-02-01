@@ -1,0 +1,7 @@
+doctrine_template Writer(BaseDoc, W) where {
+  doctrine Writer extends BaseDoc where {
+    mode M;
+    type W @M;
+    gen tell : [W] -> [] @M;
+  }
+}

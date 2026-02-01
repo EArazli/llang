@@ -50,3 +50,44 @@ User-facing changes:
   relevant = at least once (dup inserted for >1); cartesian = any uses.
 - Configured `dup`/`drop` generators must exist in the surface mode and have shapes
   `dup(a) : a → (a, a)` and `drop(a) : a → []`.
+
+## Phase 4 — Terms and `@term` references
+
+User-facing changes:
+
+- New top-level `term <Name>` blocks compile a diagram and store its **normalized** form.
+  `term` supports the same configuration items as `run` (doctrine, mode, surface, uses,
+  apply, policy, fuel) but does **not** allow `model` or `show`.
+- Diagram expressions accept `@<TermName>` to splice a named term into a diagram.
+
+## Phase 5 — Coercion morphisms + implicit coercion paths
+
+User-facing changes:
+
+- Morphism blocks accept `coercion;` to mark a morphism as eligible for implicit coercion.
+- Doctrines defined with `extends` generate `<Name>.fromBase` coercion morphisms, and
+  pushout/coproduct-generated morphisms are also marked coercions.
+- Runs and terms must end in the declared doctrine; if not, the compiler attempts a **unique
+  shortest** coercion path. Ambiguous or missing paths are now errors.
+
+## Phase 6 — Doctrine templates + instantiation
+
+User-facing changes:
+
+- `doctrine_template T(P1, ..., Pn) where { doctrine T ... }` defines a parameterized doctrine.
+- `doctrine D = instantiate T(A1, ..., An);` expands the template with identifier substitution.
+
+## Phase 7 — `effects` macro
+
+User-facing changes:
+
+- `doctrine Combined = effects Base { E1, E2, ... };` expands to an iterated pushout over
+  `Base` using each effect’s `fromBase` morphism, producing intermediate doctrines
+  `<Combined>__stepN`.
+
+## Phase 8 — `data` macro inside doctrine blocks
+
+User-facing changes:
+
+- `data T (a@M) @M where { C : [...]; ... }` expands to a `type` declaration plus
+  constructor `gen`s with codomain `[T(a,...)]`.

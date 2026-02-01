@@ -38,6 +38,7 @@ rawFile = do
 decl :: Parser RawDecl
 decl =
   importDecl
+    <|> doctrineTemplateDecl
     <|> doctrineDecl
     <|> morphismDecl
     <|> surfaceDecl
@@ -54,11 +55,32 @@ importDecl = do
   optionalSemi
   pure (DeclImport (T.unpack path))
 
+doctrineTemplateDecl :: Parser RawDecl
+doctrineTemplateDecl = do
+  _ <- symbol "doctrine_template"
+  name <- ident
+  params <- option [] (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
+  _ <- symbol "where"
+  body <- templateBody
+  optionalSemi
+  pure (DeclDoctrineTemplate (RawDoctrineTemplate name params body))
+  where
+    templateBody = do
+      _ <- symbol "{"
+      _ <- symbol "doctrine"
+      innerName <- ident
+      mExt <- optional (symbol "extends" *> ident)
+      _ <- symbol "where"
+      items <- polyBlock
+      optionalSemi
+      _ <- symbol "}"
+      pure (PolyAST.RawPolyDoctrine innerName mExt items)
+
 doctrineDecl :: Parser RawDecl
 doctrineDecl = do
   _ <- symbol "doctrine"
   name <- ident
-  (pushoutDecl name <|> coproductDecl name <|> whereDecl name)
+  (effectsDecl name <|> pushoutDecl name <|> coproductDecl name <|> instantiateDecl name <|> whereDecl name)
   where
     whereDecl docName = do
       mExt <- optional (symbol "extends" *> ident)
@@ -80,6 +102,22 @@ doctrineDecl = do
       rightDoc <- qualifiedIdent
       optionalSemi
       pure (DeclDoctrineCoproduct docName leftDoc rightDoc)
+    effectsDecl docName = try $ do
+      _ <- symbol "="
+      _ <- symbol "effects"
+      baseDoc <- ident
+      _ <- symbol "{"
+      effects <- ident `sepBy` symbol ","
+      _ <- symbol "}"
+      optionalSemi
+      pure (DeclDoctrineEffects docName baseDoc effects)
+    instantiateDecl docName = try $ do
+      _ <- symbol "="
+      _ <- symbol "instantiate"
+      tmpl <- ident
+      args <- symbol "(" *> ident `sepBy` symbol "," <* symbol ")"
+      optionalSemi
+      pure (DeclDoctrineInstantiate (RawDoctrineInstantiate docName tmpl args))
 
 surfaceDecl :: Parser RawDecl
 surfaceDecl = do
@@ -180,6 +218,7 @@ polyItem :: Parser PolyAST.RawPolyItem
 polyItem =
   polyModeDecl
     <|> (PolyAST.RPType <$> polyTypeDecl)
+    <|> (PolyAST.RPData <$> polyDataDecl)
     <|> (PolyAST.RPGen <$> polyGenDecl)
     <|> (PolyAST.RPRule <$> polyRuleDecl)
 
@@ -202,6 +241,36 @@ polyTypeDecl = do
     { PolyAST.rptName = name
     , PolyAST.rptVars = vars
     , PolyAST.rptMode = mode
+    }
+
+polyDataDecl :: Parser PolyAST.RawPolyDataDecl
+polyDataDecl = do
+  _ <- symbol "data"
+  name <- ident
+  vars <- polyTyVarList
+  _ <- symbol "@"
+  mode <- ident
+  _ <- symbol "where"
+  _ <- symbol "{"
+  ctors <- many polyCtorDecl
+  _ <- symbol "}"
+  optionalSemi
+  pure PolyAST.RawPolyDataDecl
+    { PolyAST.rpdTyName = name
+    , PolyAST.rpdTyVars = vars
+    , PolyAST.rpdTyMode = mode
+    , PolyAST.rpdCtors = ctors
+    }
+
+polyCtorDecl :: Parser PolyAST.RawPolyCtorDecl
+polyCtorDecl = do
+  name <- ident
+  _ <- symbol ":"
+  args <- polyContext
+  optionalSemi
+  pure PolyAST.RawPolyCtorDecl
+    { PolyAST.rpcName = name
+    , PolyAST.rpcArgs = args
     }
 
 polyGenDecl :: Parser PolyAST.RawPolyGenDecl

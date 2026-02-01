@@ -45,7 +45,7 @@ ski.llang + ski.run.llang
   SKI combinators as string‑diagram rewriting with explicit app/dup/drop/swap.
 
 morphism_term.llang
-  Defines a morphism and uses run apply to normalize after mapping.
+  Defines an endomorphism morphism and uses run apply to normalize after the pass.
 
 pushout_basic.llang + pushout_basic.run.llang
   A small pushout that demonstrates automatic disjoint renaming for non‑interface gens.
