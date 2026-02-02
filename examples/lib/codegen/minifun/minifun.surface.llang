@@ -1,0 +1,30 @@
+import "./console.llang";
+
+surface MiniFun where {
+  doctrine ConsoleExpr;
+  mode M;
+
+  structural {
+    discipline: linear;
+  }
+
+  lexer {
+    keywords: ;
+    symbols: "(", ")", ",";
+  }
+
+  expr {
+    atom:
+      ident "(" <expr> ")" => CALL(name, args)
+    | ident => VAR(name)
+    | "(" <expr> ")" => <expr>
+    ;
+
+    infixr 10 "," => LIST(lhs, rhs);
+  }
+
+  elaborate {
+    VAR(x) => $x;;
+    LIST(a, b) => $1 * $2;;
+  }
+}

@@ -1,0 +1,13 @@
+import "./console.llang";
+import "./js.llang";
+
+morphism CompileToJS : ConsoleExpr -> JSCode where {
+  mode M -> M;
+
+  type Str @M -> Expr @M
+  type Unit @M -> Code @M
+
+  gen readLine @M -> readExpr
+  gen concat @M -> exprPlus
+  gen printLine @M -> program
+}

@@ -1,0 +1,16 @@
+import "../../../lib/codegen/minifun/console.llang";
+import "../../../lib/codegen/minifun/minifun.surface.llang";
+import "../../../lib/codegen/minifun/js.llang";
+import "../../../lib/codegen/minifun/compile.llang";
+
+run main where {
+  doctrine JSCode;
+  mode M;
+  surface MiniFun;
+  apply CompileToJS;
+  model JSModel;
+  show value;
+}
+---
+printLine(concat(readLine, readLine))
+---

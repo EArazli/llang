@@ -22,6 +22,7 @@ tests =
     , testCase "loop_demo.run.llang output" (goldenRun "examples/run/algebra/loop_demo.run.llang" expectedLoopDemo)
     , testCase "mode_map_demo.run.llang output" (goldenRun "examples/run/algebra/mode_map_demo.run.llang" expectedModeMapDemo)
     , testCase "hello_world.run.llang output" (goldenRun "examples/run/algebra/hello_world.run.llang" expectedHelloWorld)
+    , testCase "minifun.concat2.run.llang output" (goldenRun "examples/run/codegen/minifun/concat2.run.llang" expectedMiniFunConcat2)
     , testCase "term_ref.run.llang output" (goldenRun "examples/run/terms/term_ref.run.llang" expectedTermRef)
     , testCase "stlc.lam1.run.llang output" (goldenRun "examples/run/surfaces/ccc_surface/stlc.lam1.run.llang" expectedStlcLam)
     , testCase "stlc.app1.run.llang output" (goldenRun "examples/run/surfaces/ccc_surface/stlc.app1.run.llang" expectedStlcApp)
@@ -139,6 +140,13 @@ expectedHelloWorld =
   T.intercalate "\n"
     [ "value:"
     , "VString \"Hello, world!\""
+    ]
+
+expectedMiniFunConcat2 :: Text
+expectedMiniFunConcat2 =
+  T.intercalate "\n"
+    [ "value:"
+    , "VString \"const fs = require(\\\"fs\\\");\\nconst input = fs.readFileSync(0, \\\"utf8\\\").split(\\\"\\\\n\\\");\\nlet i = 0;\\nfunction nextLine() { return input[i++]; }\\nconsole.log((nextLine() + nextLine()));\""
     ]
 
 expectedStlcLam :: Text

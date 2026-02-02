@@ -1,0 +1,9 @@
+doctrine ConsoleExpr where {
+  mode M;
+  type Str @M;
+  type Unit @M;
+
+  gen readLine : [] -> [Str] @M;
+  gen concat : [Str, Str] -> [Str] @M;
+  gen printLine : [Str] -> [Unit] @M;
+}

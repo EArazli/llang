@@ -1,0 +1,21 @@
+doctrine JSCode where {
+  mode M;
+  type Expr @M;
+  type Code @M;
+
+  gen readExpr : [] -> [Expr] @M;
+  gen exprPlus : [Expr, Expr] -> [Expr] @M;
+  gen program : [Expr] -> [Code] @M;
+}
+
+model JSModel : JSCode where {
+  default = error "missing op";
+  op readExpr() = "nextLine()";
+  op exprPlus(a, b) = "(" ++ a ++ " + " ++ b ++ ")";
+  op program(e) =
+    "const fs = require(\"fs\");\n"
+    ++ "const input = fs.readFileSync(0, \"utf8\").split(\"\\n\");\n"
+    ++ "let i = 0;\n"
+    ++ "function nextLine() { return input[i++]; }\n"
+    ++ "console.log(" ++ e ++ ");";
+}
