@@ -61,7 +61,7 @@ rewriteOnceInBoxes rules diag =
     go [] = Right Nothing
     go ((edgeKey, edge):rest) =
       case ePayload edge of
-        PGen _ -> go rest
+        PGen _ _ -> go rest
         PBox name inner -> do
           innerRes <- rewriteOnce rules inner
           case innerRes of
@@ -102,7 +102,7 @@ rewriteAll cap rules diag = do
       fmap concat (mapM (rewriteInEdge cap' rules' diag') edges)
     rewriteInEdge cap' rules' diag' (edgeKey, edge) =
       case ePayload edge of
-        PGen _ -> Right []
+        PGen _ _ -> Right []
         PBox name inner -> do
           innerRes <- rewriteAll cap' rules' inner
           mapM
@@ -117,7 +117,7 @@ rewriteAll cap rules diag = do
 applyMatch :: RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyMatch rule match host = do
   let lhs = rrLHS rule
-  let rhs = applySubstDiagram (mTySub match) (rrRHS rule)
+  let rhs = applyAttrSubstDiagram (mAttrSub match) (applySubstDiagram (mTySub match) (rrRHS rule))
   host1 <- deleteMatchedEdges host (M.elems (mEdges match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPorts match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs

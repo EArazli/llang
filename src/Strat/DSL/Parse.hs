@@ -217,6 +217,7 @@ polyBlock = do
 polyItem :: Parser PolyAST.RawPolyItem
 polyItem =
   polyModeDecl
+    <|> polyAttrSortDecl
     <|> (PolyAST.RPType <$> polyTypeDecl)
     <|> (PolyAST.RPData <$> polyDataDecl)
     <|> (PolyAST.RPGen <$> polyGenDecl)
@@ -228,6 +229,16 @@ polyModeDecl = do
   name <- ident
   optionalSemi
   pure (PolyAST.RPMode name)
+
+polyAttrSortDecl :: Parser PolyAST.RawPolyItem
+polyAttrSortDecl = do
+  _ <- symbol "attrsort"
+  name <- ident
+  mKind <- optional (symbol "=" *> attrKind)
+  optionalSemi
+  pure (PolyAST.RPAttrSort (PolyAST.RawAttrSortDecl name mKind))
+  where
+    attrKind = symbol "int" <|> symbol "string" <|> symbol "bool"
 
 polyTypeDecl :: Parser PolyAST.RawPolyTypeDecl
 polyTypeDecl = do
@@ -278,6 +289,7 @@ polyGenDecl = do
   _ <- symbol "gen"
   name <- ident
   vars <- polyTyVarList
+  attrs <- option [] (symbol "{" *> polyGenAttrDecl `sepBy` symbol "," <* symbol "}")
   _ <- symbol ":"
   dom <- polyContext
   _ <- symbol "->"
@@ -288,10 +300,18 @@ polyGenDecl = do
   pure PolyAST.RawPolyGenDecl
     { PolyAST.rpgName = name
     , PolyAST.rpgVars = vars
+    , PolyAST.rpgAttrs = attrs
     , PolyAST.rpgDom = dom
     , PolyAST.rpgCod = cod
     , PolyAST.rpgMode = mode
     }
+
+polyGenAttrDecl :: Parser (Text, Text)
+polyGenAttrDecl = do
+  field <- ident
+  _ <- symbol ":"
+  sortName <- ident
+  pure (field, sortName)
 
 polyRuleDecl :: Parser PolyAST.RawPolyRuleDecl
 polyRuleDecl = do
@@ -392,7 +412,44 @@ polyGenTerm :: Parser PolyAST.RawDiagExpr
 polyGenTerm = do
   name <- ident
   mArgs <- optional (symbol "{" *> polyTypeExpr `sepBy` symbol "," <* symbol "}")
-  pure (PolyAST.RDGen name mArgs)
+  mAttrArgs <- optional polyAttrArgs
+  pure (PolyAST.RDGen name mArgs mAttrArgs)
+
+polyAttrArgs :: Parser [PolyAST.RawAttrArg]
+polyAttrArgs = do
+  _ <- symbol "("
+  args <- polyAttrArg `sepBy` symbol ","
+  _ <- symbol ")"
+  if mixedArgStyles args
+    then fail "generator attribute arguments must be either all named or all positional"
+    else pure args
+  where
+    mixedArgStyles [] = False
+    mixedArgStyles xs =
+      let named = [ () | PolyAST.RAName _ _ <- xs ]
+          positional = [ () | PolyAST.RAPos _ <- xs ]
+      in not (null named) && not (null positional)
+
+polyAttrArg :: Parser PolyAST.RawAttrArg
+polyAttrArg =
+  try named <|> positional
+  where
+    named = do
+      field <- ident
+      _ <- symbol "="
+      term <- polyAttrTerm
+      pure (PolyAST.RAName field term)
+    positional = PolyAST.RAPos <$> polyAttrTerm
+
+polyAttrTerm :: Parser PolyAST.RawAttrTerm
+polyAttrTerm =
+  choice
+    [ PolyAST.RATInt . fromIntegral <$> integer
+    , PolyAST.RATString <$> stringLiteral
+    , PolyAST.RATBool True <$ symbol "true"
+    , PolyAST.RATBool False <$ symbol "false"
+    , PolyAST.RATVar <$> ident
+    ]
 
 polyTermRefTerm :: Parser PolyAST.RawDiagExpr
 polyTermRefTerm = do
@@ -428,6 +485,7 @@ orientation =
 
 data MorphismItem
   = MorphismMode RawPolyModeMap
+  | MorphismAttrSort RawPolyAttrSortMap
   | MorphismType RawPolyTypeMap
   | MorphismGen RawPolyGenMap
   | MorphismCoercion
@@ -444,6 +502,7 @@ morphismBlock = do
 morphismItem :: Parser MorphismItem
 morphismItem =
   morphismModeMap
+    <|> morphismAttrSortMap
     <|> morphismTypeMap
     <|> morphismGenMap
     <|> morphismCoercionItem
@@ -458,6 +517,15 @@ morphismModeMap = do
   tgt <- ident
   optionalSemi
   pure (MorphismMode (RawPolyModeMap src tgt))
+
+morphismAttrSortMap :: Parser MorphismItem
+morphismAttrSortMap = do
+  _ <- symbol "attrsort"
+  src <- ident
+  _ <- symbol "->"
+  tgt <- ident
+  optionalSemi
+  pure (MorphismAttrSort (RawPolyAttrSortMap src tgt))
 
 morphismTypeMap :: Parser MorphismItem
 morphismTypeMap = do
@@ -512,6 +580,7 @@ buildPolyMorphism name src tgt items =
     , rpmTgt = tgt
     , rpmItems =
         [ RPMMode m | MorphismMode m <- items ]
+          <> [ RPMAttrSort m | MorphismAttrSort m <- items ]
           <> [ RPMType i | MorphismType i <- items ]
           <> [ RPMGen j | MorphismGen j <- items ]
           <> [ RPMCoercion | MorphismCoercion <- items ]

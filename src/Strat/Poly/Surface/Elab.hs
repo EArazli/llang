@@ -18,6 +18,7 @@ import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Cont
 import qualified Strat.Poly.TypeExpr as Ty
 import Strat.Poly.UnifyTy (Subst, applySubstTy, applySubstCtx, unifyTyFlex, composeSubst)
 import Strat.Poly.Diagram (Diagram(..), idD, diagramDom, diagramCod, freeTyVarsDiagram, applySubstDiagram)
+import Strat.Poly.Attr
 import Strat.Poly.Graph
   ( PortId(..)
   , EdgePayload(..)
@@ -243,6 +244,7 @@ elabAst doc mode spec cart env ast =
       case M.lookup name (eeVars env) of
         Just ty -> elabVarRef doc mode env (eeTypeSubst env) name ty
         Nothing -> elabZeroArgGen doc mode env name
+    SALit _ -> liftEither (Left "surface: bare literal must be handled by an elaboration rule")
     SAType _ -> liftEither (Left "surface: unexpected type where expression expected")
     SANode ctor args ->
       if ctor == "CALL"
@@ -258,7 +260,7 @@ elabZeroArgGen doc mode env name = do
   gen <- liftEither (lookupGen doc mode (GenName name))
   if null (gdDom gen)
     then do
-      diag <- genDFromDecl mode env gen Nothing
+      diag <- genDFromDecl mode env gen Nothing M.empty
       pure (emptySurf diag)
     else liftEither (Left ("surface: unknown variable " <> name))
 
@@ -285,7 +287,7 @@ buildGenCall _doc mode env gen argDiag = do
   let cod = applySubstCtx subst cod1
   let argPorts = dOut (sdDiag argDiag')
   let (outPorts, diag1) = allocPorts cod (sdDiag argDiag')
-  diag2 <- liftEither (addEdgePayload (PGen (gdName gen)) argPorts outPorts diag1)
+  diag2 <- liftEither (addEdgePayload (PGen (gdName gen) M.empty) argPorts outPorts diag1)
   let diag3 = diag2 { dOut = outPorts }
   liftEither (validateDiagram diag3)
   pure argDiag' { sdDiag = diag3 }
@@ -347,6 +349,7 @@ detectBinder params args =
     isExprArg a =
       case a of
         SAType _ -> False
+        SALit _ -> False
         _ -> True
 
     isBinderIdent exprInfos bodyIdx idx indexed =
@@ -422,7 +425,7 @@ extendEnv doc mode env (BinderInfo _ (BinderInput varName tyAnn)) = do
       let newCtx = Ty.TCon (prodRef mode) [ctxTy, ty0]
       let varTy = Ty.TCon (homRef mode) [newCtx, ty0]
       exrDecl <- liftEither (requireExr doc mode)
-      exrDiag <- genDFromDecl mode env exrDecl (Just [ctxTy, ty0])
+      exrDiag <- genDFromDecl mode env exrDecl (Just [ctxTy, ty0]) M.empty
       let subst' = M.insert ctxVar newCtx (eeTypeSubst env)
       pure env
         { eeVars = M.insert varName varTy (eeVars env)
@@ -587,17 +590,17 @@ buildProjection _doc mode env exlDecl compDecl ctxCur steps =
       foldM (composeStep ctxCur) acc rest
   where
     exlDiag step = do
-      diag <- genDFromDecl mode env exlDecl (Just [psLeft step, psRight step])
+      diag <- genDFromDecl mode env exlDecl (Just [psLeft step, psRight step]) M.empty
       pure (emptySurf diag)
     composeStep ctxRoot acc step = do
       exl <- exlDiag step
-      compDiag <- genDFromDecl mode env compDecl (Just [ctxRoot, psCur step, psLeft step])
+      compDiag <- genDFromDecl mode env compDecl (Just [ctxRoot, psCur step, psLeft step]) M.empty
       let compSurfDiag = emptySurf compDiag
       liftEither (tensorSurf exl acc >>= \t -> compSurf t compSurfDiag)
 
 applyWeakeningVal :: ModeName -> ElabEnv -> GenDecl -> TypeExpr -> TypeExpr -> TypeExpr -> SurfDiag -> SurfDiag -> Fresh SurfDiag
 applyWeakeningVal mode env compDecl dom cod ctxCur base proj = do
-  compDiag <- genDFromDecl mode env compDecl (Just [ctxCur, dom, cod])
+  compDiag <- genDFromDecl mode env compDecl (Just [ctxCur, dom, cod]) M.empty
   let compSurfDiag = emptySurf compDiag
   liftEither (tensorSurf base proj >>= \t -> compSurf t compSurfDiag)
 
@@ -622,7 +625,7 @@ evalTemplate doc mode _spec _cart env paramMap subst holeMap childList templ =
       ctx'0 <- liftEither (mapM (elabSurfaceTypeExpr doc mode) ctx)
       let ctx' = map (applySubstTy subst) ctx'0
       pure (emptySurf (idD mode ctx'))
-    TGen name mArgs -> do
+    TGen name mArgs mAttrArgs -> do
       gen <- liftEither (lookupGen doc mode (GenName name))
       args0 <- case mArgs of
         Nothing -> pure Nothing
@@ -630,7 +633,8 @@ evalTemplate doc mode _spec _cart env paramMap subst holeMap childList templ =
           tys <- liftEither (mapM (elabSurfaceTypeExpr doc mode) args)
           pure (Just tys)
       let args' = fmap (map (applySubstTy subst)) args0
-      diag <- genDFromDecl mode env gen args'
+      attrs <- liftEither (elabTemplateGenAttrs doc gen paramMap mAttrArgs)
+      diag <- genDFromDecl mode env gen args' attrs
       pure (emptySurf diag)
     TBox name inner -> do
       innerDiag <- evalTemplate doc mode _spec _cart env paramMap subst holeMap childList inner
@@ -660,6 +664,100 @@ buildTypeSubst doc mode env paramMap = do
           let var = TyVar { tvName = name, tvMode = mode }
           pure [(var, ty)]
         _ -> pure []
+
+elabTemplateGenAttrs
+  :: Doctrine
+  -> GenDecl
+  -> M.Map Text SurfaceAST
+  -> Maybe [TemplateAttrArg]
+  -> Either Text AttrMap
+elabTemplateGenAttrs doc gen paramMap mArgs =
+  case gdAttrs gen of
+    [] ->
+      case mArgs of
+        Nothing -> Right M.empty
+        Just _ -> Left "surface: generator does not accept attribute arguments"
+    fields -> do
+      args <- maybe (Left "surface: missing generator attribute arguments") Right mArgs
+      normalized <- normalizeTemplateAttrArgs fields args
+      fmap M.fromList (mapM elabOne normalized)
+  where
+    elabOne (fieldName, fieldSort, termTemplate) = do
+      term <- elabTemplateAttrTerm doc fieldSort paramMap termTemplate
+      Right (fieldName, term)
+
+normalizeTemplateAttrArgs
+  :: [(AttrName, AttrSort)]
+  -> [TemplateAttrArg]
+  -> Either Text [(AttrName, AttrSort, AttrTemplate)]
+normalizeTemplateAttrArgs fields args =
+  case (namedArgs, positionalArgs) of
+    (_:_, _:_) -> Left "surface: template attribute arguments must be either all named or all positional"
+    (_:_, []) -> normalizeNamed namedArgs
+    ([], _) -> normalizePos positionalArgs
+  where
+    namedArgs = [ (name, term) | TAName name term <- args ]
+    positionalArgs = [ term | TAPos term <- args ]
+    fieldNames = map fst fields
+    normalizeNamed named = do
+      ensureDistinctText "surface: duplicate generator attribute argument" (map fst named)
+      if length named /= length fields
+        then Left "surface: generator attribute argument mismatch"
+        else Right ()
+      if S.fromList (map fst named) == S.fromList fieldNames
+        then Right ()
+        else Left "surface: generator attribute arguments must cover exactly the declared fields"
+      let namedMap = M.fromList named
+      traverse
+        (\(fieldName, fieldSort) ->
+          case M.lookup fieldName namedMap of
+            Nothing -> Left "surface: missing generator attribute argument"
+            Just term -> Right (fieldName, fieldSort, term))
+        fields
+    normalizePos positional =
+      if length positional /= length fields
+        then Left "surface: generator attribute argument mismatch"
+        else Right [ (fieldName, fieldSort, term) | ((fieldName, fieldSort), term) <- zip fields positional ]
+
+ensureDistinctText :: Text -> [Text] -> Either Text ()
+ensureDistinctText label names =
+  if length names == S.size (S.fromList names)
+    then Right ()
+    else Left label
+
+elabTemplateAttrTerm :: Doctrine -> AttrSort -> M.Map Text SurfaceAST -> AttrTemplate -> Either Text AttrTerm
+elabTemplateAttrTerm doc expectedSort paramMap termTemplate =
+  case termTemplate of
+    ATLIT lit -> do
+      ensureLiteralAllowed doc expectedSort lit
+      Right (ATLit lit)
+    ATHole name ->
+      case M.lookup name paramMap of
+        Just (SALit lit) -> do
+          ensureLiteralAllowed doc expectedSort lit
+          Right (ATLit lit)
+        Just (SAIdent identName) -> do
+          let lit = ALString identName
+          ensureLiteralAllowed doc expectedSort lit
+          Right (ATLit lit)
+        _ -> Left "surface: attribute hole must be bound to a literal or identifier"
+    Strat.Poly.Surface.Spec.ATVar name ->
+      Right (Strat.Poly.Attr.ATVar (AttrVar name expectedSort))
+
+ensureLiteralAllowed :: Doctrine -> AttrSort -> AttrLit -> Either Text ()
+ensureLiteralAllowed doc sortName lit = do
+  decl <-
+    case M.lookup sortName (dAttrSorts doc) of
+      Nothing -> Left "surface: unknown attribute sort"
+      Just d -> Right d
+  let litKind =
+        case lit of
+          ALInt _ -> LKInt
+          ALString _ -> LKString
+          ALBool _ -> LKBool
+  case asLitKind decl of
+    Just allowed | allowed == litKind -> Right ()
+    _ -> Left "surface: attribute sort does not admit this literal kind"
 
 
 -- Apply binder after template evaluation
@@ -759,7 +857,7 @@ connectUses ops varName source ty uses sd =
   where
     addDrop dropGen = do
       let diag0 = sdDiag sd
-      diag1 <- liftEither (addEdgePayload (PGen (gdName dropGen)) [source] [] diag0)
+      diag1 <- liftEither (addEdgePayload (PGen (gdName dropGen) M.empty) [source] [] diag0)
       pure sd { sdDiag = diag1 }
     addDup dupGen = do
       (outs, diag1) <- dupOutputs dupGen source ty (sdDiag sd) (length uses)
@@ -793,7 +891,7 @@ dupOutputs dupGen source ty diag n
   | otherwise = do
       let (p1, diag1) = freshPort ty diag
       let (p2, diag2) = freshPort ty diag1
-      diag3 <- liftEither (addEdgePayload (PGen (gdName dupGen)) [source] [p1, p2] diag2)
+      diag3 <- liftEither (addEdgePayload (PGen (gdName dupGen) M.empty) [source] [p1, p2] diag2)
       (rest, diag4) <- dupOutputs dupGen p2 ty diag3 (n - 1)
       pure (p1:rest, diag4)
 
@@ -821,8 +919,8 @@ lookupGen doc mode name =
     Nothing -> Left "surface: unknown generator"
     Just gd -> Right gd
 
-genDFromDecl :: ModeName -> ElabEnv -> GenDecl -> Maybe [TypeExpr] -> Fresh Diagram
-genDFromDecl mode env gen mArgs = do
+genDFromDecl :: ModeName -> ElabEnv -> GenDecl -> Maybe [TypeExpr] -> AttrMap -> Fresh Diagram
+genDFromDecl mode env gen mArgs attrs = do
   let tyVars = gdTyVars gen
   let subst0 = eeTypeSubst env
   renameSubst <- freshSubst tyVars
@@ -839,13 +937,13 @@ genDFromDecl mode env gen mArgs = do
           freshVars <- liftEither (extractFreshVars tyVars renameSubst)
           let subst = M.fromList (zip freshVars args')
           pure (applySubstCtx subst dom1, applySubstCtx subst cod1)
-  liftEither (buildGenDiagram mode dom cod (gdName gen))
+  liftEither (buildGenDiagram mode dom cod (gdName gen) attrs)
 
-buildGenDiagram :: ModeName -> Context -> Context -> GenName -> Either Text Diagram
-buildGenDiagram mode dom cod gen = do
+buildGenDiagram :: ModeName -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
+buildGenDiagram mode dom cod gen attrs = do
   let (inPorts, diag1) = allocPorts dom (emptyDiagram mode)
   let (outPorts, diag2) = allocPorts cod diag1
-  diag3 <- addEdgePayload (PGen gen) inPorts outPorts diag2
+  diag3 <- addEdgePayload (PGen gen attrs) inPorts outPorts diag2
   let diagFinal = diag3 { dIn = inPorts, dOut = outPorts }
   validateDiagram diagFinal
   pure diagFinal

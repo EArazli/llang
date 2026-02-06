@@ -12,9 +12,11 @@ import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
+import qualified Data.List as L
 import Strat.Poly.ModeTheory (ModeTheory(..), ModeName(..), ModDecl(..))
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Attr
 import Strat.Poly.Diagram
 import Strat.Poly.Graph (validateDiagram)
 import Strat.Poly.Cell2
@@ -27,11 +29,13 @@ data GenDecl = GenDecl
   , gdTyVars :: [TyVar]
   , gdDom    :: Context
   , gdCod    :: Context
+  , gdAttrs  :: [(AttrName, AttrSort)]
   } deriving (Eq, Show)
 
 data Doctrine = Doctrine
   { dName  :: Text
   , dModes :: ModeTheory
+  , dAttrSorts :: M.Map AttrSort AttrSortDecl
   , dTypes :: M.Map ModeName (M.Map TypeName TypeSig)
   , dGens  :: M.Map ModeName (M.Map GenName GenDecl)
   , dCells2 :: [Cell2]
@@ -47,6 +51,7 @@ cartMode = ModeName "Cart"
 validateDoctrine :: Doctrine -> Either Text ()
 validateDoctrine doc = do
   checkModeTheory (dModes doc)
+  mapM_ checkAttrSortDecl (M.toList (dAttrSorts doc))
   mapM_ (checkTypeTable doc) (M.toList (dTypes doc))
   mapM_ (checkGenTable doc) (M.toList (dGens doc))
   mapM_ (checkCell doc) (dCells2 doc)
@@ -95,6 +100,7 @@ checkGen doc mode gd
       ensureDistinctTyVars ("validateDoctrine: duplicate generator tyvars in " <> renderGen (gdName gd)) (gdTyVars gd)
       checkContext doc mode (gdTyVars gd) (gdDom gd)
       checkContext doc mode (gdTyVars gd) (gdCod gd)
+      checkGenAttrs doc gd
 
 checkCell :: Doctrine -> Cell2 -> Either Text ()
 checkCell doc cell = do
@@ -169,6 +175,28 @@ checkTyVarModes doc vars =
   if all (\v -> tvMode v `S.member` mtModes (dModes doc)) vars
     then Right ()
     else Left "validateDoctrine: type variable has unknown mode"
+
+checkAttrSortDecl :: (AttrSort, AttrSortDecl) -> Either Text ()
+checkAttrSortDecl (name, decl) =
+  if asName decl == name
+    then Right ()
+    else Left "validateDoctrine: attribute sort declaration mismatch"
+
+checkGenAttrs :: Doctrine -> GenDecl -> Either Text ()
+checkGenAttrs doc gd = do
+  ensureDistinct ("validateDoctrine: duplicate generator attribute names in " <> renderGen (gdName gd)) (map fst (gdAttrs gd))
+  mapM_ ensureSortExists (gdAttrs gd)
+  where
+    ensureSortExists (_, sortName) =
+      if M.member sortName (dAttrSorts doc)
+        then Right ()
+        else Left ("validateDoctrine: unknown attribute sort in generator " <> renderGen (gdName gd))
+
+ensureDistinct :: Ord a => Text -> [a] -> Either Text ()
+ensureDistinct label xs =
+  if length (L.nub xs) == length xs
+    then Right ()
+    else Left label
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t

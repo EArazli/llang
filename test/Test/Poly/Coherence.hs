@@ -46,6 +46,7 @@ mkGenDecl name =
     , gdTyVars = []
     , gdDom = [aTy]
     , gdCod = [aTy]
+    , gdAttrs = []
     }
 
 mkCell :: Text -> Diagram -> Diagram -> Cell2
@@ -73,6 +74,7 @@ mkDoctrine cells =
       , dTypes = M.fromList [(modeName, M.fromList [(TypeName "A", TypeSig [])])]
       , dGens = M.fromList [(modeName, M.fromList [(gdName g, g) | g <- gens])]
       , dCells2 = cells
+      , dAttrSorts = M.empty
       }
 
 testCoherenceJoinable :: Assertion

@@ -12,7 +12,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Control.Monad (foldM, when)
-import Strat.DSL.AST (RawRun(..), RawRunShow(..), RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..))
+import Strat.DSL.AST (RawRun(..), RawRunShow(..), RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..), RawPolyAttrSortMap(..))
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
@@ -21,6 +21,7 @@ import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
+import Strat.Poly.Attr
 import Strat.Poly.Morphism
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Frontend.Coerce (coerceDiagramTo)
@@ -75,6 +76,7 @@ elabPolyMorphism env raw = do
   let coercionFlags = [() | RPMCoercion <- rpmItems raw]
   when (length coercionFlags > 1) (Left "morphism: duplicate coercion flag")
   modeMap <- buildModeMap src tgt [ m | RPMMode m <- rpmItems raw ]
+  attrSortMap <- buildAttrSortMap src tgt [ a | RPMAttrSort a <- rpmItems raw ]
   typeMap <- foldM (addTypeMap src tgt modeMap) M.empty [ t | RPMType t <- rpmItems raw ]
   genMap <- foldM (addGenMap src tgt modeMap) M.empty [ g | RPMGen g <- rpmItems raw ]
   ensureAllGenMapped src genMap
@@ -84,6 +86,7 @@ elabPolyMorphism env raw = do
         , morTgt = tgt
         , morIsCoercion = not (null coercionFlags)
         , morModeMap = modeMap
+        , morAttrSortMap = attrSortMap
         , morTypeMap = typeMap
         , morGenMap = genMap
         , morPolicy = policy
@@ -124,6 +127,27 @@ elabPolyMorphism env raw = do
           ensureMode tgt tgtMode
           pure (srcMode, tgtMode)
         renderModeName (ModeName name) = name
+        firstDup xs = go S.empty xs
+          where
+            go _ [] = Nothing
+            go seen (x:rest)
+              | x `S.member` seen = Just x
+              | otherwise = go (S.insert x seen) rest
+    buildAttrSortMap src tgt decls = do
+      pairs <- mapM toPair decls
+      let dup = firstDup (map fst pairs)
+      case dup of
+        Just s -> Left ("morphism: duplicate attrsort mapping for " <> renderAttrSort s)
+        Nothing -> Right ()
+      pure (M.fromList pairs)
+      where
+        toPair decl = do
+          let srcSort = AttrSort (rpmasSrc decl)
+          let tgtSort = AttrSort (rpmasTgt decl)
+          ensureAttrSort src srcSort
+          ensureAttrSort tgt tgtSort
+          pure (srcSort, tgtSort)
+        renderAttrSort (AttrSort name) = name
         firstDup xs = go S.empty xs
           where
             go _ [] = Nothing
@@ -210,11 +234,12 @@ seedDoctrine name base =
     Nothing -> Doctrine
       { dName = name
       , dModes = emptyModeTheory
+      , dAttrSorts = M.empty
       , dTypes = M.empty
       , dGens = M.empty
       , dCells2 = []
       }
-    Just doc -> doc { dName = name }
+    Just doc -> doc { dName = name, dAttrSorts = dAttrSorts doc }
 
 elabPolyItem :: ModuleEnv -> Doctrine -> RawPolyItem -> Either Text Doctrine
 elabPolyItem env doc item =
@@ -223,6 +248,14 @@ elabPolyItem env doc item =
       let mode = ModeName name
       mt' <- addMode mode (dModes doc)
       pure doc { dModes = mt' }
+    RPAttrSort decl -> do
+      let sortName = AttrSort (rasName decl)
+      litKind <- mapM parseAttrLitKind (rasKind decl)
+      if M.member sortName (dAttrSorts doc)
+        then Left "duplicate attribute sort name"
+        else do
+          let sortDecl = AttrSortDecl { asName = sortName, asLitKind = litKind }
+          pure doc { dAttrSorts = M.insert sortName sortDecl (dAttrSorts doc) }
     RPType decl -> do
       let mode = ModeName (rptMode decl)
       ensureMode doc mode
@@ -243,6 +276,8 @@ elabPolyItem env doc item =
       let gname = GenName (rpgName decl)
       vars <- mapM (resolveTyVarDecl doc mode) (rpgVars decl)
       ensureDistinctTyVarNames "duplicate generator type parameter name" vars
+      attrs <- mapM (resolveAttrField doc) (rpgAttrs decl)
+      ensureDistinct "duplicate generator attribute field name" (map fst attrs)
       dom <- elabContext doc mode vars (rpgDom decl)
       cod <- elabContext doc mode vars (rpgCod decl)
       let gen = GenDecl
@@ -251,6 +286,7 @@ elabPolyItem env doc item =
             , gdTyVars = vars
             , gdDom = dom
             , gdCod = cod
+            , gdAttrs = attrs
             }
       let table = M.findWithDefault M.empty mode (dGens doc)
       if M.member gname table
@@ -293,6 +329,11 @@ elabPolyItem env doc item =
       if S.isSubsetOf free allowed
         then pure ()
         else Left ("rule " <> rprName decl <> ": unresolved type variables")
+      let lhsAttrVars = freeAttrVarsDiagram lhs'
+      let rhsAttrVars = freeAttrVarsDiagram rhs'
+      if S.isSubsetOf rhsAttrVars lhsAttrVars
+        then pure ()
+        else Left ("rule " <> rprName decl <> ": RHS introduces fresh attribute variables")
       let cell = Cell2
             { c2Name = rprName decl
             , c2Class = rprClass decl
@@ -313,6 +354,14 @@ ensureDistinct label names =
   let set = S.fromList names
   in if S.size set == length names then Right () else Left label
 
+parseAttrLitKind :: Text -> Either Text AttrLitKind
+parseAttrLitKind name =
+  case name of
+    "int" -> Right LKInt
+    "string" -> Right LKString
+    "bool" -> Right LKBool
+    _ -> Left "unknown attribute literal kind"
+
 rpdCtorName :: RawPolyCtorDecl -> Text
 rpdCtorName = rpcName
 
@@ -324,16 +373,30 @@ mkCtor modeName tyName vars ctor =
   in RawPolyGenDecl
       { rpgName = rpcName ctor
       , rpgVars = vars
+      , rpgAttrs = []
       , rpgDom = rpcArgs ctor
       , rpgCod = cod
       , rpgMode = modeName
       }
+
+resolveAttrField :: Doctrine -> (Text, Text) -> Either Text (AttrName, AttrSort)
+resolveAttrField doc (fieldName, sortName) = do
+  let sortRef = AttrSort sortName
+  if M.member sortRef (dAttrSorts doc)
+    then Right (fieldName, sortRef)
+    else Left "unknown attribute sort"
 
 ensureMode :: Doctrine -> ModeName -> Either Text ()
 ensureMode doc mode =
   if mode `S.member` mtModes (dModes doc)
     then Right ()
     else Left "unknown mode"
+
+ensureAttrSort :: Doctrine -> AttrSort -> Either Text ()
+ensureAttrSort doc sortName =
+  if M.member sortName (dAttrSorts doc)
+    then Right ()
+    else Left "unknown attribute sort"
 
 resolveTyVarMode :: Doctrine -> ModeName -> RawTyVarDecl -> Either Text ModeName
 resolveTyVarMode doc defaultMode decl = do
@@ -433,8 +496,10 @@ elabTypeExpr doc vars expr =
             else Left "type constructor argument mode mismatch"
 
 elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [TyVar] -> RawDiagExpr -> Either Text Diagram
-elabDiagExpr env doc mode ruleVars expr =
-  evalFresh (build expr)
+elabDiagExpr env doc mode ruleVars expr = do
+  diag <- evalFresh (build expr)
+  ensureAttrVarNameSorts diag
+  pure diag
   where
     rigid = S.fromList ruleVars
     build e =
@@ -442,7 +507,7 @@ elabDiagExpr env doc mode ruleVars expr =
         RDId ctx -> do
           ctx' <- liftEither (elabContext doc mode ruleVars ctx)
           pure (idD mode ctx')
-        RDGen name mArgs -> do
+        RDGen name mArgs mAttrArgs -> do
           gen <- liftEither (lookupGen doc mode (GenName name))
           let tyVars = gdTyVars gen
           renameSubst <- freshSubst tyVars
@@ -461,7 +526,8 @@ elabDiagExpr env doc mode ruleVars expr =
                     _ -> liftEither (Left "generator type argument mode mismatch")
                   let subst = M.fromList (zip freshVars args')
                   pure (applySubstCtx subst dom0, applySubstCtx subst cod0)
-          liftEither (genD mode dom cod (gdName gen))
+          attrs <- liftEither (elabGenAttrs doc gen mAttrArgs)
+          liftEither (genDWithAttrs mode dom cod (gdName gen) attrs)
         RDTermRef name -> do
           term <- liftEither (lookupTerm env name)
           if tdDoctrine term == dName doc
@@ -562,6 +628,101 @@ unifyCtxFlex flex ctx1 ctx2
       let b' = applySubstTy s b
       s' <- unifyTyFlex flex a' b'
       pure (composeSubst s' s)
+
+elabGenAttrs :: Doctrine -> GenDecl -> Maybe [RawAttrArg] -> Either Text AttrMap
+elabGenAttrs doc gen mArgs =
+  case gdAttrs gen of
+    [] ->
+      case mArgs of
+        Nothing -> Right M.empty
+        Just _ -> Left "generator does not accept attribute arguments"
+    fields -> do
+      args <- maybe (Left "missing generator attribute arguments") Right mArgs
+      normalized <- normalizeAttrArgs fields args
+      (attrs, _) <- foldM elabOne (M.empty, M.empty) normalized
+      Right attrs
+  where
+    elabOne (attrs, varSorts) (fieldName, fieldSort, rawTerm) = do
+      (term, varSorts') <- elabRawAttrTerm doc fieldSort varSorts rawTerm
+      Right (M.insert fieldName term attrs, varSorts')
+
+normalizeAttrArgs :: [(AttrName, AttrSort)] -> [RawAttrArg] -> Either Text [(AttrName, AttrSort, RawAttrTerm)]
+normalizeAttrArgs fields args =
+  case (namedArgs, positionalArgs) of
+    (_:_, _:_) -> Left "generator attribute arguments must be either all named or all positional"
+    (_:_, []) -> normalizeNamed namedArgs
+    ([], _) -> normalizePos positionalArgs
+  where
+    namedArgs = [ (name, term) | RAName name term <- args ]
+    positionalArgs = [ term | RAPos term <- args ]
+    fieldNames = map fst fields
+    normalizeNamed named = do
+      ensureDistinct "duplicate generator attribute argument" (map fst named)
+      if length named /= length fields
+        then Left "generator attribute argument mismatch"
+        else Right ()
+      if S.fromList (map fst named) == S.fromList fieldNames
+        then Right ()
+        else Left "generator attribute arguments must cover exactly the declared fields"
+      let namedMap = M.fromList named
+      traverse
+        (\(fieldName, fieldSort) ->
+          case M.lookup fieldName namedMap of
+            Nothing -> Left "missing generator attribute argument"
+            Just term -> Right (fieldName, fieldSort, term))
+        fields
+    normalizePos positional =
+      if length positional /= length fields
+        then Left "generator attribute argument mismatch"
+        else Right [ (fieldName, fieldSort, term) | ((fieldName, fieldSort), term) <- zip fields positional ]
+
+elabRawAttrTerm
+  :: Doctrine
+  -> AttrSort
+  -> M.Map Text AttrSort
+  -> RawAttrTerm
+  -> Either Text (AttrTerm, M.Map Text AttrSort)
+elabRawAttrTerm doc expectedSort varSorts rawTerm =
+  case rawTerm of
+    RATVar name ->
+      case M.lookup name varSorts of
+        Nothing ->
+          Right (ATVar (AttrVar name expectedSort), M.insert name expectedSort varSorts)
+        Just sortName ->
+          if sortName == expectedSort
+            then Right (ATVar (AttrVar name expectedSort), varSorts)
+            else Left "attribute variable used with conflicting sorts"
+    RATInt n -> do
+      ensureLiteralKind LKInt
+      Right (ATLit (ALInt n), varSorts)
+    RATString s -> do
+      ensureLiteralKind LKString
+      Right (ATLit (ALString s), varSorts)
+    RATBool b -> do
+      ensureLiteralKind LKBool
+      Right (ATLit (ALBool b), varSorts)
+  where
+    ensureLiteralKind kind = do
+      decl <-
+        case M.lookup expectedSort (dAttrSorts doc) of
+          Nothing -> Left "unknown attribute sort"
+          Just d -> Right d
+      case asLitKind decl of
+        Just allowed | allowed == kind -> Right ()
+        _ -> Left "attribute sort does not admit this literal kind"
+
+ensureAttrVarNameSorts :: Diagram -> Either Text ()
+ensureAttrVarNameSorts diag =
+  foldl step (Right M.empty) (S.toList (freeAttrVarsDiagram diag)) >> Right ()
+  where
+    step acc var = do
+      mp <- acc
+      case M.lookup (avName var) mp of
+        Nothing -> Right (M.insert (avName var) (avSort var) mp)
+        Just sortName ->
+          if sortName == avSort var
+            then Right mp
+            else Left "attribute variable used with conflicting sorts"
 
 -- Freshening monad
 

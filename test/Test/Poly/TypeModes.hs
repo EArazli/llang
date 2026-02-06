@@ -52,6 +52,7 @@ mkDoctrine tables =
     , dTypes = M.fromList [ (mode, M.fromList types) | (mode, types) <- tables ]
     , dGens = M.empty
     , dCells2 = []
+    , dAttrSorts = M.empty
     }
 
 requireDoc :: Doctrine -> IO Doctrine

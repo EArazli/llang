@@ -1,0 +1,33 @@
+import "../../lib/codegen/arith_literals.llang";
+
+run_spec Base where {
+  doctrine Arith;
+  mode M;
+  surface ArithInfix;
+  show value;
+}
+
+run eval using Base where { model Eval; }
+---
+2 + 3 * 4
+---
+
+run rpn using Base where { model RPN; }
+---
+2 + 3 * 4
+---
+
+run prefix using Base where { model Prefix; }
+---
+2 + 3 * 4
+---
+
+run infix using Base where { model Infix; }
+---
+2 + 3 * 4
+---
+
+run lisp using Base where { model Lisp; }
+---
+2 + 3 * 4
+---

@@ -14,6 +14,8 @@ module Strat.Poly.Surface.Spec
   , Action(..)
   , ElabRule(..)
   , TemplateExpr(..)
+  , TemplateAttrArg(..)
+  , AttrTemplate(..)
   , SurfaceAST(..)
   ) where
 
@@ -22,6 +24,7 @@ import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName)
 import Strat.Poly.DSL.AST (RawPolyTypeExpr)
+import Strat.Poly.Attr (AttrLit)
 
 data PolySurfaceDef = PolySurfaceDef
   { psName :: Text
@@ -88,6 +91,9 @@ newtype AppRule = AppRule
 data PatItem
   = PatLit Text
   | PatIdent
+  | PatInt
+  | PatString
+  | PatBool
   | PatExpr
   | PatType
   deriving (Eq, Show)
@@ -105,7 +111,7 @@ data ElabRule = ElabRule
 
 data TemplateExpr
   = TId [RawPolyTypeExpr]
-  | TGen Text (Maybe [RawPolyTypeExpr])
+  | TGen Text (Maybe [RawPolyTypeExpr]) (Maybe [TemplateAttrArg])
   | TBox Text TemplateExpr
   | TLoop TemplateExpr
   | TComp TemplateExpr TemplateExpr
@@ -114,8 +120,20 @@ data TemplateExpr
   | TVar Text
   deriving (Eq, Show)
 
+data TemplateAttrArg
+  = TAName Text AttrTemplate
+  | TAPos AttrTemplate
+  deriving (Eq, Show)
+
+data AttrTemplate
+  = ATLIT AttrLit
+  | ATHole Text
+  | ATVar Text
+  deriving (Eq, Show)
+
 data SurfaceAST
   = SAIdent Text
+  | SALit AttrLit
   | SAType RawPolyTypeExpr
   | SANode Text [SurfaceAST]
   deriving (Eq, Show)

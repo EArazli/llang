@@ -89,6 +89,7 @@ mkDoctrine =
         , gdTyVars = tyVars
         , gdDom = dom
         , gdCod = cod
+        , gdAttrs = []
         }
       genDup = mkGen "dup" [aVar] [TVar aVar] [TVar aVar, TVar aVar]
       genDrop = mkGen "drop" [aVar] [TVar aVar] []
@@ -108,6 +109,7 @@ mkDoctrine =
       , dTypes = M.fromList [(mode, M.fromList [(a, TypeSig [])])]
       , dGens = M.fromList [(mode, gens)]
       , dCells2 = []
+      , dAttrSorts = M.empty
       }
 
 mkDoctrineWithExtraMode :: Doctrine
@@ -123,6 +125,7 @@ mkDoctrineWithExtraMode =
         , gdTyVars = tyVars
         , gdDom = dom
         , gdCod = cod
+        , gdAttrs = []
         }
       genDup = mkGen "dup" [aVar] [TVar aVar] [TVar aVar, TVar aVar]
       genDrop = mkGen "drop" [aVar] [TVar aVar] []
@@ -143,6 +146,7 @@ mkDoctrineWithExtraMode =
           ]
       , dGens = M.fromList [(modeM, gens)]
       , dCells2 = []
+      , dAttrSorts = M.empty
       }
 
 mkSurface :: Either Text (Doctrine, PolySurfaceDef)
@@ -158,7 +162,7 @@ mkSurfaceWithSpec specText' doc = do
 
 assertHasGen :: Text -> Diagram -> Assertion
 assertHasGen name diag =
-  let payloads = [ g | Edge _ (PGen g) _ _ <- IM.elems (dEdges diag) ]
+  let payloads = [ g | Edge _ (PGen g _) _ _ <- IM.elems (dEdges diag) ]
   in if GenName name `elem` payloads then pure () else assertFailure ("expected gen " <> T.unpack name)
 
 
@@ -321,6 +325,7 @@ mkDoctrineCustom =
         , gdTyVars = tyVars
         , gdDom = dom
         , gdCod = cod
+        , gdAttrs = []
         }
       genCopy = mkGen "copy" [aVar] [TVar aVar] [TVar aVar, TVar aVar]
       genDiscard = mkGen "discard" [aVar] [TVar aVar] []
@@ -338,6 +343,7 @@ mkDoctrineCustom =
       , dTypes = M.fromList [(mode, M.fromList [(a, TypeSig [])])]
       , dGens = M.fromList [(mode, gens)]
       , dCells2 = []
+      , dAttrSorts = M.empty
       }
 
 testSurfaceCustomDup :: Assertion

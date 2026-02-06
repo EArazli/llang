@@ -19,7 +19,8 @@ import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy (applySubstCtx)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Diagram (Diagram(..), applySubstDiagram, genD, diagramDom, diagramCod)
+import Strat.Poly.Attr
+import Strat.Poly.Diagram (Diagram(..), applySubstDiagram, genD, genDWithAttrs, diagramDom, diagramCod)
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), renumberDiagram, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 
@@ -33,6 +34,7 @@ data PolyPushoutResult = PolyPushoutResult
 
 type TypeRenameMap = M.Map TypeRef TypeRef
 type TypePermMap = M.Map TypeRef [Int]
+type AttrSortRenameMap = M.Map AttrSort AttrSort
 
 computePolyPushout :: Text -> Morphism -> Morphism -> Either Text PolyPushoutResult
 computePolyPushout name f g = do
@@ -41,14 +43,20 @@ computePolyPushout name f g = do
   ensureIdentityModeMap g
   ensureSameModes (morSrc f) (morTgt f)
   ensureSameModes (morSrc g) (morTgt g)
+  attrSortMapF <- requireAttrSortRenameMap f
+  attrSortMapG <- requireAttrSortRenameMap g
   (typeMapF, permMapF) <- requireTypeRenameMap f
   (typeMapG, permMapG) <- requireTypeRenameMap g
   genMapF <- requireGenRenameMap f
   genMapG <- requireGenRenameMap g
+  ensureInjective "attrsort" (M.elems attrSortMapF)
+  ensureInjective "attrsort" (M.elems attrSortMapG)
   ensureInjective "type" (M.elems typeMapF)
   ensureInjective "type" (M.elems typeMapG)
   ensureInjective "gen" (M.elems genMapF)
   ensureInjective "gen" (M.elems genMapG)
+  let renameAttrSortsB0 = M.fromList [ (img, src) | (src, img) <- M.toList attrSortMapF ]
+  let renameAttrSortsC0 = M.fromList [ (img, src) | (src, img) <- M.toList attrSortMapG ]
   let renameTypesB0 = M.fromList [ (img, src) | (src, img) <- M.toList typeMapF ]
   let renameTypesC0 = M.fromList [ (img, src) | (src, img) <- M.toList typeMapG ]
   let permTypesB0 = permMapF
@@ -57,19 +65,21 @@ computePolyPushout name f g = do
   let renameGensC0 = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList genMapG ]
   let prefixB = sanitizePrefix (dName (morTgt f)) <> "_inl"
   let prefixC = sanitizePrefix (dName (morTgt g)) <> "_inr"
+  let renameAttrSortsB = M.union renameAttrSortsB0 (disjointAttrSortRenames prefixB (morSrc f) renameAttrSortsB0 (morTgt f))
+  let renameAttrSortsC = M.union renameAttrSortsC0 (disjointAttrSortRenames prefixC (morSrc f) renameAttrSortsC0 (morTgt g))
   let renameTypesB = M.union renameTypesB0 (disjointTypeRenames prefixB (morSrc f) renameTypesB0 (morTgt f))
   let renameTypesC = M.union renameTypesC0 (disjointTypeRenames prefixC (morSrc f) renameTypesC0 (morTgt g))
   let renameGensB = M.union renameGensB0 (disjointGenRenames prefixB (morSrc f) renameGensB0 (morTgt f))
   let renameGensC = M.union renameGensC0 (disjointGenRenames prefixC (morSrc f) renameGensC0 (morTgt g))
   let renameCellsB = disjointCellRenames prefixB (morSrc f) (morTgt f)
   let renameCellsC = disjointCellRenames prefixC (morSrc f) (morTgt g)
-  b' <- renameDoctrine renameTypesB permTypesB0 renameGensB renameCellsB (morTgt f)
-  c' <- renameDoctrine renameTypesC permTypesC0 renameGensC renameCellsC (morTgt g)
+  b' <- renameDoctrine renameAttrSortsB renameTypesB permTypesB0 renameGensB renameCellsB (morTgt f)
+  c' <- renameDoctrine renameAttrSortsC renameTypesC permTypesC0 renameGensC renameCellsC (morTgt g)
   merged <- mergeDoctrineList [morSrc f, b', c']
   let pres = merged { dName = name }
   glue <- buildGlue name (morSrc f) pres
-  inl <- buildInj (name <> ".inl") (morTgt f) pres renameTypesB permTypesB0 renameGensB
-  inr <- buildInj (name <> ".inr") (morTgt g) pres renameTypesC permTypesC0 renameGensC
+  inl <- buildInj (name <> ".inl") (morTgt f) pres renameAttrSortsB renameTypesB permTypesB0 renameGensB
+  inr <- buildInj (name <> ".inr") (morTgt g) pres renameAttrSortsC renameTypesC permTypesC0 renameGensC
   checkGenerated "glue" glue
   checkGenerated "inl" inl
   checkGenerated "inr" inr
@@ -92,6 +102,7 @@ computePolyCoproduct name a b = do
   let empty = Doctrine
         { dName = "Empty"
         , dModes = dModes a
+        , dAttrSorts = M.empty
         , dTypes = M.empty
         , dGens = M.empty
         , dCells2 = []
@@ -103,6 +114,7 @@ computePolyCoproduct name a b = do
         , morTgt = a
         , morIsCoercion = True
         , morModeMap = modeMap
+        , morAttrSortMap = M.empty
         , morTypeMap = M.empty
         , morGenMap = M.empty
         , morPolicy = UseAllOriented
@@ -114,6 +126,7 @@ computePolyCoproduct name a b = do
         , morTgt = b
         , morIsCoercion = True
         , morModeMap = modeMap
+        , morAttrSortMap = M.empty
         , morTypeMap = M.empty
         , morGenMap = M.empty
         , morPolicy = UseAllOriented
@@ -130,6 +143,10 @@ ensureSameModes a b =
 identityModeMap :: Doctrine -> M.Map ModeName ModeName
 identityModeMap doc =
   M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]
+
+identityAttrSortMap :: Doctrine -> M.Map AttrSort AttrSort
+identityAttrSortMap doc =
+  M.fromList [ (s, s) | s <- M.keys (dAttrSorts doc) ]
 
 requireTypeRenameMap :: Morphism -> Either Text (TypeRenameMap, TypePermMap)
 requireTypeRenameMap mor = do
@@ -179,6 +196,20 @@ requireTypeRenameMap mor = do
     isVar (TVar _) = True
     isVar _ = False
 
+requireAttrSortRenameMap :: Morphism -> Either Text AttrSortRenameMap
+requireAttrSortRenameMap mor = do
+  let srcSorts = M.keys (dAttrSorts (morSrc mor))
+  let tgtSorts = dAttrSorts (morTgt mor)
+  let mapOne srcSort =
+        case M.lookup srcSort (morAttrSortMap mor) of
+          Nothing -> Left "poly pushout requires explicit attrsort mappings"
+          Just tgtSort ->
+            if M.member tgtSort tgtSorts
+              then Right (srcSort, tgtSort)
+              else Left "poly pushout: target attrsort missing"
+  pairs <- mapM mapOne srcSorts
+  pure (M.fromList pairs)
+
 invertPermutation :: Int -> [Int] -> Either Text [Int]
 invertPermutation n perm
   | length perm /= n = Left "poly pushout: type permutation arity mismatch"
@@ -200,26 +231,36 @@ requireGenRenameMap mor = do
       img <- case M.lookup (mode, gdName gen) (morGenMap m) of
         Nothing -> Left "poly pushout requires explicit generator mappings"
         Just d -> do
-          imgName <- singleGenName d
+          imgName <- singleGenName m gen d
           ensureGenExists (morTgt m) mode imgName
           Right imgName
       pure ((mode, gdName gen), img)
 
-singleGenName :: Diagram -> Either Text GenName
-singleGenName diag = do
+singleGenName :: Morphism -> GenDecl -> Diagram -> Either Text GenName
+singleGenName mor srcGen diag = do
   canon <- renumberDiagram diag
   case IM.elems (dEdges canon) of
     [edge] -> do
       let boundary = dIn canon <> dOut canon
       let edgePorts = eIns edge <> eOuts edge
       let allPorts = diagramPortIds canon
+      expectedAttrs <- expectedAttrMap mor srcGen
       case ePayload edge of
-        PGen g ->
-          if boundary == edgePorts && length allPorts == length boundary
+        PGen g attrs ->
+          if boundary == edgePorts && length allPorts == length boundary && attrs == expectedAttrs
             then Right g
             else Left "poly pushout requires generator mappings to be a single generator"
         _ -> Left "poly pushout requires generator mappings to be a single generator"
     _ -> Left "poly pushout requires generator mappings to be a single generator"
+  where
+    expectedAttrMap m gen = fmap M.fromList (mapM toField (gdAttrs gen))
+      where
+        toField (fieldName, srcSort) = do
+          tgtSort <-
+            case M.lookup srcSort (morAttrSortMap m) of
+              Nothing -> Left "poly pushout: missing attrsort mapping in generator image"
+              Just s -> Right s
+          Right (fieldName, ATVar (AttrVar fieldName tgtSort))
 
 ensureTypeExists :: Doctrine -> TypeRef -> Int -> Either Text ()
 ensureTypeExists doc ref arity =
@@ -265,6 +306,20 @@ disjointTypeRenames prefix src interfaceRen tgt =
           let (name', used') = freshTypeName prefix name used
               key' = TypeRef mode name'
           in (used', M.insert key key' mp)
+
+disjointAttrSortRenames :: Text -> Doctrine -> AttrSortRenameMap -> Doctrine -> AttrSortRenameMap
+disjointAttrSortRenames prefix src interfaceRen tgt =
+  let reserved = S.fromList (M.keys (dAttrSorts src))
+      names = M.keys (dAttrSorts tgt)
+      (_, mp) = foldl step (reserved, M.empty) names
+  in mp
+  where
+    step (used, mp) name =
+      if M.member name interfaceRen
+        then (used, mp)
+        else
+          let (name', used') = freshAttrSortName prefix name used
+          in (used', M.insert name name' mp)
 
 disjointGenRenames :: Text -> Doctrine -> M.Map (ModeName, GenName) GenName -> Doctrine -> M.Map (ModeName, GenName) GenName
 disjointGenRenames prefix src interfaceRen tgt =
@@ -317,6 +372,12 @@ freshTypeName prefix (TypeName base) used =
       candidate = TypeName baseName
   in freshen candidate (\n -> TypeName (baseName <> "_" <> T.pack (show n))) used
 
+freshAttrSortName :: Text -> AttrSort -> S.Set AttrSort -> (AttrSort, S.Set AttrSort)
+freshAttrSortName prefix (AttrSort base) used =
+  let baseName = prefix <> "_" <> base
+      candidate = AttrSort baseName
+  in freshen candidate (\n -> AttrSort (baseName <> "_" <> T.pack (show n))) used
+
 freshGenName :: Text -> GenName -> S.Set GenName -> (GenName, S.Set GenName)
 freshGenName prefix (GenName base) used =
   let baseName = prefix <> "_" <> base
@@ -341,13 +402,32 @@ freshen candidate mk used =
         then go (n + 1)
         else (cand, S.insert cand used)
 
-renameDoctrine :: TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> M.Map (ModeName, Text) Text -> Doctrine -> Either Text Doctrine
-renameDoctrine tyRen permRen genRen cellRen doc = do
+renameDoctrine
+  :: AttrSortRenameMap
+  -> TypeRenameMap
+  -> TypePermMap
+  -> M.Map (ModeName, GenName) GenName
+  -> M.Map (ModeName, Text) Text
+  -> Doctrine
+  -> Either Text Doctrine
+renameDoctrine attrRen tyRen permRen genRen cellRen doc = do
+  attrSorts' <- renameAttrSorts attrRen (dAttrSorts doc)
   types' <- M.traverseWithKey renameTypeTable (dTypes doc)
   gens' <- M.traverseWithKey renameGenTable (dGens doc)
-  cells' <- mapM (renameCell tyRen permRen genRen cellRen) (dCells2 doc)
-  pure doc { dTypes = types', dGens = gens', dCells2 = cells' }
+  cells' <- mapM (renameCell attrRen tyRen permRen genRen cellRen) (dCells2 doc)
+  pure doc { dAttrSorts = attrSorts', dTypes = types', dGens = gens', dCells2 = cells' }
   where
+    renameAttrSorts ren table =
+      foldl add (Right M.empty) (M.elems table)
+      where
+        add acc decl = do
+          mp <- acc
+          let name' = M.findWithDefault (asName decl) (asName decl) ren
+          let decl' = decl { asName = name' }
+          case M.lookup name' mp of
+            Nothing -> Right (M.insert name' decl' mp)
+            Just existing | existing == decl' -> Right mp
+            _ -> Left "poly pushout: attribute sort collision"
     renameTypeTable mode table =
       foldl add (Right M.empty) (M.toList table)
       where
@@ -369,26 +449,34 @@ renameDoctrine tyRen permRen genRen cellRen doc = do
           let name' = M.findWithDefault (gdName gen) (mode, gdName gen) genRen
           dom' <- mapM (renameTypeExpr tyRen permRen) (gdDom gen)
           cod' <- mapM (renameTypeExpr tyRen permRen) (gdCod gen)
-          let gen' = gen { gdName = name', gdDom = dom', gdCod = cod' }
+          let attrs' = [ (fieldName, M.findWithDefault sortName sortName attrRen) | (fieldName, sortName) <- gdAttrs gen ]
+          let gen' = gen { gdName = name', gdDom = dom', gdCod = cod', gdAttrs = attrs' }
           case M.lookup name' mp of
             Nothing -> Right (M.insert name' gen' mp)
             Just existing | existing == gen' -> Right mp
             _ -> Left "poly pushout: generator name collision"
 
-renameCell :: TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> M.Map (ModeName, Text) Text -> Cell2 -> Either Text Cell2
-renameCell tyRen permRen genRen cellRen cell = do
+renameCell
+  :: AttrSortRenameMap
+  -> TypeRenameMap
+  -> TypePermMap
+  -> M.Map (ModeName, GenName) GenName
+  -> M.Map (ModeName, Text) Text
+  -> Cell2
+  -> Either Text Cell2
+renameCell attrRen tyRen permRen genRen cellRen cell = do
   let mode = dMode (c2LHS cell)
   let name' = M.findWithDefault (c2Name cell) (mode, c2Name cell) cellRen
-  lhs' <- renameDiagram tyRen permRen genRen (c2LHS cell)
-  rhs' <- renameDiagram tyRen permRen genRen (c2RHS cell)
+  lhs' <- renameDiagram attrRen tyRen permRen genRen (c2LHS cell)
+  rhs' <- renameDiagram attrRen tyRen permRen genRen (c2RHS cell)
   pure cell
     { c2Name = name'
     , c2LHS = lhs'
     , c2RHS = rhs'
     }
 
-renameDiagram :: TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> Diagram -> Either Text Diagram
-renameDiagram tyRen permRen genRen diag = do
+renameDiagram :: AttrSortRenameMap -> TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> Diagram -> Either Text Diagram
+renameDiagram attrRen tyRen permRen genRen diag = do
   let mode = dMode diag
   dPortTy' <- traverse (renameTypeExpr tyRen permRen) (dPortTy diag)
   dEdges' <- traverse (renameEdge mode) (dEdges diag)
@@ -396,12 +484,21 @@ renameDiagram tyRen permRen genRen diag = do
   where
     renameEdge mode edge =
       case ePayload edge of
-        PGen gen ->
+        PGen gen attrs ->
           let gen' = M.findWithDefault gen (mode, gen) genRen
-          in Right edge { ePayload = PGen gen' }
+              attrs' = M.map (renameAttrTerm attrRen) attrs
+          in Right edge { ePayload = PGen gen' attrs' }
         PBox name inner -> do
-          inner' <- renameDiagram tyRen permRen genRen inner
+          inner' <- renameDiagram attrRen tyRen permRen genRen inner
           pure edge { ePayload = PBox name inner' }
+
+renameAttrTerm :: AttrSortRenameMap -> AttrTerm -> AttrTerm
+renameAttrTerm ren term =
+  case term of
+    ATLit lit -> ATLit lit
+    ATVar v ->
+      let sortName' = M.findWithDefault (avSort v) (avSort v) ren
+      in ATVar v { avSort = sortName' }
 
 renameTypeExpr :: TypeRenameMap -> TypePermMap -> TypeExpr -> Either Text TypeExpr
 renameTypeExpr ren permRen ty =
@@ -439,11 +536,21 @@ mergeDoctrine a b = do
   if dModes a /= dModes b
     then Left "poly pushout: mode mismatch"
     else do
+      attrSorts <- mergeAttrSorts (dAttrSorts a) (dAttrSorts b)
       types <- mergeTypeTables (dTypes a) (dTypes b)
       gens <- mergeGenTables (dGens a) (dGens b)
       cells <- mergeCells (dCells2 a) (dCells2 b)
-      pure a { dTypes = types, dGens = gens, dCells2 = cells }
+      pure a { dAttrSorts = attrSorts, dTypes = types, dGens = gens, dCells2 = cells }
   where
+    mergeAttrSorts left right =
+      foldl add (Right left) (M.toList right)
+      where
+        add acc (name, decl) = do
+          mp <- acc
+          case M.lookup name mp of
+            Nothing -> Right (M.insert name decl mp)
+            Just existing | existing == decl -> Right mp
+            _ -> Left "poly pushout: attribute sort conflict"
     mergeTypeTables left right =
       foldl mergeTypeMode (Right left) (M.toList right)
     mergeTypeMode acc (mode, table) = do
@@ -572,6 +679,7 @@ genDeclAlphaEq :: GenDecl -> GenDecl -> Bool
 genDeclAlphaEq g1 g2 =
   gdMode g1 == gdMode g2
     && gdName g1 == gdName g2
+    && gdAttrs g1 == gdAttrs g2
     && length (gdTyVars g1) == length (gdTyVars g2)
     && let subst = M.fromList (zip (gdTyVars g2) (map TVar (gdTyVars g1)))
            dom2 = applySubstCtx subst (gdDom g2)
@@ -589,34 +697,53 @@ alphaRenameCellTo from to cell
 
 buildGlue :: Text -> Doctrine -> Doctrine -> Either Text Morphism
 buildGlue name src tgt = do
-  genMap <- buildGenMap src tgt M.empty M.empty M.empty
+  genMap <- buildGenMap src tgt M.empty M.empty M.empty M.empty
   pure Morphism
     { morName = name <> ".glue"
     , morSrc = src
     , morTgt = tgt
     , morIsCoercion = True
     , morModeMap = identityModeMap src
+    , morAttrSortMap = identityAttrSortMap src
     , morTypeMap = M.empty
     , morGenMap = genMap
     , morPolicy = UseOnlyComputationalLR
     , morFuel = 10
     }
 
-buildInj :: Text -> Doctrine -> Doctrine -> TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> Either Text Morphism
-buildInj name src tgt tyRen permRen genRen = do
+buildInj
+  :: Text
+  -> Doctrine
+  -> Doctrine
+  -> AttrSortRenameMap
+  -> TypeRenameMap
+  -> TypePermMap
+  -> M.Map (ModeName, GenName) GenName
+  -> Either Text Morphism
+buildInj name src tgt attrRen tyRen permRen genRen = do
+  attrSortMap <- buildAttrSortMap src attrRen
   typeMap <- buildTypeMap src tyRen permRen
-  genMap <- buildGenMap src tgt tyRen permRen genRen
+  genMap <- buildGenMap src tgt attrRen tyRen permRen genRen
   pure Morphism
     { morName = name
     , morSrc = src
     , morTgt = tgt
     , morIsCoercion = True
     , morModeMap = identityModeMap src
+    , morAttrSortMap = attrSortMap
     , morTypeMap = typeMap
     , morGenMap = genMap
     , morPolicy = UseOnlyComputationalLR
     , morFuel = 10
     }
+
+buildAttrSortMap :: Doctrine -> AttrSortRenameMap -> Either Text (M.Map AttrSort AttrSort)
+buildAttrSortMap doc renames =
+  foldM add M.empty (M.keys (dAttrSorts doc))
+  where
+    add mp srcSort =
+      let tgtSort = M.findWithDefault srcSort srcSort renames
+      in Right (M.insert srcSort tgtSort mp)
 
 buildTypeMap :: Doctrine -> TypeRenameMap -> TypePermMap -> Either Text (M.Map TypeRef TypeTemplate)
 buildTypeMap doc renames permRen =
@@ -640,8 +767,15 @@ buildTypeMap doc renames permRen =
         Just perm -> applyPerm perm vars
       pure (TypeTemplate vars (TCon tgtRef (map TVar vars')))
 
-buildGenMap :: Doctrine -> Doctrine -> TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> Either Text (M.Map (ModeName, GenName) Diagram)
-buildGenMap src tgt tyRen permRen genRen =
+buildGenMap
+  :: Doctrine
+  -> Doctrine
+  -> AttrSortRenameMap
+  -> TypeRenameMap
+  -> TypePermMap
+  -> M.Map (ModeName, GenName) GenName
+  -> Either Text (M.Map (ModeName, GenName) Diagram)
+buildGenMap src tgt attrRen tyRen permRen genRen =
   fmap M.fromList (mapM build (allGens src))
   where
     build (mode, gen) = do
@@ -650,7 +784,12 @@ buildGenMap src tgt tyRen permRen genRen =
       dom <- mapM (renameTypeExpr tyRen permRen) (gdDom gen)
       cod <- mapM (renameTypeExpr tyRen permRen) (gdCod gen)
       _ <- ensureGenExists tgt mode genName'
-      d <- genD mode dom cod genName'
+      let attrs =
+            M.fromList
+              [ (fieldName, ATVar (AttrVar fieldName (M.findWithDefault sortName sortName attrRen)))
+              | (fieldName, sortName) <- gdAttrs gen
+              ]
+      d <- genDWithAttrs mode dom cod genName' attrs
       pure ((mode, genName), d)
 
 checkGenerated :: Text -> Morphism -> Either Text ()

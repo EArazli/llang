@@ -20,6 +20,7 @@ import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
 import Strat.Poly.Surface.Spec
 import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..))
 import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Attr (AttrLit(..))
 
 
 -- Spec parser
@@ -49,6 +50,9 @@ stringLiteral = lexeme $ do
   _ <- char '"'
   content <- manyTill L.charLiteral (char '"')
   pure (T.pack content)
+
+integer :: Parser Integer
+integer = lexeme L.decimal
 
 parseSurfaceSpec :: Text -> Either Text SurfaceSpec
 parseSurfaceSpec input =
@@ -260,6 +264,9 @@ patItem :: Parser PatItem
 patItem =
   choice
     [ symbol "ident" $> PatIdent
+    , symbol "int" $> PatInt
+    , symbol "string" $> PatString
+    , symbol "bool" $> PatBool
     , try (symbol "<" *> symbol "expr" *> symbol ">" $> PatExpr)
     , try (symbol "<" *> symbol "type" *> symbol ">" $> PatType)
     , PatLit <$> stringLiteral
@@ -324,7 +331,8 @@ templateGen :: Parser TemplateExpr
 templateGen = do
   name <- ident
   mArgs <- optional (symbol "{" *> typeExpr `sepBy` symbol "," <* symbol "}")
-  pure (TGen name mArgs)
+  mAttrArgs <- optional templateAttrArgs
+  pure (TGen name mArgs mAttrArgs)
 
 templateBox :: Parser TemplateExpr
 templateBox = do
@@ -352,6 +360,48 @@ templateHole = lexeme $ do
     Nothing -> do
       name <- identRaw
       pure (TVar name)
+
+templateAttrArgs :: Parser [TemplateAttrArg]
+templateAttrArgs = do
+  _ <- symbol "("
+  args <- templateAttrArg `sepBy` symbol ","
+  _ <- symbol ")"
+  if mixedArgStyles args
+    then fail "template attribute arguments must be either all named or all positional"
+    else pure args
+  where
+    mixedArgStyles [] = False
+    mixedArgStyles xs =
+      let named = [ () | TAName _ _ <- xs ]
+          positional = [ () | TAPos _ <- xs ]
+      in not (null named) && not (null positional)
+
+templateAttrArg :: Parser TemplateAttrArg
+templateAttrArg =
+  try named <|> positional
+  where
+    named = do
+      field <- ident
+      _ <- symbol "="
+      term <- templateAttrTerm
+      pure (TAName field term)
+    positional = TAPos <$> templateAttrTerm
+
+templateAttrTerm :: Parser AttrTemplate
+templateAttrTerm =
+  choice
+    [ try attrHole
+    , ATLIT . ALInt . fromIntegral <$> integer
+    , ATLIT . ALString <$> stringLiteral
+    , ATLIT (ALBool True) <$ symbol "true"
+    , ATLIT (ALBool False) <$ symbol "false"
+    , ATVar <$> ident
+    ]
+  where
+    attrHole = do
+      _ <- symbol "#"
+      name <- ident
+      pure (ATHole name)
 
 contextExpr :: Parser [RawPolyTypeExpr]
 contextExpr = do
@@ -405,6 +455,7 @@ parseSurfaceExpr spec input =
 
 data Capture
   = CapIdent Text
+  | CapLit AttrLit
   | CapType RawPolyTypeExpr
   | CapExpr SurfaceAST
   | CapSkip
@@ -488,6 +539,11 @@ parsePatItem lexSpec exprSpec item =
   case item of
     PatLit lit -> literalToken lexSpec lit *> pure CapSkip
     PatIdent -> CapIdent <$> identToken lexSpec
+    PatInt -> CapLit . ALInt . fromIntegral <$> integer
+    PatString -> CapLit . ALString <$> stringLiteral
+    PatBool ->
+      (literalToken lexSpec "true" $> CapLit (ALBool True))
+        <|> (literalToken lexSpec "false" $> CapLit (ALBool False))
     PatExpr -> CapExpr <$> parseExpr lexSpec exprSpec 0
     PatType -> CapType <$> typeExpr
 
@@ -507,6 +563,7 @@ applyAction act caps =
     capToAst cap =
       case cap of
         CapIdent t -> SAIdent t
+        CapLit lit -> SALit lit
         CapType ty -> SAType ty
         CapExpr e -> e
         CapSkip -> SANode "__skip__" []

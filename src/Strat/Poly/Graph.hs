@@ -13,7 +13,7 @@ module Strat.Poly.Graph
   , mergePorts
   , renumberDiagram
   , diagramIsoEq
-  , diagramIsoMatchWithTyVars
+  , diagramIsoMatchWithVars
   , shiftDiagram
   , diagramPortType
   , diagramPortIds
@@ -30,6 +30,7 @@ import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.TypeExpr (TypeExpr, TyVar, typeMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.UnifyTy (Subst, unifyTyFlex, applySubstTy, composeSubst)
+import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, applyAttrSubstMap, composeAttrSubst, unifyAttrFlex)
 import Strat.Poly.TypePretty (renderType)
 
 
@@ -37,7 +38,7 @@ newtype PortId = PortId Int deriving (Eq, Ord, Show)
 newtype EdgeId = EdgeId Int deriving (Eq, Ord, Show)
 
 data EdgePayload
-  = PGen GenName
+  = PGen GenName AttrMap
   | PBox BoxName Diagram
   deriving (Eq, Ord, Show)
 
@@ -74,7 +75,8 @@ data IsoMatchState = IsoMatchState
   , imsUsedPorts :: S.Set PortId
   , imsUsedEdges :: S.Set EdgeId
   , imsQueue :: [(PortId, PortId)]
-  , imsSubst :: Subst
+  , imsTySubst :: Subst
+  , imsAttrSubst :: AttrSubst
   } deriving (Eq, Show)
 
 
@@ -117,7 +119,7 @@ freshPort ty diag =
 
 addEdge :: GenName -> [PortId] -> [PortId] -> Diagram -> Either Text Diagram
 addEdge gen ins outs diag =
-  addEdgePayload (PGen gen) ins outs diag
+  addEdgePayload (PGen gen M.empty) ins outs diag
 
 addEdgePayload :: EdgePayload -> [PortId] -> [PortId] -> Diagram -> Either Text Diagram
 addEdgePayload payload ins outs diag = do
@@ -245,7 +247,7 @@ validateDiagram diag = do
         Just ty -> Right ty
     checkPayload edge =
       case ePayload edge of
-        PGen _ -> Right ()
+        PGen _ _ -> Right ()
         PBox _ inner -> do
           if dMode inner /= dMode diag
             then Left "validateDiagram: box mode mismatch"
@@ -348,7 +350,7 @@ shiftDiagram portOff edgeOff diag =
           }
       shiftPayload payload =
         case payload of
-          PGen g -> PGen g
+          PGen g attrs -> PGen g attrs
           PBox name inner -> PBox name (shiftDiagram portOff edgeOff inner)
       shiftPortMap = IM.mapKeysMonotonic (+ portOff)
       shiftEdgeMap = IM.mapKeysMonotonic (+ edgeOff)
@@ -430,7 +432,7 @@ renumberDiagram diag = do
           (IM.elems edges)
     mapPayload payload =
       case payload of
-        PGen g -> Right (PGen g)
+        PGen g attrs -> Right (PGen g attrs)
         PBox name inner -> do
           inner' <- renumberDiagram inner
           Right (PBox name inner')
@@ -545,8 +547,10 @@ diagramIsoEq left right
 
     payloadCompatible p1 p2 =
       case (p1, p2) of
-        (PGen g1, PGen g2) ->
-          if g1 == g2 then Right () else Left "diagramIsoEq: generator mismatch"
+        (PGen g1 attrs1, PGen g2 attrs2) ->
+          if g1 == g2 && attrs1 == attrs2
+            then Right ()
+            else Left "diagramIsoEq: generator mismatch"
         (PBox _ d1, PBox _ d2) -> do
           ok <- diagramIsoEq d1 d2
           if ok then Right () else Left "diagramIsoEq: box diagram mismatch"
@@ -585,8 +589,13 @@ unionDisjointIntMap label left right =
     then Right (IM.union left right)
     else Left (label <> ": key collision " <> T.pack (show overlap))
 
-diagramIsoMatchWithTyVars :: S.Set TyVar -> Diagram -> Diagram -> Either Text [Subst]
-diagramIsoMatchWithTyVars flex left right
+diagramIsoMatchWithVars
+  :: S.Set TyVar
+  -> S.Set AttrVar
+  -> Diagram
+  -> Diagram
+  -> Either Text [(Subst, AttrSubst)]
+diagramIsoMatchWithVars tyFlex attrFlex left right
   | dMode left /= dMode right = Right []
   | length (dIn left) /= length (dIn right) = Right []
   | length (dOut left) /= length (dOut right) = Right []
@@ -597,9 +606,9 @@ diagramIsoMatchWithTyVars flex left right
       st0 <- foldl addInit (Right (Just emptyState)) initPairs
       case st0 of
         Nothing -> Right []
-        Just st -> fmap (map imsSubst) (isoSearch st)
+        Just st -> fmap (map (\s -> (imsTySubst s, imsAttrSubst s))) (isoSearch st)
   where
-    emptyState = IsoMatchState M.empty M.empty S.empty S.empty [] M.empty
+    emptyState = IsoMatchState M.empty M.empty S.empty S.empty [] M.empty M.empty
 
     addInit acc (p1, p2) = do
       mSt <- acc
@@ -640,12 +649,12 @@ diagramIsoMatchWithTyVars flex left right
     checkPortTypes st p1 p2 = do
       ty1 <- requirePortType left p1
       ty2 <- requirePortType right p2
-      let subst = imsSubst st
-      case unifyTyFlex flex (applySubstTy subst ty1) (applySubstTy subst ty2) of
+      let subst = imsTySubst st
+      case unifyTyFlex tyFlex (applySubstTy subst ty1) (applySubstTy subst ty2) of
         Left _ -> Right []
         Right s1 ->
           let subst' = composeSubst s1 subst
-          in Right [st { imsSubst = subst' }]
+          in Right [st { imsTySubst = subst' }]
 
     mapIncidentEdges p1 p2 st = do
       st1s <- mapEndpoint "producer" (lookupEdge left (dProd left) p1) (lookupEdge right (dProd right) p2) st
@@ -685,14 +694,15 @@ diagramIsoMatchWithTyVars flex left right
               subs <- payloadSubsts st (ePayload e1) (ePayload e2)
               fmap concat (mapM (attachEdge st e1 e2) subs)
 
-    attachEdge st e1 e2 subst = do
+    attachEdge st e1 e2 (tySubst, attrSubst) = do
       if length (eIns e1) /= length (eIns e2) || length (eOuts e1) /= length (eOuts e2)
         then Right []
         else do
           let st0 = st
                 { imsEdgeMap = M.insert (eId e1) (eId e2) (imsEdgeMap st)
                 , imsUsedEdges = S.insert (eId e2) (imsUsedEdges st)
-                , imsSubst = subst
+                , imsTySubst = tySubst
+                , imsAttrSubst = attrSubst
                 }
           foldl addPorts (Right [st0]) (zip (eIns e1) (eIns e2) <> zip (eOuts e1) (eOuts e2))
       where
@@ -702,19 +712,37 @@ diagramIsoMatchWithTyVars flex left right
 
     payloadSubsts st p1 p2 =
       case (p1, p2) of
-        (PGen g1, PGen g2) ->
-          if g1 == g2 then Right [imsSubst st] else Right []
+        (PGen g1 attrs1, PGen g2 attrs2) ->
+          if g1 /= g2 || M.keysSet attrs1 /= M.keysSet attrs2
+            then Right []
+            else do
+              let attrSubst0 = imsAttrSubst st
+              case foldl unifyField (Right attrSubst0) (M.toList attrs1) of
+                Left _ -> Right []
+                Right attrSubst' -> Right [(imsTySubst st, attrSubst')]
+          where
+            unifyField acc (field, term1) = do
+              sub <- acc
+              case M.lookup field attrs2 of
+                Nothing -> Left "diagramIsoMatchWithVars: missing attribute field"
+                Just term2 -> unifyAttrFlex attrFlex sub term1 term2
         (PBox _ d1, PBox _ d2) -> do
-          let subst = imsSubst st
-          let d1' = applySubstDiagramLocal subst d1
-          let d2' = applySubstDiagramLocal subst d2
-          subs <- diagramIsoMatchWithTyVars flex d1' d2'
-          Right (map (`composeSubst` subst) subs)
+          let tySubst = imsTySubst st
+          let attrSubst = imsAttrSubst st
+          let d1' = applySubstsDiagramLocal tySubst attrSubst d1
+          let d2' = applySubstsDiagramLocal tySubst attrSubst d2
+          case diagramIsoMatchWithVars tyFlex attrFlex d1' d2' of
+            Left _ -> Right []
+            Right subs ->
+              Right
+                [ (composeSubst tySub tySubst, composeAttrSubst attrSub attrSubst)
+                | (tySub, attrSub) <- subs
+                ]
         _ -> Right []
 
     requirePortType diag pid =
       case diagramPortType diag pid of
-        Nothing -> Left "diagramIsoMatchWithTyVars: missing port type"
+        Nothing -> Left "diagramIsoMatchWithVars: missing port type"
         Just ty -> Right ty
 
     nextUnmappedEdge st =
@@ -736,19 +764,22 @@ diagramIsoMatchWithTyVars flex left right
 
     payloadCompatible p1 p2 =
       case (p1, p2) of
-        (PGen g1, PGen g2) -> g1 == g2
+        (PGen g1 attrs1, PGen g2 attrs2) ->
+          g1 == g2 && M.keysSet attrs1 == M.keysSet attrs2
         (PBox _ _, PBox _ _) -> True
         _ -> False
 
     tryMapEdge st e1 e2 = addEdgePair st e1 e2
 
-applySubstDiagramLocal :: Subst -> Diagram -> Diagram
-applySubstDiagramLocal subst diag =
-  let dPortTy' = IM.map (applySubstTy subst) (dPortTy diag)
-      dEdges' = IM.map (mapEdgePayloadLocal subst) (dEdges diag)
+applySubstsDiagramLocal :: Subst -> AttrSubst -> Diagram -> Diagram
+applySubstsDiagramLocal tySubst attrSubst diag =
+  let dPortTy' = IM.map (applySubstTy tySubst) (dPortTy diag)
+      dEdges' = IM.map (mapEdgePayloadLocal tySubst attrSubst) (dEdges diag)
   in diag { dPortTy = dPortTy', dEdges = dEdges' }
   where
-    mapEdgePayloadLocal s edge =
+    mapEdgePayloadLocal tyS attrS edge =
       case ePayload edge of
-        PGen g -> edge { ePayload = PGen g }
-        PBox name inner -> edge { ePayload = PBox name (applySubstDiagramLocal s inner) }
+        PGen g attrs ->
+          edge { ePayload = PGen g (applyAttrSubstMap attrS attrs) }
+        PBox name inner ->
+          edge { ePayload = PBox name (applySubstsDiagramLocal tyS attrS inner) }

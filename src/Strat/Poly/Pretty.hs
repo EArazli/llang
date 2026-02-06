@@ -7,9 +7,11 @@ module Strat.Poly.Pretty
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Map.Strict as M
 import Strat.Poly.Graph
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names (GenName(..), BoxName(..))
+import Strat.Poly.Attr (AttrTerm(..), AttrLit(..), AttrMap, AttrVar(..))
 import Strat.Poly.TypePretty (renderMode, renderType)
 
 
@@ -43,8 +45,8 @@ renderEdges edges = do
   where
     renderEdge e =
       case ePayload e of
-        PGen g ->
-          Right ("  " <> renderEdgeId (eId e) <> ": " <> renderGen g
+        PGen g attrs ->
+          Right ("  " <> renderEdgeId (eId e) <> ": " <> renderGenWithAttrs g attrs
             <> " [" <> renderPortList (eIns e) <> "] -> [" <> renderPortList (eOuts e) <> "]")
         PBox name inner -> do
           innerTxt <- renderDiagram inner
@@ -62,6 +64,26 @@ indent txt =
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
+
+renderGenWithAttrs :: GenName -> AttrMap -> Text
+renderGenWithAttrs g attrs
+  | M.null attrs = renderGen g
+  | otherwise =
+      renderGen g
+        <> "("
+        <> T.intercalate ", " [ name <> "=" <> renderAttrTerm term | (name, term) <- M.toAscList attrs ]
+        <> ")"
+
+renderAttrTerm :: AttrTerm -> Text
+renderAttrTerm term =
+  case term of
+    ATVar v -> avName v
+    ATLit lit ->
+      case lit of
+        ALInt n -> T.pack (show n)
+        ALString s -> T.pack (show s)
+        ALBool True -> "true"
+        ALBool False -> "false"
 
 renderBox :: BoxName -> Text
 renderBox (BoxName t) = t

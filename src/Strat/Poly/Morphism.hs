@@ -18,6 +18,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
+import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
@@ -30,6 +31,7 @@ data Morphism = Morphism
   , morTgt    :: Doctrine
   , morIsCoercion :: Bool
   , morModeMap :: M.Map ModeName ModeName
+  , morAttrSortMap :: M.Map AttrSort AttrSort
   , morTypeMap :: M.Map TypeRef TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) Diagram
   , morPolicy  :: RewritePolicy
@@ -47,6 +49,12 @@ mapMode mor mode =
     Nothing -> Left "morphism: missing mode mapping"
     Just mode' -> Right mode'
 
+mapAttrSort :: Morphism -> AttrSort -> Either Text AttrSort
+mapAttrSort mor sortName =
+  case M.lookup sortName (morAttrSortMap mor) of
+    Nothing -> Left "morphism: missing attribute sort mapping"
+    Just sortName' -> Right sortName'
+
 mapTyVar :: Morphism -> TyVar -> Either Text TyVar
 mapTyVar mor v = do
   mode' <- mapMode mor (tvMode v)
@@ -56,6 +64,14 @@ mapTypeRef :: Morphism -> TypeRef -> Either Text TypeRef
 mapTypeRef mor ref = do
   mode' <- mapMode mor (trMode ref)
   pure ref { trMode = mode' }
+
+applyMorphismAttrTerm :: Morphism -> AttrTerm -> Either Text AttrTerm
+applyMorphismAttrTerm mor term =
+  case term of
+    ATLit lit -> Right (ATLit lit)
+    ATVar v -> do
+      sortName' <- mapAttrSort mor (avSort v)
+      Right (ATVar v { avSort = sortName' })
 
 applyMorphismTy :: Morphism -> TypeExpr -> Either Text TypeExpr
 applyMorphismTy mor ty =
@@ -83,7 +99,7 @@ applyMorphismDiagram mor diagSrc = do
           Nothing -> Left "applyMorphismDiagram: missing source edge"
           Just edgeSrc ->
             case ePayload edgeSrc of
-              PGen genName -> do
+              PGen genName attrsSrc -> do
                 genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
                 subst <- instantiateGen genDecl diagSrc edgeSrc
                 substTgt <- mapSubst mor subst
@@ -93,7 +109,9 @@ applyMorphismDiagram mor diagSrc = do
                     if dMode image /= modeTgt
                       then Left "applyMorphismDiagram: generator mapping mode mismatch"
                       else Right ()
-                    let instImage = applySubstDiagram substTgt image
+                    attrSubst <- instantiateAttrSubst mor genDecl attrsSrc
+                    let instImage0 = applySubstDiagram substTgt image
+                    let instImage = applyAttrSubstDiagram attrSubst instImage0
                     spliceEdge diagTgt edgeKey instImage
               PBox name inner -> do
                 inner' <- applyMorphismDiagram mor inner
@@ -117,6 +135,7 @@ mapSubst mor subst = do
 checkMorphism :: Morphism -> Either Text ()
 checkMorphism mor = do
   validateModeMap mor
+  validateAttrSortMap mor
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
   let cells = filter (cellEnabled (morPolicy mor)) (dCells2 (morSrc mor))
   fastOk <- inclusionFastPath mor
@@ -142,9 +161,44 @@ validateModeMap mor = do
   where
     renderModeName (ModeName name) = name
 
+validateAttrSortMap :: Morphism -> Either Text ()
+validateAttrSortMap mor = do
+  let srcSorts = dAttrSorts (morSrc mor)
+  let tgtSorts = dAttrSorts (morTgt mor)
+  case [ s | (s, _) <- M.toList (morAttrSortMap mor), M.notMember s srcSorts ] of
+    (s:_) -> Left ("checkMorphism: unknown source attribute sort " <> renderAttrSort s)
+    [] -> Right ()
+  case [ s | (_, s) <- M.toList (morAttrSortMap mor), M.notMember s tgtSorts ] of
+    (s:_) -> Left ("checkMorphism: unknown target attribute sort " <> renderAttrSort s)
+    [] -> Right ()
+  let usedSrcSorts =
+        S.fromList
+          [ sortName
+          | table <- M.elems (dGens (morSrc mor))
+          , gen <- M.elems table
+          , (_, sortName) <- gdAttrs gen
+          ]
+  case [ s | s <- S.toList usedSrcSorts, M.notMember s (morAttrSortMap mor) ] of
+    (s:_) -> Left ("checkMorphism: missing attribute sort mapping for " <> renderAttrSort s)
+    [] -> Right ()
+  where
+    renderAttrSort (AttrSort name) = name
+
 modeMapIsIdentity :: Morphism -> Bool
 modeMapIsIdentity mor =
   all (\m -> M.lookup m (morModeMap mor) == Just m) (S.toList (mtModes (dModes (morSrc mor))))
+
+attrSortMapIsIdentity :: Morphism -> Bool
+attrSortMapIsIdentity mor =
+  all (\s -> M.lookup s (morAttrSortMap mor) == Just s) (S.toList usedSorts)
+  where
+    usedSorts =
+      S.fromList
+        [ sortName
+        | table <- M.elems (dGens (morSrc mor))
+        , gen <- M.elems table
+        , (_, sortName) <- gdAttrs gen
+        ]
 
 checkGenMapping :: Morphism -> GenDecl -> Either Text ()
 checkGenMapping mor gen = do
@@ -190,6 +244,7 @@ checkCell mor cell = do
 inclusionFastPath :: Morphism -> Either Text Bool
 inclusionFastPath mor
   | not (modeMapIsIdentity mor) = Right False
+  | not (attrSortMapIsIdentity mor) = Right False
   | not (M.null (morTypeMap mor)) = Right False
   | otherwise = do
       okGens <- allM (genIsIdentity mor) (allGens (morSrc mor))
@@ -207,8 +262,10 @@ inclusionFastPath mor
       case M.lookup (mode, name) (morGenMap m) of
         Nothing -> Right False
         Just image -> do
-          expected <- genD mode dom cod name
+          expected <- genDWithAttrs mode dom cod name (identityAttrArgs (gdAttrs gen))
           isoOrFalse expected image
+    identityAttrArgs attrs =
+      M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- attrs ]
     cellMatches tgtMap cell =
       case M.lookup (cellKey cell) tgtMap of
         Nothing -> Right False
@@ -222,7 +279,7 @@ inclusionFastPath mor
 
 renamingFastPath :: Morphism -> [Cell2] -> Either Text Bool
 renamingFastPath mor srcCells = do
-  if not (modeMapIsIdentity mor)
+  if not (modeMapIsIdentity mor) || not (attrSortMapIsIdentity mor)
     then Right False
     else do
       let tgt = morTgt mor
@@ -347,15 +404,15 @@ buildGenRenaming mor = do
       let mode = gdMode gen
       let name = gdName gen
       diag <- M.lookup (mode, name) (morGenMap mor)
-      case singleGenNameMaybe diag of
+      case singleGenNameMaybe gen diag of
         Nothing -> Nothing
         Just tgtName ->
           case M.lookup mode (dGens tgt) >>= M.lookup tgtName of
             Nothing -> Nothing
             Just _ -> Just (M.insert (mode, name) tgtName mp)
 
-singleGenNameMaybe :: Diagram -> Maybe GenName
-singleGenNameMaybe diag =
+singleGenNameMaybe :: GenDecl -> Diagram -> Maybe GenName
+singleGenNameMaybe srcGen diag =
   case renumberDiagram diag of
     Left _ -> Nothing
     Right canon ->
@@ -365,10 +422,16 @@ singleGenNameMaybe diag =
               edgePorts = eIns edge <> eOuts edge
               allPorts = diagramPortIds canon
           in case ePayload edge of
-            PGen g
-              | boundary == edgePorts && length allPorts == length boundary -> Just g
+            PGen g attrs
+              | boundary == edgePorts
+              , length allPorts == length boundary
+              , attrs == passThroughAttrs (gdAttrs srcGen) ->
+                  Just g
             _ -> Nothing
         _ -> Nothing
+  where
+    passThroughAttrs attrs =
+      M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- attrs ]
 
 renameDiagram :: M.Map TypeRef TypeRef -> M.Map (ModeName, GenName) GenName -> Diagram -> Diagram
 renameDiagram tyRen genRen diag =
@@ -379,9 +442,9 @@ renameDiagram tyRen genRen diag =
   where
     renameEdge mode edge =
       case ePayload edge of
-        PGen gen ->
+        PGen gen attrs ->
           let gen' = M.findWithDefault gen (mode, gen) genRen
-          in edge { ePayload = PGen gen' }
+          in edge { ePayload = PGen gen' attrs }
         PBox name inner ->
           let inner' = renameDiagram tyRen genRen inner
           in edge { ePayload = PBox name inner' }
@@ -442,6 +505,25 @@ instantiateGen gen diag edge = do
   s1 <- unifyCtx (gdDom gen) dom
   s2 <- unifyCtx (applySubstCtx s1 (gdCod gen)) cod
   pure (composeSubst s2 s1)
+
+instantiateAttrSubst :: Morphism -> GenDecl -> AttrMap -> Either Text AttrSubst
+instantiateAttrSubst mor gen attrsSrc = do
+  mappedFields <- mapM mapField (gdAttrs gen)
+  attrsSrcTgt <- mapM (applyMorphismAttrTerm mor) attrsSrc
+  let flex = S.fromList [ v | (_, v) <- mappedFields ]
+  let unifyOne acc (fieldName, formalVar) = do
+        subst <- acc
+        term <-
+          case M.lookup fieldName attrsSrcTgt of
+            Nothing -> Left "applyMorphismDiagram: missing source attribute argument"
+            Just t -> Right t
+        unifyAttrFlex flex subst (ATVar formalVar) term
+  foldl unifyOne (Right M.empty) mappedFields
+  where
+    mapField (fieldName, sortName) = do
+      sortName' <- mapAttrSort mor sortName
+      let v = AttrVar fieldName sortName'
+      Right (fieldName, v)
 
 requirePortType :: Diagram -> PortId -> Either Text TypeExpr
 requirePortType diag pid =

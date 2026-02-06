@@ -46,6 +46,7 @@ testEvalUnknownGen = do
         , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
         , dGens = M.empty
         , dCells2 = []
+        , dAttrSorts = M.empty
         }
   let model = ModelSpec "Empty" [] DefaultSymbolic
   case evalDiagram doc model diag [VInt 1] of
@@ -66,6 +67,7 @@ testEvalMissingModel = do
         , gdTyVars = []
         , gdDom = [a]
         , gdCod = [a, a]
+        , gdAttrs = []
         }
   let doc = Doctrine
         { dName = "WithDup"
@@ -73,6 +75,7 @@ testEvalMissingModel = do
         , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(GenName "dup", dupGen)])]
         , dCells2 = []
+        , dAttrSorts = M.empty
         }
   let model = ModelSpec "NoDupModel" [] (DefaultError "missing")
   case evalDiagram doc model diag [VInt 1] of
@@ -85,7 +88,7 @@ mkDupDiagram mode a = do
   let (p0, d0) = freshPort a (emptyDiagram mode)
   let (p1, d1) = freshPort a d0
   let (p2, d2) = freshPort a d1
-  d3 <- addEdgePayload (PGen (GenName "dup")) [p0] [p1, p2] d2
+  d3 <- addEdgePayload (PGen (GenName "dup") M.empty) [p0] [p1, p2] d2
   let diag = d3 { dIn = [p0], dOut = [p1, p2] }
   validateDiagram diag
   pure diag
@@ -152,6 +155,7 @@ mkCycleDoctrine mode a =
         , gdTyVars = []
         , gdDom = [a]
         , gdCod = [a]
+        , gdAttrs = []
         }
       dupGen = GenDecl
         { gdName = GenName "dup"
@@ -159,6 +163,7 @@ mkCycleDoctrine mode a =
         , gdTyVars = []
         , gdDom = [a]
         , gdCod = [a, a]
+        , gdAttrs = []
         }
   in Doctrine
       { dName = "Cycle"
@@ -166,6 +171,7 @@ mkCycleDoctrine mode a =
       , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
       , dGens = M.fromList [(mode, M.fromList [(gdName fGen, fGen), (gdName dupGen, dupGen)])]
       , dCells2 = []
+      , dAttrSorts = M.empty
       }
 
 mkCycleDiagram :: ModeName -> TypeExpr -> Either T.Text Diagram
@@ -173,8 +179,8 @@ mkCycleDiagram mode a = do
   let (p0, d0) = freshPort a (emptyDiagram mode)
   let (p1, d1) = freshPort a d0
   let (p2, d2) = freshPort a d1
-  d3 <- addEdgePayload (PGen (GenName "f")) [p1] [p0] d2
-  d4 <- addEdgePayload (PGen (GenName "dup")) [p0] [p1, p2] d3
+  d3 <- addEdgePayload (PGen (GenName "f") M.empty) [p1] [p0] d2
+  d4 <- addEdgePayload (PGen (GenName "dup") M.empty) [p0] [p1, p2] d3
   let diag = d4 { dIn = [], dOut = [p2] }
   validateDiagram diag
   pure diag

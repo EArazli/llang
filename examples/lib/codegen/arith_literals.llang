@@ -1,0 +1,75 @@
+doctrine Arith where {
+  mode M;
+
+  attrsort Int = int;
+
+  type Code @M;
+
+  gen lit {n:Int} : [] -> [Code] @M;
+  gen add : [Code, Code] -> [Code] @M;
+  gen mul : [Code, Code] -> [Code] @M;
+}
+
+surface ArithInfix where {
+  doctrine Arith;
+  mode M;
+  structural {
+    discipline: linear;
+  }
+
+  lexer {
+    keywords: ;
+    symbols: "(", ")", "+", "*";
+  }
+
+  expr {
+    atom:
+      int => LIT(n)
+    | "(" <expr> ")" => <expr>
+    ;
+
+    infixl 20 "*" => MUL(lhs, rhs);
+    infixl 10 "+" => ADD(lhs, rhs);
+  }
+
+  elaborate {
+    LIT(n) => lit(n=#n);;
+    MUL(a, b) => ($1 * $2) ; mul;;
+    ADD(a, b) => ($1 * $2) ; add;;
+  }
+}
+
+model Eval : Arith where {
+  default = error "missing op";
+  op lit(n) = n;
+  op add(a, b) = a + b;
+  op mul(a, b) = a * b;
+}
+
+model RPN : Arith where {
+  default = error "missing op";
+  op lit(n) = [n];
+  op add(a, b) = a ++ b ++ ["+"];
+  op mul(a, b) = a ++ b ++ ["*"];
+}
+
+model Prefix : Arith where {
+  default = error "missing op";
+  op lit(n) = [n];
+  op add(a, b) = ["+"] ++ a ++ b;
+  op mul(a, b) = ["*"] ++ a ++ b;
+}
+
+model Infix : Arith where {
+  default = error "missing op";
+  op lit(n) = [n];
+  op add(a, b) = ["("] ++ a ++ ["+"] ++ b ++ [")"];
+  op mul(a, b) = ["("] ++ a ++ ["*"] ++ b ++ [")"];
+}
+
+model Lisp : Arith where {
+  default = error "missing op";
+  op lit(n) = [n];
+  op add(a, b) = ["("] ++ ["+"] ++ a ++ b ++ [")"];
+  op mul(a, b) = ["("] ++ ["*"] ++ a ++ b ++ [")"];
+}

@@ -52,6 +52,7 @@ testMonoidMorphism = do
         , morTgt = docTgt
         , morIsCoercion = False
         , morModeMap = modeMap
+        , morAttrSortMap = M.empty
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((modeM, GenName "unit"), unitImg), ((modeM, GenName "mul"), mulImg)]
         , morPolicy = UseAllOriented
@@ -69,11 +70,12 @@ testTypeMapReorder = do
   let prod = TypeName "Prod"
   let pair = TypeName "Pair"
   let genName = GenName "g"
-  let genSrc = GenDecl genName mode [a, b] [TCon (TypeRef mode prod) [TVar a, TVar b]] [TCon (TypeRef mode prod) [TVar a, TVar b]]
-  let genTgt = GenDecl genName mode [a, b] [TCon (TypeRef mode pair) [TVar a, TVar b]] [TCon (TypeRef mode pair) [TVar a, TVar b]]
+  let genSrc = GenDecl genName mode [a, b] [TCon (TypeRef mode prod) [TVar a, TVar b]] [TCon (TypeRef mode prod) [TVar a, TVar b]] []
+  let genTgt = GenDecl genName mode [a, b] [TCon (TypeRef mode pair) [TVar a, TVar b]] [TCon (TypeRef mode pair) [TVar a, TVar b]] []
   let docSrc = Doctrine
         { dName = "Src"
         , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dAttrSorts = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(prod, TypeSig [mode, mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genSrc)])]
         , dCells2 = []
@@ -81,6 +83,7 @@ testTypeMapReorder = do
   let docTgt = Doctrine
         { dName = "Tgt"
         , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dAttrSorts = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(pair, TypeSig [mode, mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genTgt)])]
         , dCells2 = []
@@ -99,6 +102,7 @@ testTypeMapReorder = do
         , morTgt = docTgt'
         , morIsCoercion = False
         , morModeMap = identityModeMap docSrc'
+        , morAttrSortMap = M.empty
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((mode, genName), img)]
         , morPolicy = UseAllOriented
@@ -116,11 +120,12 @@ testCrossModeMorphism = do
   let bRef = TypeRef modeV (TypeName "B")
   let aTy = TCon aRef []
   let bTy = TCon bRef []
-  let fGen = GenDecl (GenName "f") modeC [] [aTy] [aTy]
-  let gGen = GenDecl (GenName "g") modeV [] [bTy] [bTy]
+  let fGen = GenDecl (GenName "f") modeC [] [aTy] [aTy] []
+  let gGen = GenDecl (GenName "g") modeV [] [bTy] [bTy] []
   let docSrc = Doctrine
         { dName = "Src"
         , dModes = ModeTheory (S.singleton modeC) M.empty []
+        , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeC, M.fromList [(TypeName "A", TypeSig [])])]
         , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
         , dCells2 = []
@@ -128,6 +133,7 @@ testCrossModeMorphism = do
   let docTgt = Doctrine
         { dName = "Tgt"
         , dModes = ModeTheory (S.singleton modeV) M.empty []
+        , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeV, M.fromList [(TypeName "B", TypeSig [])])]
         , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
         , dCells2 = []
@@ -145,6 +151,7 @@ testCrossModeMorphism = do
         , morTgt = docTgt'
         , morIsCoercion = False
         , morModeMap = M.fromList [(modeC, modeV)]
+        , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(aRef, TypeTemplate [] bTy)]
         , morGenMap = M.fromList [((modeC, GenName "f"), img)]
         , morPolicy = UseAllOriented
@@ -177,10 +184,19 @@ mkMonoid = do
   assoc <- assocRule "assoc" aTy (GenName "mul")
   unitL <- unitRule "unitL" aTy (GenName "unit") (GenName "mul") True
   unitR <- unitRule "unitR" aTy (GenName "unit") (GenName "mul") False
-  let gens = M.fromList [(modeM, M.fromList [(GenName "unit", GenDecl (GenName "unit") modeM [] [] [aTy]), (GenName "mul", GenDecl (GenName "mul") modeM [] [aTy, aTy] [aTy])])]
+  let gens =
+        M.fromList
+          [ ( modeM
+            , M.fromList
+                [ (GenName "unit", GenDecl (GenName "unit") modeM [] [] [aTy] [])
+                , (GenName "mul", GenDecl (GenName "mul") modeM [] [aTy, aTy] [aTy] [])
+                ]
+            )
+          ]
   let doc = Doctrine
         { dName = "Monoid"
         , dModes = mt
+        , dAttrSorts = M.empty
         , dTypes = types
         , dGens = gens
         , dCells2 = [assoc, unitL, unitR]
@@ -196,10 +212,19 @@ mkStringMonoid = do
   assoc <- assocRule "assoc" strTy (GenName "append")
   unitL <- unitRule "unitL" strTy (GenName "empty") (GenName "append") True
   unitR <- unitRule "unitR" strTy (GenName "empty") (GenName "append") False
-  let gens = M.fromList [(modeM, M.fromList [(GenName "empty", GenDecl (GenName "empty") modeM [] [] [strTy]), (GenName "append", GenDecl (GenName "append") modeM [] [strTy, strTy] [strTy])])]
+  let gens =
+        M.fromList
+          [ ( modeM
+            , M.fromList
+                [ (GenName "empty", GenDecl (GenName "empty") modeM [] [] [strTy] [])
+                , (GenName "append", GenDecl (GenName "append") modeM [] [strTy, strTy] [strTy] [])
+                ]
+            )
+          ]
   let doc = Doctrine
         { dName = "StringMonoid"
         , dModes = mt
+        , dAttrSorts = M.empty
         , dTypes = types
         , dGens = gens
         , dCells2 = [assoc, unitL, unitR]

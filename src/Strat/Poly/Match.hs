@@ -15,54 +15,68 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Data.List (sortOn)
 import Strat.Poly.Graph
-import Strat.Poly.Diagram (applySubstDiagram, freeTyVarsDiagram)
+import Strat.Poly.Diagram (applySubstDiagram, applyAttrSubstDiagram, freeTyVarsDiagram, freeAttrVarsDiagram)
 import Strat.Poly.Doctrine (Doctrine)
 import Strat.Poly.TypeExpr (TypeExpr(..), TyVar)
 import Strat.Poly.UnifyTy
+import Strat.Poly.Attr
 
 
 data Match = Match
   { mPorts :: M.Map PortId PortId
   , mEdges :: M.Map EdgeId EdgeId
   , mTySub :: Subst
+  , mAttrSub :: AttrSubst
   , mUsedHostPorts :: S.Set PortId
   , mUsedHostEdges :: S.Set EdgeId
   } deriving (Eq, Show)
 
 findFirstMatch :: Doctrine -> Diagram -> Diagram -> Either Text (Maybe Match)
-findFirstMatch _ lhs host = findFirstMatchWithTyVars (freeTyVarsDiagram lhs) lhs host
+findFirstMatch _ lhs host =
+  findFirstMatchInternal (freeTyVarsDiagram lhs) (freeAttrVarsDiagram lhs) lhs host
 
 findAllMatches :: Doctrine -> Diagram -> Diagram -> Either Text [Match]
-findAllMatches _ lhs host = findAllMatchesWithTyVars (freeTyVarsDiagram lhs) lhs host
+findAllMatches _ lhs host =
+  findAllMatchesInternal (freeTyVarsDiagram lhs) (freeAttrVarsDiagram lhs) lhs host
 
 findFirstMatchNoDoc :: Diagram -> Diagram -> Either Text (Maybe Match)
-findFirstMatchNoDoc lhs host = findFirstMatchWithTyVars (freeTyVarsDiagram lhs) lhs host
+findFirstMatchNoDoc lhs host =
+  findFirstMatchInternal (freeTyVarsDiagram lhs) (freeAttrVarsDiagram lhs) lhs host
 
 findAllMatchesNoDoc :: Diagram -> Diagram -> Either Text [Match]
-findAllMatchesNoDoc lhs host = findAllMatchesWithTyVars (freeTyVarsDiagram lhs) lhs host
+findAllMatchesNoDoc lhs host =
+  findAllMatchesInternal (freeTyVarsDiagram lhs) (freeAttrVarsDiagram lhs) lhs host
 
 findFirstMatchWithTyVars :: S.Set TyVar -> Diagram -> Diagram -> Either Text (Maybe Match)
 findFirstMatchWithTyVars flex lhs host = do
-  matches <- findAllMatchesInternal flex lhs host
+  matches <- findAllMatchesInternal flex (freeAttrVarsDiagram lhs) lhs host
   pure (case matches of
           [] -> Nothing
           (m:_) -> Just m)
 
 findAllMatchesWithTyVars :: S.Set TyVar -> Diagram -> Diagram -> Either Text [Match]
-findAllMatchesWithTyVars = findAllMatchesInternal
+findAllMatchesWithTyVars flex lhs host =
+  findAllMatchesInternal flex (freeAttrVarsDiagram lhs) lhs host
 
-findAllMatchesInternal :: S.Set TyVar -> Diagram -> Diagram -> Either Text [Match]
-findAllMatchesInternal flex lhs host = do
+findFirstMatchInternal :: S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text (Maybe Match)
+findFirstMatchInternal tyFlex attrFlex lhs host = do
+  matches <- findAllMatchesInternal tyFlex attrFlex lhs host
+  pure (case matches of
+          [] -> Nothing
+          (m:_) -> Just m)
+
+findAllMatchesInternal :: S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text [Match]
+findAllMatchesInternal tyFlex attrFlex lhs host = do
   let lhsEdges = IM.elems (dEdges lhs)
   let hostEdges = IM.elems (dEdges host)
   let adj = adjacency lhs
   let allEdgeIds = map eId lhsEdges
-  go [] (Match M.empty M.empty M.empty S.empty S.empty) adj allEdgeIds lhsEdges hostEdges
+  go [] (Match M.empty M.empty M.empty M.empty S.empty S.empty) adj allEdgeIds lhsEdges hostEdges
   where
     go acc match adj allEdgeIds lhsEdges hostEdges =
       case pickNextEdge match adj allEdgeIds of
         Nothing -> do
-          case completeBoundary flex lhs host match of
+          case completeBoundary tyFlex lhs host match of
             Left _ -> Right acc
             Right match' ->
               if danglingOk lhs host match'
@@ -74,7 +88,7 @@ findAllMatchesInternal flex lhs host = do
           tryCandidates acc match adj allEdgeIds edge candidates
     tryCandidates acc match adj allEdgeIds edge [] = Right acc
     tryCandidates acc match adj allEdgeIds edge (cand:cands) = do
-      case extendMatch flex lhs host match edge cand of
+      case extendMatch tyFlex attrFlex lhs host match edge cand of
         Left _ -> tryCandidates acc match adj allEdgeIds edge cands
         Right matches -> do
           acc' <- foldl step (Right acc) matches
@@ -103,7 +117,8 @@ edgeCompatible match pat host =
 payloadCompatible :: EdgePayload -> EdgePayload -> Bool
 payloadCompatible p h =
   case (p, h) of
-    (PGen g1, PGen g2) -> g1 == g2
+    (PGen g1 attrs1, PGen g2 attrs2) ->
+      g1 == g2 && M.keysSet attrs1 == M.keysSet attrs2
     (PBox _ _, PBox _ _) -> True
     _ -> False
 
@@ -116,55 +131,78 @@ portsCompatible match pats hosts =
         Nothing -> h `S.notMember` mUsedHostPorts match
         Just h' -> h' == h
 
-extendMatch :: S.Set TyVar -> Diagram -> Diagram -> Match -> Edge -> Edge -> Either Text [Match]
-extendMatch flex lhs host match patEdge hostEdge = do
+extendMatch :: S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> Match -> Edge -> Edge -> Either Text [Match]
+extendMatch tyFlex attrFlex lhs host match patEdge hostEdge = do
   if M.member (eId patEdge) (mEdges match)
     then Right []
     else if eId hostEdge `S.member` mUsedHostEdges match
       then Right []
       else do
         let pairs = zip (eIns patEdge <> eOuts patEdge) (eIns hostEdge <> eOuts hostEdge)
-        substs <- payloadSubsts flex lhs host match patEdge hostEdge
+        substs <- payloadSubsts tyFlex attrFlex lhs host match patEdge hostEdge
         fmap concat (mapM (extendWithSubst pairs) substs)
   where
-    extendWithSubst pairs subst0 =
-      case foldl step (Right (mPorts match, mUsedHostPorts match, subst0)) pairs of
+    extendWithSubst pairs (tySubst0, attrSubst0) =
+      case foldl step (Right (mPorts match, mUsedHostPorts match, tySubst0, attrSubst0)) pairs of
         Left _ -> Right []
-        Right (portMap, usedPorts, subst) ->
+        Right (portMap, usedPorts, tySubst, attrSubst) ->
           let edgeMap = M.insert (eId patEdge) (eId hostEdge) (mEdges match)
               usedEdges = S.insert (eId hostEdge) (mUsedHostEdges match)
-          in Right [match { mPorts = portMap, mEdges = edgeMap, mTySub = subst, mUsedHostPorts = usedPorts, mUsedHostEdges = usedEdges }]
+          in Right
+            [ match
+                { mPorts = portMap
+                , mEdges = edgeMap
+                , mTySub = tySubst
+                , mAttrSub = attrSubst
+                , mUsedHostPorts = usedPorts
+                , mUsedHostEdges = usedEdges
+                }
+            ]
       where
         step acc (p, h) = do
-          (portMap, usedPorts, subst) <- acc
+          (portMap, usedPorts, tySubst, attrSubst) <- acc
           case M.lookup p portMap of
             Just h' ->
               if h' == h
-                then Right (portMap, usedPorts, subst)
+                then Right (portMap, usedPorts, tySubst, attrSubst)
                 else Left "extendMatch: port mapping conflict"
             Nothing ->
               if h `S.member` usedPorts
                 then Left "extendMatch: host port already used"
                 else do
-                  subst' <- unifyPorts subst p h
-                  pure (M.insert p h portMap, S.insert h usedPorts, subst')
-    unifyPorts subst p h = do
+                  tySubst' <- unifyPorts tySubst p h
+                  pure (M.insert p h portMap, S.insert h usedPorts, tySubst', attrSubst)
+    unifyPorts tySubst p h = do
       pTy <- requirePortType lhs p
       hTy <- requirePortType host h
-      s1 <- unifyTyFlex flex (applySubstTy subst pTy) hTy
-      pure (composeSubst s1 subst)
+      s1 <- unifyTyFlex tyFlex (applySubstTy tySubst pTy) hTy
+      pure (composeSubst s1 tySubst)
 
-payloadSubsts :: S.Set TyVar -> Diagram -> Diagram -> Match -> Edge -> Edge -> Either Text [Subst]
-payloadSubsts flex _ _ match patEdge hostEdge =
+payloadSubsts :: S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> Match -> Edge -> Edge -> Either Text [(Subst, AttrSubst)]
+payloadSubsts tyFlex attrFlex _ _ match patEdge hostEdge =
   case (ePayload patEdge, ePayload hostEdge) of
-    (PGen g1, PGen g2) ->
-      if g1 == g2 then Right [mTySub match] else Right []
+    (PGen g1 attrs1, PGen g2 attrs2) ->
+      if g1 /= g2 || M.keysSet attrs1 /= M.keysSet attrs2
+        then Right []
+        else do
+          attrSubst <- foldl unifyField (Right (mAttrSub match)) (M.toList attrs1)
+          Right [(mTySub match, attrSubst)]
+      where
+        unifyField acc (field, term1) = do
+          sub <- acc
+          case M.lookup field attrs2 of
+            Nothing -> Left "match: missing attribute field"
+            Just term2 -> unifyAttrFlex attrFlex sub term1 term2
     (PBox _ d1, PBox _ d2) -> do
-      let subst = mTySub match
-      let d1' = applySubstDiagram subst d1
-      let d2' = applySubstDiagram subst d2
-      subs <- diagramIsoMatchWithTyVars flex d1' d2'
-      Right (map (`composeSubst` subst) subs)
+      let tySubst = mTySub match
+      let attrSubst = mAttrSub match
+      let d1' = applyAttrSubstDiagram attrSubst (applySubstDiagram tySubst d1)
+      let d2' = applyAttrSubstDiagram attrSubst (applySubstDiagram tySubst d2)
+      subs <- diagramIsoMatchWithVars tyFlex attrFlex d1' d2'
+      Right
+        [ (composeSubst tySub tySubst, composeAttrSubst attrSub attrSubst)
+        | (tySub, attrSub) <- subs
+        ]
     _ -> Right []
 
 requirePortType :: Diagram -> PortId -> Either Text TypeExpr

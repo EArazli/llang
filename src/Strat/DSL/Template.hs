@@ -33,6 +33,11 @@ substItem :: M.Map Text Text -> P.RawPolyItem -> P.RawPolyItem
 substItem subst item =
   case item of
     P.RPMode name -> P.RPMode (lookupText subst name)
+    P.RPAttrSort decl ->
+      P.RPAttrSort decl
+        { P.rasName = lookupText subst (P.rasName decl)
+        , P.rasKind = fmap (lookupText subst) (P.rasKind decl)
+        }
     P.RPType decl ->
       P.RPType decl
         { P.rptName = lookupText subst (P.rptName decl)
@@ -43,6 +48,7 @@ substItem subst item =
       P.RPGen decl
         { P.rpgName = lookupText subst (P.rpgName decl)
         , P.rpgVars = map (substTyVarDecl subst) (P.rpgVars decl)
+        , P.rpgAttrs = [ (lookupText subst field, lookupText subst sortName) | (field, sortName) <- P.rpgAttrs decl ]
         , P.rpgDom = map (substTypeExpr subst) (P.rpgDom decl)
         , P.rpgCod = map (substTypeExpr subst) (P.rpgCod decl)
         , P.rpgMode = lookupText subst (P.rpgMode decl)
@@ -93,13 +99,30 @@ substDiagExpr :: M.Map Text Text -> P.RawDiagExpr -> P.RawDiagExpr
 substDiagExpr subst expr =
   case expr of
     P.RDId ctx -> P.RDId (map (substTypeExpr subst) ctx)
-    P.RDGen name mArgs ->
-      P.RDGen (lookupText subst name) (fmap (map (substTypeExpr subst)) mArgs)
+    P.RDGen name mArgs mAttrArgs ->
+      P.RDGen
+        (lookupText subst name)
+        (fmap (map (substTypeExpr subst)) mArgs)
+        (fmap (map (substAttrArg subst)) mAttrArgs)
     P.RDTermRef name -> P.RDTermRef (lookupText subst name)
     P.RDBox name inner -> P.RDBox (lookupText subst name) (substDiagExpr subst inner)
     P.RDLoop inner -> P.RDLoop (substDiagExpr subst inner)
     P.RDComp a b -> P.RDComp (substDiagExpr subst a) (substDiagExpr subst b)
     P.RDTensor a b -> P.RDTensor (substDiagExpr subst a) (substDiagExpr subst b)
+
+substAttrArg :: M.Map Text Text -> P.RawAttrArg -> P.RawAttrArg
+substAttrArg subst arg =
+  case arg of
+    P.RAName name term -> P.RAName (lookupText subst name) (substAttrTerm subst term)
+    P.RAPos term -> P.RAPos (substAttrTerm subst term)
+
+substAttrTerm :: M.Map Text Text -> P.RawAttrTerm -> P.RawAttrTerm
+substAttrTerm subst term =
+  case term of
+    P.RATVar name -> P.RATVar (lookupText subst name)
+    P.RATInt n -> P.RATInt n
+    P.RATString s -> P.RATString s
+    P.RATBool b -> P.RATBool b
 
 lookupText :: M.Map Text Text -> Text -> Text
 lookupText subst name = M.findWithDefault name name subst

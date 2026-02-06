@@ -10,6 +10,7 @@ import qualified Test.NoPolyPrefixes as NoPolyPrefixes
 import qualified Test.Poly.Basic as PolyBasic
 import qualified Test.Poly.Rewrite as PolyRewrite
 import qualified Test.Poly.DSL as PolyDSL
+import qualified Test.Poly.Literals as PolyLiterals
 import qualified Test.Poly.Morphism as PolyMorphism
 import qualified Test.Poly.Eval as PolyEval
 import qualified Test.Poly.Pushout as PolyPushout
@@ -35,6 +36,7 @@ main =
       , PolyBasic.tests
       , PolyRewrite.tests
       , PolyDSL.tests
+      , PolyLiterals.tests
       , PolyMorphism.tests
       , PolyEval.tests
       , PolyPushout.tests

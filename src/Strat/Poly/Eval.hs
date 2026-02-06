@@ -16,6 +16,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), PortId(..), EdgeId(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.Attr (AttrMap, AttrTerm(..), AttrLit(..), renderAttrVar)
 
 
 data PolyModel = PolyModel
@@ -96,7 +97,7 @@ evalAcyclicEdge :: PolyModel -> Doctrine -> ModeName -> M.Map PortId Value -> Ed
 evalAcyclicEdge model doc mode env edge = do
   args <- mapM (lookupPort env) (eIns edge)
   outs <- case ePayload edge of
-    PGen name -> evalGen model doc mode name args
+    PGen name attrs -> evalGen model doc mode name attrs args
     PBox _ inner -> evalDiagramWithModel model doc inner args
   if length outs /= length (eOuts edge)
     then Left "poly eval: output arity mismatch"
@@ -130,7 +131,7 @@ evalCyclic model doc mode env bindings edges = do
       binds <- acc
       args <- mapM (lookupPort env') (eIns edge)
       outs <- case ePayload edge of
-        PGen name -> evalGenSymbolic model doc mode name args
+        PGen name attrs -> evalGenSymbolic model doc mode name attrs args
         PBox _ inner -> evalDiagramWithModel model doc inner args
       if length outs /= length (eOuts edge)
         then Left "poly eval: output arity mismatch"
@@ -145,24 +146,26 @@ evalCyclic model doc mode env bindings edges = do
 
     addBind mp (pid, val) = M.insert pid val mp
 
-evalGenSymbolic :: PolyModel -> Doctrine -> ModeName -> GenName -> [Value] -> Either Text [Value]
-evalGenSymbolic model doc mode name args = do
+evalGenSymbolic :: PolyModel -> Doctrine -> ModeName -> GenName -> AttrMap -> [Value] -> Either Text [Value]
+evalGenSymbolic model doc mode name attrs args = do
   gen <- lookupGen doc mode name
+  attrVals <- evalAttrValues gen attrs
+  let modelArgs = attrVals ++ args
   let codLen = length (gdCod gen)
   if codLen == 1
     then do
-      val <- pmInterp model name args
+      val <- pmInterp model name modelArgs
       Right [val]
     else if pmHasClause model name
       then do
-        val <- pmInterp model name args
+        val <- pmInterp model name modelArgs
         case val of
           VList xs | length xs == codLen -> Right xs
           _ -> Left "poly eval: expected list output"
       else
         case pmDefault model of
           DefaultSymbolic ->
-            Right [VList (VAtom (renderGen name <> "#" <> T.pack (show i)) : args) | i <- [0 .. codLen - 1]]
+            Right [VList (VAtom (renderGen name <> "#" <> T.pack (show i)) : modelArgs) | i <- [0 .. codLen - 1]]
           DefaultError msg -> Left msg
 
 renderGen :: GenName -> Text
@@ -199,24 +202,26 @@ sccOrder diag =
     portKey (PortId k) = k
 
 
-evalGen :: PolyModel -> Doctrine -> ModeName -> GenName -> [Value] -> Either Text [Value]
-evalGen model doc mode name args = do
+evalGen :: PolyModel -> Doctrine -> ModeName -> GenName -> AttrMap -> [Value] -> Either Text [Value]
+evalGen model doc mode name attrs args = do
   gen <- lookupGen doc mode name
+  attrVals <- evalAttrValues gen attrs
+  let modelArgs = attrVals ++ args
   let codLen = length (gdCod gen)
   if codLen == 1
     then do
-      val <- pmInterp model name args
+      val <- pmInterp model name modelArgs
       Right [val]
     else if pmHasClause model name
       then do
-        val <- pmInterp model name args
+        val <- pmInterp model name modelArgs
         case val of
           VList xs | length xs == codLen -> Right xs
           _ -> Left "poly eval: expected list output"
       else
         case pmDefault model of
           DefaultSymbolic ->
-            Right [VList (VAtom (renderGen name <> "#" <> T.pack (show i)) : args) | i <- [0 .. codLen - 1]]
+            Right [VList (VAtom (renderGen name <> "#" <> T.pack (show i)) : modelArgs) | i <- [0 .. codLen - 1]]
           DefaultError msg -> Left msg
 
 lookupGen :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
@@ -224,6 +229,25 @@ lookupGen doc mode name =
   case M.lookup mode (dGens doc) >>= M.lookup name of
     Nothing -> Left "poly eval: unknown generator"
     Just gd -> Right gd
+
+evalAttrValues :: GenDecl -> AttrMap -> Either Text [Value]
+evalAttrValues gen attrs = mapM fieldValue (gdAttrs gen)
+  where
+    fieldValue (field, _) =
+      case M.lookup field attrs of
+        Nothing -> Left "poly eval: missing attribute value"
+        Just term -> attrTermToValue term
+
+attrTermToValue :: AttrTerm -> Either Text Value
+attrTermToValue term =
+  case term of
+    ATLit lit ->
+      case lit of
+        ALInt n -> Right (VInt n)
+        ALString s -> Right (VString s)
+        ALBool b -> Right (VBool b)
+    ATVar v ->
+      Right (VAtom (renderAttrVar v))
 
 -- Expression eval (copied from Model.Spec)
 
@@ -255,7 +279,7 @@ evalBinOp op a b =
   case op of
     "+" -> binInt (+)
     "*" -> binInt (*)
-    "++" -> binString (<>)
+    "++" -> binConcat
     "==" -> Right (VBool (a == b))
     _ -> Left (RuntimeError ("unknown operator: " <> op))
   where
@@ -263,7 +287,8 @@ evalBinOp op a b =
       case (a, b) of
         (VInt x, VInt y) -> Right (VInt (f x y))
         _ -> Left (RuntimeError "expected int operands")
-    binString f =
+    binConcat =
       case (a, b) of
-        (VString x, VString y) -> Right (VString (f x y))
-        _ -> Left (RuntimeError "expected string operands")
+        (VString x, VString y) -> Right (VString (x <> y))
+        (VList xs, VList ys) -> Right (VList (xs <> ys))
+        _ -> Left (RuntimeError "expected string or list operands")

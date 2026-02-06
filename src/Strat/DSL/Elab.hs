@@ -17,9 +17,10 @@ import Strat.DSL.Template (instantiateTemplate)
 import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, elabPolyRun, parsePolicy)
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
-import Strat.Poly.Diagram (Diagram(..), genD)
+import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
 import Strat.Poly.ModeTheory (ModeTheory(..))
+import Strat.Poly.Attr
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePolyCoproduct)
 import Strat.Poly.Surface (elabPolySurfaceDecl)
@@ -337,6 +338,7 @@ buildPolyFromBase baseName newName env newDoc = do
         , PolyMorph.morTgt = newDoc
         , PolyMorph.morIsCoercion = True
         , PolyMorph.morModeMap = identityModeMap baseDoc
+        , PolyMorph.morAttrSortMap = identityAttrSortMap baseDoc
         , PolyMorph.morTypeMap = M.empty
         , PolyMorph.morGenMap = genMap
         , PolyMorph.morPolicy = UseStructuralAsBidirectional
@@ -353,7 +355,10 @@ buildPolyFromBase baseName newName env newDoc = do
       , gen <- M.elems table
       ]
     genImage (mode, gen) = do
-      img <- genD mode (gdDom gen) (gdCod gen) (gdName gen)
+      let attrs = M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- gdAttrs gen ]
+      img <- genDWithAttrs mode (gdDom gen) (gdCod gen) (gdName gen) attrs
       pure ((mode, gdName gen), img)
     identityModeMap doc =
       M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]
+    identityAttrSortMap doc =
+      M.fromList [ (s, s) | s <- M.keys (dAttrSorts doc) ]

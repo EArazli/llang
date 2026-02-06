@@ -50,7 +50,8 @@ polyGenTerm :: Parser RawDiagExpr
 polyGenTerm = do
   name <- ident
   mArgs <- optional (symbol "{" *> polyTypeExpr `sepBy` symbol "," <* symbol "}")
-  pure (RDGen name mArgs)
+  mAttrArgs <- optional polyAttrArgs
+  pure (RDGen name mArgs mAttrArgs)
 
 polyTermRefTerm :: Parser RawDiagExpr
 polyTermRefTerm = do
@@ -74,6 +75,42 @@ polyLoopTerm = do
   inner <- polyDiagExpr
   _ <- symbol "}"
   pure (RDLoop inner)
+
+polyAttrArgs :: Parser [RawAttrArg]
+polyAttrArgs = do
+  _ <- symbol "("
+  args <- polyAttrArg `sepBy` symbol ","
+  _ <- symbol ")"
+  if mixedArgStyles args
+    then fail "generator attribute arguments must be either all named or all positional"
+    else pure args
+  where
+    mixedArgStyles [] = False
+    mixedArgStyles xs =
+      let named = [ () | RAName _ _ <- xs ]
+          positional = [ () | RAPos _ <- xs ]
+      in not (null named) && not (null positional)
+
+polyAttrArg :: Parser RawAttrArg
+polyAttrArg =
+  try named <|> positional
+  where
+    named = do
+      field <- ident
+      _ <- symbol "="
+      term <- polyAttrTerm
+      pure (RAName field term)
+    positional = RAPos <$> polyAttrTerm
+
+polyAttrTerm :: Parser RawAttrTerm
+polyAttrTerm =
+  choice
+    [ RATInt . fromIntegral <$> integer
+    , RATString <$> stringLiteral
+    , RATBool True <$ symbol "true"
+    , RATBool False <$ symbol "false"
+    , RATVar <$> ident
+    ]
 
 polyContext :: Parser RawPolyContext
 polyContext = do
@@ -128,3 +165,9 @@ identRaw = T.pack <$> ((:) <$> letterChar <*> many identChar)
 
 identChar :: Parser Char
 identChar = alphaNumChar <|> char '_' <|> char '-' <|> char '\''
+
+stringLiteral :: Parser Text
+stringLiteral = lexeme (T.pack <$> (char '"' *> manyTill L.charLiteral (char '"')))
+
+integer :: Parser Integer
+integer = lexeme L.decimal

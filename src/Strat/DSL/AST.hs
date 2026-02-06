@@ -16,6 +16,7 @@ module Strat.DSL.AST
   , RawPolyMorphism(..)
   , RawPolyMorphismItem(..)
   , RawPolyModeMap(..)
+  , RawPolyAttrSortMap(..)
   , RawPolyTypeMap(..)
   , RawPolyGenMap(..)
   ) where
@@ -140,6 +141,7 @@ data RawPolyMorphism = RawPolyMorphism
 
 data RawPolyMorphismItem
   = RPMMode RawPolyModeMap
+  | RPMAttrSort RawPolyAttrSortMap
   | RPMType RawPolyTypeMap
   | RPMGen RawPolyGenMap
   | RPMCoercion
@@ -148,6 +150,11 @@ data RawPolyMorphismItem
 data RawPolyModeMap = RawPolyModeMap
   { rpmmSrc :: Text
   , rpmmTgt :: Text
+  } deriving (Eq, Show)
+
+data RawPolyAttrSortMap = RawPolyAttrSortMap
+  { rpmasSrc :: Text
+  , rpmasTgt :: Text
   } deriving (Eq, Show)
 
 

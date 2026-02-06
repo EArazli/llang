@@ -3,21 +3,26 @@ module Strat.Poly.Diagram
   ( Diagram(..)
   , idD
   , genD
+  , genDWithAttrs
   , compD
   , tensorD
   , diagramDom
   , diagramCod
   , applySubstDiagram
+  , applyAttrSubstDiagram
   , freeTyVarsDiagram
+  , freeAttrVarsDiagram
   ) where
 
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.TypeExpr (Context, TypeExpr(..), TyVar)
 import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap)
 import Strat.Poly.UnifyTy
 
 
@@ -30,10 +35,14 @@ idD mode ctx =
       }
 
 genD :: ModeName -> Context -> Context -> GenName -> Either Text Diagram
-genD mode dom cod gen = do
+genD mode dom cod gen =
+  genDWithAttrs mode dom cod gen M.empty
+
+genDWithAttrs :: ModeName -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
+genDWithAttrs mode dom cod gen attrs = do
   let (inPorts, diag1) = allocPorts dom (emptyDiagram mode)
   let (outPorts, diag2) = allocPorts cod diag1
-  diag3 <- case addEdge gen inPorts outPorts diag2 of
+  diag3 <- case addEdgePayload (PGen gen attrs) inPorts outPorts diag2 of
     Left err -> Left ("genD " <> renderGen gen <> ": " <> err)
     Right d -> Right d
   let diagFinal = diag3 { dIn = inPorts, dOut = outPorts }
@@ -117,6 +126,20 @@ freeTyVarsDiagram diag =
         ]
   in S.union portVars boxVars
 
+freeAttrVarsDiagram :: Diagram -> S.Set AttrVar
+freeAttrVarsDiagram diag =
+  let edgeVars = S.unions
+        [ freeAttrVarsMap attrs
+        | edge <- IM.elems (dEdges diag)
+        , PGen _ attrs <- [ePayload edge]
+        ]
+      boxVars = S.unions
+        [ freeAttrVarsDiagram inner
+        | edge <- IM.elems (dEdges diag)
+        , PBox _ inner <- [ePayload edge]
+        ]
+  in S.union edgeVars boxVars
+
 varsInTy :: TypeExpr -> [TyVar]
 varsInTy ty =
   case ty of
@@ -126,8 +149,19 @@ varsInTy ty =
 mapEdgePayload :: Subst -> Edge -> Edge
 mapEdgePayload subst edge =
   case ePayload edge of
-    PGen g -> edge { ePayload = PGen g }
+    PGen g attrs -> edge { ePayload = PGen g attrs }
     PBox name inner -> edge { ePayload = PBox name (applySubstDiagram subst inner) }
+
+applyAttrSubstDiagram :: AttrSubst -> Diagram -> Diagram
+applyAttrSubstDiagram subst diag =
+  let dEdges' = IM.map (mapEdgePayloadAttr subst) (dEdges diag)
+  in diag { dEdges = dEdges' }
+
+mapEdgePayloadAttr :: AttrSubst -> Edge -> Edge
+mapEdgePayloadAttr subst edge =
+  case ePayload edge of
+    PGen g attrs -> edge { ePayload = PGen g (applyAttrSubstMap subst attrs) }
+    PBox name inner -> edge { ePayload = PBox name (applyAttrSubstDiagram subst inner) }
 
 allocPorts :: Context -> Diagram -> ([PortId], Diagram)
 allocPorts [] diag = ([], diag)

@@ -1,6 +1,7 @@
 module Strat.Poly.DSL.AST
   ( RawPolyDoctrine(..)
   , RawPolyItem(..)
+  , RawAttrSortDecl(..)
   , RawPolyTypeDecl(..)
   , RawPolyCtorDecl(..)
   , RawPolyDataDecl(..)
@@ -11,6 +12,8 @@ module Strat.Poly.DSL.AST
   , RawPolyTypeExpr(..)
   , RawPolyContext
   , RawDiagExpr(..)
+  , RawAttrArg(..)
+  , RawAttrTerm(..)
   ) where
 
 import Data.Text (Text)
@@ -25,11 +28,17 @@ data RawPolyDoctrine = RawPolyDoctrine
 
 data RawPolyItem
   = RPMode Text
+  | RPAttrSort RawAttrSortDecl
   | RPType RawPolyTypeDecl
   | RPData RawPolyDataDecl
   | RPGen RawPolyGenDecl
   | RPRule RawPolyRuleDecl
   deriving (Eq, Show)
+
+data RawAttrSortDecl = RawAttrSortDecl
+  { rasName :: Text
+  , rasKind :: Maybe Text
+  } deriving (Eq, Show)
 
 data RawPolyTypeDecl = RawPolyTypeDecl
   { rptName :: Text
@@ -52,6 +61,7 @@ data RawPolyDataDecl = RawPolyDataDecl
 data RawPolyGenDecl = RawPolyGenDecl
   { rpgName :: Text
   , rpgVars :: [RawTyVarDecl]
+  , rpgAttrs :: [(Text, Text)]
   , rpgDom :: RawPolyContext
   , rpgCod :: RawPolyContext
   , rpgMode :: Text
@@ -88,10 +98,22 @@ type RawPolyContext = [RawPolyTypeExpr]
 
 data RawDiagExpr
   = RDId RawPolyContext
-  | RDGen Text (Maybe [RawPolyTypeExpr])
+  | RDGen Text (Maybe [RawPolyTypeExpr]) (Maybe [RawAttrArg])
   | RDTermRef Text
   | RDBox Text RawDiagExpr
   | RDLoop RawDiagExpr
   | RDComp RawDiagExpr RawDiagExpr
   | RDTensor RawDiagExpr RawDiagExpr
+  deriving (Eq, Show)
+
+data RawAttrArg
+  = RAName Text RawAttrTerm
+  | RAPos RawAttrTerm
+  deriving (Eq, Show)
+
+data RawAttrTerm
+  = RATVar Text
+  | RATInt Int
+  | RATString Text
+  | RATBool Bool
   deriving (Eq, Show)

@@ -229,6 +229,7 @@ testDuplicateGenTyVars = do
         , gdTyVars = [a, a]
         , gdDom = [TVar a]
         , gdCod = [TVar a]
+        , gdAttrs = []
         }
   let doc = Doctrine
         { dName = "DupGenTyVars"
@@ -236,6 +237,7 @@ testDuplicateGenTyVars = do
         , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = []
+        , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
     Left _ -> pure ()
@@ -260,6 +262,7 @@ testDuplicateCellTyVars = do
         , dTypes = M.empty
         , dGens = M.empty
         , dCells2 = [cell]
+        , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
     Left _ -> pure ()
@@ -276,6 +279,7 @@ testRejectRHSTyVars = do
         , gdTyVars = []
         , gdDom = [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
+        , gdAttrs = []
         }
   lhs <- require (genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName gen))
   rhs <- require (genD mode [TVar bVar] [TVar bVar] (gdName gen))
@@ -293,6 +297,7 @@ testRejectRHSTyVars = do
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
+        , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
     Left _ -> pure ()
@@ -309,6 +314,7 @@ testAcceptRHSTyVars = do
         , gdTyVars = [aVar]
         , gdDom = [TVar aVar]
         , gdCod = [TVar aVar]
+        , gdAttrs = []
         }
   lhs <- require (genD mode [TVar aVar] [TVar aVar] (gdName gen))
   rhs <- require (genD mode [TVar aVar] [TVar aVar] (gdName gen))
@@ -326,6 +332,7 @@ testAcceptRHSTyVars = do
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
+        , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
     Left err -> assertFailure (T.unpack err)
@@ -351,6 +358,7 @@ testRejectEmptyLHS = do
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.empty
         , dCells2 = [cell]
+        , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
     Left _ -> pure ()
@@ -363,9 +371,9 @@ buildIsoDiagram mode a = do
   let (p2, d2) = freshPort a d1
   let (p3, d3) = freshPort a d2
   let (p4, d4) = freshPort a d3
-  d5 <- addEdgePayload (PGen (GenName "f")) [p0] [p2] d4
-  d6 <- addEdgePayload (PGen (GenName "g")) [p1] [p3] d5
-  d7 <- addEdgePayload (PGen (GenName "h")) [p2, p3] [p4] d6
+  d5 <- addEdgePayload (PGen (GenName "f") M.empty) [p0] [p2] d4
+  d6 <- addEdgePayload (PGen (GenName "g") M.empty) [p1] [p3] d5
+  d7 <- addEdgePayload (PGen (GenName "h") M.empty) [p2, p3] [p4] d6
   let diag = d7 { dIn = [p0, p1], dOut = [p4] }
   validateDiagram diag
   pure diag

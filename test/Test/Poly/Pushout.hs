@@ -75,6 +75,7 @@ mkDoctrine mode name tyVar cellName = do
         , gdTyVars = [tyVar]
         , gdDom = [TVar tyVar]
         , gdCod = [TVar tyVar]
+        , gdAttrs = []
         }
   lhs <- case genD mode [TVar tyVar] [TVar tyVar] (gdName gen) of
     Left err -> Left (show err)
@@ -94,6 +95,7 @@ mkDoctrine mode name tyVar cellName = do
         , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
+        , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
     Left err -> Left (show err)
@@ -114,6 +116,7 @@ mkInclusionMorph name src tgt tyVar =
       , morModeMap = identityModeMap src
       , morTypeMap = M.empty
       , morGenMap = genMap
+      , morAttrSortMap = M.empty
       , morPolicy = UseAllOriented
       , morFuel = 10
       }
@@ -173,6 +176,7 @@ mkCellDoctrine mode name cls orient = do
         , gdTyVars = []
         , gdDom = [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
+        , gdAttrs = []
         }
   lhs <- genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName gen)
   let cell = Cell2
@@ -189,6 +193,7 @@ mkCellDoctrine mode name cls orient = do
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
+        , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
     Left err -> Left err
@@ -203,6 +208,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
         , gdTyVars = []
         , gdDom = [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
+        , gdAttrs = []
         }
   let genG = GenDecl
         { gdName = GenName "g"
@@ -210,6 +216,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
         , gdTyVars = []
         , gdDom = [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
+        , gdAttrs = []
         }
   lhs <- genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName genG)
   let cell = Cell2
@@ -226,6 +233,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
         , dCells2 = [cell]
+        , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
     Left err -> Left err
@@ -246,6 +254,7 @@ mkIdMorph name src tgt =
       , morModeMap = identityModeMap src
       , morTypeMap = M.empty
       , morGenMap = genMap
+      , morAttrSortMap = M.empty
       , morPolicy = UseAllOriented
       , morFuel = 10
       }
@@ -283,6 +292,7 @@ testPushoutTypePermutationCommutes = do
         , morModeMap = identityModeMap base
         , morTypeMap = M.fromList [(TypeRef mode prod, tmplF)]
         , morGenMap = M.empty
+        , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 10
         }
@@ -294,6 +304,7 @@ testPushoutTypePermutationCommutes = do
         , morModeMap = identityModeMap base
         , morTypeMap = M.empty
         , morGenMap = M.empty
+        , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 10
         }
@@ -326,6 +337,7 @@ testPushoutRejectsModeMap = do
         , dTypes = M.empty
         , dGens = M.empty
         , dCells2 = []
+        , dAttrSorts = M.empty
         }
   let left = base { dName = "Left" }
   let right = base { dName = "Right" }
@@ -338,6 +350,7 @@ testPushoutRejectsModeMap = do
         , morModeMap = modeMap
         , morTypeMap = M.empty
         , morGenMap = M.empty
+        , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 10
         }
@@ -349,6 +362,7 @@ testPushoutRejectsModeMap = do
         , morModeMap = modeMap
         , morTypeMap = M.empty
         , morGenMap = M.empty
+        , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 10
         }
@@ -366,6 +380,7 @@ mkTypeDoctrine mode name types = do
         , dTypes = M.fromList [(mode, types')]
         , dGens = M.empty
         , dCells2 = []
+        , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
     Left err -> Left err
