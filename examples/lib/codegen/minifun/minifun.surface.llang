@@ -4,10 +4,6 @@ surface MiniFun where {
   doctrine ConsoleExpr;
   mode M;
 
-  structural {
-    discipline: linear;
-  }
-
   lexer {
     keywords: ;
     symbols: "(", ")", ",";

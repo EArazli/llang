@@ -1,6 +1,8 @@
 import "./struct.symmetric.llang";
 
 doctrine StructCartesian extends StructSymmetric where {
+  structure M = cartesian;
+
   gen dup (a@M) : [a] -> [a, a] @M;
   gen drop (a@M) : [a] -> [] @M;
 

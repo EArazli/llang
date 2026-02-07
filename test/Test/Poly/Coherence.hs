@@ -9,7 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD)
@@ -70,12 +70,20 @@ mkDoctrine cells =
         ]
   in Doctrine
       { dName = "D"
-      , dModes = ModeTheory (S.singleton modeName) M.empty []
+      , dModes = mkModes (S.singleton modeName)
       , dTypes = M.fromList [(modeName, M.fromList [(TypeName "A", TypeSig [])])]
       , dGens = M.fromList [(modeName, M.fromList [(gdName g, g) | g <- gens])]
       , dCells2 = cells
       , dAttrSorts = M.empty
       }
+
+mkModes :: S.Set ModeName -> ModeTheory
+mkModes modes =
+  ModeTheory
+    (M.fromList [ (m, ModeInfo m Linear) | m <- S.toList modes ])
+    M.empty
+    []
+    []
 
 testCoherenceJoinable :: Assertion
 testCoherenceJoinable = do

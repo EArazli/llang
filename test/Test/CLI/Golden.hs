@@ -24,8 +24,6 @@ tests =
     , testCase "hello_world.run.llang output" (goldenRun "examples/run/algebra/hello_world.run.llang" expectedHelloWorld)
     , testCase "minifun.concat2.run.llang output" (goldenRun "examples/run/codegen/minifun/concat2.run.llang" expectedMiniFunConcat2)
     , testCase "term_ref.run.llang output" (goldenRun "examples/run/terms/term_ref.run.llang" expectedTermRef)
-    , testCase "stlc.lam1.run.llang output" (goldenRun "examples/run/surfaces/ccc_surface/stlc.lam1.run.llang" expectedStlcLam)
-    , testCase "stlc.app1.run.llang output" (goldenRun "examples/run/surfaces/ccc_surface/stlc.app1.run.llang" expectedStlcApp)
     ]
 
 
@@ -147,29 +145,4 @@ expectedMiniFunConcat2 =
   T.intercalate "\n"
     [ "value:"
     , "VString \"const fs = require(\\\"fs\\\");\\nconst input = fs.readFileSync(0, \\\"utf8\\\").split(\\\"\\\\n\\\");\\nlet i = 0;\\nfunction nextLine() { return input[i++]; }\\nconsole.log((nextLine() + nextLine()));\""
-    ]
-
-expectedStlcLam :: Text
-expectedStlcLam =
-  T.intercalate "\n"
-    [ "normalized:"
-    , "mode: M"
-    , "in: []"
-    , "out: [p0:M.Hom(M.Unit, M.exp(M.Bool, M.Bool))]"
-    , "edges:"
-    , "  e0: exr [] -> [p1]"
-    , "  e1: curry [p1] -> [p0]"
-    ]
-
-expectedStlcApp :: Text
-expectedStlcApp =
-  T.intercalate "\n"
-    [ "normalized:"
-    , "mode: M"
-    , "in: []"
-    , "out: [p0:M.Hom(M.Unit, M.Bool)]"
-    , "edges:"
-    , "  e0: T [] -> [p0]"
-    , "  e1: id [] -> [p1]"
-    , "  e2: drop [p1] -> []"
     ]

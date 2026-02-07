@@ -18,7 +18,6 @@ module Strat.Poly.Surface
 
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
-import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), mtModes)
 import Strat.Poly.Doctrine (Doctrine(..))
 import Strat.Poly.Surface.Spec
@@ -27,7 +26,7 @@ import Strat.Poly.Surface.Spec
 elabPolySurfaceDecl :: Text -> Doctrine -> SurfaceSpec -> Either Text PolySurfaceDef
 elabPolySurfaceDecl name doc spec = do
   let mode = ModeName (ssMode spec)
-  if mode `S.member` mtModes (dModes doc)
+  if M.member mode (mtModes (dModes doc))
     then validateSpec spec >> pure PolySurfaceDef
       { psName = name
       , psDoctrine = ssDoctrine spec

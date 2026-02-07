@@ -1,0 +1,33 @@
+doctrine LNL where {
+  mode C;
+  mode L;
+
+  structure C = cartesian;
+  structure L = linear;
+
+  modality F : C -> L;
+  modality U : L -> C;
+  adjunction F dashv U;
+
+  type Nat @C;
+  type Nat @L;
+
+  gen dup (a@C) : [a] -> [a, a] @C;
+  gen drop (a@C) : [a] -> [] @C;
+
+  rule structural coassoc = (a@C) : [a] -> [a, a, a] @C =
+    dup ; (dup * id[a]) == dup ; (id[a] * dup)
+
+  rule structural counitL = (a@C) : [a] -> [a] @C =
+    dup ; (drop * id[a]) == id[a]
+
+  rule structural counitR = (a@C) : [a] -> [a] @C =
+    dup ; (id[a] * drop) == id[a]
+}
+
+term unitNat where {
+  doctrine LNL;
+  mode C;
+}
+---
+unit_F{C.Nat}

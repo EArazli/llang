@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), emptyModeTheory)
 import Strat.Poly.Doctrine (Doctrine(..), TypeSig(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
@@ -48,12 +48,20 @@ mkDoctrine :: [(ModeName, [(TypeName, TypeSig)])] -> Doctrine
 mkDoctrine tables =
   Doctrine
     { dName = "D"
-    , dModes = ModeTheory (S.fromList (map fst tables)) M.empty []
+    , dModes = mkModes (S.fromList (map fst tables))
+    , dAttrSorts = M.empty
     , dTypes = M.fromList [ (mode, M.fromList types) | (mode, types) <- tables ]
     , dGens = M.empty
     , dCells2 = []
-    , dAttrSorts = M.empty
     }
+
+mkModes :: S.Set ModeName -> ModeTheory
+mkModes modes =
+  ModeTheory
+    (M.fromList [ (m, ModeInfo m Linear) | m <- S.toList modes ])
+    M.empty
+    []
+    []
 
 requireDoc :: Doctrine -> IO Doctrine
 requireDoc doc =
@@ -116,10 +124,10 @@ testUnifyModeMismatch :: Assertion
 testUnifyModeMismatch = do
   let aVar = tvar modeC "a"
   let aTy = tcon modeC "A" []
-  case unifyTy (TVar aVar) aTy of
+  case unifyTy emptyModeTheory (TVar aVar) aTy of
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()
-  case unifyTy (TVar aVar) (tcon modeV "B" []) of
+  case unifyTy emptyModeTheory (TVar aVar) (tcon modeV "B" []) of
     Left err ->
       assertBool "expected mode mismatch" ("mode mismatch" `T.isInfixOf` err)
     Right _ -> assertFailure "expected mode mismatch failure"

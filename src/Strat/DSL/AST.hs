@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 module Strat.DSL.AST
   ( RawDecl(..)
   , RawFile(..)
@@ -16,6 +17,7 @@ module Strat.DSL.AST
   , RawPolyMorphism(..)
   , RawPolyMorphismItem(..)
   , RawPolyModeMap(..)
+  , RawPolyModalityMap(..)
   , RawPolyAttrSortMap(..)
   , RawPolyTypeMap(..)
   , RawPolyGenMap(..)
@@ -142,6 +144,7 @@ data RawPolyMorphism = RawPolyMorphism
 
 data RawPolyMorphismItem
   = RPMMode RawPolyModeMap
+  | RPMModality RawPolyModalityMap
   | RPMAttrSort RawPolyAttrSortMap
   | RPMType RawPolyTypeMap
   | RPMGen RawPolyGenMap
@@ -151,6 +154,11 @@ data RawPolyMorphismItem
 data RawPolyModeMap = RawPolyModeMap
   { rpmmSrc :: Text
   , rpmmTgt :: Text
+  } deriving (Eq, Show)
+
+data RawPolyModalityMap = RawPolyModalityMap
+  { rpmmSrc :: Text
+  , rpmmTgt :: PolyAST.RawModExpr
   } deriving (Eq, Show)
 
 data RawPolyAttrSortMap = RawPolyAttrSortMap

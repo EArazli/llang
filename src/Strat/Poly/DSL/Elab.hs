@@ -12,7 +12,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Control.Monad (foldM, when)
-import Strat.DSL.AST (RawRun(..), RawRunShow(..), RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..), RawPolyAttrSortMap(..))
+import Strat.DSL.AST (RawRun(..), RawRunShow(..), RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..), RawPolyModalityMap(..), RawPolyAttrSortMap(..))
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
@@ -77,6 +77,7 @@ elabPolyMorphism env raw = do
   let coercionFlags = [() | RPMCoercion <- rpmItems raw]
   when (length coercionFlags > 1) (Left "morphism: duplicate coercion flag")
   modeMap <- buildModeMap src tgt [ m | RPMMode m <- rpmItems raw ]
+  modMap <- buildModMap src tgt modeMap [ mm | RPMModality mm <- rpmItems raw ]
   attrSortMap <- buildAttrSortMap src tgt [ a | RPMAttrSort a <- rpmItems raw ]
   typeMap <- foldM (addTypeMap src tgt modeMap) M.empty [ t | RPMType t <- rpmItems raw ]
   genMap <- foldM (addGenMap src tgt modeMap) M.empty [ g | RPMGen g <- rpmItems raw ]
@@ -87,6 +88,7 @@ elabPolyMorphism env raw = do
         , morTgt = tgt
         , morIsCoercion = not (null coercionFlags)
         , morModeMap = modeMap
+        , morModMap = modMap
         , morAttrSortMap = attrSortMap
         , morTypeMap = typeMap
         , morGenMap = genMap
@@ -110,20 +112,20 @@ elabPolyMorphism env raw = do
         Just m -> Left ("morphism: duplicate mode mapping for " <> renderModeName m)
         Nothing -> Right ()
       let explicit = M.fromList pairs
-      let missing = [ m | m <- S.toList srcModes, M.notMember m explicit, m `S.notMember` tgtModes ]
+      let missing = [ m | m <- M.keys srcModes, M.notMember m explicit, M.notMember m tgtModes ]
       case missing of
         (m:_) -> Left ("morphism: missing mode mapping for " <> renderModeName m)
         [] -> Right ()
       let full =
             M.fromList
               [ (m, M.findWithDefault m m explicit)
-              | m <- S.toList srcModes
+              | m <- M.keys srcModes
               ]
       pure full
       where
-        toPair decl = do
-          let srcMode = ModeName (rpmmSrc decl)
-          let tgtMode = ModeName (rpmmTgt decl)
+        toPair (RawPolyModeMap srcText tgtText) = do
+          let srcMode = ModeName srcText
+          let tgtMode = ModeName tgtText
           ensureMode src srcMode
           ensureMode tgt tgtMode
           pure (srcMode, tgtMode)
@@ -155,6 +157,51 @@ elabPolyMorphism env raw = do
             go seen (x:rest)
               | x `S.member` seen = Just x
               | otherwise = go (S.insert x seen) rest
+    buildModMap src tgt modeMap decls = do
+      explicitPairs <- mapM toExplicit decls
+      let dup = firstDup (map fst explicitPairs)
+      case dup of
+        Just m -> Left ("morphism: duplicate modality mapping for " <> renderModName m)
+        Nothing -> Right ()
+      let explicit = M.fromList explicitPairs
+      fillDefaults explicit (M.toList (mtDecls (dModes src)))
+      where
+        firstDup xs = go S.empty xs
+          where
+            go _ [] = Nothing
+            go seen (x:rest)
+              | x `S.member` seen = Just x
+              | otherwise = go (S.insert x seen) rest
+        toExplicit (RawPolyModalityMap srcText tgtRaw) = do
+          let srcName = ModName srcText
+          srcDecl <- requireDecl (dModes src) srcName
+          tgtExpr0 <- elabRawModExpr (dModes tgt) tgtRaw
+          let tgtExpr = normalizeModExpr (dModes tgt) tgtExpr0
+          srcMode <- lookupModeMap modeMap (mdSrc srcDecl)
+          tgtMode <- lookupModeMap modeMap (mdTgt srcDecl)
+          if meSrc tgtExpr /= srcMode || meTgt tgtExpr /= tgtMode
+            then Left ("morphism: modality map mode mismatch for " <> renderModName srcName)
+            else Right (srcName, tgtExpr)
+        fillDefaults acc [] = Right acc
+        fillDefaults acc ((srcName, srcDecl):rest) =
+          case M.lookup srcName acc of
+            Just _ -> fillDefaults acc rest
+            Nothing -> do
+              srcMode <- lookupModeMap modeMap (mdSrc srcDecl)
+              tgtMode <- lookupModeMap modeMap (mdTgt srcDecl)
+              defaultExpr <- defaultMap srcName srcMode tgtMode
+              fillDefaults (M.insert srcName defaultExpr acc) rest
+        defaultMap srcName srcMode tgtMode =
+          case M.lookup srcName (mtDecls (dModes tgt)) of
+            Just decl
+              | mdSrc decl == srcMode && mdTgt decl == tgtMode ->
+                  Right ModExpr { meSrc = srcMode, meTgt = tgtMode, mePath = [srcName] }
+            _ -> Left ("morphism: unmapped modality " <> renderModName srcName)
+        requireDecl mt name =
+          case M.lookup name (mtDecls mt) of
+            Nothing -> Left ("morphism: unknown source modality " <> renderModName name)
+            Just decl -> Right decl
+        renderModName (ModName n) = n
     lookupModeMap modeMap mode =
       case M.lookup mode modeMap of
         Nothing -> Left "morphism: missing mode mapping"
@@ -249,6 +296,29 @@ elabPolyItem env doc item =
       let mode = ModeName name
       mt' <- addMode mode (dModes doc)
       pure doc { dModes = mt' }
+    RPStructure decl -> do
+      let mode = ModeName (rsMode decl)
+      mt' <- setModeDiscipline mode (rsDisc decl) (dModes doc)
+      pure doc { dModes = mt' }
+    RPModality decl -> do
+      let modDecl =
+            ModDecl
+              { mdName = ModName (rmodName decl)
+              , mdSrc = ModeName (rmodSrc decl)
+              , mdTgt = ModeName (rmodTgt decl)
+              }
+      mt' <- addModDecl modDecl (dModes doc)
+      pure doc { dModes = mt' }
+    RPModEq decl -> do
+      lhs <- elabRawModExpr (dModes doc) (rmeLHS decl)
+      rhs <- elabRawModExpr (dModes doc) (rmeRHS decl)
+      mt' <- addModEqn (ModEqn lhs rhs) (dModes doc)
+      pure doc { dModes = mt' }
+    RPAdjunction decl -> do
+      let left = ModName (raLeft decl)
+      let right = ModName (raRight decl)
+      mt' <- addAdjDecl (AdjDecl left right) (dModes doc)
+      addAdjGens (doc { dModes = mt' }) left right
     RPAttrSort decl -> do
       let sortName = AttrSort (rasName decl)
       litKind <- mapM parseAttrLitKind (rasKind decl)
@@ -323,8 +393,8 @@ elabPolyItem env doc item =
       lhs <- withRule (elabDiagExpr env doc mode ruleVars (rprLHS decl))
       rhs <- withRule (elabDiagExpr env doc mode ruleVars (rprRHS decl))
       let rigid = S.fromList ruleVars
-      lhs' <- unifyBoundary rigid dom cod lhs
-      rhs' <- unifyBoundary rigid dom cod rhs
+      lhs' <- unifyBoundary (dModes doc) rigid dom cod lhs
+      rhs' <- unifyBoundary (dModes doc) rigid dom cod rhs
       let free = S.union (freeTyVarsDiagram lhs') (freeTyVarsDiagram rhs')
       let allowed = S.fromList ruleVars
       if S.isSubsetOf free allowed
@@ -354,6 +424,98 @@ ensureDistinct :: Text -> [Text] -> Either Text ()
 ensureDistinct label names =
   let set = S.fromList names
   in if S.size set == length names then Right () else Left label
+
+elabRawModExpr :: ModeTheory -> RawModExpr -> Either Text ModExpr
+elabRawModExpr mt raw =
+  case raw of
+    RMId modeName -> do
+      let mode = ModeName modeName
+      if M.member mode (mtModes mt)
+        then Right ModExpr { meSrc = mode, meTgt = mode, mePath = [] }
+        else Left ("unknown mode in modality expression: " <> modeName)
+    RMComp toks -> do
+      path <- mapM requireModName (reverse toks)
+      case path of
+        [] -> Left "empty modality expression"
+        (m0:rest) -> do
+          d0 <- requireDecl m0
+          tgt <- foldM step (mdTgt d0) rest
+          Right
+            ModExpr
+              { meSrc = mdSrc d0
+              , meTgt = tgt
+              , mePath = m0 : rest
+              }
+  where
+    requireModName tok =
+      let name = ModName tok
+       in if M.member name (mtDecls mt)
+            then Right name
+            else Left ("unknown modality in expression: " <> tok)
+    requireDecl name =
+      case M.lookup name (mtDecls mt) of
+        Nothing -> Left "unknown modality"
+        Just decl -> Right decl
+    step cur name = do
+      decl <- requireDecl name
+      if mdSrc decl == cur
+        then Right (mdTgt decl)
+        else Left "modality composition type mismatch"
+
+addAdjGens :: Doctrine -> ModName -> ModName -> Either Text Doctrine
+addAdjGens doc left right = do
+  leftDecl <- requireDecl left
+  rightDecl <- requireDecl right
+  if mdSrc leftDecl /= mdTgt rightDecl || mdTgt leftDecl /= mdSrc rightDecl
+    then Left "adjunction modalities must have opposite directions"
+    else Right ()
+  let modeM = mdSrc leftDecl
+  let modeN = mdTgt leftDecl
+  let aVar = TyVar { tvName = "a", tvMode = modeM }
+  let bVar = TyVar { tvName = "b", tvMode = modeN }
+  let fExpr = ModExpr { meSrc = modeM, meTgt = modeN, mePath = [left] }
+  let uExpr = ModExpr { meSrc = modeN, meTgt = modeM, mePath = [right] }
+  let unitName = GenName ("unit_" <> renderModName left)
+  let counitName = GenName ("counit_" <> renderModName left)
+  unitCod <- normalizeTypeExpr mt (TMod uExpr (TMod fExpr (TVar aVar)))
+  counitDom <- normalizeTypeExpr mt (TMod fExpr (TMod uExpr (TVar bVar)))
+  let unitGen =
+        GenDecl
+          { gdName = unitName
+          , gdMode = modeM
+          , gdTyVars = [aVar]
+          , gdDom = [TVar aVar]
+          , gdCod = [unitCod]
+          , gdAttrs = []
+          }
+  let counitGen =
+        GenDecl
+          { gdName = counitName
+          , gdMode = modeN
+          , gdTyVars = [bVar]
+          , gdDom = [counitDom]
+          , gdCod = [TVar bVar]
+          , gdAttrs = []
+          }
+  gens1 <- insertGen modeM unitGen (dGens doc)
+  gens2 <- insertGen modeN counitGen gens1
+  pure doc { dGens = gens2 }
+  where
+    mt = dModes doc
+    requireDecl name =
+      case M.lookup name (mtDecls mt) of
+        Nothing -> Left ("unknown modality: " <> renderModName name)
+        Just decl -> Right decl
+
+    renderModName (ModName n) = n
+
+    insertGen mode gen gens =
+      let table = M.findWithDefault M.empty mode gens
+       in if M.member (gdName gen) table
+            then Left ("adjunction-generated generator already exists: " <> renderGenName (gdName gen))
+            else Right (M.insert mode (M.insert (gdName gen) gen table) gens)
+
+    renderGenName (GenName n) = n
 
 parseAttrLitKind :: Text -> Either Text AttrLitKind
 parseAttrLitKind name =
@@ -389,7 +551,7 @@ resolveAttrField doc (fieldName, sortName) = do
 
 ensureMode :: Doctrine -> ModeName -> Either Text ()
 ensureMode doc mode =
-  if mode `S.member` mtModes (dModes doc)
+  if M.member mode (mtModes (dModes doc))
     then Right ()
     else Left "unknown mode"
 
@@ -483,18 +645,54 @@ elabTypeExpr doc vars expr =
     RPTVar name -> do
       v <- lookupTyVarByName vars name
       Right (TVar v)
+    RPTMod rawMe innerRaw -> do
+      me <- elabRawModExpr (dModes doc) rawMe
+      inner <- elabTypeExpr doc vars innerRaw
+      if typeMode inner /= meSrc me
+        then Left "modality application source/argument mode mismatch"
+        else normalizeTypeExpr (dModes doc) (TMod me inner)
     RPTCon rawRef args -> do
-      ref <- resolveTypeRef doc rawRef
-      sig <- lookupTypeSig doc ref
-      let params = tsParams sig
-      if length params /= length args
-        then Left "type constructor arity mismatch"
-        else do
-          args' <- mapM (elabTypeExpr doc vars) args
-          let argModes = map typeMode args'
-          if and (zipWith (==) params argModes)
-            then Right (TCon ref args')
-            else Left "type constructor argument mode mismatch"
+      case asModalityCall rawRef args of
+        Just (rawMe, innerRaw) -> do
+          me <- elabRawModExpr (dModes doc) rawMe
+          inner <- elabTypeExpr doc vars innerRaw
+          if typeMode inner /= meSrc me
+            then Left "modality application source/argument mode mismatch"
+            else normalizeTypeExpr (dModes doc) (TMod me inner)
+        Nothing -> do
+          ref <- resolveTypeRef doc rawRef
+          sig <- lookupTypeSig doc ref
+          let params = tsParams sig
+          if length params /= length args
+            then Left "type constructor arity mismatch"
+            else do
+              args' <- mapM (elabTypeExpr doc vars) args
+              let argModes = map typeMode args'
+              if and (zipWith (==) params argModes)
+                then Right (TCon ref args')
+                else Left "type constructor argument mode mismatch"
+  where
+    asModalityCall rawRef0 args0 =
+      case (rtrMode rawRef0, rtrName rawRef0, args0) of
+        (Nothing, name, [inner]) ->
+          if hasModality name
+            then Just (RMComp [name], inner)
+            else Nothing
+        (Just modeTok, name, [inner]) ->
+          if hasQualifiedType modeTok name
+            then Nothing
+            else
+              if hasModality modeTok && hasModality name
+                then Just (RMComp [modeTok, name], inner)
+                else Nothing
+        _ -> Nothing
+    hasModality tok = M.member (ModName tok) (mtDecls (dModes doc))
+    hasQualifiedType modeTok tyTok =
+      let mode = ModeName modeTok
+          tyName = TypeName tyTok
+       in case M.lookup mode (dTypes doc) of
+            Nothing -> False
+            Just table -> M.member tyName table
 
 elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [TyVar] -> RawDiagExpr -> Either Text Diagram
 elabDiagExpr env doc mode ruleVars expr = do
@@ -512,8 +710,8 @@ elabDiagExpr env doc mode ruleVars expr = do
           gen <- liftEither (lookupGen doc mode (GenName name))
           let tyVars = gdTyVars gen
           renameSubst <- freshSubst tyVars
-          let dom0 = applySubstCtx renameSubst (gdDom gen)
-          let cod0 = applySubstCtx renameSubst (gdCod gen)
+          let dom0 = applySubstCtx (dModes doc) renameSubst (gdDom gen)
+          let cod0 = applySubstCtx (dModes doc) renameSubst (gdCod gen)
           (dom, cod) <- case mArgs of
             Nothing -> pure (dom0, cod0)
             Just args -> do
@@ -526,7 +724,7 @@ elabDiagExpr env doc mode ruleVars expr = do
                     matches | and matches -> pure ()
                     _ -> liftEither (Left "generator type argument mode mismatch")
                   let subst = M.fromList (zip freshVars args')
-                  pure (applySubstCtx subst dom0, applySubstCtx subst cod0)
+                  pure (applySubstCtx (dModes doc) subst dom0, applySubstCtx (dModes doc) subst cod0)
           attrs <- liftEither (elabGenAttrs doc gen mAttrArgs)
           liftEither (genDWithAttrs mode dom cod (gdName gen) attrs)
         RDTermRef name -> do
@@ -571,12 +769,12 @@ elabDiagExpr env doc mode ruleVars expr = do
           let free = S.union (freeTyVarsDiagram d1) (freeTyVarsDiagram d2)
           let flex = S.difference free rigid
           subst <- liftEither $
-            case unifyCtxFlex flex cod1 dom2 of
+            case unifyCtxFlexLocal (dModes doc) flex cod1 dom2 of
               Left err -> Left ("diagram composition boundary mismatch: " <> err)
               Right s -> Right s
-          let d1' = applySubstDiagram subst d1
-          let d2' = applySubstDiagram subst d2
-          liftEither (compD d2' d1')
+          let d1' = applySubstDiagram (dModes doc) subst d1
+          let d2' = applySubstDiagram (dModes doc) subst d2
+          liftEither (compD (dModes doc) d2' d1')
         RDTensor a b -> do
           d1 <- build a
           d2 <- build b
@@ -606,29 +804,29 @@ lookupGen doc mode name =
     Nothing -> Left "unknown generator"
     Just gd -> Right gd
 
-unifyBoundary :: S.Set TyVar -> Context -> Context -> Diagram -> Either Text Diagram
-unifyBoundary rigid dom cod diag = do
+unifyBoundary :: ModeTheory -> S.Set TyVar -> Context -> Context -> Diagram -> Either Text Diagram
+unifyBoundary mt rigid dom cod diag = do
   domDiag <- diagramDom diag
   let flex0 = S.difference (freeTyVarsDiagram diag) rigid
-  s1 <- unifyCtxFlex flex0 domDiag dom
-  let diag1 = applySubstDiagram s1 diag
+  s1 <- unifyCtxFlexLocal mt flex0 domDiag dom
+  let diag1 = applySubstDiagram mt s1 diag
   codDiag <- diagramCod diag1
   let flex1 = S.difference (freeTyVarsDiagram diag1) rigid
-  s2 <- unifyCtxFlex flex1 codDiag cod
-  let diag2 = applySubstDiagram s2 diag1
+  s2 <- unifyCtxFlexLocal mt flex1 codDiag cod
+  let diag2 = applySubstDiagram mt s2 diag1
   pure diag2
 
-unifyCtxFlex :: S.Set TyVar -> Context -> Context -> Either Text Subst
-unifyCtxFlex flex ctx1 ctx2
+unifyCtxFlexLocal :: ModeTheory -> S.Set TyVar -> Context -> Context -> Either Text Subst
+unifyCtxFlexLocal mt flex ctx1 ctx2
   | length ctx1 /= length ctx2 = Left "unifyCtxFlex: length mismatch"
   | otherwise = foldl step (Right M.empty) (zip ctx1 ctx2)
   where
     step acc (a, b) = do
       s <- acc
-      let a' = applySubstTy s a
-      let b' = applySubstTy s b
-      s' <- unifyTyFlex flex a' b'
-      pure (composeSubst s' s)
+      let a' = applySubstTy mt s a
+      let b' = applySubstTy mt s b
+      s' <- unifyTyFlex mt flex a' b'
+      pure (composeSubst mt s' s)
 
 elabGenAttrs :: Doctrine -> GenDecl -> Maybe [RawAttrArg] -> Either Text AttrMap
 elabGenAttrs doc gen mArgs =

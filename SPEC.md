@@ -24,9 +24,13 @@ The project implements a polygraph-based kernel and a DSL (“llang”) for desc
 A **mode theory** consists of:
 
 - A finite set of **modes**.
-- Optional modality declarations and equations (currently stored but not used in diagram typing).
+- A per-mode variable discipline (`linear`, `affine`, `relevant`, `cartesian`).
+- Modality declarations (`modality μ : M -> N;`).
+- Ordered oriented modality equations (`mod_eq <lhs> -> <rhs>;`), used as rewrite rules.
+- Optional adjunction declarations (`adjunction F dashv U;`).
 
-Modes are identified by `ModeName` (text). In practice, examples use a single mode `M`.
+Modes are identified by `ModeName` (text). Discipline is monotone-upgraded with:
+`linear <= affine <= cartesian` and `linear <= relevant <= cartesian`.
 
 ### 1.2 Type expressions
 
@@ -35,13 +39,14 @@ Types are **mode-indexed objects**, not GAT sorts. The polygraph kernel uses a f
 ```
 TypeRef  = { trMode :: ModeName, trName :: TypeName }
 TyVar    = { tvName :: Text, tvMode :: ModeName }
-TypeExpr = TVar TyVar | TCon TypeRef [TypeExpr]
+TypeExpr = TVar TyVar | TCon TypeRef [TypeExpr] | TMod ModExpr TypeExpr
 Context  = [TypeExpr]
 ```
 
 - `TypeRef` pairs a constructor name with its mode; nested constructors may come from other modes.
 - `TyVar` names are textual; variables are **mode-indexed**.
 - Type constructors have fixed **mode signatures** `(m1,...,mk) -> m`.
+- `TMod me ty` applies a modality expression to a type. Its mode is `me`'s target mode.
 - Within any binder list (generator, rule, or template), tyvar names must be unique by **name**
   (uniqueness is not by `(name, mode)`).
 
@@ -49,10 +54,11 @@ Context  = [TypeExpr]
 
 The kernel provides a unifier:
 
-- `unifyTy :: TypeExpr -> TypeExpr -> Either Text Subst`
-- `unifyCtx :: Context -> Context -> Either Text Subst`
+- `unifyTy :: ModeTheory -> TypeExpr -> TypeExpr -> Either Text Subst`
+- `unifyCtx :: ModeTheory -> Context -> Context -> Either Text Subst`
 
 with an **occurs check**. Composition and rule matching rely on this unifier to reconcile diagram boundaries.
+All unification and substitution operations normalize modality expressions/types using the current mode theory.
 
 Unification respects modes:
 
@@ -333,6 +339,10 @@ The DSL introduces `doctrine` blocks and diagram expressions.
 ```
 doctrine <Name> [extends <Base>] where {
   mode <ModeName>;
+  structure <ModeName> = linear | affine | relevant | cartesian;
+  modality <ModName> : <ModeName> -> <ModeName>;
+  mod_eq <ModExpr> -> <ModExpr>;
+  adjunction <ModName> dashv <ModName>;
   attrsort <SortName> [= int | string | bool];
   type <TypeName> (<tyvar> [, ...]) @<ModeName>;
   gen  <GenName>  (<tyvar> [, ...]) [ { f1:S1, ..., fk:Sk } ] : <Ctx> -> <Ctx> @<ModeName>;
@@ -343,6 +353,14 @@ doctrine <Name> [extends <Base>] where {
 
 - A tyvar binder is `a` or `a@Mode`. If the mode is omitted, it defaults to the declaration mode.
 - Binder lists may be empty or omitted when no parameters are needed.
+- `structure` can only upgrade discipline according to the partial order
+  `linear <= affine <= cartesian` and `linear <= relevant <= cartesian`.
+- Modality expressions use:
+  - `id@M` for identity on mode `M`.
+  - `U.F` for composition (`U ∘ F`, rightmost applies first).
+- `mod_eq` rules are oriented rewrites and must be strictly length-decreasing in modality-path length.
+- `adjunction F dashv U` requires opposite directions and auto-generates
+  `unit_F`/`counit_F` generators with the expected modality-typed boundaries.
 - `attrsort S = int|string|bool;` declares a literal-admitting sort.
 - `attrsort S;` declares a sort with no literal kind (literals are rejected at that sort).
 - Generator attribute blocks `{ ... }` are optional; when present, each entry is `field:Sort`.
@@ -416,6 +434,7 @@ doctrine Combined = effects Base { E1, E2, ... };
 ```
 morphism <Name> : <Src> -> <Tgt> where {
   mode <SrcMode> -> <TgtMode>;
+  modality <SrcModName> -> <TgtModExpr>;
   attrsort <SrcSort> -> <TgtSort>;
   type <SrcType>(<tyvar> [, ...]) @<Mode> -> <TgtTypeExpr> @<Mode>;
   gen  <SrcGen>  @<Mode> -> <DiagExpr>;
@@ -426,6 +445,7 @@ morphism <Name> : <Src> -> <Tgt> where {
 ```
 
 - Every source generator must be mapped.
+- Every source modality must be mapped (explicitly or by same-name default when src/tgt modes match).
 - Mode mappings are optional; if omitted, each source mode maps to the same‑named target
   mode (and it is an error if that target mode does not exist).
 - The mode map is total on source modes; duplicate mode mappings are rejected.
@@ -450,9 +470,12 @@ morphism <Name> : <Src> -> <Tgt> where {
 - Types are either:
   - lowercase identifiers (type variables), or
   - constructors with optional arguments, optionally qualified by mode:
-    `Mode.Type(args)` or `Type(args)`.
+    `Mode.Type(args)` or `Type(args)`, or
+  - modality application:
+    `mu(Type)` or composed forms such as `U.F(Type)`, and identity `id@Mode(Type)`.
 - Unqualified constructors must be unique across all modes; otherwise they must be written
   with a `Mode.` qualifier.
+- `mu(Type)` is interpreted as modality application when `mu` is a declared modality.
 
 ### 6.4 Diagram expressions
 
@@ -523,32 +546,20 @@ elaboration to diagrams.
 surface <Name> where {
   doctrine <Doctrine>;
   mode <Mode>;
-  context <ctx> = <Type>;  -- optional
-
-  structural { ... }       -- optional
   lexer { ... }
   expr  { ... }
   elaborate { ... }
 }
 ```
 
-#### Structural block
+Surface variable-use behavior is derived from the doctrine mode structure only:
 
-```
-structural {
-  discipline: linear | affine | relevant | cartesian;
-  dup: <GenName>;    -- optional
-  drop: <GenName>;   -- optional
-}
-```
+- `linear`: no drop/no duplication.
+- `affine`: drop allowed (requires generator `drop` in the surface mode).
+- `relevant`: duplication allowed (requires generator `dup` in the surface mode).
+- `cartesian`: both allowed (requires both `dup` and `drop`).
 
-- The block is optional. If omitted, it defaults to **cartesian** with `dup`/`drop`
-  generators named `dup` and `drop`.
-- If present, `discipline` defaults to `cartesian`, and `dup`/`drop` default to unset.
-- `relevant`/`cartesian` require `dup`; `affine`/`cartesian` require `drop`.
-- The configured `dup` and `drop` generators must exist in the surface mode and have
-  the shapes `dup(a) : a → (a, a)` and `drop(a) : a → []`.
-- The configured `dup` and `drop` generators must not declare attributes.
+Required structural generator names are fixed: `dup` and `drop`.
 
 #### Lexer
 
@@ -611,8 +622,12 @@ generators) plus **placeholders**:
 
 - `$1`, `$2`, ... refer to child elaborations (positional).
 - `$x` refers to a bound variable occurrence (see binding rules below).
+- `@TermName` splices a previously-defined term diagram into the template.
 - Template generator calls may include attribute arguments (named or positional), e.g.
   `Gen{...}(n=#hole, ...)` or `Gen{...}(...)`.
+
+Template `@TermName` splicing is strict: the referenced term must exist and have the
+same doctrine and mode as the current surface elaboration.
 
 Template attribute terms are:
 
@@ -648,11 +663,6 @@ Elaboration semantics:
     (left‑associated duplication).
   - **cartesian**: any number of uses; 0 uses insert `drop`,
     >1 uses insert `dup` (left‑associated duplication).
-
-Optional `context <ctx> = <Type>` enables CCC‑style context threading:
-
-- The binder variable is interpreted as `Hom(prod(ctx, ty), ty)`.
-- The `ctx` type variable is updated to `prod(ctx, ty)` while elaborating the body.
 
 ### 6.7 Models
 

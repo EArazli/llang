@@ -40,6 +40,9 @@ data-files:
     examples/lib/codegen/minifun/js.llang
     examples/lib/codegen/minifun/compile.llang
     examples/lib/effects/combined.llang
+    examples/lib/modes/lnl.counit.term.llang
+    examples/lib/modes/lnl.llang
+    examples/lib/modes/staging.llang
     examples/lib/models/bool.models.llang
     examples/lib/models/peano.models.llang
     examples/lib/models/pushout/nat_bool.models.llang
@@ -52,10 +55,10 @@ data-files:
     examples/lib/pushout/pushout_basic.llang
     examples/lib/pushout/pushout_extend.llang
     examples/lib/surfaces/ccc_surface/ccc.llang
-    examples/lib/surfaces/ccc_surface/stlc.runspec.llang
-    examples/lib/surfaces/ccc_surface/stlc.surface.llang
     examples/lib/surfaces/planar_monoid.ssa.surface.llang
+    examples/lib/surfaces/template_splice_demo.surface.llang
     examples/lib/templates/state.template.llang
+    examples/lib/terms/splice_source.llang
     examples/lib/terms/term_defs.llang
     examples/run/algebra/box_match.run.llang
     examples/run/algebra/cart_monoid.run.llang
@@ -76,21 +79,16 @@ data-files:
     examples/run/codegen/minifun/concat2.run.llang
     examples/run/data/list.run.llang
     examples/run/effects/combined_with_handler.run.llang
+    examples/run/modes/lnl.counit.run.llang
+    examples/run/modes/lnl.unit.run.llang
+    examples/run/modes/staging.run.llang
     examples/run/pushout/nat_bool.run.llang
     examples/run/pushout/nat_bool_plus.run.llang
     examples/run/pushout/pushout_basic.run.llang
     examples/run/runspec/multi.llang
-    examples/run/surfaces/ccc_surface/stlc.app1.run.llang
-    examples/run/surfaces/ccc_surface/stlc.id.run.llang
-    examples/run/surfaces/ccc_surface/stlc.lam1.run.llang
-    examples/run/surfaces/ccc_surface/stlc.lam2.run.llang
-    examples/run/surfaces/ccc_surface/stlc.lam3.run.llang
-    examples/run/surfaces/ccc_surface/stlc.lam3_capture.run.llang
-    examples/run/surfaces/ccc_surface/stlc.pair.run.llang
-    examples/run/surfaces/ccc_surface/stlc.pair1.run.llang
-    examples/run/surfaces/ccc_surface/stlc.run.llang
     examples/run/surfaces/implements_uses.run.llang
     examples/run/surfaces/planar_monoid.ssa.run.llang
+    examples/run/surfaces/template_splice_demo.run.llang
     examples/run/templates/state.run.llang
     examples/run/terms/cart_monoid.term.run.llang
     examples/run/terms/stlc_bool.term.run.llang
@@ -208,8 +206,9 @@ test-suite llang-test
       Test.Poly.CCC
       Test.Poly.Coherence
       Test.Poly.DataMacro
+      Test.Poly.Helpers
+      Test.Poly.ModeTheory
       Test.Poly.Surface
-      Test.Poly.STLCSurface
       Test.Poly.TypeModes
       Test.Poly.NoLegacy
       Test.Poly.StdlibCoherence

@@ -17,7 +17,7 @@ import qualified Test.Poly.Pushout as PolyPushout
 import qualified Test.Poly.Coherence as PolyCoherence
 import qualified Test.Poly.CCC as PolyCCC
 import qualified Test.Poly.Surface as PolySurface
-import qualified Test.Poly.STLCSurface as PolySTLCSurface
+import qualified Test.Poly.ModeTheory as PolyModeTheory
 import qualified Test.Poly.TypeModes as PolyTypeModes
 import qualified Test.Poly.DataMacro as PolyDataMacro
 import qualified Test.Poly.NoLegacy as PolyNoLegacy
@@ -42,8 +42,8 @@ main =
       , PolyPushout.tests
       , PolyCoherence.tests
       , PolyCCC.tests
+      , PolyModeTheory.tests
       , PolySurface.tests
-      , PolySTLCSurface.tests
       , PolyTypeModes.tests
       , PolyDataMacro.tests
       , PolyNoLegacy.tests

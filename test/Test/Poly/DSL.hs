@@ -8,13 +8,12 @@ import Test.Tasty.HUnit
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as M
-import qualified Data.Set as S
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, meDoctrines, meMorphisms, meRuns)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.ModeTheory (ModeName(..), mtModes)
 import Strat.Poly.Doctrine
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
@@ -64,7 +63,7 @@ testPolyDSLNormalize = do
   doc <- case M.lookup "Monoid" (meDoctrines env) of
     Nothing -> assertFailure "expected Monoid doctrine"
     Just d -> pure d
-  mode <- case S.toList (mtModes (dModes doc)) of
+  mode <- case M.keys (mtModes (dModes doc)) of
     [m] -> pure m
     _ -> assertFailure "expected single mode"
   rawExpr <- case parseDiagExpr "(mul * id[A]) ; mul" of

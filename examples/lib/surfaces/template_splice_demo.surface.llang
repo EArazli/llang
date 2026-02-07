@@ -1,0 +1,21 @@
+import "../terms/splice_source.llang";
+
+surface SpliceSurface where {
+  doctrine SpliceBase;
+  mode M;
+
+  lexer {
+    keywords: term;
+    symbols: "{", "}";
+  }
+
+  expr {
+    atom:
+      "term" "{" "}" => TERM
+    ;
+  }
+
+  elaborate {
+    TERM => @SomePredefinedTerm;;
+  }
+}

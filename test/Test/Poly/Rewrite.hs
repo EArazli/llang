@@ -19,6 +19,7 @@ import Strat.Poly.Match (Match(..), findFirstMatchNoDoc, findFirstMatchWithTyVar
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Pretty (renderDiagram)
 import qualified Data.IntMap.Strict as IM
+import Test.Poly.Helpers (mkModes)
 
 
 tests :: TestTree
@@ -58,9 +59,9 @@ assocRule = do
   mul <- mkGen "mul" [aTy, aTy] [aTy]
   id1 <- pure (idD modeName [aTy])
   left <- tensorD mul id1
-  lhs <- compD mul left
+  lhs <- compD (mkModes [modeName]) mul left
   right <- tensorD id1 mul
-  rhs <- compD mul right
+  rhs <- compD (mkModes [modeName]) mul right
   pure RewriteRule
     { rrName = "assoc"
     , rrLHS = lhs
@@ -99,7 +100,7 @@ testDanglingReject :: Assertion
 testDanglingReject = do
   f <- require (mkGen "f" [aTy] [aTy])
   g <- require (mkGen "g" [aTy] [aTy])
-  lhs <- require (compD g f)
+  lhs <- require (compD (mkModes [modeName]) g f)
   let rhs = lhs
   let rule = RewriteRule
         { rrName = "dangling"
@@ -270,7 +271,7 @@ testNormalizeDeterminism = do
   mul <- require (mkGen "mul" [aTy, aTy] [aTy])
   id1 <- pure (idD modeName [aTy])
   d1 <- require (tensorD mul id1)
-  d2 <- require (compD mul d1)
+  d2 <- require (compD (mkModes [modeName]) mul d1)
   let rules = [rule]
   r1 <- require (normalize 10 rules d2)
   r2 <- require (normalize 10 rules d2)

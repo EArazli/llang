@@ -8,7 +8,6 @@ import Test.Tasty.HUnit
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
-import qualified Data.Set as S
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
@@ -17,6 +16,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.Cell2
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
+import Test.Poly.Helpers (mkModes, identityModeMap, identityModMap)
 
 
 tests :: TestTree
@@ -34,10 +34,6 @@ tvar mode name = TyVar { tvName = name, tvMode = mode }
 tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
 tcon mode name args = TCon (TypeRef mode (TypeName name)) args
 
-identityModeMap :: Doctrine -> M.Map ModeName ModeName
-identityModeMap doc =
-  M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]
-
 testMonoidMorphism :: Assertion
 testMonoidMorphism = do
   docSrc <- either (assertFailure . T.unpack) pure mkMonoid
@@ -52,6 +48,7 @@ testMonoidMorphism = do
         , morTgt = docTgt
         , morIsCoercion = False
         , morModeMap = modeMap
+        , morModMap = identityModMap docSrc
         , morAttrSortMap = M.empty
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((modeM, GenName "unit"), unitImg), ((modeM, GenName "mul"), mulImg)]
@@ -74,7 +71,7 @@ testTypeMapReorder = do
   let genTgt = GenDecl genName mode [a, b] [TCon (TypeRef mode pair) [TVar a, TVar b]] [TCon (TypeRef mode pair) [TVar a, TVar b]] []
   let docSrc = Doctrine
         { dName = "Src"
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes [mode]
         , dAttrSorts = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(prod, TypeSig [mode, mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genSrc)])]
@@ -82,7 +79,7 @@ testTypeMapReorder = do
         }
   let docTgt = Doctrine
         { dName = "Tgt"
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes [mode]
         , dAttrSorts = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(pair, TypeSig [mode, mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genTgt)])]
@@ -102,6 +99,7 @@ testTypeMapReorder = do
         , morTgt = docTgt'
         , morIsCoercion = False
         , morModeMap = identityModeMap docSrc'
+        , morModMap = identityModMap docSrc'
         , morAttrSortMap = M.empty
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((mode, genName), img)]
@@ -124,7 +122,7 @@ testCrossModeMorphism = do
   let gGen = GenDecl (GenName "g") modeV [] [bTy] [bTy] []
   let docSrc = Doctrine
         { dName = "Src"
-        , dModes = ModeTheory (S.singleton modeC) M.empty []
+        , dModes = mkModes [modeC]
         , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeC, M.fromList [(TypeName "A", TypeSig [])])]
         , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
@@ -132,7 +130,7 @@ testCrossModeMorphism = do
         }
   let docTgt = Doctrine
         { dName = "Tgt"
-        , dModes = ModeTheory (S.singleton modeV) M.empty []
+        , dModes = mkModes [modeV]
         , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeV, M.fromList [(TypeName "B", TypeSig [])])]
         , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
@@ -151,6 +149,7 @@ testCrossModeMorphism = do
         , morTgt = docTgt'
         , morIsCoercion = False
         , morModeMap = M.fromList [(modeC, modeV)]
+        , morModMap = identityModMap docSrc'
         , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(aRef, TypeTemplate [] bTy)]
         , morGenMap = M.fromList [((modeC, GenName "f"), img)]
@@ -179,7 +178,7 @@ strTy = TCon (TypeRef modeM (TypeName "Str")) []
 
 mkMonoid :: Either Text Doctrine
 mkMonoid = do
-  let mt = ModeTheory (S.singleton modeM) M.empty []
+  let mt = mkModes [modeM]
   let types = M.fromList [(modeM, M.fromList [(TypeName "A", TypeSig [])])]
   assoc <- assocRule "assoc" aTy (GenName "mul")
   unitL <- unitRule "unitL" aTy (GenName "unit") (GenName "mul") True
@@ -207,7 +206,7 @@ mkMonoid = do
 
 mkStringMonoid :: Either Text Doctrine
 mkStringMonoid = do
-  let mt = ModeTheory (S.singleton modeM) M.empty []
+  let mt = mkModes [modeM]
   let types = M.fromList [(modeM, M.fromList [(TypeName "Str", TypeSig [])])]
   assoc <- assocRule "assoc" strTy (GenName "append")
   unitL <- unitRule "unitL" strTy (GenName "empty") (GenName "append") True
@@ -238,9 +237,9 @@ assocRule name ty mulName = do
   mul <- genD modeM [ty, ty] [ty] mulName
   id1 <- pure (idD modeM [ty])
   left <- tensorD mul id1
-  lhs <- compD mul left
+  lhs <- compD (mkModes [modeM]) mul left
   right <- tensorD id1 mul
-  rhs <- compD mul right
+  rhs <- compD (mkModes [modeM]) mul right
   pure Cell2
     { c2Name = name
     , c2Class = Computational
@@ -259,10 +258,10 @@ unitRule name ty unitName mulName leftSide = do
     if leftSide
       then do
         tens <- tensorD unit id1
-        compD mul tens
+        compD (mkModes [modeM]) mul tens
       else do
         tens <- tensorD id1 unit
-        compD mul tens
+        compD (mkModes [modeM]) mul tens
   pure Cell2
     { c2Name = name
     , c2Class = Computational

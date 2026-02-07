@@ -26,7 +26,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
-import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory)
 import Strat.Poly.TypeExpr (TypeExpr, TyVar, typeMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.UnifyTy (Subst, unifyTyFlex, applySubstTy, composeSubst)
@@ -590,12 +590,13 @@ unionDisjointIntMap label left right =
     else Left (label <> ": key collision " <> T.pack (show overlap))
 
 diagramIsoMatchWithVars
-  :: S.Set TyVar
+  :: ModeTheory
+  -> S.Set TyVar
   -> S.Set AttrVar
   -> Diagram
   -> Diagram
   -> Either Text [(Subst, AttrSubst)]
-diagramIsoMatchWithVars tyFlex attrFlex left right
+diagramIsoMatchWithVars mt tyFlex attrFlex left right
   | dMode left /= dMode right = Right []
   | length (dIn left) /= length (dIn right) = Right []
   | length (dOut left) /= length (dOut right) = Right []
@@ -650,10 +651,10 @@ diagramIsoMatchWithVars tyFlex attrFlex left right
       ty1 <- requirePortType left p1
       ty2 <- requirePortType right p2
       let subst = imsTySubst st
-      case unifyTyFlex tyFlex (applySubstTy subst ty1) (applySubstTy subst ty2) of
+      case unifyTyFlex mt tyFlex (applySubstTy mt subst ty1) (applySubstTy mt subst ty2) of
         Left _ -> Right []
         Right s1 ->
-          let subst' = composeSubst s1 subst
+          let subst' = composeSubst mt s1 subst
           in Right [st { imsTySubst = subst' }]
 
     mapIncidentEdges p1 p2 st = do
@@ -729,13 +730,13 @@ diagramIsoMatchWithVars tyFlex attrFlex left right
         (PBox _ d1, PBox _ d2) -> do
           let tySubst = imsTySubst st
           let attrSubst = imsAttrSubst st
-          let d1' = applySubstsDiagramLocal tySubst attrSubst d1
-          let d2' = applySubstsDiagramLocal tySubst attrSubst d2
-          case diagramIsoMatchWithVars tyFlex attrFlex d1' d2' of
+          let d1' = applySubstsDiagramLocal mt tySubst attrSubst d1
+          let d2' = applySubstsDiagramLocal mt tySubst attrSubst d2
+          case diagramIsoMatchWithVars mt tyFlex attrFlex d1' d2' of
             Left _ -> Right []
             Right subs ->
               Right
-                [ (composeSubst tySub tySubst, composeAttrSubst attrSub attrSubst)
+                [ (composeSubst mt tySub tySubst, composeAttrSubst attrSub attrSubst)
                 | (tySub, attrSub) <- subs
                 ]
         _ -> Right []
@@ -771,9 +772,9 @@ diagramIsoMatchWithVars tyFlex attrFlex left right
 
     tryMapEdge st e1 e2 = addEdgePair st e1 e2
 
-applySubstsDiagramLocal :: Subst -> AttrSubst -> Diagram -> Diagram
-applySubstsDiagramLocal tySubst attrSubst diag =
-  let dPortTy' = IM.map (applySubstTy tySubst) (dPortTy diag)
+applySubstsDiagramLocal :: ModeTheory -> Subst -> AttrSubst -> Diagram -> Diagram
+applySubstsDiagramLocal mt tySubst attrSubst diag =
+  let dPortTy' = IM.map (applySubstTy mt tySubst) (dPortTy diag)
       dEdges' = IM.map (mapEdgePayloadLocal tySubst attrSubst) (dEdges diag)
   in diag { dPortTy = dPortTy', dEdges = dEdges' }
   where
@@ -782,4 +783,4 @@ applySubstsDiagramLocal tySubst attrSubst diag =
         PGen g attrs ->
           edge { ePayload = PGen g (applyAttrSubstMap attrS attrs) }
         PBox name inner ->
-          edge { ePayload = PBox name (applySubstsDiagramLocal tyS attrS inner) }
+          edge { ePayload = PBox name (applySubstsDiagramLocal mt tyS attrS inner) }

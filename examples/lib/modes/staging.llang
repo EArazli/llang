@@ -1,0 +1,20 @@
+doctrine Staging where {
+  mode RT;
+  mode CT;
+
+  structure RT = linear;
+  structure CT = linear;
+
+  modality quote : RT -> CT;
+  modality splice : CT -> RT;
+  mod_eq splice.quote -> id@RT;
+
+  type Nat @RT;
+}
+
+term normalizeDemo where {
+  doctrine Staging;
+  mode RT;
+}
+---
+id [splice(quote(RT.Nat))] ; id [RT.Nat]

@@ -15,14 +15,22 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName, ModDecl(..), ModExpr(..), emptyModeTheory)
 import Strat.Poly.TypeExpr
-import Strat.Poly.UnifyTy (applySubstCtx)
+import qualified Strat.Poly.UnifyTy as U
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
-import Strat.Poly.Diagram (Diagram(..), applySubstDiagram, genD, genDWithAttrs, diagramDom, diagramCod)
+import qualified Strat.Poly.Diagram as Diag
+import Strat.Poly.Diagram (Diagram(..), genD, genDWithAttrs, diagramDom, diagramCod)
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), renumberDiagram, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
+
+
+applySubstCtx :: U.Subst -> Context -> Context
+applySubstCtx = U.applySubstCtx emptyModeTheory
+
+applySubstDiagram :: U.Subst -> Diagram -> Diagram
+applySubstDiagram = Diag.applySubstDiagram emptyModeTheory
 
 
 data PolyPushoutResult = PolyPushoutResult
@@ -90,9 +98,16 @@ computePolyPushout name f g = do
         then Right ()
         else Left "poly pushout requires morphisms with the same source"
     ensureIdentityModeMap mor =
-      let modes = S.toList (mtModes (dModes (morSrc mor)))
-          ok = all (\m -> M.lookup m (morModeMap mor) == Just m) modes
-      in if ok
+      let modes = M.keys (mtModes (dModes (morSrc mor)))
+          mods = M.toList (mtDecls (dModes (morSrc mor)))
+          okModes = all (\m -> M.lookup m (morModeMap mor) == Just m) modes
+          okMods =
+            all
+              (\(name, decl) ->
+                M.lookup name (morModMap mor)
+                  == Just (ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [name] }))
+              mods
+      in if okModes && okMods
         then Right ()
         else Left "pushout requires mode-preserving morphisms"
 
@@ -114,6 +129,7 @@ computePolyCoproduct name a b = do
         , morTgt = a
         , morIsCoercion = True
         , morModeMap = modeMap
+        , morModMap = identityModMap empty
         , morAttrSortMap = M.empty
         , morTypeMap = M.empty
         , morGenMap = M.empty
@@ -126,6 +142,7 @@ computePolyCoproduct name a b = do
         , morTgt = b
         , morIsCoercion = True
         , morModeMap = modeMap
+        , morModMap = identityModMap empty
         , morAttrSortMap = M.empty
         , morTypeMap = M.empty
         , morGenMap = M.empty
@@ -142,7 +159,14 @@ ensureSameModes a b =
 
 identityModeMap :: Doctrine -> M.Map ModeName ModeName
 identityModeMap doc =
-  M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]
+  M.fromList [ (m, m) | m <- M.keys (mtModes (dModes doc)) ]
+
+identityModMap :: Doctrine -> M.Map ModName ModExpr
+identityModMap doc =
+  M.fromList
+    [ (name, ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [name] })
+    | (name, decl) <- M.toList (mtDecls (dModes doc))
+    ]
 
 identityAttrSortMap :: Doctrine -> M.Map AttrSort AttrSort
 identityAttrSortMap doc =
@@ -704,6 +728,7 @@ buildGlue name src tgt = do
     , morTgt = tgt
     , morIsCoercion = True
     , morModeMap = identityModeMap src
+    , morModMap = identityModMap src
     , morAttrSortMap = identityAttrSortMap src
     , morTypeMap = M.empty
     , morGenMap = genMap
@@ -730,6 +755,7 @@ buildInj name src tgt attrRen tyRen permRen genRen = do
     , morTgt = tgt
     , morIsCoercion = True
     , morModeMap = identityModeMap src
+    , morModMap = identityModMap src
     , morAttrSortMap = attrSortMap
     , morTypeMap = typeMap
     , morGenMap = genMap

@@ -33,6 +33,27 @@ substItem :: M.Map Text Text -> P.RawPolyItem -> P.RawPolyItem
 substItem subst item =
   case item of
     P.RPMode name -> P.RPMode (lookupText subst name)
+    P.RPStructure decl ->
+      P.RPStructure decl { P.rsMode = lookupText subst (P.rsMode decl) }
+    P.RPModality decl ->
+      P.RPModality
+        decl
+          { P.rmodName = lookupText subst (P.rmodName decl)
+          , P.rmodSrc = lookupText subst (P.rmodSrc decl)
+          , P.rmodTgt = lookupText subst (P.rmodTgt decl)
+          }
+    P.RPModEq decl ->
+      P.RPModEq
+        decl
+          { P.rmeLHS = substModExpr subst (P.rmeLHS decl)
+          , P.rmeRHS = substModExpr subst (P.rmeRHS decl)
+          }
+    P.RPAdjunction decl ->
+      P.RPAdjunction
+        decl
+          { P.raLeft = lookupText subst (P.raLeft decl)
+          , P.raRight = lookupText subst (P.raRight decl)
+          }
     P.RPAttrSort decl ->
       P.RPAttrSort decl
         { P.rasName = lookupText subst (P.rasName decl)
@@ -87,6 +108,14 @@ substTypeExpr subst expr =
     P.RPTVar name -> P.RPTVar name
     P.RPTCon ref args ->
       P.RPTCon (substTypeRef subst ref) (map (substTypeExpr subst) args)
+    P.RPTMod me inner ->
+      P.RPTMod (substModExpr subst me) (substTypeExpr subst inner)
+
+substModExpr :: M.Map Text Text -> P.RawModExpr -> P.RawModExpr
+substModExpr subst me =
+  case me of
+    P.RMId modeName -> P.RMId (lookupText subst modeName)
+    P.RMComp toks -> P.RMComp (map (lookupText subst) toks)
 
 substTypeRef :: M.Map Text Text -> P.RawTypeRef -> P.RawTypeRef
 substTypeRef subst ref =

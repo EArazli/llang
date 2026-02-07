@@ -13,9 +13,6 @@ doctrine Arith where {
 surface ArithInfix where {
   doctrine Arith;
   mode M;
-  structural {
-    discipline: linear;
-  }
 
   lexer {
     keywords: ;

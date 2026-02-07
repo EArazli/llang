@@ -9,7 +9,7 @@ module Strat.Poly.TypePretty
 import Data.Text (Text)
 import qualified Data.Text as T
 import Strat.Poly.TypeExpr
-import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..))
 
 
 renderMode :: ModeName -> Text
@@ -22,6 +22,17 @@ renderType ty =
     TCon ref [] -> renderTypeRef ref
     TCon ref args ->
       renderTypeRef ref <> "(" <> T.intercalate ", " (map renderType args) <> ")"
+    TMod me inner ->
+      renderModExpr me <> "(" <> renderType inner <> ")"
+
+renderModExpr :: ModExpr -> Text
+renderModExpr me =
+  case reverse (mePath me) of
+    [] -> "id@" <> renderMode (meSrc me)
+    names -> T.intercalate "." (map renderModName names)
+
+renderModName :: ModName -> Text
+renderModName (ModName n) = n
 
 renderTypeRef :: TypeRef -> Text
 renderTypeRef ref =

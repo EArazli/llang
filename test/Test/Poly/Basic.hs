@@ -9,8 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
-import qualified Data.Set as S
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
 import Strat.Poly.UnifyTy (applySubstTy, normalizeSubst)
 import Strat.Poly.Names (GenName(..))
@@ -32,6 +31,7 @@ import Strat.Poly.Graph
   , unionDisjointIntMap
   , diagramIsoEq
   )
+import Test.Poly.Helpers (mkModes)
 
 
 tests :: TestTree
@@ -93,7 +93,7 @@ testCompMismatch = do
   let b = tcon mode "B" []
   let g = idD mode [a]
   let f = idD mode [b]
-  case compD g f of
+  case compD (mkModes [mode]) g f of
     Left _ -> pure ()
     Right _ -> assertFailure "expected boundary mismatch"
 
@@ -187,7 +187,7 @@ testApplySubstChase = do
   let b = tvar mode "b"
   let c = tcon mode "C" []
   let subst = M.fromList [(a, TVar b), (b, c)]
-  applySubstTy subst (TVar a) @?= c
+  applySubstTy (mkModes [mode]) subst (TVar a) @?= c
 
 testApplySubstCycle :: Assertion
 testApplySubstCycle = do
@@ -195,13 +195,13 @@ testApplySubstCycle = do
   let a = tvar mode "a"
   let b = tvar mode "b"
   let subst = M.fromList [(a, TVar b), (b, TVar a)]
-  applySubstTy subst (TVar a) @?= TVar a
+  applySubstTy (mkModes [mode]) subst (TVar a) @?= TVar a
 
 testNormalizeSubstIdentity :: Assertion
 testNormalizeSubstIdentity = do
   let mode = ModeName "M"
   let a = tvar mode "a"
-  normalizeSubst (M.fromList [(a, TVar a)]) @?= M.empty
+  normalizeSubst (mkModes [mode]) (M.fromList [(a, TVar a)]) @?= M.empty
 
 testDiagramIsoBoxName :: Assertion
 testDiagramIsoBoxName = do
@@ -233,7 +233,7 @@ testDuplicateGenTyVars = do
         }
   let doc = Doctrine
         { dName = "DupGenTyVars"
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes [mode]
         , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = []
@@ -258,7 +258,7 @@ testDuplicateCellTyVars = do
         }
   let doc = Doctrine
         { dName = "DupCellTyVars"
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes [mode]
         , dTypes = M.empty
         , dGens = M.empty
         , dCells2 = [cell]
@@ -293,7 +293,7 @@ testRejectRHSTyVars = do
         }
   let doc = Doctrine
         { dName = "D"
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes [mode]
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
@@ -328,7 +328,7 @@ testAcceptRHSTyVars = do
         }
   let doc = Doctrine
         { dName = "D"
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes [mode]
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
@@ -354,7 +354,7 @@ testRejectEmptyLHS = do
         }
   let doc = Doctrine
         { dName = "D"
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes [mode]
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.empty
         , dCells2 = [cell]

@@ -19,6 +19,7 @@ import Strat.Poly.Cell2
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
 import Strat.Poly.Doctrine (Doctrine(..))
+import Strat.Poly.ModeTheory (emptyModeTheory)
 
 
 data RewriteRule = RewriteRule
@@ -117,7 +118,7 @@ rewriteAll cap rules diag = do
 applyMatch :: RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyMatch rule match host = do
   let lhs = rrLHS rule
-  let rhs = applyAttrSubstDiagram (mAttrSub match) (applySubstDiagram (mTySub match) (rrRHS rule))
+  let rhs = applyAttrSubstDiagram (mAttrSub match) (applySubstDiagram emptyModeTheory (mTySub match) (rrRHS rule))
   host1 <- deleteMatchedEdges host (M.elems (mEdges match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPorts match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs

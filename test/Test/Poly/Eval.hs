@@ -8,7 +8,7 @@ import Test.Tasty.HUnit
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..))
 import Strat.Poly.Graph (Diagram(..), emptyDiagram, freshPort, addEdgePayload, EdgePayload(..), validateDiagram)
@@ -32,6 +32,14 @@ tests =
 tcon :: ModeName -> T.Text -> [TypeExpr] -> TypeExpr
 tcon mode name args = TCon (TypeRef mode (TypeName name)) args
 
+mkModes :: S.Set ModeName -> ModeTheory
+mkModes modes =
+  ModeTheory
+    (M.fromList [ (m, ModeInfo m Linear) | m <- S.toList modes ])
+    M.empty
+    []
+    []
+
 
 testEvalUnknownGen :: Assertion
 testEvalUnknownGen = do
@@ -42,7 +50,7 @@ testEvalUnknownGen = do
     Right d -> pure d
   let doc = Doctrine
         { dName = "NoDup"
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes (S.singleton mode)
         , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
         , dGens = M.empty
         , dCells2 = []
@@ -71,7 +79,7 @@ testEvalMissingModel = do
         }
   let doc = Doctrine
         { dName = "WithDup"
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes (S.singleton mode)
         , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(GenName "dup", dupGen)])]
         , dCells2 = []
@@ -167,7 +175,7 @@ mkCycleDoctrine mode a =
         }
   in Doctrine
       { dName = "Cycle"
-      , dModes = ModeTheory (S.singleton mode) M.empty []
+      , dModes = mkModes (S.singleton mode)
       , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
       , dGens = M.fromList [(mode, M.fromList [(gdName fGen, fGen), (gdName dupGen, dupGen)])]
       , dCells2 = []

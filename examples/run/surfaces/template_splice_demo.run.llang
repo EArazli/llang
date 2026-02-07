@@ -1,0 +1,10 @@
+import "../../lib/surfaces/template_splice_demo.surface.llang";
+
+run main where {
+  doctrine SpliceBase;
+  mode M;
+  surface SpliceSurface;
+  show normalized;
+}
+---
+term{}

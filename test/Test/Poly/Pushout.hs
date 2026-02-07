@@ -9,7 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModName, ModExpr(..), ModDecl(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), mtModes, mtDecls)
 import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD, idD)
@@ -44,7 +44,22 @@ tcon mode name args = TCon (TypeRef mode (TypeName name)) args
 
 identityModeMap :: Doctrine -> M.Map ModeName ModeName
 identityModeMap doc =
-  M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]
+  M.fromList [ (m, m) | m <- M.keys (mtModes (dModes doc)) ]
+
+identityModMap :: Doctrine -> M.Map ModName ModExpr
+identityModMap doc =
+  M.fromList
+    [ (name, ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [name] })
+    | (name, decl) <- M.toList (mtDecls (dModes doc))
+    ]
+
+mkModes :: S.Set ModeName -> ModeTheory
+mkModes modes =
+  ModeTheory
+    (M.fromList [ (m, ModeInfo m Linear) | m <- S.toList modes ])
+    M.empty
+    []
+    []
 
 
 testPushoutDedupByBody :: Assertion
@@ -91,7 +106,7 @@ mkDoctrine mode name tyVar cellName = do
         }
   let doc = Doctrine
         { dName = name
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes (S.singleton mode)
         , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
@@ -114,6 +129,7 @@ mkInclusionMorph name src tgt tyVar =
       , morTgt = tgt
       , morIsCoercion = False
       , morModeMap = identityModeMap src
+      , morModMap = identityModMap src
       , morTypeMap = M.empty
       , morGenMap = genMap
       , morAttrSortMap = M.empty
@@ -189,7 +205,7 @@ mkCellDoctrine mode name cls orient = do
         }
   let doc = Doctrine
         { dName = name
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes (S.singleton mode)
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
@@ -229,7 +245,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
         }
   let doc = Doctrine
         { dName = name
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes (S.singleton mode)
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
         , dCells2 = [cell]
@@ -252,6 +268,7 @@ mkIdMorph name src tgt =
       , morTgt = tgt
       , morIsCoercion = False
       , morModeMap = identityModeMap src
+      , morModMap = identityModMap src
       , morTypeMap = M.empty
       , morGenMap = genMap
       , morAttrSortMap = M.empty
@@ -290,6 +307,7 @@ testPushoutTypePermutationCommutes = do
         , morTgt = left
         , morIsCoercion = False
         , morModeMap = identityModeMap base
+        , morModMap = identityModMap base
         , morTypeMap = M.fromList [(TypeRef mode prod, tmplF)]
         , morGenMap = M.empty
         , morAttrSortMap = M.empty
@@ -302,6 +320,7 @@ testPushoutTypePermutationCommutes = do
         , morTgt = right
         , morIsCoercion = False
         , morModeMap = identityModeMap base
+        , morModMap = identityModMap base
         , morTypeMap = M.empty
         , morGenMap = M.empty
         , morAttrSortMap = M.empty
@@ -330,7 +349,7 @@ testPushoutRejectsModeMap :: Assertion
 testPushoutRejectsModeMap = do
   let modeM = ModeName "M"
   let modeN = ModeName "N"
-  let modes = ModeTheory (S.fromList [modeM, modeN]) M.empty []
+  let modes = mkModes (S.fromList [modeM, modeN])
   let base = Doctrine
         { dName = "Base"
         , dModes = modes
@@ -348,6 +367,7 @@ testPushoutRejectsModeMap = do
         , morTgt = left
         , morIsCoercion = False
         , morModeMap = modeMap
+        , morModMap = identityModMap base
         , morTypeMap = M.empty
         , morGenMap = M.empty
         , morAttrSortMap = M.empty
@@ -360,6 +380,7 @@ testPushoutRejectsModeMap = do
         , morTgt = right
         , morIsCoercion = False
         , morModeMap = modeMap
+        , morModMap = identityModMap base
         , morTypeMap = M.empty
         , morGenMap = M.empty
         , morAttrSortMap = M.empty
@@ -376,7 +397,7 @@ mkTypeDoctrine mode name types = do
   let types' = M.fromList [ (tname, TypeSig (replicate arity mode)) | (tname, arity) <- types ]
   let doc = Doctrine
         { dName = name
-        , dModes = ModeTheory (S.singleton mode) M.empty []
+        , dModes = mkModes (S.singleton mode)
         , dTypes = M.fromList [(mode, types')]
         , dGens = M.empty
         , dCells2 = []

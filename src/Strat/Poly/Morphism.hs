@@ -10,6 +10,7 @@ import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
+import Control.Monad (foldM)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Cell2
@@ -21,7 +22,7 @@ import Strat.Poly.UnifyTy
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), composeMod, normalizeModExpr)
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 
 
@@ -31,6 +32,7 @@ data Morphism = Morphism
   , morTgt    :: Doctrine
   , morIsCoercion :: Bool
   , morModeMap :: M.Map ModeName ModeName
+  , morModMap :: M.Map ModName ModExpr
   , morAttrSortMap :: M.Map AttrSort AttrSort
   , morTypeMap :: M.Map TypeRef TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) Diagram
@@ -77,6 +79,10 @@ applyMorphismTy :: Morphism -> TypeExpr -> Either Text TypeExpr
 applyMorphismTy mor ty =
   case ty of
     TVar v -> TVar <$> mapTyVar mor v
+    TMod me inner -> do
+      inner' <- applyMorphismTy mor inner
+      me' <- mapModExpr mor me
+      normalizeTypeExpr (dModes (morTgt mor)) (TMod me' inner')
     TCon ref args -> do
       args' <- mapM (applyMorphismTy mor) args
       case M.lookup ref (morTypeMap mor) of
@@ -85,7 +91,25 @@ applyMorphismTy mor ty =
           pure (TCon ref' args')
         Just tmpl -> do
           let subst = M.fromList (zip (ttParams tmpl) args')
-          pure (applySubstTy subst (ttBody tmpl))
+          pure (applySubstTy (dModes (morTgt mor)) subst (ttBody tmpl))
+
+mapModExpr :: Morphism -> ModExpr -> Either Text ModExpr
+mapModExpr mor me = do
+  srcMapped <- mapMode mor (meSrc me)
+  tgtMapped <- mapMode mor (meTgt me)
+  let start = ModExpr { meSrc = srcMapped, meTgt = srcMapped, mePath = [] }
+  pieces <- mapM lookupPiece (mePath me)
+  composed <- foldM compose start pieces
+  let normalized = normalizeModExpr (dModes (morTgt mor)) composed
+  if meSrc normalized /= srcMapped || meTgt normalized /= tgtMapped
+    then Left "morphism: mapped modality expression has wrong endpoints"
+    else Right normalized
+  where
+    lookupPiece name =
+      case M.lookup name (morModMap mor) of
+        Nothing -> Left "morphism: missing modality mapping"
+        Just out -> Right out
+    compose acc nxt = composeMod (dModes (morTgt mor)) acc nxt
 
 applyMorphismDiagram :: Morphism -> Diagram -> Either Text Diagram
 applyMorphismDiagram mor diagSrc = do
@@ -101,7 +125,7 @@ applyMorphismDiagram mor diagSrc = do
             case ePayload edgeSrc of
               PGen genName attrsSrc -> do
                 genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
-                subst <- instantiateGen genDecl diagSrc edgeSrc
+                subst <- instantiateGen (dModes (morSrc mor)) genDecl diagSrc edgeSrc
                 substTgt <- mapSubst mor subst
                 case M.lookup (modeSrc, genName) (morGenMap mor) of
                   Nothing -> Left "applyMorphismDiagram: missing generator mapping"
@@ -110,7 +134,7 @@ applyMorphismDiagram mor diagSrc = do
                       then Left "applyMorphismDiagram: generator mapping mode mismatch"
                       else Right ()
                     attrSubst <- instantiateAttrSubst mor genDecl attrsSrc
-                    let instImage0 = applySubstDiagram substTgt image
+                    let instImage0 = applySubstDiagram (dModes (morTgt mor)) substTgt image
                     let instImage = applyAttrSubstDiagram attrSubst instImage0
                     spliceEdge diagTgt edgeKey instImage
               PBox name inner -> do
@@ -135,6 +159,7 @@ mapSubst mor subst = do
 checkMorphism :: Morphism -> Either Text ()
 checkMorphism mor = do
   validateModeMap mor
+  validateModMap mor
   validateAttrSortMap mor
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
   let cells = filter (cellEnabled (morPolicy mor)) (dCells2 (morSrc mor))
@@ -152,14 +177,59 @@ validateModeMap :: Morphism -> Either Text ()
 validateModeMap mor = do
   let srcModes = mtModes (dModes (morSrc mor))
   let tgtModes = mtModes (dModes (morTgt mor))
-  case [ m | m <- S.toList srcModes, M.notMember m (morModeMap mor) ] of
+  case [ m | m <- M.keys srcModes, M.notMember m (morModeMap mor) ] of
     (m:_) -> Left ("checkMorphism: missing mode mapping for " <> renderModeName m)
     [] -> Right ()
-  case [ m | (_, m) <- M.toList (morModeMap mor), m `S.notMember` tgtModes ] of
+  case [ m | (_, m) <- M.toList (morModeMap mor), M.notMember m tgtModes ] of
     (m:_) -> Left ("checkMorphism: unknown target mode " <> renderModeName m)
     [] -> Right ()
   where
     renderModeName (ModeName name) = name
+
+validateModMap :: Morphism -> Either Text ()
+validateModMap mor = do
+  let srcDecls = mtDecls (dModes (morSrc mor))
+  case [ m | (m, _) <- M.toList (morModMap mor), M.notMember m srcDecls ] of
+    (m:_) -> Left ("checkMorphism: unknown source modality " <> renderModName m)
+    [] -> Right ()
+  case [ m | m <- M.keys srcDecls, M.notMember m (morModMap mor) ] of
+    (m:_) -> Left ("checkMorphism: missing modality mapping for " <> renderModName m)
+    [] -> Right ()
+  mapM_ checkOne (M.toList srcDecls)
+  where
+    checkOne (name, decl) = do
+      image <-
+        case M.lookup name (morModMap mor) of
+          Nothing -> Left "checkMorphism: missing modality mapping"
+          Just me -> Right me
+      srcMode <- mapMode mor (mdSrc decl)
+      tgtMode <- mapMode mor (mdTgt decl)
+      if meSrc image /= srcMode || meTgt image /= tgtMode
+        then Left ("checkMorphism: modality mapping mode mismatch for " <> renderModName name)
+        else checkModExprWellTyped (dModes (morTgt mor)) image
+    renderModName (ModName name) = name
+
+checkModExprWellTyped :: ModeTheory -> ModExpr -> Either Text ()
+checkModExprWellTyped mt me = do
+  if M.member (meSrc me) (mtModes mt)
+    then Right ()
+    else Left "checkMorphism: modality expression has unknown source mode"
+  if M.member (meTgt me) (mtModes mt)
+    then Right ()
+    else Left "checkMorphism: modality expression has unknown target mode"
+  end <- walk (meSrc me) (mePath me)
+  if end == meTgt me
+    then Right ()
+    else Left "checkMorphism: ill-typed modality expression"
+  where
+    walk cur [] = Right cur
+    walk cur (m:rest) =
+      case M.lookup m (mtDecls mt) of
+        Nothing -> Left "checkMorphism: modality expression uses unknown modality"
+        Just decl ->
+          if mdSrc decl == cur
+            then walk (mdTgt decl) rest
+            else Left "checkMorphism: modality expression composition mismatch"
 
 validateAttrSortMap :: Morphism -> Either Text ()
 validateAttrSortMap mor = do
@@ -221,7 +291,21 @@ validateAttrSortMap mor = do
 
 modeMapIsIdentity :: Morphism -> Bool
 modeMapIsIdentity mor =
-  all (\m -> M.lookup m (morModeMap mor) == Just m) (S.toList (mtModes (dModes (morSrc mor))))
+  all (\m -> M.lookup m (morModeMap mor) == Just m) (M.keys (mtModes (dModes (morSrc mor))))
+
+modMapIsIdentity :: Morphism -> Bool
+modMapIsIdentity mor =
+  all isIdentity (M.toList (mtDecls (dModes (morSrc mor))))
+  where
+    isIdentity (name, decl) =
+      M.lookup name (morModMap mor)
+        == Just
+          ( ModExpr
+              { meSrc = mdSrc decl
+              , meTgt = mdTgt decl
+              , mePath = [name]
+              }
+          )
 
 attrSortMapIsIdentity :: Morphism -> Bool
 attrSortMapIsIdentity mor =
@@ -249,8 +333,8 @@ checkGenMapping mor gen = do
     else do
       domImg <- diagramDom image
       codImg <- diagramCod image
-      _ <- unifyCtx dom domImg
-      _ <- unifyCtx cod codImg
+      _ <- unifyCtx (dModes (morTgt mor)) dom domImg
+      _ <- unifyCtx (dModes (morTgt mor)) cod codImg
       pure ()
 
 checkCell :: Morphism -> Cell2 -> Either Text ()
@@ -279,6 +363,7 @@ checkCell mor cell = do
 inclusionFastPath :: Morphism -> Either Text Bool
 inclusionFastPath mor
   | not (modeMapIsIdentity mor) = Right False
+  | not (modMapIsIdentity mor) = Right False
   | not (attrSortMapIsIdentity mor) = Right False
   | not (M.null (morTypeMap mor)) = Right False
   | otherwise = do
@@ -314,7 +399,7 @@ inclusionFastPath mor
 
 renamingFastPath :: Morphism -> [Cell2] -> Either Text Bool
 renamingFastPath mor srcCells = do
-  if not (modeMapIsIdentity mor) || not (attrSortMapIsIdentity mor)
+  if not (modeMapIsIdentity mor) || not (modMapIsIdentity mor) || not (attrSortMapIsIdentity mor)
     then Right False
     else do
       let tgt = morTgt mor
@@ -491,6 +576,8 @@ renameTypeExpr ren ty =
     TCon ref args ->
       let ref' = M.findWithDefault ref ref ren
       in TCon ref' (map (renameTypeExpr ren) args)
+    TMod me inner ->
+      TMod me (renameTypeExpr ren inner)
 
 injective :: Ord a => [a] -> Bool
 injective xs =
@@ -533,13 +620,13 @@ lookupGenInMode doc mode name =
     Nothing -> Left "applyMorphismDiagram: unknown generator"
     Just gd -> Right gd
 
-instantiateGen :: GenDecl -> Diagram -> Edge -> Either Text Subst
-instantiateGen gen diag edge = do
+instantiateGen :: ModeTheory -> GenDecl -> Diagram -> Edge -> Either Text Subst
+instantiateGen mt gen diag edge = do
   dom <- mapM (requirePortType diag) (eIns edge)
   cod <- mapM (requirePortType diag) (eOuts edge)
-  s1 <- unifyCtx (gdDom gen) dom
-  s2 <- unifyCtx (applySubstCtx s1 (gdCod gen)) cod
-  pure (composeSubst s2 s1)
+  s1 <- unifyCtx mt (gdDom gen) dom
+  s2 <- unifyCtx mt (applySubstCtx mt s1 (gdCod gen)) cod
+  pure (composeSubst mt s2 s1)
 
 instantiateAttrSubst :: Morphism -> GenDecl -> AttrMap -> Either Text AttrSubst
 instantiateAttrSubst mor gen attrsSrc = do

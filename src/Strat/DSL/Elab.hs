@@ -19,7 +19,7 @@ import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
-import Strat.Poly.ModeTheory (ModeTheory(..))
+import Strat.Poly.ModeTheory (ModeTheory(..), ModDecl(..), ModExpr(..))
 import Strat.Poly.Attr
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePolyCoproduct)
@@ -193,7 +193,7 @@ elabDoctrineEffects env name baseName effects = do
             then Left ("effects: " <> effectName <> ".fromBase must be mode-preserving")
             else Right mor
     modeMapIdentity mor =
-      let modes = S.toList (mtModes (dModes (PolyMorph.morSrc mor)))
+      let modes = M.keys (mtModes (dModes (PolyMorph.morSrc mor)))
       in all (\m -> M.lookup m (PolyMorph.morModeMap mor) == Just m) modes
     pushoutStep (envAcc, prevStep) (idx, mor) = do
       glue <- lookupMorphism envAcc (prevStep <> ".glue")
@@ -355,6 +355,7 @@ buildPolyFromBase baseName newName env newDoc = do
         , PolyMorph.morTgt = newDoc
         , PolyMorph.morIsCoercion = True
         , PolyMorph.morModeMap = identityModeMap baseDoc
+        , PolyMorph.morModMap = identityModMap baseDoc
         , PolyMorph.morAttrSortMap = identityAttrSortMap baseDoc
         , PolyMorph.morTypeMap = M.empty
         , PolyMorph.morGenMap = genMap
@@ -376,6 +377,11 @@ buildPolyFromBase baseName newName env newDoc = do
       img <- genDWithAttrs mode (gdDom gen) (gdCod gen) (gdName gen) attrs
       pure ((mode, gdName gen), img)
     identityModeMap doc =
-      M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]
+      M.fromList [ (m, m) | m <- M.keys (mtModes (dModes doc)) ]
+    identityModMap doc =
+      M.fromList
+        [ (name, ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [name] })
+        | (name, decl) <- M.toList (mtDecls (dModes doc))
+        ]
     identityAttrSortMap doc =
       M.fromList [ (s, s) | s <- M.keys (dAttrSorts doc) ]

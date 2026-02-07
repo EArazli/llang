@@ -102,9 +102,6 @@ testSurfaceLiteralCapture = do
         , "surface NumLit where {"
         , "  doctrine D;"
         , "  mode M;"
-        , "  structural {"
-        , "    discipline: linear;"
-        , "  }"
         , "  lexer {"
         , "    keywords: ;"
         , "    symbols: ;"
@@ -122,7 +119,7 @@ testSurfaceLiteralCapture = do
   env <- require (elabSource src)
   doc <- lookupDoctrine "D" env
   surf <- lookupSurface "NumLit" env
-  diag <- require (elabSurfaceExpr doc surf "42")
+  diag <- require (elabSurfaceExpr emptyEnv doc surf "42")
   payload <- require (singleGenPayload diag)
   payload @?= (GenName "Lit", M.fromList [("n", ATLit (ALInt 42))])
 
@@ -307,9 +304,6 @@ testSurfaceRejectsDirectAttrGenCall = do
         , "surface S where {"
         , "  doctrine D;"
         , "  mode M;"
-        , "  structural {"
-        , "    discipline: linear;"
-        , "  }"
         , "  lexer {"
         , "    keywords: ;"
         , "    symbols: ;"
@@ -327,7 +321,7 @@ testSurfaceRejectsDirectAttrGenCall = do
   env <- require (elabSource src)
   doc <- lookupDoctrine "D" env
   surf <- lookupSurface "S" env
-  case elabSurfaceExpr doc surf "Lit" of
+  case elabSurfaceExpr emptyEnv doc surf "Lit" of
     Left err ->
       assertBool
         "expected explicit rejection for attribute-bearing direct generator calls"
@@ -386,9 +380,6 @@ testSurfaceRejectsConflictingAttrVarSorts = do
         , "surface S where {"
         , "  doctrine D;"
         , "  mode M;"
-        , "  structural {"
-        , "    discipline: linear;"
-        , "  }"
         , "  lexer {"
         , "    keywords: ;"
         , "    symbols: ;"
@@ -406,7 +397,7 @@ testSurfaceRejectsConflictingAttrVarSorts = do
   env <- require (elabSource src)
   doc <- lookupDoctrine "D" env
   surf <- lookupSurface "S" env
-  case elabSurfaceExpr doc surf "u" of
+  case elabSurfaceExpr emptyEnv doc surf "u" of
     Left err ->
       assertBool
         "expected conflicting attribute-variable sorts to be rejected"

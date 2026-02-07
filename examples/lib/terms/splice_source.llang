@@ -1,0 +1,13 @@
+doctrine SpliceBase where {
+  mode M;
+  type A @M;
+  gen f : [A] -> [A] @M;
+  gen g : [A] -> [A] @M;
+}
+
+term SomePredefinedTerm where {
+  doctrine SpliceBase;
+  mode M;
+}
+---
+f ; g

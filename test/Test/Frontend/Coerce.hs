@@ -16,8 +16,9 @@ import Strat.Frontend.Run (RunResult(..), runWithEnv, selectRun)
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Poly.Doctrine (Doctrine(..))
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), mtModes)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), mtModes)
 import Strat.Poly.Morphism (Morphism(..))
+import Test.Poly.Helpers (identityModMap)
 
 
 tests :: TestTree
@@ -35,15 +36,24 @@ mkDoc :: T.Text -> Doctrine
 mkDoc name =
   Doctrine
     { dName = name
-    , dModes = ModeTheory (S.singleton modeM) M.empty []
+    , dModes = mkModes (S.singleton modeM)
+    , dAttrSorts = M.empty
     , dTypes = M.fromList [(modeM, M.empty)]
     , dGens = M.empty
     , dCells2 = []
     }
 
+mkModes :: S.Set ModeName -> ModeTheory
+mkModes modes =
+  ModeTheory
+    (M.fromList [ (m, ModeInfo m Linear) | m <- S.toList modes ])
+    M.empty
+    []
+    []
+
 identityModeMap :: Doctrine -> M.Map ModeName ModeName
 identityModeMap doc =
-  M.fromList [ (m, m) | m <- S.toList (mtModes (dModes doc)) ]
+  M.fromList [ (m, m) | m <- M.keys (mtModes (dModes doc)) ]
 
 mkCoercion :: T.Text -> Doctrine -> Doctrine -> Morphism
 mkCoercion name src tgt =
@@ -53,6 +63,8 @@ mkCoercion name src tgt =
     , morTgt = tgt
     , morIsCoercion = True
     , morModeMap = identityModeMap src
+    , morModMap = identityModMap src
+    , morAttrSortMap = M.empty
     , morTypeMap = M.empty
     , morGenMap = M.empty
     , morPolicy = UseAllOriented

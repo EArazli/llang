@@ -1,0 +1,9 @@
+import "../../lib/modes/lnl.llang";
+
+run main where {
+  doctrine LNL;
+  mode C;
+  show normalized;
+}
+---
+@unitNat

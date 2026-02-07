@@ -25,7 +25,6 @@ polyExamples =
   , "examples/run/terms/cart_monoid.term.run.llang"
   , "examples/run/terms/stlc_bool.term.run.llang"
   , "examples/run/algebra/peano.run.llang"
-  , "examples/run/surfaces/ccc_surface/stlc.lam1.run.llang"
   , "examples/run/surfaces/implements_uses.run.llang"
   ]
 

@@ -1,6 +1,11 @@
 module Strat.Poly.DSL.AST
   ( RawPolyDoctrine(..)
   , RawPolyItem(..)
+  , RawModExpr(..)
+  , RawModalityDecl(..)
+  , RawStructureDecl(..)
+  , RawModEqDecl(..)
+  , RawAdjDecl(..)
   , RawAttrSortDecl(..)
   , RawPolyTypeDecl(..)
   , RawPolyCtorDecl(..)
@@ -18,6 +23,7 @@ module Strat.Poly.DSL.AST
 
 import Data.Text (Text)
 import Strat.Common.Rules (RuleClass, Orientation)
+import Strat.Poly.ModeTheory (VarDiscipline)
 
 
 data RawPolyDoctrine = RawPolyDoctrine
@@ -28,12 +34,42 @@ data RawPolyDoctrine = RawPolyDoctrine
 
 data RawPolyItem
   = RPMode Text
+  | RPStructure RawStructureDecl
+  | RPModality RawModalityDecl
+  | RPModEq RawModEqDecl
+  | RPAdjunction RawAdjDecl
   | RPAttrSort RawAttrSortDecl
   | RPType RawPolyTypeDecl
   | RPData RawPolyDataDecl
   | RPGen RawPolyGenDecl
   | RPRule RawPolyRuleDecl
   deriving (Eq, Show)
+
+data RawModExpr
+  = RMId Text
+  | RMComp [Text]
+  deriving (Eq, Show)
+
+data RawModalityDecl = RawModalityDecl
+  { rmodName :: Text
+  , rmodSrc :: Text
+  , rmodTgt :: Text
+  } deriving (Eq, Show)
+
+data RawStructureDecl = RawStructureDecl
+  { rsMode :: Text
+  , rsDisc :: VarDiscipline
+  } deriving (Eq, Show)
+
+data RawModEqDecl = RawModEqDecl
+  { rmeLHS :: RawModExpr
+  , rmeRHS :: RawModExpr
+  } deriving (Eq, Show)
+
+data RawAdjDecl = RawAdjDecl
+  { raLeft :: Text
+  , raRight :: Text
+  } deriving (Eq, Show)
 
 data RawAttrSortDecl = RawAttrSortDecl
   { rasName :: Text
@@ -92,6 +128,7 @@ data RawTyVarDecl = RawTyVarDecl
 data RawPolyTypeExpr
   = RPTVar Text
   | RPTCon RawTypeRef [RawPolyTypeExpr]
+  | RPTMod RawModExpr RawPolyTypeExpr
   deriving (Eq, Show)
 
 type RawPolyContext = [RawPolyTypeExpr]

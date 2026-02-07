@@ -18,8 +18,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
 
 import Strat.Poly.Surface.Spec
-import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..))
-import Strat.Poly.Names (GenName(..))
+import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
 import Strat.Poly.Attr (AttrLit(..))
 
 
@@ -69,8 +68,6 @@ parseSurfaceSpec input =
 data SpecItem
   = ItemDoctrine Text
   | ItemMode Text
-  | ItemContext Text RawPolyTypeExpr
-  | ItemStructural StructuralSpec
   | ItemLexer LexerSpec
   | ItemExpr ExprSpec
   | ItemElab [ElabRule]
@@ -82,8 +79,6 @@ surfaceSpec = do
         { ssName = ""
         , ssDoctrine = ""
         , ssMode = ""
-        , ssContext = Nothing
-        , ssStructural = defaultStructuralSpec
         , ssLexer = Nothing
         , ssExprSpec = Nothing
         , ssElabRules = M.empty
@@ -99,8 +94,6 @@ surfaceSpec = do
       case item of
         ItemDoctrine t -> spec { ssDoctrine = t }
         ItemMode t -> spec { ssMode = t }
-        ItemContext name ty -> spec { ssContext = Just (name, ty) }
-        ItemStructural s -> spec { ssStructural = s }
         ItemLexer l -> spec { ssLexer = Just l }
         ItemExpr e -> spec { ssExprSpec = Just e }
         ItemElab rules -> spec { ssElabRules = foldl insertRule (ssElabRules spec) rules }
@@ -112,61 +105,10 @@ surfaceItem =
   choice
     [ ItemDoctrine <$> (symbol "doctrine" *> ident <* optionalSemi)
     , ItemMode <$> (symbol "mode" *> ident <* optionalSemi)
-    , ItemContext <$> (symbol "context" *> ident <* symbol "=") <*> (typeExpr <* optionalSemi)
-    , ItemStructural <$> structuralBlock
     , ItemLexer <$> lexerBlock
     , ItemExpr <$> exprBlock
     , ItemElab <$> elaborateBlock
     ]
-
-defaultStructuralSpec :: StructuralSpec
-defaultStructuralSpec =
-  StructuralSpec
-    { ssDiscipline = Cartesian
-    , ssDupGen = Just (GenName "dup")
-    , ssDropGen = Just (GenName "drop")
-    }
-
-data StructuralItem
-  = StructDiscipline VarDiscipline
-  | StructDup GenName
-  | StructDrop GenName
-
-structuralBlock :: Parser StructuralSpec
-structuralBlock = do
-  _ <- symbol "structural"
-  _ <- symbol "{"
-  items <- many structuralItem
-  _ <- symbol "}"
-  let spec0 = StructuralSpec { ssDiscipline = Cartesian, ssDupGen = Nothing, ssDropGen = Nothing }
-  pure (foldl applyStructural spec0 items)
-  where
-    applyStructural spec item =
-      case item of
-        StructDiscipline d -> spec { ssDiscipline = d }
-        StructDup name -> spec { ssDupGen = Just name }
-        StructDrop name -> spec { ssDropGen = Just name }
-
-structuralItem :: Parser StructuralItem
-structuralItem =
-  choice
-    [ StructDiscipline <$> (symbol "discipline" *> symbol ":" *> discipline <* optionalSemi)
-    , StructDup <$> (symbol "dup" *> symbol ":" *> genName <* optionalSemi)
-    , StructDrop <$> (symbol "drop" *> symbol ":" *> genName <* optionalSemi)
-    ]
-
-discipline :: Parser VarDiscipline
-discipline = do
-  name <- ident
-  case name of
-    "linear" -> pure Linear
-    "affine" -> pure Affine
-    "relevant" -> pure Relevant
-    "cartesian" -> pure Cartesian
-    _ -> fail "unknown discipline"
-
-genName :: Parser GenName
-genName = GenName <$> ident
 
 optionalSemi :: Parser ()
 optionalSemi = void (optional (symbol ";"))
@@ -323,6 +265,7 @@ templateTerm =
     , try templateBox
     , try templateLoop
     , try templateHole
+    , try templateTermRef
     , templateGen
     , parens templateExpr
     ]
@@ -366,6 +309,12 @@ templateHole = lexeme $ do
     Nothing -> do
       name <- identRaw
       pure (TVar name)
+
+templateTermRef :: Parser TemplateExpr
+templateTermRef = do
+  _ <- symbol "@"
+  name <- ident
+  pure (TTermRef name)
 
 templateAttrArgs :: Parser [TemplateAttrArg]
 templateAttrArgs = do
@@ -417,29 +366,51 @@ contextExpr = do
   pure tys
 
 typeExpr :: Parser RawPolyTypeExpr
-typeExpr = lexeme $ do
-  name <- identRaw
-  mQual <- optional (try (char '.' *> identRaw))
-  mArgs <- optional (symbol "(" *> typeExpr `sepBy` symbol "," <* symbol ")")
-  case mQual of
-    Just qualName ->
-      let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }
-      in pure (RPTCon ref (maybe [] id mArgs))
-    Nothing ->
-      case T.uncons name of
-        Nothing -> fail "empty type"
-        Just (c, _) ->
-          case mArgs of
-            Just args ->
-              let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-              in pure (RPTCon ref args)
-            Nothing ->
-              if isLowerChar c
-                then pure (RPTVar name)
-                else
-                  let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-                  in pure (RPTCon ref [])
+typeExpr = lexeme (try modApp <|> regular)
   where
+    modApp = do
+      me <- rawModExprComplex
+      _ <- symbol "("
+      inner <- typeExpr
+      _ <- symbol ")"
+      pure (RPTMod me inner)
+    rawModExprComplex =
+      try rawId <|> rawComp
+    rawId = do
+      _ <- symbol "id"
+      _ <- symbol "@"
+      mode <- ident
+      pure (RMId mode)
+    rawComp = do
+      first <- ident
+      _ <- symbol "."
+      second <- ident
+      _ <- symbol "."
+      third <- ident
+      rest <- many (symbol "." *> ident)
+      pure (RMComp (first : second : third : rest))
+    regular = do
+      name <- identRaw
+      mQual <- optional (try (char '.' *> identRaw))
+      mArgs <- optional (symbol "(" *> typeExpr `sepBy` symbol "," <* symbol ")")
+      case mQual of
+        Just qualName ->
+          let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }
+          in pure (RPTCon ref (maybe [] id mArgs))
+        Nothing ->
+          case T.uncons name of
+            Nothing -> fail "empty type"
+            Just (c, _) ->
+              case mArgs of
+                Just args ->
+                  let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
+                  in pure (RPTCon ref args)
+                Nothing ->
+                  if isLowerChar c
+                    then pure (RPTVar name)
+                    else
+                      let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
+                      in pure (RPTCon ref [])
     isLowerChar ch = ch >= 'a' && ch <= 'z'
 
 parens :: Parser a -> Parser a

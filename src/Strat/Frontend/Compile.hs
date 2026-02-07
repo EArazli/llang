@@ -45,7 +45,7 @@ compileDiagramArtifact env targetName mMode mSurface uses morphs policy fuel exp
       surf <- lookupSurface env name
       docSurface <- lookupDoctrine env (psDoctrine surf)
       mode <- resolveMode docSurface mMode (Just surf)
-      diag <- elabSurfaceExpr docSurface surf exprText
+      diag <- elabSurfaceExpr env docSurface surf exprText
       pure (docSurface, mode, diag)
   morphsFromUses <- resolveUses env targetName uses
   (docUsed, diagUsed) <- applyMorphisms env docSurface diag0 morphsFromUses
@@ -93,11 +93,11 @@ resolveMode doc mMode mSurface =
       case mName of
         Just name ->
           let mode = ModeName name
-          in if mode `S.member` mtModes (dModes d)
+          in if M.member mode (mtModes (dModes d))
             then Right mode
             else Left ("unknown mode " <> name)
         Nothing ->
-          case S.toList (mtModes (dModes d)) of
+          case M.keys (mtModes (dModes d)) of
             [m] -> Right m
             [] -> Left "doctrine has no modes"
             _ -> Left "multiple modes; specify mode"

@@ -20,7 +20,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.Graph
-import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.ModeTheory (ModeName, ModeTheory)
 import Strat.Poly.TypeExpr (Context, TypeExpr(..), TyVar)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
@@ -53,17 +53,17 @@ genDWithAttrs mode dom cod gen attrs = do
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
 
-compD :: Diagram -> Diagram -> Either Text Diagram
-compD g f
+compD :: ModeTheory -> Diagram -> Diagram -> Either Text Diagram
+compD mt g f
   | dMode g /= dMode f = Left "diagram composition mode mismatch"
   | otherwise = do
       domG <- diagramDom g
       codF <- diagramCod f
-      subst <- case unifyCtx codF domG of
+      subst <- case unifyCtx mt codF domG of
         Left err -> Left ("diagram composition boundary mismatch: " <> err)
         Right s -> Right s
-      let f' = applySubstDiagram subst f
-      let g' = applySubstDiagram subst g
+      let f' = applySubstDiagram mt subst f
+      let g' = applySubstDiagram mt subst g
       let gShift = shiftDiagram (dNextPort f') (dNextEdge f') g'
       merged <- unionDiagram f' gShift
       let merged' = merged { dIn = dIn f', dOut = dOut gShift }
@@ -111,10 +111,10 @@ diagramCod diag = mapM (lookupPort "diagramCod") (dOut diag)
         Just ty -> Right ty
     portKey (PortId k) = k
 
-applySubstDiagram :: Subst -> Diagram -> Diagram
-applySubstDiagram subst diag =
-  let dPortTy' = IM.map (applySubstTy subst) (dPortTy diag)
-      dEdges' = IM.map (mapEdgePayload subst) (dEdges diag)
+applySubstDiagram :: ModeTheory -> Subst -> Diagram -> Diagram
+applySubstDiagram mt subst diag =
+  let dPortTy' = IM.map (applySubstTy mt subst) (dPortTy diag)
+      dEdges' = IM.map (mapEdgePayload mt subst) (dEdges diag)
   in diag { dPortTy = dPortTy', dEdges = dEdges' }
 
 freeTyVarsDiagram :: Diagram -> S.Set TyVar
@@ -146,12 +146,13 @@ varsInTy ty =
   case ty of
     TVar v -> [v]
     TCon _ args -> concatMap varsInTy args
+    TMod _ inner -> varsInTy inner
 
-mapEdgePayload :: Subst -> Edge -> Edge
-mapEdgePayload subst edge =
+mapEdgePayload :: ModeTheory -> Subst -> Edge -> Edge
+mapEdgePayload mt subst edge =
   case ePayload edge of
     PGen g attrs -> edge { ePayload = PGen g attrs }
-    PBox name inner -> edge { ePayload = PBox name (applySubstDiagram subst inner) }
+    PBox name inner -> edge { ePayload = PBox name (applySubstDiagram mt subst inner) }
 
 applyAttrSubstDiagram :: AttrSubst -> Diagram -> Diagram
 applyAttrSubstDiagram subst diag =

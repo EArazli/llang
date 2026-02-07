@@ -14,16 +14,36 @@ import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import Strat.Poly.Graph
+import qualified Strat.Poly.Diagram as Diag
 import Strat.Poly.Diagram
 import Strat.Poly.Match (Match(..))
 import Strat.Poly.TypeExpr (TyVar(..), TypeExpr(..))
-import Strat.Poly.UnifyTy (Subst, applySubstTy, unifyTyFlex, composeSubst)
+import qualified Strat.Poly.UnifyTy as U
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite (RewriteRule(..))
 import Strat.Poly.Doctrine (Doctrine(..))
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
+import Strat.Poly.ModeTheory (emptyModeTheory)
+
+
+type Subst = U.Subst
+
+applySubstTy0 :: Subst -> TypeExpr -> TypeExpr
+applySubstTy0 = U.applySubstTy emptyModeTheory
+
+unifyTyFlex0 :: S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text Subst
+unifyTyFlex0 = U.unifyTyFlex emptyModeTheory
+
+composeSubst0 :: Subst -> Subst -> Subst
+composeSubst0 = U.composeSubst emptyModeTheory
+
+applySubstDiagram0 :: Subst -> Diagram -> Diagram
+applySubstDiagram0 = Diag.applySubstDiagram emptyModeTheory
+
+diagramIsoMatchWithVars0 :: S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text [(Subst, AttrSubst)]
+diagramIsoMatchWithVars0 = Strat.Poly.Graph.diagramIsoMatchWithVars emptyModeTheory
 
 
 data CPMode = CP_All | CP_OnlyStructural | CP_StructuralVsComputational
@@ -164,8 +184,8 @@ renameRule idx rule =
       attrSuffix = "#" <> idxText
       ren = M.fromList [ (v, TVar (renameTyVar v)) | v <- rrTyVars rule ]
       renameTyVar v = v { tvName = tvName v <> tySuffix }
-      lhsTy' = applySubstDiagram ren (rrLHS rule)
-      rhsTy' = applySubstDiagram ren (rrRHS rule)
+      lhsTy' = applySubstDiagram0 ren (rrLHS rule)
+      rhsTy' = applySubstDiagram0 ren (rrRHS rule)
       lhs' = renameAttrVarsDiagram (<> attrSuffix) lhsTy'
       rhs' = renameAttrVarsDiagram (<> attrSuffix) rhsTy'
       tyvars' = map renameTyVar (rrTyVars rule)
@@ -248,14 +268,14 @@ extendPort l1 l2 flex acc (p1, p2) = do
         then Left "criticalPairs: target port already used"
         else do
           s1 <- unifyPorts l1 l2 flex tySubst p1 p2
-          let tySubst' = composeSubst s1 tySubst
+          let tySubst' = composeSubst0 s1 tySubst
           Right (M.insert p1 p2 portMap, S.insert p2 usedPorts, tySubst', attrSubst)
 
 unifyPorts :: Diagram -> Diagram -> S.Set TyVar -> Subst -> PortId -> PortId -> Either Text Subst
 unifyPorts l1 l2 flex subst p1 p2 = do
   pTy <- requirePortType l1 p1
   hTy <- requirePortType l2 p2
-  unifyTyFlex flex (applySubstTy subst pTy) (applySubstTy subst hTy)
+  unifyTyFlex0 flex (applySubstTy0 subst pTy) (applySubstTy0 subst hTy)
 
 payloadSubsts :: S.Set TyVar -> S.Set AttrVar -> Subst -> AttrSubst -> EdgePayload -> EdgePayload -> Either Text [(Subst, AttrSubst)]
 payloadSubsts tyFlex attrFlex tySubst attrSubst p1 p2 =
@@ -274,13 +294,13 @@ payloadSubsts tyFlex attrFlex tySubst attrSubst p1 p2 =
             Nothing -> Left "criticalPairs: missing attribute field"
             Just term2 -> unifyAttrFlex attrFlex sub term1 term2
     (PBox _ d1, PBox _ d2) -> do
-      let d1' = applyAttrSubstDiagram attrSubst (applySubstDiagram tySubst d1)
-      let d2' = applyAttrSubstDiagram attrSubst (applySubstDiagram tySubst d2)
-      case diagramIsoMatchWithVars tyFlex attrFlex d1' d2' of
+      let d1' = applyAttrSubstDiagram attrSubst (applySubstDiagram0 tySubst d1)
+      let d2' = applyAttrSubstDiagram attrSubst (applySubstDiagram0 tySubst d2)
+      case diagramIsoMatchWithVars0 tyFlex attrFlex d1' d2' of
         Left _ -> Right []
         Right subs ->
           Right
-            [ (composeSubst tySub tySubst, composeAttrSubst attrSub attrSubst)
+            [ (composeSubst0 tySub tySubst, composeAttrSubst attrSub attrSubst)
             | (tySub, attrSub) <- subs
             ]
     _ -> Right []
@@ -314,8 +334,8 @@ buildOverlapHost :: Diagram -> Diagram -> PartialIso -> Either Text (Diagram, Ma
 buildOverlapHost l1 l2 ov = do
   let tySubst = piTySubst ov
   let attrSubst = piAttrSubst ov
-  let l1' = applyAttrSubstDiagram attrSubst (applySubstDiagram tySubst l1)
-  let l2' = applyAttrSubstDiagram attrSubst (applySubstDiagram tySubst l2)
+  let l1' = applyAttrSubstDiagram attrSubst (applySubstDiagram0 tySubst l1)
+  let l2' = applyAttrSubstDiagram attrSubst (applySubstDiagram0 tySubst l2)
   let portMapL2 = M.fromList [ (p2, p1) | (p1, p2) <- M.toList (piPortMap ov) ]
   let edgeMapL2 = M.fromList [ (e2, e1) | (e1, e2) <- M.toList (piEdgeMap ov) ]
   (host1, portMap1, edgeMap1) <- insertEdgesFromL2 l1' l2' portMapL2 edgeMapL2
@@ -438,7 +458,7 @@ danglingOk lhs host match =
 applyRuleAtMatch :: RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyRuleAtMatch rule match host = do
   let lhs = rrLHS rule
-  let rhs = applyAttrSubstDiagram (mAttrSub match) (applySubstDiagram (mTySub match) (rrRHS rule))
+  let rhs = applyAttrSubstDiagram (mAttrSub match) (applySubstDiagram0 (mTySub match) (rrRHS rule))
   host1 <- deleteMatchedEdges host (M.elems (mEdges match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPorts match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs

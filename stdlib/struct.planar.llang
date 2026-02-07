@@ -1,3 +1,4 @@
 doctrine StructPlanar where {
   mode M;
+  structure M = linear;
 }

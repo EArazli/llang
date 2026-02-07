@@ -120,28 +120,51 @@ polyContext = do
   pure tys
 
 polyTypeExpr :: Parser RawPolyTypeExpr
-polyTypeExpr = lexeme $ do
-  name <- identRaw
-  mQual <- optional (try (char '.' *> identRaw))
-  mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
-  case mQual of
-    Just qualName ->
-      let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }
-      in pure (RPTCon ref (maybe [] id mArgs))
-    Nothing ->
-      case T.uncons name of
-        Nothing -> fail "empty type name"
-        Just (c, _) ->
-          case mArgs of
-            Just args ->
-              let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-              in pure (RPTCon ref args)
-            Nothing ->
-              if isLower c
-                then pure (RPTVar name)
-                else
+polyTypeExpr = lexeme (try modApp <|> regular)
+  where
+    modApp = do
+      me <- rawModExprComplex
+      _ <- symbol "("
+      inner <- polyTypeExpr
+      _ <- symbol ")"
+      pure (RPTMod me inner)
+    rawModExprComplex =
+      try rawId <|> rawComp
+    rawId = do
+      _ <- symbol "id"
+      _ <- symbol "@"
+      mode <- ident
+      pure (RMId mode)
+    rawComp = do
+      first <- ident
+      _ <- symbol "."
+      second <- ident
+      _ <- symbol "."
+      third <- ident
+      rest <- many (symbol "." *> ident)
+      pure (RMComp (first : second : third : rest))
+    regular = do
+      name <- identRaw
+      mQual <- optional (try (char '.' *> identRaw))
+      mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
+      case mQual of
+        Just qualName ->
+          let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }
+          in pure (RPTCon ref (maybe [] id mArgs))
+        Nothing ->
+          case T.uncons name of
+            Nothing -> fail "empty type name"
+            Just (c, _) ->
+              case mArgs of
+                Just args ->
                   let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-                  in pure (RPTCon ref [])
+                  in pure (RPTCon ref args)
+                Nothing ->
+                  if isLower c
+                    then pure (RPTVar name)
+                    else
+                      let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
+                      in pure (RPTCon ref [])
 
 -- Helpers
 

@@ -1,0 +1,8 @@
+import "./lnl.llang";
+
+term counitNat where {
+  doctrine LNL;
+  mode L;
+}
+---
+counit_F{L.Nat}

@@ -8,6 +8,7 @@ import Strat.Common.Rules
 import Strat.Model.Spec (MExpr(..))
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.Surface.Parse (surfaceSpecBlock)
+import qualified Strat.Poly.ModeTheory
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Maybe (fromMaybe)
@@ -220,6 +221,10 @@ polyBlock = do
 polyItem :: Parser PolyAST.RawPolyItem
 polyItem =
   polyModeDecl
+    <|> polyStructureDecl
+    <|> polyModalityDecl
+    <|> polyModEqDecl
+    <|> polyAdjDecl
     <|> polyAttrSortDecl
     <|> (PolyAST.RPType <$> polyTypeDecl)
     <|> (PolyAST.RPData <$> polyDataDecl)
@@ -232,6 +237,61 @@ polyModeDecl = do
   name <- ident
   optionalSemi
   pure (PolyAST.RPMode name)
+
+polyStructureDecl :: Parser PolyAST.RawPolyItem
+polyStructureDecl = do
+  _ <- symbol "structure"
+  mode <- ident
+  _ <- symbol "="
+  disc <- discipline
+  optionalSemi
+  pure (PolyAST.RPStructure (PolyAST.RawStructureDecl mode disc))
+  where
+    discipline =
+      (symbol "linear" $> Strat.Poly.ModeTheory.Linear)
+        <|> (symbol "affine" $> Strat.Poly.ModeTheory.Affine)
+        <|> (symbol "relevant" $> Strat.Poly.ModeTheory.Relevant)
+        <|> (symbol "cartesian" $> Strat.Poly.ModeTheory.Cartesian)
+
+polyModalityDecl :: Parser PolyAST.RawPolyItem
+polyModalityDecl = do
+  _ <- symbol "modality"
+  name <- ident
+  _ <- symbol ":"
+  src <- ident
+  _ <- symbol "->"
+  tgt <- ident
+  optionalSemi
+  pure (PolyAST.RPModality (PolyAST.RawModalityDecl name src tgt))
+
+polyModEqDecl :: Parser PolyAST.RawPolyItem
+polyModEqDecl = do
+  _ <- symbol "mod_eq"
+  lhs <- rawModExpr
+  _ <- symbol "->"
+  rhs <- rawModExpr
+  optionalSemi
+  pure (PolyAST.RPModEq (PolyAST.RawModEqDecl lhs rhs))
+
+polyAdjDecl :: Parser PolyAST.RawPolyItem
+polyAdjDecl = do
+  _ <- symbol "adjunction"
+  left <- ident
+  _ <- symbol "dashv"
+  right <- ident
+  optionalSemi
+  pure (PolyAST.RPAdjunction (PolyAST.RawAdjDecl left right))
+
+rawModExpr :: Parser PolyAST.RawModExpr
+rawModExpr =
+  try rawId <|> rawComp
+  where
+    rawId = do
+      _ <- symbol "id"
+      _ <- symbol "@"
+      mode <- ident
+      pure (PolyAST.RMId mode)
+    rawComp = PolyAST.RMComp <$> (ident `sepBy1` symbol ".")
 
 polyAttrSortDecl :: Parser PolyAST.RawPolyItem
 polyAttrSortDecl = do
@@ -370,28 +430,51 @@ polyTyVarList =
     <|> many polyTyVarDeclBare
 
 polyTypeExpr :: Parser PolyAST.RawPolyTypeExpr
-polyTypeExpr = lexeme $ do
-  name <- identRaw
-  mQual <- optional (try (char '.' *> identRaw))
-  mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
-  case mQual of
-    Just qualName ->
-      let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Just name, PolyAST.rtrName = qualName }
-      in pure (PolyAST.RPTCon ref (fromMaybe [] mArgs))
-    Nothing ->
-      case T.uncons name of
-        Nothing -> fail "empty type name"
-        Just (c, _) ->
-          case mArgs of
-            Just args ->
-              let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
-              in pure (PolyAST.RPTCon ref args)
-            Nothing ->
-              if isLower c
-                then pure (PolyAST.RPTVar name)
-                else
+polyTypeExpr = lexeme (try modApp <|> regular)
+  where
+    modApp = do
+      me <- rawModExprComplex
+      _ <- symbol "("
+      inner <- polyTypeExpr
+      _ <- symbol ")"
+      pure (PolyAST.RPTMod me inner)
+    rawModExprComplex =
+      try rawId <|> rawComp
+    rawId = do
+      _ <- symbol "id"
+      _ <- symbol "@"
+      mode <- ident
+      pure (PolyAST.RMId mode)
+    rawComp = do
+      first <- ident
+      _ <- symbol "."
+      second <- ident
+      _ <- symbol "."
+      third <- ident
+      rest <- many (symbol "." *> ident)
+      pure (PolyAST.RMComp (first : second : third : rest))
+    regular = do
+      name <- identRaw
+      mQual <- optional (try (char '.' *> identRaw))
+      mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
+      case mQual of
+        Just qualName ->
+          let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Just name, PolyAST.rtrName = qualName }
+          in pure (PolyAST.RPTCon ref (fromMaybe [] mArgs))
+        Nothing ->
+          case T.uncons name of
+            Nothing -> fail "empty type name"
+            Just (c, _) ->
+              case mArgs of
+                Just args ->
                   let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
-                  in pure (PolyAST.RPTCon ref [])
+                  in pure (PolyAST.RPTCon ref args)
+                Nothing ->
+                  if isLower c
+                    then pure (PolyAST.RPTVar name)
+                    else
+                      let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
+                      in pure (PolyAST.RPTCon ref [])
 
 polyDiagExpr :: Parser PolyAST.RawDiagExpr
 polyDiagExpr = makeExprParser polyDiagTerm operators
@@ -488,6 +571,7 @@ orientation =
 
 data MorphismItem
   = MorphismMode RawPolyModeMap
+  | MorphismModality RawPolyModalityMap
   | MorphismAttrSort RawPolyAttrSortMap
   | MorphismType RawPolyTypeMap
   | MorphismGen RawPolyGenMap
@@ -505,6 +589,7 @@ morphismBlock = do
 morphismItem :: Parser MorphismItem
 morphismItem =
   morphismModeMap
+    <|> morphismModalityMap
     <|> morphismAttrSortMap
     <|> morphismTypeMap
     <|> morphismGenMap
@@ -520,6 +605,15 @@ morphismModeMap = do
   tgt <- ident
   optionalSemi
   pure (MorphismMode (RawPolyModeMap src tgt))
+
+morphismModalityMap :: Parser MorphismItem
+morphismModalityMap = do
+  _ <- symbol "modality"
+  src <- ident
+  _ <- symbol "->"
+  tgt <- rawModExpr
+  optionalSemi
+  pure (MorphismModality (RawPolyModalityMap src tgt))
 
 morphismAttrSortMap :: Parser MorphismItem
 morphismAttrSortMap = do
@@ -583,6 +677,7 @@ buildPolyMorphism name src tgt items =
     , rpmTgt = tgt
     , rpmItems =
         [ RPMMode m | MorphismMode m <- items ]
+          <> [ RPMModality m | MorphismModality m <- items ]
           <> [ RPMAttrSort m | MorphismAttrSort m <- items ]
           <> [ RPMType i | MorphismType i <- items ]
           <> [ RPMGen j | MorphismGen j <- items ]
