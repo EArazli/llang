@@ -13,7 +13,7 @@ The project implements a polygraph-based kernel and a DSL (“llang”) for desc
 3. **Rewriting**: deterministic, fuel‑bounded subdiagram rewriting (DPO‑style).
 4. **Morphisms**: structure‑preserving translations between doctrines, checked by normalization/joinability.
 5. **Surfaces and models**: diagram surfaces (`surface`) and evaluator models (`model`).
-6. **Runs**: diagram‑level normalization/evaluation pipelines (`run`).
+6. **Runs**: diagram‑level normalization/evaluation pipelines (`run_spec` + `run`).
 
 ---
 
@@ -66,6 +66,7 @@ Unification respects modes:
 A **polygraphic doctrine** packages:
 
 - a mode theory,
+- an attribute-sort table (`AttrSort -> AttrSortDecl`),
 - a per-mode type constructor table (`TypeName -> TypeSig`),
 - generator declarations, and
 - 2‑cells (rewrite rules).
@@ -73,20 +74,30 @@ A **polygraphic doctrine** packages:
 Where:
 
 ```
-TypeSig = { tsParams :: [ModeName] }   -- parameter modes
+TypeSig      = { tsParams :: [ModeName] }   -- parameter modes
+AttrLitKind  = int | string | bool
+AttrSortDecl = { asName :: AttrSort, asLitKind :: Maybe AttrLitKind }
 ```
+
+- Attribute sorts may be declared with or without a literal kind.
+- If an attribute sort has no literal kind (`asLitKind = Nothing`), literals of that sort are rejected.
 
 ### 2.1 Generators
 
 A generator declaration is:
 
 ```
-GenDecl = { name, mode, tyvars, dom, cod }
+GenDecl = { name, mode, tyvars, attrs, dom, cod }
+
+attrs :: [(AttrName, AttrSort)]
 ```
 
 - `dom` and `cod` are contexts in the generator’s mode.
 - `tyvars` are schematic type parameters for generic generators.
 - `tyvars` are **binders**: their names are α‑irrelevant, and duplicates are rejected.
+- Attribute field names are distinct within a generator.
+- Every attribute field sort must exist in `dAttrSorts`.
+- Generator instances in diagrams carry exactly the declared attribute fields.
 
 ### 2.2 2‑cells
 
@@ -105,10 +116,16 @@ Cell2 = { name, class, orient, tyvars, lhs, rhs }
 `validateDoctrine` checks:
 
 - referenced modes exist,
+- attribute-sort declarations are well-formed,
 - type constructor arities match,
 - generator domains/codomains are well‑formed,
+- generator attribute fields are well-formed,
 - 2‑cell diagrams validate and have compatible boundaries,
-- all type variables used are declared in the generator or cell scope.
+- all type variables used are declared in the generator or cell scope,
+- every cell satisfies both variable disciplines:
+  `freeTyVars(RHS) ⊆ freeTyVars(LHS)` and
+  `freeAttrVars(RHS) ⊆ freeAttrVars(LHS)`,
+- attribute-variable name/sort hygiene holds (the same variable name cannot appear at multiple sorts).
 
 ---
 
@@ -126,10 +143,21 @@ A diagram is an **open directed hypergraph** with **ports as vertices** and gene
 - **Cycles are allowed**: diagrams need not be acyclic, as long as linearity and boundary
   invariants hold.
 
+Generator payloads carry attributes:
+
+```
+EdgePayload = PGen GenName AttrMap | PBox BoxName Diagram
+AttrMap     = AttrName -> AttrTerm
+AttrTerm    = ATVar AttrVar | ATLit AttrLit
+AttrVar     = { name :: Text, sort :: AttrSort }
+AttrLit     = Int | String | Bool
+```
+
 For a **box** edge, the nested diagram must:
 
 - share the outer diagram’s mode, and
 - have input/output boundary types matching the edge’s input/output port types.
+- recursively carry generator payload attributes by the same representation.
 
 The internal representation (`Strat.Poly.Graph`) stores:
 
@@ -171,7 +199,7 @@ It is enforced after composition, tensor, rewrite steps, and morphism applicatio
 A match is a structure‑preserving embedding of a pattern diagram into a host diagram:
 
 ```
-Match = { mPorts, mEdges, mTySub }
+Match = { mPorts, mEdges, mTySub, mAttrSub }
 ```
 
 Constraints:
@@ -179,7 +207,14 @@ Constraints:
 - generator labels must match,
 - ordered incidences must match,
 - port types unify under `mTySub`,
+- generator attribute key sets must match,
+- corresponding generator attribute terms unify under `mAttrSub`,
 - **dangling condition**: ports internal to the pattern must not connect to host edges outside the matched image.
+
+Attribute unification uses `unifyAttrFlex`:
+
+- flexible variables are exactly `freeAttrVars(LHS)` for the rule being matched,
+- rigid variables (not in that set) must match exactly.
 
 Matching order is deterministic (by edge id, then adjacent edges, then candidate host edges by id).
 
@@ -187,8 +222,12 @@ Boxes are matched **structurally** when the pattern contains a box edge:
 the inner diagrams must be isomorphic up to type‑variable unification and
 boundary order. Box names are ignored.
 
-**Type variable discipline:** for every rule/cell, `freeTyVars(RHS) ⊆ freeTyVars(LHS)`.
-RHS terms cannot introduce fresh type variables.
+Variable discipline for every rule/cell:
+
+- `freeTyVars(RHS) ⊆ freeTyVars(LHS)` (no fresh type variables on RHS),
+- `freeAttrVars(RHS) ⊆ freeAttrVars(LHS)` (no fresh attribute variables on RHS),
+- attribute-variable names are globally sort-consistent within a diagram
+  (name -> sort is a partial function).
 
 ### 4.2 Rewrite step
 
@@ -196,7 +235,7 @@ A rewrite step replaces a matched subdiagram `L` by `R`:
 
 1. Delete the matched edges.
 2. Delete matched **internal** ports (dangling‑safe by construction).
-3. Instantiate `R` by the match substitution.
+3. Instantiate `R` by both match substitutions (`mTySub` and `mAttrSub`).
 4. Insert a fresh copy of `R` and glue its boundary to the matched boundary ports.
 
 **Empty‑LHS rules are disallowed.** Rules must match at least one edge.
@@ -217,7 +256,10 @@ The polygraph kernel computes **critical branchings** (critical pairs) by overla
 rule LHS diagrams:
 
 - Enumerate **connected, non‑empty** partial isomorphisms between two LHS diagrams
-  (respecting generators, incidence order, and box‑structure; types unify under `unifyTyFlex`).
+  (respecting generators, incidence order, and box‑structure; types unify under `unifyTyFlex`,
+  attributes unify under `unifyAttrFlex`).
+- Freshen variables of each rule before overlap search, including **attribute variables**
+  (not only type variables), to avoid accidental capture across rules.
 - Build the **overlap host** by gluing the two LHS diagrams along the overlap.
 - Apply each rule at its induced match in the overlap host, producing a peak
   `O ↠ L` and `O ↠ R`.
@@ -246,6 +288,7 @@ return witnesses (a meeting diagram with rewrite paths).
 A morphism `F : D → E` consists of:
 
 - a **mode map** (a total mapping from source modes to target modes),
+- an **attribute-sort map** (`AttrSort -> AttrSort`),
 - a **mode-indexed type map** (`TypeRef ↦ (a1…an ⊢ τ)` templates),
 - a **mode‑indexed generator map** (`(ModeName, GenName) ↦ Diagram`),
 - rewrite policy and fuel for equation checking.
@@ -257,9 +300,10 @@ To apply `F` to a diagram:
 1. Map the diagram mode using the mode map, and map all port types using the type map
    templates (type‑variable modes are mapped by the mode map; unmapped constructors keep
    their name and only their mode is translated).
-2. For each edge in source mode `m`, instantiate the generator mapping (using unification
-   to recover type parameters), then apply it in target mode `mapMode(m)`.
-3. Splice the mapped diagram into the host by boundary identification.
+2. Map attribute-variable sorts via the attribute-sort map.
+3. For each edge in source mode `m`, instantiate the generator mapping (using unification
+   to recover type parameters and attribute substitutions), then apply it in target mode `mapMode(m)`.
+4. Splice the mapped diagram into the host by boundary identification.
 
 ### 5.2 Morphism checking
 
@@ -274,6 +318,9 @@ This mirrors the implementation’s `checkMorphism` behavior.
 
 The mode map must be total on source modes and must land in modes that exist in the
 target doctrine; generator mappings must elaborate to diagrams in the mapped target mode.
+The attribute-sort map must map used source attribute sorts to existing target sorts.
+Literal-kind preservation is enforced: if a source sort admits literal kind `k`,
+its mapped target sort must also admit `k`.
 
 ---
 
@@ -286,8 +333,9 @@ The DSL introduces `doctrine` blocks and diagram expressions.
 ```
 doctrine <Name> [extends <Base>] where {
   mode <ModeName>;
+  attrsort <SortName> [= int | string | bool];
   type <TypeName> (<tyvar> [, ...]) @<ModeName>;
-  gen  <GenName>  (<tyvar> [, ...]) : <Ctx> -> <Ctx> @<ModeName>;
+  gen  <GenName>  (<tyvar> [, ...]) [ { f1:S1, ..., fk:Sk } ] : <Ctx> -> <Ctx> @<ModeName>;
   rule <class> <RuleName> <orient> (<tyvar> [, ...]) : <Ctx> -> <Ctx> @<ModeName> =
     <DiagExpr> == <DiagExpr>;
 }
@@ -295,6 +343,9 @@ doctrine <Name> [extends <Base>] where {
 
 - A tyvar binder is `a` or `a@Mode`. If the mode is omitted, it defaults to the declaration mode.
 - Binder lists may be empty or omitted when no parameters are needed.
+- `attrsort S = int|string|bool;` declares a literal-admitting sort.
+- `attrsort S;` declares a sort with no literal kind (literals are rejected at that sort).
+- Generator attribute blocks `{ ... }` are optional; when present, each entry is `field:Sort`.
 
 Inside doctrine blocks, `data` is syntactic sugar for a type plus constructor generators:
 
@@ -365,6 +416,7 @@ doctrine Combined = effects Base { E1, E2, ... };
 ```
 morphism <Name> : <Src> -> <Tgt> where {
   mode <SrcMode> -> <TgtMode>;
+  attrsort <SrcSort> -> <TgtSort>;
   type <SrcType>(<tyvar> [, ...]) @<Mode> -> <TgtTypeExpr> @<Mode>;
   gen  <SrcGen>  @<Mode> -> <DiagExpr>;
   coercion;
@@ -377,6 +429,7 @@ morphism <Name> : <Src> -> <Tgt> where {
 - Mode mappings are optional; if omitted, each source mode maps to the same‑named target
   mode (and it is an error if that target mode does not exist).
 - The mode map is total on source modes; duplicate mode mappings are rejected.
+- Attrsort mappings are optional; if omitted, source sorts map to same‑named target sorts.
 - Type mappings are **templates with explicit binders**: the RHS may be any type expression
   whose free variables are a subset of `{a1,...,an}`.
 - Binder modes are checked against the source type's mode signature **mapped by the mode map**.
@@ -384,6 +437,10 @@ morphism <Name> : <Src> -> <Tgt> where {
 - When a morphism is used as a **pushout leg**, its type mappings must be **invertible renamings**
   (constructor rename + parameter permutation).
 - Generator mappings must elaborate to diagrams in the target doctrine/mode `mapMode(<Mode>)`.
+- Generator mappings may use target generator attribute arguments; attribute terms are
+  identifiers or literals (`int`, `string`, `bool`) under the target field sorts.
+- Attrsort mappings must preserve literal kinds (`int`, `string`, `bool`) when the source
+  sort declares one.
 - `coercion;` marks the morphism as eligible for implicit coercion paths (no change to morphism
   checking). Morphisms generated by `extends`, `pushout`, and `coproduct` are marked coercions.
 
@@ -401,13 +458,28 @@ morphism <Name> : <Src> -> <Tgt> where {
 
 ```
 id[<Ctx>]
-<GenName>{<Ty>,...}   -- optional type arguments
+<GenName>{<Ty>,...}(<AttrArgs>)   -- optional type args; optional attr args
 @<TermName>           -- splice a named term
 box <Name> { <d> }    -- boxed subdiagram
 loop { <d> }          -- feedback: connects the single output of <d> to its single input
 <d1> ; <d2>           -- composition (first d1 then d2)
 <d1> * <d2>           -- tensor
 ```
+
+Generator calls:
+
+- Type arguments `{...}` are optional.
+- Attribute arguments `(...)` are optional syntactically, but required when the generator
+  declares attributes, and disallowed when it declares none.
+- Attribute arguments must be either all named or all positional:
+
+```
+<AttrArgs> ::= <AttrArg> (, <AttrArg>)*
+<AttrArg>  ::= <AttrName> = <AttrTerm> | <AttrTerm>
+<AttrTerm> ::= <ident> | <int> | <string> | true | false
+```
+
+- Positional attribute arguments must have exactly the declared field count.
 
 Composition/tensor are parsed with the usual precedence (`*` binds tighter than `;`).
 
@@ -476,6 +548,7 @@ structural {
 - `relevant`/`cartesian` require `dup`; `affine`/`cartesian` require `drop`.
 - The configured `dup` and `drop` generators must exist in the surface mode and have
   the shapes `dup(a) : a → (a, a)` and `drop(a) : a → []`.
+- The configured `dup` and `drop` generators must not declare attributes.
 
 #### Lexer
 
@@ -507,6 +580,9 @@ Patterns are sequences of items:
 
 ```
 ident       -- identifier capture
+int         -- integer literal capture
+string      -- string literal capture
+bool        -- boolean literal capture
 <expr>      -- expression capture
 <type>      -- type capture
 "literal"   -- exact token match
@@ -516,6 +592,7 @@ Actions construct the surface AST:
 
 - `=> <expr>` returns the single captured expression (exactly one is required).
 - `=> Ctor(a, b, ...)` builds an AST node with the captured items in order.
+- Literal captures become `SALit` nodes.
 
 #### Elaboration rules
 
@@ -534,9 +611,21 @@ generators) plus **placeholders**:
 
 - `$1`, `$2`, ... refer to child elaborations (positional).
 - `$x` refers to a bound variable occurrence (see binding rules below).
+- Template generator calls may include attribute arguments (named or positional), e.g.
+  `Gen{...}(n=#hole, ...)` or `Gen{...}(...)`.
+
+Template attribute terms are:
+
+- literals (`42`, `"x"`, `true`, `false`),
+- variables (`x`, interpreted as an attribute variable at the field’s expected sort),
+- holes (`#name`), filled from captures:
+  - literal capture -> same literal,
+  - identifier capture -> string literal of the identifier text.
 
 A constructor named `CALL` with arguments `(name, arg)` is treated as a generator
 call: `name` is the generator name, and `arg` elaborates to its argument diagram.
+Direct calls via `CALL` or bare identifiers cannot target generators with attributes;
+those must be called from templates that explicitly provide attribute arguments.
 
 #### Binding rules + structural discipline
 
@@ -577,6 +666,11 @@ model <Name> : <Doctrine> where {
 Models use the same expression language for generator clauses. Evaluation is defined
 only for **closed** diagrams (no boundary inputs/outputs).
 
+For each `op Gen(args...)` clause, arguments are passed in this order:
+
+1. generator attributes (field declaration order),
+2. wire inputs (generator domain order).
+
 **Cycles are supported** using SCC‑based evaluation:
 
 - Acyclic components are evaluated concretely via the model clauses.
@@ -589,42 +683,74 @@ only for **closed** diagrams (no boundary inputs/outputs).
 
 Generators (including `dup`, `drop`, and `swap`) are interpreted only via the model
 clauses or the model’s default behavior; no special built‑ins are assumed.
+Attribute variables evaluate to atoms rendered as `name:Sort`.
 
 ---
 
 ## 7. Runs
 
-`run` blocks evaluate diagram expressions or surface programs:
+Runs are configured through `run_spec` and `run`.
 
 ```
-run <Name> where {
-  doctrine <Doctrine>;
-  mode <Mode>;          -- required if the doctrine has multiple modes
-  surface <Surface>;    -- optional; parses with a surface definition
-  uses <Iface>, ...;    -- optional; expands to default interface morphisms
-  model <Model>;        -- optional; required for show value
-  apply <Morphism>;     -- optional; may be repeated, applied in order
-  policy <RewritePolicy>;
-  fuel <N>;
-  show normalized;
-  show input;        -- optional
-  show value;        -- optional, requires model and closed diagram
-  show coherence;    -- optional, prints critical‑pair coherence report
+run_spec <Name> [using <Base>] where { <RunItems> }
+[--- <ExprText> ---]
+
+run <Name> [using <Spec>] [where { <RunItems> }]
+[--- <ExprText> ---]
+```
+
+`<RunItems>` are the same run configuration clauses (`doctrine`, `mode`, `surface`,
+`model`, `apply`, `uses`, `policy`, `fuel`, `show ...`).
+
+Resolution semantics:
+
+1. Resolve `run_spec` inheritance by following `using` recursively.
+2. Reject cycles with error `run_spec inheritance cycle: ...`.
+3. Merge parent -> child at each step.
+4. When a `run` uses a spec, merge resolved spec -> run body.
+
+Merge policy:
+
+- Singleton fields (`doctrine`, `mode`, `surface`, `model`, `policy`, `fuel`):
+  child overrides parent when present.
+- List fields (`uses`, `apply`, `show`):
+  concatenate in implemented order: parent list first, then child list.
+- Expression:
+  - use the run body if present;
+  - otherwise inherit the first available body from the resolved `run_spec` chain;
+  - if no body exists after merge, error `run: missing expression`.
+
+Execution pipeline for the effective run configuration:
+
+1. Parse either a diagram expression or a surface program.
+2. Elaborate against the chosen doctrine/mode.
+3. Apply `uses` morphisms and then `apply` morphisms in order.
+4. If needed, coerce to the declared doctrine along a unique shortest coercion path.
+5. Normalize (policy default: `UseStructuralAsBidirectional`).
+6. Optionally evaluate via the selected model (requires closed diagram).
+7. Optionally check coherence and render its report.
+8. Print requested outputs.
+
+`show cat` is currently not supported.
+
+Example (shared expression via `run_spec`):
+
+```llang
+import "../../lib/codegen/arith_literals.llang";
+
+run_spec Base where {
+  doctrine Arith;
+  mode M;
+  surface ArithInfix;
+  show value;
 }
 ---
-<DiagExpr | SurfaceProgram>
+2 + 3 * 4
+---
+
+run eval using Base where { model Eval; }
+run rpn using Base where { model RPN; }
+run lisp using Base where { model Lisp; }
+run prefix using Base where { model Prefix; }
+run infix using Base where { model Infix; }
 ```
-
-The run pipeline:
-
-1. Parses either a diagram expression or a surface program.
-2. Elaborates it against the chosen doctrine/mode.
-3. Applies any `uses` morphisms and then any `apply` morphisms in order, updating the current doctrine each time.
-4. If the resulting doctrine differs from the declared `doctrine`, attempts to coerce along a
-   **unique shortest** path of coercion morphisms; ambiguity or absence is an error.
-5. Normalizes via the polygraph rewrite engine (filtered by the policy; default `UseStructuralAsBidirectional`).
-6. Optionally evaluates via a model (closed diagrams only, and the model must match the final doctrine).
-7. Optionally checks coherence (critical branchings) and renders a report.
-8. Prints the requested outputs depending on flags.
-
-`show cat` is currently not supported for runs.

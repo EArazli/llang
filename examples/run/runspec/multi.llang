@@ -4,13 +4,9 @@ run_spec Base where {
   doctrine CartMonoid;
   show normalized;
 }
-
-run main using Base
 ---
 dup{A} ; mul
 ---
 
 run beta using Base where { fuel 1; }
----
-dup{A} ; mul
----
+run main using Base;
