@@ -88,11 +88,12 @@ data RawRun = RawRun
   , rrPolicy :: Maybe Text
   , rrFuel :: Maybe Int
   , rrShowFlags :: [RawRunShow]
-  , rrExprText :: Text
+  , rrExprText :: Maybe Text
   } deriving (Eq, Show)
 
-newtype RawRunSpec = RawRunSpec
-  { rrsRun :: RawRun
+data RawRunSpec = RawRunSpec
+  { rrsUsing :: Maybe Text
+  , rrsRun :: RawRun
   } deriving (Eq, Show)
 
 data RawNamedRun = RawNamedRun

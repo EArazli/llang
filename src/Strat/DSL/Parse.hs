@@ -169,10 +169,12 @@ runSpecDecl :: Parser RawDecl
 runSpecDecl = do
   _ <- symbol "run_spec"
   name <- ident
+  mUsing <- optional (symbol "using" *> ident)
   _ <- symbol "where"
   items <- runBlock
+  mExprText <- optional (try runBody)
   optionalSemi
-  pure (DeclRunSpec name (RawRunSpec (buildRun items "")))
+  pure (DeclRunSpec name (RawRunSpec mUsing (buildRun items mExprText)))
 
 runDecl :: Parser RawDecl
 runDecl = do
@@ -180,8 +182,9 @@ runDecl = do
   name <- ident
   using <- optional (symbol "using" *> ident)
   items <- option [] (symbol "where" *> runBlock)
-  exprText <- runBody
-  pure (DeclRun (RawNamedRun name using (buildRun items exprText)))
+  mExprText <- optional (try runBody)
+  optionalSemi
+  pure (DeclRun (RawNamedRun name using (buildRun items mExprText)))
 
 termDecl :: Parser RawDecl
 termDecl = do
@@ -446,8 +449,8 @@ polyAttrTerm =
   choice
     [ PolyAST.RATInt . fromIntegral <$> integer
     , PolyAST.RATString <$> stringLiteral
-    , PolyAST.RATBool True <$ symbol "true"
-    , PolyAST.RATBool False <$ symbol "false"
+    , PolyAST.RATBool True <$ keyword "true"
+    , PolyAST.RATBool False <$ keyword "false"
     , PolyAST.RATVar <$> ident
     ]
 
@@ -687,8 +690,8 @@ runShowItem = do
   optionalSemi
   pure (RunShow flag)
 
-buildRun :: [RunItem] -> Text -> RawRun
-buildRun items exprText =
+buildRun :: [RunItem] -> Maybe Text -> RawRun
+buildRun items mExprText =
   RawRun
     { rrDoctrine = firstJust [ d | RunDoctrine d <- items ]
     , rrMode = firstJust [ m | RunMode m <- items ]
@@ -699,7 +702,7 @@ buildRun items exprText =
     , rrPolicy = firstJust [ p | RunPolicy p <- items ]
     , rrFuel = firstJust [ f | RunFuel f <- items ]
     , rrShowFlags = [ s | RunShow s <- items ]
-    , rrExprText = exprText
+    , rrExprText = mExprText
     }
   where
     firstJust [] = Nothing

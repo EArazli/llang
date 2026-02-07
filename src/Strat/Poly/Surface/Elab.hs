@@ -17,7 +17,7 @@ import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Context, typeMode)
 import qualified Strat.Poly.TypeExpr as Ty
 import Strat.Poly.UnifyTy (Subst, applySubstTy, applySubstCtx, unifyTyFlex, composeSubst)
-import Strat.Poly.Diagram (Diagram(..), idD, diagramDom, diagramCod, freeTyVarsDiagram, applySubstDiagram)
+import Strat.Poly.Diagram (Diagram(..), idD, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
 import Strat.Poly.Attr
 import Strat.Poly.Graph
   ( PortId(..)
@@ -44,7 +44,10 @@ elabSurfaceExpr doc surf src = do
   env0 <- initEnv doc (psMode surf) spec
   diag <- evalFresh (elabAst doc (psMode surf) spec ops env0 ast)
   if M.null (sdUses diag)
-    then validateDiagram (sdDiag diag) >> pure (sdDiag diag)
+    then do
+      validateDiagram (sdDiag diag)
+      ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (sdDiag diag))
+      pure (sdDiag diag)
     else Left "surface: unresolved variables"
 
 
@@ -222,16 +225,22 @@ requireGen doc mode name =
 
 ensureDupShape :: GenDecl -> Either Text ()
 ensureDupShape gen =
-  case (gdTyVars gen, gdDom gen, gdCod gen) of
-    ([v], [Ty.TVar v1], [Ty.TVar v2, Ty.TVar v3])
-      | v == v1 && v == v2 && v == v3 -> Right ()
-    _ -> Left "surface structural: configured dup generator has wrong type"
+  if not (null (gdAttrs gen))
+    then Left "surface: structural generator dup/drop must not declare attributes"
+    else
+      case (gdTyVars gen, gdDom gen, gdCod gen) of
+        ([v], [Ty.TVar v1], [Ty.TVar v2, Ty.TVar v3])
+          | v == v1 && v == v2 && v == v3 -> Right ()
+        _ -> Left "surface structural: configured dup generator has wrong type"
 
 ensureDropShape :: GenDecl -> Either Text ()
 ensureDropShape gen =
-  case (gdTyVars gen, gdDom gen, gdCod gen) of
-    ([v], [Ty.TVar v1], []) | v == v1 -> Right ()
-    _ -> Left "surface structural: configured drop generator has wrong type"
+  if not (null (gdAttrs gen))
+    then Left "surface: structural generator dup/drop must not declare attributes"
+    else
+      case (gdTyVars gen, gdDom gen, gdCod gen) of
+        ([v], [Ty.TVar v1], []) | v == v1 -> Right ()
+        _ -> Left "surface structural: configured drop generator has wrong type"
 
 
 
@@ -258,6 +267,7 @@ elabAst doc mode spec cart env ast =
 elabZeroArgGen :: Doctrine -> ModeName -> ElabEnv -> Text -> Fresh SurfDiag
 elabZeroArgGen doc mode env name = do
   gen <- liftEither (lookupGen doc mode (GenName name))
+  liftEither (ensureDirectGenCallAttrs gen)
   if null (gdDom gen)
     then do
       diag <- genDFromDecl mode env gen Nothing M.empty
@@ -275,6 +285,7 @@ elabCall doc mode _spec _cart env args =
 
 buildGenCall :: Doctrine -> ModeName -> ElabEnv -> GenDecl -> SurfDiag -> Fresh SurfDiag
 buildGenCall _doc mode env gen argDiag = do
+  liftEither (ensureDirectGenCallAttrs gen)
   argTypes <- liftEither (diagramCod (sdDiag argDiag))
   renameSubst <- freshSubst (gdTyVars gen)
   let dom0 = applySubstCtx renameSubst (gdDom gen)
@@ -297,6 +308,12 @@ buildGenCall _doc mode env gen argDiag = do
       case ty of
         Ty.TVar v -> S.singleton v
         Ty.TCon _ xs -> S.unions (map freeTyVarsTy xs)
+
+ensureDirectGenCallAttrs :: GenDecl -> Either Text ()
+ensureDirectGenCallAttrs gen =
+  if null (gdAttrs gen)
+    then Right ()
+    else Left "surface: generator requires attribute arguments; supply via an elaboration rule/template"
 
 elabNode :: Doctrine -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> ElabRule -> [SurfaceAST] -> Fresh SurfDiag
 elabNode doc mode spec cart env rule args = do
@@ -856,10 +873,12 @@ connectUses ops varName source ty uses sd =
             (Left ("surface: variable " <> varName <> " duplicated (uses " <> T.pack (show (length uses)) <> ") under " <> renderDiscipline disc))
   where
     addDrop dropGen = do
+      liftEither (ensureStructuralGenAttrs dropGen)
       let diag0 = sdDiag sd
       diag1 <- liftEither (addEdgePayload (PGen (gdName dropGen) M.empty) [source] [] diag0)
       pure sd { sdDiag = diag1 }
     addDup dupGen = do
+      liftEither (ensureStructuralGenAttrs dupGen)
       (outs, diag1) <- dupOutputs dupGen source ty (sdDiag sd) (length uses)
       let sd1 = sd { sdDiag = diag1 }
       foldM mergeOne sd1 (zip outs uses)
@@ -886,6 +905,7 @@ mergePortsAll keep drop sd = do
 
 dupOutputs :: GenDecl -> PortId -> TypeExpr -> Diagram -> Int -> Fresh ([PortId], Diagram)
 dupOutputs dupGen source ty diag n
+  | not (null (gdAttrs dupGen)) = liftEither (Left "surface: structural generator dup/drop must not declare attributes")
   | n <= 0 = pure ([], diag)
   | n == 1 = pure ([source], diag)
   | otherwise = do
@@ -894,6 +914,12 @@ dupOutputs dupGen source ty diag n
       diag3 <- liftEither (addEdgePayload (PGen (gdName dupGen) M.empty) [source] [p1, p2] diag2)
       (rest, diag4) <- dupOutputs dupGen p2 ty diag3 (n - 1)
       pure (p1:rest, diag4)
+
+ensureStructuralGenAttrs :: GenDecl -> Either Text ()
+ensureStructuralGenAttrs gen =
+  if null (gdAttrs gen)
+    then Right ()
+    else Left "surface: structural generator dup/drop must not declare attributes"
 
 
 -- Template helpers

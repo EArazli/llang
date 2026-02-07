@@ -181,8 +181,43 @@ validateAttrSortMap mor = do
   case [ s | s <- S.toList usedSrcSorts, M.notMember s (morAttrSortMap mor) ] of
     (s:_) -> Left ("checkMorphism: missing attribute sort mapping for " <> renderAttrSort s)
     [] -> Right ()
+  mapM_ (checkLiteralKind srcSorts tgtSorts) (M.toList (morAttrSortMap mor))
   where
     renderAttrSort (AttrSort name) = name
+    renderLitKind kind =
+      case kind of
+        LKInt -> "int"
+        LKString -> "string"
+        LKBool -> "bool"
+    renderMaybeKind mKind =
+      case mKind of
+        Nothing -> "none"
+        Just kind -> renderLitKind kind
+    checkLiteralKind srcSorts tgtSorts (srcSort, tgtSort) = do
+      srcDecl <-
+        case M.lookup srcSort srcSorts of
+          Nothing -> Left "checkMorphism: unknown source attribute sort declaration"
+          Just decl -> Right decl
+      tgtDecl <-
+        case M.lookup tgtSort tgtSorts of
+          Nothing -> Left "checkMorphism: unknown target attribute sort declaration"
+          Just decl -> Right decl
+      case asLitKind srcDecl of
+        Nothing -> Right ()
+        Just srcKind ->
+          case asLitKind tgtDecl of
+            Just tgtKind | tgtKind == srcKind -> Right ()
+            tgtKind ->
+              Left
+                ( "morphism: attrsort mapping changes literal kind: "
+                    <> renderAttrSort srcSort
+                    <> " admits "
+                    <> renderLitKind srcKind
+                    <> ", but "
+                    <> renderAttrSort tgtSort
+                    <> " admits "
+                    <> renderMaybeKind tgtKind
+                )
 
 modeMapIsIdentity :: Morphism -> Bool
 modeMapIsIdentity mor =

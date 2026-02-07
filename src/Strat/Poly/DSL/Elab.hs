@@ -33,6 +33,7 @@ import Strat.RunSpec (RunShow(..), RunSpec(..))
 elabPolyRun :: Text -> RawRun -> Either Text RunSpec
 elabPolyRun name raw = do
   doctrine <- maybe (Left "run: missing doctrine") Right (rrDoctrine raw)
+  exprText <- maybe (Left "run: missing expression") Right (rrExprText raw)
   let fuel = maybe 50 id (rrFuel raw)
   let flags = if null (rrShowFlags raw) then [ShowNormalized] else map toShow (rrShowFlags raw)
   let policyName = maybe "UseStructuralAsBidirectional" id (rrPolicy raw)
@@ -49,7 +50,7 @@ elabPolyRun name raw = do
     , prPolicy = policy
     , prFuel = fuel
     , prShowFlags = flags
-    , prExprText = rrExprText raw
+    , prExprText = exprText
     }
   where
     toShow s =
@@ -498,7 +499,7 @@ elabTypeExpr doc vars expr =
 elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [TyVar] -> RawDiagExpr -> Either Text Diagram
 elabDiagExpr env doc mode ruleVars expr = do
   diag <- evalFresh (build expr)
-  ensureAttrVarNameSorts diag
+  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
   pure diag
   where
     rigid = S.fromList ruleVars
@@ -710,19 +711,6 @@ elabRawAttrTerm doc expectedSort varSorts rawTerm =
       case asLitKind decl of
         Just allowed | allowed == kind -> Right ()
         _ -> Left "attribute sort does not admit this literal kind"
-
-ensureAttrVarNameSorts :: Diagram -> Either Text ()
-ensureAttrVarNameSorts diag =
-  foldl step (Right M.empty) (S.toList (freeAttrVarsDiagram diag)) >> Right ()
-  where
-    step acc var = do
-      mp <- acc
-      case M.lookup (avName var) mp of
-        Nothing -> Right (M.insert (avName var) (avSort var) mp)
-        Just sortName ->
-          if sortName == avSort var
-            then Right mp
-            else Left "attribute variable used with conflicting sorts"
 
 -- Freshening monad
 

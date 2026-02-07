@@ -9,6 +9,9 @@ module Strat.Poly.Attr
   , AttrSubst
   , AttrName
   , AttrMap
+  , renameAttrVar
+  , renameAttrTerm
+  , ensureAttrVarNameSortsDiagram
   , freeAttrVarsTerm
   , freeAttrVarsMap
   , applyAttrSubstTerm
@@ -56,6 +59,28 @@ data AttrTerm
 type AttrSubst = M.Map AttrVar AttrTerm
 type AttrName = Text
 type AttrMap = M.Map AttrName AttrTerm
+
+renameAttrVar :: (Text -> Text) -> AttrVar -> AttrVar
+renameAttrVar rename v = v { avName = rename (avName v) }
+
+renameAttrTerm :: (Text -> Text) -> AttrTerm -> AttrTerm
+renameAttrTerm rename term =
+  case term of
+    ATVar v -> ATVar (renameAttrVar rename v)
+    ATLit _ -> term
+
+ensureAttrVarNameSortsDiagram :: S.Set AttrVar -> Either Text ()
+ensureAttrVarNameSortsDiagram vars =
+  foldl step (Right M.empty) (S.toList vars) >> Right ()
+  where
+    step acc var = do
+      seen <- acc
+      case M.lookup (avName var) seen of
+        Nothing -> Right (M.insert (avName var) (avSort var) seen)
+        Just sortName ->
+          if sortName == avSort var
+            then Right seen
+            else Left "attribute variable used with conflicting sorts"
 
 freeAttrVarsTerm :: AttrTerm -> S.Set AttrVar
 freeAttrVarsTerm term =

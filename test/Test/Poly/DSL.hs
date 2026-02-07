@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
-import Strat.Frontend.Env (emptyEnv, meDoctrines, meMorphisms)
+import Strat.Frontend.Env (emptyEnv, meDoctrines, meMorphisms, meRuns)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
@@ -22,6 +22,7 @@ import Strat.Poly.Rewrite (rulesFromDoctrine, rewriteOnce)
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Poly.Morphism (Morphism(..), checkMorphism)
+import Strat.RunSpec (RunSpec(..))
 import Paths_llang (getDataFileName)
 
 
@@ -37,6 +38,9 @@ tests =
     , testCase "morphism type map unknown binder fails" testTypeMapUnknownVar
     , testCase "morphism type map target mode mismatch fails" testTypeMapTargetModeMismatch
     , testCase "morphism mode map parses and elaborates" testMorphismModeMap
+    , testCase "run inherits expression from run_spec" testRunExprInheritedFromRunSpec
+    , testCase "run_spec inheritance chains expression" testRunSpecInheritanceChain
+    , testCase "run without inherited expression fails" testRunMissingExpressionFails
     ]
 
 testPolyDSLNormalize :: Assertion
@@ -258,3 +262,77 @@ testMorphismModeMap = do
   let modeC = ModeName "C"
   let modeV = ModeName "V"
   M.lookup modeC (morModeMap mor) @?= Just modeV
+
+testRunExprInheritedFromRunSpec :: Assertion
+testRunExprInheritedFromRunSpec = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  type A @M;"
+        , "  gen Lit : [] -> [A] @M;"
+        , "}"
+        , "run_spec Base where {"
+        , "  doctrine D;"
+        , "} "
+        , "---"
+        , "Lit"
+        , "---"
+        , "run main using Base;"
+        ]
+  env <- case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right e -> pure e
+  runSpec <- case M.lookup "main" (meRuns env) of
+    Nothing -> assertFailure "expected run main"
+    Just rs -> pure rs
+  prExprText runSpec @?= "Lit"
+
+testRunSpecInheritanceChain :: Assertion
+testRunSpecInheritanceChain = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  type A @M;"
+        , "  gen Lit : [] -> [A] @M;"
+        , "}"
+        , "run_spec Base where {"
+        , "  doctrine D;"
+        , "}"
+        , "---"
+        , "Lit"
+        , "---"
+        , "run_spec Derived using Base where {"
+        , "}"
+        , "run main using Derived;"
+        ]
+  env <- case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right e -> pure e
+  runSpec <- case M.lookup "main" (meRuns env) of
+    Nothing -> assertFailure "expected run main"
+    Just rs -> pure rs
+  prExprText runSpec @?= "Lit"
+
+testRunMissingExpressionFails :: Assertion
+testRunMissingExpressionFails = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  type A @M;"
+        , "}"
+        , "run main where {"
+        , "  doctrine D;"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertBool "expected missing expression error" ("run: missing expression" `T.isInfixOf` err)
+        Right _ -> assertFailure "expected run elaboration failure"

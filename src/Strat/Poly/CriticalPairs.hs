@@ -8,6 +8,7 @@ module Strat.Poly.CriticalPairs
   ) where
 
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
@@ -87,8 +88,8 @@ allowedPair mode r1 r2 =
 
 criticalPairsForPair :: RuleInfo -> RuleInfo -> Either Text [CriticalPairInfo]
 criticalPairsForPair r1 r2 = do
-  let r1' = renameRule ":0" (riRule r1)
-  let r2' = renameRule ":1" (riRule r2)
+  let r1' = renameRule 0 (riRule r1)
+  let r2' = renameRule 1 (riRule r2)
   let tyFlex = S.fromList (rrTyVars r1' <> rrTyVars r2')
   let attrFlex =
         S.union
@@ -156,13 +157,18 @@ rulesForCellWithClass policy cell =
       , mk "rl" (c2RHS cell) (c2LHS cell)
       ]
 
-renameRule :: Text -> RewriteRule -> RewriteRule
-renameRule suffix rule =
-  let ren = M.fromList [ (v, TVar (renameVar v)) | v <- rrTyVars rule ]
-      renameVar v = v { tvName = tvName v <> suffix }
-      lhs' = applySubstDiagram ren (rrLHS rule)
-      rhs' = applySubstDiagram ren (rrRHS rule)
-      tyvars' = map renameVar (rrTyVars rule)
+renameRule :: Int -> RewriteRule -> RewriteRule
+renameRule idx rule =
+  let idxText = T.pack (show idx)
+      tySuffix = ":" <> idxText
+      attrSuffix = "#" <> idxText
+      ren = M.fromList [ (v, TVar (renameTyVar v)) | v <- rrTyVars rule ]
+      renameTyVar v = v { tvName = tvName v <> tySuffix }
+      lhsTy' = applySubstDiagram ren (rrLHS rule)
+      rhsTy' = applySubstDiagram ren (rrRHS rule)
+      lhs' = renameAttrVarsDiagram (<> attrSuffix) lhsTy'
+      rhs' = renameAttrVarsDiagram (<> attrSuffix) rhsTy'
+      tyvars' = map renameTyVar (rrTyVars rule)
   in rule { rrLHS = lhs', rrRHS = rhs', rrTyVars = tyvars' }
 
 enumerateOverlaps :: S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text [PartialIso]

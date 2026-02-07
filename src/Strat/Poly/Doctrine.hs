@@ -106,6 +106,8 @@ checkCell :: Doctrine -> Cell2 -> Either Text ()
 checkCell doc cell = do
   validateDiagram (c2LHS cell)
   validateDiagram (c2RHS cell)
+  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (c2LHS cell))
+  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (c2RHS cell))
   if IM.size (dEdges (c2LHS cell)) <= 0
     then Left "validateDoctrine: empty LHS rules are disallowed (use an explicit marker generator if you need insertion)"
     else Right ()
@@ -125,6 +127,11 @@ checkCell doc cell = do
       if S.isSubsetOf rhsVars lhsVars
         then Right ()
         else Left "validateDoctrine: RHS introduces fresh type variables"
+      let lhsAttrVars = freeAttrVarsDiagram (c2LHS cell)
+      let rhsAttrVars = freeAttrVarsDiagram (c2RHS cell)
+      if S.isSubsetOf rhsAttrVars lhsAttrVars
+        then Right ()
+        else Left "Cell RHS introduces fresh attribute variables"
       let vars = S.union lhsVars rhsVars
       let allowed = S.fromList (c2TyVars cell)
       if S.isSubsetOf vars allowed

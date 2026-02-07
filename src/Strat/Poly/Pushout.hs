@@ -486,14 +486,14 @@ renameDiagram attrRen tyRen permRen genRen diag = do
       case ePayload edge of
         PGen gen attrs ->
           let gen' = M.findWithDefault gen (mode, gen) genRen
-              attrs' = M.map (renameAttrTerm attrRen) attrs
+              attrs' = M.map (renameAttrSortTerm attrRen) attrs
           in Right edge { ePayload = PGen gen' attrs' }
         PBox name inner -> do
           inner' <- renameDiagram attrRen tyRen permRen genRen inner
           pure edge { ePayload = PBox name inner' }
 
-renameAttrTerm :: AttrSortRenameMap -> AttrTerm -> AttrTerm
-renameAttrTerm ren term =
+renameAttrSortTerm :: AttrSortRenameMap -> AttrTerm -> AttrTerm
+renameAttrSortTerm ren term =
   case term of
     ATLit lit -> ATLit lit
     ATVar v ->

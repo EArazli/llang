@@ -36,10 +36,16 @@ lexeme = L.lexeme sc
 symbol :: Text -> Parser Text
 symbol = L.symbol sc
 
+keyword :: Text -> Parser Text
+keyword kw = lexeme (try (string kw <* notFollowedBy identChar))
+
+identChar :: Parser Char
+identChar = satisfy (\x -> isAlphaNum x || x == '_')
+
 identRaw :: Parser Text
 identRaw = lexeme $ do
   c <- letterChar <|> char '_'
-  rest <- many (satisfy (\x -> isAlphaNum x || x == '_'))
+  rest <- many identChar
   pure (T.pack (c:rest))
 
 ident :: Parser Text
@@ -393,8 +399,8 @@ templateAttrTerm =
     [ try attrHole
     , ATLIT . ALInt . fromIntegral <$> integer
     , ATLIT . ALString <$> stringLiteral
-    , ATLIT (ALBool True) <$ symbol "true"
-    , ATLIT (ALBool False) <$ symbol "false"
+    , ATLIT (ALBool True) <$ keyword "true"
+    , ATLIT (ALBool False) <$ keyword "false"
     , ATVar <$> ident
     ]
   where
@@ -580,11 +586,6 @@ literalToken lexSpec tok =
   if tok `elem` lsSymbols lexSpec
     then symbol tok
     else keyword tok
-  where
-    keyword t = lexeme $ do
-      _ <- string t
-      notFollowedBy (satisfy (\c -> isAlphaNum c || c == '_'))
-      pure t
 
 surfaceSpecBlock :: Parser SurfaceSpec
 surfaceSpecBlock = do

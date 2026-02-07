@@ -10,6 +10,7 @@ module Strat.Poly.Diagram
   , diagramCod
   , applySubstDiagram
   , applyAttrSubstDiagram
+  , renameAttrVarsDiagram
   , freeTyVarsDiagram
   , freeAttrVarsDiagram
   ) where
@@ -22,7 +23,7 @@ import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.TypeExpr (Context, TypeExpr(..), TyVar)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap)
+import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
 import Strat.Poly.UnifyTy
 
 
@@ -157,11 +158,22 @@ applyAttrSubstDiagram subst diag =
   let dEdges' = IM.map (mapEdgePayloadAttr subst) (dEdges diag)
   in diag { dEdges = dEdges' }
 
+renameAttrVarsDiagram :: (Text -> Text) -> Diagram -> Diagram
+renameAttrVarsDiagram rename diag =
+  let dEdges' = IM.map (mapEdgePayloadRename rename) (dEdges diag)
+  in diag { dEdges = dEdges' }
+
 mapEdgePayloadAttr :: AttrSubst -> Edge -> Edge
 mapEdgePayloadAttr subst edge =
   case ePayload edge of
     PGen g attrs -> edge { ePayload = PGen g (applyAttrSubstMap subst attrs) }
     PBox name inner -> edge { ePayload = PBox name (applyAttrSubstDiagram subst inner) }
+
+mapEdgePayloadRename :: (Text -> Text) -> Edge -> Edge
+mapEdgePayloadRename rename edge =
+  case ePayload edge of
+    PGen g attrs -> edge { ePayload = PGen g (M.map (renameAttrTerm rename) attrs) }
+    PBox name inner -> edge { ePayload = PBox name (renameAttrVarsDiagram rename inner) }
 
 allocPorts :: Context -> Diagram -> ([PortId], Diagram)
 allocPorts [] diag = ([], diag)

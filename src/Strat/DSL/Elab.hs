@@ -233,13 +233,30 @@ elabRuns env raws = foldM step M.empty raws
         else do
           base <- case rnrUsing raw of
             Nothing -> Right Nothing
-            Just specName ->
-              case M.lookup specName (meRunSpecs env) of
-                Nothing -> Left ("Unknown run_spec: " <> specName)
-                Just spec -> Right (Just (rrsRun spec))
+            Just specName -> Just <$> resolveRunSpec env specName
           let merged = mergeRawRun base (rnrRun raw)
           spec <- elabPolyRun name merged
           pure (M.insert name spec acc)
+
+resolveRunSpec :: ModuleEnv -> Text -> Either Text RawRun
+resolveRunSpec env root = go S.empty [root] root
+  where
+    go seen trail current = do
+      rawSpec <-
+        case M.lookup current (meRunSpecs env) of
+          Nothing -> Left ("Unknown run_spec: " <> current)
+          Just spec -> Right spec
+      base <- case rrsUsing rawSpec of
+        Nothing -> Right Nothing
+        Just parent ->
+          if parent `S.member` seen || parent `elem` trail
+            then
+              Left
+                ( "run_spec inheritance cycle: "
+                    <> T.intercalate " -> " (trail <> [parent])
+                )
+            else Just <$> go (S.insert current seen) (trail <> [parent]) parent
+      pure (mergeRawRun base (rrsRun rawSpec))
 
 elabTerms :: ModuleEnv -> [RawNamedTerm] -> Either Text ModuleEnv
 elabTerms env raws = foldM step env raws
@@ -293,7 +310,7 @@ mergeRawRun base override =
         , rrPolicy = pick rrPolicy
         , rrFuel = pick rrFuel
         , rrShowFlags = rrShowFlags b <> rrShowFlags override
-        , rrExprText = rrExprText override
+        , rrExprText = pick rrExprText
         }
       where
         pick f = case f override of

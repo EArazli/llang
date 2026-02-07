@@ -107,8 +107,8 @@ polyAttrTerm =
   choice
     [ RATInt . fromIntegral <$> integer
     , RATString <$> stringLiteral
-    , RATBool True <$ symbol "true"
-    , RATBool False <$ symbol "false"
+    , RATBool True <$ keyword "true"
+    , RATBool False <$ keyword "false"
     , RATVar <$> ident
     ]
 
@@ -153,6 +153,9 @@ lexeme = L.lexeme sc
 
 symbol :: Text -> Parser Text
 symbol = L.symbol sc
+
+keyword :: Text -> Parser Text
+keyword kw = lexeme (try (string kw <* notFollowedBy identChar))
 
 parens :: Parser a -> Parser a
 parens p = symbol "(" *> p <* symbol ")"
