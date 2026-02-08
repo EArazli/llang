@@ -1,0 +1,63 @@
+doctrine Staging where {
+  mode RT;
+  mode CT;
+
+  structure RT = linear;
+  structure CT = linear;
+
+  modality quote : RT -> CT;
+  modality splice : CT -> RT;
+  mod_eq splice.quote -> id@RT;
+
+  type Nat @RT;
+
+  gen stage : [splice(quote(RT.Nat))] -> [splice(quote(RT.Nat))] @RT;
+}
+
+surface StageExpr where {
+  doctrine Staging;
+  mode RT;
+
+  lexer {
+    keywords: stage;
+    symbols: ;
+  }
+
+  expr {
+    atom:
+      "stage" => STAGE()
+    ;
+  }
+
+  elaborate {
+    STAGE() => stage;;
+  }
+}
+
+doctrine Staging2 where {
+  mode R2;
+  mode C2;
+
+  structure R2 = linear;
+  structure C2 = linear;
+
+  modality Q : R2 -> C2;
+  modality S : C2 -> R2;
+  mod_eq S.Q -> id@R2;
+
+  type Nat @R2;
+
+  gen stage2 : [S(Q(R2.Nat))] -> [S(Q(R2.Nat))] @R2;
+
+  rule computational stage2_id -> : [Nat] -> [Nat] @R2 =
+    stage2 == id[Nat]
+}
+
+morphism StageToStage2 : Staging -> Staging2 where {
+  mode RT -> R2;
+  mode CT -> C2;
+  modality quote -> Q;
+  modality splice -> S;
+  type Nat @RT -> Nat @R2;
+  gen stage @RT -> stage2
+}

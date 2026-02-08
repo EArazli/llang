@@ -1,0 +1,22 @@
+import "../../lib/modes/lnl.llang";
+import "../../lib/modes/lnl.counit.term.llang";
+
+run_spec LNLTypeWalk where {
+  doctrine LNL;
+  show input;
+  show normalized;
+}
+
+run main using LNLTypeWalk where {
+  mode C;
+}
+---
+unit_F{C.Nat}
+---
+
+run counit using LNLTypeWalk where {
+  mode L;
+}
+---
+counit_F{L.Nat}
+---

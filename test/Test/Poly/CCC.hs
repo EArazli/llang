@@ -61,7 +61,7 @@ requireCell name doc =
 assertCellReduces :: Doctrine -> Cell2 -> IO ()
 assertCellReduces doc cell = do
   let rules = rulesFromPolicy UseOnlyComputationalLR (dCells2 doc)
-  status <- case normalize 200 rules (c2LHS cell) of
+  status <- case normalize (dModes doc) 200 rules (c2LHS cell) of
     Left err -> assertFailure (T.unpack err)
     Right st -> pure st
   rhs <- case renumberDiagram (c2RHS cell) of

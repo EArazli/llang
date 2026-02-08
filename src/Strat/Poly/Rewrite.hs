@@ -19,7 +19,7 @@ import Strat.Poly.Cell2
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
 import Strat.Poly.Doctrine (Doctrine(..))
-import Strat.Poly.ModeTheory (emptyModeTheory)
+import Strat.Poly.ModeTheory (ModeTheory)
 
 
 data RewriteRule = RewriteRule
@@ -29,34 +29,34 @@ data RewriteRule = RewriteRule
   , rrTyVars :: [TyVar]
   } deriving (Eq, Show)
 
-rewriteOnce :: [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnce rules diag = do
-  top <- rewriteOnceTop rules diag
+rewriteOnce :: ModeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnce mt rules diag = do
+  top <- rewriteOnceTop mt UseAllOriented rules diag
   case top of
     Just _ -> pure top
-    Nothing -> rewriteOnceInBoxes rules diag
+    Nothing -> rewriteOnceInBoxes mt rules diag
 
-rewriteOnceTop :: [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceTop rules diag = go rules
+rewriteOnceTop :: ModeTheory -> RewritePolicy -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceTop mt _policy rules diag = go rules
   where
     go [] = Right Nothing
     go (r:rs) = do
       if dMode (rrLHS r) /= dMode diag
         then go rs
         else do
-          matches <- findAllMatchesWithTyVars (S.fromList (rrTyVars r)) (rrLHS r) diag
+          matches <- findAllMatchesWithTyVars mt (S.fromList (rrTyVars r)) (rrLHS r) diag
           tryMatches matches
       where
         tryMatches [] = go rs
         tryMatches (m:ms) =
-          case applyMatch r m diag of
+          case applyMatch mt r m diag of
             Left _ -> tryMatches ms
             Right d -> do
               canon <- renumberDiagram d
               pure (Just canon)
 
-rewriteOnceInBoxes :: [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceInBoxes rules diag =
+rewriteOnceInBoxes :: ModeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceInBoxes mt rules diag =
   go (IM.toAscList (dEdges diag))
   where
     go [] = Right Nothing
@@ -64,7 +64,7 @@ rewriteOnceInBoxes rules diag =
       case ePayload edge of
         PGen _ _ -> go rest
         PBox name inner -> do
-          innerRes <- rewriteOnce rules inner
+          innerRes <- rewriteOnce mt rules inner
           case innerRes of
             Nothing -> go rest
             Just inner' -> do
@@ -73,20 +73,20 @@ rewriteOnceInBoxes rules diag =
               canon <- renumberDiagram diag'
               pure (Just canon)
 
-rewriteAll :: Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
-rewriteAll cap rules diag = do
-  top <- rewriteAllTop rules diag
-  inner <- rewriteAllInBoxes cap rules diag
+rewriteAll :: ModeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
+rewriteAll mt cap rules diag = do
+  top <- rewriteAllTop mt rules diag
+  inner <- rewriteAllInBoxes mt cap rules diag
   pure (take cap (top <> inner))
   where
-    rewriteAllTop rules' diag' = go [] rules'
+    rewriteAllTop mt' rules' diag' = go [] rules'
       where
         go acc [] = Right acc
         go acc (r:rs) = do
           if dMode (rrLHS r) /= dMode diag'
             then go acc rs
             else do
-              matches <- findAllMatchesWithTyVars (S.fromList (rrTyVars r)) (rrLHS r) diag'
+              matches <- findAllMatchesWithTyVars mt' (S.fromList (rrTyVars r)) (rrLHS r) diag'
               applied <- foldl collect (Right []) matches
               canon <- mapM renumberDiagram applied
               go (acc <> canon) rs
@@ -95,17 +95,17 @@ rewriteAll cap rules diag = do
               case acc of
                 Left err -> Left err
                 Right ds ->
-                  case applyMatch r m diag' of
+                  case applyMatch mt' r m diag' of
                     Left _ -> Right ds
                     Right d -> Right (ds <> [d])
-    rewriteAllInBoxes cap' rules' diag' = do
+    rewriteAllInBoxes mt' cap' rules' diag' = do
       let edges = IM.toAscList (dEdges diag')
-      fmap concat (mapM (rewriteInEdge cap' rules' diag') edges)
-    rewriteInEdge cap' rules' diag' (edgeKey, edge) =
+      fmap concat (mapM (rewriteInEdge mt' cap' rules' diag') edges)
+    rewriteInEdge mt' cap' rules' diag' (edgeKey, edge) =
       case ePayload edge of
         PGen _ _ -> Right []
         PBox name inner -> do
-          innerRes <- rewriteAll cap' rules' inner
+          innerRes <- rewriteAll mt' cap' rules' inner
           mapM
             (\d -> do
               let edge' = edge { ePayload = PBox name d }
@@ -115,11 +115,12 @@ rewriteAll cap rules diag = do
 
 -- no doctrine needed for matching at the moment
 
-applyMatch :: RewriteRule -> Match -> Diagram -> Either Text Diagram
-applyMatch rule match host = do
+applyMatch :: ModeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
+applyMatch mt rule match host = do
   let lhs = rrLHS rule
-  let rhs = applyAttrSubstDiagram (mAttrSub match) (applySubstDiagram emptyModeTheory (mTySub match) (rrRHS rule))
-  host1 <- deleteMatchedEdges host (M.elems (mEdges match))
+  let host0 = applySubstDiagram mt M.empty host
+  let rhs = applyAttrSubstDiagram (mAttrSub match) (applySubstDiagram mt (mTySub match) (rrRHS rule))
+  host1 <- deleteMatchedEdges host0 (M.elems (mEdges match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPorts match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs
   host3 <- insertDiagram host2 rhsShift

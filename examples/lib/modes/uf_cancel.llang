@@ -1,0 +1,25 @@
+doctrine UFCancel where {
+  mode A;
+  mode B;
+
+  structure A = linear;
+  structure B = linear;
+
+  modality F : A -> B;
+  modality U : B -> A;
+  mod_eq U.F -> id@A;
+
+  type Base @A;
+
+  gen foo : [U(F(A.Base))] -> [U(F(A.Base))] @A;
+
+  rule computational foo_id -> : [Base] -> [Base] @A =
+    foo == id[Base]
+}
+
+term demo where {
+  doctrine UFCancel;
+  mode A;
+}
+---
+foo

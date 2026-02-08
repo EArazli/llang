@@ -1,0 +1,18 @@
+import "../../lib/modes/dual_discipline_surface.llang";
+
+run_spec SharedExpr where {
+  doctrine DualDiscipline;
+  show input;
+  show normalized;
+}
+---
+one ; dup ; sink
+---
+
+run main using SharedExpr where {
+  mode Cart;
+}
+
+run linear using SharedExpr where {
+  mode Lin;
+}

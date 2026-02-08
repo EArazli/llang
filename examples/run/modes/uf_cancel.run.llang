@@ -1,0 +1,10 @@
+import "../../lib/modes/uf_cancel.llang";
+
+run main where {
+  doctrine UFCancel;
+  mode A;
+  show input;
+  show normalized;
+}
+---
+foo

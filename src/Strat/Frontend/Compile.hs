@@ -62,7 +62,7 @@ compileDiagramArtifact env targetName mMode mSurface uses morphs policy fuel exp
     then Right ()
     else Left "unresolved type variables in diagram"
   let rules = rulesFromPolicy policy (dCells2 docFinal)
-  status <- normalize fuel rules diagFinal
+  status <- normalize (dModes docFinal) fuel rules diagFinal
   let norm =
         case status of
           Finished d -> d

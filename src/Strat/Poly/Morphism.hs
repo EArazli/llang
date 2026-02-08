@@ -341,10 +341,11 @@ checkCell :: Morphism -> Cell2 -> Either Text ()
 checkCell mor cell = do
   lhs <- applyMorphismDiagram mor (c2LHS cell)
   rhs <- applyMorphismDiagram mor (c2RHS cell)
+  let mt = dModes (morTgt mor)
   let rules = rulesFromPolicy (morPolicy mor) (dCells2 (morTgt mor))
   let fuel = morFuel mor
-  statusL <- normalize fuel rules lhs
-  statusR <- normalize fuel rules rhs
+  statusL <- normalize mt fuel rules lhs
+  statusR <- normalize mt fuel rules rhs
   case (statusL, statusR) of
     (Finished l, Finished r) ->
       do
@@ -355,7 +356,7 @@ checkCell mor cell = do
           then Right ()
           else Left "checkMorphism: equation violation (normal forms differ)"
     _ -> do
-      ok <- joinableWithin fuel rules lhs rhs
+      ok <- joinableWithin mt fuel rules lhs rhs
       if ok
         then Right ()
         else Left "checkMorphism: equation undecided or violated"

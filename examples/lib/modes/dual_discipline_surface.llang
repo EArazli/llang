@@ -1,0 +1,27 @@
+doctrine DualDiscipline where {
+  mode Lin;
+  mode Cart;
+
+  structure Lin = linear;
+  structure Cart = cartesian;
+
+  type Num @Lin;
+  type Num @Cart;
+
+  gen one : [] -> [Lin.Num] @Lin;
+  gen sink : [Lin.Num, Lin.Num] -> [] @Lin;
+
+  gen one : [] -> [Cart.Num] @Cart;
+  gen sink : [Cart.Num, Cart.Num] -> [] @Cart;
+  gen dup (a@Cart) : [a] -> [a, a] @Cart;
+  gen drop (a@Cart) : [a] -> [] @Cart;
+
+  rule structural coassoc_cart = (a@Cart) : [a] -> [a, a, a] @Cart =
+    dup ; (dup * id[a]) == dup ; (id[a] * dup)
+
+  rule structural counitL_cart = (a@Cart) : [a] -> [a] @Cart =
+    dup ; (drop * id[a]) == id[a]
+
+  rule structural counitR_cart = (a@Cart) : [a] -> [a] @Cart =
+    dup ; (id[a] * drop) == id[a]
+}

@@ -7,6 +7,8 @@ module Strat.Poly.Match
   , findAllMatchesNoDoc
   , findFirstMatchWithTyVars
   , findAllMatchesWithTyVars
+  , findFirstMatchWithTyVarsNoDoc
+  , findAllMatchesWithTyVarsNoDoc
   ) where
 
 import Data.Text (Text)
@@ -48,16 +50,22 @@ findAllMatchesNoDoc :: Diagram -> Diagram -> Either Text [Match]
 findAllMatchesNoDoc lhs host =
   findAllMatchesInternal emptyModeTheory (freeTyVarsDiagram lhs) (freeAttrVarsDiagram lhs) lhs host
 
-findFirstMatchWithTyVars :: S.Set TyVar -> Diagram -> Diagram -> Either Text (Maybe Match)
-findFirstMatchWithTyVars flex lhs host = do
-  matches <- findAllMatchesInternal emptyModeTheory flex (freeAttrVarsDiagram lhs) lhs host
+findFirstMatchWithTyVars :: ModeTheory -> S.Set TyVar -> Diagram -> Diagram -> Either Text (Maybe Match)
+findFirstMatchWithTyVars mt flex lhs host = do
+  matches <- findAllMatchesInternal mt flex (freeAttrVarsDiagram lhs) lhs host
   pure (case matches of
           [] -> Nothing
           (m:_) -> Just m)
 
-findAllMatchesWithTyVars :: S.Set TyVar -> Diagram -> Diagram -> Either Text [Match]
-findAllMatchesWithTyVars flex lhs host =
-  findAllMatchesInternal emptyModeTheory flex (freeAttrVarsDiagram lhs) lhs host
+findAllMatchesWithTyVars :: ModeTheory -> S.Set TyVar -> Diagram -> Diagram -> Either Text [Match]
+findAllMatchesWithTyVars mt flex lhs host =
+  findAllMatchesInternal mt flex (freeAttrVarsDiagram lhs) lhs host
+
+findFirstMatchWithTyVarsNoDoc :: S.Set TyVar -> Diagram -> Diagram -> Either Text (Maybe Match)
+findFirstMatchWithTyVarsNoDoc = findFirstMatchWithTyVars emptyModeTheory
+
+findAllMatchesWithTyVarsNoDoc :: S.Set TyVar -> Diagram -> Diagram -> Either Text [Match]
+findAllMatchesWithTyVarsNoDoc = findAllMatchesWithTyVars emptyModeTheory
 
 findFirstMatchInternal :: ModeTheory -> S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text (Maybe Match)
 findFirstMatchInternal mt tyFlex attrFlex lhs host = do

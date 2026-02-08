@@ -139,7 +139,7 @@ testRewriteAttrSubstitution = do
   env <- require (elabSource src)
   doc <- lookupDoctrine "D" env
   diag <- require (elabDiag doc "IdLit(7)")
-  norm <- require (normalize 10 (rulesFromDoctrine doc) diag)
+  norm <- require (normalize (dModes doc) 10 (rulesFromDoctrine doc) diag)
   out <- case norm of
     Finished d -> pure d
     OutOfFuel _ -> assertFailure "expected rewrite to normalize within fuel" >> pure diag

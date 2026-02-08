@@ -25,6 +25,7 @@ tests =
     [ testCase "modality rewrite normalizes nested modality type" testNormalizeTypeExprByModEq
     , testCase "substitution re-normalizes modality type" testSubstReNormalizes
     , testCase "adjunction auto-generates unit/counit generators" testAdjunctionGens
+    , testCase "structural dup with attributes is rejected directly" testDupAttrsRejected
     ]
 
 testNormalizeTypeExprByModEq :: Assertion
@@ -98,6 +99,23 @@ testAdjunctionGens = do
       dom <- requireEither (normalizeTypeExpr (dModes doc) (TMod fExpr (TMod uExpr (TVar b))))
       gdDom counitGen @?= [dom]
     _ -> assertFailure "counit_F should bind exactly one type variable"
+
+testDupAttrsRejected :: Assertion
+testDupAttrsRejected = do
+  let src = T.unlines
+        [ "doctrine BadStruct where {"
+        , "  mode M;"
+        , "  structure M = cartesian;"
+        , "  attrsort Int = int;"
+        , "  type A @M;"
+        , "  gen dup (a@M) {n:Int} : [a] -> [a, a] @M;"
+        , "  gen drop (a@M) : [a] -> [] @M;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool "expected direct dup-attrs structural error" ("must not declare attributes" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected doctrine validation failure"
 
 buildStagingTheory :: ModeName -> ModeName -> Either T.Text ModeTheory
 buildStagingTheory rt ct = do

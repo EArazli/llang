@@ -10,6 +10,7 @@ module Strat.Poly.Normalize
 import Data.Text (Text)
 import Strat.Poly.Diagram (Diagram)
 import Strat.Poly.Graph (renumberDiagram, diagramIsoEq)
+import Strat.Poly.ModeTheory (ModeTheory)
 import Strat.Poly.Rewrite (RewriteRule, rewriteOnce, rewriteAll)
 
 
@@ -24,40 +25,40 @@ data JoinWitness = JoinWitness
   , jwRight :: [Diagram]
   } deriving (Eq, Show)
 
-normalize :: Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
-normalize fuel rules diag
+normalize :: ModeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
+normalize mt fuel rules diag
   | fuel <= 0 = do
       canon <- renumberDiagram diag
       Right (OutOfFuel canon)
   | otherwise = do
       canon <- renumberDiagram diag
-      step <- rewriteOnce rules canon
+      step <- rewriteOnce mt rules canon
       case step of
         Nothing -> do
           canon' <- renumberDiagram diag
           Right (Finished canon')
         Just diag' -> do
           canon' <- renumberDiagram diag'
-          normalize (fuel - 1) rules canon'
+          normalize mt (fuel - 1) rules canon'
 
-joinableWithin :: Int -> [RewriteRule] -> Diagram -> Diagram -> Either Text Bool
-joinableWithin fuel rules d1 d2
+joinableWithin :: ModeTheory -> Int -> [RewriteRule] -> Diagram -> Diagram -> Either Text Bool
+joinableWithin mt fuel rules d1 d2
   | fuel < 0 = Right False
   | otherwise = do
       let cap = 50
       d1' <- renumberDiagram d1
       d2' <- renumberDiagram d2
-      reach1 <- reachable rules cap fuel d1'
-      reach2 <- reachable rules cap fuel d2'
+      reach1 <- reachable mt rules cap fuel d1'
+      reach2 <- reachable mt rules cap fuel d2'
       anyIso reach1 reach2
 
-joinableWithinWitness :: Int -> [RewriteRule] -> Diagram -> Diagram -> Either Text (Maybe JoinWitness)
-joinableWithinWitness fuel rules d1 d2
+joinableWithinWitness :: ModeTheory -> Int -> [RewriteRule] -> Diagram -> Diagram -> Either Text (Maybe JoinWitness)
+joinableWithinWitness mt fuel rules d1 d2
   | fuel < 0 = Right Nothing
   | otherwise = do
       let cap = 50
-      nodes1 <- reachableWithParents rules cap fuel d1
-      nodes2 <- reachableWithParents rules cap fuel d2
+      nodes1 <- reachableWithParents mt rules cap fuel d1
+      nodes2 <- reachableWithParents mt rules cap fuel d2
       meet <- findMeet nodes1 nodes2
       case meet of
         Nothing -> Right Nothing
@@ -73,8 +74,8 @@ data Node = Node
   , nodeDepth :: Int
   } deriving (Eq, Show)
 
-reachableWithParents :: [RewriteRule] -> Int -> Int -> Diagram -> Either Text [Node]
-reachableWithParents rules cap fuel start = do
+reachableWithParents :: ModeTheory -> [RewriteRule] -> Int -> Int -> Diagram -> Either Text [Node]
+reachableWithParents mt rules cap fuel start = do
   start' <- renumberDiagram start
   go [Node start' Nothing 0] [0]
   where
@@ -86,7 +87,7 @@ reachableWithParents rules cap fuel start = do
           if nodeDepth node >= fuel
             then go nodes rest
             else do
-              next0 <- rewriteAll cap rules (nodeDiag node)
+              next0 <- rewriteAll mt cap rules (nodeDiag node)
               next <- mapM renumberDiagram next0
               (nodes', newIdxs) <- foldl (insertIfNew idx (nodeDepth node + 1)) (Right (nodes, [])) next
               go nodes' (rest <> newIdxs)
@@ -144,8 +145,8 @@ indexMaybe xs i
         (y:_) -> Just y
         [] -> Nothing
 
-reachable :: [RewriteRule] -> Int -> Int -> Diagram -> Either Text [Diagram]
-reachable rules cap fuel start =
+reachable :: ModeTheory -> [RewriteRule] -> Int -> Int -> Diagram -> Either Text [Diagram]
+reachable mt rules cap fuel start =
   do
     start' <- renumberDiagram start
     go [start'] [(start', 0)]
@@ -154,7 +155,7 @@ reachable rules cap fuel start =
     go seen ((d,depth):queue)
       | depth >= fuel = go seen queue
       | otherwise = do
-          next0 <- rewriteAll cap rules d
+          next0 <- rewriteAll mt cap rules d
           next <- mapM renumberDiagram next0
           (seen', new) <- foldl insertIfNew (Right (seen, [])) next
           let queue' = queue <> [(x, depth + 1) | x <- new]

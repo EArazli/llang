@@ -560,6 +560,7 @@ Surface variable-use behavior is derived from the doctrine mode structure only:
 - `cartesian`: both allowed (requires both `dup` and `drop`).
 
 Required structural generator names are fixed: `dup` and `drop`.
+Required structural generators `dup`/`drop` must declare no attributes (`gdAttrs = []`).
 
 #### Lexer
 

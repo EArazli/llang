@@ -73,13 +73,13 @@ testPolyDSLNormalize = do
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   let rules = rulesFromDoctrine doc
-  norm <- case normalize 10 rules diag of
+  norm <- case normalize (dModes doc) 10 rules diag of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case norm of
     Finished d -> do
       -- normalization should agree with a single rewrite step
-      step <- case rewriteOnce rules diag of
+      step <- case rewriteOnce (dModes doc) rules diag of
         Left err -> assertFailure (T.unpack err)
         Right r -> pure r
       case step of

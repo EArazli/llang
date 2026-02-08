@@ -228,12 +228,12 @@ checkStructuralByDiscipline doc =
 
     requireDup mode = do
       dup <- requireNamedGen mode "dup"
-      ensureDupShape dup
+      ensureDupShape mode dup
       Right dup
 
     requireDrop mode = do
       dropGen <- requireNamedGen mode "drop"
-      ensureDropShape dropGen
+      ensureDropShape mode dropGen
       Right dropGen
 
     requireNamedGen mode name =
@@ -241,16 +241,22 @@ checkStructuralByDiscipline doc =
         Nothing -> Left ("validateDoctrine: mode " <> renderModeName mode <> " requires generator " <> name)
         Just gen -> Right gen
 
-    ensureDupShape gen =
-      case (gdTyVars gen, gdDom gen, gdCod gen) of
-        ([v], [TVar v1], [TVar v2, TVar v3])
-          | v == v1 && v == v2 && v == v3 -> Right ()
-        _ -> Left "validateDoctrine: dup must have shape (a@M) : [a] -> [a,a]"
+    ensureDupShape mode gen =
+      if not (null (gdAttrs gen))
+        then Left ("dup in mode " <> renderModeName mode <> " must not declare attributes")
+        else
+          case (gdTyVars gen, gdDom gen, gdCod gen) of
+            ([v], [TVar v1], [TVar v2, TVar v3])
+              | v == v1 && v == v2 && v == v3 -> Right ()
+            _ -> Left "validateDoctrine: dup must have shape (a@M) : [a] -> [a,a]"
 
-    ensureDropShape gen =
-      case (gdTyVars gen, gdDom gen, gdCod gen) of
-        ([v], [TVar v1], []) | v == v1 -> Right ()
-        _ -> Left "validateDoctrine: drop must have shape (a@M) : [a] -> []"
+    ensureDropShape mode gen =
+      if not (null (gdAttrs gen))
+        then Left ("drop in mode " <> renderModeName mode <> " must not declare attributes")
+        else
+          case (gdTyVars gen, gdDom gen, gdCod gen) of
+            ([v], [TVar v1], []) | v == v1 -> Right ()
+            _ -> Left "validateDoctrine: drop must have shape (a@M) : [a] -> []"
 
     requireCoassoc mode = do
       (lhs, rhs) <- lawCoassoc mode

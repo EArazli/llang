@@ -31,9 +31,12 @@ data-files:
 - examples/lib/codegen/minifun/js.llang
 - examples/lib/codegen/minifun/compile.llang
 - examples/lib/effects/combined.llang
+- examples/lib/modes/dual_discipline_surface.llang
 - examples/lib/modes/lnl.counit.term.llang
 - examples/lib/modes/lnl.llang
 - examples/lib/modes/staging.llang
+- examples/lib/modes/staging_mode_map.llang
+- examples/lib/modes/uf_cancel.llang
 - examples/lib/models/bool.models.llang
 - examples/lib/models/peano.models.llang
 - examples/lib/models/pushout/nat_bool.models.llang
@@ -70,9 +73,13 @@ data-files:
 - examples/run/codegen/minifun/concat2.run.llang
 - examples/run/data/list.run.llang
 - examples/run/effects/combined_with_handler.run.llang
+- examples/run/modes/dual_discipline_surface.run.llang
+- examples/run/modes/lnl.typewalk.run.llang
 - examples/run/modes/lnl.counit.run.llang
 - examples/run/modes/lnl.unit.run.llang
 - examples/run/modes/staging.run.llang
+- examples/run/modes/staging_mode_map.run.llang
+- examples/run/modes/uf_cancel.run.llang
 - examples/run/pushout/nat_bool.run.llang
 - examples/run/pushout/nat_bool_plus.run.llang
 - examples/run/pushout/pushout_basic.run.llang

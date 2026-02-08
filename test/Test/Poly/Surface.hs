@@ -9,6 +9,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import Strat.DSL.Parse (parseRawFile)
+import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, ModuleEnv(..), TermDef(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
@@ -17,7 +19,7 @@ import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..))
 import Strat.Poly.Surface.Parse (parseSurfaceSpec)
 import Strat.Poly.Surface (PolySurfaceDef, elabPolySurfaceDecl)
 import Strat.Poly.Surface.Elab (elabSurfaceExpr)
-import Strat.Poly.Diagram (idD)
+import Strat.Poly.Diagram (idD, diagramDom, diagramCod)
 import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..), diagramIsoEq)
 import Test.Poly.Helpers (mkModes)
 
@@ -32,6 +34,7 @@ tests =
     , testCase "surface affine rejects duplication" testSurfaceAffineRejectsDup
     , testCase "surface relevant rejects drop" testSurfaceRelevantRejectsDrop
     , testCase "surface linear rejects duplication and drop" testSurfaceLinearRejectsBoth
+    , testCase "surface composition unifies through mode equations" testSurfaceModeEqComp
     , testCase "template @TermName splice uses module term" testSurfaceTemplateSplice
     ]
 
@@ -197,6 +200,57 @@ testSurfaceLinearRejectsBoth = do
     Left err ->
       assertBool "expected linear drop error" ("dropped" `T.isInfixOf` err && "linear" `T.isInfixOf` err)
     Right _ -> assertFailure "expected linear drop error"
+
+testSurfaceModeEqComp :: Assertion
+testSurfaceModeEqComp = do
+  let src = T.unlines
+        [ "doctrine SurfModes where {"
+        , "  mode A;"
+        , "  mode B;"
+        , "  structure A = linear;"
+        , "  structure B = linear;"
+        , "  modality F : A -> B;"
+        , "  modality U : B -> A;"
+        , "  mod_eq U.F -> id@A;"
+        , "  type Base @A;"
+        , "  gen lift : [] -> [U(F(A.Base))] @A;"
+        , "}"
+        , "surface Seq where {"
+        , "  doctrine SurfModes;"
+        , "  mode A;"
+        , "  lexer {"
+        , "    keywords: lift, baseid;"
+        , "    symbols: \";\";"
+        , "  }"
+        , "  expr {"
+        , "    atom:"
+        , "      \"lift\" => LIFT()"
+        , "    | \"baseid\" => BASEID()"
+        , "    ;"
+        , "    infixl 10 \";\" => SEQ(lhs, rhs);"
+        , "  }"
+        , "  elaborate {"
+        , "    LIFT() => lift;;"
+        , "    BASEID() => id[Base];;"
+        , "    SEQ(a, b) => $1 ; $2;;"
+        , "  }"
+        , "}"
+        ]
+  env <- either (assertFailure . T.unpack) pure (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "SurfModes" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine SurfModes" >> fail "unreachable"
+      Just d -> pure d
+  surf <-
+    case M.lookup "Seq" (meSurfaces env) of
+      Nothing -> assertFailure "missing surface Seq" >> fail "unreachable"
+      Just s -> pure s
+  diag <- either (assertFailure . T.unpack) pure (elabSurfaceExpr emptyEnv doc surf "lift ; baseid")
+  dom <- either (assertFailure . T.unpack) pure (diagramDom diag)
+  cod <- either (assertFailure . T.unpack) pure (diagramCod diag)
+  let base = TCon (TypeRef (ModeName "A") (TypeName "Base")) []
+  dom @?= []
+  cod @?= [base]
 
 testSurfaceTemplateSplice :: Assertion
 testSurfaceTemplateSplice = do
