@@ -24,6 +24,7 @@ tests =
     , testCase "hello_world.run.llang output" (goldenRun "examples/run/algebra/hello_world.run.llang" expectedHelloWorld)
     , testCase "minifun.concat2.run.llang output" (goldenRun "examples/run/codegen/minifun/concat2.run.llang" expectedMiniFunConcat2)
     , testCase "term_ref.run.llang output" (goldenRun "examples/run/terms/term_ref.run.llang" expectedTermRef)
+    , testCase "dual_discipline_surface linear error includes generator and mode" testDualDisciplineLinearError
     ]
 
 
@@ -34,6 +35,17 @@ goldenRun relPath expected = do
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> out @?= expected
+
+testDualDisciplineLinearError :: Assertion
+testDualDisciplineLinearError = do
+  path <- getDataFileName "examples/run/modes/dual_discipline_surface.run.llang"
+  result <- runCLI (CLIOptions path (Just "linear"))
+  case result of
+    Left err -> do
+      assertBool "expected unknown generator prefix" ("run: unknown generator:" `T.isInfixOf` err)
+      assertBool "expected generator name in error" ("dup" `T.isInfixOf` err)
+      assertBool "expected mode name in error" ("Lin" `T.isInfixOf` err)
+    Right out -> assertFailure ("expected linear run to fail, got output:\n" <> T.unpack out)
 
 expectedPlanarMonoid :: Text
 expectedPlanarMonoid =

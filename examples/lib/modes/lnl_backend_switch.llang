@@ -1,0 +1,23 @@
+import "./lnl.llang";
+
+doctrine LNLBackend extends LNL where {
+
+  gen z : [] -> [C.Nat] @C;
+  gen srcFU : [] -> [F(U(L.Nat))] @L;
+}
+
+model LNLTypeWalk : LNLBackend where {
+  default = symbolic;
+  op z() = "C.Nat";
+  op unit_F(x) = ["unit_F", x, "U(F(C.Nat))"];
+  op srcFU() = "F(U(L.Nat))";
+  op counit_F(x) = ["counit_F", x, "L.Nat"];
+}
+
+model LNLCodegenTypes : LNLBackend where {
+  default = symbolic;
+  op z() = "seed:C.Nat";
+  op unit_F(x) = "unit_F : " ++ x ++ " -> U(F(C.Nat))";
+  op srcFU() = "seed:F(U(L.Nat))";
+  op counit_F(x) = "counit_F : " ++ x ++ " -> L.Nat";
+}

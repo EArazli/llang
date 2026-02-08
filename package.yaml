@@ -32,8 +32,11 @@ data-files:
 - examples/lib/codegen/minifun/compile.llang
 - examples/lib/effects/combined.llang
 - examples/lib/modes/dual_discipline_surface.llang
+- examples/lib/modes/dual_discipline_term_surface.llang
+- examples/lib/modes/lnl_backend_switch.llang
 - examples/lib/modes/lnl.counit.term.llang
 - examples/lib/modes/lnl.llang
+- examples/lib/modes/quad_discipline.llang
 - examples/lib/modes/staging.llang
 - examples/lib/modes/staging_mode_map.llang
 - examples/lib/modes/uf_cancel.llang
@@ -74,9 +77,13 @@ data-files:
 - examples/run/data/list.run.llang
 - examples/run/effects/combined_with_handler.run.llang
 - examples/run/modes/dual_discipline_surface.run.llang
+- examples/run/modes/dual_discipline_term_surface.run.llang
+- examples/run/modes/lnl_backend_switch.run.llang
 - examples/run/modes/lnl.typewalk.run.llang
 - examples/run/modes/lnl.counit.run.llang
 - examples/run/modes/lnl.unit.run.llang
+- examples/run/modes/modality_rename_visible.run.llang
+- examples/run/modes/quad_discipline_surface.run.llang
 - examples/run/modes/staging.run.llang
 - examples/run/modes/staging_mode_map.run.llang
 - examples/run/modes/uf_cancel.run.llang
@@ -175,6 +182,7 @@ tests:
     - Test.Poly.Rewrite
     - Test.Poly.DSL
     - Test.Poly.Literals
+    - Test.Poly.CriticalPairs
     - Test.Poly.Morphism
     - Test.Poly.Eval
     - Test.Poly.Pushout

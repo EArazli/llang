@@ -801,8 +801,11 @@ elabDiagExpr env doc mode ruleVars expr = do
 lookupGen :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGen doc mode name =
   case M.lookup mode (dGens doc) >>= M.lookup name of
-    Nothing -> Left "unknown generator"
+    Nothing -> Left ("unknown generator: " <> renderGen name <> " @" <> renderMode mode)
     Just gd -> Right gd
+  where
+    renderMode (ModeName m) = m
+    renderGen (GenName g) = g
 
 unifyBoundary :: ModeTheory -> S.Set TyVar -> Context -> Context -> Diagram -> Either Text Diagram
 unifyBoundary mt rigid dom cod diag = do

@@ -1,0 +1,113 @@
+import "../../lib/modes/quad_discipline.llang";
+
+run main where {
+  doctrine QuadDiscipline;
+  mode Cart;
+  surface QuadCart;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Cart.Base;
+  out pair(x, x)
+}
+---
+
+run rel_dup where {
+  doctrine QuadDiscipline;
+  mode Rel;
+  surface QuadRel;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Rel.Base;
+  out pair(x, x)
+}
+---
+
+run aff_dup where {
+  doctrine QuadDiscipline;
+  mode Aff;
+  surface QuadAff;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Aff.Base;
+  out pair(x, x)
+}
+---
+
+run lin_dup where {
+  doctrine QuadDiscipline;
+  mode Lin;
+  surface QuadLin;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Lin.Base;
+  out pair(x, x)
+}
+---
+
+run cart_drop where {
+  doctrine QuadDiscipline;
+  mode Cart;
+  surface QuadCart;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Cart.Base;
+  out unit
+}
+---
+
+run aff_drop where {
+  doctrine QuadDiscipline;
+  mode Aff;
+  surface QuadAff;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Aff.Base;
+  out unit
+}
+---
+
+run rel_drop where {
+  doctrine QuadDiscipline;
+  mode Rel;
+  surface QuadRel;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Rel.Base;
+  out unit
+}
+---
+
+run lin_drop where {
+  doctrine QuadDiscipline;
+  mode Lin;
+  surface QuadLin;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Lin.Base;
+  out unit
+}
+---

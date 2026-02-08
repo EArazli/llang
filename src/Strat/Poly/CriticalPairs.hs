@@ -3,6 +3,7 @@ module Strat.Poly.CriticalPairs
   ( CPMode(..)
   , CriticalPair(..)
   , CriticalPairInfo(..)
+  , RuleInfo(..)
   , criticalPairsForDoctrine
   , criticalPairsForRules
   ) where
@@ -25,25 +26,10 @@ import Strat.Poly.Doctrine (Doctrine(..))
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
-import Strat.Poly.ModeTheory (emptyModeTheory)
+import Strat.Poly.ModeTheory (ModeTheory)
 
 
 type Subst = U.Subst
-
-applySubstTy0 :: Subst -> TypeExpr -> TypeExpr
-applySubstTy0 = U.applySubstTy emptyModeTheory
-
-unifyTyFlex0 :: S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text Subst
-unifyTyFlex0 = U.unifyTyFlex emptyModeTheory
-
-composeSubst0 :: Subst -> Subst -> Subst
-composeSubst0 = U.composeSubst emptyModeTheory
-
-applySubstDiagram0 :: Subst -> Diagram -> Diagram
-applySubstDiagram0 = Diag.applySubstDiagram emptyModeTheory
-
-diagramIsoMatchWithVars0 :: S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text [(Subst, AttrSubst)]
-diagramIsoMatchWithVars0 = Strat.Poly.Graph.diagramIsoMatchWithVars emptyModeTheory
 
 
 data CPMode = CP_All | CP_OnlyStructural | CP_StructuralVsComputational
@@ -80,10 +66,10 @@ data PartialIso = PartialIso
 
 criticalPairsForDoctrine :: CPMode -> RewritePolicy -> Doctrine -> Either Text [CriticalPairInfo]
 criticalPairsForDoctrine mode policy doc =
-  criticalPairsForRules mode (rulesWithClass policy (dCells2 doc))
+  criticalPairsForRules (dModes doc) mode (rulesWithClass policy (dCells2 doc))
 
-criticalPairsForRules :: CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
-criticalPairsForRules mode rules = do
+criticalPairsForRules :: ModeTheory -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
+criticalPairsForRules mt mode rules = do
   let indexed = zip [0 :: Int ..] rules
   let pairs =
         [ (r1, r2)
@@ -92,7 +78,7 @@ criticalPairsForRules mode rules = do
         , i <= j
         , allowedPairSym mode r1 r2
         ]
-  pairsOut <- fmap concat (mapM (uncurry criticalPairsForPair) pairs)
+  pairsOut <- fmap concat (mapM (uncurry (criticalPairsForPair mt)) pairs)
   dedupCriticalPairs pairsOut
   where
     allowedPairSym m a b = allowedPair m a b || allowedPair m b a
@@ -106,24 +92,24 @@ allowedPair mode r1 r2 =
       (riClass r1 == Structural && riClass r2 == Computational)
         || (riClass r1 == Computational && riClass r2 == Structural)
 
-criticalPairsForPair :: RuleInfo -> RuleInfo -> Either Text [CriticalPairInfo]
-criticalPairsForPair r1 r2 = do
-  let r1' = renameRule 0 (riRule r1)
-  let r2' = renameRule 1 (riRule r2)
+criticalPairsForPair :: ModeTheory -> RuleInfo -> RuleInfo -> Either Text [CriticalPairInfo]
+criticalPairsForPair mt r1 r2 = do
+  let r1' = renameRule mt 0 (riRule r1)
+  let r2' = renameRule mt 1 (riRule r2)
   let tyFlex = S.fromList (rrTyVars r1' <> rrTyVars r2')
   let attrFlex =
         S.union
           (freeAttrVarsDiagram (rrLHS r1'))
           (freeAttrVarsDiagram (rrLHS r2'))
-  overlaps <- enumerateOverlaps tyFlex attrFlex (rrLHS r1') (rrLHS r2')
+  overlaps <- enumerateOverlaps mt tyFlex attrFlex (rrLHS r1') (rrLHS r2')
   fmap concat (mapM (buildPair r1 r2 r1' r2') overlaps)
   where
     buildPair r1Info r2Info rule1 rule2 ov = do
-      (host, match1, match2) <- buildOverlapHost (rrLHS rule1) (rrLHS rule2) ov
+      (host, match1, match2) <- buildOverlapHost mt (rrLHS rule1) (rrLHS rule2) ov
       if danglingOk (rrLHS rule1) host match1 && danglingOk (rrLHS rule2) host match2
         then do
-          left <- applyRuleAtMatch rule1 match1 host
-          right <- applyRuleAtMatch rule2 match2 host
+          left <- applyRuleAtMatch mt rule1 match1 host
+          right <- applyRuleAtMatch mt rule2 match2 host
           overlap' <- renumberDiagram host
           left' <- renumberDiagram left
           right' <- renumberDiagram right
@@ -177,22 +163,22 @@ rulesForCellWithClass policy cell =
       , mk "rl" (c2RHS cell) (c2LHS cell)
       ]
 
-renameRule :: Int -> RewriteRule -> RewriteRule
-renameRule idx rule =
+renameRule :: ModeTheory -> Int -> RewriteRule -> RewriteRule
+renameRule mt idx rule =
   let idxText = T.pack (show idx)
       tySuffix = ":" <> idxText
       attrSuffix = "#" <> idxText
       ren = M.fromList [ (v, TVar (renameTyVar v)) | v <- rrTyVars rule ]
       renameTyVar v = v { tvName = tvName v <> tySuffix }
-      lhsTy' = applySubstDiagram0 ren (rrLHS rule)
-      rhsTy' = applySubstDiagram0 ren (rrRHS rule)
+      lhsTy' = Diag.applySubstDiagram mt ren (rrLHS rule)
+      rhsTy' = Diag.applySubstDiagram mt ren (rrRHS rule)
       lhs' = renameAttrVarsDiagram (<> attrSuffix) lhsTy'
       rhs' = renameAttrVarsDiagram (<> attrSuffix) rhsTy'
       tyvars' = map renameTyVar (rrTyVars rule)
   in rule { rrLHS = lhs', rrRHS = rhs', rrTyVars = tyvars' }
 
-enumerateOverlaps :: S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text [PartialIso]
-enumerateOverlaps tyFlex attrFlex l1 l2 = do
+enumerateOverlaps :: ModeTheory -> S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text [PartialIso]
+enumerateOverlaps mt tyFlex attrFlex l1 l2 = do
   let edges1 = sortEdges (IM.elems (dEdges l1))
   let edges2 = sortEdges (IM.elems (dEdges l2))
   fmap concat (mapM (seedFrom edges2) edges1)
@@ -201,11 +187,11 @@ enumerateOverlaps tyFlex attrFlex l1 l2 = do
     seedFrom edges2 e1 =
       fmap concat (mapM (expandFromSeed e1) edges2)
     expandFromSeed e1 e2 = do
-      seeds <- mapEdge tyFlex attrFlex l1 l2 emptyState e1 e2
-      fmap concat (mapM (expandState l1 l2 tyFlex attrFlex) seeds)
+      seeds <- mapEdge mt tyFlex attrFlex l1 l2 emptyState e1 e2
+      fmap concat (mapM (expandState mt l1 l2 tyFlex attrFlex) seeds)
 
-expandState :: Diagram -> Diagram -> S.Set TyVar -> S.Set AttrVar -> PartialIso -> Either Text [PartialIso]
-expandState l1 l2 tyFlex attrFlex st = do
+expandState :: ModeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set AttrVar -> PartialIso -> Either Text [PartialIso]
+expandState mt l1 l2 tyFlex attrFlex st = do
   let mappedPorts = S.fromList (M.keys (piPortMap st))
   let candidates =
         [ e
@@ -213,22 +199,22 @@ expandState l1 l2 tyFlex attrFlex st = do
         , M.notMember (eId e) (piEdgeMap st)
         , any (`S.member` mappedPorts) (eIns e <> eOuts e)
         ]
-  expanded <- fmap concat (mapM (expandEdge l1 l2 tyFlex attrFlex st) candidates)
-  deeper <- fmap concat (mapM (expandState l1 l2 tyFlex attrFlex) expanded)
+  expanded <- fmap concat (mapM (expandEdge mt l1 l2 tyFlex attrFlex st) candidates)
+  deeper <- fmap concat (mapM (expandState mt l1 l2 tyFlex attrFlex) expanded)
   pure (st : deeper)
 
-expandEdge :: Diagram -> Diagram -> S.Set TyVar -> S.Set AttrVar -> PartialIso -> Edge -> Either Text [PartialIso]
-expandEdge l1 l2 tyFlex attrFlex st e1 = do
+expandEdge :: ModeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set AttrVar -> PartialIso -> Edge -> Either Text [PartialIso]
+expandEdge mt l1 l2 tyFlex attrFlex st e1 = do
   let candidates =
         [ e2
         | e2 <- sortEdges (IM.elems (dEdges l2))
         , eId e2 `S.notMember` piUsedEdges st
         , edgeCompatible e1 e2
         ]
-  fmap concat (mapM (mapEdge tyFlex attrFlex l1 l2 st e1) candidates)
+  fmap concat (mapM (mapEdge mt tyFlex attrFlex l1 l2 st e1) candidates)
 
-mapEdge :: S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> PartialIso -> Edge -> Edge -> Either Text [PartialIso]
-mapEdge tyFlex attrFlex l1 l2 st e1 e2 =
+mapEdge :: ModeTheory -> S.Set TyVar -> S.Set AttrVar -> Diagram -> Diagram -> PartialIso -> Edge -> Edge -> Either Text [PartialIso]
+mapEdge mt tyFlex attrFlex l1 l2 st e1 e2 =
   if M.member (eId e1) (piEdgeMap st)
     then Right []
     else if eId e2 `S.member` piUsedEdges st
@@ -236,12 +222,12 @@ mapEdge tyFlex attrFlex l1 l2 st e1 e2 =
     else if length (eIns e1) /= length (eIns e2) || length (eOuts e1) /= length (eOuts e2)
       then Right []
       else do
-        substs <- payloadSubsts tyFlex attrFlex (piTySubst st) (piAttrSubst st) (ePayload e1) (ePayload e2)
+        substs <- payloadSubsts mt tyFlex attrFlex (piTySubst st) (piAttrSubst st) (ePayload e1) (ePayload e2)
         fmap concat (mapM extendPorts substs)
   where
     extendPorts (tySubst0, attrSubst0) = do
       let pairs = zip (eIns e1) (eIns e2) <> zip (eOuts e1) (eOuts e2)
-      case foldl (extendPort l1 l2 tyFlex) (Right (piPortMap st, piUsedPorts st, tySubst0, attrSubst0)) pairs of
+      case foldl (extendPort mt l1 l2 tyFlex) (Right (piPortMap st, piUsedPorts st, tySubst0, attrSubst0)) pairs of
         Left _ -> Right []
         Right (portMap', usedPorts', tySubst', attrSubst') -> do
           let edgeMap' = M.insert (eId e1) (eId e2) (piEdgeMap st)
@@ -257,8 +243,8 @@ mapEdge tyFlex attrFlex l1 l2 st e1 e2 =
                 }
             ]
 
-extendPort :: Diagram -> Diagram -> S.Set TyVar -> Either Text (M.Map PortId PortId, S.Set PortId, Subst, AttrSubst) -> (PortId, PortId) -> Either Text (M.Map PortId PortId, S.Set PortId, Subst, AttrSubst)
-extendPort l1 l2 flex acc (p1, p2) = do
+extendPort :: ModeTheory -> Diagram -> Diagram -> S.Set TyVar -> Either Text (M.Map PortId PortId, S.Set PortId, Subst, AttrSubst) -> (PortId, PortId) -> Either Text (M.Map PortId PortId, S.Set PortId, Subst, AttrSubst)
+extendPort mt l1 l2 flex acc (p1, p2) = do
   (portMap, usedPorts, tySubst, attrSubst) <- acc
   case M.lookup p1 portMap of
     Just p2' ->
@@ -267,18 +253,18 @@ extendPort l1 l2 flex acc (p1, p2) = do
       if p2 `S.member` usedPorts
         then Left "criticalPairs: target port already used"
         else do
-          s1 <- unifyPorts l1 l2 flex tySubst p1 p2
-          let tySubst' = composeSubst0 s1 tySubst
+          s1 <- unifyPorts mt l1 l2 flex tySubst p1 p2
+          let tySubst' = U.composeSubst mt s1 tySubst
           Right (M.insert p1 p2 portMap, S.insert p2 usedPorts, tySubst', attrSubst)
 
-unifyPorts :: Diagram -> Diagram -> S.Set TyVar -> Subst -> PortId -> PortId -> Either Text Subst
-unifyPorts l1 l2 flex subst p1 p2 = do
+unifyPorts :: ModeTheory -> Diagram -> Diagram -> S.Set TyVar -> Subst -> PortId -> PortId -> Either Text Subst
+unifyPorts mt l1 l2 flex subst p1 p2 = do
   pTy <- requirePortType l1 p1
   hTy <- requirePortType l2 p2
-  unifyTyFlex0 flex (applySubstTy0 subst pTy) (applySubstTy0 subst hTy)
+  U.unifyTyFlex mt flex (U.applySubstTy mt subst pTy) (U.applySubstTy mt subst hTy)
 
-payloadSubsts :: S.Set TyVar -> S.Set AttrVar -> Subst -> AttrSubst -> EdgePayload -> EdgePayload -> Either Text [(Subst, AttrSubst)]
-payloadSubsts tyFlex attrFlex tySubst attrSubst p1 p2 =
+payloadSubsts :: ModeTheory -> S.Set TyVar -> S.Set AttrVar -> Subst -> AttrSubst -> EdgePayload -> EdgePayload -> Either Text [(Subst, AttrSubst)]
+payloadSubsts mt tyFlex attrFlex tySubst attrSubst p1 p2 =
   case (p1, p2) of
     (PGen g1 attrs1, PGen g2 attrs2) ->
       if g1 /= g2 || M.keysSet attrs1 /= M.keysSet attrs2
@@ -294,13 +280,13 @@ payloadSubsts tyFlex attrFlex tySubst attrSubst p1 p2 =
             Nothing -> Left "criticalPairs: missing attribute field"
             Just term2 -> unifyAttrFlex attrFlex sub term1 term2
     (PBox _ d1, PBox _ d2) -> do
-      let d1' = applyAttrSubstDiagram attrSubst (applySubstDiagram0 tySubst d1)
-      let d2' = applyAttrSubstDiagram attrSubst (applySubstDiagram0 tySubst d2)
-      case diagramIsoMatchWithVars0 tyFlex attrFlex d1' d2' of
+      let d1' = applyAttrSubstDiagram attrSubst (Diag.applySubstDiagram mt tySubst d1)
+      let d2' = applyAttrSubstDiagram attrSubst (Diag.applySubstDiagram mt tySubst d2)
+      case Strat.Poly.Graph.diagramIsoMatchWithVars mt tyFlex attrFlex d1' d2' of
         Left _ -> Right []
         Right subs ->
           Right
-            [ (composeSubst0 tySub tySubst, composeAttrSubst attrSub attrSubst)
+            [ (U.composeSubst mt tySub tySubst, composeAttrSubst attrSub attrSubst)
             | (tySub, attrSub) <- subs
             ]
     _ -> Right []
@@ -330,12 +316,12 @@ requirePortType diag pid =
     Nothing -> Left "criticalPairs: missing port type"
     Just ty -> Right ty
 
-buildOverlapHost :: Diagram -> Diagram -> PartialIso -> Either Text (Diagram, Match, Match)
-buildOverlapHost l1 l2 ov = do
+buildOverlapHost :: ModeTheory -> Diagram -> Diagram -> PartialIso -> Either Text (Diagram, Match, Match)
+buildOverlapHost mt l1 l2 ov = do
   let tySubst = piTySubst ov
   let attrSubst = piAttrSubst ov
-  let l1' = applyAttrSubstDiagram attrSubst (applySubstDiagram0 tySubst l1)
-  let l2' = applyAttrSubstDiagram attrSubst (applySubstDiagram0 tySubst l2)
+  let l1' = applyAttrSubstDiagram attrSubst (Diag.applySubstDiagram mt tySubst l1)
+  let l2' = applyAttrSubstDiagram attrSubst (Diag.applySubstDiagram mt tySubst l2)
   let portMapL2 = M.fromList [ (p2, p1) | (p1, p2) <- M.toList (piPortMap ov) ]
   let edgeMapL2 = M.fromList [ (e2, e1) | (e1, e2) <- M.toList (piEdgeMap ov) ]
   (host1, portMap1, edgeMap1) <- insertEdgesFromL2 l1' l2' portMapL2 edgeMapL2
@@ -455,10 +441,10 @@ danglingOk lhs host match =
         Nothing -> False
     portKey (PortId k) = k
 
-applyRuleAtMatch :: RewriteRule -> Match -> Diagram -> Either Text Diagram
-applyRuleAtMatch rule match host = do
+applyRuleAtMatch :: ModeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
+applyRuleAtMatch mt rule match host = do
   let lhs = rrLHS rule
-  let rhs = applyAttrSubstDiagram (mAttrSub match) (applySubstDiagram0 (mTySub match) (rrRHS rule))
+  let rhs = applyAttrSubstDiagram (mAttrSub match) (Diag.applySubstDiagram mt (mTySub match) (rrRHS rule))
   host1 <- deleteMatchedEdges host (M.elems (mEdges match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPorts match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs

@@ -1,0 +1,43 @@
+import "../../lib/modes/lnl_backend_switch.llang";
+
+run_spec UnitTrace where {
+  doctrine LNLBackend;
+  mode C;
+  show input;
+  show normalized;
+}
+---
+z ; unit_F{C.Nat}
+---
+
+run main using UnitTrace where {}
+
+run typewalk using UnitTrace where {
+  model LNLTypeWalk;
+  show value;
+}
+
+run codegen using UnitTrace where {
+  model LNLCodegenTypes;
+  show value;
+}
+
+run_spec CounitTrace where {
+  doctrine LNLBackend;
+  mode L;
+  show input;
+  show normalized;
+}
+---
+srcFU ; counit_F{L.Nat}
+---
+
+run counit_typewalk using CounitTrace where {
+  model LNLTypeWalk;
+  show value;
+}
+
+run counit_codegen using CounitTrace where {
+  model LNLCodegenTypes;
+  show value;
+}

@@ -396,7 +396,11 @@ doctrine <Name> = coproduct <Left> <Right>;
 ```
 
 - `pushout` requires morphisms with **renaming/inclusion** behavior (single‑generator images) and injective interface maps.
-- `pushout` additionally requires **mode‑preserving** morphisms (the mode map must be the identity).
+- `pushout` requires morphisms that are:
+  - mode-preserving (the mode map is identity),
+  - modality-preserving (the modality map is identity),
+  - between doctrines with identical mode theories (same modes, modalities, `mod_eq`, and adjunction declarations).
+- Pushout does not currently merge mode theories.
 - The pushout produces canonical morphisms `<Name>.inl`, `<Name>.inr`, and `<Name>.glue`.
 - Non‑interface generators and types are automatically **disjoint‑renamed** in the pushout (prefixing by the target doctrine name plus `_inl`/`_inr`) to avoid collisions.
 - `coproduct` is implemented as a pushout over an empty interface (so all symbols are renamed disjointly).
@@ -734,13 +738,21 @@ Merge policy:
 Execution pipeline for the effective run configuration:
 
 1. Parse either a diagram expression or a surface program.
-2. Elaborate against the chosen doctrine/mode.
-3. Apply `uses` morphisms and then `apply` morphisms in order.
-4. If needed, coerce to the declared doctrine along a unique shortest coercion path.
-5. Normalize (policy default: `UseStructuralAsBidirectional`).
-6. Optionally evaluate via the selected model (requires closed diagram).
-7. Optionally check coherence and render its report.
-8. Print requested outputs.
+2. Determine source doctrine/mode for elaboration:
+   - If `surface` is present:
+     - source doctrine is `surface.doctrine`,
+     - source mode is `surface.mode`,
+     - a run `mode` clause is allowed only if it is exactly `surface.mode` (otherwise error).
+   - If `surface` is absent:
+     - source doctrine is the run doctrine,
+     - source mode is run `mode` (or inferred if the doctrine has exactly one mode).
+3. Elaborate in the source doctrine/mode (surface elaboration when `surface` is set, diagram elaboration otherwise).
+4. Apply `uses` morphisms and then `apply` morphisms in order.
+5. If needed, coerce to the run’s target doctrine along a unique shortest coercion path.
+6. Normalize (policy default: `UseStructuralAsBidirectional`).
+7. Optionally evaluate via the selected model (requires closed diagram).
+8. Optionally check coherence and render its report.
+9. Print requested outputs.
 
 `show cat` is currently not supported.
 

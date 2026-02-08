@@ -8,11 +8,13 @@ import Test.Tasty.HUnit
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names
 import Strat.Poly.Diagram
+import Strat.Poly.Graph (Edge(..), EdgePayload(..))
 import Strat.Poly.Cell2
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
@@ -26,6 +28,7 @@ tests =
     [ testCase "monoid morphism to string monoid" testMonoidMorphism
     , testCase "type map can reorder parameters" testTypeMapReorder
     , testCase "cross-mode morphism applies mode map" testCrossModeMorphism
+    , testCase "modality map rewrites modality applications in types" testModalityMapRewritesTypeModalities
     ]
 
 tvar :: ModeName -> Text -> TyVar
@@ -166,6 +169,127 @@ testCrossModeMorphism = do
   cod <- either (assertFailure . T.unpack) pure (diagramCod tgtDiag)
   dom @?= [bTy]
   cod @?= [bTy]
+
+testModalityMapRewritesTypeModalities :: Assertion
+testModalityMapRewritesTypeModalities = do
+  let modeA = ModeName "A"
+  let modeB = ModeName "B"
+  let modeC = ModeName "C"
+  let modeD = ModeName "D"
+  let modF = ModName "F"
+  let modH = ModName "H"
+  let modG = ModName "G"
+  let modK = ModName "K"
+  let fSrc = ModExpr { meSrc = modeA, meTgt = modeB, mePath = [modF] }
+  let hSrc = ModExpr { meSrc = modeB, meTgt = modeB, mePath = [modH] }
+  let gTgt = ModExpr { meSrc = modeC, meTgt = modeD, mePath = [modG] }
+  let kTgt = ModExpr { meSrc = modeD, meTgt = modeD, mePath = [modK] }
+  let baseSrc = tcon modeA "Base" []
+  let baseTgt = tcon modeC "Base" []
+  let fBaseSrc = TMod fSrc baseSrc
+  let hfBaseSrc = TMod hSrc fBaseSrc
+  let gBaseTgt = TMod gTgt baseTgt
+  let kgBaseTgt = TMod kTgt gBaseTgt
+  let gkBaseTgt = TMod (ModExpr { meSrc = modeC, meTgt = modeD, mePath = [modG, modK] }) baseTgt
+  let modeTheorySrc =
+        ModeTheory
+          { mtModes =
+              M.fromList
+                [ (modeA, ModeInfo modeA Linear)
+                , (modeB, ModeInfo modeB Linear)
+                ]
+          , mtDecls =
+              M.fromList
+                [ (modF, ModDecl modF modeA modeB)
+                , (modH, ModDecl modH modeB modeB)
+                ]
+          , mtEqns = []
+          , mtAdjs = []
+          }
+  let modeTheoryTgt =
+        ModeTheory
+          { mtModes =
+              M.fromList
+                [ (modeC, ModeInfo modeC Linear)
+                , (modeD, ModeInfo modeD Linear)
+                ]
+          , mtDecls =
+              M.fromList
+                [ (modG, ModDecl modG modeC modeD)
+                , (modK, ModDecl modK modeD modeD)
+                ]
+          , mtEqns = []
+          , mtAdjs = []
+          }
+  let genGSrc = GenDecl (GenName "g") modeB [] [fBaseSrc] [fBaseSrc] []
+  let genGGSrc = GenDecl (GenName "gg") modeB [] [hfBaseSrc] [hfBaseSrc] []
+  let genGTgt = GenDecl (GenName "g") modeD [] [gBaseTgt] [gBaseTgt] []
+  let genGGTgt = GenDecl (GenName "gg") modeD [] [kgBaseTgt] [kgBaseTgt] []
+  let docSrc = Doctrine
+        { dName = "SrcModal"
+        , dModes = modeTheorySrc
+        , dAttrSorts = M.empty
+        , dTypes = M.fromList [(modeA, M.fromList [(TypeName "Base", TypeSig [])])]
+        , dGens = M.fromList [(modeB, M.fromList [(GenName "g", genGSrc), (GenName "gg", genGGSrc)])]
+        , dCells2 = []
+        }
+  let docTgt = Doctrine
+        { dName = "TgtModal"
+        , dModes = modeTheoryTgt
+        , dAttrSorts = M.empty
+        , dTypes = M.fromList [(modeC, M.fromList [(TypeName "Base", TypeSig [])])]
+        , dGens = M.fromList [(modeD, M.fromList [(GenName "g", genGTgt), (GenName "gg", genGGTgt)])]
+        , dCells2 = []
+        }
+  docSrc' <- case validateDoctrine docSrc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure docSrc
+  docTgt' <- case validateDoctrine docTgt of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure docTgt
+  imgG <- either (assertFailure . T.unpack) pure (genD modeD [gBaseTgt] [gBaseTgt] (GenName "g"))
+  imgGG <- either (assertFailure . T.unpack) pure (genD modeD [kgBaseTgt] [kgBaseTgt] (GenName "gg"))
+  let mor = Morphism
+        { morName = "ModalMap"
+        , morSrc = docSrc'
+        , morTgt = docTgt'
+        , morIsCoercion = False
+        , morModeMap = M.fromList [(modeA, modeC), (modeB, modeD)]
+        , morModMap = M.fromList [(modF, gTgt), (modH, kTgt)]
+        , morAttrSortMap = M.empty
+        , morTypeMap = M.fromList [(TypeRef modeA (TypeName "Base"), TypeTemplate [] baseTgt)]
+        , morGenMap = M.fromList [((modeB, GenName "g"), imgG), ((modeB, GenName "gg"), imgGG)]
+        , morPolicy = UseAllOriented
+        , morFuel = 20
+        }
+  case checkMorphism mor of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+
+  srcDiagG <- either (assertFailure . T.unpack) pure (genD modeB [fBaseSrc] [fBaseSrc] (GenName "g"))
+  tgtDiagG <- either (assertFailure . T.unpack) pure (applyMorphismDiagram mor srcDiagG)
+  dMode tgtDiagG @?= modeD
+  domG <- either (assertFailure . T.unpack) pure (diagramDom tgtDiagG)
+  codG <- either (assertFailure . T.unpack) pure (diagramCod tgtDiagG)
+  domG @?= [gBaseTgt]
+  codG @?= [gBaseTgt]
+  assertSingleGenEdge "g" tgtDiagG
+
+  srcDiagGG <- either (assertFailure . T.unpack) pure (genD modeB [hfBaseSrc] [hfBaseSrc] (GenName "gg"))
+  tgtDiagGG <- either (assertFailure . T.unpack) pure (applyMorphismDiagram mor srcDiagGG)
+  dMode tgtDiagGG @?= modeD
+  domGG <- either (assertFailure . T.unpack) pure (diagramDom tgtDiagGG)
+  codGG <- either (assertFailure . T.unpack) pure (diagramCod tgtDiagGG)
+  domGG @?= [gkBaseTgt]
+  codGG @?= [gkBaseTgt]
+  assertSingleGenEdge "gg" tgtDiagGG
+  where
+    assertSingleGenEdge name diag =
+      case IM.elems (dEdges diag) of
+        [Edge _ (PGen genName attrs) _ _] -> do
+          genName @?= GenName name
+          attrs @?= M.empty
+        _ -> assertFailure "expected exactly one generator edge"
 
 modeM :: ModeName
 modeM = ModeName "M"

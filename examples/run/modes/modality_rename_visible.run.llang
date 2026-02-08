@@ -2,17 +2,6 @@ import "../../lib/modes/staging_mode_map.llang";
 
 run main where {
   doctrine Staging2;
-  surface StageExpr;
-  apply StageToStage2;
-  show input;
-  show normalized;
-}
----
-stage
----
-
-run ct where {
-  doctrine Staging2;
   surface StageExprCT;
   apply StageToStage2;
   show input;

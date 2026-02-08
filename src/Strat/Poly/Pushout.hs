@@ -15,22 +15,14 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName, ModDecl(..), ModExpr(..), emptyModeTheory)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName, ModDecl(..), ModExpr(..))
 import Strat.Poly.TypeExpr
 import qualified Strat.Poly.UnifyTy as U
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
-import qualified Strat.Poly.Diagram as Diag
-import Strat.Poly.Diagram (Diagram(..), genD, genDWithAttrs, diagramDom, diagramCod)
+import Strat.Poly.Diagram (Diagram(..), genD, genDWithAttrs, diagramDom, diagramCod, applySubstDiagram)
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), renumberDiagram, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
-
-
-applySubstCtx :: U.Subst -> Context -> Context
-applySubstCtx = U.applySubstCtx emptyModeTheory
-
-applySubstDiagram :: U.Subst -> Diagram -> Diagram
-applySubstDiagram = Diag.applySubstDiagram emptyModeTheory
 
 
 data PolyPushoutResult = PolyPushoutResult
@@ -51,6 +43,7 @@ computePolyPushout name f g = do
   ensureIdentityModeMap g
   ensureSameModes (morSrc f) (morTgt f)
   ensureSameModes (morSrc g) (morTgt g)
+  let mt = dModes (morSrc f)
   attrSortMapF <- requireAttrSortRenameMap f
   attrSortMapG <- requireAttrSortRenameMap g
   (typeMapF, permMapF) <- requireTypeRenameMap f
@@ -83,7 +76,7 @@ computePolyPushout name f g = do
   let renameCellsC = disjointCellRenames prefixC (morSrc f) (morTgt g)
   b' <- renameDoctrine renameAttrSortsB renameTypesB permTypesB0 renameGensB renameCellsB (morTgt f)
   c' <- renameDoctrine renameAttrSortsC renameTypesC permTypesC0 renameGensC renameCellsC (morTgt g)
-  merged <- mergeDoctrineList [morSrc f, b', c']
+  merged <- mergeDoctrineList mt [morSrc f, b', c']
   let pres = merged { dName = name }
   glue <- buildGlue name (morSrc f) pres
   inl <- buildInj (name <> ".inl") (morTgt f) pres renameAttrSortsB renameTypesB permTypesB0 renameGensB
@@ -528,6 +521,9 @@ renameTypeExpr :: TypeRenameMap -> TypePermMap -> TypeExpr -> Either Text TypeEx
 renameTypeExpr ren permRen ty =
   case ty of
     TVar v -> Right (TVar v)
+    TMod me inner -> do
+      inner' <- renameTypeExpr ren permRen inner
+      Right (TMod me inner')
     TCon ref args -> do
       args' <- mapM (renameTypeExpr ren permRen) args
       let ref' = M.findWithDefault ref ref ren
@@ -547,23 +543,23 @@ applyPerm perm args
     n = length args
     outOfRange i = i < 0 || i >= n
 
-mergeDoctrineList :: [Doctrine] -> Either Text Doctrine
-mergeDoctrineList [] = Left "poly pushout: no doctrines to merge"
-mergeDoctrineList (d:ds) = foldl merge (Right d) ds
+mergeDoctrineList :: ModeTheory -> [Doctrine] -> Either Text Doctrine
+mergeDoctrineList _ [] = Left "poly pushout: no doctrines to merge"
+mergeDoctrineList mt (d:ds) = foldl merge (Right d) ds
   where
     merge acc next = do
       base <- acc
-      mergeDoctrine base next
+      mergeDoctrine mt base next
 
-mergeDoctrine :: Doctrine -> Doctrine -> Either Text Doctrine
-mergeDoctrine a b = do
+mergeDoctrine :: ModeTheory -> Doctrine -> Doctrine -> Either Text Doctrine
+mergeDoctrine mt a b = do
   if dModes a /= dModes b
     then Left "poly pushout: mode mismatch"
     else do
       attrSorts <- mergeAttrSorts (dAttrSorts a) (dAttrSorts b)
       types <- mergeTypeTables (dTypes a) (dTypes b)
       gens <- mergeGenTables (dGens a) (dGens b)
-      cells <- mergeCells (dCells2 a) (dCells2 b)
+      cells <- mergeCells mt (dCells2 a) (dCells2 b)
       pure a { dAttrSorts = attrSorts, dTypes = types, dGens = gens, dCells2 = cells }
   where
     mergeAttrSorts left right =
@@ -605,11 +601,11 @@ mergeDoctrine a b = do
           mp <- acc
           case M.lookup (gdName gen) mp of
             Nothing -> Right (M.insert (gdName gen) gen mp)
-            Just g | genDeclAlphaEq g gen -> Right mp
+            Just g | genDeclAlphaEq mt g gen -> Right mp
             _ -> Left "poly pushout: generator conflict"
 
-mergeCells :: [Cell2] -> [Cell2] -> Either Text [Cell2]
-mergeCells left right =
+mergeCells :: ModeTheory -> [Cell2] -> [Cell2] -> Either Text [Cell2]
+mergeCells mt left right =
   foldl insertCell (Right []) (left <> right)
   where
     insertCell acc cell = do
@@ -689,7 +685,7 @@ mergeCells left right =
         else if length (c2TyVars a) /= length (c2TyVars b)
           then Right False
           else do
-            b' <- alphaRenameCellTo (c2TyVars b) (c2TyVars a) b
+            b' <- alphaRenameCellTo mt (c2TyVars b) (c2TyVars a) b
             okL <- isoOrFalse (c2LHS a) (c2LHS b')
             okR <- isoOrFalse (c2RHS a) (c2RHS b')
             pure (okL && okR)
@@ -699,24 +695,24 @@ mergeCells left right =
         Left _ -> Right False
         Right ok -> Right ok
 
-genDeclAlphaEq :: GenDecl -> GenDecl -> Bool
-genDeclAlphaEq g1 g2 =
+genDeclAlphaEq :: ModeTheory -> GenDecl -> GenDecl -> Bool
+genDeclAlphaEq mt g1 g2 =
   gdMode g1 == gdMode g2
     && gdName g1 == gdName g2
     && gdAttrs g1 == gdAttrs g2
     && length (gdTyVars g1) == length (gdTyVars g2)
     && let subst = M.fromList (zip (gdTyVars g2) (map TVar (gdTyVars g1)))
-           dom2 = applySubstCtx subst (gdDom g2)
-           cod2 = applySubstCtx subst (gdCod g2)
+           dom2 = U.applySubstCtx mt subst (gdDom g2)
+           cod2 = U.applySubstCtx mt subst (gdCod g2)
        in dom2 == gdDom g1 && cod2 == gdCod g1
 
-alphaRenameCellTo :: [TyVar] -> [TyVar] -> Cell2 -> Either Text Cell2
-alphaRenameCellTo from to cell
+alphaRenameCellTo :: ModeTheory -> [TyVar] -> [TyVar] -> Cell2 -> Either Text Cell2
+alphaRenameCellTo mt from to cell
   | length from /= length to = Left "poly pushout: alpha rename arity mismatch"
   | otherwise =
       let subst = M.fromList (zip from (map TVar to))
-          lhs' = applySubstDiagram subst (c2LHS cell)
-          rhs' = applySubstDiagram subst (c2RHS cell)
+          lhs' = applySubstDiagram mt subst (c2LHS cell)
+          rhs' = applySubstDiagram mt subst (c2RHS cell)
       in Right cell { c2TyVars = to, c2LHS = lhs', c2RHS = rhs' }
 
 buildGlue :: Text -> Doctrine -> Doctrine -> Either Text Morphism

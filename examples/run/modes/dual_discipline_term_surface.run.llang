@@ -1,0 +1,57 @@
+import "../../lib/modes/dual_discipline_term_surface.llang";
+
+run cart_dup where {
+  doctrine DualDiscipline;
+  mode Cart;
+  surface DupTermCart;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Cart.Num;
+  out sink(x, x)
+}
+---
+
+run lin_dup where {
+  doctrine DualDiscipline;
+  mode Lin;
+  surface DupTermLin;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Lin.Num;
+  out sink(x, x)
+}
+---
+
+run cart_drop where {
+  doctrine DualDiscipline;
+  mode Cart;
+  surface DupTermCart;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Cart.Num;
+  out one
+}
+---
+
+run lin_drop where {
+  doctrine DualDiscipline;
+  mode Lin;
+  surface DupTermLin;
+  show input;
+  show normalized;
+}
+---
+diag {
+  in x:Lin.Num;
+  out one
+}
+---

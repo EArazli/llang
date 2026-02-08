@@ -9,7 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.ModeTheory (ModeName(..), ModName, ModExpr(..), ModDecl(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), mtModes, mtDecls)
+import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModEqn(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), mtModes, mtDecls)
 import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD, idD)
@@ -31,6 +31,7 @@ tests =
     , testCase "pushout merges cell classes" testPushoutMergeClass
     , testCase "pushout rejects name conflict with different bodies" testPushoutNameConflict
     , testCase "pushout rejects non-identity mode maps" testPushoutRejectsModeMap
+    , testCase "pushout handles alpha-renaming with mode equations" testPushoutAlphaRenameWithModeEq
     ]
 
 require :: Either Text a -> IO a
@@ -391,6 +392,127 @@ testPushoutRejectsModeMap = do
     Left err ->
       assertBool "expected mode map rejection" ("mode-preserving" `T.isInfixOf` err)
     Right _ -> assertFailure "expected pushout to reject non-identity mode map"
+
+testPushoutAlphaRenameWithModeEq :: Assertion
+testPushoutAlphaRenameWithModeEq = do
+  let mode = ModeName "M"
+  let modF = ModName "F"
+  let modU = ModName "U"
+  let mt = mkModeEqTheory mode modF modU
+  base <- require (mkModeEqDoctrine "Base" mt "a" True)
+  left <- require (mkModeEqDoctrine "Left" mt "x" False)
+  right <- require (mkModeEqDoctrine "Right" mt "y" False)
+  let morLeft = mkModeEqMorph "f" base left "x"
+  let morRight = mkModeEqMorph "g" base right "y"
+  res <- case computePolyPushout "P" morLeft morRight of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> pure out
+  case validateDoctrine (poDoctrine res) of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  let etaCells = [ cell | cell <- dCells2 (poDoctrine res), c2Name cell == "eta" ]
+  length etaCells @?= 1
+  case M.lookup mode (dGens (poDoctrine res)) >>= M.lookup (GenName "modal") of
+    Nothing -> assertFailure "expected modal generator in pushout result"
+    Just modalGen ->
+      case gdDom modalGen of
+        [TMod me (TVar _)] -> mePath me @?= [modF]
+        _ -> assertFailure "expected modal generator domain to retain non-canceling modality"
+
+mkModeEqTheory :: ModeName -> ModName -> ModName -> ModeTheory
+mkModeEqTheory mode modF modU =
+  ModeTheory
+    { mtModes = M.singleton mode (ModeInfo mode Linear)
+    , mtDecls =
+        M.fromList
+          [ (modF, ModDecl modF mode mode)
+          , (modU, ModDecl modU mode mode)
+          ]
+    , mtEqns =
+        [ ModEqn
+            (ModExpr { meSrc = mode, meTgt = mode, mePath = [modF, modU] })
+            (ModExpr { meSrc = mode, meTgt = mode, mePath = [] })
+        ]
+    , mtAdjs = []
+    }
+
+mkModeEqMorph :: Text -> Doctrine -> Doctrine -> Text -> Morphism
+mkModeEqMorph name src tgt varName =
+  let mode = ModeName "M"
+      modF = ModName "F"
+      v = TyVar { tvName = varName, tvMode = mode }
+      fExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF] }
+      hTy = TVar v
+      modalTy = TMod fExpr (TVar v)
+      hImg = case genD mode [hTy] [hTy] (GenName "h") of
+        Left _ -> error "mkModeEqMorph: genD h failed"
+        Right d -> d
+      modalImg = case genD mode [modalTy] [modalTy] (GenName "modal") of
+        Left _ -> error "mkModeEqMorph: genD modal failed"
+        Right d -> d
+  in Morphism
+      { morName = name
+      , morSrc = src
+      , morTgt = tgt
+      , morIsCoercion = False
+      , morModeMap = identityModeMap src
+      , morModMap = identityModMap src
+      , morTypeMap = M.empty
+      , morGenMap = M.fromList [((mode, GenName "h"), hImg), ((mode, GenName "modal"), modalImg)]
+      , morAttrSortMap = M.empty
+      , morPolicy = UseAllOriented
+      , morFuel = 10
+      }
+
+mkModeEqDoctrine :: Text -> ModeTheory -> Text -> Bool -> Either Text Doctrine
+mkModeEqDoctrine name mt varName useUF = do
+  let mode = ModeName "M"
+  let modF = ModName "F"
+  let modU = ModName "U"
+  let v = TyVar { tvName = varName, tvMode = mode }
+  let fExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF] }
+  let ufExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF, modU] }
+  let hTy =
+        if useUF
+          then TMod ufExpr (TVar v)
+          else TVar v
+  let modalTy = TMod fExpr (TVar v)
+  lhs <- genD mode [hTy] [hTy] (GenName "h")
+  let cell = Cell2
+        { c2Name = "eta"
+        , c2Class = Computational
+        , c2Orient = LR
+        , c2TyVars = [v]
+        , c2LHS = lhs
+        , c2RHS = idD mode [hTy]
+        }
+  let genH = GenDecl
+        { gdName = GenName "h"
+        , gdMode = mode
+        , gdTyVars = [v]
+        , gdDom = [TVar v]
+        , gdCod = [TVar v]
+        , gdAttrs = []
+        }
+  let genModal = GenDecl
+        { gdName = GenName "modal"
+        , gdMode = mode
+        , gdTyVars = [v]
+        , gdDom = [modalTy]
+        , gdCod = [modalTy]
+        , gdAttrs = []
+        }
+  let doc = Doctrine
+        { dName = name
+        , dModes = mt
+        , dTypes = M.empty
+        , dGens = M.fromList [(mode, M.fromList [(GenName "h", genH), (GenName "modal", genModal)])]
+        , dCells2 = [cell]
+        , dAttrSorts = M.empty
+        }
+  case validateDoctrine doc of
+    Left err -> Left err
+    Right () -> Right doc
 
 mkTypeDoctrine :: ModeName -> Text -> [(TypeName, Int)] -> Either Text Doctrine
 mkTypeDoctrine mode name types = do

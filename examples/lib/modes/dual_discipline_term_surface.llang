@@ -1,0 +1,65 @@
+import "./dual_discipline_surface.llang";
+
+surface DupTermCart where {
+  doctrine DualDiscipline;
+  mode Cart;
+
+  lexer {
+    keywords: diag, in, out;
+    symbols: "(", ")", "{", "}", ":", ";", ",";
+  }
+
+  expr {
+    atom:
+      ident "(" <expr> ")" => CALL(name, args)
+    | ident => VAR(name)
+    | "out" <expr> => OUT(expr)
+    | "diag" "{" <expr> "}" => DIAG(expr)
+    | "(" <expr> ")" => <expr>
+    ;
+    prefix:
+      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+    ;
+    infixr 10 "," => LIST(lhs, rhs);
+  }
+
+  elaborate {
+    VAR(x) => $x;;
+    LIST(a, b) => $1 * $2;;
+    OUT(e) => $1;;
+    DIAG(e) => $1;;
+    IN(x, ty, body) => $1;;
+  }
+}
+
+surface DupTermLin where {
+  doctrine DualDiscipline;
+  mode Lin;
+
+  lexer {
+    keywords: diag, in, out;
+    symbols: "(", ")", "{", "}", ":", ";", ",";
+  }
+
+  expr {
+    atom:
+      ident "(" <expr> ")" => CALL(name, args)
+    | ident => VAR(name)
+    | "out" <expr> => OUT(expr)
+    | "diag" "{" <expr> "}" => DIAG(expr)
+    | "(" <expr> ")" => <expr>
+    ;
+    prefix:
+      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+    ;
+    infixr 10 "," => LIST(lhs, rhs);
+  }
+
+  elaborate {
+    VAR(x) => $x;;
+    LIST(a, b) => $1 * $2;;
+    OUT(e) => $1;;
+    DIAG(e) => $1;;
+    IN(x, ty, body) => $1;;
+  }
+}

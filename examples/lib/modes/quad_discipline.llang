@@ -1,0 +1,172 @@
+doctrine QuadDiscipline where {
+  mode Lin;
+  mode Aff;
+  mode Rel;
+  mode Cart;
+
+  structure Lin = linear;
+  structure Aff = affine;
+  structure Rel = relevant;
+  structure Cart = cartesian;
+
+  type Base @Lin;
+  type Base @Aff;
+  type Base @Rel;
+  type Base @Cart;
+
+  gen pair : [Lin.Base, Lin.Base] -> [Lin.Base] @Lin;
+  gen pair : [Aff.Base, Aff.Base] -> [Aff.Base] @Aff;
+  gen pair : [Rel.Base, Rel.Base] -> [Rel.Base] @Rel;
+  gen pair : [Cart.Base, Cart.Base] -> [Cart.Base] @Cart;
+
+  gen unit : [] -> [Lin.Base] @Lin;
+  gen unit : [] -> [Aff.Base] @Aff;
+  gen unit : [] -> [Rel.Base] @Rel;
+  gen unit : [] -> [Cart.Base] @Cart;
+
+  gen dup (a@Rel) : [a] -> [a, a] @Rel;
+  gen dup (a@Cart) : [a] -> [a, a] @Cart;
+
+  gen drop (a@Aff) : [a] -> [] @Aff;
+  gen drop (a@Cart) : [a] -> [] @Cart;
+
+  rule structural coassoc_rel = (a@Rel) : [a] -> [a, a, a] @Rel =
+    dup ; (dup * id[a]) == dup ; (id[a] * dup)
+
+  rule structural coassoc_cart = (a@Cart) : [a] -> [a, a, a] @Cart =
+    dup ; (dup * id[a]) == dup ; (id[a] * dup)
+
+  rule structural counitL_cart = (a@Cart) : [a] -> [a] @Cart =
+    dup ; (drop * id[a]) == id[a]
+
+  rule structural counitR_cart = (a@Cart) : [a] -> [a] @Cart =
+    dup ; (id[a] * drop) == id[a]
+}
+
+surface QuadLin where {
+  doctrine QuadDiscipline;
+  mode Lin;
+
+  lexer {
+    keywords: diag, in, out;
+    symbols: "(", ")", "{", "}", ":", ";", ",";
+  }
+
+  expr {
+    atom:
+      ident "(" <expr> ")" => CALL(name, args)
+    | ident => VAR(name)
+    | "out" <expr> => OUT(expr)
+    | "diag" "{" <expr> "}" => DIAG(expr)
+    | "(" <expr> ")" => <expr>
+    ;
+    prefix:
+      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+    ;
+    infixr 10 "," => LIST(lhs, rhs);
+  }
+
+  elaborate {
+    VAR(x) => $x;;
+    LIST(a, b) => $1 * $2;;
+    OUT(e) => $1;;
+    DIAG(e) => $1;;
+    IN(x, ty, body) => $1;;
+  }
+}
+
+surface QuadAff where {
+  doctrine QuadDiscipline;
+  mode Aff;
+
+  lexer {
+    keywords: diag, in, out;
+    symbols: "(", ")", "{", "}", ":", ";", ",";
+  }
+
+  expr {
+    atom:
+      ident "(" <expr> ")" => CALL(name, args)
+    | ident => VAR(name)
+    | "out" <expr> => OUT(expr)
+    | "diag" "{" <expr> "}" => DIAG(expr)
+    | "(" <expr> ")" => <expr>
+    ;
+    prefix:
+      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+    ;
+    infixr 10 "," => LIST(lhs, rhs);
+  }
+
+  elaborate {
+    VAR(x) => $x;;
+    LIST(a, b) => $1 * $2;;
+    OUT(e) => $1;;
+    DIAG(e) => $1;;
+    IN(x, ty, body) => $1;;
+  }
+}
+
+surface QuadRel where {
+  doctrine QuadDiscipline;
+  mode Rel;
+
+  lexer {
+    keywords: diag, in, out;
+    symbols: "(", ")", "{", "}", ":", ";", ",";
+  }
+
+  expr {
+    atom:
+      ident "(" <expr> ")" => CALL(name, args)
+    | ident => VAR(name)
+    | "out" <expr> => OUT(expr)
+    | "diag" "{" <expr> "}" => DIAG(expr)
+    | "(" <expr> ")" => <expr>
+    ;
+    prefix:
+      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+    ;
+    infixr 10 "," => LIST(lhs, rhs);
+  }
+
+  elaborate {
+    VAR(x) => $x;;
+    LIST(a, b) => $1 * $2;;
+    OUT(e) => $1;;
+    DIAG(e) => $1;;
+    IN(x, ty, body) => $1;;
+  }
+}
+
+surface QuadCart where {
+  doctrine QuadDiscipline;
+  mode Cart;
+
+  lexer {
+    keywords: diag, in, out;
+    symbols: "(", ")", "{", "}", ":", ";", ",";
+  }
+
+  expr {
+    atom:
+      ident "(" <expr> ")" => CALL(name, args)
+    | ident => VAR(name)
+    | "out" <expr> => OUT(expr)
+    | "diag" "{" <expr> "}" => DIAG(expr)
+    | "(" <expr> ")" => <expr>
+    ;
+    prefix:
+      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+    ;
+    infixr 10 "," => LIST(lhs, rhs);
+  }
+
+  elaborate {
+    VAR(x) => $x;;
+    LIST(a, b) => $1 * $2;;
+    OUT(e) => $1;;
+    DIAG(e) => $1;;
+    IN(x, ty, body) => $1;;
+  }
+}
