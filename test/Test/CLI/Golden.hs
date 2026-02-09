@@ -8,6 +8,9 @@ import Test.Tasty.HUnit
 import Strat.CLI (runCLI, CLIOptions(..))
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
+import System.Directory (getTemporaryDirectory, removeFile)
+import System.FilePath ((</>))
 import Paths_llang (getDataFileName)
 
 
@@ -25,6 +28,7 @@ tests =
     , testCase "minifun.concat2.run.llang output" (goldenRun "examples/run/codegen/minifun/concat2.run.llang" expectedMiniFunConcat2)
     , testCase "term_ref.run.llang output" (goldenRun "examples/run/terms/term_ref.run.llang" expectedTermRef)
     , testCase "dual_discipline_surface linear error includes generator and mode" testDualDisciplineLinearError
+    , testCase "surface unknown generator error includes generator and mode" testSurfaceUnknownGeneratorError
     ]
 
 
@@ -46,6 +50,71 @@ testDualDisciplineLinearError = do
       assertBool "expected generator name in error" ("dup" `T.isInfixOf` err)
       assertBool "expected mode name in error" ("Lin" `T.isInfixOf` err)
     Right out -> assertFailure ("expected linear run to fail, got output:\n" <> T.unpack out)
+
+testSurfaceUnknownGeneratorError :: Assertion
+testSurfaceUnknownGeneratorError = do
+  tmpDir <- getTemporaryDirectory
+  let path = tmpDir </> "llang-surface-unknown-generator.run.llang"
+  TIO.writeFile path surfaceUnknownGeneratorRun
+  result <- runCLI (CLIOptions path Nothing)
+  _ <- removeFile path
+  case result of
+    Left err -> do
+      assertBool "expected surface unknown generator prefix" ("run: surface: unknown generator:" `T.isInfixOf` err)
+      assertBool "expected generator name in error" ("nope" `T.isInfixOf` err)
+      assertBool "expected mode name in error" ("M" `T.isInfixOf` err)
+    Right out -> assertFailure ("expected run to fail, got output:\n" <> T.unpack out)
+
+surfaceUnknownGeneratorRun :: Text
+surfaceUnknownGeneratorRun =
+  T.unlines
+    [ "doctrine D where {"
+    , "  mode M;"
+    , "  structure M = linear;"
+    , "  type A @M;"
+    , "  gen f : [M.A] -> [M.A] @M;"
+    , "}"
+    , "surface S where {"
+    , "  doctrine D;"
+    , "  mode M;"
+    , "  lexer {"
+    , "    keywords: diag, in, out;"
+    , "    symbols: \"(\", \")\", \"{\", \"}\", \":\", \";\", \",\";"
+    , "  }"
+    , "  expr {"
+    , "    atom:"
+    , "      ident \"(\" <expr> \")\" => CALL(name, args)"
+    , "    | ident => VAR(name)"
+    , "    | \"out\" <expr> => OUT(expr)"
+    , "    | \"diag\" \"{\" <expr> \"}\" => DIAG(expr)"
+    , "    | \"(\" <expr> \")\" => <expr>"
+    , "    ;"
+    , "    prefix:"
+    , "      \"in\" ident \":\" <type> \";\" <expr> => IN(name, ty, body)"
+    , "    ;"
+    , "    infixr 10 \",\" => LIST(lhs, rhs);"
+    , "  }"
+    , "  elaborate {"
+    , "    VAR(x) => $x;;"
+    , "    LIST(a, b) => $1 * $2;;"
+    , "    OUT(e) => $1;;"
+    , "    DIAG(e) => $1;;"
+    , "    IN(x, ty, body) => $1;;"
+    , "  }"
+    , "}"
+    , "run main where {"
+    , "  doctrine D;"
+    , "  mode M;"
+    , "  surface S;"
+    , "  show normalized;"
+    , "}"
+    , "---"
+    , "diag {"
+    , "  in x:M.A;"
+    , "  out nope(x)"
+    , "}"
+    , "---"
+    ]
 
 expectedPlanarMonoid :: Text
 expectedPlanarMonoid =

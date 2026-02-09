@@ -30,6 +30,7 @@ tests =
     "Poly.Surface"
     [ testCase "surface parse/elab ok" testSurfaceElabOk
     , testCase "surface inserts dup for multiple uses" testSurfaceDup
+    , testCase "surface dup chain is left-associated for 3 uses" testSurfaceDupLeftAssociated
     , testCase "surface inserts drop for unused" testSurfaceDrop
     , testCase "surface affine rejects duplication" testSurfaceAffineRejectsDup
     , testCase "surface relevant rejects drop" testSurfaceRelevantRejectsDrop
@@ -156,6 +157,28 @@ testSurfaceDup = do
   case elabSurfaceExpr emptyEnv doc surf expr of
     Left err -> assertFailure (T.unpack err)
     Right diag -> assertHasGen "dup" diag
+
+testSurfaceDupLeftAssociated :: Assertion
+testSurfaceDupLeftAssociated = do
+  let doc = mkDoctrineWithDiscipline Cartesian
+  surf <- either (assertFailure . T.unpack) pure (mkSurfaceWithSpec specText doc)
+  let expr = T.unlines [ "term {", "  in x:A;", "  out x, x, x", "}" ]
+  diag <- either (assertFailure . T.unpack) pure (elabSurfaceExpr emptyEnv doc surf expr)
+  let dupEdges = [ e | e@(Edge _ (PGen g _) _ _) <- IM.elems (dEdges diag), g == GenName "dup" ]
+  length dupEdges @?= 2
+  inPort <- case dIn diag of
+    [p] -> pure p
+    _ -> assertFailure "expected exactly one input port for binder"
+  firstDup <- case filter (\e -> eIns e == [inPort]) dupEdges of
+    [e] -> pure e
+    _ -> assertFailure "expected exactly one dup edge consuming binder input"
+  o1 <- case eOuts firstDup of
+    [p, _] -> pure p
+    _ -> assertFailure "expected dup codomain to have arity 2"
+  secondDup <- case filter (\e -> eId e /= eId firstDup) dupEdges of
+    [e] -> pure e
+    _ -> assertFailure "expected exactly one remaining dup edge"
+  eIns secondDup @?= [o1]
 
 testSurfaceDrop :: Assertion
 testSurfaceDrop = do

@@ -664,10 +664,13 @@ Elaboration semantics:
 - Variable uses are checked against the discipline:
   - **linear**: exactly once (0 or >1 uses is an error).
   - **affine**: at most once; 0 uses insert `drop`.
-  - **relevant**: at least once; multiple uses insert `dup`
-    (left‑associated duplication).
+  - **relevant**: at least once; multiple uses insert a **left‑associated** `dup`
+    chain: for 3 uses the inserted shape is `dup ; (dup * id[a])` (i.e. the
+    second `dup` consumes the **left** output of the first `dup`).
   - **cartesian**: any number of uses; 0 uses insert `drop`,
-    >1 uses insert `dup` (left‑associated duplication).
+    multiple uses insert a **left‑associated** `dup` chain: for 3 uses the
+    inserted shape is `dup ; (dup * id[a])` (i.e. the second `dup` consumes
+    the **left** output of the first `dup`).
 
 ### 6.7 Models
 

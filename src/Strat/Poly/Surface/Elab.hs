@@ -810,19 +810,20 @@ mergePortsAll keep drop sd = do
   pure (diag', uses', tags')
 
 
--- Duplication tree
+-- Duplication tree (left-associated)
 
 dupOutputs :: GenDecl -> PortId -> TypeExpr -> Diagram -> Int -> Fresh ([PortId], Diagram)
 dupOutputs dupGen source ty diag n
-  | not (null (gdAttrs dupGen)) = liftEither (Left "surface: structural generator dup/drop must not declare attributes")
+  | not (null (gdAttrs dupGen)) =
+      liftEither (Left "surface: structural generator dup/drop must not declare attributes")
   | n <= 0 = pure ([], diag)
   | n == 1 = pure ([source], diag)
   | otherwise = do
       let (p1, diag1) = freshPort ty diag
       let (p2, diag2) = freshPort ty diag1
       diag3 <- liftEither (addEdgePayload (PGen (gdName dupGen) M.empty) [source] [p1, p2] diag2)
-      (rest, diag4) <- dupOutputs dupGen p2 ty diag3 (n - 1)
-      pure (p1:rest, diag4)
+      (leftOuts, diag4) <- dupOutputs dupGen p1 ty diag3 (n - 1)
+      pure (leftOuts ++ [p2], diag4)
 
 ensureStructuralGenAttrs :: GenDecl -> Either Text ()
 ensureStructuralGenAttrs gen =
@@ -851,8 +852,11 @@ varSurf mode name ty =
 lookupGen :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGen doc mode name =
   case M.lookup mode (dGens doc) >>= M.lookup name of
-    Nothing -> Left "surface: unknown generator"
+    Nothing -> Left ("surface: unknown generator: " <> renderGen name <> " @" <> renderMode mode)
     Just gd -> Right gd
+  where
+    renderMode (ModeName m) = m
+    renderGen (GenName g) = g
 
 genDFromDecl :: ModeTheory -> ModeName -> ElabEnv -> GenDecl -> Maybe [TypeExpr] -> AttrMap -> Fresh Diagram
 genDFromDecl mt mode env gen mArgs attrs = do
