@@ -26,7 +26,10 @@ tests =
     , testCase "mode_map_demo.run.llang output" (goldenRun "examples/run/algebra/mode_map_demo.run.llang" expectedModeMapDemo)
     , testCase "hello_world.run.llang output" (goldenRun "examples/run/algebra/hello_world.run.llang" expectedHelloWorld)
     , testCase "minifun.concat2.run.llang output" (goldenRun "examples/run/codegen/minifun/concat2.run.llang" expectedMiniFunConcat2)
-    , testCase "js_fold_ssa.run.llang output" (goldenRun "examples/run/codegen/js_fold_ssa.run.llang" expectedJsFoldSSA)
+    , testCase "server_targets.run.llang bun output" (goldenRunNamed "examples/run/codegen/server_targets.run.llang" "bun" expectedServerTargetBun)
+    , testCase "server_targets.run.llang express output" (goldenRunNamed "examples/run/codegen/server_targets.run.llang" "express" expectedServerTargetExpress)
+    , testCase "arith_targets.run.llang js output" (goldenRunNamed "examples/run/codegen/arith_targets.run.llang" "js" expectedArithTargetJs)
+    , testCase "arith_targets.run.llang c output" (goldenRunNamed "examples/run/codegen/arith_targets.run.llang" "c" expectedArithTargetC)
     , testCase "term_ref.run.llang output" (goldenRun "examples/run/terms/term_ref.run.llang" expectedTermRef)
     , testCase "dual_discipline_surface linear error includes generator and mode" testDualDisciplineLinearError
     , testCase "surface unknown generator error includes generator and mode" testSurfaceUnknownGeneratorError
@@ -37,6 +40,14 @@ goldenRun :: FilePath -> Text -> Assertion
 goldenRun relPath expected = do
   path <- getDataFileName relPath
   result <- runCLI (CLIOptions path Nothing)
+  case result of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> out @?= expected
+
+goldenRunNamed :: FilePath -> Text -> Text -> Assertion
+goldenRunNamed relPath runName expected = do
+  path <- getDataFileName relPath
+  result <- runCLI (CLIOptions path (Just runName))
   case result of
     Left err -> assertFailure (T.unpack err)
     Right out -> out @?= expected
@@ -233,12 +244,62 @@ expectedMiniFunConcat2 =
     , "console.log((nextLine() + nextLine()));"
     ]
 
-expectedJsFoldSSA :: Text
-expectedJsFoldSSA =
+expectedServerTargetBun :: Text
+expectedServerTargetBun =
   T.intercalate "\n"
     [ "value:"
     , "(() => {"
-    , "  const msg = \"Hello, world!\";"
+    , "  const p5 = \"!\";"
+    , "  const p2 = \", \";"
+    , "  const world = \"world\";"
+    , "  const hello = \"Hello\";"
+    , "  const p3 = hello + p2;"
+    , "  const p4 = p3 + world;"
+    , "  const msg = p4 + p5;"
     , "  Bun.serve({ fetch(req) { return new Response(msg); } });"
     , "})()"
+    ]
+
+expectedServerTargetExpress :: Text
+expectedServerTargetExpress =
+  T.intercalate "\n"
+    [ "value:"
+    , "(() => {"
+    , "  const p5 = \"!\";"
+    , "  const p2 = \", \";"
+    , "  const world = \"world\";"
+    , "  const hello = \"Hello\";"
+    , "  const p3 = hello + p2;"
+    , "  const p4 = p3 + world;"
+    , "  const msg = p4 + p5;"
+    , "  const app = require(\"express\")(); app.get(\"/\", (_req, res) => res.send(msg)); app.listen(3000);"
+    , "})()"
+    ]
+
+expectedArithTargetJs :: Text
+expectedArithTargetJs =
+  T.intercalate "\n"
+    [ "value:"
+    , "(() => {"
+    , "  const p3 = 3;"
+    , "  const p2 = 2;"
+    , "  const p4 = (p2 * p3);"
+    , "  const p1 = 1;"
+    , "  const p0 = (p1 + p4);"
+    , "  return p0;"
+    , "})()"
+    ]
+
+expectedArithTargetC :: Text
+expectedArithTargetC =
+  T.intercalate "\n"
+    [ "value:"
+    , "int main() {"
+    , "  int p3 = 3;"
+    , "  int p2 = 2;"
+    , "  int p4 = (p2 * p3);"
+    , "  int p1 = 1;"
+    , "  int p0 = (p1 + p4);"
+    , "  return p0;"
+    , "}"
     ]

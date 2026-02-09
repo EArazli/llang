@@ -682,15 +682,17 @@ Elaboration semantics:
 ### 6.7 Models
 
 ```
-model <Name> : <Doctrine> where {
+model <Name> : <Doctrine> [using <BaseModel>] where {
   backend = algebra;
-  backend = fold_ssa;
+  backend = fold;
+  fold { ... };
   default = symbolic;
   op <GenName>(args...) = <expr>;
 }
 ```
 
 `backend` is optional; default is `algebra`.
+`backend = fold_ssa` is accepted as a deprecated alias for `backend = fold`.
 
 Models use the same expression language for generator clauses.
 
@@ -721,28 +723,76 @@ Generators (including `dup`, `drop`, and `swap`) are interpreted only via the mo
 clauses or the model’s default behavior; no special built‑ins are assumed.
 Attribute variables evaluate to atoms rendered as `name:Sort`.
 
-#### Fold SSA backend (`backend = fold_ssa`)
+#### Fold backend (`backend = fold`)
 
-`fold_ssa` renders the entire diagram into a single string value.
+`fold` renders the whole diagram to a single string (`[VString ...]`) using a
+user-specified `fold { ... }` block.
 
-- Open diagrams are allowed.
-- Evaluation uses deterministic topological edge order and rejects cycles with
-  `fold_ssa: cyclic diagrams are not supported`.
-- Variable names are derived from `dPortLabel` when present, else fallback `pN`,
-  then sanitized/disambiguated deterministically:
-  - replace non-`[A-Za-z0-9_]` with `_`,
-  - empty becomes `pN`,
-  - leading digit gets `_` prefix,
-  - JS reserved words get `_` prefix,
-  - repeated base names become `base_N`.
-- Emission form:
-  - closed diagram: `(() => { ... })()`,
-  - open diagram: `(x, y, ...) => { ... }`.
-- Edge emission:
-  - codomain 0: statement line,
-  - codomain 1: `const out = expr;`,
-  - codomain >1: `const [o1, o2, ...] = expr;`.
-- Multi-output generators use destructuring.
+Required hooks and signatures:
+
+- `prologue_closed()`
+- `epilogue_closed()`
+- `prologue_open(params, paramDecls)`
+- `epilogue_open()`
+- `bind0(stmt)`
+- `bind1(out, ty, expr)`
+- `bindN(outs, decls, expr)`
+- `return0()`
+- `return1(out, ty)`
+- `returnN(outs, decls)`
+
+All hooks must evaluate to string values.
+
+Optional fold settings:
+
+- `indent = "<text>";` (default `"  "`)
+- `reserved = ["..."];` (default `[]`)
+
+Naming is deterministic and target-agnostic:
+
+- base name comes from `dPortLabel` when present, else `pN`,
+- sanitize by replacing non-`[A-Za-z0-9_]` with `_`,
+- empty -> `pN`,
+- leading digit gets `_` prefix,
+- reserved names get `_` prefix,
+- global uniqueness is enforced on final names (including prefixes), with fixed
+  boundary names pre-reserved.
+
+Evaluation uses deterministic topological edge order and rejects cycles.
+
+Box behavior:
+
+- boundary input/output names are fixed to outer names,
+- non-boundary inner names are prefixed with deterministic `__b<edgeId>_`,
+- inner code is inlined directly (no hard-coded alias statements).
+
+Emission behavior:
+
+- closed diagrams use `prologue_closed`/`epilogue_closed`,
+- open diagrams use `prologue_open(params, paramDecls)`/`epilogue_open`,
+- codomain 0 uses `bind0(stmt)`,
+- codomain 1 uses `bind1(out, ty, expr)`,
+- codomain >1 uses `bindN(outs, decls, expr)`,
+- returns use `return0/1/N` (`""` means no emitted return line),
+- expressions for codomain >0 must be single-line.
+
+#### Model inheritance
+
+`model Child : D using Base where { ... }` merges local overrides with `Base`.
+
+- Base model must already be in scope.
+- Base and child doctrine names must match exactly.
+- Backend/default:
+  - child setting overrides if present,
+  - otherwise inherit base setting.
+- Fold spec:
+  - `indent`: child override if present; otherwise inherit base; else `"  "`,
+  - `reserved`: set union,
+  - hooks: inherited from base; child hook with same name overrides.
+- `op` clauses:
+  - inherited from base,
+  - child clause with same generator name overrides,
+  - otherwise child clause is appended.
 
 ---
 
@@ -796,7 +846,7 @@ Execution pipeline for the effective run configuration:
 6. Normalize (policy default: `UseStructuralAsBidirectional`).
 7. Optionally evaluate via the selected model:
    - `backend = algebra`: requires closedness on inputs (`dIn = []`),
-   - `backend = fold_ssa`: open diagrams are allowed.
+   - `backend = fold`: open diagrams are allowed.
 8. Optionally check coherence and render its report.
 9. Print requested outputs.
 

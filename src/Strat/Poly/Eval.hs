@@ -14,7 +14,7 @@ import Strat.Model.Spec (ModelSpec(..), ModelBackend(..), OpClause(..), DefaultB
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), PortId(..), EdgeId(..))
-import Strat.Poly.FoldSSA (renderFoldSSA)
+import Strat.Poly.Fold (renderFold)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Attr (AttrMap, AttrTerm(..), AttrLit(..), renderAttrVar)
@@ -28,7 +28,7 @@ data PolyModel = PolyModel
 
 instantiatePolyModel :: ModelSpec -> PolyModel
 instantiatePolyModel spec =
-  let clauseMap = M.fromList [ (ocOp c, mkClause c) | c <- msClauses spec ]
+  let clauseMap = M.fromList [ (ocOp c, mkClause c) | c <- msOps spec ]
   in PolyModel
       { pmInterp = \(GenName name) args ->
           case M.lookup name clauseMap of
@@ -62,8 +62,8 @@ evalDiagram doc spec diag inputs =
   case msBackend spec of
     BackendAlgebra ->
       evalDiagramWithModel (instantiatePolyModel spec) doc diag inputs
-    BackendFoldSSA ->
-      renderFoldSSA doc spec diag
+    BackendFold ->
+      renderFold doc spec diag
 
 evalDiagramWithModel :: PolyModel -> Doctrine -> Diagram -> [Value] -> Either Text [Value]
 evalDiagramWithModel model doc diag inputs = do

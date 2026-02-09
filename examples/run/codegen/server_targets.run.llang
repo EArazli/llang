@@ -1,0 +1,22 @@
+import "../../lib/codegen/server_ir.llang";
+
+run_spec Program where {
+  doctrine ServerIR;
+  mode M;
+  surface ServerIR_Surface;
+  show value;
+}
+---
+let hello = "Hello";
+let world = "world";
+let msg = hello + ", " + world + "!";
+serve(msg)
+---
+
+run bun using Program where {
+  model ServerJS_Bun;
+}
+
+run express using Program where {
+  model ServerJS_Express;
+}

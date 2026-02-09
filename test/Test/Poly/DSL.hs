@@ -10,7 +10,8 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as M
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
-import Strat.Frontend.Env (emptyEnv, meDoctrines, meMorphisms, meRuns)
+import Strat.Frontend.Env (emptyEnv, meDoctrines, meModels, meMorphisms, meRuns)
+import Strat.Model.Spec (MExpr(..), ModelBackend(..), ModelSpec(..), OpClause(..), FoldSpec(..))
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.ModeTheory (ModeName(..), mtModes)
@@ -40,6 +41,8 @@ tests =
     , testCase "run inherits expression from run_spec" testRunExprInheritedFromRunSpec
     , testCase "run_spec inheritance chains expression" testRunSpecInheritanceChain
     , testCase "run without inherited expression fails" testRunMissingExpressionFails
+    , testCase "model fold block elaborates required hooks" testModelFoldBlockElab
+    , testCase "model using merges fold and ops" testModelUsingMerges
     ]
 
 testPolyDSLNormalize :: Assertion
@@ -317,6 +320,115 @@ testRunSpecInheritanceChain = do
     Nothing -> assertFailure "expected run main"
     Just rs -> pure rs
   prExprText runSpec @?= "Lit"
+
+testModelFoldBlockElab :: Assertion
+testModelFoldBlockElab = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  type A @M;"
+        , "  gen g : [A] -> [A] @M;"
+        , "}"
+        , "model F : D where {"
+        , "  backend = fold;"
+        , "  default = symbolic;"
+        , "  fold {"
+        , "    indent = \"  \";"
+        , "    reserved = [\"if\", \"return\"];"
+        , "    prologue_closed() = \"(() => {\";"
+        , "    epilogue_closed() = \"})()\";"
+        , "    prologue_open(params, paramDecls) = \"(x) => {\";"
+        , "    epilogue_open() = \"}\";"
+        , "    bind0(stmt) = stmt;"
+        , "    bind1(out, ty, expr) = expr;"
+        , "    bindN(outs, decls, expr) = expr;"
+        , "    return0() = \"\";"
+        , "    return1(out, ty) = out;"
+        , "    returnN(outs, decls) = outs;"
+        , "  }"
+        , "  op g(x) = x;"
+        , "}"
+        ]
+  env <- case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right e -> pure e
+  (_, modelSpec) <- case M.lookup "F" (meModels env) of
+    Nothing -> assertFailure "expected model F"
+    Just m -> pure m
+  msBackend modelSpec @?= BackendFold
+  foldSpec <- case msFold modelSpec of
+    Nothing -> assertFailure "expected fold spec in model F"
+    Just fs -> pure fs
+  let requiredHooks =
+        [ "prologue_closed"
+        , "epilogue_closed"
+        , "prologue_open"
+        , "epilogue_open"
+        , "bind0"
+        , "bind1"
+        , "bindN"
+        , "return0"
+        , "return1"
+        , "returnN"
+        ]
+  mapM_ (\name -> assertBool ("missing hook: " <> T.unpack name) (M.member name (fsHooks foldSpec))) requiredHooks
+
+testModelUsingMerges :: Assertion
+testModelUsingMerges = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  type A @M;"
+        , "  gen concat : [A, A] -> [A] @M;"
+        , "  gen serve : [A] -> [] @M;"
+        , "}"
+        , "model Base : D where {"
+        , "  backend = fold;"
+        , "  default = symbolic;"
+        , "  fold {"
+        , "    prologue_closed() = \"(() => {\";"
+        , "    epilogue_closed() = \"})()\";"
+        , "    prologue_open(params, paramDecls) = \"(x) => {\";"
+        , "    epilogue_open() = \"}\";"
+        , "    bind0(stmt) = stmt;"
+        , "    bind1(out, ty, expr) = expr;"
+        , "    bindN(outs, decls, expr) = expr;"
+        , "    return0() = \"\";"
+        , "    return1(out, ty) = out;"
+        , "    returnN(outs, decls) = outs;"
+        , "  }"
+        , "  op concat(a, b) = \"base_concat\";"
+        , "  op serve(x) = \"base_serve\";"
+        , "}"
+        , "model Child : D using Base where {"
+        , "  op serve(x) = \"child_serve\";"
+        , "}"
+        ]
+  env <- case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right e -> pure e
+  (_, baseModel) <- case M.lookup "Base" (meModels env) of
+    Nothing -> assertFailure "expected model Base"
+    Just m -> pure m
+  (_, childModel) <- case M.lookup "Child" (meModels env) of
+    Nothing -> assertFailure "expected model Child"
+    Just m -> pure m
+  msBackend childModel @?= BackendFold
+  msFold childModel @?= msFold baseModel
+  lookupOpExpr "concat" childModel @?= Just (MString "base_concat")
+  lookupOpExpr "serve" childModel @?= Just (MString "child_serve")
+  where
+    lookupOpExpr name spec = ocExpr <$> findOp name (msOps spec)
+    findOp _ [] = Nothing
+    findOp name (clause:rest)
+      | ocOp clause == name = Just clause
+      | otherwise = findOp name rest
 
 testRunMissingExpressionFails :: Assertion
 testRunMissingExpressionFails = do

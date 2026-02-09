@@ -2,24 +2,35 @@
 module Strat.Model.Spec
   ( ModelSpec(..)
   , ModelBackend(..)
+  , FoldSpec(..)
   , OpClause(..)
   , DefaultBehavior(..)
   , MExpr(..)
   ) where
 
 import Data.Text (Text)
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 
 
 data ModelBackend
   = BackendAlgebra
-  | BackendFoldSSA
+  | BackendFold
   deriving (Eq, Ord, Show)
+
+data FoldSpec = FoldSpec
+  { fsIndent   :: Text
+  , fsReserved :: S.Set Text
+  , fsHooks    :: M.Map Text OpClause
+  }
+  deriving (Eq, Show)
 
 data ModelSpec = ModelSpec
   { msName    :: Text
-  , msClauses :: [OpClause]
+  , msOps     :: [OpClause]
   , msDefault :: DefaultBehavior
   , msBackend :: ModelBackend
+  , msFold    :: Maybe FoldSpec
   }
   deriving (Eq, Show)
 

@@ -9,10 +9,11 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Data.Maybe (listToMaybe)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
 import Strat.Frontend.Env
-import Strat.Model.Spec (ModelSpec(..), ModelBackend(..), DefaultBehavior(..), OpClause(..))
+import Strat.Model.Spec (ModelSpec(..), ModelBackend(..), DefaultBehavior(..), FoldSpec(..), OpClause(..))
 import Strat.DSL.Template (instantiateTemplate)
 import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, elabPolyRun, parsePolicy)
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
@@ -80,10 +81,10 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
           def <- elabPolySurfaceDecl name doc spec
           let env' = env { meSurfaces = M.insert name def (meSurfaces env) }
           pure (env', rawTerms, rawRuns)
-        DeclModel name doc items -> do
+        DeclModel name doc mBase items -> do
           ensureAbsent "model" name (meModels env)
-          spec <- elabModelSpec name items
           _ <- lookupDoctrine env doc
+          spec <- elabModelSpec env name doc mBase items
           let env' = env { meModels = M.insert name (doc, spec) (meModels env) }
           pure (env', rawTerms, rawRuns)
         DeclMorphism morphDecl -> do
@@ -317,34 +318,171 @@ mergeRawRun base override =
           Just v -> Just v
           Nothing -> f b
 
-elabModelSpec :: Text -> [RawModelItem] -> Either Text ModelSpec
-elabModelSpec name items = do
+data LocalModelSpec = LocalModelSpec
+  { lmsBackend :: Maybe ModelBackend
+  , lmsDefault :: Maybe DefaultBehavior
+  , lmsOps :: [OpClause]
+  , lmsFold :: Maybe FoldSpec
+  , lmsFoldIndentOverride :: Maybe Text
+  }
+
+elabModelSpec :: ModuleEnv -> Text -> Text -> Maybe Text -> [RawModelItem] -> Either Text ModelSpec
+elabModelSpec env name docName mBase items = do
+  local <- elabLocalModelSpec name items
+  spec0 <- case mBase of
+    Nothing ->
+      pure
+        ( ModelSpec
+            { msName = name
+            , msOps = lmsOps local
+            , msDefault = maybe DefaultSymbolic id (lmsDefault local)
+            , msBackend = maybe BackendAlgebra id (lmsBackend local)
+            , msFold = lmsFold local
+            }
+        )
+    Just baseName -> do
+      (baseDocName, baseSpec) <-
+        case M.lookup baseName (meModels env) of
+          Nothing -> Left ("Unknown model: " <> baseName)
+          Just pair -> Right pair
+      if baseDocName /= docName
+        then Left "elabModelSpec: base model doctrine mismatch"
+        else pure ()
+      pure (mergeModelSpec name baseSpec local)
+  case msBackend spec0 of
+    BackendAlgebra -> pure spec0
+    BackendFold ->
+      case msFold spec0 of
+        Nothing -> Left "elabModelSpec: backend fold requires fold block"
+        Just fs -> do
+          validateFoldHooks fs
+          pure spec0
+  where
+    mergeModelSpec mergedName baseSpec localSpec =
+      let mergedBackend = maybe (msBackend baseSpec) id (lmsBackend localSpec)
+          mergedDefault = maybe (msDefault baseSpec) id (lmsDefault localSpec)
+          mergedOps = mergeOps (msOps baseSpec) (lmsOps localSpec)
+          mergedFold = mergeFoldSpec (msFold baseSpec) (lmsFold localSpec) (lmsFoldIndentOverride localSpec)
+      in ModelSpec
+        { msName = mergedName
+        , msOps = mergedOps
+        , msDefault = mergedDefault
+        , msBackend = mergedBackend
+        , msFold = mergedFold
+        }
+    mergeFoldSpec baseFold childFold childIndentOverride =
+      case (baseFold, childFold) of
+        (Nothing, Nothing) -> Nothing
+        (Just b, Nothing) -> Just b
+        (Nothing, Just c) -> Just c
+        (Just b, Just c) ->
+          Just
+            FoldSpec
+              { fsIndent = maybe (fsIndent b) id childIndentOverride
+              , fsReserved = S.union (fsReserved b) (fsReserved c)
+              , fsHooks = M.union (fsHooks c) (fsHooks b)
+              }
+    mergeOps baseOps childOps =
+      let childMap = M.fromList [ (ocOp op, op) | op <- childOps ]
+          baseNames = S.fromList (map ocOp baseOps)
+          mergedBase = map (\op -> M.findWithDefault op (ocOp op) childMap) baseOps
+          added = [ op | op <- childOps, not (ocOp op `S.member` baseNames) ]
+      in mergedBase <> added
+
+elabLocalModelSpec :: Text -> [RawModelItem] -> Either Text LocalModelSpec
+elabLocalModelSpec modelName items = do
   let defaults = [ d | RMDefault d <- items ]
-  def <-
-    case defaults of
-      [] -> Right DefaultSymbolic
-      [d] -> Right d
-      _ -> Left "Multiple default clauses in model"
+  def <- case defaults of
+    [] -> Right Nothing
+    [d] -> Right (Just d)
+    _ -> Left "Multiple default clauses in model"
   let backends = [ b | RMBackend b <- items ]
-  backend <-
-    case backends of
-      [] -> Right BackendAlgebra
-      [RMBAlgebra] -> Right BackendAlgebra
-      [RMBFoldSSA] -> Right BackendFoldSSA
-      _ -> Left ("elabModelSpec: multiple backend clauses in model " <> name)
+  backend <- case backends of
+    [] -> Right Nothing
+    [RMBAlgebra] -> Right (Just BackendAlgebra)
+    [RMBFold] -> Right (Just BackendFold)
+    _ -> Left ("elabModelSpec: multiple backend clauses in model " <> modelName)
   let clauses = [ c | RMClause c <- items ]
   let opNames = map rmcOp clauses
   case findDup opNames of
     Just dup -> Left ("Duplicate op clause in model: " <> dup)
     Nothing -> pure ()
   let ops = map (\c -> OpClause (rmcOp c) (rmcArgs c) (rmcExpr c)) clauses
-  pure (ModelSpec name ops def backend)
+  let folds = [ f | RMFold f <- items ]
+  (mFold, mIndentOverride) <- case folds of
+    [] -> Right (Nothing, Nothing)
+    [foldItems] -> do
+      fs <- buildFoldSpec foldItems
+      let indOverride = listToMaybe [ txt | RFIndent txt <- foldItems ]
+      Right (Just fs, indOverride)
+    _ -> Left ("elabModelSpec: multiple fold clauses in model " <> modelName)
+  pure
+    LocalModelSpec
+      { lmsBackend = backend
+      , lmsDefault = def
+      , lmsOps = ops
+      , lmsFold = mFold
+      , lmsFoldIndentOverride = mIndentOverride
+      }
   where
     findDup xs = go M.empty xs
     go _ [] = Nothing
     go seen (x:rest)
       | M.member x seen = Just x
       | otherwise = go (M.insert x () seen) rest
+
+buildFoldSpec :: [RawFoldItem] -> Either Text FoldSpec
+buildFoldSpec items = do
+  indent <- case [ t | RFIndent t <- items ] of
+    [] -> Right "  "
+    [t] -> Right t
+    _ -> Left "elabModelSpec: duplicate fold indent"
+  reservedVals <- case [ xs | RFReserved xs <- items ] of
+    [] -> Right []
+    [xs] -> Right xs
+    _ -> Left "elabModelSpec: duplicate fold reserved"
+  let hooksRaw = [ c | RFHook c <- items ]
+  case findDup (map rmcOp hooksRaw) of
+    Just dup -> Left ("elabModelSpec: duplicate fold hook " <> dup)
+    Nothing -> pure ()
+  let hooks = M.fromList [ (rmcOp c, OpClause (rmcOp c) (rmcArgs c) (rmcExpr c)) | c <- hooksRaw ]
+  pure
+    FoldSpec
+      { fsIndent = indent
+      , fsReserved = S.fromList reservedVals
+      , fsHooks = hooks
+      }
+  where
+    findDup xs = go M.empty xs
+    go _ [] = Nothing
+    go seen (x:rest)
+      | M.member x seen = Just x
+      | otherwise = go (M.insert x () seen) rest
+
+validateFoldHooks :: FoldSpec -> Either Text ()
+validateFoldHooks fs = mapM_ checkHook requiredFoldHooks
+  where
+    checkHook (hookName, args) =
+      case M.lookup hookName (fsHooks fs) of
+        Nothing -> Left ("elabModelSpec: missing fold hook " <> hookName)
+        Just clause ->
+          if ocArgs clause == args
+            then Right ()
+            else Left ("elabModelSpec: fold hook " <> hookName <> " has wrong parameters")
+
+requiredFoldHooks :: [(Text, [Text])]
+requiredFoldHooks =
+  [ ("prologue_closed", [])
+  , ("epilogue_closed", [])
+  , ("prologue_open", ["params", "paramDecls"])
+  , ("epilogue_open", [])
+  , ("bind0", ["stmt"])
+  , ("bind1", ["out", "ty", "expr"])
+  , ("bindN", ["outs", "decls", "expr"])
+  , ("return0", [])
+  , ("return1", ["out", "ty"])
+  , ("returnN", ["outs", "decls"])
+  ]
 
 buildPolyFromBase :: Text -> Text -> ModuleEnv -> Doctrine -> Either Text PolyMorph.Morphism
 buildPolyFromBase baseName newName env newDoc = do

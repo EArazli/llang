@@ -91,7 +91,7 @@ runWithEnv env spec = do
                 vals <- evalDiagram docModel modelSpec diagModel []
                 pure (Just vals)
               else Left "run: value requires closed diagram"
-          BackendFoldSSA -> do
+          BackendFold -> do
             vals <- evalDiagram docModel modelSpec diagModel []
             pure (Just vals)
     else Right Nothing

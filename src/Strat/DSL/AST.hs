@@ -5,6 +5,7 @@ module Strat.DSL.AST
   , RawFile(..)
   , RawModelItem(..)
   , RawModelBackend(..)
+  , RawFoldItem(..)
   , RawModelClause(..)
   , RawRunShow(..)
   , RawRun(..)
@@ -42,7 +43,7 @@ data RawDecl
   | DeclDoctrineTemplate RawDoctrineTemplate
   | DeclDoctrineInstantiate RawDoctrineInstantiate
   | DeclSurface Text SurfaceSpec
-  | DeclModel Text Text [RawModelItem]
+  | DeclModel Text Text (Maybe Text) [RawModelItem]
   | DeclMorphism RawPolyMorphism
   | DeclImplements Text Text Text
   | DeclRunSpec Text RawRunSpec
@@ -54,13 +55,20 @@ newtype RawFile = RawFile [RawDecl]
   deriving (Eq, Show)
 
 
-data RawModelBackend = RMBAlgebra | RMBFoldSSA
+data RawModelBackend = RMBAlgebra | RMBFold
   deriving (Eq, Ord, Show)
+
+data RawFoldItem
+  = RFIndent Text
+  | RFReserved [Text]
+  | RFHook RawModelClause
+  deriving (Eq, Show)
 
 data RawModelItem
   = RMDefault DefaultBehavior
   | RMClause RawModelClause
   | RMBackend RawModelBackend
+  | RMFold [RawFoldItem]
   deriving (Eq, Show)
 
 data RawModelClause = RawModelClause

@@ -135,10 +135,11 @@ modelDecl = do
   name <- ident
   _ <- symbol ":"
   doc <- ident
+  base <- optional (symbol "using" *> ident)
   _ <- symbol "where"
   items <- modelBlock
   optionalSemi
-  pure (DeclModel name doc items)
+  pure (DeclModel name doc base items)
 
 morphismDecl :: Parser RawDecl
 morphismDecl = do
@@ -927,13 +928,13 @@ modelBlock = do
   pure items
 
 modelItem :: Parser RawModelItem
-modelItem = backendItem <|> defaultItem <|> clauseItem
+modelItem = backendItem <|> defaultItem <|> foldItem <|> clauseItem
 
 backendItem :: Parser RawModelItem
 backendItem = do
   _ <- symbol "backend"
   _ <- symbol "="
-  b <- (symbol "algebra" $> RMBAlgebra) <|> (symbol "fold_ssa" $> RMBFoldSSA)
+  b <- (symbol "algebra" $> RMBAlgebra) <|> (try (symbol "fold_ssa") $> RMBFold) <|> (symbol "fold" $> RMBFold)
   _ <- symbol ";"
   pure (RMBackend b)
 
@@ -954,6 +955,44 @@ clauseItem = do
   expr' <- mexpr
   optionalSemi
   pure (RMClause (RawModelClause name (maybe [] id args) expr'))
+
+foldItem :: Parser RawModelItem
+foldItem = do
+  _ <- symbol "fold"
+  _ <- symbol "{"
+  items <- many foldBlockItem
+  _ <- symbol "}"
+  pure (RMFold items)
+
+foldBlockItem :: Parser RawFoldItem
+foldBlockItem = foldIndentItem <|> foldReservedItem <|> foldHookItem
+
+foldIndentItem :: Parser RawFoldItem
+foldIndentItem = do
+  _ <- symbol "indent"
+  _ <- symbol "="
+  txt <- stringLiteral
+  _ <- symbol ";"
+  pure (RFIndent txt)
+
+foldReservedItem :: Parser RawFoldItem
+foldReservedItem = do
+  _ <- symbol "reserved"
+  _ <- symbol "="
+  _ <- symbol "["
+  names <- stringLiteral `sepBy` symbol ","
+  _ <- symbol "]"
+  _ <- symbol ";"
+  pure (RFReserved names)
+
+foldHookItem :: Parser RawFoldItem
+foldHookItem = do
+  name <- ident
+  args <- symbol "(" *> ident `sepBy` symbol "," <* symbol ")"
+  _ <- symbol "="
+  expr' <- mexpr
+  _ <- symbol ";"
+  pure (RFHook (RawModelClause name args expr'))
 
 -- Model expressions
 

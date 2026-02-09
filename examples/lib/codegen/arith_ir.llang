@@ -1,0 +1,96 @@
+doctrine ArithIR where {
+  mode M;
+  attrsort string = string;
+  type Expr @M;
+
+  gen lit {value:string} : [] -> [Expr] @M;
+  gen var {name:string} : [] -> [Expr] @M;
+  gen add : [Expr, Expr] -> [Expr] @M;
+  gen mul : [Expr, Expr] -> [Expr] @M;
+}
+
+surface ArithIR_Surface where {
+  doctrine ArithIR;
+  mode M;
+
+  lexer {
+    keywords: ;
+    symbols: "(", ")", "+", "*";
+  }
+
+  expr {
+    atom:
+      string => LIT(value)
+    | ident => VAR(name)
+    | "(" <expr> ")" => <expr>
+    ;
+
+    infixl 20 "*" => MUL(lhs, rhs);
+    infixl 10 "+" => ADD(lhs, rhs);
+  }
+
+  elaborate {
+    LIT(value) => lit(value=#value);;
+    VAR(name) => var(name=#name);;
+    MUL(a, b) => ($1 * $2) ; mul;;
+    ADD(a, b) => ($1 * $2) ; add;;
+  }
+}
+
+model Arith_JS : ArithIR where {
+  backend = fold;
+  default = error "missing op";
+
+  fold {
+    indent = "  ";
+    reserved = ["if", "return", "const", "let"];
+
+    prologue_closed() = "(() => {";
+    epilogue_closed() = "})()";
+
+    prologue_open(params, paramDecls) = "(" ++ params ++ ") => {";
+    epilogue_open() = "}";
+
+    bind0(stmt) = stmt;
+    bind1(out, ty, expr) = "const " ++ out ++ " = " ++ expr ++ ";";
+    bindN(outs, decls, expr) = "const [" ++ outs ++ "] = " ++ expr ++ ";";
+
+    return0() = "";
+    return1(out, ty) = "return " ++ out ++ ";";
+    returnN(outs, decls) = "return [" ++ outs ++ "];";
+  }
+
+  op lit(value) = value;
+  op var(name) = name;
+  op add(a, b) = "(" ++ a ++ " + " ++ b ++ ")";
+  op mul(a, b) = "(" ++ a ++ " * " ++ b ++ ")";
+}
+
+model Arith_C : ArithIR where {
+  backend = fold;
+  default = error "missing op";
+
+  fold {
+    indent = "  ";
+    reserved = ["if", "return", "int"];
+
+    prologue_closed() = "int main() {";
+    epilogue_closed() = "}";
+
+    prologue_open(params, paramDecls) = "int f(" ++ paramDecls ++ ") {";
+    epilogue_open() = "}";
+
+    bind0(stmt) = stmt;
+    bind1(out, ty, expr) = "int " ++ out ++ " = " ++ expr ++ ";";
+    bindN(outs, decls, expr) = "/* unsupported multi-output: " ++ outs ++ " */";
+
+    return0() = "";
+    return1(out, ty) = "return " ++ out ++ ";";
+    returnN(outs, decls) = "return 0;";
+  }
+
+  op lit(value) = value;
+  op var(name) = name;
+  op add(a, b) = "(" ++ a ++ " + " ++ b ++ ")";
+  op mul(a, b) = "(" ++ a ++ " * " ++ b ++ ")";
+}
