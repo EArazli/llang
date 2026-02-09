@@ -17,7 +17,7 @@ import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Context, typeMode)
 import qualified Strat.Poly.TypeExpr as Ty
 import qualified Strat.Poly.UnifyTy as U
-import Strat.Poly.Diagram (Diagram(..), idD, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
+import Strat.Poly.Diagram (Diagram(..), idD, unionDiagram, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
 import Strat.Poly.Attr
 import Strat.Poly.Graph
   ( PortId(..)
@@ -26,10 +26,10 @@ import Strat.Poly.Graph
   , freshPort
   , addEdgePayload
   , mergePorts
+  , setPortLabel
   , validateDiagram
   , shiftDiagram
   , diagramPortType
-  , unionDisjointIntMap
   )
 import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
@@ -538,7 +538,9 @@ evalTemplate menv doc mt mode _spec _cart env paramMap subst holeMap childList t
   case templ of
     THole n ->
       case drop (n - 1) childList of
-        (sd:_) -> pure (tagHole n sd)
+        (sd:_) ->
+          -- Child tags are local to the child template; re-tag only at this level.
+          pure (tagHole n sd { sdTags = M.empty })
         [] -> liftEither (Left "surface: template hole out of range")
     TVar name -> do
       varName <- case M.lookup name paramMap of
@@ -705,7 +707,8 @@ applyBinder mt doc mode cart env (Just binder) holeMap sd =
       tyAnn' <- liftEither (elabSurfaceTypeExpr doc mode tyAnn)
       let varTy = applySubstTy mt (eeTypeSubst env) tyAnn'
       let (source, diag1) = freshPort varTy (sdDiag sd)
-      let sd1 = sd { sdDiag = diag1 }
+      diag1a <- liftEither (setPortLabel source varName diag1)
+      let sd1 = sd { sdDiag = diag1a }
       sd2 <- connectVar doc mode cart varName source varTy sd1 True
       pure sd2
     BinderInfo _ (BinderValue varName valueArgIdx) -> do
@@ -721,7 +724,9 @@ applyBinder mt doc mode cart env (Just binder) holeMap sd =
                 Nothing -> liftEither (Left "surface: missing bound value type")
                 Just t -> pure t
               sd1 <- unifyVarType mt varName ty sd
-              sd2 <- connectVar doc mode cart varName source ty sd1 False
+              diagLabeled <- liftEither (setPortLabel source varName (sdDiag sd1))
+              let sd1a = sd1 { sdDiag = diagLabeled }
+              sd2 <- connectVar doc mode cart varName source ty sd1a False
               let tags' = M.delete (TagHole hidx) (sdTags sd2)
               pure sd2 { sdTags = tags' }
             _ ->
@@ -747,7 +752,7 @@ connectVar _doc _mode ops varName source ty sd sourceIsInput = do
   let useInOutput = any (`elem` dOut (sdDiag sd)) uses
   sd1 <- connectUses ops varName source ty uses sd
   let diag1 = sdDiag sd1
-  let dIn' = if sourceIsInput then ensureIn source (dIn diag1) else dIn diag1
+  let dIn' = if sourceIsInput then ensureIn source (dIn diag1) else removePort source (dIn diag1)
   let dOut' =
         if sourceIsInput
           then dOut diag1
@@ -929,21 +934,6 @@ tensorSurf a b = do
     { sdDiag = diagFinal
     , sdUses = mergeUses (sdUses a) usesShift
     , sdTags = mergeTags (sdTags a) tagsShift
-    }
-
-unionDiagram :: Diagram -> Diagram -> Either Text Diagram
-unionDiagram left right = do
-  portTy <- unionDisjointIntMap "unionDiagram ports" (dPortTy left) (dPortTy right)
-  prod <- unionDisjointIntMap "unionDiagram producers" (dProd left) (dProd right)
-  cons <- unionDisjointIntMap "unionDiagram consumers" (dCons left) (dCons right)
-  edges <- unionDisjointIntMap "unionDiagram edges" (dEdges left) (dEdges right)
-  pure left
-    { dPortTy = portTy
-    , dProd = prod
-    , dCons = cons
-    , dEdges = edges
-    , dNextPort = dNextPort right
-    , dNextEdge = dNextEdge right
     }
 
 boxSurf :: ModeName -> Text -> SurfDiag -> Either Text SurfDiag

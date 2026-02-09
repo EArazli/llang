@@ -14,7 +14,7 @@ import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..))
 import Strat.Poly.Graph (Diagram(..), emptyDiagram, freshPort, addEdgePayload, EdgePayload(..), validateDiagram)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Eval (evalDiagram)
-import Strat.Model.Spec (ModelSpec(..), DefaultBehavior(..))
+import Strat.Model.Spec (ModelSpec(..), ModelBackend(..), DefaultBehavior(..))
 import Strat.Backend (Value(..))
 
 
@@ -56,7 +56,7 @@ testEvalUnknownGen = do
         , dCells2 = []
         , dAttrSorts = M.empty
         }
-  let model = ModelSpec "Empty" [] DefaultSymbolic
+  let model = ModelSpec "Empty" [] DefaultSymbolic BackendAlgebra
   case evalDiagram doc model diag [VInt 1] of
     Left _ -> pure ()
     Right _ -> assertFailure "expected eval failure for unknown generator"
@@ -85,7 +85,7 @@ testEvalMissingModel = do
         , dCells2 = []
         , dAttrSorts = M.empty
         }
-  let model = ModelSpec "NoDupModel" [] (DefaultError "missing")
+  let model = ModelSpec "NoDupModel" [] (DefaultError "missing") BackendAlgebra
   case evalDiagram doc model diag [VInt 1] of
     Left _ -> pure ()
     Right _ -> assertFailure "expected eval failure for missing model clause"
@@ -109,7 +109,7 @@ testEvalCycleLetrec = do
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   let doc = mkCycleDoctrine mode a
-  let model = ModelSpec "NoModel" [] DefaultSymbolic
+  let model = ModelSpec "NoModel" [] DefaultSymbolic BackendAlgebra
   res <- case evalDiagram doc model diag [] of
     Left err -> assertFailure (T.unpack err)
     Right vals -> pure vals
@@ -125,7 +125,7 @@ testEvalCycleBindings = do
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   let doc = mkCycleDoctrine mode a
-  let model = ModelSpec "NoModel" [] DefaultSymbolic
+  let model = ModelSpec "NoModel" [] DefaultSymbolic BackendAlgebra
   res <- case evalDiagram doc model diag [] of
     Left err -> assertFailure (T.unpack err)
     Right vals -> pure vals
@@ -147,7 +147,7 @@ testEvalCycleInBox = do
     Right d -> pure d
   let outer = d1 { dIn = [], dOut = [outP] }
   let doc = mkCycleDoctrine mode a
-  let model = ModelSpec "NoModel" [] DefaultSymbolic
+  let model = ModelSpec "NoModel" [] DefaultSymbolic BackendAlgebra
   res <- case evalDiagram doc model outer [] of
     Left err -> assertFailure (T.unpack err)
     Right vals -> pure vals

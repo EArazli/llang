@@ -14,6 +14,7 @@ import qualified Test.Poly.Literals as PolyLiterals
 import qualified Test.Poly.CriticalPairs as PolyCriticalPairs
 import qualified Test.Poly.Morphism as PolyMorphism
 import qualified Test.Poly.Eval as PolyEval
+import qualified Test.Poly.FoldSSA as PolyFoldSSA
 import qualified Test.Poly.Pushout as PolyPushout
 import qualified Test.Poly.Coherence as PolyCoherence
 import qualified Test.Poly.CCC as PolyCCC
@@ -41,6 +42,7 @@ main =
       , PolyCriticalPairs.tests
       , PolyMorphism.tests
       , PolyEval.tests
+      , PolyFoldSSA.foldSSATests
       , PolyPushout.tests
       , PolyCoherence.tests
       , PolyCCC.tests

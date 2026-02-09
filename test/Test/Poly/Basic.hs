@@ -402,6 +402,10 @@ permuteIsoDiagram diag = do
             [ (portKey (remapPort (PortId k)), ty)
             | (k, ty) <- IM.toList (dPortTy diag)
             ]
+      let dPortLabel' = IM.fromList
+            [ (portKey (remapPort (PortId k)), label)
+            | (k, label) <- IM.toList (dPortLabel diag)
+            ]
       let dProd' = IM.fromList
             [ (portKey (remapPort (PortId k)), fmap remapEdge prod)
             | (k, prod) <- IM.toList (dProd diag)
@@ -424,6 +428,7 @@ permuteIsoDiagram diag = do
             { dIn = map remapPort (dIn diag)
             , dOut = map remapPort (dOut diag)
             , dPortTy = dPortTy'
+            , dPortLabel = dPortLabel'
             , dProd = dProd'
             , dCons = dCons'
             , dEdges = dEdges'

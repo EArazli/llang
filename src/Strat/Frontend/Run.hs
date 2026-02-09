@@ -21,7 +21,7 @@ import Strat.Poly.Pretty (renderDiagram)
 import Strat.Poly.Coherence (checkCoherence, renderCoherenceReport)
 import Strat.Poly.CriticalPairs (CPMode(..))
 import Strat.Poly.Eval (evalDiagram)
-import Strat.Model.Spec (ModelSpec)
+import Strat.Model.Spec (ModelSpec(..), ModelBackend(..))
 import Strat.Backend (Value(..))
 
 
@@ -84,11 +84,16 @@ runWithEnv env spec = do
       Just name -> do
         (docName, modelSpec) <- lookupModel env name
         (docModel, diagModel) <- resolveModelDiagram env doc' norm docName
-        if null (dIn diagModel)
-          then do
+        case msBackend modelSpec of
+          BackendAlgebra ->
+            if null (dIn diagModel)
+              then do
+                vals <- evalDiagram docModel modelSpec diagModel []
+                pure (Just vals)
+              else Left "run: value requires closed diagram"
+          BackendFoldSSA -> do
             vals <- evalDiagram docModel modelSpec diagModel []
             pure (Just vals)
-          else Left "run: value requires closed diagram"
     else Right Nothing
   coherenceTxt <- if ShowCoherence `elem` prShowFlags spec
     then do
@@ -142,5 +147,6 @@ resolveModelDiagram env doc diag modelDocName =
 renderValues :: [Value] -> Text
 renderValues vals =
   case vals of
+    [VString s] -> s
     [v] -> T.pack (show v)
     _ -> T.pack (show vals)

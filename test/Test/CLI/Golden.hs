@@ -26,6 +26,7 @@ tests =
     , testCase "mode_map_demo.run.llang output" (goldenRun "examples/run/algebra/mode_map_demo.run.llang" expectedModeMapDemo)
     , testCase "hello_world.run.llang output" (goldenRun "examples/run/algebra/hello_world.run.llang" expectedHelloWorld)
     , testCase "minifun.concat2.run.llang output" (goldenRun "examples/run/codegen/minifun/concat2.run.llang" expectedMiniFunConcat2)
+    , testCase "js_fold_ssa.run.llang output" (goldenRun "examples/run/codegen/js_fold_ssa.run.llang" expectedJsFoldSSA)
     , testCase "term_ref.run.llang output" (goldenRun "examples/run/terms/term_ref.run.llang" expectedTermRef)
     , testCase "dual_discipline_surface linear error includes generator and mode" testDualDisciplineLinearError
     , testCase "surface unknown generator error includes generator and mode" testSurfaceUnknownGeneratorError
@@ -218,12 +219,26 @@ expectedHelloWorld :: Text
 expectedHelloWorld =
   T.intercalate "\n"
     [ "value:"
-    , "VString \"Hello, world!\""
+    , "Hello, world!"
     ]
 
 expectedMiniFunConcat2 :: Text
 expectedMiniFunConcat2 =
   T.intercalate "\n"
     [ "value:"
-    , "VString \"const fs = require(\\\"fs\\\");\\nconst input = fs.readFileSync(0, \\\"utf8\\\").split(\\\"\\\\n\\\");\\nlet i = 0;\\nfunction nextLine() { return input[i++]; }\\nconsole.log((nextLine() + nextLine()));\""
+    , "const fs = require(\"fs\");"
+    , "const input = fs.readFileSync(0, \"utf8\").split(\"\\n\");"
+    , "let i = 0;"
+    , "function nextLine() { return input[i++]; }"
+    , "console.log((nextLine() + nextLine()));"
+    ]
+
+expectedJsFoldSSA :: Text
+expectedJsFoldSSA =
+  T.intercalate "\n"
+    [ "value:"
+    , "(() => {"
+    , "  const msg = \"Hello, world!\";"
+    , "  Bun.serve({ fetch(req) { return new Response(msg); } });"
+    , "})()"
     ]

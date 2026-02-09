@@ -4,7 +4,7 @@ module Strat.DSL.AST
   ( RawDecl(..)
   , RawFile(..)
   , RawModelItem(..)
-  , RawDefault(..)
+  , RawModelBackend(..)
   , RawModelClause(..)
   , RawRunShow(..)
   , RawRun(..)
@@ -24,7 +24,7 @@ module Strat.DSL.AST
   ) where
 
 import Data.Text (Text)
-import Strat.Model.Spec (MExpr)
+import Strat.Model.Spec (DefaultBehavior, MExpr)
 import Strat.Poly.Surface.Spec (SurfaceSpec)
 import qualified Strat.Poly.DSL.AST as PolyAST
 
@@ -54,14 +54,13 @@ newtype RawFile = RawFile [RawDecl]
   deriving (Eq, Show)
 
 
-data RawModelItem
-  = RMDefault RawDefault
-  | RMOp RawModelClause
-  deriving (Eq, Show)
+data RawModelBackend = RMBAlgebra | RMBFoldSSA
+  deriving (Eq, Ord, Show)
 
-data RawDefault
-  = RawDefaultSymbolic
-  | RawDefaultError Text
+data RawModelItem
+  = RMDefault DefaultBehavior
+  | RMClause RawModelClause
+  | RMBackend RawModelBackend
   deriving (Eq, Show)
 
 data RawModelClause = RawModelClause

@@ -34,6 +34,7 @@ data-files:
     examples/lib/algebra/subdiagram_match.llang
     examples/lib/algebra/tiny_source.llang
     examples/lib/codegen/js_ast.llang
+    examples/lib/codegen/js_fold_ssa.llang
     examples/lib/codegen/arith_literals.llang
     examples/lib/codegen/minifun/console.llang
     examples/lib/codegen/minifun/minifun.surface.llang
@@ -81,6 +82,7 @@ data-files:
     examples/run/algebra/planar_monoid.run.llang
     examples/run/algebra/ski.run.llang
     examples/run/codegen/compile_to_js.run.llang
+    examples/run/codegen/js_fold_ssa.run.llang
     examples/run/codegen/arith_literals.run.llang
     examples/run/codegen/minifun/concat2.run.llang
     examples/run/data/list.run.llang
@@ -145,6 +147,7 @@ library
       Strat.Poly.DSL.Elab
       Strat.Poly.DSL.Parse
       Strat.Poly.Eval
+      Strat.Poly.FoldSSA
       Strat.Poly.Graph
       Strat.Poly.Match
       Strat.Poly.ModeTheory
@@ -217,6 +220,7 @@ test-suite llang-test
       Test.Poly.CriticalPairs
       Test.Poly.Morphism
       Test.Poly.Eval
+      Test.Poly.FoldSSA
       Test.Poly.Pushout
       Test.Poly.CCC
       Test.Poly.Coherence

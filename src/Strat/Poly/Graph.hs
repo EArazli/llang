@@ -16,6 +16,8 @@ module Strat.Poly.Graph
   , diagramIsoMatchWithVars
   , shiftDiagram
   , diagramPortType
+  , getPortLabel
+  , setPortLabel
   , diagramPortIds
   , unionDisjointIntMap
   ) where
@@ -50,15 +52,16 @@ data Edge = Edge
   } deriving (Eq, Ord, Show)
 
 data Diagram = Diagram
-  { dMode     :: ModeName
-  , dIn       :: [PortId]
-  , dOut      :: [PortId]
-  , dPortTy   :: IM.IntMap TypeExpr
-  , dProd     :: IM.IntMap (Maybe EdgeId)
-  , dCons     :: IM.IntMap (Maybe EdgeId)
-  , dEdges    :: IM.IntMap Edge
-  , dNextPort :: Int
-  , dNextEdge :: Int
+  { dMode      :: ModeName
+  , dIn        :: [PortId]
+  , dOut       :: [PortId]
+  , dPortTy    :: IM.IntMap TypeExpr
+  , dPortLabel :: IM.IntMap (Maybe Text)
+  , dProd      :: IM.IntMap (Maybe EdgeId)
+  , dCons      :: IM.IntMap (Maybe EdgeId)
+  , dEdges     :: IM.IntMap Edge
+  , dNextPort  :: Int
+  , dNextEdge  :: Int
   } deriving (Eq, Ord, Show)
 
 data IsoState = IsoState
@@ -86,6 +89,7 @@ emptyDiagram mode = Diagram
   , dIn = []
   , dOut = []
   , dPortTy = IM.empty
+  , dPortLabel = IM.empty
   , dProd = IM.empty
   , dCons = IM.empty
   , dEdges = IM.empty
@@ -105,12 +109,29 @@ diagramPortIds diag = map PortId (IM.keys (dPortTy diag))
 diagramPortType :: Diagram -> PortId -> Maybe TypeExpr
 diagramPortType diag pid = IM.lookup (portKey pid) (dPortTy diag)
 
+getPortLabel :: Diagram -> PortId -> Maybe Text
+getPortLabel diag pid =
+  case IM.lookup (portKey pid) (dPortLabel diag) of
+    Nothing -> Nothing
+    Just label -> label
+
+setPortLabel :: PortId -> Text -> Diagram -> Either Text Diagram
+setPortLabel pid name diag =
+  if IM.member (portKey pid) (dPortTy diag)
+    then
+      Right
+        diag
+          { dPortLabel = IM.insert (portKey pid) (Just name) (dPortLabel diag)
+          }
+    else Left "setPortLabel: port does not exist"
+
 freshPort :: TypeExpr -> Diagram -> (PortId, Diagram)
 freshPort ty diag =
   let pid = PortId (dNextPort diag)
       k = portKey pid
       diag' = diag
         { dPortTy = IM.insert k ty (dPortTy diag)
+        , dPortLabel = IM.insert k Nothing (dPortLabel diag)
         , dProd = IM.insert k Nothing (dProd diag)
         , dCons = IM.insert k Nothing (dCons diag)
         , dNextPort = dNextPort diag + 1
@@ -180,12 +201,14 @@ validateDiagram diag = do
   pure ()
   where
     ensureKeysets =
-      let ksTy = IM.keysSet (dPortTy diag)
-          ksProd = IM.keysSet (dProd diag)
-          ksCons = IM.keysSet (dCons diag)
-      in if ksTy == ksProd && ksTy == ksCons
+      do
+        ensureSameKeySet "port types" (dPortTy diag) (dPortLabel diag)
+        ensureSameKeySet "port labels" (dPortLabel diag) (dProd diag)
+        ensureSameKeySet "port labels" (dPortLabel diag) (dCons diag)
+    ensureSameKeySet label left right =
+      if IM.keysSet left == IM.keysSet right
         then Right ()
-        else Left "validateDiagram: port map keysets mismatch"
+        else Left ("validateDiagram: " <> label <> " keysets mismatch")
     ensureBoundaryUnique label ports =
       let s = S.fromList ports
       in if S.size s == length ports
@@ -289,6 +312,8 @@ mergePorts diag keep drop
   | otherwise = do
       tyKeep <- requireType keep
       tyDrop <- requireType drop
+      labelKeep <- requireLabel keep
+      labelDrop <- requireLabel drop
       if tyKeep /= tyDrop
         then Left "mergePorts: type mismatch"
         else do
@@ -300,6 +325,11 @@ mergePorts diag keep drop
           cons <- mergeEndpoint "consumer" consKeep consDrop
           let diag' = diag
                 { dPortTy = IM.delete (portKey drop) (dPortTy diag)
+                , dPortLabel =
+                    IM.insert
+                      (portKey keep)
+                      (mergeLabel labelKeep labelDrop)
+                      (IM.delete (portKey drop) (dPortLabel diag))
                 , dProd = IM.insert (portKey keep) prod (IM.delete (portKey drop) (dProd diag))
                 , dCons = IM.insert (portKey keep) cons (IM.delete (portKey drop) (dCons diag))
                 , dIn = replacePort keep drop (dIn diag)
@@ -312,6 +342,14 @@ mergePorts diag keep drop
       case IM.lookup (portKey pid) (dPortTy diag) of
         Nothing -> Left "mergePorts: missing port"
         Just ty -> Right ty
+    requireLabel pid =
+      case IM.lookup (portKey pid) (dPortLabel diag) of
+        Nothing -> Left "mergePorts: missing port"
+        Just label -> Right label
+    mergeLabel keepLabel dropLabel =
+      case keepLabel of
+        Nothing -> dropLabel
+        Just _ -> keepLabel
     mergeEndpoint label a b =
       case (a, b) of
         (Just (Just e1), Just (Just e2))
@@ -358,6 +396,7 @@ shiftDiagram portOff edgeOff diag =
       { dIn = shiftPorts (dIn diag)
       , dOut = shiftPorts (dOut diag)
       , dPortTy = shiftPortMap (dPortTy diag)
+      , dPortLabel = shiftPortMap (dPortLabel diag)
       , dProd = shiftPortMap (fmap (fmap shiftEdge) (dProd diag))
       , dCons = shiftPortMap (fmap (fmap shiftEdge) (dCons diag))
       , dEdges = shiftEdgeMap (IM.map shiftEdgeRec (dEdges diag))
@@ -370,6 +409,7 @@ renumberDiagram diag = do
   let (portMap, nextPort) = assignPorts diag
   let edgeMap = assignEdges diag
   dPortTy' <- buildPortMap portMap (dPortTy diag)
+  dPortLabel' <- buildPortMap portMap (dPortLabel diag)
   dProd' <- buildEdgeRefMap portMap edgeMap (dProd diag)
   dCons' <- buildEdgeRefMap portMap edgeMap (dCons diag)
   dEdges' <- buildEdges portMap edgeMap (dEdges diag)
@@ -380,6 +420,7 @@ renumberDiagram diag = do
     , dIn = dIn'
     , dOut = dOut'
     , dPortTy = dPortTy'
+    , dPortLabel = dPortLabel'
     , dProd = dProd'
     , dCons = dCons'
     , dEdges = dEdges'

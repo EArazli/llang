@@ -518,6 +518,7 @@ deletePort diag pid =
       (Just Nothing, Just Nothing) ->
         let d1 = diag
               { dPortTy = IM.delete k (dPortTy diag)
+              , dPortLabel = IM.delete k (dPortLabel diag)
               , dProd = IM.delete k (dProd diag)
               , dCons = IM.delete k (dCons diag)
               , dIn = filter (/= pid) (dIn diag)
@@ -529,11 +530,13 @@ deletePort diag pid =
 insertDiagram :: Diagram -> Diagram -> Either Text Diagram
 insertDiagram base extra = do
   portTy <- unionDisjointIntMap "criticalPairs: insert ports" (dPortTy base) (dPortTy extra)
+  portLabel <- unionDisjointIntMap "criticalPairs: insert labels" (dPortLabel base) (dPortLabel extra)
   prod <- unionDisjointIntMap "criticalPairs: insert producers" (dProd base) (dProd extra)
   cons <- unionDisjointIntMap "criticalPairs: insert consumers" (dCons base) (dCons extra)
   edges <- unionDisjointIntMap "criticalPairs: insert edges" (dEdges base) (dEdges extra)
   pure base
     { dPortTy = portTy
+    , dPortLabel = portLabel
     , dProd = prod
     , dCons = cons
     , dEdges = edges

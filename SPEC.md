@@ -168,8 +168,15 @@ For a **box** edge, the nested diagram must:
 The internal representation (`Strat.Poly.Graph`) stores:
 
 - port types, producer/consumer incidence maps,
+- port labels (`dPortLabel : PortId ↦ Maybe Text`),
 - edge table, and
 - boundary port lists.
+
+Port labels are metadata only:
+
+- they do not affect diagram equality, matching, or coherence checks,
+- they are carried through structural operations, and
+- surface input/value binders assign labels to the corresponding ports.
 
 Box names are **metadata only**: diagram equality and matching ignore the `BoxName`,
 but the **box structure is part of matching**. A box edge matches another box edge
@@ -676,13 +683,24 @@ Elaboration semantics:
 
 ```
 model <Name> : <Doctrine> where {
-  default symbolic;
+  backend = algebra;
+  backend = fold_ssa;
+  default = symbolic;
   op <GenName>(args...) = <expr>;
 }
 ```
 
-Models use the same expression language for generator clauses. Evaluation is defined
-only for **closed** diagrams (no boundary inputs/outputs).
+`backend` is optional; default is `algebra`.
+
+Models use the same expression language for generator clauses.
+
+#### Algebra backend (`backend = algebra`)
+
+This is the existing evaluator:
+
+- SCC-based value evaluation (acyclic concrete; cyclic symbolic `letrec`),
+- generator arguments are `[attrs..., wireInputs...]`,
+- `show value` requires no boundary inputs (`dIn = []`), but outputs may exist.
 
 For each `op Gen(args...)` clause, arguments are passed in this order:
 
@@ -702,6 +720,29 @@ For each `op Gen(args...)` clause, arguments are passed in this order:
 Generators (including `dup`, `drop`, and `swap`) are interpreted only via the model
 clauses or the model’s default behavior; no special built‑ins are assumed.
 Attribute variables evaluate to atoms rendered as `name:Sort`.
+
+#### Fold SSA backend (`backend = fold_ssa`)
+
+`fold_ssa` renders the entire diagram into a single string value.
+
+- Open diagrams are allowed.
+- Evaluation uses deterministic topological edge order and rejects cycles with
+  `fold_ssa: cyclic diagrams are not supported`.
+- Variable names are derived from `dPortLabel` when present, else fallback `pN`,
+  then sanitized/disambiguated deterministically:
+  - replace non-`[A-Za-z0-9_]` with `_`,
+  - empty becomes `pN`,
+  - leading digit gets `_` prefix,
+  - JS reserved words get `_` prefix,
+  - repeated base names become `base_N`.
+- Emission form:
+  - closed diagram: `(() => { ... })()`,
+  - open diagram: `(x, y, ...) => { ... }`.
+- Edge emission:
+  - codomain 0: statement line,
+  - codomain 1: `const out = expr;`,
+  - codomain >1: `const [o1, o2, ...] = expr;`.
+- Multi-output generators use destructuring.
 
 ---
 
@@ -753,11 +794,15 @@ Execution pipeline for the effective run configuration:
 4. Apply `uses` morphisms and then `apply` morphisms in order.
 5. If needed, coerce to the run’s target doctrine along a unique shortest coercion path.
 6. Normalize (policy default: `UseStructuralAsBidirectional`).
-7. Optionally evaluate via the selected model (requires closed diagram).
+7. Optionally evaluate via the selected model:
+   - `backend = algebra`: requires closedness on inputs (`dIn = []`),
+   - `backend = fold_ssa`: open diagrams are allowed.
 8. Optionally check coherence and render its report.
 9. Print requested outputs.
 
 `show cat` is currently not supported.
+
+`show value` rendering prints a singleton string value directly (no `VString` wrapper).
 
 Example (shared expression via `run_spec`):
 

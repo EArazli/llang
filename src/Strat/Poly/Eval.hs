@@ -10,10 +10,11 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import qualified Data.Graph as G
 import Strat.Backend (Value(..), RuntimeError(..))
-import Strat.Model.Spec (ModelSpec(..), OpClause(..), DefaultBehavior(..), MExpr(..))
+import Strat.Model.Spec (ModelSpec(..), ModelBackend(..), OpClause(..), DefaultBehavior(..), MExpr(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), PortId(..), EdgeId(..))
+import Strat.Poly.FoldSSA (renderFoldSSA)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Attr (AttrMap, AttrTerm(..), AttrLit(..), renderAttrVar)
@@ -58,7 +59,11 @@ defaultInterp behavior op args =
 
 evalDiagram :: Doctrine -> ModelSpec -> Diagram -> [Value] -> Either Text [Value]
 evalDiagram doc spec diag inputs =
-  evalDiagramWithModel (instantiatePolyModel spec) doc diag inputs
+  case msBackend spec of
+    BackendAlgebra ->
+      evalDiagramWithModel (instantiatePolyModel spec) doc diag inputs
+    BackendFoldSSA ->
+      renderFoldSSA doc spec diag
 
 evalDiagramWithModel :: PolyModel -> Doctrine -> Diagram -> [Value] -> Either Text [Value]
 evalDiagramWithModel model doc diag inputs = do

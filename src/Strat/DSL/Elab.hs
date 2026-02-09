@@ -12,7 +12,7 @@ import qualified Data.Set as S
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
 import Strat.Frontend.Env
-import Strat.Model.Spec (ModelSpec(..), DefaultBehavior(..), OpClause(..))
+import Strat.Model.Spec (ModelSpec(..), ModelBackend(..), DefaultBehavior(..), OpClause(..))
 import Strat.DSL.Template (instantiateTemplate)
 import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, elabPolyRun, parsePolicy)
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
@@ -323,20 +323,22 @@ elabModelSpec name items = do
   def <-
     case defaults of
       [] -> Right DefaultSymbolic
-      [RawDefaultSymbolic] -> Right DefaultSymbolic
-      [RawDefaultError msg] -> Right (DefaultError msg)
+      [d] -> Right d
       _ -> Left "Multiple default clauses in model"
-  let clauses = [ c | RMOp c <- items ]
+  let backends = [ b | RMBackend b <- items ]
+  backend <-
+    case backends of
+      [] -> Right BackendAlgebra
+      [RMBAlgebra] -> Right BackendAlgebra
+      [RMBFoldSSA] -> Right BackendFoldSSA
+      _ -> Left ("elabModelSpec: multiple backend clauses in model " <> name)
+  let clauses = [ c | RMClause c <- items ]
   let opNames = map rmcOp clauses
   case findDup opNames of
     Just dup -> Left ("Duplicate op clause in model: " <> dup)
     Nothing -> pure ()
   let ops = map (\c -> OpClause (rmcOp c) (rmcArgs c) (rmcExpr c)) clauses
-  pure ModelSpec
-    { msName = name
-    , msClauses = ops
-    , msDefault = def
-    }
+  pure (ModelSpec name ops def backend)
   where
     findDup xs = go M.empty xs
     go _ [] = Nothing

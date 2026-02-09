@@ -718,11 +718,13 @@ clearProducers d ports =
 insertDiagram :: Diagram -> Diagram -> Either Text Diagram
 insertDiagram base extra = do
   portTy <- unionDisjointIntMap "insertDiagram ports" (dPortTy base) (dPortTy extra)
+  portLabel <- unionDisjointIntMap "insertDiagram labels" (dPortLabel base) (dPortLabel extra)
   prod <- unionDisjointIntMap "insertDiagram producers" (dProd base) (dProd extra)
   cons <- unionDisjointIntMap "insertDiagram consumers" (dCons base) (dCons extra)
   edges <- unionDisjointIntMap "insertDiagram edges" (dEdges base) (dEdges extra)
   pure base
     { dPortTy = portTy
+    , dPortLabel = portLabel
     , dProd = prod
     , dCons = cons
     , dEdges = edges

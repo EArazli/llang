@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Model.Spec
   ( ModelSpec(..)
+  , ModelBackend(..)
   , OpClause(..)
   , DefaultBehavior(..)
   , MExpr(..)
@@ -9,10 +10,16 @@ module Strat.Model.Spec
 import Data.Text (Text)
 
 
+data ModelBackend
+  = BackendAlgebra
+  | BackendFoldSSA
+  deriving (Eq, Ord, Show)
+
 data ModelSpec = ModelSpec
   { msName    :: Text
   , msClauses :: [OpClause]
   , msDefault :: DefaultBehavior
+  , msBackend :: ModelBackend
   }
   deriving (Eq, Show)
 

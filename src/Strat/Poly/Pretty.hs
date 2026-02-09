@@ -33,9 +33,13 @@ renderPorts diag ports =
   T.intercalate ", " [ renderPort p | p <- ports ]
   where
     renderPort p =
-      case IM.lookup (portKey p) (dPortTy diag) of
-        Nothing -> renderPortId p
-        Just ty -> renderPortId p <> ":" <> renderType ty
+      let renderedPort =
+            case getPortLabel diag p of
+              Nothing -> renderPortId p
+              Just lbl -> renderPortId p <> "(" <> lbl <> ")"
+      in case IM.lookup (portKey p) (dPortTy diag) of
+          Nothing -> renderedPort
+          Just ty -> renderedPort <> ":" <> renderType ty
     portKey (PortId k) = k
 
 renderEdges :: [Edge] -> Either Text Text

@@ -6,6 +6,7 @@ module Strat.Poly.Diagram
   , genDWithAttrs
   , compD
   , tensorD
+  , unionDiagram
   , diagramDom
   , diagramCod
   , applySubstDiagram
@@ -186,11 +187,13 @@ allocPorts (ty:rest) diag =
 unionDiagram :: Diagram -> Diagram -> Either Text Diagram
 unionDiagram left right = do
   portTy <- unionDisjointIntMap "unionDiagram ports" (dPortTy left) (dPortTy right)
+  portLabel <- unionDisjointIntMap "unionDiagram labels" (dPortLabel left) (dPortLabel right)
   prod <- unionDisjointIntMap "unionDiagram producers" (dProd left) (dProd right)
   cons <- unionDisjointIntMap "unionDiagram consumers" (dCons left) (dCons right)
   edges <- unionDisjointIntMap "unionDiagram edges" (dEdges left) (dEdges right)
   pure left
     { dPortTy = portTy
+    , dPortLabel = portLabel
     , dProd = prod
     , dCons = cons
     , dEdges = edges

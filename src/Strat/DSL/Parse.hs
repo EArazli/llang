@@ -5,7 +5,7 @@ module Strat.DSL.Parse
 
 import Strat.DSL.AST
 import Strat.Common.Rules
-import Strat.Model.Spec (MExpr(..))
+import Strat.Model.Spec (DefaultBehavior(..), MExpr(..))
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.Surface.Parse (surfaceSpecBlock)
 import qualified Strat.Poly.ModeTheory
@@ -927,25 +927,33 @@ modelBlock = do
   pure items
 
 modelItem :: Parser RawModelItem
-modelItem = defaultItem <|> opItem
+modelItem = backendItem <|> defaultItem <|> clauseItem
+
+backendItem :: Parser RawModelItem
+backendItem = do
+  _ <- symbol "backend"
+  _ <- symbol "="
+  b <- (symbol "algebra" $> RMBAlgebra) <|> (symbol "fold_ssa" $> RMBFoldSSA)
+  _ <- symbol ";"
+  pure (RMBackend b)
 
 defaultItem :: Parser RawModelItem
 defaultItem = do
   _ <- symbol "default"
   _ <- symbol "="
-  def <- (symbol "symbolic" $> RawDefaultSymbolic) <|> (symbol "error" *> (RawDefaultError <$> stringLiteral))
+  def <- (symbol "symbolic" $> DefaultSymbolic) <|> (symbol "error" *> (DefaultError <$> stringLiteral))
   optionalSemi
   pure (RMDefault def)
 
-opItem :: Parser RawModelItem
-opItem = do
+clauseItem :: Parser RawModelItem
+clauseItem = do
   _ <- symbol "op"
   name <- qualifiedIdent
   args <- optional (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
   _ <- symbol "="
   expr' <- mexpr
   optionalSemi
-  pure (RMOp (RawModelClause name (maybe [] id args) expr'))
+  pure (RMClause (RawModelClause name (maybe [] id args) expr'))
 
 -- Model expressions
 
