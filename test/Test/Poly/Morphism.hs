@@ -9,6 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Set as S
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
@@ -35,7 +36,7 @@ tvar :: ModeName -> Text -> TyVar
 tvar mode name = TyVar { tvName = name, tvMode = mode }
 
 tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
-tcon mode name args = TCon (TypeRef mode (TypeName name)) args
+tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
 
 testMonoidMorphism :: Assertion
 testMonoidMorphism = do
@@ -70,21 +71,43 @@ testTypeMapReorder = do
   let prod = TypeName "Prod"
   let pair = TypeName "Pair"
   let genName = GenName "g"
-  let genSrc = GenDecl genName mode [a, b] [TCon (TypeRef mode prod) [TVar a, TVar b]] [TCon (TypeRef mode prod) [TVar a, TVar b]] []
-  let genTgt = GenDecl genName mode [a, b] [TCon (TypeRef mode pair) [TVar a, TVar b]] [TCon (TypeRef mode pair) [TVar a, TVar b]] []
+  let genSrc =
+        GenDecl
+          { gdName = genName
+          , gdMode = mode
+          , gdTyVars = [a, b]
+          , gdIxVars = []
+          , gdDom = map InPort [TCon (TypeRef mode prod) [TAType (TVar a), TAType (TVar b)]]
+          , gdCod = [TCon (TypeRef mode prod) [TAType (TVar a), TAType (TVar b)]]
+          , gdAttrs = []
+          }
+  let genTgt =
+        GenDecl
+          { gdName = genName
+          , gdMode = mode
+          , gdTyVars = [a, b]
+          , gdIxVars = []
+          , gdDom = map InPort [TCon (TypeRef mode pair) [TAType (TVar a), TAType (TVar b)]]
+          , gdCod = [TCon (TypeRef mode pair) [TAType (TVar a), TAType (TVar b)]]
+          , gdAttrs = []
+          }
   let docSrc = Doctrine
         { dName = "Src"
         , dModes = mkModes [mode]
-        , dAttrSorts = M.empty
-        , dTypes = M.fromList [(mode, M.fromList [(prod, TypeSig [mode, mode])])]
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+      , dAttrSorts = M.empty
+        , dTypes = M.fromList [(mode, M.fromList [(prod, TypeSig [PS_Ty mode, PS_Ty mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genSrc)])]
         , dCells2 = []
         }
   let docTgt = Doctrine
         { dName = "Tgt"
         , dModes = mkModes [mode]
-        , dAttrSorts = M.empty
-        , dTypes = M.fromList [(mode, M.fromList [(pair, TypeSig [mode, mode])])]
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+      , dAttrSorts = M.empty
+        , dTypes = M.fromList [(mode, M.fromList [(pair, TypeSig [PS_Ty mode, PS_Ty mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genTgt)])]
         , dCells2 = []
         }
@@ -94,8 +117,8 @@ testTypeMapReorder = do
   docTgt' <- case validateDoctrine docTgt of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
-  img <- either (assertFailure . T.unpack) pure (genD mode [TCon (TypeRef mode pair) [TVar b, TVar a]] [TCon (TypeRef mode pair) [TVar b, TVar a]] genName)
-  let typeMap = M.fromList [(TypeRef mode prod, TypeTemplate [a, b] (TCon (TypeRef mode pair) [TVar b, TVar a]))]
+  img <- either (assertFailure . T.unpack) pure (genD mode [TCon (TypeRef mode pair) [TAType (TVar b), TAType (TVar a)]] [TCon (TypeRef mode pair) [TAType (TVar b), TAType (TVar a)]] genName)
+  let typeMap = M.fromList [(TypeRef mode prod, TypeTemplate [a, b] (TCon (TypeRef mode pair) [TAType (TVar b), TAType (TVar a)]))]
   let mor = Morphism
         { morName = "SwapProd"
         , morSrc = docSrc'
@@ -121,12 +144,32 @@ testCrossModeMorphism = do
   let bRef = TypeRef modeV (TypeName "B")
   let aTy = TCon aRef []
   let bTy = TCon bRef []
-  let fGen = GenDecl (GenName "f") modeC [] [aTy] [aTy] []
-  let gGen = GenDecl (GenName "g") modeV [] [bTy] [bTy] []
+  let fGen =
+        GenDecl
+          { gdName = GenName "f"
+          , gdMode = modeC
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = map InPort [aTy]
+          , gdCod = [aTy]
+          , gdAttrs = []
+          }
+  let gGen =
+        GenDecl
+          { gdName = GenName "g"
+          , gdMode = modeV
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = map InPort [bTy]
+          , gdCod = [bTy]
+          , gdAttrs = []
+          }
   let docSrc = Doctrine
         { dName = "Src"
         , dModes = mkModes [modeC]
-        , dAttrSorts = M.empty
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+      , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeC, M.fromList [(TypeName "A", TypeSig [])])]
         , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
         , dCells2 = []
@@ -134,7 +177,9 @@ testCrossModeMorphism = do
   let docTgt = Doctrine
         { dName = "Tgt"
         , dModes = mkModes [modeV]
-        , dAttrSorts = M.empty
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+      , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeV, M.fromList [(TypeName "B", TypeSig [])])]
         , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
         , dCells2 = []
@@ -221,14 +266,52 @@ testModalityMapRewritesTypeModalities = do
           , mtEqns = []
           , mtAdjs = []
           }
-  let genGSrc = GenDecl (GenName "g") modeB [] [fBaseSrc] [fBaseSrc] []
-  let genGGSrc = GenDecl (GenName "gg") modeB [] [hfBaseSrc] [hfBaseSrc] []
-  let genGTgt = GenDecl (GenName "g") modeD [] [gBaseTgt] [gBaseTgt] []
-  let genGGTgt = GenDecl (GenName "gg") modeD [] [kgBaseTgt] [kgBaseTgt] []
+  let genGSrc =
+        GenDecl
+          { gdName = GenName "g"
+          , gdMode = modeB
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = map InPort [fBaseSrc]
+          , gdCod = [fBaseSrc]
+          , gdAttrs = []
+          }
+  let genGGSrc =
+        GenDecl
+          { gdName = GenName "gg"
+          , gdMode = modeB
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = map InPort [hfBaseSrc]
+          , gdCod = [hfBaseSrc]
+          , gdAttrs = []
+          }
+  let genGTgt =
+        GenDecl
+          { gdName = GenName "g"
+          , gdMode = modeD
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = map InPort [gBaseTgt]
+          , gdCod = [gBaseTgt]
+          , gdAttrs = []
+          }
+  let genGGTgt =
+        GenDecl
+          { gdName = GenName "gg"
+          , gdMode = modeD
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = map InPort [kgBaseTgt]
+          , gdCod = [kgBaseTgt]
+          , gdAttrs = []
+          }
   let docSrc = Doctrine
         { dName = "SrcModal"
         , dModes = modeTheorySrc
-        , dAttrSorts = M.empty
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+      , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeA, M.fromList [(TypeName "Base", TypeSig [])])]
         , dGens = M.fromList [(modeB, M.fromList [(GenName "g", genGSrc), (GenName "gg", genGGSrc)])]
         , dCells2 = []
@@ -236,7 +319,9 @@ testModalityMapRewritesTypeModalities = do
   let docTgt = Doctrine
         { dName = "TgtModal"
         , dModes = modeTheoryTgt
-        , dAttrSorts = M.empty
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+      , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeC, M.fromList [(TypeName "Base", TypeSig [])])]
         , dGens = M.fromList [(modeD, M.fromList [(GenName "g", genGTgt), (GenName "gg", genGGTgt)])]
         , dCells2 = []
@@ -286,9 +371,10 @@ testModalityMapRewritesTypeModalities = do
   where
     assertSingleGenEdge name diag =
       case IM.elems (dEdges diag) of
-        [Edge _ (PGen genName attrs) _ _] -> do
+        [Edge _ (PGen genName attrs bargs) _ _] -> do
           genName @?= GenName name
           attrs @?= M.empty
+          bargs @?= []
         _ -> assertFailure "expected exactly one generator edge"
 
 modeM :: ModeName
@@ -311,15 +397,37 @@ mkMonoid = do
         M.fromList
           [ ( modeM
             , M.fromList
-                [ (GenName "unit", GenDecl (GenName "unit") modeM [] [] [aTy] [])
-                , (GenName "mul", GenDecl (GenName "mul") modeM [] [aTy, aTy] [aTy] [])
+                [ ( GenName "unit"
+                  , GenDecl
+                      { gdName = GenName "unit"
+                      , gdMode = modeM
+                      , gdTyVars = []
+                      , gdIxVars = []
+                      , gdDom = map InPort []
+                      , gdCod = [aTy]
+                      , gdAttrs = []
+                      }
+                  )
+                , ( GenName "mul"
+                  , GenDecl
+                      { gdName = GenName "mul"
+                      , gdMode = modeM
+                      , gdTyVars = []
+                      , gdIxVars = []
+                      , gdDom = map InPort [aTy, aTy]
+                      , gdCod = [aTy]
+                      , gdAttrs = []
+                      }
+                  )
                 ]
             )
           ]
   let doc = Doctrine
         { dName = "Monoid"
         , dModes = mt
-        , dAttrSorts = M.empty
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+      , dAttrSorts = M.empty
         , dTypes = types
         , dGens = gens
         , dCells2 = [assoc, unitL, unitR]
@@ -339,15 +447,37 @@ mkStringMonoid = do
         M.fromList
           [ ( modeM
             , M.fromList
-                [ (GenName "empty", GenDecl (GenName "empty") modeM [] [] [strTy] [])
-                , (GenName "append", GenDecl (GenName "append") modeM [] [strTy, strTy] [strTy] [])
+                [ ( GenName "empty"
+                  , GenDecl
+                      { gdName = GenName "empty"
+                      , gdMode = modeM
+                      , gdTyVars = []
+                      , gdIxVars = []
+                      , gdDom = map InPort []
+                      , gdCod = [strTy]
+                      , gdAttrs = []
+                      }
+                  )
+                , ( GenName "append"
+                  , GenDecl
+                      { gdName = GenName "append"
+                      , gdMode = modeM
+                      , gdTyVars = []
+                      , gdIxVars = []
+                      , gdDom = map InPort [strTy, strTy]
+                      , gdCod = [strTy]
+                      , gdAttrs = []
+                      }
+                  )
                 ]
             )
           ]
   let doc = Doctrine
         { dName = "StringMonoid"
         , dModes = mt
-        , dAttrSorts = M.empty
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+      , dAttrSorts = M.empty
         , dTypes = types
         , dGens = gens
         , dCells2 = [assoc, unitL, unitR]
@@ -369,6 +499,7 @@ assocRule name ty mulName = do
     , c2Class = Computational
     , c2Orient = LR
     , c2TyVars = []
+    , c2IxVars = []
     , c2LHS = lhs
     , c2RHS = rhs
     }
@@ -391,6 +522,7 @@ unitRule name ty unitName mulName leftSide = do
     , c2Class = Computational
     , c2Orient = LR
     , c2TyVars = []
+    , c2IxVars = []
     , c2LHS = expr
     , c2RHS = id1
     }

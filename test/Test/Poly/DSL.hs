@@ -174,7 +174,7 @@ testPolyPushoutRenamesTypes = do
     Nothing -> assertFailure "expected Left_inl_f generator"
     Just g -> pure g
   let leftTy = TCon (TypeRef mode (TypeName "Left_inl_A")) []
-  gdDom genLeft @?= [leftTy]
+  gdPlainDom genLeft @?= [leftTy]
   gdCod genLeft @?= [leftTy]
 
 testTypeMapBinderMismatch :: Assertion

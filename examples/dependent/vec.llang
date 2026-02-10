@@ -1,0 +1,29 @@
+doctrine VecDependent where {
+  mode M;
+  mode I;
+  index_mode I;
+
+  type Nat @I;
+  type A @M;
+  type Vec(n : Nat, a@M) @M;
+
+  index_fun Z : Nat @I;
+  index_fun S(n : Nat) : Nat @I;
+  index_fun add(m : Nat, n : Nat) : Nat @I;
+
+  index_rule addZL(n : Nat) : add(Z, n) -> n @I;
+  index_rule addSL(m : Nat, n : Nat) : add(S(m), n) -> S(add(m, n)) @I;
+
+  gen vnil(a@M) : [] -> [Vec(Z, a)] @M;
+  gen vcons(a@M, n : Nat) : [a, Vec(n, a)] -> [Vec(S(n), a)] @M;
+  gen append(a@M, n : Nat, m : Nat) : [Vec(n, a), Vec(m, a)] -> [Vec(add(n, m), a)] @M;
+  gen expect22(a@M) : [Vec(S(S(Z)), a)] -> [Vec(S(S(Z)), a)] @M;
+}
+
+run main where {
+  doctrine VecDependent;
+  mode M;
+  show normalized;
+}
+---
+append{A, S(Z), S(Z)} ; expect22{A}

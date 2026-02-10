@@ -10,15 +10,16 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..), TypeArg(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), emptyModeTheory)
-import Strat.Poly.Doctrine (Doctrine(..), TypeSig(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), TypeSig(..), ParamSig(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Frontend.Env (emptyEnv)
 import Strat.Poly.Diagram (diagramDom)
 import Strat.Poly.UnifyTy (unifyTy)
 import Strat.Poly.Graph (emptyDiagram, freshPort, validateDiagram)
+import Strat.Poly.TypeTheory (TypeTheory(..))
 
 
 tests :: TestTree
@@ -42,14 +43,16 @@ tvar :: ModeName -> Text -> TyVar
 tvar mode name = TyVar { tvName = name, tvMode = mode }
 
 tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
-tcon mode name args = TCon (TypeRef mode (TypeName name)) args
+tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
 
 mkDoctrine :: [(ModeName, [(TypeName, TypeSig)])] -> Doctrine
 mkDoctrine tables =
   Doctrine
     { dName = "D"
     , dModes = mkModes (S.fromList (map fst tables))
-    , dAttrSorts = M.empty
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+      , dAttrSorts = M.empty
     , dTypes = M.fromList [ (mode, M.fromList types) | (mode, types) <- tables ]
     , dGens = M.empty
     , dCells2 = []
@@ -74,7 +77,7 @@ testElabCrossMode = do
   let doc0 =
         mkDoctrine
           [ (modeC, [(TypeName "A", TypeSig [])])
-          , (modeV, [(TypeName "A", TypeSig []), (TypeName "Thunk", TypeSig [modeC])])
+          , (modeV, [(TypeName "A", TypeSig []), (TypeName "Thunk", TypeSig [PS_Ty modeC])])
           ]
   doc <- requireDoc doc0
   raw <- case parseDiagExpr "id[V.Thunk(C.A)]" of
@@ -109,7 +112,7 @@ testArgModeMismatch = do
   let doc0 =
         mkDoctrine
           [ (modeC, [(TypeName "A", TypeSig [])])
-          , (modeV, [(TypeName "A", TypeSig []), (TypeName "Thunk", TypeSig [modeC])])
+          , (modeV, [(TypeName "A", TypeSig []), (TypeName "Thunk", TypeSig [PS_Ty modeC])])
           ]
   doc <- requireDoc doc0
   raw <- case parseDiagExpr "id[V.Thunk(V.A)]" of
@@ -124,10 +127,11 @@ testUnifyModeMismatch :: Assertion
 testUnifyModeMismatch = do
   let aVar = tvar modeC "a"
   let aTy = tcon modeC "A" []
-  case unifyTy emptyModeTheory (TVar aVar) aTy of
+  let tt = TypeTheory { ttModes = emptyModeTheory, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+  case unifyTy tt (TVar aVar) aTy of
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()
-  case unifyTy emptyModeTheory (TVar aVar) (tcon modeV "B" []) of
+  case unifyTy tt (TVar aVar) (tcon modeV "B" []) of
     Left err ->
       assertBool "expected mode mismatch" ("mode mismatch" `T.isInfixOf` err)
     Right _ -> assertFailure "expected mode mismatch failure"
@@ -136,7 +140,7 @@ testValidateDiagramModeMismatch :: Assertion
 testValidateDiagramModeMismatch = do
   let modeM = ModeName "M"
   let badTy = tcon modeC "A" []
-  let (_p0, diag) = freshPort badTy (emptyDiagram modeM)
+  let (_p0, diag) = freshPort badTy (emptyDiagram modeM [])
   case validateDiagram diag of
     Left err ->
       assertBool "expected port mode mismatch" ("wrong mode" `T.isInfixOf` err)

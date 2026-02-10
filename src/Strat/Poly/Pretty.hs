@@ -22,6 +22,7 @@ renderDiagram diag = do
   pure $
     T.intercalate "\n"
       [ "mode: " <> renderMode (dMode diag')
+      , "ixctx: [" <> T.intercalate ", " (map renderType (dIxCtx diag')) <> "]"
       , "in: [" <> renderPorts diag' (dIn diag') <> "]"
       , "out: [" <> renderPorts diag' (dOut diag') <> "]"
       , "edges:"
@@ -49,9 +50,20 @@ renderEdges edges = do
   where
     renderEdge e =
       case ePayload e of
-        PGen g attrs ->
-          Right ("  " <> renderEdgeId (eId e) <> ": " <> renderGenWithAttrs g attrs
-            <> " [" <> renderPortList (eIns e) <> "] -> [" <> renderPortList (eOuts e) <> "]")
+        PGen g attrs bargs -> do
+          bargsTxt <- renderBinderArgs bargs
+          Right
+            ( "  "
+                <> renderEdgeId (eId e)
+                <> ": "
+                <> renderGenWithAttrs g attrs
+                <> bargsTxt
+                <> " ["
+                <> renderPortList (eIns e)
+                <> "] -> ["
+                <> renderPortList (eOuts e)
+                <> "]"
+            )
         PBox name inner -> do
           innerTxt <- renderDiagram inner
           let header =
@@ -59,7 +71,31 @@ renderEdges edges = do
                   <> " [" <> renderPortList (eIns e) <> "] -> [" <> renderPortList (eOuts e) <> "]"
           let body = indent innerTxt
           Right (header <> "\n" <> body)
+        PSplice x ->
+          Right
+            ( "  "
+                <> renderEdgeId (eId e)
+                <> ": splice("
+                <> renderBinderMeta x
+                <> ") ["
+                <> renderPortList (eIns e)
+                <> "] -> ["
+                <> renderPortList (eOuts e)
+                <> "]"
+            )
     renderPortList = T.intercalate ", " . map renderPortId
+
+    renderBinderArgs [] = Right ""
+    renderBinderArgs args = do
+      xs <- mapM renderBinderArg args
+      Right (" [" <> T.intercalate ", " xs <> "]")
+
+    renderBinderArg barg =
+      case barg of
+        BAMeta x -> Right (renderBinderMeta x)
+        BAConcrete d -> do
+          txt <- renderDiagram d
+          Right ("{" <> T.replace "\n" " " txt <> "}")
 
 indent :: Text -> Text
 indent txt =
@@ -97,5 +133,8 @@ renderPortId (PortId k) = "p" <> T.pack (show k)
 
 renderEdgeId :: EdgeId -> Text
 renderEdgeId (EdgeId k) = "e" <> T.pack (show k)
+
+renderBinderMeta :: BinderMetaVar -> Text
+renderBinderMeta (BinderMetaVar x) = "?" <> x
 
 -- renderType and renderMode come from Strat.Poly.TypePretty

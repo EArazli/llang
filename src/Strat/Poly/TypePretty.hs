@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.TypePretty
   ( renderType
+  , renderTypeArg
+  , renderIxTerm
   , renderTypeRef
   , renderTypeName
   , renderMode
@@ -21,9 +23,27 @@ renderType ty =
     TVar v -> tvName v <> "@" <> renderMode (tvMode v)
     TCon ref [] -> renderTypeRef ref
     TCon ref args ->
-      renderTypeRef ref <> "(" <> T.intercalate ", " (map renderType args) <> ")"
+      renderTypeRef ref <> "(" <> T.intercalate ", " (map renderTypeArg args) <> ")"
     TMod me inner ->
       renderModExpr me <> "(" <> renderType inner <> ")"
+
+renderTypeArg :: TypeArg -> Text
+renderTypeArg arg =
+  case arg of
+    TAType ty -> renderType ty
+    TAIndex ix -> renderIxTerm ix
+
+renderIxTerm :: IxTerm -> Text
+renderIxTerm ix =
+  case ix of
+    IXVar v -> ixvName v
+    IXBound i -> "^" <> T.pack (show i)
+    IXFun name [] -> renderIxFunName name
+    IXFun name args ->
+      renderIxFunName name <> "(" <> T.intercalate ", " (map renderIxTerm args) <> ")"
+
+renderIxFunName :: IxFunName -> Text
+renderIxFunName (IxFunName name) = name
 
 renderModExpr :: ModExpr -> Text
 renderModExpr me =

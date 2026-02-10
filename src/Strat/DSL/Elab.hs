@@ -19,7 +19,7 @@ import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, elabPolyRun, par
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
 import Strat.Poly.ModeTheory (ModeTheory(..), ModDecl(..), ModExpr(..))
 import Strat.Poly.Attr
 import qualified Strat.Poly.Morphism as PolyMorph
@@ -514,7 +514,7 @@ buildPolyFromBase baseName newName env newDoc = do
       ]
     genImage (mode, gen) = do
       let attrs = M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- gdAttrs gen ]
-      img <- genDWithAttrs mode (gdDom gen) (gdCod gen) (gdName gen) attrs
+      img <- genDWithAttrs mode (gdPlainDom gen) (gdCod gen) (gdName gen) attrs
       pure ((mode, gdName gen), img)
     identityModeMap doc =
       M.fromList [ (m, m) | m <- M.keys (mtModes (dModes doc)) ]

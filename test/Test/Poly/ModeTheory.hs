@@ -13,7 +13,8 @@ import Strat.Frontend.Env (meDoctrines)
 import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
+import Strat.Poly.TypeTheory (TypeTheory(..))
 import Strat.Poly.Names (GenName(..))
 import Test.Poly.Helpers (mkModes)
 
@@ -51,8 +52,9 @@ testSubstReNormalizes = do
   let aVar = TyVar { tvName = "A", tvMode = rt }
   let quoteE = ModExpr { meSrc = rt, meTgt = ct, mePath = [quote] }
   let spliceE = ModExpr { meSrc = ct, meTgt = rt, mePath = [splice] }
-  subst <- requireEither (unifyTy mt (TVar xVar) (TMod quoteE (TVar aVar)))
-  let got = applySubstTy mt subst (TMod spliceE (TVar xVar))
+  let tt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+  subst <- requireEither (unifyTy tt (TVar xVar) (TMod quoteE (TVar aVar)))
+  got <- requireEither (applySubstTy tt subst (TMod spliceE (TVar xVar)))
   got @?= TVar aVar
 
 testAdjunctionGens :: Assertion
@@ -85,7 +87,7 @@ testAdjunctionGens = do
       Just g -> pure g
   case gdTyVars unitGen of
     [a] -> do
-      gdDom unitGen @?= [TVar a]
+      gdPlainDom unitGen @?= [TVar a]
       let fExpr = ModExpr { meSrc = modeC, meTgt = modeL, mePath = [ModName "F"] }
       let uExpr = ModExpr { meSrc = modeL, meTgt = modeC, mePath = [ModName "U"] }
       cod <- requireEither (normalizeTypeExpr (dModes doc) (TMod uExpr (TMod fExpr (TVar a))))
@@ -97,7 +99,7 @@ testAdjunctionGens = do
       let fExpr = ModExpr { meSrc = modeC, meTgt = modeL, mePath = [ModName "F"] }
       let uExpr = ModExpr { meSrc = modeL, meTgt = modeC, mePath = [ModName "U"] }
       dom <- requireEither (normalizeTypeExpr (dModes doc) (TMod fExpr (TMod uExpr (TVar b))))
-      gdDom counitGen @?= [dom]
+      gdPlainDom counitGen @?= [dom]
     _ -> assertFailure "counit_F should bind exactly one type variable"
 
 testDupAttrsRejected :: Assertion

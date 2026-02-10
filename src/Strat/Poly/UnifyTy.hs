@@ -1,163 +1,414 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.UnifyTy
-  ( Subst
+  ( Subst(..)
+  , emptySubst
   , unifyTy
   , unifyTyFlex
+  , unifyIx
   , unifyCtx
-  , unifyCtxFlex
   , applySubstTy
+  , applySubstIx
   , applySubstCtx
   , normalizeSubst
   , composeSubst
+  , TyOnlySubst
+  , fromTyOnlySubst
+  , toTyOnlySubst
+  , applySubstTyLegacy
+  , applySubstCtxLegacy
+  , unifyTyFlexLegacy
+  , unifyCtxLegacy
+  , normalizeSubstLegacy
+  , composeSubstLegacy
   ) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.TypeExpr
+import Strat.Poly.IndexTheory
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModeTheory)
+import Strat.Poly.TypeExpr
+import Strat.Poly.TypeTheory
 
 
-type Subst = M.Map TyVar TypeExpr
+data Subst = Subst
+  { sTy :: M.Map TyVar TypeExpr
+  , sIx :: M.Map IxVar IxTerm
+  } deriving (Eq, Ord, Show)
 
-unifyTy :: ModeTheory -> TypeExpr -> TypeExpr -> Either Text Subst
-unifyTy mt t1 t2 = unifyWith mt M.empty t1 t2
+emptySubst :: Subst
+emptySubst = Subst M.empty M.empty
 
-unifyTyFlex :: ModeTheory -> S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text Subst
-unifyTyFlex mt flex t1 t2 = unifyWithFlex mt flex M.empty t1 t2
+type TyOnlySubst = M.Map TyVar TypeExpr
 
-unifyCtx :: ModeTheory -> Context -> Context -> Either Text Subst
-unifyCtx mt ctx1 ctx2
+fromTyOnlySubst :: TyOnlySubst -> Subst
+fromTyOnlySubst tySubst = Subst tySubst M.empty
+
+toTyOnlySubst :: Subst -> TyOnlySubst
+toTyOnlySubst = sTy
+
+legacyTheory :: ModeTheory -> TypeTheory
+legacyTheory mt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+
+unifyTy :: TypeTheory -> TypeExpr -> TypeExpr -> Either Text Subst
+unifyTy tt t1 t2 =
+  let tyFlex = S.union (freeTyVarsType t1) (freeTyVarsType t2)
+      ixFlex = S.union (freeIxVarsType t1) (freeIxVarsType t2)
+   in unifyTyFlex tt [] tyFlex ixFlex emptySubst t1 t2
+
+unifyTyFlex
+  :: TypeTheory
+  -> [TypeExpr]
+  -> S.Set TyVar
+  -> S.Set IxVar
+  -> Subst
+  -> TypeExpr
+  -> TypeExpr
+  -> Either Text Subst
+unifyTyFlex tt ixCtx tyFlex ixFlex subst t1 t2 = do
+  t1' <- applySubstTy tt subst t1
+  t2' <- applySubstTy tt subst t2
+  unifyWith subst t1' t2'
+  where
+    unifyWith s a b =
+      case (a, b) of
+        (TVar v, t) -> unifyTyVar s v t
+        (t, TVar v) -> unifyTyVar s v t
+        (TCon refA argsA, TCon refB argsB)
+          | refA == refB && length argsA == length argsB ->
+              case M.lookup refA (ttTypeParams tt) of
+                Just params
+                  | length params == length argsA ->
+                      foldl stepBySig (Right s) (zip params (zip argsA argsB))
+                _ ->
+                  foldl step (Right s) (zip argsA argsB)
+          | otherwise ->
+              Left ("unifyTyFlex: cannot unify " <> renderTy a <> " with " <> renderTy b)
+        (TMod me1 x1, TMod me2 x2)
+          | me1 == me2 -> unifyWith s x1 x2
+          | otherwise -> Left ("unifyTyFlex: cannot unify " <> renderTy a <> " with " <> renderTy b)
+        _ ->
+          Left ("unifyTyFlex: cannot unify " <> renderTy a <> " with " <> renderTy b)
+
+    step acc (argA, argB) = do
+      s <- acc
+      case (argA, argB) of
+        (TAType tyA, TAType tyB) -> do
+          tyA' <- applySubstTy tt s tyA
+          tyB' <- applySubstTy tt s tyB
+          s1 <- unifyTyFlex tt ixCtx tyFlex ixFlex s tyA' tyB'
+          composeSubst tt s1 s
+        (TAIndex ixA, TAIndex ixB) -> do
+          sort <- inferExpectedIxSort tt ixCtx s ixA ixB
+          s1 <- unifyIx tt ixCtx ixFlex s sort ixA ixB
+          composeSubst tt s1 s
+        _ -> Left "unifyTyFlex: mixed type/index arguments cannot unify"
+
+    stepBySig acc (paramSig, (argA, argB)) = do
+      s <- acc
+      case (paramSig, argA, argB) of
+        (TPS_Ty _, TAType tyA, TAType tyB) -> do
+          tyA' <- applySubstTy tt s tyA
+          tyB' <- applySubstTy tt s tyB
+          s1 <- unifyTyFlex tt ixCtx tyFlex ixFlex s tyA' tyB'
+          composeSubst tt s1 s
+        (TPS_Ix sort, TAIndex ixA, TAIndex ixB) -> do
+          s1 <- unifyIx tt ixCtx ixFlex s sort ixA ixB
+          composeSubst tt s1 s
+        (TPS_Ty _, _, _) ->
+          Left "unifyTyFlex: expected type argument for constructor parameter"
+        (TPS_Ix _, _, _) ->
+          Left "unifyTyFlex: expected index argument for constructor parameter"
+
+    unifyTyVar s v t
+      | v `S.member` tyFlex = bindTyVar s v t
+      | otherwise =
+          case t of
+            TVar v' | v == v' -> Right s
+            TVar v' | v' `S.member` tyFlex -> bindTyVar s v' (TVar v)
+            _ -> Left ("unifyTyFlex: rigid variable mismatch " <> renderVar v <> " with " <> renderTy t)
+
+    bindTyVar s v t = do
+      t' <- applySubstTy tt s t
+      if tvMode v /= typeMode t'
+        then Left ("unifyTyFlex: mode mismatch " <> renderVar v <> " with " <> renderTy t')
+        else if t' == TVar v
+          then Right s
+          else if occursTyVar v t'
+            then Left ("unifyTyFlex: occurs check failed for " <> renderVar v <> " in " <> renderTy t')
+            else composeSubst tt (Subst (M.singleton v t') M.empty) s
+
+unifyCtx
+  :: TypeTheory
+  -> [TypeExpr]
+  -> S.Set TyVar
+  -> S.Set IxVar
+  -> Context
+  -> Context
+  -> Either Text Subst
+unifyCtx tt ixCtx tyFlex ixFlex ctx1 ctx2
   | length ctx1 /= length ctx2 = Left "unifyCtx: length mismatch"
-  | otherwise = foldl step (Right M.empty) (zip ctx1 ctx2)
+  | otherwise = foldl step (Right emptySubst) (zip ctx1 ctx2)
   where
     step acc (a, b) = do
       s <- acc
-      s' <- unifyWith mt s a b
-      pure (composeSubst mt s' s)
+      a' <- applySubstTy tt s a
+      b' <- applySubstTy tt s b
+      s1 <- unifyTyFlex tt ixCtx tyFlex ixFlex s a' b'
+      composeSubst tt s1 s
 
-unifyCtxFlex :: ModeTheory -> S.Set TyVar -> Context -> Context -> Either Text Subst
-unifyCtxFlex mt flex ctx1 ctx2
-  | length ctx1 /= length ctx2 = Left "unifyCtxFlex: length mismatch"
-  | otherwise = foldl step (Right M.empty) (zip ctx1 ctx2)
+unifyIx
+  :: TypeTheory
+  -> [TypeExpr]
+  -> S.Set IxVar
+  -> Subst
+  -> TypeExpr
+  -> IxTerm
+  -> IxTerm
+  -> Either Text Subst
+unifyIx tt ixCtx ixFlex subst expectedSort ix1 ix2 = do
+  expectedSort' <- applySubstTy tt subst expectedSort
+  lhs0 <- applySubstIx tt subst expectedSort' ix1
+  rhs0 <- applySubstIx tt subst expectedSort' ix2
+  lhs <- normalizeIx tt expectedSort' lhs0
+  rhs <- normalizeIx tt expectedSort' rhs0
+  unifyIxNorm subst lhs rhs
   where
-    step acc (a, b) = do
-      s <- acc
-      let a' = applySubstTy mt s a
-      let b' = applySubstTy mt s b
-      s' <- unifyTyFlex mt flex a' b'
-      pure (composeSubst mt s' s)
+    unifyIxNorm s a b =
+      case (a, b) of
+        (IXBound i, IXBound j)
+          | i == j -> Right s
+          | otherwise -> Left "unifyIx: bound index mismatch"
+        (IXFun f xs, IXFun g ys)
+          | f == g && length xs == length ys -> foldl step (Right s) (zip xs ys)
+          | otherwise -> Left "unifyIx: function mismatch"
+        (IXVar v, IXVar w)
+          | sameIxVarId v w -> Right s
+          | v `S.member` ixFlex -> bindIxVar s v (IXVar w)
+          | w `S.member` ixFlex -> bindIxVar s w (IXVar v)
+          | otherwise -> Left "unifyIx: rigid index variable mismatch"
+        (IXVar v, t)
+          | v `S.member` ixFlex -> bindIxVar s v t
+        (t, IXVar v)
+          | v `S.member` ixFlex -> bindIxVar s v t
+        _ -> Left "unifyIx: cannot unify index terms"
+      where
+        step acc (x, y) = do
+          s1 <- acc
+          x' <- applySubstIx tt s1 expectedSort x
+          y' <- applySubstIx tt s1 expectedSort y
+          xNorm <- normalizeIx tt expectedSort x'
+          yNorm <- normalizeIx tt expectedSort y'
+          s2 <- unifyIxNorm s1 xNorm yNorm
+          composeSubst tt s2 s1
 
-unifyWithFlex :: ModeTheory -> S.Set TyVar -> Subst -> TypeExpr -> TypeExpr -> Either Text Subst
-unifyWithFlex mt flex subst t1 t2 =
-  case (applySubstTy mt subst t1, applySubstTy mt subst t2) of
-    (TVar v, t) ->
-      unifyVar mt flex subst v t
-    (t, TVar v) ->
-      unifyVar mt flex subst v t
-    (TCon n as, TCon m bs)
-      | n == m && length as == length bs ->
-          foldl step (Right subst) (zip as bs)
-      | otherwise ->
-          Left ("unifyTyFlex: cannot unify " <> renderTy (TCon n as) <> " with " <> renderTy (TCon m bs))
-    (TMod me1 x1, TMod me2 x2)
-      | me1 == me2 ->
-          unifyWithFlex mt flex subst x1 x2
-      | otherwise ->
-          Left ("unifyTyFlex: cannot unify " <> renderTy (TMod me1 x1) <> " with " <> renderTy (TMod me2 x2))
-    (ta, tb) ->
-      Left ("unifyTyFlex: cannot unify " <> renderTy ta <> " with " <> renderTy tb)
+    bindIxVar s v t = do
+      sortV0 <- applySubstTy tt s (ixvSort v)
+      sortV <- normalizeTypeExpr (ttModes tt) sortV0
+      t' <- applySubstIx tt s sortV t
+      if occursIxVar v t'
+        then Left "unifyIx: occurs check failed"
+        else do
+          let boundSet = boundIxIndicesIx t'
+          if any (>= ixvScope v) (S.toList boundSet)
+            then Left "unifyIx: escape from index scope"
+            else if ixvScope v == 0 && not (S.null boundSet)
+              then Left "unifyIx: scope-0 metavariable cannot mention bound indices"
+              else composeSubst tt (Subst M.empty (M.singleton v t')) s
+
+applySubstTy :: TypeTheory -> Subst -> TypeExpr -> Either Text TypeExpr
+applySubstTy tt subst ty = do
+  raw <- goTy S.empty ty
+  normalizeTypeExpr (ttModes tt) raw
   where
-    step acc (a, b) = do
-      s <- acc
-      s' <- unifyWithFlex mt flex s a b
-      pure (composeSubst mt s' s)
-
-unifyVar :: ModeTheory -> S.Set TyVar -> Subst -> TyVar -> TypeExpr -> Either Text Subst
-unifyVar mt flex subst v t
-  | v `S.member` flex =
-      bindVar mt subst v t
-  | otherwise =
-      case t of
-        TVar v' | v' == v -> Right subst
-        TVar v' | v' `S.member` flex -> bindVar mt subst v' (TVar v)
-        _ -> Left ("unifyTyFlex: rigid variable mismatch " <> renderVar v <> " with " <> renderTy t)
-
-unifyWith :: ModeTheory -> Subst -> TypeExpr -> TypeExpr -> Either Text Subst
-unifyWith mt subst t1 t2 =
-  case (applySubstTy mt subst t1, applySubstTy mt subst t2) of
-    (TVar v, t) -> bindVar mt subst v t
-    (t, TVar v) -> bindVar mt subst v t
-    (TCon n as, TCon m bs)
-      | n == m && length as == length bs ->
-          foldl step (Right subst) (zip as bs)
-      | otherwise ->
-          Left ("unifyTy: cannot unify " <> renderTy (TCon n as) <> " with " <> renderTy (TCon m bs))
-    (TMod me1 x1, TMod me2 x2)
-      | me1 == me2 -> unifyWith mt subst x1 x2
-      | otherwise -> Left ("unifyTy: cannot unify " <> renderTy (TMod me1 x1) <> " with " <> renderTy (TMod me2 x2))
-    (ta, tb) ->
-      Left ("unifyTy: cannot unify " <> renderTy ta <> " with " <> renderTy tb)
-  where
-    step acc (a, b) = do
-      s <- acc
-      s' <- unifyWith mt s a b
-      pure (composeSubst mt s' s)
-
-bindVar :: ModeTheory -> Subst -> TyVar -> TypeExpr -> Either Text Subst
-bindVar mt subst v t
-  | tvMode v /= typeMode t = Left ("unifyTy: mode mismatch " <> renderVar v <> " with " <> renderTy t)
-  | t' == TVar v = Right subst
-  | occurs v t' = Left ("unifyTy: occurs check failed for " <> renderVar v <> " in " <> renderTy t')
-  | otherwise =
-      let subst' = M.insert v t' (M.map (applySubstTy mt (M.singleton v t')) subst)
-       in Right (normalizeSubst mt subst')
-  where
-    t' = applySubstTy mt subst t
-
-occurs :: TyVar -> TypeExpr -> Bool
-occurs v t =
-  case t of
-    TVar v' -> v == v'
-    TCon _ args -> any (occurs v) args
-    TMod _ inner -> occurs v inner
-
-applySubstTy :: ModeTheory -> Subst -> TypeExpr -> TypeExpr
-applySubstTy mt subst ty =
-  let raw = go S.empty ty
-   in case normalizeTypeExpr mt raw of
-        Right out -> out
-        Left _ -> raw
-  where
-    go seen expr =
+    goTy seen expr =
       case expr of
         TVar v ->
-          case M.lookup v subst of
-            Nothing -> TVar v
+          case M.lookup v (sTy subst) of
+            Nothing -> Right (TVar v)
             Just t ->
               if v `S.member` seen
-                then TVar v
-                else go (S.insert v seen) t
-        TCon n args -> TCon n (map (go seen) args)
-        TMod me inner -> TMod me (go seen inner)
+                then Right (TVar v)
+                else goTy (S.insert v seen) t
+        TCon ref args -> do
+          args' <- mapM (goArg seen) args
+          Right (TCon ref args')
+        TMod me inner -> TMod me <$> goTy seen inner
 
-applySubstCtx :: ModeTheory -> Subst -> Context -> Context
-applySubstCtx mt subst = map (applySubstTy mt subst)
+    goArg seen arg =
+      case arg of
+        TAType innerTy -> TAType <$> goTy seen innerTy
+        TAIndex ix ->
+          case inferIxSortFromTerm tt [] subst ix of
+            Left _ -> TAIndex <$> applyIxNoNorm seen ix
+            Right sortTy -> TAIndex <$> applySubstIx tt subst sortTy ix
 
-normalizeSubst :: ModeTheory -> Subst -> Subst
-normalizeSubst mt subst =
-  M.fromList
-    [ (v, t')
-    | (v, t) <- M.toList subst
-    , let t' = applySubstTy mt subst t
-    , t' /= TVar v
-    ]
+    applyIxNoNorm seen tm =
+      case tm of
+        IXVar v -> do
+          sort' <- goTy seen (ixvSort v)
+          case lookupIxById v (sIx subst) of
+            Nothing -> Right (IXVar v { ixvSort = sort' })
+            Just tmSub -> applyIxNoNorm seen tmSub
+        IXBound _ -> Right tm
+        IXFun f args -> IXFun f <$> mapM (applyIxNoNorm seen) args
 
-composeSubst :: ModeTheory -> Subst -> Subst -> Subst
-composeSubst mt s2 s1 =
-  let s1' = M.map (applySubstTy mt s2) s1
-   in normalizeSubst mt (M.union s1' s2)
+applySubstIx :: TypeTheory -> Subst -> TypeExpr -> IxTerm -> Either Text IxTerm
+applySubstIx tt subst expectedSort tm = do
+  expectedSort' <- applySubstTy tt subst expectedSort
+  tm' <- goIx S.empty tm
+  normalizeIx tt expectedSort' tm'
+  where
+    goIx seen expr =
+      case expr of
+        IXVar v -> do
+          sort' <- applySubstTy tt subst (ixvSort v)
+          let v' = v { ixvSort = sort' }
+          case lookupIxById v' (sIx subst) of
+            Nothing -> Right (IXVar v')
+            Just tmSub ->
+              if v' `S.member` seen
+                then Right (IXVar v')
+                else goIx (S.insert v' seen) tmSub
+        IXBound _ -> Right expr
+        IXFun name args -> IXFun name <$> mapM (goIx seen) args
+
+applySubstCtx :: TypeTheory -> Subst -> Context -> Either Text Context
+applySubstCtx tt subst = mapM (applySubstTy tt subst)
+
+normalizeSubst :: TypeTheory -> Subst -> Either Text Subst
+normalizeSubst tt subst = do
+  tyPairs <- mapM normTy (M.toList (sTy subst))
+  ixPairs <- mapM normIx (M.toList (sIx subst))
+  let tyMap = M.fromList [ (v, t) | (v, t) <- tyPairs, t /= TVar v ]
+  let ixMap = M.fromList [ (v, t) | (v, t) <- ixPairs, t /= IXVar v ]
+  Right (Subst tyMap ixMap)
+  where
+    normTy (v, t) = do
+      t' <- applySubstTy tt subst t
+      pure (v, t')
+    normIx (v, t) = do
+      sort' <- applySubstTy tt subst (ixvSort v)
+      t' <- applySubstIx tt subst sort' t
+      pure (v { ixvSort = sort' }, t')
+
+composeSubst :: TypeTheory -> Subst -> Subst -> Either Text Subst
+composeSubst tt s2 s1 = do
+  ty1' <- mapM (applySubstTy tt s2) (sTy s1)
+  ix1' <- fmap M.fromList (mapM substIxPair (M.toList (sIx s1)))
+  normalizeSubst tt (Subst (M.union ty1' (sTy s2)) (M.union ix1' (sIx s2)))
+  where
+    substIxPair (v, t) = do
+      sort' <- applySubstTy tt s2 (ixvSort v)
+      t' <- applySubstIx tt s2 sort' t
+      pure (v { ixvSort = sort' }, t')
+
+applySubstTyLegacy :: ModeTheory -> TyOnlySubst -> TypeExpr -> TypeExpr
+applySubstTyLegacy mt subst ty =
+  case applySubstTy (legacyTheory mt) (fromTyOnlySubst subst) ty of
+    Right ty' -> ty'
+    Left _ -> ty
+
+applySubstCtxLegacy :: ModeTheory -> TyOnlySubst -> Context -> Context
+applySubstCtxLegacy mt subst = map (applySubstTyLegacy mt subst)
+
+unifyTyFlexLegacy :: ModeTheory -> S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text TyOnlySubst
+unifyTyFlexLegacy mt flex t1 t2 = do
+  subst <- unifyTyFlex (legacyTheory mt) [] flex S.empty emptySubst t1 t2
+  pure (toTyOnlySubst subst)
+
+unifyCtxLegacy :: ModeTheory -> Context -> Context -> Either Text TyOnlySubst
+unifyCtxLegacy mt ctx1 ctx2 = do
+  let flex = S.unions (map freeTyVarsType (ctx1 <> ctx2))
+  subst <- unifyCtx (legacyTheory mt) [] flex S.empty ctx1 ctx2
+  pure (toTyOnlySubst subst)
+
+normalizeSubstLegacy :: ModeTheory -> TyOnlySubst -> TyOnlySubst
+normalizeSubstLegacy mt subst =
+  case normalizeSubst (legacyTheory mt) (fromTyOnlySubst subst) of
+    Right s -> toTyOnlySubst s
+    Left _ -> subst
+
+composeSubstLegacy :: ModeTheory -> TyOnlySubst -> TyOnlySubst -> TyOnlySubst
+composeSubstLegacy mt s2 s1 =
+  case composeSubst (legacyTheory mt) (fromTyOnlySubst s2) (fromTyOnlySubst s1) of
+    Right s -> toTyOnlySubst s
+    Left _ -> s1
+
+inferExpectedIxSort :: TypeTheory -> [TypeExpr] -> Subst -> IxTerm -> IxTerm -> Either Text TypeExpr
+inferExpectedIxSort tt ixCtx subst lhs rhs =
+  case inferIxSortFromTerm tt ixCtx subst lhs of
+    Right ty -> Right ty
+    Left _ -> inferIxSortFromTerm tt ixCtx subst rhs
+
+inferIxSortFromTerm :: TypeTheory -> [TypeExpr] -> Subst -> IxTerm -> Either Text TypeExpr
+inferIxSortFromTerm tt ixCtx subst tm =
+  case tm of
+    IXVar v -> applySubstTy tt subst (ixvSort v)
+    IXBound i ->
+      if i < length ixCtx
+        then applySubstTy tt subst (ixCtx !! i)
+        else Left "inferIxSortFromTerm: out-of-scope bound index"
+    IXFun f args -> do
+      sig <- chooseFunSig f (length args)
+      applySubstTy tt subst (ifRes sig)
+  where
+    chooseFunSig funName arity =
+      case [ sig
+           | ixTheory <- M.elems (ttIndex tt)
+           , (name, sig) <- M.toList (itFuns ixTheory)
+           , name == funName
+           , length (ifArgs sig) == arity
+           ] of
+        [] -> Left "inferIxSortFromTerm: unknown index function"
+        (sig:_) -> Right sig
+
+occursTyVar :: TyVar -> TypeExpr -> Bool
+occursTyVar v ty =
+  case ty of
+    TVar v' -> v == v'
+    TCon _ args -> any occursArg args
+    TMod _ inner -> occursTyVar v inner
+  where
+    occursArg arg =
+      case arg of
+        TAType innerTy -> occursTyVar v innerTy
+        TAIndex ix -> any (occursTyVar v . ixvSort) (S.toList (freeIxVarsIx ix))
+
+occursIxVar :: IxVar -> IxTerm -> Bool
+occursIxVar v tm =
+  case tm of
+    IXVar v' -> sameIxVarId v v'
+    IXBound _ -> False
+    IXFun _ args -> any (occursIxVar v) args
+
+sameIxVarId :: IxVar -> IxVar -> Bool
+sameIxVarId a b = ixvName a == ixvName b && ixvScope a == ixvScope b
+
+lookupIxById :: IxVar -> M.Map IxVar IxTerm -> Maybe IxTerm
+lookupIxById v mp =
+  case M.lookup v mp of
+    Just tm -> Just tm
+    Nothing ->
+      snd <$> findIxById (M.toList mp)
+  where
+    findIxById [] = Nothing
+    findIxById ((k, tm):rest)
+      | sameIxVarId k v = Just (k, tm)
+      | otherwise = findIxById rest
+
+freeTyVarsType :: TypeExpr -> S.Set TyVar
+freeTyVarsType ty =
+  case ty of
+    TVar v -> S.singleton v
+    TCon _ args -> S.unions (map freeArg args)
+    TMod _ inner -> freeTyVarsType inner
+  where
+    freeArg arg =
+      case arg of
+        TAType innerTy -> freeTyVarsType innerTy
+        TAIndex ix -> S.unions (map (freeTyVarsType . ixvSort) (S.toList (freeIxVarsIx ix)))
 
 renderTy :: TypeExpr -> Text
 renderTy ty =
@@ -165,8 +416,22 @@ renderTy ty =
     TVar v -> renderVar v
     TCon ref [] -> renderTypeRef ref
     TCon ref args ->
-      renderTypeRef ref <> "(" <> T.intercalate ", " (map renderTy args) <> ")"
+      renderTypeRef ref <> "(" <> T.intercalate ", " (map renderArg args) <> ")"
     TMod me inner -> renderModExpr me <> "(" <> renderTy inner <> ")"
+  where
+    renderArg arg =
+      case arg of
+        TAType innerTy -> renderTy innerTy
+        TAIndex ix -> renderIx ix
+
+    renderIx tm =
+      case tm of
+        IXVar v -> ixvName v
+        IXBound i -> "^" <> T.pack (show i)
+        IXFun f [] -> renderIxFun f
+        IXFun f args -> renderIxFun f <> "(" <> T.intercalate ", " (map renderIx args) <> ")"
+
+    renderIxFun (IxFunName n) = n
 
 renderVar :: TyVar -> Text
 renderVar v = tvName v <> "@" <> renderMode (tvMode v)

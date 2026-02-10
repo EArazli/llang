@@ -149,12 +149,17 @@ renderReturn ctx block = do
 renderEdge :: FoldCtx -> Text -> Diagram -> ModeName -> M.Map PortId Text -> Edge -> Either Text [Text]
 renderEdge ctx namePrefix diag mode portNames edge =
   case ePayload edge of
-    PGen gen attrs -> renderGenEdge ctx diag mode portNames gen attrs (eIns edge) (eOuts edge)
+    PGen gen attrs bargs ->
+      if null bargs
+        then renderGenEdge ctx diag mode portNames gen attrs (eIns edge) (eOuts edge)
+        else Left "evaluator: binder arguments/splice not supported"
     PBox _ inner -> do
       innerInputs <- mapM (lookupPortName portNames) (eIns edge)
       innerOutputs <- mapM (lookupPortName portNames) (eOuts edge)
       innerBlock <- renderBlock ctx (namePrefix <> "__b" <> renderEdgeId (eId edge) <> "_") (Just innerInputs) (Just innerOutputs) inner
       pure (rbLines innerBlock)
+    PSplice _ ->
+      Left "evaluator: binder arguments/splice not supported"
 
 renderGenEdge
   :: FoldCtx

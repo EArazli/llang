@@ -34,36 +34,59 @@ Modes are identified by `ModeName` (text). Discipline is monotone-upgraded with:
 
 ### 1.2 Type expressions
 
-Types are **mode-indexed objects**, not GAT sorts. The polygraph kernel uses a first-order type language:
+Types are mode-indexed and support an explicit index world. The kernel uses:
 
 ```
 TypeRef  = { trMode :: ModeName, trName :: TypeName }
 TyVar    = { tvName :: Text, tvMode :: ModeName }
-TypeExpr = TVar TyVar | TCon TypeRef [TypeExpr] | TMod ModExpr TypeExpr
+IxVar    = { ixvName :: Text, ixvSort :: TypeExpr, ixvScope :: Int }
+IxTerm   = IXVar IxVar | IXBound Int | IXFun IxFunName [IxTerm]
+TypeArg  = TAType TypeExpr | TAIndex IxTerm
+TypeExpr = TVar TyVar | TCon TypeRef [TypeArg] | TMod ModExpr TypeExpr
 Context  = [TypeExpr]
 ```
 
-- `TypeRef` pairs a constructor name with its mode; nested constructors may come from other modes.
-- `TyVar` names are textual; variables are **mode-indexed**.
-- Type constructors have fixed **mode signatures** `(m1,...,mk) -> m`.
-- `TMod me ty` applies a modality expression to a type. Its mode is `me`'s target mode.
-- Within any binder list (generator, rule, or template), tyvar names must be unique by **name**
-  (uniqueness is not by `(name, mode)`).
+- Type constructors carry mixed arguments: type arguments and index arguments.
+- `IXVar` are index metavariables, unified during typing/matching.
+- `IXBound i` are rigid bound indices introduced only by binder slots (`i` is de Bruijn-style).
+- `typeMode` is computed from the constructor/modality structure and ignores index arguments.
+- Type-level definitional equality is strictly:
+  1. mode-theory normalization (modalities),
+  2. index-term normalization in the doctrine’s index theory.
+  Diagram reduction is never used for type equality.
+- Binder lists reject duplicate variable names within their namespace.
 
 ### 1.3 Type unification
 
-The kernel provides a unifier:
+The kernel uses a combined substitution:
 
-- `unifyTy :: ModeTheory -> TypeExpr -> TypeExpr -> Either Text Subst`
-- `unifyCtx :: ModeTheory -> Context -> Context -> Either Text Subst`
+```
+Subst = { sTy :: Map TyVar TypeExpr, sIx :: Map IxVar IxTerm }
+```
 
-with an **occurs check**. Composition and rule matching rely on this unifier to reconcile diagram boundaries.
-All unification and substitution operations normalize modality expressions/types using the current mode theory.
+and a combined theory parameter:
 
-Unification respects modes:
+```
+TypeTheory = { ttModes :: ModeTheory, ttIndex :: Map ModeName IxTheory, ttIxFuel :: Int }
+```
 
-- `TVar v` can only unify with a type `t` when `tvMode v == typeMode t`.
-- `TCon r ...` only unifies with `TCon r ...` with the same `TypeRef` (mode + name).
+with default `ttIxFuel = 200`.
+
+Unification is kind-directed by constructor signatures:
+
+- `PS_Ty` positions unify as types.
+- `PS_Ix sort` positions unify as index terms at expected sort `sort`.
+
+Index unification (`unifyIx`) is scoped first-order unification:
+
+- substitutes and normalizes both sides first,
+- unifies structurally (`IXBound` rigid, `IXFun` pointwise),
+- may bind only flex metas,
+- enforces occurs check,
+- enforces scope safety: if `v := t`, every `IXBound i` in `t` must satisfy `i < ixvScope v`.
+  Scope-0 metas cannot be solved with terms containing bound indices.
+
+All substitution application re-normalizes modalities and index terms.
 
 ---
 
@@ -72,6 +95,7 @@ Unification respects modes:
 A **polygraphic doctrine** packages:
 
 - a mode theory,
+- an index world (`index_mode`, per-mode index theory),
 - an attribute-sort table (`AttrSort -> AttrSortDecl`),
 - a per-mode type constructor table (`TypeName -> TypeSig`),
 - generator declarations, and
@@ -80,11 +104,18 @@ A **polygraphic doctrine** packages:
 Where:
 
 ```
-TypeSig      = { tsParams :: [ModeName] }   -- parameter modes
+ParamSig     = PS_Ty ModeName | PS_Ix TypeExpr
+TypeSig      = { tsParams :: [ParamSig] }
+IxTheory     = { itFuns :: Map IxFunName IxFunSig, itRules :: [IxRule] }
+IxFunSig     = { ifArgs :: [TypeExpr], ifRes :: TypeExpr }
+IxRule       = { irVars :: [IxVar], irLHS :: IxTerm, irRHS :: IxTerm }
 AttrLitKind  = int | string | bool
 AttrSortDecl = { asName :: AttrSort, asLitKind :: Maybe AttrLitKind }
 ```
 
+- `PS_Ix sort` parameters must use index sorts (`typeMode sort ∈ dIndexModes`).
+- `index_fun`/`index_rule` are grouped per index mode by result sort mode.
+- `index_rule` matching is first-order on index terms only (no diagram rewriting).
 - Attribute sorts may be declared with or without a literal kind.
 - If an attribute sort has no literal kind (`asLitKind = Nothing`), literals of that sort are rejected.
 
@@ -93,14 +124,22 @@ AttrSortDecl = { asName :: AttrSort, asLitKind :: Maybe AttrLitKind }
 A generator declaration is:
 
 ```
-GenDecl = { name, mode, tyvars, attrs, dom, cod }
+BinderSig   = { bsIxCtx :: [TypeExpr], bsDom :: Context, bsCod :: Context }
+InputShape  = InPort TypeExpr | InBinder BinderSig
+GenDecl     = { name, mode, gdTyVars, gdIxVars, attrs, dom :: [InputShape], cod }
 
 attrs :: [(AttrName, AttrSort)]
 ```
 
-- `dom` and `cod` are contexts in the generator’s mode.
-- `tyvars` are schematic type parameters for generic generators.
-- `tyvars` are **binders**: their names are α‑irrelevant, and duplicates are rejected.
+- `gdTyVars` are type metas in declarations, `gdIxVars` are index metas with `ixvScope = 0`.
+- Plain input ports are `InPort`.
+- Binder slots are `InBinder` with:
+  - `bsIxCtx`: bound index sorts (index modes only),
+  - `bsDom`: term-bound input ports for the binder body,
+  - `bsCod`: binder body codomain.
+- Types in `bsDom`/`bsCod` may use `IXBound i` referencing `bsIxCtx[i]`.
+- Binder names are surface metadata only and are not stored in kernel objects.
+- `gdPlainDom` extracts only `InPort` entries (legacy plain domain projection).
 - Attribute field names are distinct within a generator.
 - Every attribute field sort must exist in `dAttrSorts`.
 - Generator instances in diagrams carry exactly the declared attribute fields.
@@ -110,27 +149,33 @@ attrs :: [(AttrName, AttrSort)]
 A 2‑cell is a named rewrite equation between diagrams:
 
 ```
-Cell2 = { name, class, orient, tyvars, lhs, rhs }
+Cell2 = { name, class, orient, c2TyVars, c2IxVars, lhs, rhs }
 ```
 
 - `lhs` and `rhs` are diagrams of the same mode.
 - Their boundaries must unify (same context lengths; types unify under a substitution).
-- `tyvars` are **binders**: their names are α‑irrelevant, and duplicates are rejected.
+- `c2TyVars` and `c2IxVars` are binders (α‑irrelevant, duplicate names rejected).
 
 ### 2.3 Validation
 
 `validateDoctrine` checks:
 
 - referenced modes exist,
+- each `index_mode` names an existing mode,
+- index function/rule sorts live in index modes and are mode-consistent by result sort,
 - attribute-sort declarations are well-formed,
-- type constructor arities match,
+- type constructor arities and mixed parameter kinds match,
 - generator domains/codomains are well‑formed,
+- binder slot signatures are well-formed (`bsIxCtx` index-only, bound indices in range),
 - generator attribute fields are well-formed,
 - 2‑cell diagrams validate and have compatible boundaries,
 - all type variables used are declared in the generator or cell scope,
+- all index variables used are declared in scope,
 - every cell satisfies both variable disciplines:
   `freeTyVars(RHS) ⊆ freeTyVars(LHS)` and
+  `freeIxVars(RHS) ⊆ freeIxVars(LHS)` and
   `freeAttrVars(RHS) ⊆ freeAttrVars(LHS)`,
+- binder metas satisfy `binderMetas(RHS) ⊆ binderMetas(LHS)`,
 - attribute-variable name/sort hygiene holds (the same variable name cannot appear at multiple sorts).
 
 ---
@@ -143,25 +188,35 @@ A diagram is an **open directed hypergraph** with **ports as vertices** and gene
 
 - **Ports** have types.
 - **Edges** have ordered input ports and ordered output ports; each edge payload is either
-  a **generator instance** or a **box** containing a nested diagram.
+  a generator instance, a box, or a splice edge.
 - **Boundary** consists of ordered input ports and ordered output ports.
+- **Index context** `dIxCtx :: [TypeExpr]` stores bound index sorts in scope.
 - **Linearity invariant**: each port has at most one producer and at most one consumer.
 - **Cycles are allowed**: diagrams need not be acyclic, as long as linearity and boundary
   invariants hold.
 
-Generator payloads carry attributes:
+Generator payloads carry attributes and binder arguments:
 
 ```
-EdgePayload = PGen GenName AttrMap | PBox BoxName Diagram
+BinderArg   = BAConcrete Diagram | BAMeta BinderMetaVar
+EdgePayload = PGen GenName AttrMap [BinderArg] | PBox BoxName Diagram | PSplice BinderMetaVar
 AttrMap     = AttrName -> AttrTerm
 AttrTerm    = ATVar AttrVar | ATLit AttrLit
 AttrVar     = { name :: Text, sort :: AttrSort }
 AttrLit     = Int | String | Bool
 ```
 
+Rules for index context:
+
+- top-level/normal term diagrams use `dIxCtx = []`,
+- binder-argument diagrams must use the slot’s `bsIxCtx`,
+- boxes do not bind indices (`PBox` inner `dIxCtx` must equal outer `dIxCtx`),
+- any `IXBound i` in diagram port types must satisfy `i < length dIxCtx`.
+
 For a **box** edge, the nested diagram must:
 
 - share the outer diagram’s mode, and
+- share the outer diagram’s `dIxCtx`,
 - have input/output boundary types matching the edge’s input/output port types.
 - recursively carry generator payload attributes by the same representation.
 
@@ -212,16 +267,22 @@ It is enforced after composition, tensor, rewrite steps, and morphism applicatio
 A match is a structure‑preserving embedding of a pattern diagram into a host diagram:
 
 ```
-Match = { mPorts, mEdges, mTySub, mAttrSub }
+Match = { mPorts, mEdges, mTySub, mAttrSub, mBinderSub }
 ```
 
 Constraints:
 
 - generator labels must match,
 - ordered incidences must match,
-- port types unify under `mTySub`,
+- diagram `dIxCtx` must agree,
+- port types unify under combined type/index substitution `mTySub`,
 - generator attribute key sets must match,
 - corresponding generator attribute terms unify under `mAttrSub`,
+- binder argument arities must match,
+- binder metas are valid only at binder-argument positions:
+  - `BAMeta X` captures a concrete binder diagram on first use,
+  - repeated `BAMeta X` requires iso-equality with the existing capture,
+  - binder metas outside binder-arg positions are rejected by elaboration,
 - **dangling condition**: ports internal to the pattern must not connect to host edges outside the matched image.
 
 Attribute unification uses `unifyAttrFlex`:
@@ -248,10 +309,23 @@ A rewrite step replaces a matched subdiagram `L` by `R`:
 
 1. Delete the matched edges.
 2. Delete matched **internal** ports (dangling‑safe by construction).
-3. Instantiate `R` by both match substitutions (`mTySub` and `mAttrSub`).
-4. Insert a fresh copy of `R` and glue its boundary to the matched boundary ports.
+3. Instantiate `R` by type/index and attribute substitutions.
+4. Substitute binder metas in RHS binder arguments using `mBinderSub`.
+5. Expand splice edges `PSplice X` in RHS by grafting captured diagram `mBinderSub[X]`:
+   - require exact `dIxCtx` equality between captured diagram and splice context,
+   - require captured boundary equals splice edge boundary,
+   - remove splice edge,
+   - insert shifted captured diagram,
+   - merge splice boundary ports with captured boundary ports.
+6. Insert the resulting fresh RHS and glue its boundary to the matched boundary ports.
 
 **Empty‑LHS rules are disallowed.** Rules must match at least one edge.
+
+`PSplice` is rejected in:
+
+- term/evaluation diagrams,
+- rewrite-rule LHS,
+- any context other than rule RHS elaboration.
 
 ### 4.3 Normalization and joinability
 
@@ -346,20 +420,27 @@ The DSL introduces `doctrine` blocks and diagram expressions.
 ```
 doctrine <Name> [extends <Base>] where {
   mode <ModeName>;
+  index_mode <ModeName>;
   structure <ModeName> = linear | affine | relevant | cartesian;
   modality <ModName> : <ModeName> -> <ModeName>;
   mod_eq <ModExpr> -> <ModExpr>;
   adjunction <ModName> dashv <ModName>;
   attrsort <SortName> [= int | string | bool];
-  type <TypeName> (<tyvar> [, ...]) @<ModeName>;
-  gen  <GenName>  (<tyvar> [, ...]) [ { f1:S1, ..., fk:Sk } ] : <Ctx> -> <Ctx> @<ModeName>;
-  rule <class> <RuleName> <orient> (<tyvar> [, ...]) : <Ctx> -> <Ctx> @<ModeName> =
+  index_fun <IxFun>(x1:Sort1, ..., xn:SortN) : SortR @<ModeName>;
+  index_rule <IxRule>(x1:Sort1, ..., xn:SortN) : <IxExpr> -> <IxExpr> @<ModeName>;
+  type <TypeName> (<param> [, ...]) @<ModeName>;
+  gen  <GenName>  (<param> [, ...]) [ { f1:S1, ..., fk:Sk } ] : <InputShapes> -> <Ctx> @<ModeName>;
+  rule <class> <RuleName> <orient> (<param> [, ...]) : <Ctx> -> <Ctx> @<ModeName> =
     <DiagExpr> == <DiagExpr>;
 }
 ```
 
-- A tyvar binder is `a` or `a@Mode`. If the mode is omitted, it defaults to the declaration mode.
+- Parameters are mixed:
+  - type param: `a` or `a@Mode`,
+  - index param: `n : Sort`.
 - Binder lists may be empty or omitted when no parameters are needed.
+- `index_mode` marks which modes are valid index modes.
+- `index_fun`/`index_rule` must be mode-consistent with their result sort mode.
 - `structure` can only upgrade discipline according to the partial order
   `linear <= affine <= cartesian` and `linear <= relevant <= cartesian`.
 - Modality expressions use:
@@ -371,6 +452,10 @@ doctrine <Name> [extends <Base>] where {
 - `attrsort S = int|string|bool;` declares a literal-admitting sort.
 - `attrsort S;` declares a sort with no literal kind (literals are rejected at that sort).
 - Generator attribute blocks `{ ... }` are optional; when present, each entry is `field:Sort`.
+- Generator domains are input-shape lists:
+  - plain ports: `A`,
+  - binder slots: `binder { v1:T1, ..., vk:Tk } : [Cod...]`.
+  Binder vars in the generator mode become `bsDom`; vars in index modes become `bsIxCtx`.
 
 Inside doctrine blocks, `data` is syntactic sugar for a type plus constructor generators:
 
@@ -478,22 +563,31 @@ morphism <Name> : <Src> -> <Tgt> where {
 ### 6.3 Types and contexts
 
 - A context is a bracketed list: `[A, B, ...]` or `[]`.
-- Types are either:
-  - lowercase identifiers (type variables), or
-  - constructors with optional arguments, optionally qualified by mode:
-    `Mode.Type(args)` or `Type(args)`, or
-  - modality application:
-    `mu(Type)` or composed forms such as `U.F(Type)`, and identity `id@Mode(Type)`.
-- Unqualified constructors must be unique across all modes; otherwise they must be written
-  with a `Mode.` qualifier.
-- `mu(Type)` is interpreted as modality application when `mu` is a declared modality.
+- Types and index terms share one raw expression grammar; elaboration is kind-directed.
+- Bare names are not classified by lowercase/uppercase syntax.
+  Resolution is by scope/signature:
+  - type variable in scope,
+  - type constructor (possibly qualified),
+  - index variable in scope,
+  - index function in expected index mode.
+- Type expressions support:
+  - constructors with mixed args: `T(arg1, arg2, ...)`,
+  - modality application: `mu(T)` and `id@Mode(T)`,
+  - bound index references in index positions: `^0`, `^1`, ...
+- Index terms support:
+  - variables (`n`),
+  - bound indices (`^i`),
+  - function applications (`add(S(n), m)`).
+- Index definitional equality is normalization by `index_rule` (leftmost-outermost, declaration order, fuel-bounded).
+- Unqualified constructors must be unique across modes; otherwise they require `Mode.Type(...)`.
 
 ### 6.4 Diagram expressions
 
 ```
 id[<Ctx>]
-<GenName>{<Ty>,...}(<AttrArgs>)   -- optional type args; optional attr args
+<GenName>{<Arg>,...}(<AttrArgs>)[<BinderArgs>]  -- all argument groups optional
 @<TermName>           -- splice a named term
+splice(?X)            -- RHS-only binder splice
 box <Name> { <d> }    -- boxed subdiagram
 loop { <d> }          -- feedback: connects the single output of <d> to its single input
 <d1> ; <d2>           -- composition (first d1 then d2)
@@ -502,9 +596,14 @@ loop { <d> }          -- feedback: connects the single output of <d> to its sing
 
 Generator calls:
 
-- Type arguments `{...}` are optional.
+- Constructor/index arguments `{...}` are optional (elaborated as type args then index args by declaration binder class).
 - Attribute arguments `(...)` are optional syntactically, but required when the generator
   declares attributes, and disallowed when it declares none.
+- Binder arguments `[...]` are optional syntactically, but required exactly when the generator
+  declares binder slots.
+- Each binder argument is either:
+  - a concrete diagram expression,
+  - or binder meta `?X` (allowed only in rewrite rules).
 - Attribute arguments must be either all named or all positional:
 
 ```
@@ -525,6 +624,8 @@ shortest coercion path; ambiguity or absence is an error.
 The **first** output port is identified with the input port (feedback); the remaining
 outputs become the outputs of the looped diagram. The result has **no inputs** and
 `(n−1)` outputs.
+
+`splice(?X)` is allowed only in rewrite-rule RHS and requires `?X` to be captured in LHS binder args.
 
 ---
 

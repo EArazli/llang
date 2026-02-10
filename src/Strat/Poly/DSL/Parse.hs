@@ -6,7 +6,6 @@ module Strat.Poly.DSL.Parse
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void (Void)
-import Data.Char (isLower)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
@@ -34,6 +33,7 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 polyDiagTerm :: Parser RawDiagExpr
 polyDiagTerm =
   try polyIdTerm
+    <|> polySpliceTerm
     <|> polyLoopTerm
     <|> polyBoxTerm
     <|> polyTermRefTerm
@@ -51,7 +51,16 @@ polyGenTerm = do
   name <- ident
   mArgs <- optional (symbol "{" *> polyTypeExpr `sepBy` symbol "," <* symbol "}")
   mAttrArgs <- optional polyAttrArgs
-  pure (RDGen name mArgs mAttrArgs)
+  mBinderArgs <- optional polyBinderArgs
+  pure (RDGen name mArgs mAttrArgs mBinderArgs)
+
+polySpliceTerm :: Parser RawDiagExpr
+polySpliceTerm = do
+  _ <- symbol "splice"
+  _ <- symbol "("
+  meta <- binderMetaVar
+  _ <- symbol ")"
+  pure (RDSplice meta)
 
 polyTermRefTerm :: Parser RawDiagExpr
 polyTermRefTerm = do
@@ -119,8 +128,23 @@ polyContext = do
   _ <- symbol "]"
   pure tys
 
+polyBinderArgs :: Parser [RawBinderArg]
+polyBinderArgs = do
+  _ <- symbol "["
+  args <- polyBinderArg `sepBy` symbol ","
+  _ <- symbol "]"
+  pure args
+
+polyBinderArg :: Parser RawBinderArg
+polyBinderArg =
+  try (RBAMeta <$> binderMetaVar)
+    <|> (RBAExpr <$> polyDiagExpr)
+
+binderMetaVar :: Parser Text
+binderMetaVar = lexeme (char '?' *> identRaw)
+
 polyTypeExpr :: Parser RawPolyTypeExpr
-polyTypeExpr = lexeme (try modApp <|> regular)
+polyTypeExpr = lexeme (try modApp <|> try bound <|> regular)
   where
     modApp = do
       me <- rawModExprComplex
@@ -128,6 +152,10 @@ polyTypeExpr = lexeme (try modApp <|> regular)
       inner <- polyTypeExpr
       _ <- symbol ")"
       pure (RPTMod me inner)
+    bound = do
+      _ <- symbol "^"
+      idx <- fromIntegral <$> integer
+      pure (RPTBound idx)
     rawModExprComplex =
       try rawId <|> rawComp
     rawId = do
@@ -152,19 +180,12 @@ polyTypeExpr = lexeme (try modApp <|> regular)
           let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }
           in pure (RPTCon ref (maybe [] id mArgs))
         Nothing ->
-          case T.uncons name of
-            Nothing -> fail "empty type name"
-            Just (c, _) ->
-              case mArgs of
-                Just args ->
-                  let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-                  in pure (RPTCon ref args)
-                Nothing ->
-                  if isLower c
-                    then pure (RPTVar name)
-                    else
-                      let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-                      in pure (RPTCon ref [])
+          case mArgs of
+            Just args ->
+              let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
+              in pure (RPTCon ref args)
+            Nothing ->
+              pure (RPTVar name)
 
 -- Helpers
 

@@ -9,12 +9,12 @@ import qualified Data.Text as T
 import Strat.Backend (Value(..))
 import Strat.Model.Spec (DefaultBehavior(..), FoldSpec(..), MExpr(..), ModelBackend(..), ModelSpec(..), OpClause(..))
 import Strat.Poly.Diagram (genD)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..))
 import Strat.Poly.Eval (evalDiagram)
 import Strat.Poly.Graph (dIn, dOut, setPortLabel)
 import Strat.Poly.ModeTheory (ModeInfo(..), ModeName(..), ModeTheory(..), VarDiscipline(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TypeArg(..))
 import Test.Tasty
 import Test.Tasty.HUnit
 
@@ -31,7 +31,7 @@ foldTests =
     ]
 
 tcon :: ModeName -> T.Text -> [TypeExpr] -> TypeExpr
-tcon mode name args = TCon (TypeRef mode (TypeName name)) args
+tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
 
 mkModes :: S.Set ModeName -> ModeTheory
 mkModes modes =
@@ -46,6 +46,8 @@ mkDoctrine mode gens typesTable =
   Doctrine
     { dName = "D"
     , dModes = mkModes (S.singleton mode)
+    , dIndexModes = S.empty
+    , dIxTheory = M.empty
     , dTypes = typesTable
     , dGens = M.fromList [(mode, M.fromList [ (gdName g, g) | g <- gens ])]
     , dCells2 = []
@@ -112,7 +114,8 @@ testFoldUsesLabels = do
           { gdName = GenName "g"
           , gdMode = mode
           , gdTyVars = []
-          , gdDom = [a]
+        , gdIxVars = []
+    , gdDom = map InPort [a]
           , gdCod = [a]
           , gdAttrs = []
           }
@@ -144,7 +147,8 @@ testFoldStmtEmission = do
           { gdName = GenName "emit"
           , gdMode = mode
           , gdTyVars = []
-          , gdDom = []
+        , gdIxVars = []
+    , gdDom = map InPort []
           , gdCod = []
           , gdAttrs = []
           }
@@ -188,7 +192,8 @@ testFoldSSAAvoidsParamCollision = do
           { gdName = GenName "g"
           , gdMode = mode
           , gdTyVars = []
-          , gdDom = [a]
+        , gdIxVars = []
+    , gdDom = map InPort [a]
           , gdCod = [a]
           , gdAttrs = []
           }
@@ -236,7 +241,8 @@ testFoldSSAHandlesCollisionAfterSuffix = do
           { gdName = GenName "split"
           , gdMode = mode
           , gdTyVars = []
-          , gdDom = [a]
+        , gdIxVars = []
+    , gdDom = map InPort [a]
           , gdCod = [a, a]
           , gdAttrs = []
           }
@@ -268,7 +274,8 @@ testFoldSSAIndentsMultilineStmt = do
           { gdName = GenName "emit"
           , gdMode = mode
           , gdTyVars = []
-          , gdDom = []
+        , gdIxVars = []
+    , gdDom = map InPort []
           , gdCod = []
           , gdAttrs = []
           }

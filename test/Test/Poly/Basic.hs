@@ -9,13 +9,14 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
-import Strat.Poly.UnifyTy (applySubstTy, normalizeSubst)
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..), TypeArg(..))
+import Strat.Poly.UnifyTy (applySubstTyLegacy, normalizeSubstLegacy)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Names (BoxName(..))
 import Strat.Poly.Diagram
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.Graph
@@ -65,7 +66,7 @@ tvar :: ModeName -> Text -> TyVar
 tvar mode name = TyVar { tvName = name, tvMode = mode }
 
 tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
-tcon mode name args = TCon (TypeRef mode (TypeName name)) args
+tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
 
 
 testDiagramDomCod :: Assertion
@@ -187,7 +188,7 @@ testApplySubstChase = do
   let b = tvar mode "b"
   let c = tcon mode "C" []
   let subst = M.fromList [(a, TVar b), (b, c)]
-  applySubstTy (mkModes [mode]) subst (TVar a) @?= c
+  applySubstTyLegacy (mkModes [mode]) subst (TVar a) @?= c
 
 testApplySubstCycle :: Assertion
 testApplySubstCycle = do
@@ -195,20 +196,20 @@ testApplySubstCycle = do
   let a = tvar mode "a"
   let b = tvar mode "b"
   let subst = M.fromList [(a, TVar b), (b, TVar a)]
-  applySubstTy (mkModes [mode]) subst (TVar a) @?= TVar a
+  applySubstTyLegacy (mkModes [mode]) subst (TVar a) @?= TVar a
 
 testNormalizeSubstIdentity :: Assertion
 testNormalizeSubstIdentity = do
   let mode = ModeName "M"
   let a = tvar mode "a"
-  normalizeSubst (mkModes [mode]) (M.fromList [(a, TVar a)]) @?= M.empty
+  normalizeSubstLegacy (mkModes [mode]) (M.fromList [(a, TVar a)]) @?= M.empty
 
 testDiagramIsoBoxName :: Assertion
 testDiagramIsoBoxName = do
   let mode = ModeName "M"
   let a = tcon mode "A" []
   let inner = idD mode [a]
-  let (inP, d0) = freshPort a (emptyDiagram mode)
+  let (inP, d0) = freshPort a (emptyDiagram mode [])
   let (outP, d1) = freshPort a d0
   d2 <- require (addEdgePayload (PBox (BoxName "B1") inner) [inP] [outP] d1)
   let d3 = d2 { dIn = [inP], dOut = [outP] }
@@ -227,13 +228,16 @@ testDuplicateGenTyVars = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = [a, a]
-        , gdDom = [TVar a]
+        , gdIxVars = []
+    , gdDom = map InPort [TVar a]
         , gdCod = [TVar a]
         , gdAttrs = []
         }
   let doc = Doctrine
         { dName = "DupGenTyVars"
         , dModes = mkModes [mode]
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = []
@@ -253,12 +257,15 @@ testDuplicateCellTyVars = do
         , c2Class = Structural
         , c2Orient = Bidirectional
         , c2TyVars = [a, a]
+        , c2IxVars = []
         , c2LHS = diag
         , c2RHS = diag
         }
   let doc = Doctrine
         { dName = "DupCellTyVars"
         , dModes = mkModes [mode]
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.empty
         , dGens = M.empty
         , dCells2 = [cell]
@@ -277,7 +284,8 @@ testRejectRHSTyVars = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
-        , gdDom = [tcon mode "A" []]
+        , gdIxVars = []
+    , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
         }
@@ -287,13 +295,16 @@ testRejectRHSTyVars = do
         { c2Name = "rhs_fresh"
         , c2Class = Computational
         , c2Orient = LR
-        , c2TyVars = [bVar]
+        , c2TyVars = []
+        , c2IxVars = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
   let doc = Doctrine
         { dName = "D"
         , dModes = mkModes [mode]
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
@@ -312,7 +323,8 @@ testAcceptRHSTyVars = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = [aVar]
-        , gdDom = [TVar aVar]
+        , gdIxVars = []
+    , gdDom = map InPort [TVar aVar]
         , gdCod = [TVar aVar]
         , gdAttrs = []
         }
@@ -323,12 +335,15 @@ testAcceptRHSTyVars = do
         , c2Class = Computational
         , c2Orient = LR
         , c2TyVars = [aVar]
+        , c2IxVars = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
   let doc = Doctrine
         { dName = "D"
         , dModes = mkModes [mode]
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
@@ -349,12 +364,15 @@ testRejectEmptyLHS = do
         , c2Class = Computational
         , c2Orient = LR
         , c2TyVars = []
+        , c2IxVars = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
   let doc = Doctrine
         { dName = "D"
         , dModes = mkModes [mode]
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.empty
         , dCells2 = [cell]
@@ -366,14 +384,14 @@ testRejectEmptyLHS = do
 
 buildIsoDiagram :: ModeName -> TypeExpr -> Either Text Diagram
 buildIsoDiagram mode a = do
-  let (p0, d0) = freshPort a (emptyDiagram mode)
+  let (p0, d0) = freshPort a (emptyDiagram mode [])
   let (p1, d1) = freshPort a d0
   let (p2, d2) = freshPort a d1
   let (p3, d3) = freshPort a d2
   let (p4, d4) = freshPort a d3
-  d5 <- addEdgePayload (PGen (GenName "f") M.empty) [p0] [p2] d4
-  d6 <- addEdgePayload (PGen (GenName "g") M.empty) [p1] [p3] d5
-  d7 <- addEdgePayload (PGen (GenName "h") M.empty) [p2, p3] [p4] d6
+  d5 <- addEdgePayload (PGen (GenName "f") M.empty []) [p0] [p2] d4
+  d6 <- addEdgePayload (PGen (GenName "g") M.empty []) [p1] [p3] d5
+  d7 <- addEdgePayload (PGen (GenName "h") M.empty []) [p2, p3] [p4] d6
   let diag = d7 { dIn = [p0, p1], dOut = [p4] }
   validateDiagram diag
   pure diag

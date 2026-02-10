@@ -11,10 +11,10 @@ import qualified Data.Text as T
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (meDoctrines)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..), TypeArg(..))
 
 
 tests :: TestTree
@@ -60,10 +60,10 @@ testDataMacroElab = do
     Nothing -> assertFailure "expected Cons constructor"
     Just g -> pure g
   let aVar = TyVar { tvName = "a", tvMode = mode }
-  let listTy = TCon (TypeRef mode (TypeName "List")) [TVar aVar]
-  gdDom nilGen @?= []
+  let listTy = TCon (TypeRef mode (TypeName "List")) [TAType (TVar aVar)]
+  gdPlainDom nilGen @?= []
   gdCod nilGen @?= [listTy]
-  gdDom consGen @?= [TVar aVar, listTy]
+  gdPlainDom consGen @?= [TVar aVar, listTy]
   gdCod consGen @?= [listTy]
 
 testDataMacroCollision :: Assertion

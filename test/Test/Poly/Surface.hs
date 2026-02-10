@@ -9,13 +9,14 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Set as S
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, ModuleEnv(..), TermDef(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..))
 import Strat.Poly.Surface.Parse (parseSurfaceSpec)
 import Strat.Poly.Surface (PolySurfaceDef, elabPolySurfaceDecl)
 import Strat.Poly.Surface.Elab (elabSurfaceExpr)
@@ -101,7 +102,8 @@ mkDoctrineWithDiscipline disc =
         { gdName = GenName name
         , gdMode = modeM
         , gdTyVars = tyVars
-        , gdDom = dom
+        , gdIxVars = []
+        , gdDom = map InPort dom
         , gdCod = cod
         , gdAttrs = []
         }
@@ -114,7 +116,9 @@ mkDoctrineWithDiscipline disc =
   in Doctrine
       { dName = "TestDoc"
       , dModes = mt
-      , dTypes = M.fromList [(modeM, M.fromList [(TypeName "A", TypeSig [])])]
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+        , dTypes = M.fromList [(modeM, M.fromList [(TypeName "A", TypeSig [])])]
       , dGens =
           M.fromList
             [ ( modeM
@@ -137,7 +141,7 @@ mkSurfaceWithSpec txt doc = do
 
 assertHasGen :: Text -> Diagram -> Assertion
 assertHasGen name diag =
-  let payloads = [ g | Edge _ (PGen g _) _ _ <- IM.elems (dEdges diag) ]
+  let payloads = [ g | Edge _ (PGen g _ _) _ _ <- IM.elems (dEdges diag) ]
   in if GenName name `elem` payloads then pure () else assertFailure ("expected gen " <> T.unpack name)
 
 testSurfaceElabOk :: Assertion
@@ -164,7 +168,7 @@ testSurfaceDupLeftAssociated = do
   surf <- either (assertFailure . T.unpack) pure (mkSurfaceWithSpec specText doc)
   let expr = T.unlines [ "term {", "  in x:A;", "  out x, x, x", "}" ]
   diag <- either (assertFailure . T.unpack) pure (elabSurfaceExpr emptyEnv doc surf expr)
-  let dupEdges = [ e | e@(Edge _ (PGen g _) _ _) <- IM.elems (dEdges diag), g == GenName "dup" ]
+  let dupEdges = [ e | e@(Edge _ (PGen g _ _) _ _) <- IM.elems (dEdges diag), g == GenName "dup" ]
   length dupEdges @?= 2
   inPort <- case dIn diag of
     [p] -> pure p

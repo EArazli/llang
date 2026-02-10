@@ -19,11 +19,50 @@ import Strat.Poly.Diagram
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
+import Strat.Poly.TypeTheory (TypeTheory(..))
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), composeMod, normalizeModExpr)
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
+
+
+mkLegacyTypeTheory :: ModeTheory -> TypeTheory
+mkLegacyTypeTheory mt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+
+applySubstTyCompat :: ModeTheory -> Subst -> TypeExpr -> TypeExpr
+applySubstTyCompat mt subst ty =
+  case applySubstTy (mkLegacyTypeTheory mt) subst ty of
+    Right ty' -> ty'
+    Left _ -> ty
+
+applySubstCtxCompat :: ModeTheory -> Subst -> Context -> Context
+applySubstCtxCompat mt subst = map (applySubstTyCompat mt subst)
+
+composeSubstCompat :: ModeTheory -> Subst -> Subst -> Subst
+composeSubstCompat mt s2 s1 =
+  case composeSubst (mkLegacyTypeTheory mt) s2 s1 of
+    Right s -> s
+    Left _ -> s1
+
+unifyCtxCompat :: ModeTheory -> Context -> Context -> Either Text Subst
+unifyCtxCompat mt ctxA ctxB =
+  let tt = mkLegacyTypeTheory mt
+      tyFlex = S.unions (map freeTyVarsTypeLocal (ctxA <> ctxB))
+      ixFlex = S.unions (map freeIxVarsType (ctxA <> ctxB))
+   in unifyCtx tt [] tyFlex ixFlex ctxA ctxB
+
+freeTyVarsTypeLocal :: TypeExpr -> S.Set TyVar
+freeTyVarsTypeLocal ty =
+  case ty of
+    TVar v -> S.singleton v
+    TCon _ args -> S.unions (map freeArg args)
+    TMod _ inner -> freeTyVarsTypeLocal inner
+  where
+    freeArg arg =
+      case arg of
+        TAType t -> freeTyVarsTypeLocal t
+        TAIndex ix -> S.unions [ freeTyVarsTypeLocal (ixvSort v) | v <- S.toList (freeIxVarsIx ix) ]
 
 
 data Morphism = Morphism
@@ -84,14 +123,36 @@ applyMorphismTy mor ty =
       me' <- mapModExpr mor me
       normalizeTypeExpr (dModes (morTgt mor)) (TMod me' inner')
     TCon ref args -> do
-      args' <- mapM (applyMorphismTy mor) args
+      args' <- mapM mapArg args
       case M.lookup ref (morTypeMap mor) of
         Nothing -> do
           ref' <- mapTypeRef mor ref
           pure (TCon ref' args')
         Just tmpl -> do
-          let subst = M.fromList (zip (ttParams tmpl) args')
-          pure (applySubstTy (dModes (morTgt mor)) subst (ttBody tmpl))
+          tyArgs <- mapM requireTyArg args'
+          let subst = Subst (M.fromList (zip (ttParams tmpl) tyArgs)) M.empty
+          case applySubstTy (mkLegacyTypeTheory (dModes (morTgt mor))) subst (ttBody tmpl) of
+            Left err -> Left err
+            Right out -> Right out
+  where
+    mapArg arg =
+      case arg of
+        TAType t -> TAType <$> applyMorphismTy mor t
+        TAIndex ix -> TAIndex <$> applyMorphismIxTerm mor ix
+
+    requireTyArg arg =
+      case arg of
+        TAType t -> Right t
+        TAIndex _ -> Left "morphism: type template cannot be instantiated by index arguments"
+
+applyMorphismIxTerm :: Morphism -> IxTerm -> Either Text IxTerm
+applyMorphismIxTerm mor tm =
+  case tm of
+    IXVar v -> do
+      sort' <- applyMorphismTy mor (ixvSort v)
+      Right (IXVar v { ixvSort = sort' })
+    IXBound i -> Right (IXBound i)
+    IXFun f args -> IXFun f <$> mapM (applyMorphismIxTerm mor) args
 
 mapModExpr :: Morphism -> ModExpr -> Either Text ModExpr
 mapModExpr mor me = do
@@ -114,8 +175,9 @@ mapModExpr mor me = do
 applyMorphismDiagram :: Morphism -> Diagram -> Either Text Diagram
 applyMorphismDiagram mor diagSrc = do
   modeTgt <- mapMode mor modeSrc
+  ixCtx <- mapM (applyMorphismTy mor) (dIxCtx diagSrc)
   portTy <- mapM (applyMorphismTy mor) (dPortTy diagSrc)
-  let diagTgt0 = diagSrc { dMode = modeTgt, dPortTy = portTy }
+  let diagTgt0 = diagSrc { dMode = modeTgt, dIxCtx = ixCtx, dPortTy = portTy }
   let edgeIds = IM.keys (dEdges diagSrc)
   let step acc edgeKey = do
         diagTgt <- acc
@@ -123,7 +185,10 @@ applyMorphismDiagram mor diagSrc = do
           Nothing -> Left "applyMorphismDiagram: missing source edge"
           Just edgeSrc ->
             case ePayload edgeSrc of
-              PGen genName attrsSrc -> do
+              PGen genName attrsSrc bargsSrc -> do
+                if not (null bargsSrc)
+                  then Left "applyMorphismDiagram: binder arguments not supported in morphisms"
+                  else Right ()
                 genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
                 subst <- instantiateGen (dModes (morSrc mor)) genDecl diagSrc edgeSrc
                 substTgt <- mapSubst mor subst
@@ -140,6 +205,8 @@ applyMorphismDiagram mor diagSrc = do
               PBox name inner -> do
                 inner' <- applyMorphismDiagram mor inner
                 updateEdgePayload diagTgt edgeKey (PBox name inner')
+              PSplice x ->
+                updateEdgePayload diagTgt edgeKey (PSplice x)
   diagTgt <- foldl step (Right diagTgt0) edgeIds
   validateDiagram diagTgt
   pure diagTgt
@@ -148,13 +215,18 @@ applyMorphismDiagram mor diagSrc = do
 
 mapSubst :: Morphism -> Subst -> Either Text Subst
 mapSubst mor subst = do
-  pairs <- mapM mapOne (M.toList subst)
-  pure (M.fromList pairs)
+  tyPairs <- mapM mapTyOne (M.toList (sTy subst))
+  ixPairs <- mapM mapIxOne (M.toList (sIx subst))
+  pure (Subst (M.fromList tyPairs) (M.fromList ixPairs))
   where
-    mapOne (v, t) = do
+    mapTyOne (v, t) = do
       v' <- mapTyVar mor v
       t' <- applyMorphismTy mor t
       pure (v', t')
+    mapIxOne (v, t) = do
+      sort' <- applyMorphismTy mor (ixvSort v)
+      t' <- applyMorphismIxTerm mor t
+      pure (v { ixvSort = sort' }, t')
 
 checkMorphism :: Morphism -> Either Text ()
 checkMorphism mor = do
@@ -323,7 +395,7 @@ checkGenMapping :: Morphism -> GenDecl -> Either Text ()
 checkGenMapping mor gen = do
   let modeSrc = gdMode gen
   modeTgt <- mapMode mor modeSrc
-  dom <- mapM (applyMorphismTy mor) (gdDom gen)
+  dom <- mapM (applyMorphismTy mor) (gdPlainDom gen)
   cod <- mapM (applyMorphismTy mor) (gdCod gen)
   image <- case M.lookup (modeSrc, gdName gen) (morGenMap mor) of
     Nothing -> Left "checkMorphism: missing generator mapping"
@@ -333,8 +405,8 @@ checkGenMapping mor gen = do
     else do
       domImg <- diagramDom image
       codImg <- diagramCod image
-      _ <- unifyCtx (dModes (morTgt mor)) dom domImg
-      _ <- unifyCtx (dModes (morTgt mor)) cod codImg
+      _ <- unifyCtxCompat (dModes (morTgt mor)) dom domImg
+      _ <- unifyCtxCompat (dModes (morTgt mor)) cod codImg
       pure ()
 
 checkCell :: Morphism -> Cell2 -> Either Text ()
@@ -378,7 +450,7 @@ inclusionFastPath mor
     genIsIdentity m gen = do
       let mode = gdMode gen
       let name = gdName gen
-      let dom = gdDom gen
+      let dom = gdPlainDom gen
       let cod = gdCod gen
       case M.lookup (mode, name) (morGenMap m) of
         Nothing -> Right False
@@ -503,13 +575,13 @@ buildTypeRenaming mor = do
           | length (ttParams tmpl) == arity
           , length params == arity
           , all isVar params
-          , let vars = [ v | TVar v <- params ]
+          , let vars = [ v | TAType (TVar v) <- params ]
           , length vars == length (S.fromList vars)
           , S.fromList vars == S.fromList (ttParams tmpl)
           -> Just tgtRef
         _ -> Nothing
 
-    isVar (TVar _) = True
+    isVar (TAType (TVar _)) = True
     isVar _ = False
 
 buildGenRenaming :: Morphism -> Maybe (M.Map (ModeName, GenName) GenName)
@@ -543,9 +615,10 @@ singleGenNameMaybe srcGen diag =
               edgePorts = eIns edge <> eOuts edge
               allPorts = diagramPortIds canon
           in case ePayload edge of
-            PGen g attrs
+            PGen g attrs bargs
               | boundary == edgePorts
               , length allPorts == length boundary
+              , null bargs
               , attrs == passThroughAttrs (gdAttrs srcGen) ->
                   Just g
             _ -> Nothing
@@ -557,18 +630,27 @@ singleGenNameMaybe srcGen diag =
 renameDiagram :: M.Map TypeRef TypeRef -> M.Map (ModeName, GenName) GenName -> Diagram -> Diagram
 renameDiagram tyRen genRen diag =
   let mode = dMode diag
+      dIxCtx' = map (renameTypeExpr tyRen) (dIxCtx diag)
       dPortTy' = IM.map (renameTypeExpr tyRen) (dPortTy diag)
       dEdges' = IM.map (renameEdge mode) (dEdges diag)
-  in diag { dPortTy = dPortTy', dEdges = dEdges' }
+  in diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
   where
     renameEdge mode edge =
       case ePayload edge of
-        PGen gen attrs ->
+        PGen gen attrs bargs ->
           let gen' = M.findWithDefault gen (mode, gen) genRen
-          in edge { ePayload = PGen gen' attrs }
+              bargs' = map renameBinderArg bargs
+          in edge { ePayload = PGen gen' attrs bargs' }
         PBox name inner ->
           let inner' = renameDiagram tyRen genRen inner
           in edge { ePayload = PBox name inner' }
+        PSplice x ->
+          edge { ePayload = PSplice x }
+
+    renameBinderArg barg =
+      case barg of
+        BAConcrete inner -> BAConcrete (renameDiagram tyRen genRen inner)
+        BAMeta x -> BAMeta x
 
 renameTypeExpr :: M.Map TypeRef TypeRef -> TypeExpr -> TypeExpr
 renameTypeExpr ren ty =
@@ -576,9 +658,20 @@ renameTypeExpr ren ty =
     TVar v -> TVar v
     TCon ref args ->
       let ref' = M.findWithDefault ref ref ren
-      in TCon ref' (map (renameTypeExpr ren) args)
+      in TCon ref' (map renameArg args)
     TMod me inner ->
       TMod me (renameTypeExpr ren inner)
+  where
+    renameArg arg =
+      case arg of
+        TAType t -> TAType (renameTypeExpr ren t)
+        TAIndex ix -> TAIndex (renameIx ix)
+
+    renameIx ix =
+      case ix of
+        IXVar v -> IXVar v { ixvSort = renameTypeExpr ren (ixvSort v) }
+        IXBound i -> IXBound i
+        IXFun f args -> IXFun f (map renameIx args)
 
 injective :: Ord a => [a] -> Bool
 injective xs =
@@ -625,9 +718,9 @@ instantiateGen :: ModeTheory -> GenDecl -> Diagram -> Edge -> Either Text Subst
 instantiateGen mt gen diag edge = do
   dom <- mapM (requirePortType diag) (eIns edge)
   cod <- mapM (requirePortType diag) (eOuts edge)
-  s1 <- unifyCtx mt (gdDom gen) dom
-  s2 <- unifyCtx mt (applySubstCtx mt s1 (gdCod gen)) cod
-  pure (composeSubst mt s2 s1)
+  s1 <- unifyCtxCompat mt (gdPlainDom gen) dom
+  s2 <- unifyCtxCompat mt (applySubstCtxCompat mt s1 (gdCod gen)) cod
+  pure (composeSubstCompat mt s2 s1)
 
 instantiateAttrSubst :: Morphism -> GenDecl -> AttrMap -> Either Text AttrSubst
 instantiateAttrSubst mor gen attrsSrc = do

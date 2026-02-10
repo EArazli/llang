@@ -17,6 +17,7 @@ import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Match (Match(..), findFirstMatchNoDoc, findFirstMatchWithTyVarsNoDoc)
+import Strat.Poly.UnifyTy (Subst(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModDecl(..), ModExpr(..), ModEqn(..), addMode, addModDecl, addModEqn)
 import Strat.Poly.Pretty (renderDiagram)
 import qualified Data.IntMap.Strict as IM
@@ -165,7 +166,7 @@ testRewriteInsideBox = do
         , rrRHS = g
         , rrTyVars = []
         }
-  let (inP, d0) = freshPort aTy (emptyDiagram modeName)
+  let (inP, d0) = freshPort aTy (emptyDiagram modeName [])
   let (outP, d1) = freshPort aTy d0
   let boxEdge = PBox (BoxName "B") f
   d2 <- require (addEdgePayload boxEdge [inP] [outP] d1)
@@ -270,7 +271,7 @@ testBoxTypeVarUnify = do
   case res of
     Nothing -> assertFailure "expected type-var unification through box"
     Just m ->
-      case M.lookup aVar (mTySub m) of
+      case M.lookup aVar (sTy (mTySubst m)) of
         Nothing -> assertFailure "expected substitution for type variable"
         Just ty -> ty @?= aConcrete
 
@@ -322,7 +323,7 @@ testNormalizeDeterminism = do
 
 mkBoxDiagram :: Text -> Diagram -> TypeExpr -> Either Text Diagram
 mkBoxDiagram name inner ty = do
-  let (inP, d0) = freshPort ty (emptyDiagram modeName)
+  let (inP, d0) = freshPort ty (emptyDiagram modeName [])
   let (outP, d1) = freshPort ty d0
   let boxEdge = PBox (BoxName name) inner
   d2 <- addEdgePayload boxEdge [inP] [outP] d1

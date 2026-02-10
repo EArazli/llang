@@ -23,6 +23,7 @@ import qualified Test.Poly.ModeTheory as PolyModeTheory
 import qualified Test.Poly.TypeModes as PolyTypeModes
 import qualified Test.Poly.DataMacro as PolyDataMacro
 import qualified Test.Poly.NoLegacy as PolyNoLegacy
+import qualified Test.Poly.Dependent as PolyDependent
 import qualified Test.Poly.StdlibCoherence as PolyStdlibCoherence
 
 main :: IO ()
@@ -50,6 +51,7 @@ main =
       , PolySurface.tests
       , PolyTypeModes.tests
       , PolyDataMacro.tests
+      , PolyDependent.tests
       , PolyNoLegacy.tests
       , PolyStdlibCoherence.tests
       , NoPolyPrefixes.tests

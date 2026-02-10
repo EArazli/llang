@@ -13,7 +13,7 @@ import Strat.Backend (Value(..), RuntimeError(..))
 import Strat.Model.Spec (ModelSpec(..), ModelBackend(..), OpClause(..), DefaultBehavior(..), MExpr(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), PortId(..), EdgeId(..))
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), PortId(..), EdgeId(..))
 import Strat.Poly.Fold (renderFold)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.ModeTheory (ModeName)
@@ -67,6 +67,7 @@ evalDiagram doc spec diag inputs =
 
 evalDiagramWithModel :: PolyModel -> Doctrine -> Diagram -> [Value] -> Either Text [Value]
 evalDiagramWithModel model doc diag inputs = do
+  rejectUnsupported diag
   if length inputs /= length (dIn diag)
     then Left "poly eval: input arity mismatch"
     else do
@@ -102,8 +103,12 @@ evalAcyclicEdge :: PolyModel -> Doctrine -> ModeName -> M.Map PortId Value -> Ed
 evalAcyclicEdge model doc mode env edge = do
   args <- mapM (lookupPort env) (eIns edge)
   outs <- case ePayload edge of
-    PGen name attrs -> evalGen model doc mode name attrs args
+    PGen name attrs bargs ->
+      if null bargs
+        then evalGen model doc mode name attrs args
+        else Left "evaluator: binder arguments/splice not supported"
     PBox _ inner -> evalDiagramWithModel model doc inner args
+    PSplice _ -> Left "evaluator: binder arguments/splice not supported"
   if length outs /= length (eOuts edge)
     then Left "poly eval: output arity mismatch"
     else assignOutputs env (zip (eOuts edge) outs)
@@ -136,8 +141,12 @@ evalCyclic model doc mode env bindings edges = do
       binds <- acc
       args <- mapM (lookupPort env') (eIns edge)
       outs <- case ePayload edge of
-        PGen name attrs -> evalGenSymbolic model doc mode name attrs args
+        PGen name attrs bargs ->
+          if null bargs
+            then evalGenSymbolic model doc mode name attrs args
+            else Left "evaluator: binder arguments/splice not supported"
         PBox _ inner -> evalDiagramWithModel model doc inner args
+        PSplice _ -> Left "evaluator: binder arguments/splice not supported"
       if length outs /= length (eOuts edge)
         then Left "poly eval: output arity mismatch"
         else do
@@ -253,6 +262,26 @@ attrTermToValue term =
         ALBool b -> Right (VBool b)
     ATVar v ->
       Right (VAtom (renderAttrVar v))
+
+rejectUnsupported :: Diagram -> Either Text ()
+rejectUnsupported diag =
+  if hasUnsupported diag
+    then Left "evaluator: binder arguments/splice not supported"
+    else Right ()
+  where
+    hasUnsupported d =
+      any edgeUnsupported (IM.elems (dEdges d))
+
+    edgeUnsupported edge =
+      case ePayload edge of
+        PSplice _ -> True
+        PBox _ inner -> hasUnsupported inner
+        PGen _ _ bargs -> any binderUnsupported bargs
+
+    binderUnsupported barg =
+      case barg of
+        BAMeta _ -> True
+        BAConcrete inner -> hasUnsupported inner
 
 -- Expression eval (copied from Model.Spec)
 

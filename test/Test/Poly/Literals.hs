@@ -333,7 +333,7 @@ testAttrBoolKeywordBoundary :: Assertion
 testAttrBoolKeywordBoundary = do
   raw <- require (parseDiagExpr "Lit(truex)")
   case raw of
-    PolyAST.RDGen "Lit" Nothing (Just [PolyAST.RAPos (PolyAST.RATVar name)]) ->
+    PolyAST.RDGen "Lit" Nothing (Just [PolyAST.RAPos (PolyAST.RATVar name)]) Nothing ->
       name @?= "truex"
     _ ->
       assertFailure "expected Lit(truex) to parse with attribute variable truex"
@@ -443,7 +443,7 @@ elabDiag doc src = do
 singleGenPayload :: Diagram -> Either T.Text (GenName, AttrMap)
 singleGenPayload diag =
   case IM.elems (dEdges diag) of
-    [Edge _ (PGen g attrs) _ _] -> Right (g, attrs)
+    [Edge _ (PGen g attrs _) _ _] -> Right (g, attrs)
     _ -> Left "expected diagram with exactly one generator edge"
 
 uniqueGenAttr :: GenName -> AttrName -> Diagram -> Either T.Text AttrTerm
@@ -455,7 +455,7 @@ uniqueGenAttr genName fieldName diag =
   where
     terms =
       [ term
-      | Edge _ (PGen g attrs) _ _ <- IM.elems (dEdges diag)
+      | Edge _ (PGen g attrs _) _ _ <- IM.elems (dEdges diag)
       , g == genName
       , Just term <- [M.lookup fieldName attrs]
       ]

@@ -10,10 +10,10 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModEqn(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), mtModes, mtDecls)
-import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..))
+import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), TypeArg(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD, idD)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), gdPlainDom, validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Morphism (Morphism(..), TypeTemplate(..), applyMorphismDiagram)
 import Strat.Poly.Pushout (computePolyPushout, PolyPushoutResult(..))
@@ -41,7 +41,7 @@ tvar :: ModeName -> Text -> TyVar
 tvar mode name = TyVar { tvName = name, tvMode = mode }
 
 tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
-tcon mode name args = TCon (TypeRef mode (TypeName name)) args
+tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
 
 identityModeMap :: Doctrine -> M.Map ModeName ModeName
 identityModeMap doc =
@@ -89,7 +89,8 @@ mkDoctrine mode name tyVar cellName = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = [tyVar]
-        , gdDom = [TVar tyVar]
+        , gdIxVars = []
+    , gdDom = map InPort [TVar tyVar]
         , gdCod = [TVar tyVar]
         , gdAttrs = []
         }
@@ -102,12 +103,15 @@ mkDoctrine mode name tyVar cellName = do
         , c2Class = Computational
         , c2Orient = LR
         , c2TyVars = [tyVar]
+        , c2IxVars = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
   let doc = Doctrine
         { dName = name
         , dModes = mkModes (S.singleton mode)
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
@@ -191,7 +195,8 @@ mkCellDoctrine mode name cls orient = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
-        , gdDom = [tcon mode "A" []]
+        , gdIxVars = []
+    , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
         }
@@ -201,12 +206,15 @@ mkCellDoctrine mode name cls orient = do
         , c2Class = cls
         , c2Orient = orient
         , c2TyVars = []
+        , c2IxVars = []
         , c2LHS = lhs
         , c2RHS = lhs
         }
   let doc = Doctrine
         { dName = name
         , dModes = mkModes (S.singleton mode)
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
@@ -223,7 +231,8 @@ mkCellDoctrineWithAlt mode name cls orient = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
-        , gdDom = [tcon mode "A" []]
+        , gdIxVars = []
+    , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
         }
@@ -231,7 +240,8 @@ mkCellDoctrineWithAlt mode name cls orient = do
         { gdName = GenName "g"
         , gdMode = mode
         , gdTyVars = []
-        , gdDom = [tcon mode "A" []]
+        , gdIxVars = []
+    , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
         }
@@ -241,12 +251,15 @@ mkCellDoctrineWithAlt mode name cls orient = do
         , c2Class = cls
         , c2Orient = orient
         , c2TyVars = []
+        , c2IxVars = []
         , c2LHS = lhs
         , c2RHS = lhs
         }
   let doc = Doctrine
         { dName = name
         , dModes = mkModes (S.singleton mode)
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
         , dCells2 = [cell]
@@ -301,7 +314,7 @@ testPushoutTypePermutationCommutes = do
   right <- case mkTypeDoctrine mode "C" [(prod, 2)] of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
-  let tmplF = TypeTemplate [aVar, bVar] (TCon (TypeRef mode pair) [TVar bVar, TVar aVar])
+  let tmplF = TypeTemplate [aVar, bVar] (TCon (TypeRef mode pair) [TAType (TVar bVar), TAType (TVar aVar)])
   let morF = Morphism
         { morName = "f"
         , morSrc = base
@@ -331,7 +344,7 @@ testPushoutTypePermutationCommutes = do
   res <- case computePolyPushout "P" morF morG of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
-  let diagA = idD mode [TCon (TypeRef mode prod) [TVar aVar, TVar bVar]]
+  let diagA = idD mode [TCon (TypeRef mode prod) [TAType (TVar aVar), TAType (TVar bVar)]]
   d1 <- case applyMorphismDiagram morF diagA of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -354,6 +367,8 @@ testPushoutRejectsModeMap = do
   let base = Doctrine
         { dName = "Base"
         , dModes = modes
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.empty
         , dGens = M.empty
         , dCells2 = []
@@ -415,7 +430,7 @@ testPushoutAlphaRenameWithModeEq = do
   case M.lookup mode (dGens (poDoctrine res)) >>= M.lookup (GenName "modal") of
     Nothing -> assertFailure "expected modal generator in pushout result"
     Just modalGen ->
-      case gdDom modalGen of
+      case gdPlainDom modalGen of
         [TMod me (TVar _)] -> mePath me @?= [modF]
         _ -> assertFailure "expected modal generator domain to retain non-canceling modality"
 
@@ -483,6 +498,7 @@ mkModeEqDoctrine name mt varName useUF = do
         , c2Class = Computational
         , c2Orient = LR
         , c2TyVars = [v]
+        , c2IxVars = []
         , c2LHS = lhs
         , c2RHS = idD mode [hTy]
         }
@@ -490,7 +506,8 @@ mkModeEqDoctrine name mt varName useUF = do
         { gdName = GenName "h"
         , gdMode = mode
         , gdTyVars = [v]
-        , gdDom = [TVar v]
+        , gdIxVars = []
+    , gdDom = map InPort [TVar v]
         , gdCod = [TVar v]
         , gdAttrs = []
         }
@@ -498,13 +515,16 @@ mkModeEqDoctrine name mt varName useUF = do
         { gdName = GenName "modal"
         , gdMode = mode
         , gdTyVars = [v]
-        , gdDom = [modalTy]
+        , gdIxVars = []
+    , gdDom = map InPort [modalTy]
         , gdCod = [modalTy]
         , gdAttrs = []
         }
   let doc = Doctrine
         { dName = name
         , dModes = mt
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(GenName "h", genH), (GenName "modal", genModal)])]
         , dCells2 = [cell]
@@ -516,10 +536,12 @@ mkModeEqDoctrine name mt varName useUF = do
 
 mkTypeDoctrine :: ModeName -> Text -> [(TypeName, Int)] -> Either Text Doctrine
 mkTypeDoctrine mode name types = do
-  let types' = M.fromList [ (tname, TypeSig (replicate arity mode)) | (tname, arity) <- types ]
+  let types' = M.fromList [ (tname, TypeSig (replicate arity (PS_Ty mode))) | (tname, arity) <- types ]
   let doc = Doctrine
         { dName = name
         , dModes = mkModes (S.singleton mode)
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, types')]
         , dGens = M.empty
         , dCells2 = []

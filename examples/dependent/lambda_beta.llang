@@ -1,0 +1,18 @@
+doctrine LambdaBeta where {
+  mode M;
+  type A @M;
+
+  gen lam : [binder { x : A } : [A]] -> [A] @M;
+  gen app : [A, A] -> [A] @M;
+
+  rule computational beta -> : [A] -> [A] @M =
+    (lam[?Body] * id[A]) ; app == splice(?Body)
+}
+
+run main where {
+  doctrine LambdaBeta;
+  mode M;
+  show normalized;
+}
+---
+(lam[id[A]] * id[A]) ; app

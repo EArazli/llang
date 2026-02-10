@@ -19,7 +19,6 @@ import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
 import Control.Monad (void)
-import Data.Char (isLower)
 
 type Parser = Parsec Void Text
 
@@ -221,7 +220,10 @@ polyBlock = do
 
 polyItem :: Parser PolyAST.RawPolyItem
 polyItem =
-  polyModeDecl
+  try polyIndexModeDecl
+    <|> try polyIndexFunDecl
+    <|> try polyIndexRuleDecl
+    <|> polyModeDecl
     <|> polyStructureDecl
     <|> polyModalityDecl
     <|> polyModEqDecl
@@ -238,6 +240,50 @@ polyModeDecl = do
   name <- ident
   optionalSemi
   pure (PolyAST.RPMode name)
+
+polyIndexModeDecl :: Parser PolyAST.RawPolyItem
+polyIndexModeDecl = do
+  _ <- symbol "index_mode"
+  name <- ident
+  optionalSemi
+  pure (PolyAST.RPIndexMode name)
+
+polyIndexFunDecl :: Parser PolyAST.RawPolyItem
+polyIndexFunDecl = do
+  _ <- symbol "index_fun"
+  name <- ident
+  vars <- option [] (symbol "(" *> polyIxVarDecl `sepBy` symbol "," <* symbol ")")
+  _ <- symbol ":"
+  res <- polyTypeExpr
+  _ <- symbol "@"
+  mode <- ident
+  optionalSemi
+  pure (PolyAST.RPIndexFun PolyAST.RawIndexFunDecl
+    { PolyAST.rifName = name
+    , PolyAST.rifArgs = vars
+    , PolyAST.rifRes = res
+    , PolyAST.rifMode = mode
+    })
+
+polyIndexRuleDecl :: Parser PolyAST.RawPolyItem
+polyIndexRuleDecl = do
+  _ <- symbol "index_rule"
+  name <- ident
+  vars <- option [] (symbol "(" *> polyIxVarDecl `sepBy` symbol "," <* symbol ")")
+  _ <- symbol ":"
+  lhs <- polyTypeExpr
+  _ <- symbol "->"
+  rhs <- polyTypeExpr
+  _ <- symbol "@"
+  mode <- ident
+  optionalSemi
+  pure (PolyAST.RPIndexRule PolyAST.RawIndexRuleDecl
+    { PolyAST.rirName = name
+    , PolyAST.rirVars = vars
+    , PolyAST.rirLHS = lhs
+    , PolyAST.rirRHS = rhs
+    , PolyAST.rirMode = mode
+    })
 
 polyStructureDecl :: Parser PolyAST.RawPolyItem
 polyStructureDecl = do
@@ -308,7 +354,7 @@ polyTypeDecl :: Parser PolyAST.RawPolyTypeDecl
 polyTypeDecl = do
   _ <- symbol "type"
   name <- ident
-  vars <- polyTyVarList
+  vars <- polyParamList
   _ <- symbol "@"
   mode <- ident
   optionalSemi
@@ -352,10 +398,10 @@ polyGenDecl :: Parser PolyAST.RawPolyGenDecl
 polyGenDecl = do
   _ <- symbol "gen"
   name <- ident
-  vars <- polyTyVarList
+  vars <- polyParamList
   attrs <- option [] (symbol "{" *> polyGenAttrDecl `sepBy` symbol "," <* symbol "}")
   _ <- symbol ":"
-  dom <- polyContext
+  dom <- polyInputShapes
   _ <- symbol "->"
   cod <- polyContext
   _ <- symbol "@"
@@ -383,7 +429,7 @@ polyRuleDecl = do
   cls <- (symbol "computational" $> Computational) <|> (symbol "structural" $> Structural)
   name <- ident
   orient <- orientation
-  vars <- polyTyVarList
+  vars <- polyParamList
   _ <- symbol ":"
   dom <- polyContext
   _ <- symbol "->"
@@ -414,6 +460,41 @@ polyContext = do
   _ <- symbol "]"
   pure tys
 
+polyInputShapes :: Parser [PolyAST.RawInputShape]
+polyInputShapes = do
+  _ <- symbol "["
+  shapes <- polyInputShape `sepBy` symbol ","
+  _ <- symbol "]"
+  pure shapes
+
+polyInputShape :: Parser PolyAST.RawInputShape
+polyInputShape =
+  try polyBinderShape <|> (PolyAST.RIPort <$> polyTypeExpr)
+
+polyBinderShape :: Parser PolyAST.RawInputShape
+polyBinderShape = do
+  _ <- symbol "binder"
+  _ <- symbol "{"
+  vars <- polyBinderVarDecl `sepBy` symbol ","
+  _ <- symbol "}"
+  _ <- symbol ":"
+  cod <- polyContext
+  pure (PolyAST.RIBinder vars cod)
+
+polyBinderVarDecl :: Parser PolyAST.RawBinderVarDecl
+polyBinderVarDecl = do
+  name <- ident
+  _ <- symbol ":"
+  ty <- polyTypeExpr
+  pure PolyAST.RawBinderVarDecl { PolyAST.rbvName = name, PolyAST.rbvType = ty }
+
+polyIxVarDecl :: Parser PolyAST.RawIxVarDecl
+polyIxVarDecl = do
+  name <- ident
+  _ <- symbol ":"
+  sortTy <- polyTypeExpr
+  pure PolyAST.RawIxVarDecl { PolyAST.rivName = name, PolyAST.rivSort = sortTy }
+
 polyTyVarDecl :: Parser PolyAST.RawTyVarDecl
 polyTyVarDecl = do
   name <- ident
@@ -430,8 +511,20 @@ polyTyVarList =
   try (symbol "(" *> polyTyVarDecl `sepBy` symbol "," <* symbol ")")
     <|> many polyTyVarDeclBare
 
+polyParamDecl :: Parser PolyAST.RawParamDecl
+polyParamDecl =
+  try polyIxParam <|> polyTyParam
+  where
+    polyTyParam = PolyAST.RPDType <$> polyTyVarDecl
+    polyIxParam = PolyAST.RPDIndex <$> polyIxVarDecl
+
+polyParamList :: Parser [PolyAST.RawParamDecl]
+polyParamList =
+  try (symbol "(" *> polyParamDecl `sepBy` symbol "," <* symbol ")")
+    <|> (map PolyAST.RPDType <$> many polyTyVarDeclBare)
+
 polyTypeExpr :: Parser PolyAST.RawPolyTypeExpr
-polyTypeExpr = lexeme (try modApp <|> regular)
+polyTypeExpr = lexeme (try modApp <|> try bound <|> regular)
   where
     modApp = do
       me <- rawModExprComplex
@@ -439,6 +532,10 @@ polyTypeExpr = lexeme (try modApp <|> regular)
       inner <- polyTypeExpr
       _ <- symbol ")"
       pure (PolyAST.RPTMod me inner)
+    bound = do
+      _ <- symbol "^"
+      idx <- fromIntegral <$> integer
+      pure (PolyAST.RPTBound idx)
     rawModExprComplex =
       try rawId <|> rawComp
     rawId = do
@@ -463,19 +560,12 @@ polyTypeExpr = lexeme (try modApp <|> regular)
           let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Just name, PolyAST.rtrName = qualName }
           in pure (PolyAST.RPTCon ref (fromMaybe [] mArgs))
         Nothing ->
-          case T.uncons name of
-            Nothing -> fail "empty type name"
-            Just (c, _) ->
-              case mArgs of
-                Just args ->
-                  let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
-                  in pure (PolyAST.RPTCon ref args)
-                Nothing ->
-                  if isLower c
-                    then pure (PolyAST.RPTVar name)
-                    else
-                      let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
-                      in pure (PolyAST.RPTCon ref [])
+          case mArgs of
+            Just args ->
+              let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
+              in pure (PolyAST.RPTCon ref args)
+            Nothing ->
+              pure (PolyAST.RPTVar name)
 
 polyDiagExpr :: Parser PolyAST.RawDiagExpr
 polyDiagExpr = makeExprParser polyDiagTerm operators
@@ -487,7 +577,7 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 
 polyDiagTerm :: Parser PolyAST.RawDiagExpr
 polyDiagTerm =
-  polyTermRefTerm <|> try polyIdTerm <|> polyLoopTerm <|> polyBoxTerm <|> polyGenTerm <|> parens polyDiagExpr
+  polyTermRefTerm <|> try polyIdTerm <|> polySpliceTerm <|> polyLoopTerm <|> polyBoxTerm <|> polyGenTerm <|> parens polyDiagExpr
 
 polyIdTerm :: Parser PolyAST.RawDiagExpr
 polyIdTerm = do
@@ -500,7 +590,31 @@ polyGenTerm = do
   name <- ident
   mArgs <- optional (symbol "{" *> polyTypeExpr `sepBy` symbol "," <* symbol "}")
   mAttrArgs <- optional polyAttrArgs
-  pure (PolyAST.RDGen name mArgs mAttrArgs)
+  mBinderArgs <- optional polyBinderArgs
+  pure (PolyAST.RDGen name mArgs mAttrArgs mBinderArgs)
+
+polySpliceTerm :: Parser PolyAST.RawDiagExpr
+polySpliceTerm = do
+  _ <- symbol "splice"
+  _ <- symbol "("
+  meta <- binderMetaVar
+  _ <- symbol ")"
+  pure (PolyAST.RDSplice meta)
+
+polyBinderArgs :: Parser [PolyAST.RawBinderArg]
+polyBinderArgs = do
+  _ <- symbol "["
+  args <- polyBinderArg `sepBy` symbol ","
+  _ <- symbol "]"
+  pure args
+
+polyBinderArg :: Parser PolyAST.RawBinderArg
+polyBinderArg =
+  try (PolyAST.RBAMeta <$> binderMetaVar)
+    <|> (PolyAST.RBAExpr <$> polyDiagExpr)
+
+binderMetaVar :: Parser Text
+binderMetaVar = lexeme (char '?' *> identRaw)
 
 polyAttrArgs :: Parser [PolyAST.RawAttrArg]
 polyAttrArgs = do

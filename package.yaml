@@ -59,6 +59,8 @@ data-files:
 - examples/lib/templates/state.template.llang
 - examples/lib/terms/splice_source.llang
 - examples/lib/terms/term_defs.llang
+- examples/dependent/lambda_beta.llang
+- examples/dependent/vec.llang
 - examples/run/algebra/box_match.run.llang
 - examples/run/algebra/cart_monoid.run.llang
 - examples/run/algebra/cat.run.llang
@@ -194,6 +196,7 @@ tests:
     - Test.Poly.CCC
     - Test.Poly.Coherence
     - Test.Poly.DataMacro
+    - Test.Poly.Dependent
     - Test.Poly.Helpers
     - Test.Poly.ModeTheory
     - Test.Poly.Surface

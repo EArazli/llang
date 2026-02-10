@@ -68,6 +68,8 @@ data-files:
     examples/lib/templates/state.template.llang
     examples/lib/terms/splice_source.llang
     examples/lib/terms/term_defs.llang
+    examples/dependent/lambda_beta.llang
+    examples/dependent/vec.llang
     examples/run/algebra/box_match.run.llang
     examples/run/algebra/cart_monoid.run.llang
     examples/run/algebra/cat.run.llang
@@ -151,6 +153,7 @@ library
       Strat.Poly.Eval
       Strat.Poly.Fold
       Strat.Poly.Graph
+      Strat.Poly.IndexTheory
       Strat.Poly.Match
       Strat.Poly.ModeTheory
       Strat.Poly.Morphism
@@ -164,6 +167,7 @@ library
       Strat.Poly.Surface.Parse
       Strat.Poly.Surface.Spec
       Strat.Poly.TypeExpr
+      Strat.Poly.TypeTheory
       Strat.Poly.UnifyTy
       Strat.RunSpec
   other-modules:
@@ -227,6 +231,7 @@ test-suite llang-test
       Test.Poly.CCC
       Test.Poly.Coherence
       Test.Poly.DataMacro
+      Test.Poly.Dependent
       Test.Poly.Helpers
       Test.Poly.ModeTheory
       Test.Poly.Surface

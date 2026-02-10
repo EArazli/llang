@@ -33,6 +33,24 @@ substItem :: M.Map Text Text -> P.RawPolyItem -> P.RawPolyItem
 substItem subst item =
   case item of
     P.RPMode name -> P.RPMode (lookupText subst name)
+    P.RPIndexMode name -> P.RPIndexMode (lookupText subst name)
+    P.RPIndexFun decl ->
+      P.RPIndexFun
+        decl
+          { P.rifName = lookupText subst (P.rifName decl)
+          , P.rifArgs = map (substIxVarDecl subst) (P.rifArgs decl)
+          , P.rifRes = substTypeExpr subst (P.rifRes decl)
+          , P.rifMode = lookupText subst (P.rifMode decl)
+          }
+    P.RPIndexRule decl ->
+      P.RPIndexRule
+        decl
+          { P.rirName = lookupText subst (P.rirName decl)
+          , P.rirVars = map (substIxVarDecl subst) (P.rirVars decl)
+          , P.rirLHS = substTypeExpr subst (P.rirLHS decl)
+          , P.rirRHS = substTypeExpr subst (P.rirRHS decl)
+          , P.rirMode = lookupText subst (P.rirMode decl)
+          }
     P.RPStructure decl ->
       P.RPStructure decl { P.rsMode = lookupText subst (P.rsMode decl) }
     P.RPModality decl ->
@@ -62,15 +80,15 @@ substItem subst item =
     P.RPType decl ->
       P.RPType decl
         { P.rptName = lookupText subst (P.rptName decl)
-        , P.rptVars = map (substTyVarDecl subst) (P.rptVars decl)
+        , P.rptVars = map (substParamDecl subst) (P.rptVars decl)
         , P.rptMode = lookupText subst (P.rptMode decl)
         }
     P.RPGen decl ->
       P.RPGen decl
         { P.rpgName = lookupText subst (P.rpgName decl)
-        , P.rpgVars = map (substTyVarDecl subst) (P.rpgVars decl)
+        , P.rpgVars = map (substParamDecl subst) (P.rpgVars decl)
         , P.rpgAttrs = [ (lookupText subst field, lookupText subst sortName) | (field, sortName) <- P.rpgAttrs decl ]
-        , P.rpgDom = map (substTypeExpr subst) (P.rpgDom decl)
+        , P.rpgDom = map (substInputShape subst) (P.rpgDom decl)
         , P.rpgCod = map (substTypeExpr subst) (P.rpgCod decl)
         , P.rpgMode = lookupText subst (P.rpgMode decl)
         }
@@ -81,7 +99,7 @@ substItem subst item =
         , P.rprCod = map (substTypeExpr subst) (P.rprCod decl)
         , P.rprLHS = substDiagExpr subst (P.rprLHS decl)
         , P.rprRHS = substDiagExpr subst (P.rprRHS decl)
-        , P.rprVars = map (substTyVarDecl subst) (P.rprVars decl)
+        , P.rprVars = map (substParamDecl subst) (P.rprVars decl)
         }
     P.RPData decl ->
       P.RPData decl
@@ -102,14 +120,41 @@ substTyVarDecl :: M.Map Text Text -> P.RawTyVarDecl -> P.RawTyVarDecl
 substTyVarDecl subst decl =
   decl { P.rtvMode = fmap (lookupText subst) (P.rtvMode decl) }
 
+substIxVarDecl :: M.Map Text Text -> P.RawIxVarDecl -> P.RawIxVarDecl
+substIxVarDecl subst decl =
+  decl
+    { P.rivSort = substTypeExpr subst (P.rivSort decl)
+    }
+
+substParamDecl :: M.Map Text Text -> P.RawParamDecl -> P.RawParamDecl
+substParamDecl subst decl =
+  case decl of
+    P.RPDType tv -> P.RPDType (substTyVarDecl subst tv)
+    P.RPDIndex iv -> P.RPDIndex (substIxVarDecl subst iv)
+
 substTypeExpr :: M.Map Text Text -> P.RawPolyTypeExpr -> P.RawPolyTypeExpr
 substTypeExpr subst expr =
   case expr of
-    P.RPTVar name -> P.RPTVar name
+    P.RPTVar name -> P.RPTVar (lookupText subst name)
+    P.RPTBound i -> P.RPTBound i
     P.RPTCon ref args ->
       P.RPTCon (substTypeRef subst ref) (map (substTypeExpr subst) args)
     P.RPTMod me inner ->
       P.RPTMod (substModExpr subst me) (substTypeExpr subst inner)
+
+substInputShape :: M.Map Text Text -> P.RawInputShape -> P.RawInputShape
+substInputShape subst shape =
+  case shape of
+    P.RIPort ty -> P.RIPort (substTypeExpr subst ty)
+    P.RIBinder vars cod ->
+      P.RIBinder
+        (map substBinderVar vars)
+        (map (substTypeExpr subst) cod)
+  where
+    substBinderVar v =
+      v
+        { P.rbvType = substTypeExpr subst (P.rbvType v)
+        }
 
 substModExpr :: M.Map Text Text -> P.RawModExpr -> P.RawModExpr
 substModExpr subst me =
@@ -128,16 +173,24 @@ substDiagExpr :: M.Map Text Text -> P.RawDiagExpr -> P.RawDiagExpr
 substDiagExpr subst expr =
   case expr of
     P.RDId ctx -> P.RDId (map (substTypeExpr subst) ctx)
-    P.RDGen name mArgs mAttrArgs ->
+    P.RDGen name mArgs mAttrArgs mBArgs ->
       P.RDGen
         (lookupText subst name)
         (fmap (map (substTypeExpr subst)) mArgs)
         (fmap (map (substAttrArg subst)) mAttrArgs)
+        (fmap (map (substBinderArg subst)) mBArgs)
     P.RDTermRef name -> P.RDTermRef (lookupText subst name)
+    P.RDSplice name -> P.RDSplice (lookupText subst name)
     P.RDBox name inner -> P.RDBox (lookupText subst name) (substDiagExpr subst inner)
     P.RDLoop inner -> P.RDLoop (substDiagExpr subst inner)
     P.RDComp a b -> P.RDComp (substDiagExpr subst a) (substDiagExpr subst b)
     P.RDTensor a b -> P.RDTensor (substDiagExpr subst a) (substDiagExpr subst b)
+
+substBinderArg :: M.Map Text Text -> P.RawBinderArg -> P.RawBinderArg
+substBinderArg subst barg =
+  case barg of
+    P.RBAExpr e -> P.RBAExpr (substDiagExpr subst e)
+    P.RBAMeta name -> P.RBAMeta (lookupText subst name)
 
 substAttrArg :: M.Map Text Text -> P.RawAttrArg -> P.RawAttrArg
 substAttrArg subst arg =

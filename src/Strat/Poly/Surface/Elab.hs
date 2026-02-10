@@ -11,7 +11,7 @@ import Control.Monad (foldM)
 
 import Strat.Poly.Surface.Spec
 import Strat.Poly.Surface.Parse (parseSurfaceExpr)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), lookupTypeSig)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), lookupTypeSig, gdPlainDom)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), VarDiscipline(..), modeDiscipline, allowsDrop, allowsDup)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Context, typeMode)
@@ -35,26 +35,31 @@ import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 
 
-type Subst = U.Subst
+type Subst = U.TyOnlySubst
 
 applySubstTy :: ModeTheory -> Subst -> TypeExpr -> TypeExpr
-applySubstTy = U.applySubstTy
+applySubstTy = U.applySubstTyLegacy
 
 applySubstCtx :: ModeTheory -> Subst -> Context -> Context
-applySubstCtx = U.applySubstCtx
+applySubstCtx = U.applySubstCtxLegacy
 
 unifyTyFlex :: ModeTheory -> S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text Subst
-unifyTyFlex = U.unifyTyFlex
+unifyTyFlex = U.unifyTyFlexLegacy
 
 composeSubst :: ModeTheory -> Subst -> Subst -> Subst
-composeSubst = U.composeSubst
+composeSubst = U.composeSubstLegacy
 
 freeTyVarsTy :: TypeExpr -> S.Set TyVar
 freeTyVarsTy ty =
   case ty of
     Ty.TVar v -> S.singleton v
-    Ty.TCon _ args -> S.unions (map freeTyVarsTy args)
+    Ty.TCon _ args -> S.unions (map freeArg args)
     Ty.TMod _ inner -> freeTyVarsTy inner
+  where
+    freeArg arg =
+      case arg of
+        Ty.TAType t -> freeTyVarsTy t
+        Ty.TAIndex ix -> S.unions [ freeTyVarsTy (Ty.ixvSort v) | v <- S.toList (Ty.freeIxVarsIx ix) ]
 
 
 -- Public entrypoint
@@ -91,6 +96,8 @@ elabSurfaceTypeExpr doc mode expr =
   case expr of
     RPTVar name ->
       Right (Ty.TVar (TyVar { tvName = name, tvMode = mode }))
+    RPTBound _ ->
+      Left "surface: bound index terms (^i) are not supported in surface type annotations"
     RPTMod rawMe innerRaw -> do
       me <- elabRawModExprSurface (dModes doc) rawMe
       inner <- elabSurfaceTypeExpr doc mode innerRaw
@@ -113,10 +120,16 @@ elabSurfaceTypeExpr doc mode expr =
             then Left "surface: type constructor arity mismatch"
             else do
               args' <- mapM (elabSurfaceTypeExpr doc mode) args
-              let argModes = map typeMode args'
-              if and (zipWith (==) params argModes)
-                then Right (Ty.TCon ref args')
-                else Left "surface: type constructor argument mode mismatch"
+              let checkParam (param, argTy) =
+                    case param of
+                      PS_Ty m ->
+                        if typeMode argTy == m
+                          then Right ()
+                          else Left "surface: type constructor argument mode mismatch"
+                      PS_Ix _ ->
+                        Left "surface: index arguments are not supported in surface type annotations"
+              mapM_ checkParam (zip params args')
+              Right (Ty.TCon ref (map Ty.TAType args'))
   where
     asModalityCall rawRef0 args0 =
       case (rtrMode rawRef0, rtrName rawRef0, args0) of
@@ -255,7 +268,7 @@ dedupe = go S.empty
       | otherwise = x : go (S.insert x seen) xs
 
 applySubstSurf :: ModeTheory -> Subst -> SurfDiag -> SurfDiag
-applySubstSurf mt subst sd = sd { sdDiag = applySubstDiagram mt subst (sdDiag sd) }
+applySubstSurf mt subst sd = sd { sdDiag = applySubstDiagram mt (U.fromTyOnlySubst subst) (sdDiag sd) }
 
 unifyCtxFlex :: ModeTheory -> S.Set TyVar -> Context -> Context -> Either Text Subst
 unifyCtxFlex mt flex ctx1 ctx2
@@ -311,7 +324,7 @@ ensureDupShape gen =
   if not (null (gdAttrs gen))
     then Left "surface: structural generator dup/drop must not declare attributes"
     else
-      case (gdTyVars gen, gdDom gen, gdCod gen) of
+      case (gdTyVars gen, gdPlainDom gen, gdCod gen) of
         ([v], [Ty.TVar v1], [Ty.TVar v2, Ty.TVar v3])
           | v == v1 && v == v2 && v == v3 -> Right ()
         _ -> Left "surface structural: configured dup generator has wrong type"
@@ -321,7 +334,7 @@ ensureDropShape gen =
   if not (null (gdAttrs gen))
     then Left "surface: structural generator dup/drop must not declare attributes"
     else
-      case (gdTyVars gen, gdDom gen, gdCod gen) of
+      case (gdTyVars gen, gdPlainDom gen, gdCod gen) of
         ([v], [Ty.TVar v1], []) | v == v1 -> Right ()
         _ -> Left "surface structural: configured drop generator has wrong type"
 
@@ -351,7 +364,7 @@ elabZeroArgGen :: ModeTheory -> Doctrine -> ModeName -> ElabEnv -> Text -> Fresh
 elabZeroArgGen mt doc mode env name = do
   gen <- liftEither (lookupGen doc mode (GenName name))
   liftEither (ensureDirectGenCallAttrs gen)
-  if null (gdDom gen)
+  if null (gdPlainDom gen)
     then do
       diag <- genDFromDecl mt mode env gen Nothing M.empty
       pure (emptySurf diag)
@@ -371,7 +384,7 @@ buildGenCall mt _doc mode env gen argDiag = do
   liftEither (ensureDirectGenCallAttrs gen)
   argTypes <- liftEither (diagramCod (sdDiag argDiag))
   renameSubst <- freshSubst (gdTyVars gen)
-  let dom0 = applySubstCtx mt renameSubst (gdDom gen)
+  let dom0 = applySubstCtx mt renameSubst (gdPlainDom gen)
   let cod0 = applySubstCtx mt renameSubst (gdCod gen)
   let dom1 = applySubstCtx mt (eeTypeSubst env) dom0
   let cod1 = applySubstCtx mt (eeTypeSubst env) cod0
@@ -381,7 +394,7 @@ buildGenCall mt _doc mode env gen argDiag = do
   let cod = applySubstCtx mt subst cod1
   let argPorts = dOut (sdDiag argDiag')
   let (outPorts, diag1) = allocPorts cod (sdDiag argDiag')
-  diag2 <- liftEither (addEdgePayload (PGen (gdName gen) M.empty) argPorts outPorts diag1)
+  diag2 <- liftEither (addEdgePayload (PGen (gdName gen) M.empty []) argPorts outPorts diag1)
   let diag3 = diag2 { dOut = outPorts }
   liftEither (validateDiagram diag3)
   pure argDiag' { sdDiag = diag3 }
@@ -789,7 +802,7 @@ connectUses ops varName source ty uses sd =
     addDrop dropGen = do
       liftEither (ensureStructuralGenAttrs dropGen)
       let diag0 = sdDiag sd
-      diag1 <- liftEither (addEdgePayload (PGen (gdName dropGen) M.empty) [source] [] diag0)
+      diag1 <- liftEither (addEdgePayload (PGen (gdName dropGen) M.empty []) [source] [] diag0)
       pure sd { sdDiag = diag1 }
     addDup dupGen = do
       liftEither (ensureStructuralGenAttrs dupGen)
@@ -826,7 +839,7 @@ dupOutputs dupGen source ty diag n
   | otherwise = do
       let (p1, diag1) = freshPort ty diag
       let (p2, diag2) = freshPort ty diag1
-      diag3 <- liftEither (addEdgePayload (PGen (gdName dupGen) M.empty) [source] [p1, p2] diag2)
+      diag3 <- liftEither (addEdgePayload (PGen (gdName dupGen) M.empty []) [source] [p1, p2] diag2)
       (leftOuts, diag4) <- dupOutputs dupGen p1 ty diag3 (n - 1)
       pure (leftOuts ++ [p2], diag4)
 
@@ -868,7 +881,7 @@ genDFromDecl mt mode env gen mArgs attrs = do
   let tyVars = gdTyVars gen
   let subst0 = eeTypeSubst env
   renameSubst <- freshSubst tyVars
-  let dom0 = applySubstCtx mt renameSubst (gdDom gen)
+  let dom0 = applySubstCtx mt renameSubst (gdPlainDom gen)
   let cod0 = applySubstCtx mt renameSubst (gdCod gen)
   let (dom1, cod1) = (applySubstCtx mt subst0 dom0, applySubstCtx mt subst0 cod0)
   (dom, cod) <- case mArgs of
@@ -885,9 +898,9 @@ genDFromDecl mt mode env gen mArgs attrs = do
 
 buildGenDiagram :: ModeName -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
 buildGenDiagram mode dom cod gen attrs = do
-  let (inPorts, diag1) = allocPorts dom (emptyDiagram mode)
+  let (inPorts, diag1) = allocPorts dom (emptyDiagram mode [])
   let (outPorts, diag2) = allocPorts cod diag1
-  diag3 <- addEdgePayload (PGen gen attrs) inPorts outPorts diag2
+  diag3 <- addEdgePayload (PGen gen attrs []) inPorts outPorts diag2
   let diagFinal = diag3 { dIn = inPorts, dOut = outPorts }
   validateDiagram diagFinal
   pure diagFinal
@@ -940,7 +953,7 @@ boxSurf :: ModeName -> Text -> SurfDiag -> Either Text SurfDiag
 boxSurf mode name inner = do
   dom <- diagramDom (sdDiag inner)
   cod <- diagramCod (sdDiag inner)
-  let (ins, diag0) = allocPorts dom (emptyDiagram mode)
+  let (ins, diag0) = allocPorts dom (emptyDiagram mode [])
   let (outs, diag1) = allocPorts cod diag0
   diag2 <- addEdgePayload (PBox (BoxName name) (sdDiag inner)) ins outs diag1
   let diag3 = diag2 { dIn = ins, dOut = outs }

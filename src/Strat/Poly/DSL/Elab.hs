@@ -9,6 +9,7 @@ module Strat.Poly.DSL.Elab
 
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Control.Monad (foldM, when)
@@ -16,11 +17,13 @@ import Strat.DSL.AST (RawRun(..), RawRunShow(..), RawPolyMorphism(..), RawPolyMo
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (emptyDiagram, freshPort, addEdgePayload, EdgePayload(..), validateDiagram, mergePorts)
+import Strat.Poly.Graph (emptyDiagram, freshPort, addEdgePayload, Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), validateDiagram, mergePorts)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
-import Strat.Poly.UnifyTy
+import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..), IxRule(..))
+import qualified Strat.Poly.UnifyTy as U
+import Strat.Poly.TypeTheory (TypeTheory(..))
 import Strat.Poly.Attr
 import Strat.Poly.Morphism
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
@@ -28,6 +31,34 @@ import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.RunSpec (RunShow(..), RunSpec(..))
+
+
+type Subst = U.Subst
+
+legacyTheory :: ModeTheory -> TypeTheory
+legacyTheory mt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+
+applySubstTy :: ModeTheory -> Subst -> TypeExpr -> TypeExpr
+applySubstTy mt subst ty =
+  case U.applySubstTy (legacyTheory mt) subst ty of
+    Right ty' -> ty'
+    Left _ -> ty
+
+applySubstCtx :: ModeTheory -> Subst -> Context -> Context
+applySubstCtx mt subst = map (applySubstTy mt subst)
+
+unifyTyFlex :: ModeTheory -> S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text Subst
+unifyTyFlex mt flex t1 t2 =
+  U.unifyTyFlex (legacyTheory mt) [] flex S.empty U.emptySubst t1 t2
+
+composeSubst :: ModeTheory -> Subst -> Subst -> Subst
+composeSubst mt s2 s1 =
+  case U.composeSubst (legacyTheory mt) s2 s1 of
+    Right s -> s
+    Left _ -> s1
+
+applySubstDiagramTyOnly :: ModeTheory -> Subst -> Diagram -> Diagram
+applySubstDiagramTyOnly mt subst = applySubstDiagram mt subst
 
 
 elabPolyRun :: Text -> RawRun -> Either Text RunSpec
@@ -221,9 +252,10 @@ elabPolyMorphism env raw = do
       let name = TypeName (rpmtSrcType decl)
       let ref = TypeRef modeSrc name
       sig <- lookupTypeSig src ref
-      paramModesTgt <- mapM (lookupModeMap modeMap) (tsParams sig)
+      paramModesSrc <- mapM requireTyParamMode (tsParams sig)
+      paramModesTgt <- mapM (lookupModeMap modeMap) paramModesSrc
       params <- buildTypeMapParams paramModesTgt (rpmtParams decl)
-      tgtExpr <- elabTypeExpr tgt params (rpmtTgtType decl)
+      tgtExpr <- elabTypeExpr tgt params [] M.empty (rpmtTgtType decl)
       if typeMode tgtExpr /= modeTgtDecl
         then Left ("morphism: target type expression mode mismatch (expected " <> rpmtTgtMode decl <> ")")
         else Right ()
@@ -231,6 +263,10 @@ elabPolyMorphism env raw = do
       if M.member key mp
         then Left "morphism: duplicate type mapping"
         else Right (M.insert key (TypeTemplate params tgtExpr) mp)
+    requireTyParamMode param =
+      case param of
+        PS_Ty m -> Right m
+        PS_Ix _ -> Left "morphism: type maps over index-parameterized constructors are not supported here"
     addGenMap src tgt modeMap mp decl = do
       let modeSrc = ModeName (rpmgMode decl)
       ensureMode src modeSrc
@@ -282,6 +318,8 @@ seedDoctrine name base =
     Nothing -> Doctrine
       { dName = name
       , dModes = emptyModeTheory
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
       , dAttrSorts = M.empty
       , dTypes = M.empty
       , dGens = M.empty
@@ -296,6 +334,34 @@ elabPolyItem env doc item =
       let mode = ModeName name
       mt' <- addMode mode (dModes doc)
       pure doc { dModes = mt' }
+    RPIndexMode name -> do
+      let mode = ModeName name
+      ensureMode doc mode
+      pure doc { dIndexModes = S.insert mode (dIndexModes doc) }
+    RPIndexFun decl -> do
+      let mode = ModeName (rifMode decl)
+      ensureMode doc mode
+      vars <- mapM (elabIxDeclVar doc []) (rifArgs decl)
+      argSorts <- mapM (pure . ixvSort) vars
+      resSort <- elabTypeExpr doc [] [] M.empty (rifRes decl)
+      let sig = IxFunSig { ifArgs = argSorts, ifRes = resSort }
+      let table0 = M.findWithDefault (IxTheory M.empty []) mode (dIxTheory doc)
+      let funs0 = itFuns table0
+      if M.member (IxFunName (rifName decl)) funs0
+        then Left "duplicate index_fun name"
+        else do
+          let table1 = table0 { itFuns = M.insert (IxFunName (rifName decl)) sig funs0 }
+          pure doc { dIxTheory = M.insert mode table1 (dIxTheory doc) }
+    RPIndexRule decl -> do
+      let mode = ModeName (rirMode decl)
+      ensureMode doc mode
+      vars <- mapM (elabIxDeclVar doc []) (rirVars decl)
+      lhs <- elabIxTerm doc [] vars M.empty Nothing (rirLHS decl)
+      rhs <- elabIxTerm doc [] vars M.empty Nothing (rirRHS decl)
+      let rule = IxRule { irVars = vars, irLHS = lhs, irRHS = rhs }
+      let table0 = M.findWithDefault (IxTheory M.empty []) mode (dIxTheory doc)
+      let table1 = table0 { itRules = itRules table0 <> [rule] }
+      pure doc { dIxTheory = M.insert mode table1 (dIxTheory doc) }
     RPStructure decl -> do
       let mode = ModeName (rsMode decl)
       mt' <- setModeDiscipline mode (rsDisc decl) (dModes doc)
@@ -331,9 +397,8 @@ elabPolyItem env doc item =
       let mode = ModeName (rptMode decl)
       ensureMode doc mode
       let tname = TypeName (rptName decl)
-      ensureDistinctRawTyVarNames "duplicate type parameter name" (rptVars decl)
-      sigModes <- mapM (resolveTyVarMode doc mode) (rptVars decl)
-      let sig = TypeSig { tsParams = sigModes }
+      (_tyVars, _ixVars, sigParams) <- elabParamDecls doc mode (rptVars decl)
+      let sig = TypeSig { tsParams = sigParams }
       let table = M.findWithDefault M.empty mode (dTypes doc)
       if M.member tname table
         then Left "duplicate type name"
@@ -345,16 +410,16 @@ elabPolyItem env doc item =
       let mode = ModeName (rpgMode decl)
       ensureMode doc mode
       let gname = GenName (rpgName decl)
-      vars <- mapM (resolveTyVarDecl doc mode) (rpgVars decl)
-      ensureDistinctTyVarNames "duplicate generator type parameter name" vars
+      (tyVars, ixVars, _sigParams) <- elabParamDecls doc mode (rpgVars decl)
       attrs <- mapM (resolveAttrField doc) (rpgAttrs decl)
       ensureDistinct "duplicate generator attribute field name" (map fst attrs)
-      dom <- elabContext doc mode vars (rpgDom decl)
-      cod <- elabContext doc mode vars (rpgCod decl)
+      dom <- elabInputShapes doc mode tyVars ixVars (rpgDom decl)
+      cod <- elabContext doc mode tyVars ixVars M.empty (rpgCod decl)
       let gen = GenDecl
             { gdName = gname
             , gdMode = mode
-            , gdTyVars = vars
+            , gdTyVars = tyVars
+            , gdIxVars = ixVars
             , gdDom = dom
             , gdCod = cod
             , gdAttrs = attrs
@@ -378,7 +443,7 @@ elabPolyItem env doc item =
         [] -> Right ()
       let typeDecl = RawPolyTypeDecl
             { rptName = rpdTyName decl
-            , rptVars = rpdTyVars decl
+            , rptVars = map RPDType (rpdTyVars decl)
             , rptMode = modeName
             }
       let ctors = map (mkCtor modeName (rpdTyName decl) (rpdTyVars decl)) (rpdCtors decl)
@@ -386,17 +451,18 @@ elabPolyItem env doc item =
     RPRule decl -> do
       let mode = ModeName (rprMode decl)
       ensureMode doc mode
-      ruleVars <- mapM (resolveTyVarDecl doc mode) (rprVars decl)
-      ensureDistinctTyVarNames "duplicate rule type parameter name" ruleVars
-      dom <- elabContext doc mode ruleVars (rprDom decl)
-      cod <- elabContext doc mode ruleVars (rprCod decl)
-      lhs <- withRule (elabDiagExpr env doc mode ruleVars (rprLHS decl))
-      rhs <- withRule (elabDiagExpr env doc mode ruleVars (rprRHS decl))
-      let rigid = S.fromList ruleVars
-      lhs' <- unifyBoundary (dModes doc) rigid dom cod lhs
-      rhs' <- unifyBoundary (dModes doc) rigid dom cod rhs
+      (ruleTyVars, ruleIxVars, _sigParams) <- elabParamDecls doc mode (rprVars decl)
+      dom <- elabContext doc mode ruleTyVars ruleIxVars M.empty (rprDom decl)
+      cod <- elabContext doc mode ruleTyVars ruleIxVars M.empty (rprCod decl)
+      (lhs, binderSigs) <- withRule (elabRuleLHS env doc mode ruleTyVars ruleIxVars (rprLHS decl))
+      rhs <- withRule (elabRuleRHS env doc mode ruleTyVars ruleIxVars binderSigs (rprRHS decl))
+      let rigidTy = S.fromList ruleTyVars
+      let rigidIx = S.fromList ruleIxVars
+      let tt = doctrineTypeTheory doc
+      lhs' <- unifyBoundary tt rigidTy rigidIx dom cod lhs
+      rhs' <- unifyBoundary tt rigidTy rigidIx dom cod rhs
       let free = S.union (freeTyVarsDiagram lhs') (freeTyVarsDiagram rhs')
-      let allowed = S.fromList ruleVars
+      let allowed = S.fromList ruleTyVars
       if S.isSubsetOf free allowed
         then pure ()
         else Left ("rule " <> rprName decl <> ": unresolved type variables")
@@ -409,7 +475,8 @@ elabPolyItem env doc item =
             { c2Name = rprName decl
             , c2Class = rprClass decl
             , c2Orient = rprOrient decl
-            , c2TyVars = ruleVars
+            , c2TyVars = ruleTyVars
+            , c2IxVars = ruleIxVars
             , c2LHS = lhs'
             , c2RHS = rhs'
             }
@@ -484,7 +551,8 @@ addAdjGens doc left right = do
           { gdName = unitName
           , gdMode = modeM
           , gdTyVars = [aVar]
-          , gdDom = [TVar aVar]
+          , gdIxVars = []
+          , gdDom = [InPort (TVar aVar)]
           , gdCod = [unitCod]
           , gdAttrs = []
           }
@@ -493,7 +561,8 @@ addAdjGens doc left right = do
           { gdName = counitName
           , gdMode = modeN
           , gdTyVars = [bVar]
-          , gdDom = [counitDom]
+          , gdIxVars = []
+          , gdDom = [InPort counitDom]
           , gdCod = [TVar bVar]
           , gdAttrs = []
           }
@@ -535,9 +604,9 @@ mkCtor modeName tyName vars ctor =
       cod = [RPTCon typeRef args]
   in RawPolyGenDecl
       { rpgName = rpcName ctor
-      , rpgVars = vars
+      , rpgVars = map RPDType vars
       , rpgAttrs = []
-      , rpgDom = rpcArgs ctor
+      , rpgDom = map RIPort (rpcArgs ctor)
       , rpgCod = cod
       , rpgMode = modeName
       }
@@ -572,6 +641,11 @@ resolveTyVarDecl doc defaultMode decl = do
   mode <- resolveTyVarMode doc defaultMode decl
   pure TyVar { tvName = rtvName decl, tvMode = mode }
 
+elabIxDeclVar :: Doctrine -> [TyVar] -> RawIxVarDecl -> Either Text IxVar
+elabIxDeclVar doc tyVars decl = do
+  sortTy <- elabTypeExpr doc tyVars [] M.empty (rivSort decl)
+  pure IxVar { ixvName = rivName decl, ixvSort = sortTy, ixvScope = 0 }
+
 ensureDistinctRawTyVarNames :: Text -> [RawTyVarDecl] -> Either Text ()
 ensureDistinctRawTyVarNames label vars =
   let names = map rtvName vars
@@ -590,6 +664,33 @@ lookupTyVarByName vars name =
     [v] -> Right v
     [] -> Left ("unknown type variable: " <> name)
     _ -> Left ("duplicate type variable name: " <> name)
+
+lookupIxVarByName :: [IxVar] -> Text -> Either Text IxVar
+lookupIxVarByName vars name =
+  case [v | v <- vars, ixvName v == name] of
+    [v] -> Right v
+    [] -> Left ("unknown index variable: " <> name)
+    _ -> Left ("duplicate index variable name: " <> name)
+
+elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text ([TyVar], [IxVar], [ParamSig])
+elabParamDecls doc defaultMode params = go [] [] [] params
+  where
+    go tyAcc ixAcc sigAcc [] = Right (reverse tyAcc, reverse ixAcc, reverse sigAcc)
+    go tyAcc ixAcc sigAcc (p:rest) =
+      case p of
+        RPDType tvDecl -> do
+          tv <- resolveTyVarDecl doc defaultMode tvDecl
+          let name = tvName tv
+          if name `elem` map tvName tyAcc || name `elem` map ixvName ixAcc
+            then Left "duplicate parameter name"
+            else go (tv:tyAcc) ixAcc (PS_Ty (tvMode tv) : sigAcc) rest
+        RPDIndex ixDecl -> do
+          let name = rivName ixDecl
+          if name `elem` map tvName tyAcc || name `elem` map ixvName ixAcc
+            then Left "duplicate parameter name"
+            else do
+              ixVar <- elabIxDeclVar doc tyAcc ixDecl
+              go tyAcc (ixVar:ixAcc) (PS_Ix (ixvSort ixVar) : sigAcc) rest
 
 resolveTypeRef :: Doctrine -> RawTypeRef -> Either Text TypeRef
 resolveTypeRef doc raw =
@@ -631,23 +732,32 @@ buildTypeMapParams sigModes decls = do
               then Right TyVar { tvName = rtvName decl, tvMode = explicit }
               else Left "morphism: type mapping binder mode mismatch"
 
-elabContext :: Doctrine -> ModeName -> [TyVar] -> RawPolyContext -> Either Text Context
-elabContext doc expectedMode vars ctx = do
-  tys <- mapM (elabTypeExpr doc vars) ctx
+elabContext :: Doctrine -> ModeName -> [TyVar] -> [IxVar] -> M.Map Text (Int, TypeExpr) -> RawPolyContext -> Either Text Context
+elabContext doc expectedMode tyVars ixVars ixBound ctx = do
+  tys <- mapM (elabTypeExpr doc tyVars ixVars ixBound) ctx
   let bad = filter (\ty -> typeMode ty /= expectedMode) tys
   if null bad
     then Right tys
     else Left "boundary type must match generator mode"
 
-elabTypeExpr :: Doctrine -> [TyVar] -> RawPolyTypeExpr -> Either Text TypeExpr
-elabTypeExpr doc vars expr =
+elabTypeExpr :: Doctrine -> [TyVar] -> [IxVar] -> M.Map Text (Int, TypeExpr) -> RawPolyTypeExpr -> Either Text TypeExpr
+elabTypeExpr doc tyVars ixVars ixBound expr =
   case expr of
     RPTVar name -> do
-      v <- lookupTyVarByName vars name
-      Right (TVar v)
+      case [v | v <- tyVars, tvName v == name] of
+        [v] -> Right (TVar v)
+        (_:_:_) -> Left ("duplicate type variable name: " <> name)
+        [] -> do
+          ref <- resolveTypeRef doc RawTypeRef { rtrMode = Nothing, rtrName = name }
+          sig <- lookupTypeSig doc ref
+          if null (tsParams sig)
+            then Right (TCon ref [])
+            else Left "type constructor arity mismatch"
+    RPTBound _ ->
+      Left "bound index variable (^i) is only valid in index argument positions"
     RPTMod rawMe innerRaw -> do
       me <- elabRawModExpr (dModes doc) rawMe
-      inner <- elabTypeExpr doc vars innerRaw
+      inner <- elabTypeExpr doc tyVars ixVars ixBound innerRaw
       if typeMode inner /= meSrc me
         then Left "modality application source/argument mode mismatch"
         else normalizeTypeExpr (dModes doc) (TMod me inner)
@@ -655,7 +765,7 @@ elabTypeExpr doc vars expr =
       case asModalityCall rawRef args of
         Just (rawMe, innerRaw) -> do
           me <- elabRawModExpr (dModes doc) rawMe
-          inner <- elabTypeExpr doc vars innerRaw
+          inner <- elabTypeExpr doc tyVars ixVars ixBound innerRaw
           if typeMode inner /= meSrc me
             then Left "modality application source/argument mode mismatch"
             else normalizeTypeExpr (dModes doc) (TMod me inner)
@@ -666,12 +776,18 @@ elabTypeExpr doc vars expr =
           if length params /= length args
             then Left "type constructor arity mismatch"
             else do
-              args' <- mapM (elabTypeExpr doc vars) args
-              let argModes = map typeMode args'
-              if and (zipWith (==) params argModes)
-                then Right (TCon ref args')
-                else Left "type constructor argument mode mismatch"
+              args' <- mapM (elabOneArg params) (zip params args)
+              Right (TCon ref args')
   where
+    elabOneArg _ (PS_Ty m, rawArg) = do
+      argTy <- elabTypeExpr doc tyVars ixVars ixBound rawArg
+      if typeMode argTy == m
+        then Right (TAType argTy)
+        else Left "type constructor argument mode mismatch"
+    elabOneArg _ (PS_Ix sortTy, rawArg) = do
+      ix <- elabIxTerm doc tyVars ixVars ixBound (Just sortTy) rawArg
+      Right (TAIndex ix)
+
     asModalityCall rawRef0 args0 =
       case (rtrMode rawRef0, rtrName rawRef0, args0) of
         (Nothing, name, [inner]) ->
@@ -694,46 +810,212 @@ elabTypeExpr doc vars expr =
             Nothing -> False
             Just table -> M.member tyName table
 
+elabIxTerm
+  :: Doctrine
+  -> [TyVar]
+  -> [IxVar]
+  -> M.Map Text (Int, TypeExpr)
+  -> Maybe TypeExpr
+  -> RawPolyTypeExpr
+  -> Either Text IxTerm
+elabIxTerm doc tyVars ixVars ixBound mExpected raw =
+  case raw of
+    RPTBound i -> Right (IXBound i)
+    RPTMod _ _ -> Left "index terms do not support modality application"
+    RPTVar name ->
+      case M.lookup name ixBound of
+        Just (idx, _) -> Right (IXBound idx)
+        Nothing ->
+          case [v | v <- ixVars, ixvName v == name] of
+            [v] -> Right (IXVar v)
+            (_:_:_) -> Left ("duplicate index variable name: " <> name)
+            [] ->
+              case mExpected of
+                Nothing -> do
+                  (funName, _sig) <- lookupIxFunAny doc name 0
+                  pure (IXFun funName [])
+                Just expected -> do
+                  (funName, _sig) <- lookupIxFunByName doc expected name 0
+                  pure (IXFun funName [])
+    RPTCon rawRef args -> do
+      case rtrMode rawRef of
+        Just _ -> Left "index function names must be unqualified"
+        Nothing -> do
+          (funName, sig) <-
+            case mExpected of
+              Just expected -> lookupIxFunByName doc expected (rtrName rawRef) (length args)
+              Nothing -> lookupIxFunAny doc (rtrName rawRef) (length args)
+          ixArgs <- mapM (uncurry (elabIxTerm doc tyVars ixVars ixBound . Just)) (zip (ifArgs sig) args)
+          pure (IXFun funName ixArgs)
+
+lookupIxFunByName :: Doctrine -> TypeExpr -> Text -> Int -> Either Text (IxFunName, IxFunSig)
+lookupIxFunByName doc expectedSort name arity = do
+  theory <-
+    case M.lookup (typeMode expectedSort) (dIxTheory doc) of
+      Nothing -> Left "missing index theory for expected index sort"
+      Just th -> Right th
+  let fname = IxFunName name
+  sig <-
+    case M.lookup fname (itFuns theory) of
+      Nothing -> Left ("unknown index function: " <> name)
+      Just s -> Right s
+  if length (ifArgs sig) /= arity
+    then Left "index function arity mismatch"
+    else Right (fname, sig)
+
+lookupIxFunAny :: Doctrine -> Text -> Int -> Either Text (IxFunName, IxFunSig)
+lookupIxFunAny doc name arity =
+  case
+    [ (fname, sig)
+    | theory <- M.elems (dIxTheory doc)
+    , (fname@(IxFunName fnameTxt), sig) <- M.toList (itFuns theory)
+    , fnameTxt == name
+    , length (ifArgs sig) == arity
+    ]
+    of
+      [] -> Left ("unknown index function: " <> name)
+      [single] -> Right single
+      _ -> Left ("ambiguous index function: " <> name)
+
+elabInputShapes :: Doctrine -> ModeName -> [TyVar] -> [IxVar] -> [RawInputShape] -> Either Text [InputShape]
+elabInputShapes doc mode tyVars ixVars = mapM (elabInputShape doc mode tyVars ixVars)
+
+elabInputShape :: Doctrine -> ModeName -> [TyVar] -> [IxVar] -> RawInputShape -> Either Text InputShape
+elabInputShape doc mode tyVars ixVars shape =
+  case shape of
+    RIPort rawTy -> InPort <$> elabTypeExpr doc tyVars ixVars M.empty rawTy
+    RIBinder binders rawCod -> do
+      boundTys <- mapM (\b -> elabTypeExpr doc tyVars ixVars M.empty (rbvType b)) binders
+      let binderPairs = zip binders boundTys
+      let ixBinders = [ (rbvName b, ty) | (b, ty) <- binderPairs, typeMode ty `S.member` dIndexModes doc ]
+      let termBinders = [ b | (b, ty) <- binderPairs, typeMode ty == mode ]
+      let badBinders = [ b | (b, ty) <- binderPairs, typeMode ty /= mode && typeMode ty `S.notMember` dIndexModes doc ]
+      if null badBinders
+        then Right ()
+        else Left "binder variable mode must be either generator mode or index mode"
+      let ixCtx = map snd ixBinders
+      let ixBound = M.fromList (zipWith (\(nm, ty) idx -> (nm, (idx, ty))) ixBinders [0..])
+      bsDom <- mapM (\b -> elabTypeExpr doc tyVars ixVars ixBound (rbvType b)) termBinders
+      bsCod <- elabContext doc mode tyVars ixVars ixBound rawCod
+      pure (InBinder BinderSig { bsIxCtx = ixCtx, bsDom = bsDom, bsCod = bsCod })
+
+data BinderMetaMode
+  = BMNoMeta
+  | BMCollect
+  | BMUse
+  deriving (Eq, Show)
+
+elabRuleLHS
+  :: ModuleEnv
+  -> Doctrine
+  -> ModeName
+  -> [TyVar]
+  -> [IxVar]
+  -> RawDiagExpr
+  -> Either Text (Diagram, M.Map BinderMetaVar BinderSig)
+elabRuleLHS env doc mode tyVars ixVars expr = do
+  (diag, metas) <- elabDiagExprWith env doc mode [] tyVars ixVars M.empty BMCollect False expr
+  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
+  pure (diag, metas)
+
+elabRuleRHS
+  :: ModuleEnv
+  -> Doctrine
+  -> ModeName
+  -> [TyVar]
+  -> [IxVar]
+  -> M.Map BinderMetaVar BinderSig
+  -> RawDiagExpr
+  -> Either Text Diagram
+elabRuleRHS env doc mode tyVars ixVars binderSigs expr = do
+  (diag, metas) <- elabDiagExprWith env doc mode [] tyVars ixVars binderSigs BMUse True expr
+  if metas == binderSigs
+    then do
+      ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
+      pure diag
+    else Left "rule RHS introduces fresh binder metas"
+
 elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [TyVar] -> RawDiagExpr -> Either Text Diagram
 elabDiagExpr env doc mode ruleVars expr = do
-  diag <- evalFresh (build expr)
+  (diag, _) <- elabDiagExprWith env doc mode [] ruleVars [] M.empty BMNoMeta False expr
   ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
   pure diag
+
+elabDiagExprWith
+  :: ModuleEnv
+  -> Doctrine
+  -> ModeName
+  -> [TypeExpr]
+  -> [TyVar]
+  -> [IxVar]
+  -> M.Map BinderMetaVar BinderSig
+  -> BinderMetaMode
+  -> Bool
+  -> RawDiagExpr
+  -> Either Text (Diagram, M.Map BinderMetaVar BinderSig)
+elabDiagExprWith env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSplice expr =
+  evalFresh (build ixCtx binderSigs0 expr)
   where
-    rigid = S.fromList ruleVars
-    build e =
+    rigidTy = S.fromList tyVars
+    rigidIx = S.fromList ixVars
+    ttDoc = doctrineTypeTheory doc
+
+    build curIxCtx binderSigs e =
       case e of
         RDId ctx -> do
-          ctx' <- liftEither (elabContext doc mode ruleVars ctx)
-          pure (idD mode ctx')
-        RDGen name mArgs mAttrArgs -> do
+          ctx' <- liftEither (elabContext doc mode tyVars ixVars M.empty ctx)
+          pure (idDIx mode curIxCtx ctx', binderSigs)
+        RDGen name mArgs mAttrArgs mBinderArgs -> do
           gen <- liftEither (lookupGen doc mode (GenName name))
-          let tyVars = gdTyVars gen
-          renameSubst <- freshSubst tyVars
-          let dom0 = applySubstCtx (dModes doc) renameSubst (gdDom gen)
-          let cod0 = applySubstCtx (dModes doc) renameSubst (gdCod gen)
-          (dom, cod) <- case mArgs of
-            Nothing -> pure (dom0, cod0)
-            Just args -> do
-              args' <- mapM (liftEither . elabTypeExpr doc ruleVars) args
-              if length args' /= length tyVars
-                then liftEither (Left "generator type argument mismatch")
-                else do
-                  freshVars <- liftEither (extractFreshVars tyVars renameSubst)
-                  case zipWith (\v t -> tvMode v == typeMode t) freshVars args' of
-                    matches | and matches -> pure ()
-                    _ -> liftEither (Left "generator type argument mode mismatch")
-                  let subst = M.fromList (zip freshVars args')
-                  pure (applySubstCtx (dModes doc) subst dom0, applySubstCtx (dModes doc) subst cod0)
+          tyRename <- freshTySubst (gdTyVars gen)
+          ixRename <- freshIxSubst (gdIxVars gen)
+          let renameSubst = U.Subst { U.sTy = tyRename, U.sIx = ixRename }
+          let dom0 = applySubstCtxDoc renameSubst (gdPlainDom gen)
+          let cod0 = applySubstCtxDoc renameSubst (gdCod gen)
+          let binderSlots0 =
+                [ applySubstBinderSig renameSubst bs
+                | InBinder bs <- gdDom gen
+                ]
+          (dom, cod, binderSlots) <-
+            case mArgs of
+              Nothing -> pure (dom0, cod0, binderSlots0)
+              Just args -> do
+                let tyArity = length (gdTyVars gen)
+                let ixArity = length (gdIxVars gen)
+                if length args /= tyArity + ixArity
+                  then liftEither (Left "generator type/index argument mismatch")
+                  else do
+                    let (tyRawArgs, ixRawArgs) = splitAt tyArity args
+                    tyArgs <- mapM (liftEither . elabTypeExpr doc tyVars ixVars M.empty) tyRawArgs
+                    freshTyVars <- liftEither (extractFreshTyVars (gdTyVars gen) tyRename)
+                    case and (zipWith (\v t -> tvMode v == typeMode t) freshTyVars tyArgs) of
+                      False -> liftEither (Left "generator type argument mode mismatch")
+                      True -> pure ()
+                    freshIxVars <- liftEither (extractFreshIxVars (gdIxVars gen) ixRename)
+                    ixArgs <- mapM (uncurry elabIxArg) (zip freshIxVars ixRawArgs)
+                    let argSubst =
+                          U.Subst
+                            { U.sTy = M.fromList (zip freshTyVars tyArgs)
+                            , U.sIx = M.fromList (zip freshIxVars ixArgs)
+                            }
+                    let dom1 = applySubstCtxDoc argSubst dom0
+                    let cod1 = applySubstCtxDoc argSubst cod0
+                    let binderSlots1 = map (applySubstBinderSig argSubst) binderSlots0
+                    pure (dom1, cod1, binderSlots1)
           attrs <- liftEither (elabGenAttrs doc gen mAttrArgs)
-          liftEither (genDWithAttrs mode dom cod (gdName gen) attrs)
+          (binderArgs, binderSigs') <- elaborateBinderArgs curIxCtx binderSigs binderSlots mBinderArgs
+          diag <- liftEither (mkGenDiag curIxCtx (gdName gen) attrs binderArgs dom cod)
+          pure (diag, binderSigs')
         RDTermRef name -> do
           term <- liftEither (lookupTerm env name)
           if tdDoctrine term == dName doc
             then
               if tdMode term /= mode
                 then liftEither (Left ("term @" <> name <> " has mode " <> renderModeName (tdMode term) <> ", expected " <> renderModeName mode))
-                else pure (tdDiagram term)
+                else
+                  if dIxCtx (tdDiagram term) == curIxCtx
+                    then pure (tdDiagram term, binderSigs)
+                    else liftEither (Left ("term @" <> name <> " has incompatible index context"))
             else do
               srcDoc <- liftEither (lookupDoctrine env (tdDoctrine term))
               (doc', diag') <- liftEither (coerceDiagramTo env srcDoc (tdDiagram term) (dName doc))
@@ -741,44 +1023,165 @@ elabDiagExpr env doc mode ruleVars expr = do
                 then liftEither (Left ("term @" <> name <> " has doctrine " <> tdDoctrine term <> ", expected " <> dName doc))
                 else if dMode diag' /= mode
                   then liftEither (Left ("term @" <> name <> " has mode " <> renderModeName (dMode diag') <> ", expected " <> renderModeName mode))
-                  else pure diag'
+                  else
+                    if dIxCtx diag' == curIxCtx
+                      then pure (diag', binderSigs)
+                      else liftEither (Left ("term @" <> name <> " has incompatible index context"))
+        RDSplice name ->
+          if allowSplice
+            then do
+              let meta = BinderMetaVar name
+              sig <- liftEither $
+                case M.lookup meta binderSigs of
+                  Nothing -> Left "splice references unknown binder meta"
+                  Just bs -> Right bs
+              diag <- liftEither (mkSpliceDiag curIxCtx meta (bsDom sig) (bsCod sig))
+              pure (diag, binderSigs)
+            else liftEither (Left "splice is only allowed in rule RHS")
         RDBox name innerExpr -> do
-          inner <- build innerExpr
+          (inner, binderSigs') <- build curIxCtx binderSigs innerExpr
           dom <- liftEither (diagramDom inner)
           cod <- liftEither (diagramCod inner)
-          let (ins, diag0) = allocPorts dom (emptyDiagram mode)
+          let (ins, diag0) = allocPorts dom (emptyDiagram mode curIxCtx)
           let (outs, diag1) = allocPorts cod diag0
           diag2 <- liftEither (addEdgePayload (PBox (BoxName name) inner) ins outs diag1)
           let diag3 = diag2 { dIn = ins, dOut = outs }
           liftEither (validateDiagram diag3)
-          pure diag3
+          pure (diag3, binderSigs')
         RDLoop innerExpr -> do
-          inner <- build innerExpr
+          (inner, binderSigs') <- build curIxCtx binderSigs innerExpr
           case (dIn inner, dOut inner) of
             ([pIn], pOut:pOuts) -> do
               diag1 <- liftEither (mergePorts inner pOut pIn)
               let diag2 = diag1 { dIn = [], dOut = pOuts }
               liftEither (validateDiagram diag2)
-              pure diag2
+              pure (diag2, binderSigs')
             _ -> liftEither (Left "loop: expected exactly one input and at least one output")
         RDComp a b -> do
-          d1 <- build a
-          d2 <- build b
+          (d1, binderSigs1) <- build curIxCtx binderSigs a
+          (d2, binderSigs2) <- build curIxCtx binderSigs1 b
           cod1 <- liftEither (diagramCod d1)
           dom2 <- liftEither (diagramDom d2)
-          let free = S.union (freeTyVarsDiagram d1) (freeTyVarsDiagram d2)
-          let flex = S.difference free rigid
+          let freeTy = S.union (freeTyVarsDiagram d1) (freeTyVarsDiagram d2)
+          let freeIx = S.union (freeIxVarsDiagram d1) (freeIxVarsDiagram d2)
+          let flexTy = S.difference freeTy rigidTy
+          let flexIx = S.difference freeIx rigidIx
           subst <- liftEither $
-            case unifyCtxFlexLocal (dModes doc) flex cod1 dom2 of
+            case unifyCtxFlexLocal ttDoc curIxCtx flexTy flexIx cod1 dom2 of
               Left err -> Left ("diagram composition boundary mismatch: " <> err)
               Right s -> Right s
-          let d1' = applySubstDiagram (dModes doc) subst d1
-          let d2' = applySubstDiagram (dModes doc) subst d2
-          liftEither (compD (dModes doc) d2' d1')
+          let d1' = applySubstDiagramDoc subst d1
+          let d2' = applySubstDiagramDoc subst d2
+          dComp <- liftEither (compD (dModes doc) d2' d1')
+          pure (dComp, binderSigs2)
         RDTensor a b -> do
-          d1 <- build a
-          d2 <- build b
-          liftEither (tensorD d1 d2)
+          (d1, binderSigs1) <- build curIxCtx binderSigs a
+          (d2, binderSigs2) <- build curIxCtx binderSigs1 b
+          dTen <- liftEither (tensorD d1 d2)
+          pure (dTen, binderSigs2)
+
+    elaborateBinderArgs curIxCtx binderSigs binderSlots mBinderArgs =
+      case (binderSlots, mBinderArgs) of
+        ([], Nothing) -> pure ([], binderSigs)
+        ([], Just []) -> pure ([], binderSigs)
+        ([], Just _) -> liftEither (Left "generator does not accept binder arguments")
+        (_:_, Nothing) -> liftEither (Left "missing generator binder arguments")
+        (_, Just rawArgs) ->
+          if length binderSlots /= length rawArgs
+            then liftEither (Left "generator binder argument mismatch")
+            else foldM step ([], binderSigs) (zip binderSlots rawArgs)
+      where
+        step (acc, bsMap) (slot, rawArg) =
+          case rawArg of
+            RBAExpr exprArg -> do
+              (diagArg, _) <-
+                liftEither
+                  ( elabDiagExprWith
+                      env
+                      doc
+                      mode
+                      (bsIxCtx slot)
+                      tyVars
+                      ixVars
+                      M.empty
+                      BMNoMeta
+                      False
+                      exprArg
+                  )
+              domArg <- liftEither (diagramDom diagArg)
+              codArg <- liftEither (diagramCod diagArg)
+              if domArg == bsDom slot && codArg == bsCod slot
+                then pure (acc <> [BAConcrete diagArg], bsMap)
+                else liftEither (Left "binder argument boundary mismatch")
+            RBAMeta name ->
+              case metaMode of
+                BMNoMeta ->
+                  liftEither (Left "binder metavariables are only allowed in rule diagrams")
+                BMCollect -> do
+                  let key = BinderMetaVar name
+                  case M.lookup key bsMap of
+                    Nothing -> pure (acc <> [BAMeta key], M.insert key slot bsMap)
+                    Just slot'
+                      | slot' == slot -> pure (acc <> [BAMeta key], bsMap)
+                      | otherwise -> liftEither (Left "binder meta reused with inconsistent signature")
+                BMUse -> do
+                  let key = BinderMetaVar name
+                  case M.lookup key bsMap of
+                    Nothing -> liftEither (Left "RHS introduces unknown binder meta")
+                    Just slot'
+                      | slot' == slot -> pure (acc <> [BAMeta key], bsMap)
+                      | otherwise -> liftEither (Left "binder meta used with inconsistent signature")
+
+    elabIxArg v rawArg = liftEither (elabIxTerm doc tyVars ixVars M.empty (Just (ixvSort v)) rawArg)
+
+    mkGenDiag curIxCtx g attrs bargs dom cod = do
+      let (ins, d0) = allocPorts dom (emptyDiagram mode curIxCtx)
+      let (outs, d1) = allocPorts cod d0
+      d2 <- addEdgePayload (PGen g attrs bargs) ins outs d1
+      let d3 = d2 { dIn = ins, dOut = outs }
+      validateDiagram d3
+      pure d3
+
+    mkSpliceDiag curIxCtx meta dom cod = do
+      let (ins, d0) = allocPorts dom (emptyDiagram mode curIxCtx)
+      let (outs, d1) = allocPorts cod d0
+      d2 <- addEdgePayload (PSplice meta) ins outs d1
+      let d3 = d2 { dIn = ins, dOut = outs }
+      validateDiagram d3
+      pure d3
+
+    applySubstTyDoc subst ty =
+      case U.applySubstTy ttDoc subst ty of
+        Right ty' -> ty'
+        Left _ -> ty
+
+    applySubstCtxDoc subst = map (applySubstTyDoc subst)
+
+    applySubstBinderSig subst bs =
+      bs
+        { bsIxCtx = applySubstCtxDoc subst (bsIxCtx bs)
+        , bsDom = applySubstCtxDoc subst (bsDom bs)
+        , bsCod = applySubstCtxDoc subst (bsCod bs)
+        }
+
+    applySubstDiagramDoc subst diag =
+      let dPortTy' = IM.map (applySubstTyDoc subst) (dPortTy diag)
+          dIxCtx' = map (applySubstTyDoc subst) (dIxCtx diag)
+          dEdges' = IM.map mapEdge (dEdges diag)
+       in diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
+      where
+        mapEdge edge =
+          case ePayload edge of
+            PGen g attrs bargs ->
+              edge { ePayload = PGen g attrs (map mapBinderArg bargs) }
+            PBox name inner ->
+              edge { ePayload = PBox name (applySubstDiagramDoc subst inner) }
+            PSplice meta ->
+              edge { ePayload = PSplice meta }
+        mapBinderArg barg =
+          case barg of
+            BAConcrete inner -> BAConcrete (applySubstDiagramDoc subst inner)
+            BAMeta x -> BAMeta x
 
     allocPorts [] diag = ([], diag)
     allocPorts (ty:rest) diag =
@@ -807,29 +1210,64 @@ lookupGen doc mode name =
     renderMode (ModeName m) = m
     renderGen (GenName g) = g
 
-unifyBoundary :: ModeTheory -> S.Set TyVar -> Context -> Context -> Diagram -> Either Text Diagram
-unifyBoundary mt rigid dom cod diag = do
+unifyBoundary :: TypeTheory -> S.Set TyVar -> S.Set IxVar -> Context -> Context -> Diagram -> Either Text Diagram
+unifyBoundary tt rigidTy rigidIx dom cod diag = do
   domDiag <- diagramDom diag
-  let flex0 = S.difference (freeTyVarsDiagram diag) rigid
-  s1 <- unifyCtxFlexLocal mt flex0 domDiag dom
-  let diag1 = applySubstDiagram mt s1 diag
+  let flexTy0 = S.difference (freeTyVarsDiagram diag) rigidTy
+  let flexIx0 = S.difference (freeIxVarsDiagram diag) rigidIx
+  s1 <- unifyCtxFlexLocal tt (dIxCtx diag) flexTy0 flexIx0 domDiag dom
+  let diag1 = applySubstDiagramWithTT tt s1 diag
   codDiag <- diagramCod diag1
-  let flex1 = S.difference (freeTyVarsDiagram diag1) rigid
-  s2 <- unifyCtxFlexLocal mt flex1 codDiag cod
-  let diag2 = applySubstDiagram mt s2 diag1
+  let flexTy1 = S.difference (freeTyVarsDiagram diag1) rigidTy
+  let flexIx1 = S.difference (freeIxVarsDiagram diag1) rigidIx
+  s2 <- unifyCtxFlexLocal tt (dIxCtx diag1) flexTy1 flexIx1 codDiag cod
+  let diag2 = applySubstDiagramWithTT tt s2 diag1
   pure diag2
 
-unifyCtxFlexLocal :: ModeTheory -> S.Set TyVar -> Context -> Context -> Either Text Subst
-unifyCtxFlexLocal mt flex ctx1 ctx2
+unifyCtxFlexLocal :: TypeTheory -> [TypeExpr] -> S.Set TyVar -> S.Set IxVar -> Context -> Context -> Either Text Subst
+unifyCtxFlexLocal tt ixCtx flexTy flexIx ctx1 ctx2
   | length ctx1 /= length ctx2 = Left "unifyCtxFlex: length mismatch"
-  | otherwise = foldl step (Right M.empty) (zip ctx1 ctx2)
+  | otherwise = foldl step (Right U.emptySubst) (zip ctx1 ctx2)
   where
     step acc (a, b) = do
       s <- acc
-      let a' = applySubstTy mt s a
-      let b' = applySubstTy mt s b
-      s' <- unifyTyFlex mt flex a' b'
-      pure (composeSubst mt s' s)
+      let a' = applySubstTyWithTT tt s a
+      let b' = applySubstTyWithTT tt s b
+      s' <- U.unifyTyFlex tt ixCtx flexTy flexIx U.emptySubst a' b'
+      composeSubstWithTT tt s' s
+
+applySubstTyWithTT :: TypeTheory -> Subst -> TypeExpr -> TypeExpr
+applySubstTyWithTT tt subst ty =
+  case U.applySubstTy tt subst ty of
+    Right ty' -> ty'
+    Left _ -> ty
+
+composeSubstWithTT :: TypeTheory -> Subst -> Subst -> Either Text Subst
+composeSubstWithTT tt s2 s1 =
+  case U.composeSubst tt s2 s1 of
+    Right s -> Right s
+    Left err -> Left err
+
+applySubstDiagramWithTT :: TypeTheory -> Subst -> Diagram -> Diagram
+applySubstDiagramWithTT tt subst diag =
+  let dPortTy' = IM.map (applySubstTyWithTT tt subst) (dPortTy diag)
+      dIxCtx' = map (applySubstTyWithTT tt subst) (dIxCtx diag)
+      dEdges' = IM.map mapEdge (dEdges diag)
+   in diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
+  where
+    mapEdge edge =
+      case ePayload edge of
+        PGen g attrs bargs ->
+          edge { ePayload = PGen g attrs (map mapBinderArg bargs) }
+        PBox name inner ->
+          edge { ePayload = PBox name (applySubstDiagramWithTT tt subst inner) }
+        PSplice x ->
+          edge { ePayload = PSplice x }
+
+    mapBinderArg barg =
+      case barg of
+        BAConcrete inner -> BAConcrete (applySubstDiagramWithTT tt subst inner)
+        BAMeta x -> BAMeta x
 
 elabGenAttrs :: Doctrine -> GenDecl -> Maybe [RawAttrArg] -> Either Text AttrMap
 elabGenAttrs doc gen mArgs =
@@ -941,13 +1379,18 @@ instance Monad Fresh where
 evalFresh :: Fresh a -> Either Text a
 evalFresh (Fresh f) = fmap fst (f 0)
 
-freshSubst :: [TyVar] -> Fresh Subst
-freshSubst vars = do
-  pairs <- mapM freshVar vars
+freshTySubst :: [TyVar] -> Fresh (M.Map TyVar TypeExpr)
+freshTySubst vars = do
+  pairs <- mapM freshTyVar vars
   pure (M.fromList pairs)
 
-extractFreshVars :: [TyVar] -> Subst -> Either Text [TyVar]
-extractFreshVars vars subst =
+freshIxSubst :: [IxVar] -> Fresh (M.Map IxVar IxTerm)
+freshIxSubst vars = do
+  pairs <- mapM freshIxVar vars
+  pure (M.fromList pairs)
+
+extractFreshTyVars :: [TyVar] -> M.Map TyVar TypeExpr -> Either Text [TyVar]
+extractFreshTyVars vars subst =
   mapM lookupVar vars
   where
     lookupVar v =
@@ -955,12 +1398,28 @@ extractFreshVars vars subst =
         Just (TVar v') -> Right v'
         _ -> Left "internal error: expected fresh type variable"
 
-freshVar :: TyVar -> Fresh (TyVar, TypeExpr)
-freshVar v = do
+extractFreshIxVars :: [IxVar] -> M.Map IxVar IxTerm -> Either Text [IxVar]
+extractFreshIxVars vars subst =
+  mapM lookupVar vars
+  where
+    lookupVar v =
+      case M.lookup v subst of
+        Just (IXVar v') -> Right v'
+        _ -> Left "internal error: expected fresh index variable"
+
+freshTyVar :: TyVar -> Fresh (TyVar, TypeExpr)
+freshTyVar v = do
   n <- freshInt
   let name = tvName v <> T.pack ("#" <> show n)
   let fresh = TyVar { tvName = name, tvMode = tvMode v }
   pure (v, TVar fresh)
+
+freshIxVar :: IxVar -> Fresh (IxVar, IxTerm)
+freshIxVar v = do
+  n <- freshInt
+  let name = ixvName v <> T.pack ("#" <> show n)
+  let fresh = IxVar { ixvName = name, ixvSort = ixvSort v, ixvScope = ixvScope v }
+  pure (v, IXVar fresh)
 
 freshInt :: Fresh Int
 freshInt = Fresh (\n -> Right (n, n + 1))

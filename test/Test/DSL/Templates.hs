@@ -124,6 +124,7 @@ testInstantiateRun = do
     T.intercalate "\n"
       [ "normalized:"
       , "mode: M"
+      , "ixctx: []"
       , "in: [p0:M.A]"
       , "out: [p1:M.A]"
       , "edges:"

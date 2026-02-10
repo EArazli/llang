@@ -21,7 +21,7 @@ import qualified Strat.Poly.UnifyTy as U
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
 import Strat.Poly.Diagram (Diagram(..), genD, genDWithAttrs, diagramDom, diagramCod, applySubstDiagram)
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), renumberDiagram, diagramPortIds, diagramIsoEq)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), renumberDiagram, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 
 
@@ -110,6 +110,8 @@ computePolyCoproduct name a b = do
   let empty = Doctrine
         { dName = "Empty"
         , dModes = dModes a
+        , dIndexModes = S.empty
+        , dIxTheory = M.empty
         , dAttrSorts = M.empty
         , dTypes = M.empty
         , dGens = M.empty
@@ -195,7 +197,7 @@ requireTypeRenameMap mor = do
           | length (ttParams tmpl) == arity
           , length params == arity
           , all isVar params
-          , let vars = [ v | TVar v <- params ]
+          , let vars = [ v | TAType (TVar v) <- params ]
           , length vars == length (S.fromList vars)
           , S.fromList vars == S.fromList (ttParams tmpl)
           -> do
@@ -210,7 +212,7 @@ requireTypeRenameMap mor = do
       case M.lookup v mp of
         Nothing -> Left "poly pushout requires renaming type maps"
         Just idx -> Right idx
-    isVar (TVar _) = True
+    isVar (TAType (TVar _)) = True
     isVar _ = False
 
 requireAttrSortRenameMap :: Morphism -> Either Text AttrSortRenameMap
@@ -263,8 +265,8 @@ singleGenName mor srcGen diag = do
       let allPorts = diagramPortIds canon
       expectedAttrs <- expectedAttrMap mor srcGen
       case ePayload edge of
-        PGen g attrs ->
-          if boundary == edgePorts && length allPorts == length boundary && attrs == expectedAttrs
+        PGen g attrs bargs ->
+          if boundary == edgePorts && length allPorts == length boundary && null bargs && attrs == expectedAttrs
             then Right g
             else Left "poly pushout requires generator mappings to be a single generator"
         _ -> Left "poly pushout requires generator mappings to be a single generator"
@@ -464,7 +466,7 @@ renameDoctrine attrRen tyRen permRen genRen cellRen doc = do
         add acc gen = do
           mp <- acc
           let name' = M.findWithDefault (gdName gen) (mode, gdName gen) genRen
-          dom' <- mapM (renameTypeExpr tyRen permRen) (gdDom gen)
+          dom' <- mapM (renameInputShape tyRen permRen) (gdDom gen)
           cod' <- mapM (renameTypeExpr tyRen permRen) (gdCod gen)
           let attrs' = [ (fieldName, M.findWithDefault sortName sortName attrRen) | (fieldName, sortName) <- gdAttrs gen ]
           let gen' = gen { gdName = name', gdDom = dom', gdCod = cod', gdAttrs = attrs' }
@@ -495,19 +497,28 @@ renameCell attrRen tyRen permRen genRen cellRen cell = do
 renameDiagram :: AttrSortRenameMap -> TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> Diagram -> Either Text Diagram
 renameDiagram attrRen tyRen permRen genRen diag = do
   let mode = dMode diag
+  dIxCtx' <- mapM (renameTypeExpr tyRen permRen) (dIxCtx diag)
   dPortTy' <- traverse (renameTypeExpr tyRen permRen) (dPortTy diag)
   dEdges' <- traverse (renameEdge mode) (dEdges diag)
-  pure diag { dPortTy = dPortTy', dEdges = dEdges' }
+  pure diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
   where
     renameEdge mode edge =
       case ePayload edge of
-        PGen gen attrs ->
+        PGen gen attrs bargs -> do
           let gen' = M.findWithDefault gen (mode, gen) genRen
               attrs' = M.map (renameAttrSortTerm attrRen) attrs
-          in Right edge { ePayload = PGen gen' attrs' }
+          bargs' <- mapM renameBinderArg bargs
+          pure edge { ePayload = PGen gen' attrs' bargs' }
         PBox name inner -> do
           inner' <- renameDiagram attrRen tyRen permRen genRen inner
           pure edge { ePayload = PBox name inner' }
+        PSplice x ->
+          pure edge { ePayload = PSplice x }
+
+    renameBinderArg barg =
+      case barg of
+        BAConcrete inner -> BAConcrete <$> renameDiagram attrRen tyRen permRen genRen inner
+        BAMeta x -> Right (BAMeta x)
 
 renameAttrSortTerm :: AttrSortRenameMap -> AttrTerm -> AttrTerm
 renameAttrSortTerm ren term =
@@ -517,6 +528,16 @@ renameAttrSortTerm ren term =
       let sortName' = M.findWithDefault (avSort v) (avSort v) ren
       in ATVar v { avSort = sortName' }
 
+renameInputShape :: TypeRenameMap -> TypePermMap -> InputShape -> Either Text InputShape
+renameInputShape ren permRen shape =
+  case shape of
+    InPort ty -> InPort <$> renameTypeExpr ren permRen ty
+    InBinder bs -> do
+      ix' <- mapM (renameTypeExpr ren permRen) (bsIxCtx bs)
+      dom' <- mapM (renameTypeExpr ren permRen) (bsDom bs)
+      cod' <- mapM (renameTypeExpr ren permRen) (bsCod bs)
+      Right (InBinder bs { bsIxCtx = ix', bsDom = dom', bsCod = cod' })
+
 renameTypeExpr :: TypeRenameMap -> TypePermMap -> TypeExpr -> Either Text TypeExpr
 renameTypeExpr ren permRen ty =
   case ty of
@@ -525,13 +546,26 @@ renameTypeExpr ren permRen ty =
       inner' <- renameTypeExpr ren permRen inner
       Right (TMod me inner')
     TCon ref args -> do
-      args' <- mapM (renameTypeExpr ren permRen) args
+      args' <- mapM renameArg args
       let ref' = M.findWithDefault ref ref ren
       case M.lookup ref permRen of
         Nothing -> Right (TCon ref' args')
         Just perm -> do
           args'' <- applyPerm perm args'
           Right (TCon ref' args'')
+  where
+    renameArg arg =
+      case arg of
+        TAType t -> TAType <$> renameTypeExpr ren permRen t
+        TAIndex ix -> TAIndex <$> renameIx ix
+
+    renameIx ix =
+      case ix of
+        IXVar v -> do
+          sort' <- renameTypeExpr ren permRen (ixvSort v)
+          Right (IXVar v { ixvSort = sort' })
+        IXBound i -> Right (IXBound i)
+        IXFun f args -> IXFun f <$> mapM renameIx args
 
 applyPerm :: [Int] -> [a] -> Either Text [a]
 applyPerm perm args
@@ -702,17 +736,17 @@ genDeclAlphaEq mt g1 g2 =
     && gdAttrs g1 == gdAttrs g2
     && length (gdTyVars g1) == length (gdTyVars g2)
     && let subst = M.fromList (zip (gdTyVars g2) (map TVar (gdTyVars g1)))
-           dom2 = U.applySubstCtx mt subst (gdDom g2)
-           cod2 = U.applySubstCtx mt subst (gdCod g2)
-       in dom2 == gdDom g1 && cod2 == gdCod g1
+           dom2 = U.applySubstCtxLegacy mt subst (gdPlainDom g2)
+           cod2 = U.applySubstCtxLegacy mt subst (gdCod g2)
+       in dom2 == gdPlainDom g1 && cod2 == gdCod g1
 
 alphaRenameCellTo :: ModeTheory -> [TyVar] -> [TyVar] -> Cell2 -> Either Text Cell2
 alphaRenameCellTo mt from to cell
   | length from /= length to = Left "poly pushout: alpha rename arity mismatch"
   | otherwise =
       let subst = M.fromList (zip from (map TVar to))
-          lhs' = applySubstDiagram mt subst (c2LHS cell)
-          rhs' = applySubstDiagram mt subst (c2RHS cell)
+          lhs' = applySubstDiagram mt (U.fromTyOnlySubst subst) (c2LHS cell)
+          rhs' = applySubstDiagram mt (U.fromTyOnlySubst subst) (c2RHS cell)
       in Right cell { c2TyVars = to, c2LHS = lhs', c2RHS = rhs' }
 
 buildGlue :: Text -> Doctrine -> Doctrine -> Either Text Morphism
@@ -779,7 +813,8 @@ buildTypeMap doc renames permRen =
         else do
           tmpl <- renameTemplate ref' mPerm (tsParams sig)
           Right (M.insert ref tmpl mp)
-    renameTemplate tgtRef mPerm paramModes = do
+    renameTemplate tgtRef mPerm params = do
+      paramModes <- mapM requireTyParam params
       let vars =
             [ TyVar { tvName = "a" <> T.pack (show i), tvMode = mode }
             | (i, mode) <- zip [0..] paramModes
@@ -787,7 +822,12 @@ buildTypeMap doc renames permRen =
       vars' <- case mPerm of
         Nothing -> Right vars
         Just perm -> applyPerm perm vars
-      pure (TypeTemplate vars (TCon tgtRef (map TVar vars')))
+      pure (TypeTemplate vars (TCon tgtRef (map (TAType . TVar) vars')))
+
+    requireTyParam param =
+      case param of
+        PS_Ty mode -> Right mode
+        PS_Ix _ -> Left "poly pushout: renaming templates over index parameters are not supported"
 
 buildGenMap
   :: Doctrine
@@ -803,7 +843,7 @@ buildGenMap src tgt attrRen tyRen permRen genRen =
     build (mode, gen) = do
       let genName = gdName gen
       let genName' = M.findWithDefault genName (mode, genName) genRen
-      dom <- mapM (renameTypeExpr tyRen permRen) (gdDom gen)
+      dom <- mapM (renameTypeExpr tyRen permRen) (gdPlainDom gen)
       cod <- mapM (renameTypeExpr tyRen permRen) (gdCod gen)
       _ <- ensureGenExists tgt mode genName'
       let attrs =

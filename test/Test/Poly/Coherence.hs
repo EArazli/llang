@@ -14,7 +14,7 @@ import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD)
 import Strat.Poly.Graph (Diagram)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Coherence (checkCoherence, ObligationResult(..))
 import Strat.Poly.CriticalPairs (CPMode(..))
@@ -44,7 +44,8 @@ mkGenDecl name =
     { gdName = GenName name
     , gdMode = modeName
     , gdTyVars = []
-    , gdDom = [aTy]
+    , gdIxVars = []
+    , gdDom = map InPort [aTy]
     , gdCod = [aTy]
     , gdAttrs = []
     }
@@ -56,6 +57,7 @@ mkCell name lhs rhs =
     , c2Class = Computational
     , c2Orient = LR
     , c2TyVars = []
+    , c2IxVars = []
     , c2LHS = lhs
     , c2RHS = rhs
     }
@@ -71,6 +73,8 @@ mkDoctrine cells =
   in Doctrine
       { dName = "D"
       , dModes = mkModes (S.singleton modeName)
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
       , dTypes = M.fromList [(modeName, M.fromList [(TypeName "A", TypeSig [])])]
       , dGens = M.fromList [(modeName, M.fromList [(gdName g, g) | g <- gens])]
       , dCells2 = cells

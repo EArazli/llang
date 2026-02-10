@@ -1,22 +1,29 @@
 module Strat.Poly.DSL.AST
   ( RawPolyDoctrine(..)
   , RawPolyItem(..)
+  , RawIndexFunDecl(..)
+  , RawIndexRuleDecl(..)
   , RawModExpr(..)
   , RawModalityDecl(..)
   , RawStructureDecl(..)
   , RawModEqDecl(..)
   , RawAdjDecl(..)
   , RawAttrSortDecl(..)
+  , RawParamDecl(..)
+  , RawIxVarDecl(..)
   , RawPolyTypeDecl(..)
   , RawPolyCtorDecl(..)
   , RawPolyDataDecl(..)
   , RawPolyGenDecl(..)
   , RawPolyRuleDecl(..)
+  , RawInputShape(..)
+  , RawBinderVarDecl(..)
   , RawTypeRef(..)
   , RawTyVarDecl(..)
   , RawPolyTypeExpr(..)
   , RawPolyContext
   , RawDiagExpr(..)
+  , RawBinderArg(..)
   , RawAttrArg(..)
   , RawAttrTerm(..)
   ) where
@@ -34,6 +41,9 @@ data RawPolyDoctrine = RawPolyDoctrine
 
 data RawPolyItem
   = RPMode Text
+  | RPIndexMode Text
+  | RPIndexFun RawIndexFunDecl
+  | RPIndexRule RawIndexRuleDecl
   | RPStructure RawStructureDecl
   | RPModality RawModalityDecl
   | RPModEq RawModEqDecl
@@ -76,9 +86,34 @@ data RawAttrSortDecl = RawAttrSortDecl
   , rasKind :: Maybe Text
   } deriving (Eq, Show)
 
+data RawParamDecl
+  = RPDType RawTyVarDecl
+  | RPDIndex RawIxVarDecl
+  deriving (Eq, Show)
+
+data RawIxVarDecl = RawIxVarDecl
+  { rivName :: Text
+  , rivSort :: RawPolyTypeExpr
+  } deriving (Eq, Show)
+
+data RawIndexFunDecl = RawIndexFunDecl
+  { rifName :: Text
+  , rifArgs :: [RawIxVarDecl]
+  , rifRes :: RawPolyTypeExpr
+  , rifMode :: Text
+  } deriving (Eq, Show)
+
+data RawIndexRuleDecl = RawIndexRuleDecl
+  { rirName :: Text
+  , rirVars :: [RawIxVarDecl]
+  , rirLHS :: RawPolyTypeExpr
+  , rirRHS :: RawPolyTypeExpr
+  , rirMode :: Text
+  } deriving (Eq, Show)
+
 data RawPolyTypeDecl = RawPolyTypeDecl
   { rptName :: Text
-  , rptVars :: [RawTyVarDecl]
+  , rptVars :: [RawParamDecl]
   , rptMode :: Text
   } deriving (Eq, Show)
 
@@ -96,9 +131,9 @@ data RawPolyDataDecl = RawPolyDataDecl
 
 data RawPolyGenDecl = RawPolyGenDecl
   { rpgName :: Text
-  , rpgVars :: [RawTyVarDecl]
+  , rpgVars :: [RawParamDecl]
   , rpgAttrs :: [(Text, Text)]
-  , rpgDom :: RawPolyContext
+  , rpgDom :: [RawInputShape]
   , rpgCod :: RawPolyContext
   , rpgMode :: Text
   } deriving (Eq, Show)
@@ -107,12 +142,22 @@ data RawPolyRuleDecl = RawPolyRuleDecl
   { rprClass :: RuleClass
   , rprName :: Text
   , rprOrient :: Orientation
-  , rprVars :: [RawTyVarDecl]
+  , rprVars :: [RawParamDecl]
   , rprDom :: RawPolyContext
   , rprCod :: RawPolyContext
   , rprMode :: Text
   , rprLHS :: RawDiagExpr
   , rprRHS :: RawDiagExpr
+  } deriving (Eq, Show)
+
+data RawInputShape
+  = RIPort RawPolyTypeExpr
+  | RIBinder [RawBinderVarDecl] RawPolyContext
+  deriving (Eq, Show)
+
+data RawBinderVarDecl = RawBinderVarDecl
+  { rbvName :: Text
+  , rbvType :: RawPolyTypeExpr
   } deriving (Eq, Show)
 
 data RawTypeRef = RawTypeRef
@@ -127,6 +172,7 @@ data RawTyVarDecl = RawTyVarDecl
 
 data RawPolyTypeExpr
   = RPTVar Text
+  | RPTBound Int
   | RPTCon RawTypeRef [RawPolyTypeExpr]
   | RPTMod RawModExpr RawPolyTypeExpr
   deriving (Eq, Show)
@@ -135,12 +181,18 @@ type RawPolyContext = [RawPolyTypeExpr]
 
 data RawDiagExpr
   = RDId RawPolyContext
-  | RDGen Text (Maybe [RawPolyTypeExpr]) (Maybe [RawAttrArg])
+  | RDGen Text (Maybe [RawPolyTypeExpr]) (Maybe [RawAttrArg]) (Maybe [RawBinderArg])
   | RDTermRef Text
+  | RDSplice Text
   | RDBox Text RawDiagExpr
   | RDLoop RawDiagExpr
   | RDComp RawDiagExpr RawDiagExpr
   | RDTensor RawDiagExpr RawDiagExpr
+  deriving (Eq, Show)
+
+data RawBinderArg
+  = RBAExpr RawDiagExpr
+  | RBAMeta Text
   deriving (Eq, Show)
 
 data RawAttrArg
