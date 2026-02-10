@@ -1,0 +1,22 @@
+doctrine ImplicitBinderIndex where {
+  mode M;
+  mode I;
+  index_mode I;
+
+  type Nat @I;
+  index_fun Z : Nat @I;
+
+  type Vec(n : Nat) @M;
+  type Out @M;
+
+  gen use(n : Nat) : [] -> [Vec(n)] @M;
+  gen wrap : [binder { n : Nat } : [Vec(n)]] -> [Out] @M;
+}
+
+run main where {
+  doctrine ImplicitBinderIndex;
+  mode M;
+  show normalized;
+}
+---
+wrap[use]
