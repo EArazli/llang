@@ -152,8 +152,8 @@ checkIxTheoryTable doc (mode, ixTheory) = do
 
     checkIxRule expectedMode theory rule = do
       mapM_ (ensureIndexSort . ixvSort) (irVars rule)
-      lhsSort <- inferIxSortRule tt theory (M.fromList [(ixvName v, ixvSort v) | v <- irVars rule]) [] (irLHS rule)
-      rhsSort <- inferIxSortRule tt theory (M.fromList [(ixvName v, ixvSort v) | v <- irVars rule]) [] (irRHS rule)
+      lhsSort <- inferIxSortRule tt theory (M.fromList [(ixvName v, ixvSort v) | v <- irVars rule]) (irLHS rule)
+      rhsSort <- inferIxSortRule tt theory (M.fromList [(ixvName v, ixvSort v) | v <- irVars rule]) (irRHS rule)
       lhsSort' <- normalizeTypeDeep tt lhsSort
       rhsSort' <- normalizeTypeDeep tt rhsSort
       if lhsSort' /= rhsSort'
@@ -213,12 +213,15 @@ checkInputShape doc expectedMode tyvars ixvars shape =
 
 checkBinderSig :: Doctrine -> ModeName -> [TyVar] -> [IxVar] -> BinderSig -> Either Text ()
 checkBinderSig doc expectedMode tyvars ixvars bs = do
-  mapM_ checkIxSort (bsIxCtx bs)
+  checkIxCtxTele (bsIxCtx bs)
   checkContext doc expectedMode tyvars ixvars (bsIxCtx bs) (bsDom bs)
   checkContext doc expectedMode tyvars ixvars (bsIxCtx bs) (bsCod bs)
   where
-    checkIxSort ty = do
-      checkType doc tyvars ixvars [] ty
+    checkIxCtxTele ctx =
+      mapM_ checkAt (zip [0 :: Int ..] ctx)
+
+    checkAt (i, ty) = do
+      checkType doc tyvars ixvars (take i (bsIxCtx bs)) ty
       if typeMode ty `S.member` dIndexModes doc
         then Right ()
         else Left "validateDoctrine: binder index context sort must be in an index mode"
@@ -552,8 +555,8 @@ checkStructuralByDiscipline doc =
     lawTyVar mode =
       Right TyVar { tvName = "a", tvMode = mode }
 
-inferIxSortRule :: TypeTheory -> IxTheory -> M.Map Text TypeExpr -> [TypeExpr] -> IxTerm -> Either Text TypeExpr
-inferIxSortRule tt theory varSorts ixCtx tm =
+inferIxSortRule :: TypeTheory -> IxTheory -> M.Map Text TypeExpr -> IxTerm -> Either Text TypeExpr
+inferIxSortRule tt theory varSorts tm =
   case tm of
     IXVar v -> do
       ty <-
@@ -565,27 +568,15 @@ inferIxSortRule tt theory varSorts ixCtx tm =
       if varSort' == ty'
         then Right ty
         else Left "validateDoctrine: index_rule variable sort mismatch"
-    IXBound i ->
-      if i < length ixCtx
-        then Right (ixCtx !! i)
-        else Left "validateDoctrine: index_rule bound index out of scope"
+    IXBound _ ->
+      Left "validateDoctrine: index_rule cannot use bound indices"
     IXFun fname args ->
       case M.lookup fname (itFuns theory) of
         Nothing -> Left "validateDoctrine: index_rule references unknown index_fun"
         Just sig -> do
           if length (ifArgs sig) /= length args
             then Left "validateDoctrine: index_rule function arity mismatch"
-            else do
-              argSorts <- mapM (inferIxSortRule tt theory varSorts ixCtx) args
-              mapM_ (uncurry ensureSortEq) (zip (ifArgs sig) argSorts)
-              Right (ifRes sig)
-  where
-    ensureSortEq expected actual = do
-      expected' <- normalizeTypeDeep tt expected
-      actual' <- normalizeTypeDeep tt actual
-      if expected' == actual'
-        then Right ()
-        else Left "validateDoctrine: index_rule argument sort mismatch"
+            else Right (ifRes sig)
 
 freeTyVarsTypeLocal :: TypeExpr -> S.Set TyVar
 freeTyVarsTypeLocal ty =

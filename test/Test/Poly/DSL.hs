@@ -37,6 +37,8 @@ tests =
     [ testCase "parse/elab monoid doctrine and normalize" testPolyDSLNormalize
     , testCase "implicit index arg infers bound binder index" testImplicitBinderIndexInference
     , testCase "index_mode without explicit theory entries elaborates" testIndexModeWithoutTheoryEntry
+    , testCase "index_rule in one mode can use argument terms from another index mode" testCrossModeIndexRuleValidation
+    , testCase "binder index context supports telescope dependencies" testBinderIxCtxTelescope
     , testCase "nested binder elaboration keeps fresh index vars distinct" testNestedBinderFreshSupply
     , testCase "morphism declared in example file" testPolyMorphismDSL
     , testCase "doctrine extends produces fromBase morphism" testPolyFromBaseMorphism
@@ -170,6 +172,50 @@ testIndexModeWithoutTheoryEntry = do
   case elabDiagExpr emptyEnv doc (ModeName "M") [] expr of
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()
+
+testCrossModeIndexRuleValidation :: Assertion
+testCrossModeIndexRuleValidation = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  mode I;"
+        , "  mode J;"
+        , "  index_mode I;"
+        , "  index_mode J;"
+        , "  type Nat @I;"
+        , "  type Sym @J;"
+        , "  index_fun Z : Nat @I;"
+        , "  index_fun add(m : Nat, n : Nat) : Nat @I;"
+        , "  index_rule addZL(n : Nat) : add(Z, n) -> n @I;"
+        , "  index_fun f(n : Nat) : Sym @J;"
+        , "  index_rule fAdd : f(add(Z, Z)) -> f(Z) @J;"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right _ -> pure ()
+
+testBinderIxCtxTelescope :: Assertion
+testBinderIxCtxTelescope = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  mode I;"
+        , "  index_mode I;"
+        , "  type Nat @I;"
+        , "  type Fin(n : Nat) @I;"
+        , "  gen b : [binder { n : Nat, m : Fin(^0) } : []] -> [] @M;"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right _ -> pure ()
 
 testNestedBinderFreshSupply :: Assertion
 testNestedBinderFreshSupply = do

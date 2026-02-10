@@ -20,28 +20,12 @@ import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
 import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.IndexTheory (IxTheory(..))
+import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..), normalizeTypeDeep)
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), composeMod, normalizeModExpr)
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
-
-
-applySubstTyCompat :: TypeTheory -> Subst -> TypeExpr -> TypeExpr
-applySubstTyCompat tt subst ty =
-  case applySubstTy tt subst ty of
-    Right ty' -> ty'
-    Left _ -> ty
-
-applySubstCtxCompat :: TypeTheory -> Subst -> Context -> Context
-applySubstCtxCompat tt subst = map (applySubstTyCompat tt subst)
-
-composeSubstCompat :: TypeTheory -> Subst -> Subst -> Subst
-composeSubstCompat tt s2 s1 =
-  case composeSubst tt s2 s1 of
-    Right s -> s
-    Left _ -> s1
 
 unifyCtxCompat :: TypeTheory -> [TypeExpr] -> Context -> Context -> Either Text Subst
 unifyCtxCompat tt ixCtx ctxA ctxB =
@@ -548,15 +532,45 @@ renamingFastPath mor srcCells = do
 
 validateIxFunMap :: Morphism -> Either Text ()
 validateIxFunMap mor = do
-  let srcFuns = S.fromList (allIxFunNames (morSrc mor))
-  let tgtFuns = S.fromList (allIxFunNames (morTgt mor))
-  case [ f | (f, _) <- M.toList (morIxFunMap mor), f `S.notMember` srcFuns ] of
-    (f:_) -> Left ("checkMorphism: unknown source index function " <> renderIxFunName f)
-    [] -> Right ()
-  case [ f | (_, f) <- M.toList (morIxFunMap mor), f `S.notMember` tgtFuns ] of
-    (f:_) -> Left ("checkMorphism: unknown target index function " <> renderIxFunName f)
-    [] -> Right ()
+  mapM_ checkOne (M.toList (morIxFunMap mor))
   where
+    ttTgt = doctrineTypeTheory (morTgt mor)
+
+    checkOne (srcName, tgtName) = do
+      (srcMode, srcSig) <- resolveUniqueIxFun "source" (morSrc mor) srcName
+      (tgtMode, tgtSig) <- resolveUniqueIxFun "target" (morTgt mor) tgtName
+      srcMode' <- mapMode mor srcMode
+      if srcMode' == tgtMode
+        then Right ()
+        else Left ("checkMorphism: index function mode mismatch for " <> renderIxFunName srcName)
+      let srcArgs = ifArgs srcSig
+      let tgtArgs = ifArgs tgtSig
+      if length srcArgs == length tgtArgs
+        then Right ()
+        else Left ("checkMorphism: index function arity mismatch for " <> renderIxFunName srcName)
+      mapM_ (uncurry checkSortPreserved) (zip srcArgs tgtArgs)
+      checkSortPreserved (ifRes srcSig) (ifRes tgtSig)
+
+    checkSortPreserved srcSort tgtSort = do
+      srcMapped <- applyMorphismTy mor srcSort
+      srcNorm <- normalizeTypeDeep ttTgt srcMapped
+      tgtNorm <- normalizeTypeDeep ttTgt tgtSort
+      if srcNorm == tgtNorm
+        then Right ()
+        else Left "checkMorphism: index function sort mapping mismatch"
+
+    resolveUniqueIxFun side doc funName =
+      case
+        [ (mode, sig)
+        | (mode, ixTheory) <- M.toList (dIxTheory doc)
+        , (name, sig) <- M.toList (itFuns ixTheory)
+        , name == funName
+        ]
+      of
+        [] -> Left ("checkMorphism: unknown " <> side <> " index function " <> renderIxFunName funName)
+        [entry] -> Right entry
+        _ -> Left ("checkMorphism: ambiguous " <> side <> " index function " <> renderIxFunName funName)
+
     renderIxFunName (IxFunName name) = name
 
 isoOrFalse :: Diagram -> Diagram -> Either Text Bool
@@ -749,8 +763,9 @@ instantiateGen tt gen diag edge = do
   dom <- mapM (requirePortType diag) (eIns edge)
   cod <- mapM (requirePortType diag) (eOuts edge)
   s1 <- unifyCtxCompat tt (dIxCtx diag) (gdPlainDom gen) dom
-  s2 <- unifyCtxCompat tt (dIxCtx diag) (applySubstCtxCompat tt s1 (gdCod gen)) cod
-  pure (composeSubstCompat tt s2 s1)
+  codExpected <- applySubstCtx tt s1 (gdCod gen)
+  s2 <- unifyCtxCompat tt (dIxCtx diag) codExpected cod
+  composeSubst tt s2 s1
 
 instantiateAttrSubst :: Morphism -> GenDecl -> AttrMap -> Either Text AttrSubst
 instantiateAttrSubst mor gen attrsSrc = do

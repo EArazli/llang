@@ -35,17 +35,14 @@ type Subst = U.Subst
 mkLegacyTypeTheory :: ModeTheory -> TypeTheory
 mkLegacyTypeTheory mt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
 
-applySubstTyCompat :: TypeTheory -> Subst -> TypeExpr -> TypeExpr
-applySubstTyCompat tt subst ty =
-  case U.applySubstTy tt subst ty of
-    Right ty' -> ty'
-    Left _ -> ty
+fatalSubstPrefix :: Text
+fatalSubstPrefix = "criticalPairs: substitution failure: "
 
-composeSubstCompat :: TypeTheory -> Subst -> Subst -> Subst
-composeSubstCompat tt s2 s1 =
-  case U.composeSubst tt s2 s1 of
-    Right s -> s
-    Left _ -> s1
+fatalSubstError :: Text -> Text
+fatalSubstError err = fatalSubstPrefix <> err
+
+isFatalSubstError :: Text -> Bool
+isFatalSubstError = T.isPrefixOf fatalSubstPrefix
 
 
 data CPMode = CP_All | CP_OnlyStructural | CP_StructuralVsComputational
@@ -114,8 +111,8 @@ allowedPair mode r1 r2 =
 
 criticalPairsForPair :: TypeTheory -> RuleInfo -> RuleInfo -> Either Text [CriticalPairInfo]
 criticalPairsForPair tt r1 r2 = do
-  let r1' = renameRule tt 0 (riRule r1)
-  let r2' = renameRule tt 1 (riRule r2)
+  let r1' = renameRule 0 (riRule r1)
+  let r2' = renameRule 1 (riRule r2)
   let tyFlex = S.fromList (rrTyVars r1' <> rrTyVars r2')
   let ixFlex =
         S.union
@@ -188,17 +185,23 @@ rulesForCellWithClass policy cell =
       , mk "rl" (c2RHS cell) (c2LHS cell)
       ]
 
-renameRule :: TypeTheory -> Int -> RewriteRule -> RewriteRule
-renameRule tt idx rule =
+renameRule :: Int -> RewriteRule -> RewriteRule
+renameRule idx rule =
   let idxText = T.pack (show idx)
       tySuffix = ":" <> idxText
       ixSuffix = "$" <> idxText
       attrSuffix = "#" <> idxText
       binderSuffix = "%" <> idxText
-      ren = M.fromList [ (v, TVar (renameTyVar v)) | v <- rrTyVars rule ]
-      renSub = U.Subst ren M.empty
+      renamedTyVars = M.fromList [ (v, renameTyVar v) | v <- rrTyVars rule ]
       renameTyVar v = v { tvName = tvName v <> tySuffix }
       renameBinderMeta (BinderMetaVar name) = BinderMetaVar (name <> binderSuffix)
+      renameTyNode ty =
+        case ty of
+          TVar v ->
+            case M.lookup v renamedTyVars of
+              Just v' -> TVar v'
+              Nothing -> TVar v
+          _ -> ty
       renameIxVar v =
         v
           { ixvName = ixvName v <> ixSuffix
@@ -208,17 +211,9 @@ renameRule tt idx rule =
         case tm of
           IXVar v -> IXVar (renameIxVar v)
           _ -> tm
-      renameIxType ty = mapTypeExpr id renameIxTerm ty
-      lhsTy' =
-        case Diag.applySubstDiagramTT tt renSub (rrLHS rule) of
-          Right d -> d
-          Left _ -> rrLHS rule
-      rhsTy' =
-        case Diag.applySubstDiagramTT tt renSub (rrRHS rule) of
-          Right d -> d
-          Left _ -> rrRHS rule
-      lhsIx' = renameIxVarsDiagram renameIxType lhsTy'
-      rhsIx' = renameIxVarsDiagram renameIxType rhsTy'
+      renameIxType ty = mapTypeExpr renameTyNode renameIxTerm ty
+      lhsIx' = renameIxVarsDiagram renameIxType (rrLHS rule)
+      rhsIx' = renameIxVarsDiagram renameIxType (rrRHS rule)
       lhsB' = renameBinderMetasDiagram renameBinderMeta lhsIx'
       rhsB' = renameBinderMetasDiagram renameBinderMeta rhsIx'
       lhs' = renameAttrVarsDiagram (<> attrSuffix) lhsB'
@@ -281,7 +276,10 @@ mapEdge tt tyFlex ixFlex attrFlex l1 l2 st e1 e2 =
     extendPorts (tySubst0, attrSubst0) = do
       let pairs = zip (eIns e1) (eIns e2) <> zip (eOuts e1) (eOuts e2)
       case foldl (extendPort tt l1 l2 tyFlex ixFlex) (Right (piPortMap st, piUsedPorts st, tySubst0, attrSubst0)) pairs of
-        Left _ -> Right []
+        Left err ->
+          if isFatalSubstError err
+            then Left err
+            else Right []
         Right (portMap', usedPorts', tySubst', attrSubst') -> do
           let edgeMap' = M.insert (eId e1) (eId e2) (piEdgeMap st)
           let usedEdges' = S.insert (eId e2) (piUsedEdges st)
@@ -307,21 +305,23 @@ extendPort tt l1 l2 flex ixFlex acc (p1, p2) = do
         then Left "criticalPairs: target port already used"
         else do
           s1 <- unifyPorts tt l1 l2 flex ixFlex tySubst p1 p2
-          let tySubst' = composeSubstCompat tt s1 tySubst
+          tySubst' <- mapLeft fatalSubstError (U.composeSubst tt s1 tySubst)
           Right (M.insert p1 p2 portMap, S.insert p2 usedPorts, tySubst', attrSubst)
 
 unifyPorts :: TypeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set IxVar -> Subst -> PortId -> PortId -> Either Text Subst
 unifyPorts tt l1 l2 flex ixFlex subst p1 p2 = do
   pTy <- requirePortType l1 p1
   hTy <- requirePortType l2 p2
+  pTy' <- mapLeft fatalSubstError (U.applySubstTy tt subst pTy)
+  hTy' <- mapLeft fatalSubstError (U.applySubstTy tt subst hTy)
   U.unifyTyFlex
     tt
     (dIxCtx l1)
     flex
     ixFlex
     U.emptySubst
-    (applySubstTyCompat tt subst pTy)
-    (applySubstTyCompat tt subst hTy)
+    pTy'
+    hTy'
 
 payloadSubsts :: TypeTheory -> S.Set TyVar -> S.Set IxVar -> S.Set AttrVar -> Subst -> AttrSubst -> EdgePayload -> EdgePayload -> Either Text [(Subst, AttrSubst)]
 payloadSubsts tt tyFlex ixFlex attrFlex tySubst attrSubst p1 p2 =
@@ -347,28 +347,38 @@ payloadSubsts tt tyFlex ixFlex attrFlex tySubst attrSubst p1 p2 =
         binderArgSubsts tySubst0 attrSubst0 (lhsArg, rhsArg) =
           case (lhsArg, rhsArg) of
             (BAConcrete d1, BAConcrete d2) ->
-              let d1' = applySubstsDiagramLocal tt tySubst0 attrSubst0 d1
-                  d2' = applySubstsDiagramLocal tt tySubst0 attrSubst0 d2
-               in case Strat.Poly.Graph.diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2' of
+              case (applySubstsDiagramLocal tt tySubst0 attrSubst0 d1, applySubstsDiagramLocal tt tySubst0 attrSubst0 d2) of
+                (Right d1', Right d2') ->
+                  case Strat.Poly.Graph.diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2' of
                     Left _ -> Right []
                     Right subs ->
-                      Right
-                        [ (composeSubstCompat tt tySub tySubst0, composeAttrSubst attrSub attrSubst0)
-                        | (tySub, attrSub) <- subs
-                        ]
+                      fmap concat
+                        ( mapM
+                            (\(tySub, attrSub) -> do
+                              tySub' <- mapLeft fatalSubstError (U.composeSubst tt tySub tySubst0)
+                              pure [(tySub', composeAttrSubst attrSub attrSubst0)]
+                            )
+                            subs
+                        )
+                (Left err, _) -> Left (fatalSubstError err)
+                (_, Left err) -> Left (fatalSubstError err)
             (BAMeta x, BAMeta y) ->
               if x == y then Right [(tySubst0, attrSubst0)] else Right []
             _ -> Right []
     (PBox _ d1, PBox _ d2) -> do
-      let d1' = applySubstsDiagramLocal tt tySubst attrSubst d1
-      let d2' = applySubstsDiagramLocal tt tySubst attrSubst d2
+      d1' <- mapLeft fatalSubstError (applySubstsDiagramLocal tt tySubst attrSubst d1)
+      d2' <- mapLeft fatalSubstError (applySubstsDiagramLocal tt tySubst attrSubst d2)
       case Strat.Poly.Graph.diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2' of
         Left _ -> Right []
         Right subs ->
-          Right
-            [ (composeSubstCompat tt tySub tySubst, composeAttrSubst attrSub attrSubst)
-            | (tySub, attrSub) <- subs
-            ]
+          fmap concat
+            ( mapM
+                (\(tySub, attrSub) -> do
+                  tySub' <- mapLeft fatalSubstError (U.composeSubst tt tySub tySubst)
+                  pure [(tySub', composeAttrSubst attrSub attrSubst)]
+                )
+                subs
+            )
     (PSplice x, PSplice y) | x == y -> Right [(tySubst, attrSubst)]
     _ -> Right []
 
@@ -402,8 +412,8 @@ buildOverlapHost :: TypeTheory -> Diagram -> Diagram -> PartialIso -> Either Tex
 buildOverlapHost tt l1 l2 ov = do
   let tySubst = piTySubst ov
   let attrSubst = piAttrSubst ov
-  let l1' = applySubstsDiagramLocal tt tySubst attrSubst l1
-  let l2' = applySubstsDiagramLocal tt tySubst attrSubst l2
+  l1' <- applySubstsDiagramLocal tt tySubst attrSubst l1
+  l2' <- applySubstsDiagramLocal tt tySubst attrSubst l2
   let portMapL2 = M.fromList [ (p2, p1) | (p1, p2) <- M.toList (piPortMap ov) ]
   let edgeMapL2 = M.fromList [ (e2, e1) | (e1, e2) <- M.toList (piEdgeMap ov) ]
   (host1, portMap1, edgeMap1) <- insertEdgesFromL2 l1' l2' portMapL2 edgeMapL2
@@ -544,7 +554,7 @@ danglingOk lhs host match =
 applyRuleAtMatch :: TypeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyRuleAtMatch tt rule match host = do
   let lhs = rrLHS rule
-  let rhs = applySubstsDiagramLocal tt (mTySubst match) (mAttrSubst match) (rrRHS rule)
+  rhs <- applySubstsDiagramLocal tt (mTySubst match) (mAttrSubst match) (rrRHS rule)
   host1 <- deleteMatchedEdges host (M.elems (mEdgeMap match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPortMap match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs
@@ -644,26 +654,10 @@ insertDiagram base extra = do
     , dNextEdge = dNextEdge extra
     }
 
-applySubstsDiagramLocal :: TypeTheory -> Subst -> AttrSubst -> Diagram -> Diagram
-applySubstsDiagramLocal tt tySubst attrSubst diag =
-  let dPortTy' = IM.map (applySubstTyCompat tt tySubst) (dPortTy diag)
-      dIxCtx' = map (applySubstTyCompat tt tySubst) (dIxCtx diag)
-      dEdges' = IM.map (mapEdgePayloadLocal tySubst attrSubst) (dEdges diag)
-  in diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
-  where
-    mapEdgePayloadLocal tyS attrS edge =
-      case ePayload edge of
-        PGen g attrs bargs ->
-          edge { ePayload = PGen g (applyAttrSubstMap attrS attrs) (map (mapBinderArg tyS attrS) bargs) }
-        PBox name inner ->
-          edge { ePayload = PBox name (applySubstsDiagramLocal tt tyS attrS inner) }
-        PSplice x ->
-          edge { ePayload = PSplice x }
-
-    mapBinderArg tyS attrS barg =
-      case barg of
-        BAConcrete inner -> BAConcrete (applySubstsDiagramLocal tt tyS attrS inner)
-        BAMeta x -> BAMeta x
+applySubstsDiagramLocal :: TypeTheory -> Subst -> AttrSubst -> Diagram -> Either Text Diagram
+applySubstsDiagramLocal tt tySubst attrSubst diag = do
+  dTy <- mapLeft fatalSubstError (Diag.applySubstDiagramTT tt tySubst diag)
+  pure (applyAttrSubstDiagram attrSubst dTy)
 
 renameIxVarsDiagram :: (TypeExpr -> TypeExpr) -> Diagram -> Diagram
 renameIxVarsDiagram renameTy diag =
@@ -738,3 +732,9 @@ dedupCriticalPairs pairs = go [] pairs
       case diagramIsoEq x y of
         Left _ -> Right False
         Right ok -> Right ok
+
+mapLeft :: (e -> e') -> Either e a -> Either e' a
+mapLeft f res =
+  case res of
+    Left err -> Left (f err)
+    Right x -> Right x

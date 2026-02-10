@@ -27,6 +27,7 @@ import Strat.Poly.Graph
   ( BinderMetaVar(..)
   , BinderArg(..)
   , EdgePayload(..)
+  , diagramIsoMatchWithVars
   , dIn
   , dOut
   , emptyDiagram
@@ -49,6 +50,7 @@ tests =
     , testCase "scoped index unification rejects escapes" testScopedIxUnify
     , testCase "dependent unification normalizes index arguments" testDependentUnify
     , testCase "dependent composition respects definitional index equality" testDependentCompDefEq
+    , testCase "iso matching drops candidates when dependent substitution fails" testIsoMatchDropsSubstFailure
     , testCase "binder metas + splice rewrite" testBinderMetaSplice
     ]
 
@@ -116,6 +118,19 @@ testDependentCompDefEq = do
   _ <- require (compDTT tt g f)
   pure ()
 
+testIsoMatchDropsSubstFailure :: Assertion
+testIsoMatchDropsSubstFailure = do
+  let mode = ModeName "M"
+  let goodTy = TCon (TypeRef mode (TypeName "A")) []
+  let badSort = TCon (TypeRef mode (TypeName "BadSort")) [TAType goodTy]
+  let tt = TypeTheory { ttModes = mkModes [mode], ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+  let inner = emptyDiagram mode [badSort]
+  _ <- require (validateDiagram inner)
+  lhs <- require (mkWrapWithBinder mode goodTy inner)
+  rhs <- require (mkWrapWithBinder mode goodTy inner)
+  matches <- require (diagramIsoMatchWithVars tt S.empty S.empty S.empty lhs rhs)
+  assertBool "expected no matches when binder substitution normalization fails" (null matches)
+
 testBinderMetaSplice :: Assertion
 testBinderMetaSplice = do
   let mode = ModeName "M"
@@ -154,6 +169,14 @@ mkSpliceRHS mode aTy meta = do
   let (y, d1) = freshPort aTy d0
   d2 <- addEdgePayload (PSplice meta) [x] [y] d1
   let diag = d2 { dIn = [x], dOut = [y] }
+  validateDiagram diag
+  pure diag
+
+mkWrapWithBinder :: ModeName -> TypeExpr -> Diagram -> Either Text Diagram
+mkWrapWithBinder mode outTy inner = do
+  let (outPort, d0) = freshPort outTy (emptyDiagram mode [])
+  d1 <- addEdgePayload (PGen (GenName "wrap") M.empty [BAConcrete inner]) [] [outPort] d0
+  let diag = d1 { dOut = [outPort] }
   validateDiagram diag
   pure diag
 

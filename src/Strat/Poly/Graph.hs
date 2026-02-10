@@ -93,18 +93,6 @@ data IsoMatchState = IsoMatchState
   , imsAttrSubst :: AttrSubst
   } deriving (Eq, Show)
 
-applySubstTyCompat :: TypeTheory -> Subst -> TypeExpr -> TypeExpr
-applySubstTyCompat tt subst ty =
-  case applySubstTy tt subst ty of
-    Right ty' -> ty'
-    Left _ -> ty
-
-composeSubstCompat :: TypeTheory -> Subst -> Subst -> Subst
-composeSubstCompat tt s2 s1 =
-  case composeSubst tt s2 s1 of
-    Right s -> s
-    Left _ -> s1
-
 
 emptyDiagram :: ModeName -> [TypeExpr] -> Diagram
 emptyDiagram mode ixCtx = Diagram
@@ -756,20 +744,16 @@ diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex left right
       ty1 <- requirePortType left p1
       ty2 <- requirePortType right p2
       let subst = imsTySubst st
-      case
-        unifyTyFlex
-          tt
-          (dIxCtx left)
-          tyFlex
-          ixFlex
-          emptySubst
-          (applySubstTyCompat tt subst ty1)
-          (applySubstTyCompat tt subst ty2)
-        of
-        Left _ -> Right []
-        Right s1 ->
-          let subst' = composeSubstCompat tt s1 subst
-          in Right [st { imsTySubst = subst' }]
+      case (applySubstTy tt subst ty1, applySubstTy tt subst ty2) of
+        (Right ty1', Right ty2') ->
+          case unifyTyFlex tt (dIxCtx left) tyFlex ixFlex emptySubst ty1' ty2' of
+            Left _ -> Right []
+            Right s1 ->
+              case composeSubst tt s1 subst of
+                Left _ -> Right []
+                Right subst' ->
+                  Right [st { imsTySubst = subst' }]
+        _ -> Right []
 
     mapIncidentEdges p1 p2 st = do
       st1s <- mapEndpoint "producer" (lookupEdge left (dProd left) p1) (lookupEdge right (dProd right) p2) st
@@ -849,30 +833,42 @@ diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex left right
             binderArgSubsts tySubst0 attrSubst0 (lhsArg, rhsArg) =
               case (lhsArg, rhsArg) of
                 (BAConcrete d1, BAConcrete d2) ->
-                  let d1' = applySubstsDiagramLocal tt tySubst0 attrSubst0 d1
-                      d2' = applySubstsDiagramLocal tt tySubst0 attrSubst0 d2
-                   in case diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2' of
+                  case (applySubstsDiagramLocal tt tySubst0 attrSubst0 d1, applySubstsDiagramLocal tt tySubst0 attrSubst0 d2) of
+                    (Right d1', Right d2') ->
+                      case diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2' of
                         Left _ -> Right []
                         Right subs ->
-                          Right
-                            [ (composeSubstCompat tt tySub tySubst0, composeAttrSubst attrSub attrSubst0)
-                            | (tySub, attrSub) <- subs
-                            ]
+                          fmap concat
+                            ( mapM
+                                (\(tySub, attrSub) ->
+                                  case composeSubst tt tySub tySubst0 of
+                                    Left _ -> Right []
+                                    Right tySub' -> Right [(tySub', composeAttrSubst attrSub attrSubst0)]
+                                )
+                                subs
+                            )
+                    _ -> Right []
                 (BAMeta x, BAMeta y) ->
                   if x == y then Right [(tySubst0, attrSubst0)] else Right []
                 _ -> Right []
         (PBox _ d1, PBox _ d2) -> do
           let tySubst = imsTySubst st
           let attrSubst = imsAttrSubst st
-          let d1' = applySubstsDiagramLocal tt tySubst attrSubst d1
-          let d2' = applySubstsDiagramLocal tt tySubst attrSubst d2
-          case diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2' of
-            Left _ -> Right []
-            Right subs ->
-              Right
-                [ (composeSubstCompat tt tySub tySubst, composeAttrSubst attrSub attrSubst)
-                | (tySub, attrSub) <- subs
-                ]
+          case (applySubstsDiagramLocal tt tySubst attrSubst d1, applySubstsDiagramLocal tt tySubst attrSubst d2) of
+            (Right d1', Right d2') ->
+              case diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2' of
+                Left _ -> Right []
+                Right subs ->
+                  fmap concat
+                    ( mapM
+                        (\(tySub, attrSub) ->
+                          case composeSubst tt tySub tySubst of
+                            Left _ -> Right []
+                            Right tySub' -> Right [(tySub', composeAttrSubst attrSub attrSubst)]
+                        )
+                        subs
+                    )
+            _ -> Right []
         (PSplice x, PSplice y) ->
           if x == y then Right [(imsTySubst st, imsAttrSubst st)] else Right []
         _ -> Right []
@@ -909,23 +905,24 @@ diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex left right
 
     tryMapEdge st e1 e2 = addEdgePair st e1 e2
 
-applySubstsDiagramLocal :: TypeTheory -> Subst -> AttrSubst -> Diagram -> Diagram
-applySubstsDiagramLocal tt tySubst attrSubst diag =
-  let dPortTy' = IM.map (applySubstTyCompat tt tySubst) (dPortTy diag)
-      dIxCtx' = map (applySubstTyCompat tt tySubst) (dIxCtx diag)
-      dEdges' = IM.map (mapEdgePayloadLocal tySubst attrSubst) (dEdges diag)
-  in diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
+applySubstsDiagramLocal :: TypeTheory -> Subst -> AttrSubst -> Diagram -> Either Text Diagram
+applySubstsDiagramLocal tt tySubst attrSubst diag = do
+  dPortTy' <- traverse (applySubstTy tt tySubst) (dPortTy diag)
+  dIxCtx' <- mapM (applySubstTy tt tySubst) (dIxCtx diag)
+  dEdges' <- traverse (mapEdgePayloadLocal tySubst attrSubst) (dEdges diag)
+  pure diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
   where
     mapEdgePayloadLocal tyS attrS edge =
       case ePayload edge of
-        PGen g attrs bargs ->
-          edge { ePayload = PGen g (applyAttrSubstMap attrS attrs) (map (mapBinderArg tyS attrS) bargs) }
-        PBox name inner ->
-          edge { ePayload = PBox name (applySubstsDiagramLocal tt tyS attrS inner) }
-        PSplice x ->
-          edge { ePayload = PSplice x }
+        PGen g attrs bargs -> do
+          bargs' <- mapM (mapBinderArg tyS attrS) bargs
+          Right (edge { ePayload = PGen g (applyAttrSubstMap attrS attrs) bargs' })
+        PBox name inner -> do
+          inner' <- applySubstsDiagramLocal tt tyS attrS inner
+          Right (edge { ePayload = PBox name inner' })
+        PSplice x -> Right (edge { ePayload = PSplice x })
 
     mapBinderArg tyS attrS barg =
       case barg of
-        BAConcrete inner -> BAConcrete (applySubstsDiagramLocal tt tyS attrS inner)
-        BAMeta x -> BAMeta x
+        BAConcrete inner -> BAConcrete <$> applySubstsDiagramLocal tt tyS attrS inner
+        BAMeta x -> Right (BAMeta x)
