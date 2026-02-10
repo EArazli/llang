@@ -14,13 +14,13 @@ import qualified Data.Set as S
 import Strat.Poly.Graph
 import Strat.Poly.Diagram
 import Strat.Poly.Match
-import Strat.Poly.TypeExpr (TyVar, TypeExpr)
+import Strat.Poly.TypeExpr (TyVar, IxVar, TypeExpr)
 import Strat.Poly.Cell2
 import Strat.Poly.UnifyTy (emptySubst)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
-import Strat.Poly.Doctrine (Doctrine(..))
-import Strat.Poly.ModeTheory (ModeTheory)
+import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory)
 
 
 data RewriteRule = RewriteRule
@@ -28,18 +28,19 @@ data RewriteRule = RewriteRule
   , rrLHS    :: Diagram
   , rrRHS    :: Diagram
   , rrTyVars :: [TyVar]
+  , rrIxVars :: [IxVar]
   } deriving (Eq, Show)
 
-rewriteOnce :: ModeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnce mt rules diag = do
+rewriteOnce :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnce tt rules diag = do
   rejectSplice "rewriteOnce" diag
-  top <- rewriteOnceTop mt UseAllOriented rules diag
+  top <- rewriteOnceTop tt rules diag
   case top of
     Just _ -> pure top
-    Nothing -> rewriteOnceNested mt rules diag
+    Nothing -> rewriteOnceNested tt rules diag
 
-rewriteOnceTop :: ModeTheory -> RewritePolicy -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceTop mt _policy rules diag = go rules
+rewriteOnceTop :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceTop tt rules diag = go rules
   where
     go [] = Right Nothing
     go (r:rs) = do
@@ -47,19 +48,25 @@ rewriteOnceTop mt _policy rules diag = go rules
         then go rs
         else do
           rejectSplice "rewrite rule lhs" (rrLHS r)
-          matches <- findAllMatchesWithTyVars mt (S.fromList (rrTyVars r)) (rrLHS r) diag
+          matches <-
+            findAllMatchesWithVars
+              tt
+              (S.fromList (rrTyVars r))
+              (S.fromList (rrIxVars r))
+              (rrLHS r)
+              diag
           tryMatches matches
       where
         tryMatches [] = go rs
         tryMatches (m:ms) =
-          case applyMatch mt r m diag of
+          case applyMatch tt r m diag of
             Left _ -> tryMatches ms
             Right d -> do
               canon <- renumberDiagram d
               pure (Just canon)
 
-rewriteOnceNested :: ModeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceNested mt rules diag =
+rewriteOnceNested :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceNested tt rules diag =
   go (IM.toAscList (dEdges diag))
   where
     go [] = Right Nothing
@@ -67,7 +74,7 @@ rewriteOnceNested mt rules diag =
       case ePayload edge of
         PSplice _ -> Left "rewriteOnce: splice nodes are not allowed in evaluation terms"
         PBox name inner -> do
-          innerRes <- rewriteOnce mt rules inner
+          innerRes <- rewriteOnce tt rules inner
           case innerRes of
             Nothing -> go rest
             Just inner' -> do
@@ -90,28 +97,34 @@ rewriteOnceNested mt rules diag =
       case b of
         BAMeta _ -> rewriteOnceBinderArgs bs
         BAConcrete inner -> do
-          res <- rewriteOnce mt rules inner
+          res <- rewriteOnce tt rules inner
           case res of
             Just inner' -> Right (Just (BAConcrete inner' : bs))
             Nothing -> do
               rest <- rewriteOnceBinderArgs bs
               pure (fmap (b :) rest)
 
-rewriteAll :: ModeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
-rewriteAll mt cap rules diag = do
+rewriteAll :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
+rewriteAll tt cap rules diag = do
   rejectSplice "rewriteAll" diag
-  top <- rewriteAllTop mt rules diag
-  inner <- rewriteAllNested mt cap rules diag
+  top <- rewriteAllTop tt rules diag
+  inner <- rewriteAllNested tt cap rules diag
   pure (take cap (top <> inner))
   where
-    rewriteAllTop mt' rules' diag' = go [] rules'
+    rewriteAllTop tt' rules' diag' = go [] rules'
       where
         go acc [] = Right acc
         go acc (r:rs) = do
           if dMode (rrLHS r) /= dMode diag'
             then go acc rs
             else do
-              matches <- findAllMatchesWithTyVars mt' (S.fromList (rrTyVars r)) (rrLHS r) diag'
+              matches <-
+                findAllMatchesWithVars
+                  tt'
+                  (S.fromList (rrTyVars r))
+                  (S.fromList (rrIxVars r))
+                  (rrLHS r)
+                  diag'
               applied <- foldl collect (Right []) matches
               canon <- mapM renumberDiagram applied
               go (acc <> canon) rs
@@ -120,21 +133,21 @@ rewriteAll mt cap rules diag = do
               case acc of
                 Left err -> Left err
                 Right ds ->
-                  case applyMatch mt' r m diag' of
+                  case applyMatch tt' r m diag' of
                     Left _ -> Right ds
                     Right d -> Right (ds <> [d])
 
-rewriteAllNested :: ModeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
-rewriteAllNested mt cap rules diag = do
+rewriteAllNested :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
+rewriteAllNested tt cap rules diag = do
   let edges = IM.toAscList (dEdges diag)
-  fmap concat (mapM (rewriteInEdge mt cap rules diag) edges)
+  fmap concat (mapM (rewriteInEdge tt cap rules diag) edges)
 
-rewriteInEdge :: ModeTheory -> Int -> [RewriteRule] -> Diagram -> (Int, Edge) -> Either Text [Diagram]
-rewriteInEdge mt cap rules diag (edgeKey, edge) =
+rewriteInEdge :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> (Int, Edge) -> Either Text [Diagram]
+rewriteInEdge tt cap rules diag (edgeKey, edge) =
   case ePayload edge of
     PSplice _ -> Left "rewriteAll: splice nodes are not allowed in evaluation terms"
     PBox name inner -> do
-      innerRes <- rewriteAll mt cap rules inner
+      innerRes <- rewriteAll tt cap rules inner
       mapM
         (\d -> do
           let edge' = edge { ePayload = PBox name d }
@@ -142,7 +155,7 @@ rewriteInEdge mt cap rules diag (edgeKey, edge) =
           renumberDiagram diag')
         innerRes
     PGen gen attrs bargs -> do
-      bargsRes <- rewriteAllBinderArgs mt cap rules bargs
+      bargsRes <- rewriteAllBinderArgs tt cap rules bargs
       mapM
         (\bargs' -> do
           let edge' = edge { ePayload = PGen gen attrs bargs' }
@@ -150,26 +163,27 @@ rewriteInEdge mt cap rules diag (edgeKey, edge) =
           renumberDiagram diag')
         bargsRes
 
-rewriteAllBinderArgs :: ModeTheory -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [[BinderArg]]
+rewriteAllBinderArgs :: TypeTheory -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [[BinderArg]]
 rewriteAllBinderArgs _ _ _ [] = Right []
-rewriteAllBinderArgs mt cap rules args =
+rewriteAllBinderArgs tt cap rules args =
   fmap concat (mapM rewriteAt [0 .. length args - 1])
   where
     rewriteAt i =
       case splitAt i args of
         (pre, BAConcrete inner : post) -> do
-          res <- rewriteAll mt cap rules inner
+          res <- rewriteAll tt cap rules inner
           pure [pre <> [BAConcrete inner'] <> post | inner' <- res]
         _ -> Right []
 
-applyMatch :: ModeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
-applyMatch mt rule match host = do
+applyMatch :: TypeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
+applyMatch tt rule match host = do
   rejectSplice "rewrite host" host
   -- Normalize host boundary types before gluing so mergePorts compares
-  -- canonicalized types (e.g. after modality equations).
-  let hostNorm = applySubstDiagram mt emptySubst host
+  -- canonicalized types (e.g. after modality/index equations).
+  hostNorm <- applySubstDiagramTT tt emptySubst host
   let lhs = rrLHS rule
-  let rhs0 = applyAttrSubstDiagram (mAttrSubst match) (applySubstDiagram mt (mTySubst match) (rrRHS rule))
+  rhsSub <- applySubstDiagramTT tt (mTySubst match) (rrRHS rule)
+  let rhs0 = applyAttrSubstDiagram (mAttrSubst match) rhsSub
   rhs1 <- instantiateBinderMetas (mBinderSub match) rhs0
   rhs <- expandSplices (mBinderSub match) rhs1
   host1 <- deleteMatchedEdges hostNorm (M.elems (mEdgeMap match))
@@ -430,6 +444,7 @@ rulesForCell policy cell =
         , rrLHS = lhs
         , rrRHS = rhs
         , rrTyVars = c2TyVars cell
+        , rrIxVars = c2IxVars cell
         }
 
     oriented =

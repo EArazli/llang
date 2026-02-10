@@ -9,6 +9,8 @@ module Strat.Poly.Match
   , findAllMatchesWithTyVars
   , findFirstMatchWithTyVarsNoDoc
   , findAllMatchesWithTyVarsNoDoc
+  , findFirstMatchWithVars
+  , findAllMatchesWithVars
   ) where
 
 import Data.Text (Text)
@@ -18,7 +20,7 @@ import qualified Data.Set as S
 import Data.List (sortOn)
 import Strat.Poly.Graph
 import Strat.Poly.Diagram
-  ( applySubstDiagram
+  ( applySubstDiagramTT
   , applyAttrSubstDiagram
   , freeTyVarsDiagram
   , freeIxVarsDiagram
@@ -124,6 +126,26 @@ findFirstMatchWithTyVarsNoDoc = findFirstMatchWithTyVars emptyModeTheory
 
 findAllMatchesWithTyVarsNoDoc :: S.Set TyVar -> Diagram -> Diagram -> Either Text [Match]
 findAllMatchesWithTyVarsNoDoc = findAllMatchesWithTyVars emptyModeTheory
+
+findFirstMatchWithVars
+  :: TypeTheory
+  -> S.Set TyVar
+  -> S.Set IxVar
+  -> Diagram
+  -> Diagram
+  -> Either Text (Maybe Match)
+findFirstMatchWithVars tt tyFlex ixFlex lhs host =
+  findFirstMatchInternal tt tyFlex ixFlex (freeAttrVarsDiagram lhs) lhs host
+
+findAllMatchesWithVars
+  :: TypeTheory
+  -> S.Set TyVar
+  -> S.Set IxVar
+  -> Diagram
+  -> Diagram
+  -> Either Text [Match]
+findAllMatchesWithVars tt tyFlex ixFlex lhs host =
+  findAllMatchesInternal tt tyFlex ixFlex (freeAttrVarsDiagram lhs) lhs host
 
 findFirstMatchInternal
   :: TypeTheory
@@ -312,14 +334,17 @@ payloadSubsts tt tyFlex ixFlex attrFlex _ _ match patEdge hostEdge =
 
         expandOne (patArg, hostArg) (tySubst0, attrSubst0, binderSub0) =
           case (patArg, hostArg) of
-            (BAConcrete dPat, BAConcrete dHost) -> do
-              let dPat' = applyAttrSubstDiagram attrSubst0 (applySubstDiagram (ttModes tt) tySubst0 dPat)
-              let dHost' = applyAttrSubstDiagram attrSubst0 (applySubstDiagram (ttModes tt) tySubst0 dHost)
-              subs <- diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex dPat' dHost'
-              pure
-                [ (composeSubstCompat tt tySub tySubst0, composeAttrSubst attrSub attrSubst0, binderSub0)
-                | (tySub, attrSub) <- subs
-                ]
+            (BAConcrete dPat, BAConcrete dHost) ->
+              case (applySubstDiagramTT tt tySubst0 dPat, applySubstDiagramTT tt tySubst0 dHost) of
+                (Right dPatSub, Right dHostSub) -> do
+                  let dPat' = applyAttrSubstDiagram attrSubst0 dPatSub
+                  let dHost' = applyAttrSubstDiagram attrSubst0 dHostSub
+                  subs <- diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex dPat' dHost'
+                  pure
+                    [ (composeSubstCompat tt tySub tySubst0, composeAttrSubst attrSub attrSubst0, binderSub0)
+                    | (tySub, attrSub) <- subs
+                    ]
+                _ -> Right []
             (BAMeta x, BAConcrete dHost) ->
               case M.lookup x binderSub0 of
                 Nothing -> Right [(tySubst0, attrSubst0, M.insert x dHost binderSub0)]
@@ -337,13 +362,16 @@ payloadSubsts tt tyFlex ixFlex attrFlex _ _ match patEdge hostEdge =
     (PBox _ d1, PBox _ d2) -> do
       let tySubst = mTySubst match
       let attrSubst = mAttrSubst match
-      let d1' = applyAttrSubstDiagram attrSubst (applySubstDiagram (ttModes tt) tySubst d1)
-      let d2' = applyAttrSubstDiagram attrSubst (applySubstDiagram (ttModes tt) tySubst d2)
-      subs <- diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2'
-      Right
-        [ (composeSubstCompat tt tySub tySubst, composeAttrSubst attrSub attrSubst, mBinderSub match)
-        | (tySub, attrSub) <- subs
-        ]
+      case (applySubstDiagramTT tt tySubst d1, applySubstDiagramTT tt tySubst d2) of
+        (Right d1Sub, Right d2Sub) -> do
+          let d1' = applyAttrSubstDiagram attrSubst d1Sub
+          let d2' = applyAttrSubstDiagram attrSubst d2Sub
+          subs <- diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2'
+          Right
+            [ (composeSubstCompat tt tySub tySubst, composeAttrSubst attrSub attrSubst, mBinderSub match)
+            | (tySub, attrSub) <- subs
+            ]
+        _ -> Right []
 
     (PSplice x, PSplice y)
       | x == y -> Right [(mTySubst match, mAttrSubst match, mBinderSub match)]

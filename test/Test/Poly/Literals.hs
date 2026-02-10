@@ -15,7 +15,7 @@ import Strat.Frontend.Env (ModuleEnv(..), emptyEnv)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
-import Strat.Poly.Doctrine (Doctrine(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), validateDoctrine, doctrineTypeTheory)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..))
 import Strat.Poly.Diagram (renameAttrVarsDiagram)
@@ -139,7 +139,7 @@ testRewriteAttrSubstitution = do
   env <- require (elabSource src)
   doc <- lookupDoctrine "D" env
   diag <- require (elabDiag doc "IdLit(7)")
-  norm <- require (normalize (dModes doc) 10 (rulesFromDoctrine doc) diag)
+  norm <- require (normalize (doctrineTypeTheory doc) 10 (rulesFromDoctrine doc) diag)
   out <- case norm of
     Finished d -> pure d
     OutOfFuel _ -> assertFailure "expected rewrite to normalize within fuel" >> pure diag

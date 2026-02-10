@@ -19,7 +19,8 @@ import Strat.Poly.Diagram
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
-import Strat.Poly.TypeTheory (TypeTheory(..))
+import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.IndexTheory (IxTheory(..))
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
@@ -27,30 +28,26 @@ import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 
 
-mkLegacyTypeTheory :: ModeTheory -> TypeTheory
-mkLegacyTypeTheory mt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
-
-applySubstTyCompat :: ModeTheory -> Subst -> TypeExpr -> TypeExpr
-applySubstTyCompat mt subst ty =
-  case applySubstTy (mkLegacyTypeTheory mt) subst ty of
+applySubstTyCompat :: TypeTheory -> Subst -> TypeExpr -> TypeExpr
+applySubstTyCompat tt subst ty =
+  case applySubstTy tt subst ty of
     Right ty' -> ty'
     Left _ -> ty
 
-applySubstCtxCompat :: ModeTheory -> Subst -> Context -> Context
-applySubstCtxCompat mt subst = map (applySubstTyCompat mt subst)
+applySubstCtxCompat :: TypeTheory -> Subst -> Context -> Context
+applySubstCtxCompat tt subst = map (applySubstTyCompat tt subst)
 
-composeSubstCompat :: ModeTheory -> Subst -> Subst -> Subst
-composeSubstCompat mt s2 s1 =
-  case composeSubst (mkLegacyTypeTheory mt) s2 s1 of
+composeSubstCompat :: TypeTheory -> Subst -> Subst -> Subst
+composeSubstCompat tt s2 s1 =
+  case composeSubst tt s2 s1 of
     Right s -> s
     Left _ -> s1
 
-unifyCtxCompat :: ModeTheory -> Context -> Context -> Either Text Subst
-unifyCtxCompat mt ctxA ctxB =
-  let tt = mkLegacyTypeTheory mt
-      tyFlex = S.unions (map freeTyVarsTypeLocal (ctxA <> ctxB))
+unifyCtxCompat :: TypeTheory -> [TypeExpr] -> Context -> Context -> Either Text Subst
+unifyCtxCompat tt ixCtx ctxA ctxB =
+  let tyFlex = S.unions (map freeTyVarsTypeLocal (ctxA <> ctxB))
       ixFlex = S.unions (map freeIxVarsType (ctxA <> ctxB))
-   in unifyCtx tt [] tyFlex ixFlex ctxA ctxB
+   in unifyCtx tt ixCtx tyFlex ixFlex ctxA ctxB
 
 freeTyVarsTypeLocal :: TypeExpr -> S.Set TyVar
 freeTyVarsTypeLocal ty =
@@ -75,6 +72,7 @@ data Morphism = Morphism
   , morAttrSortMap :: M.Map AttrSort AttrSort
   , morTypeMap :: M.Map TypeRef TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) Diagram
+  , morIxFunMap :: M.Map IxFunName IxFunName
   , morPolicy  :: RewritePolicy
   , morFuel    :: Int
   } deriving (Eq, Show)
@@ -131,7 +129,7 @@ applyMorphismTy mor ty =
         Just tmpl -> do
           tyArgs <- mapM requireTyArg args'
           let subst = Subst (M.fromList (zip (ttParams tmpl) tyArgs)) M.empty
-          case applySubstTy (mkLegacyTypeTheory (dModes (morTgt mor))) subst (ttBody tmpl) of
+          case applySubstTy (doctrineTypeTheory (morTgt mor)) subst (ttBody tmpl) of
             Left err -> Left err
             Right out -> Right out
   where
@@ -152,7 +150,10 @@ applyMorphismIxTerm mor tm =
       sort' <- applyMorphismTy mor (ixvSort v)
       Right (IXVar v { ixvSort = sort' })
     IXBound i -> Right (IXBound i)
-    IXFun f args -> IXFun f <$> mapM (applyMorphismIxTerm mor) args
+    IXFun f args -> do
+      args' <- mapM (applyMorphismIxTerm mor) args
+      let f' = M.findWithDefault f f (morIxFunMap mor)
+      Right (IXFun f' args')
 
 mapModExpr :: Morphism -> ModExpr -> Either Text ModExpr
 mapModExpr mor me = do
@@ -174,6 +175,8 @@ mapModExpr mor me = do
 
 applyMorphismDiagram :: Morphism -> Diagram -> Either Text Diagram
 applyMorphismDiagram mor diagSrc = do
+  let srcTheory = doctrineTypeTheory (morSrc mor)
+  let tgtTheory = doctrineTypeTheory (morTgt mor)
   modeTgt <- mapMode mor modeSrc
   ixCtx <- mapM (applyMorphismTy mor) (dIxCtx diagSrc)
   portTy <- mapM (applyMorphismTy mor) (dPortTy diagSrc)
@@ -190,7 +193,7 @@ applyMorphismDiagram mor diagSrc = do
                   then Left "applyMorphismDiagram: binder arguments not supported in morphisms"
                   else Right ()
                 genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
-                subst <- instantiateGen (dModes (morSrc mor)) genDecl diagSrc edgeSrc
+                subst <- instantiateGen srcTheory genDecl diagSrc edgeSrc
                 substTgt <- mapSubst mor subst
                 case M.lookup (modeSrc, genName) (morGenMap mor) of
                   Nothing -> Left "applyMorphismDiagram: missing generator mapping"
@@ -199,7 +202,7 @@ applyMorphismDiagram mor diagSrc = do
                       then Left "applyMorphismDiagram: generator mapping mode mismatch"
                       else Right ()
                     attrSubst <- instantiateAttrSubst mor genDecl attrsSrc
-                    let instImage0 = applySubstDiagram (dModes (morTgt mor)) substTgt image
+                    instImage0 <- applySubstDiagramTT tgtTheory substTgt image
                     let instImage = applyAttrSubstDiagram attrSubst instImage0
                     spliceEdge diagTgt edgeKey instImage
               PBox name inner -> do
@@ -233,6 +236,7 @@ checkMorphism mor = do
   validateModeMap mor
   validateModMap mor
   validateAttrSortMap mor
+  validateIxFunMap mor
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
   let cells = filter (cellEnabled (morPolicy mor)) (dCells2 (morSrc mor))
   fastOk <- inclusionFastPath mor
@@ -391,8 +395,13 @@ attrSortMapIsIdentity mor =
         , (_, sortName) <- gdAttrs gen
         ]
 
+ixFunMapIsIdentity :: Morphism -> Bool
+ixFunMapIsIdentity mor =
+  all (\f -> M.findWithDefault f f (morIxFunMap mor) == f) (allIxFunNames (morSrc mor))
+
 checkGenMapping :: Morphism -> GenDecl -> Either Text ()
 checkGenMapping mor gen = do
+  let ttTgt = doctrineTypeTheory (morTgt mor)
   let modeSrc = gdMode gen
   modeTgt <- mapMode mor modeSrc
   dom <- mapM (applyMorphismTy mor) (gdPlainDom gen)
@@ -405,19 +414,19 @@ checkGenMapping mor gen = do
     else do
       domImg <- diagramDom image
       codImg <- diagramCod image
-      _ <- unifyCtxCompat (dModes (morTgt mor)) dom domImg
-      _ <- unifyCtxCompat (dModes (morTgt mor)) cod codImg
+      _ <- unifyCtxCompat ttTgt [] dom domImg
+      _ <- unifyCtxCompat ttTgt [] cod codImg
       pure ()
 
 checkCell :: Morphism -> Cell2 -> Either Text ()
 checkCell mor cell = do
   lhs <- applyMorphismDiagram mor (c2LHS cell)
   rhs <- applyMorphismDiagram mor (c2RHS cell)
-  let mt = dModes (morTgt mor)
+  let tt = doctrineTypeTheory (morTgt mor)
   let rules = rulesFromPolicy (morPolicy mor) (dCells2 (morTgt mor))
   let fuel = morFuel mor
-  statusL <- normalize mt fuel rules lhs
-  statusR <- normalize mt fuel rules rhs
+  statusL <- normalize tt fuel rules lhs
+  statusR <- normalize tt fuel rules rhs
   case (statusL, statusR) of
     (Finished l, Finished r) ->
       do
@@ -428,7 +437,7 @@ checkCell mor cell = do
           then Right ()
           else Left "checkMorphism: equation violation (normal forms differ)"
     _ -> do
-      ok <- joinableWithin mt fuel rules lhs rhs
+      ok <- joinableWithin tt fuel rules lhs rhs
       if ok
         then Right ()
         else Left "checkMorphism: equation undecided or violated"
@@ -438,6 +447,7 @@ inclusionFastPath mor
   | not (modeMapIsIdentity mor) = Right False
   | not (modMapIsIdentity mor) = Right False
   | not (attrSortMapIsIdentity mor) = Right False
+  | not (ixFunMapIsIdentity mor) = Right False
   | not (M.null (morTypeMap mor)) = Right False
   | otherwise = do
       okGens <- allM (genIsIdentity mor) (allGens (morSrc mor))
@@ -472,7 +482,7 @@ inclusionFastPath mor
 
 renamingFastPath :: Morphism -> [Cell2] -> Either Text Bool
 renamingFastPath mor srcCells = do
-  if not (modeMapIsIdentity mor) || not (modMapIsIdentity mor) || not (attrSortMapIsIdentity mor)
+  if not (modeMapIsIdentity mor) || not (modMapIsIdentity mor) || not (attrSortMapIsIdentity mor) || not (ixFunMapIsIdentity mor)
     then Right False
     else do
       let tgt = morTgt mor
@@ -535,6 +545,19 @@ renamingFastPath mor srcCells = do
               okL <- isoOrFalse lhsRen (c2LHS tgt)
               okR <- isoOrFalse rhsRen (c2RHS tgt)
               pure (okL && okR)
+
+validateIxFunMap :: Morphism -> Either Text ()
+validateIxFunMap mor = do
+  let srcFuns = S.fromList (allIxFunNames (morSrc mor))
+  let tgtFuns = S.fromList (allIxFunNames (morTgt mor))
+  case [ f | (f, _) <- M.toList (morIxFunMap mor), f `S.notMember` srcFuns ] of
+    (f:_) -> Left ("checkMorphism: unknown source index function " <> renderIxFunName f)
+    [] -> Right ()
+  case [ f | (_, f) <- M.toList (morIxFunMap mor), f `S.notMember` tgtFuns ] of
+    (f:_) -> Left ("checkMorphism: unknown target index function " <> renderIxFunName f)
+    [] -> Right ()
+  where
+    renderIxFunName (IxFunName name) = name
 
 isoOrFalse :: Diagram -> Diagram -> Either Text Bool
 isoOrFalse d1 d2 =
@@ -708,19 +731,26 @@ allTypes doc =
   , (name, sig) <- M.toList table
   ]
 
+allIxFunNames :: Doctrine -> [IxFunName]
+allIxFunNames doc =
+  [ fname
+  | ixTheory <- M.elems (dIxTheory doc)
+  , fname <- M.keys (itFuns ixTheory)
+  ]
+
 lookupGenInMode :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGenInMode doc mode name =
   case M.lookup mode (dGens doc) >>= M.lookup name of
     Nothing -> Left "applyMorphismDiagram: unknown generator"
     Just gd -> Right gd
 
-instantiateGen :: ModeTheory -> GenDecl -> Diagram -> Edge -> Either Text Subst
-instantiateGen mt gen diag edge = do
+instantiateGen :: TypeTheory -> GenDecl -> Diagram -> Edge -> Either Text Subst
+instantiateGen tt gen diag edge = do
   dom <- mapM (requirePortType diag) (eIns edge)
   cod <- mapM (requirePortType diag) (eOuts edge)
-  s1 <- unifyCtxCompat mt (gdPlainDom gen) dom
-  s2 <- unifyCtxCompat mt (applySubstCtxCompat mt s1 (gdCod gen)) cod
-  pure (composeSubstCompat mt s2 s1)
+  s1 <- unifyCtxCompat tt (dIxCtx diag) (gdPlainDom gen) dom
+  s2 <- unifyCtxCompat tt (dIxCtx diag) (applySubstCtxCompat tt s1 (gdCod gen)) cod
+  pure (composeSubstCompat tt s2 s1)
 
 instantiateAttrSubst :: Morphism -> GenDecl -> AttrMap -> Either Text AttrSubst
 instantiateAttrSubst mor gen attrsSrc = do

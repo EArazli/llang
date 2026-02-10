@@ -59,6 +59,7 @@ testCriticalPairsRespectModeEq = do
           , rrLHS = lhsUF
           , rrRHS = lhsUF
           , rrTyVars = []
+          , rrIxVars = []
           }
   let ruleBase =
         RewriteRule
@@ -66,6 +67,7 @@ testCriticalPairsRespectModeEq = do
           , rrLHS = lhsBase
           , rrRHS = lhsBase
           , rrTyVars = []
+          , rrIxVars = []
           }
   let infoUF = RuleInfo { riLabel = "rule.uf", riRule = ruleUF, riClass = Structural }
   let infoBase = RuleInfo { riLabel = "rule.base", riRule = ruleBase, riClass = Computational }

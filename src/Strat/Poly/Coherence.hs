@@ -14,8 +14,8 @@ import qualified Data.IntMap.Strict as IM
 import Strat.Poly.CriticalPairs
 import Strat.Poly.Normalize (JoinWitness(..), joinableWithinWitness)
 import Strat.Poly.Rewrite (rulesFromPolicy, RewriteRule)
-import Strat.Poly.Doctrine (Doctrine(..))
-import Strat.Poly.ModeTheory (ModeTheory)
+import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Common.Rules (RewritePolicy)
 import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.Pretty (renderDiagram)
@@ -40,7 +40,7 @@ checkCoherence mode policy fuel doc = do
   cps <- criticalPairsForDoctrine mode policy doc
   let obligations = concatMap (obligationsFor mode) cps
   let rules = rulesFromPolicy policy (dCells2 doc)
-  mapM (checkObligation (dModes doc) fuel rules) obligations
+  mapM (checkObligation (doctrineTypeTheory doc) fuel rules) obligations
 
 obligationsFor :: CPMode -> CriticalPairInfo -> [Obligation]
 obligationsFor mode info =
@@ -51,9 +51,9 @@ obligationsFor mode info =
     (Computational, Computational) ->
       if mode == CP_All then [Obligation NeedsJoin (cpiPair info)] else []
 
-checkObligation :: ModeTheory -> Int -> [RewriteRule] -> Obligation -> Either Text ObligationResult
-checkObligation mt fuel rules ob = do
-  mW <- joinableWithinWitness mt fuel rules (cpLeft (obCP ob)) (cpRight (obCP ob))
+checkObligation :: TypeTheory -> Int -> [RewriteRule] -> Obligation -> Either Text ObligationResult
+checkObligation tt fuel rules ob = do
+  mW <- joinableWithinWitness tt fuel rules (cpLeft (obCP ob)) (cpRight (obCP ob))
   pure ObligationResult { orObligation = ob, orWitness = mW }
 
 renderCoherenceReport :: [ObligationResult] -> Either Text Text

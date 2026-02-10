@@ -103,8 +103,9 @@ testBinderMetaSplice = do
   host <- require (mkBetaInput mode aTy (BAConcrete body))
   rhs <- require (mkSpliceRHS mode aTy meta)
 
-  let rule = RewriteRule { rrName = "beta", rrLHS = lhs, rrRHS = rhs, rrTyVars = [] }
-  step <- require (rewriteOnce (mkModes [mode]) [rule] host)
+  let rule = RewriteRule { rrName = "beta", rrLHS = lhs, rrRHS = rhs, rrTyVars = [], rrIxVars = [] }
+  let tt = TypeTheory { ttModes = mkModes [mode], ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+  step <- require (rewriteOnce tt [rule] host)
   out <-
     case step of
       Nothing -> assertFailure "expected beta rewrite to fire" >> fail "unreachable"

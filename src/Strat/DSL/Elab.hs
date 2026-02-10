@@ -499,6 +499,7 @@ buildPolyFromBase baseName newName env newDoc = do
         , PolyMorph.morAttrSortMap = identityAttrSortMap baseDoc
         , PolyMorph.morTypeMap = M.empty
         , PolyMorph.morGenMap = genMap
+        , PolyMorph.morIxFunMap = M.empty
         , PolyMorph.morPolicy = UseStructuralAsBidirectional
         , PolyMorph.morFuel = 50
         }

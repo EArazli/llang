@@ -174,6 +174,7 @@ rulesForCellWithClass policy cell =
             , rrLHS = lhs
             , rrRHS = rhs
             , rrTyVars = c2TyVars cell
+            , rrIxVars = c2IxVars cell
             }
       in RuleInfo label rule (c2Class cell)
     oriented =
@@ -208,8 +209,14 @@ renameRule tt idx rule =
           IXVar v -> IXVar (renameIxVar v)
           _ -> tm
       renameIxType ty = mapTypeExpr id renameIxTerm ty
-      lhsTy' = Diag.applySubstDiagram (ttModes tt) renSub (rrLHS rule)
-      rhsTy' = Diag.applySubstDiagram (ttModes tt) renSub (rrRHS rule)
+      lhsTy' =
+        case Diag.applySubstDiagramTT tt renSub (rrLHS rule) of
+          Right d -> d
+          Left _ -> rrLHS rule
+      rhsTy' =
+        case Diag.applySubstDiagramTT tt renSub (rrRHS rule) of
+          Right d -> d
+          Left _ -> rrRHS rule
       lhsIx' = renameIxVarsDiagram renameIxType lhsTy'
       rhsIx' = renameIxVarsDiagram renameIxType rhsTy'
       lhsB' = renameBinderMetasDiagram renameBinderMeta lhsIx'
@@ -217,7 +224,8 @@ renameRule tt idx rule =
       lhs' = renameAttrVarsDiagram (<> attrSuffix) lhsB'
       rhs' = renameAttrVarsDiagram (<> attrSuffix) rhsB'
       tyvars' = map renameTyVar (rrTyVars rule)
-  in rule { rrLHS = lhs', rrRHS = rhs', rrTyVars = tyvars' }
+      ixvars' = map renameIxVar (rrIxVars rule)
+  in rule { rrLHS = lhs', rrRHS = rhs', rrTyVars = tyvars', rrIxVars = ixvars' }
 
 enumerateOverlaps :: TypeTheory -> S.Set TyVar -> S.Set IxVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text [PartialIso]
 enumerateOverlaps tt tyFlex ixFlex attrFlex l1 l2 =

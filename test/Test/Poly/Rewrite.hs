@@ -11,14 +11,14 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
-import Strat.Poly.Doctrine (dModes)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Match (Match(..), findFirstMatchNoDoc, findFirstMatchWithTyVarsNoDoc)
 import Strat.Poly.UnifyTy (Subst(..))
-import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModDecl(..), ModExpr(..), ModEqn(..), addMode, addModDecl, addModEqn)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory, ModName(..), ModDecl(..), ModExpr(..), ModEqn(..), addMode, addModDecl, addModEqn)
+import Strat.Poly.TypeTheory (TypeTheory(..))
 import Strat.Poly.Pretty (renderDiagram)
 import qualified Data.IntMap.Strict as IM
 import Test.Poly.Helpers (mkModes)
@@ -57,6 +57,15 @@ mkGen name dom cod = genD modeName dom cod (GenName name)
 require :: Either Text a -> IO a
 require = either (assertFailure . T.unpack) pure
 
+mkTypeTheory :: ModeTheory -> TypeTheory
+mkTypeTheory mt =
+  TypeTheory
+    { ttModes = mt
+    , ttIndex = M.empty
+    , ttTypeParams = M.empty
+    , ttIxFuel = 200
+    }
+
 assocRule :: Either Text RewriteRule
 assocRule = do
   mul <- mkGen "mul" [aTy, aTy] [aTy]
@@ -70,6 +79,7 @@ assocRule = do
     , rrLHS = lhs
     , rrRHS = rhs
     , rrTyVars = []
+    , rrIxVars = []
     }
 
 testSimpleRewrite :: Assertion
@@ -77,7 +87,7 @@ testSimpleRewrite = do
   rule <- either (assertFailure . T.unpack) pure assocRule
   let lhs = rrLHS rule
   let mt = mkModes [modeName]
-  res <- case rewriteOnce mt [rule] lhs of
+  res <- case rewriteOnce (mkTypeTheory mt) [rule] lhs of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -94,7 +104,7 @@ testSubdiagramRewrite = do
   extra <- require (mkGen "mul" [aTy, aTy] [aTy])
   host <- require (tensorD lhs extra)
   let mt = mkModes [modeName]
-  res <- case rewriteOnce mt [rule] host of
+  res <- case rewriteOnce (mkTypeTheory mt) [rule] host of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -112,6 +122,7 @@ testDanglingReject = do
         , rrLHS = lhs
         , rrRHS = rhs
         , rrTyVars = []
+        , rrIxVars = []
         }
   extra <- require (mkGen "h" [aTy] [aTy])
   host0 <- require (tensorD lhs extra)
@@ -119,7 +130,7 @@ testDanglingReject = do
   let internalPort = head (filter (`notElem` boundary) (diagramPortIds lhs))
   let host1 = host0 { dOut = internalPort : dOut host0 }
   let mt = mkModes [modeName]
-  res <- case rewriteOnce mt [rule] host1 of
+  res <- case rewriteOnce (mkTypeTheory mt) [rule] host1 of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -147,9 +158,10 @@ testNonInjectiveRewrite = do
         , rrLHS = lhs
         , rrRHS = lhs
         , rrTyVars = []
+        , rrIxVars = []
         }
   let mt = mkModes [modeName]
-  res <- case rewriteOnce mt [rule] g of
+  res <- case rewriteOnce (mkTypeTheory mt) [rule] g of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -165,6 +177,7 @@ testRewriteInsideBox = do
         , rrLHS = f
         , rrRHS = g
         , rrTyVars = []
+        , rrIxVars = []
         }
   let (inP, d0) = freshPort aTy (emptyDiagram modeName [])
   let (outP, d1) = freshPort aTy d0
@@ -172,7 +185,7 @@ testRewriteInsideBox = do
   d2 <- require (addEdgePayload boxEdge [inP] [outP] d1)
   let host = d2 { dIn = [inP], dOut = [outP] }
   let mt = mkModes [modeName]
-  res <- case rewriteOnce mt [rule] host of
+  res <- case rewriteOnce (mkTypeTheory mt) [rule] host of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -200,10 +213,11 @@ testBoxMismatchRejects = do
         , rrLHS = lhs
         , rrRHS = rhs
         , rrTyVars = []
+        , rrIxVars = []
         }
   host <- require (mkBoxDiagram "B" g aTy)
   let mt = mkModes [modeName]
-  res <- case rewriteOnce mt [rule] host of
+  res <- case rewriteOnce (mkTypeTheory mt) [rule] host of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -222,10 +236,11 @@ testBoxMatchAccepts = do
         , rrLHS = lhs
         , rrRHS = rhs
         , rrTyVars = []
+        , rrIxVars = []
         }
   host <- require (mkBoxDiagram "B" f2 aTy)
   let mt = mkModes [modeName]
-  res <- case rewriteOnce mt [rule] host of
+  res <- case rewriteOnce (mkTypeTheory mt) [rule] host of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -295,8 +310,8 @@ testRewriteUsesModeEq = do
   lhs <- require (genD modeA [base] [base] (GenName "foo"))
   let rhs = idD modeA [base]
   host <- require (genD modeA [ufBase] [ufBase] (GenName "foo"))
-  let rule = RewriteRule { rrName = "foo_id", rrLHS = lhs, rrRHS = rhs, rrTyVars = [] }
-  res <- require (rewriteOnce mt [rule] host)
+  let rule = RewriteRule { rrName = "foo_id", rrLHS = lhs, rrRHS = rhs, rrTyVars = [], rrIxVars = [] }
+  res <- require (rewriteOnce (mkTypeTheory mt) [rule] host)
   out <-
     case res of
       Nothing -> assertFailure "expected rewrite to fire" >> fail "unreachable"
@@ -314,8 +329,8 @@ testNormalizeDeterminism = do
   d2 <- require (compD (mkModes [modeName]) mul d1)
   let rules = [rule]
   let mt = mkModes [modeName]
-  r1 <- require (normalize mt 10 rules d2)
-  r2 <- require (normalize mt 10 rules d2)
+  r1 <- require (normalize (mkTypeTheory mt) 10 rules d2)
+  r2 <- require (normalize (mkTypeTheory mt) 10 rules d2)
   case (r1, r2) of
     (Finished a, Finished b) -> a @?= b
     (OutOfFuel a, OutOfFuel b) -> a @?= b

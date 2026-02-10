@@ -47,38 +47,63 @@ data IxRule = IxRule
 
 normalizeIx :: TypeTheory -> TypeExpr -> IxTerm -> Either Text IxTerm
 normalizeIx tt expectedSort tm = do
-  ixTheory <- requireTheoryForSort expectedSort
-  normalizeLoop (ttIxFuel tt) ixTheory tm
+  _ <- requireTheoryForSort tt expectedSort
+  normalizeLoop (ttIxFuel tt) tt expectedSort tm
   where
-    requireTheoryForSort sortTy =
+    requireTheoryForSort theory sortTy =
       let mode = typeMode sortTy
-       in case M.lookup mode (ttIndex tt) of
+       in case M.lookup mode (ttIndex theory) of
             Just ixTheory -> Right ixTheory
             Nothing -> Left "normalizeIx: expected sort is not in an index mode"
 
-normalizeLoop :: Int -> IxTheory -> IxTerm -> Either Text IxTerm
-normalizeLoop fuel ixTheory tm
+normalizeLoop :: Int -> TypeTheory -> TypeExpr -> IxTerm -> Either Text IxTerm
+normalizeLoop fuel tt expectedSort tm
   | fuel < 0 = Left "normalizeIx: negative fuel"
   | fuel == 0 = Left "normalizeIx: fuel exhausted"
-  | otherwise =
-      case rewriteOnceIx ixTheory tm of
+  | otherwise = do
+      mStep <- rewriteOnceIx tt expectedSort tm
+      case mStep of
         Nothing -> Right tm
-        Just tm' -> normalizeLoop (fuel - 1) ixTheory tm'
+        Just tm' -> normalizeLoop (fuel - 1) tt expectedSort tm'
 
-rewriteOnceIx :: IxTheory -> IxTerm -> Maybe IxTerm
-rewriteOnceIx ixTheory tm =
-  tryRules tm <|> descend tm
+rewriteOnceIx :: TypeTheory -> TypeExpr -> IxTerm -> Either Text (Maybe IxTerm)
+rewriteOnceIx tt expectedSort tm = do
+  ixTheory <- requireTheoryForSort tt expectedSort
+  case firstJust (map (`applyRuleAt` tm) (itRules ixTheory)) of
+    Just tm' -> Right (Just tm')
+    Nothing ->
+      case tm of
+        IXFun f args -> do
+          sig <- requireFunSig expectedSort ixTheory f args
+          rewritten <- rewriteArgsBySort (zip (ifArgs sig) args)
+          pure (fmap (IXFun f) rewritten)
+        _ -> Right Nothing
   where
-    tryRules t = firstJust (map (`applyRuleAt` t) (itRules ixTheory))
-    descend t =
-      case t of
-        IXFun f args -> fmap (IXFun f) (rewriteArgs args)
-        _ -> Nothing
-    rewriteArgs [] = Nothing
-    rewriteArgs (arg:rest) =
-      case rewriteOnceIx ixTheory arg of
-        Just arg' -> Just (arg' : rest)
-        Nothing -> fmap (arg :) (rewriteArgs rest)
+    requireTheoryForSort theory sortTy =
+      let mode = typeMode sortTy
+       in case M.lookup mode (ttIndex theory) of
+            Just ixTheory -> Right ixTheory
+            Nothing -> Left "normalizeIx: expected sort is not in an index mode"
+
+    requireFunSig sortTy ixTheory f args =
+      case M.lookup f (itFuns ixTheory) of
+        Nothing -> Left "normalizeIx: unknown index function"
+        Just sig ->
+          if length (ifArgs sig) /= length args
+            then Left "normalizeIx: index function arity mismatch"
+            else
+              if typeMode (ifRes sig) == typeMode sortTy
+                then Right sig
+                else Left "normalizeIx: index function result sort mode mismatch"
+
+    rewriteArgsBySort [] = Right Nothing
+    rewriteArgsBySort ((argSort, arg):rest) = do
+      mHead <- rewriteOnceIx tt argSort arg
+      case mHead of
+        Just arg' -> Right (Just (arg' : map snd rest))
+        Nothing -> do
+          mTail <- rewriteArgsBySort rest
+          pure (fmap (arg :) mTail)
 
 applyRuleAt :: IxRule -> IxTerm -> Maybe IxTerm
 applyRuleAt rule tm = do

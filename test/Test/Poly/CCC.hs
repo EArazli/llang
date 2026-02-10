@@ -11,7 +11,7 @@ import qualified Data.Text as T
 import Paths_llang (getDataFileName)
 import Strat.Frontend.Loader (loadModule)
 import Strat.Frontend.Env (meDoctrines)
-import Strat.Poly.Doctrine (Doctrine(..))
+import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Rewrite (rulesFromPolicy)
@@ -61,7 +61,7 @@ requireCell name doc =
 assertCellReduces :: Doctrine -> Cell2 -> IO ()
 assertCellReduces doc cell = do
   let rules = rulesFromPolicy UseOnlyComputationalLR (dCells2 doc)
-  status <- case normalize (dModes doc) 200 rules (c2LHS cell) of
+  status <- case normalize (doctrineTypeTheory doc) 200 rules (c2LHS cell) of
     Left err -> assertFailure (T.unpack err)
     Right st -> pure st
   rhs <- case renumberDiagram (c2RHS cell) of

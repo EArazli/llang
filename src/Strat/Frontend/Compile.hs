@@ -12,8 +12,8 @@ import Strat.Frontend.Env (ModuleEnv(..))
 import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
-import Strat.Poly.Doctrine (Doctrine(..))
-import Strat.Poly.Diagram (Diagram, freeTyVarsDiagram)
+import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
+import Strat.Poly.Diagram (Diagram, freeTyVarsDiagram, freeIxVarsDiagram)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
 import Strat.Poly.Rewrite (rulesFromPolicy)
@@ -61,8 +61,11 @@ compileDiagramArtifact env targetName mMode mSurface uses morphs policy fuel exp
   if S.null (freeTyVarsDiagram diagFinal)
     then Right ()
     else Left "unresolved type variables in diagram"
+  if S.null (freeIxVarsDiagram diagFinal)
+    then Right ()
+    else Left "unresolved index variables in diagram"
   let rules = rulesFromPolicy policy (dCells2 docFinal)
-  status <- normalize (dModes docFinal) fuel rules diagFinal
+  status <- normalize (doctrineTypeTheory docFinal) fuel rules diagFinal
   let norm =
         case status of
           Finished d -> d

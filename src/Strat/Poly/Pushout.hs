@@ -17,6 +17,7 @@ import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName, ModDecl(..), ModExpr(..))
 import Strat.Poly.TypeExpr
+import Strat.Poly.IndexTheory (IxTheory(..), IxRule(..))
 import qualified Strat.Poly.UnifyTy as U
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
@@ -128,6 +129,7 @@ computePolyCoproduct name a b = do
         , morAttrSortMap = M.empty
         , morTypeMap = M.empty
         , morGenMap = M.empty
+        , morIxFunMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 50
         }
@@ -141,6 +143,7 @@ computePolyCoproduct name a b = do
         , morAttrSortMap = M.empty
         , morTypeMap = M.empty
         , morGenMap = M.empty
+        , morIxFunMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 50
         }
@@ -591,10 +594,22 @@ mergeDoctrine mt a b = do
     then Left "poly pushout: mode mismatch"
     else do
       attrSorts <- mergeAttrSorts (dAttrSorts a) (dAttrSorts b)
+      indexModes <- pure (S.union (dIndexModes a) (dIndexModes b))
+      ixTheory <- mergeIxTheoryTables (dIxTheory a) (dIxTheory b)
       types <- mergeTypeTables (dTypes a) (dTypes b)
       gens <- mergeGenTables (dGens a) (dGens b)
       cells <- mergeCells mt (dCells2 a) (dCells2 b)
-      pure a { dAttrSorts = attrSorts, dTypes = types, dGens = gens, dCells2 = cells }
+      let merged =
+            a
+              { dIndexModes = indexModes
+              , dIxTheory = ixTheory
+              , dAttrSorts = attrSorts
+              , dTypes = types
+              , dGens = gens
+              , dCells2 = cells
+              }
+      validateDoctrine merged
+      pure merged
   where
     mergeAttrSorts left right =
       foldl add (Right left) (M.toList right)
@@ -637,6 +652,47 @@ mergeDoctrine mt a b = do
             Nothing -> Right (M.insert (gdName gen) gen mp)
             Just g | genDeclAlphaEq mt g gen -> Right mp
             _ -> Left "poly pushout: generator conflict"
+
+    mergeIxTheoryTables left right =
+      foldl mergeMode (Right left) (M.toList right)
+      where
+        mergeMode acc (mode, theory) = do
+          mp <- acc
+          let base = M.findWithDefault (IxTheory M.empty []) mode mp
+          merged <- mergeIxTheory mode base theory
+          pure (M.insert mode merged mp)
+
+    mergeIxTheory mode left right = do
+      funs <- mergeIxFuns (itFuns left) (itFuns right)
+      rules <- mergeIxRules (itRules left) (itRules right)
+      pure IxTheory { itFuns = funs, itRules = rules }
+      where
+        mergeIxFuns leftF rightF =
+          foldl addFun (Right leftF) (M.toList rightF)
+          where
+            addFun acc (fname, sig) = do
+              mp <- acc
+              case M.lookup fname mp of
+                Nothing -> Right (M.insert fname sig mp)
+                Just sig0 | sig0 == sig -> Right mp
+                _ -> Left ("poly pushout: index_fun signature conflict in mode " <> renderMode mode)
+
+        mergeIxRules leftR rightR = do
+          let combined = dedupeRules (leftR <> rightR)
+          if hasRuleConflict combined
+            then Left ("poly pushout: index_rule conflict in mode " <> renderMode mode)
+            else Right combined
+
+        dedupeRules = foldl add []
+          where
+            add acc r =
+              if any (== r) acc then acc else acc <> [r]
+
+        hasRuleConflict rules =
+          let lhsMap = M.fromListWith S.union [ (irLHS rule, S.singleton (irRHS rule)) | rule <- rules ]
+           in any (\rhsSet -> S.size rhsSet > 1) (M.elems lhsMap)
+
+        renderMode (ModeName name) = name
 
 mergeCells :: ModeTheory -> [Cell2] -> [Cell2] -> Either Text [Cell2]
 mergeCells mt left right =
@@ -762,6 +818,7 @@ buildGlue name src tgt = do
     , morAttrSortMap = identityAttrSortMap src
     , morTypeMap = M.empty
     , morGenMap = genMap
+    , morIxFunMap = M.empty
     , morPolicy = UseOnlyComputationalLR
     , morFuel = 10
     }
@@ -789,6 +846,7 @@ buildInj name src tgt attrRen tyRen permRen genRen = do
     , morAttrSortMap = attrSortMap
     , morTypeMap = typeMap
     , morGenMap = genMap
+    , morIxFunMap = M.empty
     , morPolicy = UseOnlyComputationalLR
     , morFuel = 10
     }

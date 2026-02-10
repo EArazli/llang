@@ -37,6 +37,8 @@ mkDoc name =
   Doctrine
     { dName = name
     , dModes = mkModes (S.singleton modeM)
+    , dIndexModes = S.empty
+    , dIxTheory = M.empty
     , dAttrSorts = M.empty
     , dTypes = M.fromList [(modeM, M.empty)]
     , dGens = M.empty
@@ -67,6 +69,7 @@ mkCoercion name src tgt =
     , morAttrSortMap = M.empty
     , morTypeMap = M.empty
     , morGenMap = M.empty
+    , morIxFunMap = M.empty
     , morPolicy = UseAllOriented
     , morFuel = 10
     }

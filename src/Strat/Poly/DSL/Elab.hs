@@ -123,6 +123,7 @@ elabPolyMorphism env raw = do
         , morAttrSortMap = attrSortMap
         , morTypeMap = typeMap
         , morGenMap = genMap
+        , morIxFunMap = M.empty
         , morPolicy = policy
         , morFuel = fuel
         }
@@ -968,7 +969,7 @@ elabDiagExprWith env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSpli
         RDGen name mArgs mAttrArgs mBinderArgs -> do
           gen <- liftEither (lookupGen doc mode (GenName name))
           tyRename <- freshTySubst (gdTyVars gen)
-          ixRename <- freshIxSubst (gdIxVars gen)
+          ixRename <- freshIxSubst (length curIxCtx) (gdIxVars gen)
           let renameSubst = U.Subst { U.sTy = tyRename, U.sIx = ixRename }
           let dom0 = applySubstCtxDoc renameSubst (gdPlainDom gen)
           let cod0 = applySubstCtxDoc renameSubst (gdCod gen)
@@ -1108,10 +1109,11 @@ elabDiagExprWith env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSpli
                       False
                       exprArg
                   )
-              domArg <- liftEither (diagramDom diagArg)
-              codArg <- liftEither (diagramCod diagArg)
+              diagArg' <- liftEither (unifyBoundary ttDoc rigidTy rigidIx (bsDom slot) (bsCod slot) diagArg)
+              domArg <- liftEither (diagramDom diagArg')
+              codArg <- liftEither (diagramCod diagArg')
               if domArg == bsDom slot && codArg == bsCod slot
-                then pure (acc <> [BAConcrete diagArg], bsMap)
+                then pure (acc <> [BAConcrete diagArg'], bsMap)
                 else liftEither (Left "binder argument boundary mismatch")
             RBAMeta name ->
               case metaMode of
@@ -1384,9 +1386,9 @@ freshTySubst vars = do
   pairs <- mapM freshTyVar vars
   pure (M.fromList pairs)
 
-freshIxSubst :: [IxVar] -> Fresh (M.Map IxVar IxTerm)
-freshIxSubst vars = do
-  pairs <- mapM freshIxVar vars
+freshIxSubst :: Int -> [IxVar] -> Fresh (M.Map IxVar IxTerm)
+freshIxSubst depth vars = do
+  pairs <- mapM (freshIxVar depth) vars
   pure (M.fromList pairs)
 
 extractFreshTyVars :: [TyVar] -> M.Map TyVar TypeExpr -> Either Text [TyVar]
@@ -1414,11 +1416,11 @@ freshTyVar v = do
   let fresh = TyVar { tvName = name, tvMode = tvMode v }
   pure (v, TVar fresh)
 
-freshIxVar :: IxVar -> Fresh (IxVar, IxTerm)
-freshIxVar v = do
+freshIxVar :: Int -> IxVar -> Fresh (IxVar, IxTerm)
+freshIxVar depth v = do
   n <- freshInt
   let name = ixvName v <> T.pack ("#" <> show n)
-  let fresh = IxVar { ixvName = name, ixvSort = ixvSort v, ixvScope = ixvScope v }
+  let fresh = IxVar { ixvName = name, ixvSort = ixvSort v, ixvScope = max (ixvScope v) depth }
   pure (v, IXVar fresh)
 
 freshInt :: Fresh Int

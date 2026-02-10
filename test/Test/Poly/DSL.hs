@@ -8,6 +8,7 @@ import Test.Tasty.HUnit
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, meDoctrines, meModels, meMorphisms, meRuns)
@@ -16,8 +17,10 @@ import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.ModeTheory (ModeName(..), mtModes)
 import Strat.Poly.Doctrine
+import Strat.Poly.Diagram (Diagram(..), diagramCod)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeArg(..), IxTerm(..), TypeName(..), TypeRef(..))
 import Strat.Poly.Rewrite (rulesFromDoctrine, rewriteOnce)
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Pretty (renderDiagram)
@@ -31,6 +34,7 @@ tests =
   testGroup
     "Poly.DSL"
     [ testCase "parse/elab monoid doctrine and normalize" testPolyDSLNormalize
+    , testCase "implicit index arg infers bound binder index" testImplicitBinderIndexInference
     , testCase "morphism declared in example file" testPolyMorphismDSL
     , testCase "doctrine extends produces fromBase morphism" testPolyFromBaseMorphism
     , testCase "pushout renames gen types" testPolyPushoutRenamesTypes
@@ -76,13 +80,13 @@ testPolyDSLNormalize = do
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   let rules = rulesFromDoctrine doc
-  norm <- case normalize (dModes doc) 10 rules diag of
+  norm <- case normalize (doctrineTypeTheory doc) 10 rules diag of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case norm of
     Finished d -> do
       -- normalization should agree with a single rewrite step
-      step <- case rewriteOnce (dModes doc) rules diag of
+      step <- case rewriteOnce (doctrineTypeTheory doc) rules diag of
         Left err -> assertFailure (T.unpack err)
         Right r -> pure r
       case step of
@@ -96,6 +100,45 @@ testPolyDSLNormalize = do
             Right txt -> pure txt
           got @?= want
     OutOfFuel _ -> assertFailure "expected normalization to finish"
+
+testImplicitBinderIndexInference :: Assertion
+testImplicitBinderIndexInference = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  mode I;"
+        , "  index_mode I;"
+        , "  type Nat @I;"
+        , "  index_fun Z : Nat @I;"
+        , "  type Vec(n : Nat) @M;"
+        , "  type Out @M;"
+        , "  gen use(n : Nat) : [] -> [Vec(n)] @M;"
+        , "  gen wrap : [binder { n : Nat } : [Vec(n)]] -> [Out] @M;"
+        , "}"
+        ]
+  env <- case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right e -> pure e
+  doc <- case M.lookup "D" (meDoctrines env) of
+    Nothing -> assertFailure "expected doctrine D"
+    Just d -> pure d
+  expr <- case parseDiagExpr "wrap[use]" of
+    Left err -> assertFailure (T.unpack err)
+    Right e -> pure e
+  diag <- case elabDiagExpr emptyEnv doc (ModeName "M") [] expr of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  case IM.elems (dEdges diag) of
+    [Edge _ (PGen g _ [BAConcrete inner]) _ _] -> do
+      g @?= GenName "wrap"
+      cod <- case diagramCod inner of
+        Left err -> assertFailure (T.unpack err)
+        Right c -> pure c
+      cod @?= [TCon (TypeRef (ModeName "M") (TypeName "Vec")) [TAIndex (IXBound 0)]]
+    _ -> assertFailure "expected single wrap edge with one concrete binder argument"
 
 testPolyMorphismDSL :: Assertion
 testPolyMorphismDSL = do

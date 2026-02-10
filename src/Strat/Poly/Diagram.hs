@@ -12,12 +12,15 @@ module Strat.Poly.Diagram
   , unionDiagram
   , diagramDom
   , diagramCod
+  , applySubstDiagramTT
   , applySubstDiagram
   , applyAttrSubstDiagram
   , renameAttrVarsDiagram
   , freeTyVarsDiagram
   , freeIxVarsDiagram
   , freeAttrVarsDiagram
+  , binderArgMetaVarsDiagram
+  , spliceMetaVarsDiagram
   , binderMetaVarsDiagram
   ) where
 
@@ -31,6 +34,7 @@ import Strat.Poly.TypeExpr (Context, TypeExpr(..), TyVar, TypeArg(..), IxTerm(..
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
 import Strat.Poly.UnifyTy
+import Strat.Poly.TypeTheory (TypeTheory)
 
 
 idDIx :: ModeName -> [TypeExpr] -> Context -> Diagram
@@ -141,6 +145,21 @@ applySubstDiagram mt subst diag =
       dEdges' = IM.map (mapEdgePayload mt subst) (dEdges diag)
   in diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
 
+binderArgMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
+binderArgMetaVarsDiagram diag =
+  S.unions (map binderArgMetasPayload (IM.elems (dEdges diag)))
+
+spliceMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
+spliceMetaVarsDiagram diag =
+  S.unions (map spliceMetasPayload (IM.elems (dEdges diag)))
+
+applySubstDiagramTT :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
+applySubstDiagramTT tt subst diag = do
+  dPortTy' <- traverse (applySubstTy tt subst) (dPortTy diag)
+  dIxCtx' <- mapM (applySubstTy tt subst) (dIxCtx diag)
+  dEdges' <- traverse (mapEdgePayloadTT tt subst) (dEdges diag)
+  pure diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
+
 freeTyVarsDiagram :: Diagram -> S.Set TyVar
 freeTyVarsDiagram diag =
   let portVars = S.fromList (concatMap varsInTy (IM.elems (dPortTy diag)))
@@ -162,7 +181,7 @@ freeIxVarsDiagram diag =
 
 binderMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
 binderMetaVarsDiagram diag =
-  S.unions (map binderMetasPayload (IM.elems (dEdges diag)))
+  S.union (binderArgMetaVarsDiagram diag) (spliceMetaVarsDiagram diag)
 
 varsInTy :: TypeExpr -> [TyVar]
 varsInTy ty =
@@ -227,20 +246,35 @@ freeIxVarsPayload edge =
         BAConcrete inner -> freeIxVarsDiagram inner
         BAMeta _ -> S.empty
 
-binderMetasPayload :: Edge -> S.Set BinderMetaVar
-binderMetasPayload edge =
+binderArgMetasPayload :: Edge -> S.Set BinderMetaVar
+binderArgMetasPayload edge =
   case ePayload edge of
     PGen _ _ bargs ->
       S.unions (map fromBinderArg bargs)
     PBox _ inner ->
-      binderMetaVarsDiagram inner
+      binderArgMetaVarsDiagram inner
+    PSplice _ ->
+      S.empty
+  where
+    fromBinderArg barg =
+      case barg of
+        BAConcrete inner -> binderArgMetaVarsDiagram inner
+        BAMeta x -> S.singleton x
+
+spliceMetasPayload :: Edge -> S.Set BinderMetaVar
+spliceMetasPayload edge =
+  case ePayload edge of
+    PGen _ _ bargs ->
+      S.unions (map fromBinderArg bargs)
+    PBox _ inner ->
+      spliceMetaVarsDiagram inner
     PSplice x ->
       S.singleton x
   where
     fromBinderArg barg =
       case barg of
-        BAConcrete inner -> binderMetaVarsDiagram inner
-        BAMeta x -> S.singleton x
+        BAConcrete inner -> spliceMetaVarsDiagram inner
+        BAMeta _ -> S.empty
 
 mapEdgePayload :: ModeTheory -> Subst -> Edge -> Edge
 mapEdgePayload mt subst edge =
@@ -253,6 +287,22 @@ mapEdgePayload mt subst edge =
       case barg of
         BAConcrete inner -> BAConcrete (applySubstDiagram mt subst inner)
         BAMeta x -> BAMeta x
+
+mapEdgePayloadTT :: TypeTheory -> Subst -> Edge -> Either Text Edge
+mapEdgePayloadTT tt subst edge =
+  case ePayload edge of
+    PGen g attrs bargs -> do
+      bargs' <- mapM mapBinderArgTT bargs
+      pure edge { ePayload = PGen g attrs bargs' }
+    PBox name inner -> do
+      inner' <- applySubstDiagramTT tt subst inner
+      pure edge { ePayload = PBox name inner' }
+    PSplice x -> pure edge { ePayload = PSplice x }
+  where
+    mapBinderArgTT barg =
+      case barg of
+        BAConcrete inner -> BAConcrete <$> applySubstDiagramTT tt subst inner
+        BAMeta x -> Right (BAMeta x)
 
 
 applyAttrSubstDiagram :: AttrSubst -> Diagram -> Diagram

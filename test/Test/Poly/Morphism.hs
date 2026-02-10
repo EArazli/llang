@@ -56,6 +56,7 @@ testMonoidMorphism = do
         , morAttrSortMap = M.empty
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((modeM, GenName "unit"), unitImg), ((modeM, GenName "mul"), mulImg)]
+        , morIxFunMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 20
         }
@@ -129,6 +130,7 @@ testTypeMapReorder = do
         , morAttrSortMap = M.empty
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((mode, genName), img)]
+        , morIxFunMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 20
         }
@@ -201,6 +203,7 @@ testCrossModeMorphism = do
         , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(aRef, TypeTemplate [] bTy)]
         , morGenMap = M.fromList [((modeC, GenName "f"), img)]
+        , morIxFunMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 20
         }
@@ -344,6 +347,7 @@ testModalityMapRewritesTypeModalities = do
         , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(TypeRef modeA (TypeName "Base"), TypeTemplate [] baseTgt)]
         , morGenMap = M.fromList [((modeB, GenName "g"), imgG), ((modeB, GenName "gg"), imgGG)]
+        , morIxFunMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 20
         }

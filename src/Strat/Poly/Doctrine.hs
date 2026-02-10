@@ -222,6 +222,9 @@ checkCell doc cell = do
   validateDiagram (c2RHS cell)
   ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (c2LHS cell))
   ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (c2RHS cell))
+  if S.null (spliceMetaVarsDiagram (c2LHS cell))
+    then Right ()
+    else Left "validateDoctrine: splice nodes are not allowed in rule LHS"
   if IM.size (dEdges (c2LHS cell)) <= 0
     then Left "validateDoctrine: empty LHS rules are disallowed (use an explicit marker generator if you need insertion)"
     else Right ()
@@ -270,11 +273,11 @@ checkCell doc cell = do
       if S.isSubsetOf ixVars declaredIx
         then Right ()
         else Left "validateDoctrine: cell uses undeclared index variables"
-      let lhsBinderMetas = binderMetaVarsDiagram (c2LHS cell)
-      let rhsBinderMetas = binderMetaVarsDiagram (c2RHS cell)
-      if S.isSubsetOf rhsBinderMetas lhsBinderMetas
+      let lhsCapturedMetas = binderArgMetaVarsDiagram (c2LHS cell)
+      let rhsReferencedMetas = S.union (binderArgMetaVarsDiagram (c2RHS cell)) (spliceMetaVarsDiagram (c2RHS cell))
+      if S.isSubsetOf rhsReferencedMetas lhsCapturedMetas
         then Right ()
-        else Left "validateDoctrine: RHS introduces fresh binder metas"
+        else Left "validateDoctrine: RHS references binder metas not captured by LHS binder arguments"
 
 checkContext :: Doctrine -> ModeName -> [TyVar] -> [IxVar] -> [TypeExpr] -> Context -> Either Text ()
 checkContext doc expectedMode tyvars ixvars ixCtx ctx = mapM_ (checkBoundaryType doc expectedMode tyvars ixvars ixCtx) ctx
