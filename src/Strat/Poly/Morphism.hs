@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Morphism
   ( Morphism(..)
+  , TemplateParam(..)
   , TypeTemplate(..)
   , applyMorphismDiagram
   , checkMorphism
@@ -61,8 +62,13 @@ data Morphism = Morphism
   , morFuel    :: Int
   } deriving (Eq, Show)
 
+data TemplateParam
+  = TPType TyVar
+  | TPIx IxVar
+  deriving (Eq, Ord, Show)
+
 data TypeTemplate = TypeTemplate
-  { ttParams :: [TyVar]
+  { ttParams :: [TemplateParam]
   , ttBody :: TypeExpr
   } deriving (Eq, Show)
 
@@ -110,22 +116,29 @@ applyMorphismTy mor ty =
         Nothing -> do
           ref' <- mapTypeRef mor ref
           pure (TCon ref' args')
-        Just tmpl -> do
-          tyArgs <- mapM requireTyArg args'
-          let subst = Subst (M.fromList (zip (ttParams tmpl) tyArgs)) M.empty
-          case applySubstTy (doctrineTypeTheory (morTgt mor)) subst (ttBody tmpl) of
-            Left err -> Left err
-            Right out -> Right out
+        Just tmpl ->
+          instantiateTemplate tmpl args'
   where
     mapArg arg =
       case arg of
         TAType t -> TAType <$> applyMorphismTy mor t
         TAIndex ix -> TAIndex <$> applyMorphismIxTerm mor ix
 
-    requireTyArg arg =
-      case arg of
-        TAType t -> Right t
-        TAIndex _ -> Left "morphism: type template cannot be instantiated by index arguments"
+    instantiateTemplate tmpl args
+      | length (ttParams tmpl) /= length args =
+          Left "morphism: type template arity mismatch during instantiation"
+      | otherwise = do
+          subst <- foldM addParam emptySubst (zip (ttParams tmpl) args)
+          applySubstTy (doctrineTypeTheory (morTgt mor)) subst (ttBody tmpl)
+
+    addParam s (param, arg) =
+      case (param, arg) of
+        (TPType v, TAType t) ->
+          Right s { sTy = M.insert v t (sTy s) }
+        (TPIx v, TAIndex ix) ->
+          Right s { sIx = M.insert v ix (sIx s) }
+        _ ->
+          Left "morphism: type template kind mismatch during instantiation"
 
 applyMorphismIxTerm :: Morphism -> IxTerm -> Either Text IxTerm
 applyMorphismIxTerm mor tm =
@@ -221,6 +234,7 @@ checkMorphism mor = do
   validateModMap mor
   validateAttrSortMap mor
   validateIxFunMap mor
+  validateTypeMap mor
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
   let cells = filter (cellEnabled (morPolicy mor)) (dCells2 (morSrc mor))
   fastOk <- inclusionFastPath mor
@@ -348,6 +362,57 @@ validateAttrSortMap mor = do
                     <> " admits "
                     <> renderMaybeKind tgtKind
                 )
+
+validateTypeMap :: Morphism -> Either Text ()
+validateTypeMap mor = do
+  mapM_ checkEntry (M.toList (morTypeMap mor))
+  where
+    checkEntry (srcRef, tmpl) = do
+      srcSig <-
+        case lookupTypeSig (morSrc mor) srcRef of
+          Left _ -> Left "checkMorphism: unknown source type in type map"
+          Right sig -> Right sig
+      let srcParams = tsParams srcSig
+      let tmplParams = ttParams tmpl
+      if length tmplParams /= length srcParams
+        then Left "checkMorphism: type template arity mismatch"
+        else Right ()
+      ensureDistinctTemplateParamNames tmplParams
+      mapM_ (uncurry checkParam) (zip srcParams tmplParams)
+      let tyVars = [ v | TPType v <- tmplParams ]
+      let ixVars = [ v | TPIx v <- tmplParams ]
+      checkType (morTgt mor) tyVars ixVars [] (ttBody tmpl)
+      mappedMode <- mapMode mor (trMode srcRef)
+      if typeMode (ttBody tmpl) == mappedMode
+        then Right ()
+        else Left "checkMorphism: type template body mode mismatch"
+
+    ensureDistinctTemplateParamNames params =
+      let names = [ tvName v | TPType v <- params ] <> [ ixvName v | TPIx v <- params ]
+          set = S.fromList names
+      in if S.size set == length names
+          then Right ()
+          else Left "checkMorphism: duplicate type template parameter name"
+
+    checkParam srcParam tmplParam =
+      case (srcParam, tmplParam) of
+        (PS_Ty srcMode, TPType v) -> do
+          expectedMode <- mapMode mor srcMode
+          if tvMode v == expectedMode
+            then Right ()
+            else Left "checkMorphism: type template type-parameter mode mismatch"
+        (PS_Ix srcSort, TPIx ixv) -> do
+          expectedMode <- mapMode mor (typeMode srcSort)
+          if typeMode (ixvSort ixv) == expectedMode
+            then
+              if expectedMode `S.member` dIndexModes (morTgt mor)
+                then Right ()
+                else Left "checkMorphism: type template index parameter sort is not in an index mode"
+            else Left "checkMorphism: type template index-parameter mode mismatch"
+        (PS_Ty _, _) ->
+          Left "checkMorphism: type template kind mismatch"
+        (PS_Ix _, _) ->
+          Left "checkMorphism: type template kind mismatch"
 
 modeMapIsIdentity :: Morphism -> Bool
 modeMapIsIdentity mor =
@@ -611,15 +676,31 @@ buildTypeRenaming mor = do
         TCon tgtRef params
           | length (ttParams tmpl) == arity
           , length params == arity
-          , all isVar params
-          , let vars = [ v | TAType (TVar v) <- params ]
-          , length vars == length (S.fromList vars)
-          , S.fromList vars == S.fromList (ttParams tmpl)
+          , let positions = map (argParamIndex (ttParams tmpl)) params
+          , all isJust positions
+          , let idxs = [ i | Just i <- positions ]
+          , length idxs == arity
+          , length idxs == S.size (S.fromList idxs)
           -> Just tgtRef
         _ -> Nothing
 
-    isVar (TAType (TVar _)) = True
-    isVar _ = False
+    argParamIndex params arg =
+      case arg of
+        TAType (TVar v) ->
+          findParamIndex params (\p -> case p of TPType v' -> v' == v; _ -> False)
+        TAIndex (IXVar v) ->
+          findParamIndex params (\p -> case p of TPIx v' -> v' == v; _ -> False)
+        _ -> Nothing
+
+    findParamIndex params p =
+      case [ i | (i, param) <- zip [0 :: Int ..] params, p param ] of
+        [i] -> Just i
+        _ -> Nothing
+
+    isJust mv =
+      case mv of
+        Just _ -> True
+        Nothing -> False
 
 buildGenRenaming :: Morphism -> Maybe (M.Map (ModeName, GenName) GenName)
 buildGenRenaming mor = do

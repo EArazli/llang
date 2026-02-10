@@ -10,12 +10,13 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModEqn(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), mtModes, mtDecls)
-import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), TypeArg(..))
+import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), TypeArg(..), IxVar(..), IxTerm(..))
+import Strat.Poly.IndexTheory (IxTheory(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD, idD)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), gdPlainDom, validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Poly.Morphism (Morphism(..), TypeTemplate(..), applyMorphismDiagram)
+import Strat.Poly.Morphism (Morphism(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram)
 import Strat.Poly.Pushout (computePolyPushout, PolyPushoutResult(..))
 import Strat.Poly.Graph (diagramIsoEq)
 import Strat.Common.Rules (RuleClass(..), Orientation(..), RewritePolicy(..))
@@ -32,6 +33,8 @@ tests =
     , testCase "pushout rejects name conflict with different bodies" testPushoutNameConflict
     , testCase "pushout rejects non-identity mode maps" testPushoutRejectsModeMap
     , testCase "pushout handles alpha-renaming with mode equations" testPushoutAlphaRenameWithModeEq
+    , testCase "pushout supports indexed type maps" testPushoutIndexedTypeMaps
+    , testCase "pushout merges cells alpha-equivalent over index vars" testPushoutCellIxAlphaEq
     ]
 
 require :: Either Text a -> IO a
@@ -316,7 +319,7 @@ testPushoutTypePermutationCommutes = do
   right <- case mkTypeDoctrine mode "C" [(prod, 2)] of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
-  let tmplF = TypeTemplate [aVar, bVar] (TCon (TypeRef mode pair) [TAType (TVar bVar), TAType (TVar aVar)])
+  let tmplF = TypeTemplate [TPType aVar, TPType bVar] (TCon (TypeRef mode pair) [TAType (TVar bVar), TAType (TVar aVar)])
   let morF = Morphism
         { morName = "f"
         , morSrc = base
@@ -439,6 +442,224 @@ testPushoutAlphaRenameWithModeEq = do
       case gdPlainDom modalGen of
         [TMod me (TVar _)] -> mePath me @?= [modF]
         _ -> assertFailure "expected modal generator domain to retain non-canceling modality"
+
+testPushoutIndexedTypeMaps :: Assertion
+testPushoutIndexedTypeMaps = do
+  let modeM = ModeName "M"
+  let modeI = ModeName "I"
+  let natRef = TypeRef modeI (TypeName "Nat")
+  let vecRef = TypeRef modeM (TypeName "Vec")
+  let vec2Ref = TypeRef modeM (TypeName "Vec2")
+  let natTy = TCon natRef []
+  let src =
+        Doctrine
+          { dName = "SrcIdx"
+          , dModes = mkModes (S.fromList [modeM, modeI])
+          , dIndexModes = S.singleton modeI
+          , dIxTheory = M.empty
+          , dTypes =
+              M.fromList
+                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
+                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Ix natTy, PS_Ty modeM])])
+                ]
+          , dGens = M.empty
+          , dCells2 = []
+          , dAttrSorts = M.empty
+          }
+  let left =
+        Doctrine
+          { dName = "LeftIdx"
+          , dModes = mkModes (S.fromList [modeM, modeI])
+          , dIndexModes = S.singleton modeI
+          , dIxTheory = M.empty
+          , dTypes =
+              M.fromList
+                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
+                , (modeM, M.fromList [(TypeName "Vec2", TypeSig [PS_Ix natTy, PS_Ty modeM])])
+                ]
+          , dGens = M.empty
+          , dCells2 = []
+          , dAttrSorts = M.empty
+          }
+  let right = src { dName = "RightIdx" }
+  case validateDoctrine src of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine left of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine right of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  let nVar = IxVar { ixvName = "n", ixvSort = natTy, ixvScope = 0 }
+  let aVar = TyVar { tvName = "a", tvMode = modeM }
+  let morF =
+        Morphism
+          { morName = "fIdx"
+          , morSrc = src
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap =
+              M.fromList
+                [ ( vecRef
+                  , TypeTemplate
+                      [TPIx nVar, TPType aVar]
+                      (TCon vec2Ref [TAIndex (IXVar nVar), TAType (TVar aVar)])
+                  )
+                ]
+          , morGenMap = M.empty
+          , morIxFunMap = M.empty
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 10
+          }
+  let morG =
+        Morphism
+          { morName = "gIdx"
+          , morSrc = src
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morIxFunMap = M.empty
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 10
+          }
+  case computePolyPushout "PIdx" morF morG of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()
+
+testPushoutCellIxAlphaEq :: Assertion
+testPushoutCellIxAlphaEq = do
+  let modeM = ModeName "M"
+  let modeI = ModeName "I"
+  let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
+  let vecRef = TypeRef modeM (TypeName "Vec")
+  let genName = GenName "f"
+  let mkIx name = IxVar { ixvName = name, ixvSort = natTy, ixvScope = 0 }
+  let vecTy ixv = TCon vecRef [TAIndex (IXVar ixv)]
+  let srcIx = mkIx "n"
+  let leftIx = mkIx "i"
+  let rightIx = mkIx "j"
+  let srcGen =
+        GenDecl
+          { gdName = genName
+          , gdMode = modeM
+          , gdTyVars = []
+          , gdIxVars = [srcIx]
+          , gdDom = [InPort (vecTy srcIx)]
+          , gdCod = [vecTy srcIx]
+          , gdAttrs = []
+          }
+  let leftGen =
+        GenDecl
+          { gdName = genName
+          , gdMode = modeM
+          , gdTyVars = []
+          , gdIxVars = [leftIx]
+          , gdDom = [InPort (vecTy leftIx)]
+          , gdCod = [vecTy leftIx]
+          , gdAttrs = []
+          }
+  let rightGen =
+        GenDecl
+          { gdName = genName
+          , gdMode = modeM
+          , gdTyVars = []
+          , gdIxVars = [rightIx]
+          , gdDom = [InPort (vecTy rightIx)]
+          , gdCod = [vecTy rightIx]
+          , gdAttrs = []
+          }
+  leftLHS <- require (genD modeM [vecTy leftIx] [vecTy leftIx] genName)
+  rightLHS <- require (genD modeM [vecTy rightIx] [vecTy rightIx] genName)
+  let leftCell =
+        Cell2
+          { c2Name = "eqLeftIx"
+          , c2Class = Computational
+          , c2Orient = LR
+          , c2TyVars = []
+          , c2IxVars = [leftIx]
+          , c2LHS = leftLHS
+          , c2RHS = idD modeM [vecTy leftIx]
+          }
+  let rightCell =
+        Cell2
+          { c2Name = "eqRightIx"
+          , c2Class = Computational
+          , c2Orient = LR
+          , c2TyVars = []
+          , c2IxVars = [rightIx]
+          , c2LHS = rightLHS
+          , c2RHS = idD modeM [vecTy rightIx]
+          }
+  let commonDoc name gen cell =
+        Doctrine
+          { dName = name
+          , dModes = mkModes (S.fromList [modeM, modeI])
+          , dIndexModes = S.singleton modeI
+          , dIxTheory = M.fromList [(modeI, IxTheory M.empty [])]
+          , dTypes =
+              M.fromList
+                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
+                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Ix natTy])])
+                ]
+          , dGens = M.fromList [(modeM, M.fromList [(genName, gen)])]
+          , dCells2 = cell
+          , dAttrSorts = M.empty
+          }
+  let src = commonDoc "SrcIxAlpha" srcGen []
+  let left = commonDoc "LeftIxAlpha" leftGen [leftCell]
+  let right = commonDoc "RightIxAlpha" rightGen [rightCell]
+  case validateDoctrine src of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine left of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine right of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  img <- require (genD modeM [vecTy srcIx] [vecTy srcIx] genName)
+  let morLeft =
+        Morphism
+          { morName = "fIxAlpha"
+          , morSrc = src
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.fromList [((modeM, genName), img)]
+          , morIxFunMap = M.empty
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 10
+          }
+  let morRight =
+        Morphism
+          { morName = "gIxAlpha"
+          , morSrc = src
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.fromList [((modeM, genName), img)]
+          , morIxFunMap = M.empty
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 10
+          }
+  res <- case computePolyPushout "PIxAlpha" morLeft morRight of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> pure out
+  length (dCells2 (poDoctrine res)) @?= 1
 
 mkModeEqTheory :: ModeName -> ModName -> ModName -> ModeTheory
 mkModeEqTheory mode modF modU =

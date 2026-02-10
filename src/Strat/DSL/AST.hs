@@ -176,7 +176,7 @@ data RawPolyAttrSortMap = RawPolyAttrSortMap
 
 data RawPolyTypeMap = RawPolyTypeMap
   { rpmtSrcType :: Text
-  , rpmtParams :: [PolyAST.RawTyVarDecl]
+  , rpmtParams :: [PolyAST.RawParamDecl]
   , rpmtSrcMode :: Text
   , rpmtTgtType :: PolyAST.RawPolyTypeExpr
   , rpmtTgtMode :: Text

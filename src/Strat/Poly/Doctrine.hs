@@ -9,6 +9,7 @@ module Strat.Poly.Doctrine
   , gdPlainDom
   , doctrineTypeTheory
   , lookupTypeSig
+  , checkType
   , validateDoctrine
   , cartMode
   ) where

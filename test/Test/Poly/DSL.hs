@@ -46,6 +46,7 @@ tests =
     , testCase "morphism type map binder arity mismatch fails" testTypeMapBinderMismatch
     , testCase "morphism type map unknown binder fails" testTypeMapUnknownVar
     , testCase "morphism type map target mode mismatch fails" testTypeMapTargetModeMismatch
+    , testCase "morphism type map supports index binders" testTypeMapIndexBinders
     , testCase "morphism mode map parses and elaborates" testMorphismModeMap
     , testCase "run inherits expression from run_spec" testRunExprInheritedFromRunSpec
     , testCase "run_spec inheritance chains expression" testRunSpecInheritanceChain
@@ -388,6 +389,44 @@ testTypeMapTargetModeMismatch = do
       case elabRawFile rf of
         Left _ -> pure ()
         Right _ -> assertFailure "expected target mode mismatch to fail"
+
+testTypeMapIndexBinders :: Assertion
+testTypeMapIndexBinders = do
+  let src = T.unlines
+        [ "doctrine Src where {"
+        , "  mode M;"
+        , "  mode I;"
+        , "  index_mode I;"
+        , "  type Nat @I;"
+        , "  index_fun Z : Nat @I;"
+        , "  index_fun S(n : Nat) : Nat @I;"
+        , "  type A @M;"
+        , "  type Vec(n : Nat, a@M) @M;"
+        , "}"
+        , "doctrine Tgt where {"
+        , "  mode M;"
+        , "  mode I;"
+        , "  index_mode I;"
+        , "  type Nat @I;"
+        , "  index_fun Z : Nat @I;"
+        , "  index_fun S(n : Nat) : Nat @I;"
+        , "  type A @M;"
+        , "  type Vec2(n : Nat, a@M) @M;"
+        , "}"
+        , "morphism M : Src -> Tgt where {"
+        , "  type Vec(n : Nat, a@M) @M -> Vec2(S(n), a) @M;"
+        , "}"
+        ]
+  env <- case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right e -> pure e
+  mor <- case M.lookup "M" (meMorphisms env) of
+    Nothing -> assertFailure "expected morphism M"
+    Just m -> pure m
+  assertBool "expected Vec type map entry" (M.member (TypeRef (ModeName "M") (TypeName "Vec")) (morTypeMap mor))
 
 testMorphismModeMap :: Assertion
 testMorphismModeMap = do

@@ -14,6 +14,7 @@ import Strat.Poly.ModeTheory (ModeName(..), addMode, emptyModeTheory)
 import Strat.Poly.TypeExpr
   ( TypeExpr(..)
   , TypeArg(..)
+  , TyVar(..)
   , TypeName(..)
   , TypeRef(..)
   , IxFunName(..)
@@ -23,8 +24,10 @@ import Strat.Poly.TypeExpr
 import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..), IxRule(..), normalizeIx)
 import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..))
 import Strat.Poly.UnifyTy (unifyIx, unifyTyFlex, emptySubst, sIx)
+import Strat.Poly.Match (findAllMatchesWithVars)
 import Strat.Poly.Graph
-  ( BinderMetaVar(..)
+  ( Diagram(..)
+  , BinderMetaVar(..)
   , BinderArg(..)
   , EdgePayload(..)
   , diagramIsoMatchWithVars
@@ -36,7 +39,7 @@ import Strat.Poly.Graph
   , validateDiagram
     , diagramIsoEq
   )
-import Strat.Poly.Diagram (Diagram, idD, genDIx, compDTT)
+import Strat.Poly.Diagram (idD, genDIx, compDTT)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Rewrite (RewriteRule(..), rewriteOnce)
 import Test.Poly.Helpers (mkModes)
@@ -49,7 +52,9 @@ tests =
     [ testCase "index normalization reduces add(S(Z),S(Z))" testNormalizeIx
     , testCase "scoped index unification rejects escapes" testScopedIxUnify
     , testCase "dependent unification normalizes index arguments" testDependentUnify
+    , testCase "bound index sort checks apply current substitution" testBoundSortUsesSubstitution
     , testCase "dependent composition respects definitional index equality" testDependentCompDefEq
+    , testCase "matching requires index-context compatibility" testMatchIxCtxCompatibility
     , testCase "iso matching drops candidates when dependent substitution fails" testIsoMatchDropsSubstFailure
     , testCase "binder metas + splice rewrite" testBinderMetaSplice
     ]
@@ -96,6 +101,29 @@ testDependentUnify = do
   _ <- require (unifyTyFlex tt [] S.empty (S.singleton n) emptySubst lhs rhs)
   pure ()
 
+testBoundSortUsesSubstitution :: Assertion
+testBoundSortUsesSubstitution = do
+  let modeM = ModeName "M"
+  let modeI = ModeName "I"
+  let aVar = TyVar { tvName = "a", tvMode = modeM }
+  let lenRef = TypeRef modeI (TypeName "Len")
+  let concrete = TCon (TypeRef modeM (TypeName "AConcrete")) []
+  let ixCtxSort = TCon lenRef [TAType (TVar aVar)]
+  let expectedSort = TCon lenRef [TAType concrete]
+  let tt =
+        TypeTheory
+          { ttModes = mkModes [modeM, modeI]
+          , ttIndex = M.fromList [(modeI, IxTheory M.empty [])]
+          , ttTypeParams = M.fromList [(lenRef, [TPS_Ty modeM])]
+          , ttIxFuel = 200
+          }
+  case unifyIx tt [ixCtxSort] S.empty emptySubst expectedSort (IXBound 0) (IXBound 0) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected bound sort mismatch before solving substitution"
+  subst <- require (unifyTyFlex tt [] (S.singleton aVar) S.empty emptySubst (TVar aVar) concrete)
+  _ <- require (unifyIx tt [ixCtxSort] S.empty subst expectedSort (IXBound 0) (IXBound 0))
+  pure ()
+
 testDependentCompDefEq :: Assertion
 testDependentCompDefEq = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
@@ -117,6 +145,27 @@ testDependentCompDefEq = do
   g <- require (genDIx modeM [] [vecTy z] [outTy] (GenName "g"))
   _ <- require (compDTT tt g f)
   pure ()
+
+testMatchIxCtxCompatibility :: Assertion
+testMatchIxCtxCompatibility = do
+  let modeM = ModeName "M"
+  let modeI = ModeName "I"
+  let aTy = TCon (TypeRef modeM (TypeName "A")) []
+  let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
+  let boolTy = TCon (TypeRef modeI (TypeName "Bool")) []
+  let tt =
+        TypeTheory
+          { ttModes = mkModes [modeM, modeI]
+          , ttIndex = M.empty
+          , ttTypeParams = M.empty
+          , ttIxFuel = 200
+          }
+  let lhs = (idD modeM [aTy]) { dIxCtx = [natTy] }
+  let host = (idD modeM [aTy]) { dIxCtx = [boolTy] }
+  _ <- require (validateDiagram lhs)
+  _ <- require (validateDiagram host)
+  matches <- require (findAllMatchesWithVars tt S.empty S.empty lhs host)
+  assertBool "expected no matches for incompatible index contexts" (null matches)
 
 testIsoMatchDropsSubstFailure :: Assertion
 testIsoMatchDropsSubstFailure = do

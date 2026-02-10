@@ -162,11 +162,19 @@ findAllMatchesInternal
   -> Diagram
   -> Either Text [Match]
 findAllMatchesInternal tt tyFlex ixFlex attrFlex lhs host = do
-  let lhsEdges = IM.elems (dEdges lhs)
-  let hostEdges = IM.elems (dEdges host)
-  let adj = adjacency lhs
-  let allEdgeIds = map eId lhsEdges
-  go [] (Match M.empty M.empty emptySubst M.empty M.empty S.empty S.empty) adj allEdgeIds lhsEdges hostEdges
+  if dMode lhs /= dMode host
+    then Right []
+    else do
+      lhsIxCtx <- applySubstCtx tt emptySubst (dIxCtx lhs)
+      hostIxCtx <- applySubstCtx tt emptySubst (dIxCtx host)
+      if lhsIxCtx /= hostIxCtx
+        then Right []
+        else do
+          let lhsEdges = IM.elems (dEdges lhs)
+          let hostEdges = IM.elems (dEdges host)
+          let adj = adjacency lhs
+          let allEdgeIds = map eId lhsEdges
+          go [] (Match M.empty M.empty emptySubst M.empty M.empty S.empty S.empty) adj allEdgeIds lhsEdges hostEdges
   where
     go acc match adj allEdgeIds lhsEdges hostEdges =
       case pickNextEdge match adj allEdgeIds of

@@ -252,21 +252,15 @@ elabPolyMorphism env raw = do
       let name = TypeName (rpmtSrcType decl)
       let ref = TypeRef modeSrc name
       sig <- lookupTypeSig src ref
-      paramModesSrc <- mapM requireTyParamMode (tsParams sig)
-      paramModesTgt <- mapM (lookupModeMap modeMap) paramModesSrc
-      params <- buildTypeMapParams paramModesTgt (rpmtParams decl)
-      tgtExpr <- elabTypeExpr tgt params [] M.empty (rpmtTgtType decl)
+      (tmplParams, tyVarsTgt, ixVarsTgt) <- buildTypeTemplateParams tgt modeMap (tsParams sig) (rpmtParams decl)
+      tgtExpr <- elabTypeExpr tgt tyVarsTgt ixVarsTgt M.empty (rpmtTgtType decl)
       if typeMode tgtExpr /= modeTgtDecl
         then Left ("morphism: target type expression mode mismatch (expected " <> rpmtTgtMode decl <> ")")
         else Right ()
       let key = TypeRef modeSrc name
       if M.member key mp
         then Left "morphism: duplicate type mapping"
-        else Right (M.insert key (TypeTemplate params tgtExpr) mp)
-    requireTyParamMode param =
-      case param of
-        PS_Ty m -> Right m
-        PS_Ix _ -> Left "morphism: type maps over index-parameterized constructors are not supported here"
+        else Right (M.insert key (TypeTemplate tmplParams tgtExpr) mp)
     addGenMap src tgt modeMap mp decl = do
       let modeSrc = ModeName (rpmgMode decl)
       ensureMode src modeSrc
@@ -720,23 +714,54 @@ resolveTypeRef doc raw =
         [mode] -> Right (TypeRef mode tname)
         _ -> Left ("ambiguous type constructor: " <> rtrName raw <> " (qualify with Mode.)")
 
-buildTypeMapParams :: [ModeName] -> [RawTyVarDecl] -> Either Text [TyVar]
-buildTypeMapParams sigModes decls = do
-  if length sigModes /= length decls
+buildTypeTemplateParams
+  :: Doctrine
+  -> M.Map ModeName ModeName
+  -> [ParamSig]
+  -> [RawParamDecl]
+  -> Either Text ([TemplateParam], [TyVar], [IxVar])
+buildTypeTemplateParams tgt modeMap sigParams decls = do
+  if length sigParams /= length decls
     then Left "morphism: type mapping binder arity mismatch"
-    else Right ()
-  params <- mapM buildOne (zip sigModes decls)
-  ensureDistinctTyVarNames "morphism: duplicate type mapping binders" params
-  pure params
+    else go [] [] [] (zip sigParams decls)
   where
-    buildOne (mode, decl) =
-      case rtvMode decl of
-        Nothing -> Right TyVar { tvName = rtvName decl, tvMode = mode }
-        Just modeName ->
-          let explicit = ModeName modeName
-          in if explicit == mode
-              then Right TyVar { tvName = rtvName decl, tvMode = explicit }
-              else Left "morphism: type mapping binder mode mismatch"
+    go tyAcc ixAcc tmplAcc [] =
+      Right (reverse tmplAcc, reverse tyAcc, reverse ixAcc)
+    go tyAcc ixAcc tmplAcc ((sigParam, decl):rest) =
+      case (sigParam, decl) of
+        (PS_Ty srcMode, RPDType tyDecl) -> do
+          expectedMode <- lookupMappedMode srcMode
+          tyVar <- resolveTyVarDecl tgt expectedMode tyDecl
+          ensureFreshName tyAcc ixAcc (tvName tyVar)
+          go (tyVar:tyAcc) ixAcc (TPType tyVar:tmplAcc) rest
+        (PS_Ix srcSort, RPDIndex ixDecl) -> do
+          expectedMode <- lookupMappedMode (typeMode srcSort)
+          ixSort <- elabTypeExpr tgt (reverse tyAcc) (reverse ixAcc) M.empty (rivSort ixDecl)
+          if typeMode ixSort /= expectedMode
+            then Left "morphism: type mapping index binder mode mismatch"
+            else Right ()
+          if expectedMode `S.member` dIndexModes tgt
+            then Right ()
+            else Left "morphism: type mapping index binder must live in an index mode"
+          ensureFreshName tyAcc ixAcc (rivName ixDecl)
+          let ixVar = IxVar { ixvName = rivName ixDecl, ixvSort = ixSort, ixvScope = 0 }
+          go tyAcc (ixVar:ixAcc) (TPIx ixVar:tmplAcc) rest
+        (PS_Ty _, _) ->
+          Left "morphism: type mapping binder kind mismatch"
+        (PS_Ix _, _) ->
+          Left "morphism: type mapping binder kind mismatch"
+
+    ensureFreshName tyAcc ixAcc name =
+      let tyNames = map tvName tyAcc
+          ixNames = map ixvName ixAcc
+      in if name `elem` tyNames || name `elem` ixNames
+          then Left "morphism: duplicate type mapping binders"
+          else Right ()
+
+    lookupMappedMode srcMode =
+      case M.lookup srcMode modeMap of
+        Nothing -> Left "morphism: missing mode mapping"
+        Just tgtMode -> Right tgtMode
 
 elabContext :: Doctrine -> ModeName -> [TyVar] -> [IxVar] -> M.Map Text (Int, TypeExpr) -> RawPolyContext -> Either Text Context
 elabContext doc expectedMode tyVars ixVars ixBound ctx = do

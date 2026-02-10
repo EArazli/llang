@@ -743,7 +743,7 @@ morphismTypeMap :: Parser MorphismItem
 morphismTypeMap = do
   _ <- symbol "type"
   src <- ident
-  params <- option [] (symbol "(" *> polyTyVarDecl `sepBy` symbol "," <* symbol ")")
+  params <- option [] (symbol "(" *> polyParamDecl `sepBy` symbol "," <* symbol ")")
   _ <- symbol "@"
   srcMode <- ident
   _ <- symbol "->"

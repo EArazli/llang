@@ -18,10 +18,9 @@ import Strat.Poly.Morphism
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName, ModDecl(..), ModExpr(..))
 import Strat.Poly.TypeExpr
 import Strat.Poly.IndexTheory (IxTheory(..), IxRule(..))
-import qualified Strat.Poly.UnifyTy as U
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
-import Strat.Poly.Diagram (Diagram(..), genD, genDWithAttrs, diagramDom, diagramCod, applySubstDiagram)
+import Strat.Poly.Diagram (Diagram(..), genD, genDWithAttrs, diagramDom, diagramCod)
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), renumberDiagram, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 
@@ -182,7 +181,7 @@ requireTypeRenameMap mor = do
     typeImage m (srcRef, sig) = do
       (tgtRef, mPerm) <- case M.lookup srcRef (morTypeMap m) of
         Nothing -> Right (srcRef, Nothing)
-        Just tmpl -> templateTarget tmpl (length (tsParams sig))
+        Just tmpl -> templateTarget tmpl (tsParams sig)
       ensureTypeExists (morTgt m) tgtRef (length (tsParams sig))
       pure (srcRef, tgtRef, mPerm)
     insertPerm mp (_srcRef, tgtRef, mPerm) =
@@ -194,29 +193,52 @@ requireTypeRenameMap mor = do
             Just existing
               | existing == perm -> Right mp
               | otherwise -> Left "poly pushout: inconsistent type permutation"
-    templateTarget tmpl arity =
+    templateTarget tmpl srcParams =
       case ttBody tmpl of
-        TCon tgtRef params
+        TCon tgtRef args
           | length (ttParams tmpl) == arity
-          , length params == arity
-          , all isVar params
-          , let vars = [ v | TAType (TVar v) <- params ]
-          , length vars == length (S.fromList vars)
-          , S.fromList vars == S.fromList (ttParams tmpl)
+          , length args == arity
+          , positionalKindMatch (zip srcParams (ttParams tmpl))
+          , let positions = map (argParamIndex (ttParams tmpl)) args
+          , all isJust positions
+          , let perm = [ i | Just i <- positions ]
+          , length perm == S.size (S.fromList perm)
           -> do
-            let indexMap = M.fromList (zip (ttParams tmpl) [0..])
-            perm <- mapM (lookupIndex indexMap) vars
             inv <- invertPermutation arity perm
             let ident = [0 .. arity - 1]
             let inv' = if perm == ident then Nothing else Just inv
             pure (tgtRef, inv')
         _ -> Left "poly pushout requires renaming type maps"
-    lookupIndex mp v =
-      case M.lookup v mp of
-        Nothing -> Left "poly pushout requires renaming type maps"
-        Just idx -> Right idx
-    isVar (TAType (TVar _)) = True
-    isVar _ = False
+      where
+        arity = length srcParams
+
+    positionalKindMatch [] = True
+    positionalKindMatch ((srcParam, tmplParam):rest) =
+      kindMatch srcParam tmplParam && positionalKindMatch rest
+
+    kindMatch srcParam tmplParam =
+      case (srcParam, tmplParam) of
+        (PS_Ty _, TPType _) -> True
+        (PS_Ix _, TPIx _) -> True
+        _ -> False
+
+    argParamIndex params arg =
+      case arg of
+        TAType (TVar v) ->
+          findParamIndex params (\p -> case p of TPType v' -> v' == v; _ -> False)
+        TAIndex (IXVar v) ->
+          findParamIndex params (\p -> case p of TPIx v' -> v' == v; _ -> False)
+        _ -> Nothing
+
+    findParamIndex params p =
+      case [ i | (i, param) <- zip [0 :: Int ..] params, p param ] of
+        [i] -> Just i
+        _ -> Nothing
+
+    isJust mv =
+      case mv of
+        Just _ -> True
+        Nothing -> False
 
 requireAttrSortRenameMap :: Morphism -> Either Text AttrSortRenameMap
 requireAttrSortRenameMap mor = do
@@ -650,7 +672,7 @@ mergeDoctrine mt a b = do
           mp <- acc
           case M.lookup (gdName gen) mp of
             Nothing -> Right (M.insert (gdName gen) gen mp)
-            Just g | genDeclAlphaEq mt g gen -> Right mp
+            Just g | genDeclAlphaEq g gen -> Right mp
             _ -> Left "poly pushout: generator conflict"
 
     mergeIxTheoryTables left right =
@@ -772,38 +794,157 @@ mergeCells mt left right =
     cellBodyEq a b = do
       if dMode (c2LHS a) /= dMode (c2LHS b)
         then Right False
-        else if length (c2TyVars a) /= length (c2TyVars b)
-          then Right False
-          else do
-            b' <- alphaRenameCellTo mt (c2TyVars b) (c2TyVars a) b
-            okL <- isoOrFalse (c2LHS a) (c2LHS b')
-            okR <- isoOrFalse (c2RHS a) (c2RHS b')
-            pure (okL && okR)
+      else if length (c2TyVars a) /= length (c2TyVars b)
+        then Right False
+      else if length (c2IxVars a) /= length (c2IxVars b)
+        then Right False
+        else do
+          b' <- alphaRenameCellTo (c2TyVars b) (c2TyVars a) (c2IxVars b) (c2IxVars a) b
+          lhsA <- normalizeDiagramModes mt (c2LHS a)
+          lhsB <- normalizeDiagramModes mt (c2LHS b')
+          rhsA <- normalizeDiagramModes mt (c2RHS a)
+          rhsB <- normalizeDiagramModes mt (c2RHS b')
+          okL <- isoOrFalse lhsA lhsB
+          okR <- isoOrFalse rhsA rhsB
+          pure (okL && okR)
 
     isoOrFalse d1 d2 =
       case diagramIsoEq d1 d2 of
         Left _ -> Right False
         Right ok -> Right ok
 
-genDeclAlphaEq :: ModeTheory -> GenDecl -> GenDecl -> Bool
-genDeclAlphaEq mt g1 g2 =
+genDeclAlphaEq :: GenDecl -> GenDecl -> Bool
+genDeclAlphaEq g1 g2 =
   gdMode g1 == gdMode g2
     && gdName g1 == gdName g2
     && gdAttrs g1 == gdAttrs g2
     && length (gdTyVars g1) == length (gdTyVars g2)
-    && let subst = M.fromList (zip (gdTyVars g2) (map TVar (gdTyVars g1)))
-           dom2 = U.applySubstCtxLegacy mt subst (gdPlainDom g2)
-           cod2 = U.applySubstCtxLegacy mt subst (gdCod g2)
-       in dom2 == gdPlainDom g1 && cod2 == gdCod g1
+    && length (gdIxVars g1) == length (gdIxVars g2)
+    && let tyMap = M.fromList (zip (gdTyVars g2) (gdTyVars g1))
+           ixMap = M.fromList (zip (gdIxVars g2) (gdIxVars g1))
+           tyVars2 = map (renameTyVarAlpha tyMap) (gdTyVars g2)
+           ixVars2 = map (renameIxVarAlpha tyMap ixMap) (gdIxVars g2)
+           dom2 = map (renameInputShapeAlpha tyMap ixMap) (gdDom g2)
+           cod2 = map (renameTypeAlpha tyMap ixMap) (gdCod g2)
+       in tyVars2 == gdTyVars g1
+            && ixVars2 == gdIxVars g1
+            && dom2 == gdDom g1
+            && cod2 == gdCod g1
 
-alphaRenameCellTo :: ModeTheory -> [TyVar] -> [TyVar] -> Cell2 -> Either Text Cell2
-alphaRenameCellTo mt from to cell
-  | length from /= length to = Left "poly pushout: alpha rename arity mismatch"
+alphaRenameCellTo :: [TyVar] -> [TyVar] -> [IxVar] -> [IxVar] -> Cell2 -> Either Text Cell2
+alphaRenameCellTo fromTy toTy fromIx toIx cell
+  | length fromTy /= length toTy = Left "poly pushout: alpha rename type arity mismatch"
+  | length fromIx /= length toIx = Left "poly pushout: alpha rename index arity mismatch"
   | otherwise =
-      let subst = M.fromList (zip from (map TVar to))
-          lhs' = applySubstDiagram mt (U.fromTyOnlySubst subst) (c2LHS cell)
-          rhs' = applySubstDiagram mt (U.fromTyOnlySubst subst) (c2RHS cell)
-      in Right cell { c2TyVars = to, c2LHS = lhs', c2RHS = rhs' }
+      let tyMap = M.fromList (zip fromTy toTy)
+          ixMap = M.fromList (zip fromIx toIx)
+          lhs' = renameDiagramAlpha tyMap ixMap (c2LHS cell)
+          rhs' = renameDiagramAlpha tyMap ixMap (c2RHS cell)
+      in Right cell { c2TyVars = toTy, c2IxVars = toIx, c2LHS = lhs', c2RHS = rhs' }
+
+renameTyVarAlpha :: M.Map TyVar TyVar -> TyVar -> TyVar
+renameTyVarAlpha tyMap v =
+  M.findWithDefault v v tyMap
+
+renameIxVarAlpha :: M.Map TyVar TyVar -> M.Map IxVar IxVar -> IxVar -> IxVar
+renameIxVarAlpha tyMap ixMap v =
+  case M.lookup v ixMap of
+    Just v' -> v'
+    Nothing -> v { ixvSort = renameTypeAlpha tyMap ixMap (ixvSort v) }
+
+renameTypeAlpha :: M.Map TyVar TyVar -> M.Map IxVar IxVar -> TypeExpr -> TypeExpr
+renameTypeAlpha tyMap ixMap = mapTypeExpr renameTy renameIx
+  where
+    renameTy ty =
+      case ty of
+        TVar v -> TVar (renameTyVarAlpha tyMap v)
+        _ -> ty
+    renameIx tm =
+      case tm of
+        IXVar v -> IXVar (renameIxVarAlpha tyMap ixMap v)
+        _ -> tm
+
+renameInputShapeAlpha :: M.Map TyVar TyVar -> M.Map IxVar IxVar -> InputShape -> InputShape
+renameInputShapeAlpha tyMap ixMap shape =
+  case shape of
+    InPort ty -> InPort (renameTypeAlpha tyMap ixMap ty)
+    InBinder bs ->
+      let ixCtx' = map (renameTypeAlpha tyMap ixMap) (bsIxCtx bs)
+          dom' = map (renameTypeAlpha tyMap ixMap) (bsDom bs)
+          cod' = map (renameTypeAlpha tyMap ixMap) (bsCod bs)
+      in InBinder bs { bsIxCtx = ixCtx', bsDom = dom', bsCod = cod' }
+
+renameDiagramAlpha :: M.Map TyVar TyVar -> M.Map IxVar IxVar -> Diagram -> Diagram
+renameDiagramAlpha tyMap ixMap diag =
+  diag
+    { dIxCtx = map (renameTypeAlpha tyMap ixMap) (dIxCtx diag)
+    , dPortTy = IM.map (renameTypeAlpha tyMap ixMap) (dPortTy diag)
+    , dEdges = IM.map renameEdge (dEdges diag)
+    }
+  where
+    renameEdge edge =
+      case ePayload edge of
+        PGen g attrs bargs ->
+          edge { ePayload = PGen g attrs (map renameBinderArg bargs) }
+        PBox name inner ->
+          edge { ePayload = PBox name (renameDiagramAlpha tyMap ixMap inner) }
+        PSplice x ->
+          edge { ePayload = PSplice x }
+
+    renameBinderArg barg =
+      case barg of
+        BAConcrete inner -> BAConcrete (renameDiagramAlpha tyMap ixMap inner)
+        BAMeta x -> BAMeta x
+
+normalizeDiagramModes :: ModeTheory -> Diagram -> Either Text Diagram
+normalizeDiagramModes mt diag = do
+  ixCtx' <- mapM normalizeTypeModes (dIxCtx diag)
+  portTy' <- traverse normalizeTypeModes (dPortTy diag)
+  edges' <- traverse normalizeEdgeModes (dEdges diag)
+  pure diag { dIxCtx = ixCtx', dPortTy = portTy', dEdges = edges' }
+  where
+    normalizeEdgeModes edge =
+      case ePayload edge of
+        PGen g attrs bargs -> do
+          bargs' <- mapM normalizeBinderArg bargs
+          pure edge { ePayload = PGen g attrs bargs' }
+        PBox name inner -> do
+          inner' <- normalizeDiagramModes mt inner
+          pure edge { ePayload = PBox name inner' }
+        PSplice x ->
+          pure edge { ePayload = PSplice x }
+
+    normalizeBinderArg barg =
+      case barg of
+        BAConcrete inner -> BAConcrete <$> normalizeDiagramModes mt inner
+        BAMeta x -> Right (BAMeta x)
+
+    normalizeTypeModes ty = do
+      ty' <- goType ty
+      normalizeTypeExpr mt ty'
+
+    goType ty =
+      case ty of
+        TVar _ -> Right ty
+        TCon ref args -> do
+          args' <- mapM goArg args
+          Right (TCon ref args')
+        TMod me inner -> do
+          inner' <- goType inner
+          Right (TMod me inner')
+
+    goArg arg =
+      case arg of
+        TAType ty -> TAType <$> goType ty
+        TAIndex ix -> TAIndex <$> goIx ix
+
+    goIx ix =
+      case ix of
+        IXVar v -> do
+          sort' <- goType (ixvSort v)
+          Right (IXVar v { ixvSort = sort' })
+        IXBound i -> Right (IXBound i)
+        IXFun f args -> IXFun f <$> mapM goIx args
 
 buildGlue :: Text -> Doctrine -> Doctrine -> Either Text Morphism
 buildGlue name src tgt = do
@@ -872,20 +1013,25 @@ buildTypeMap doc renames permRen =
           tmpl <- renameTemplate ref' mPerm (tsParams sig)
           Right (M.insert ref tmpl mp)
     renameTemplate tgtRef mPerm params = do
-      paramModes <- mapM requireTyParam params
-      let vars =
-            [ TyVar { tvName = "a" <> T.pack (show i), tvMode = mode }
-            | (i, mode) <- zip [0..] paramModes
-            ]
-      vars' <- case mPerm of
-        Nothing -> Right vars
-        Just perm -> applyPerm perm vars
-      pure (TypeTemplate vars (TCon tgtRef (map (TAType . TVar) vars')))
+      tmplParams <- mapM mkParam (zip [0 :: Int ..] params)
+      args0 <- mapM toArg tmplParams
+      args <- case mPerm of
+        Nothing -> Right args0
+        Just perm -> applyPerm perm args0
+      pure (TypeTemplate tmplParams (TCon tgtRef args))
 
-    requireTyParam param =
+    mkParam (i, param) =
       case param of
-        PS_Ty mode -> Right mode
-        PS_Ix _ -> Left "poly pushout: renaming templates over index parameters are not supported"
+        PS_Ty mode ->
+          Right (TPType TyVar { tvName = "a" <> T.pack (show i), tvMode = mode })
+        PS_Ix sortTy -> do
+          sortTy' <- renameTypeExpr renames permRen sortTy
+          Right (TPIx IxVar { ixvName = "i" <> T.pack (show i), ixvSort = sortTy', ixvScope = 0 })
+
+    toArg param =
+      case param of
+        TPType v -> Right (TAType (TVar v))
+        TPIx v -> Right (TAIndex (IXVar v))
 
 buildGenMap
   :: Doctrine
