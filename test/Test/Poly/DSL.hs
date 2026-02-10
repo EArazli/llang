@@ -9,6 +9,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Set as S
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, meDoctrines, meModels, meMorphisms, meRuns)
@@ -17,7 +18,7 @@ import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.ModeTheory (ModeName(..), mtModes)
 import Strat.Poly.Doctrine
-import Strat.Poly.Diagram (Diagram(..), diagramCod)
+import Strat.Poly.Diagram (Diagram(..), diagramCod, freeIxVarsDiagram, freeTyVarsDiagram)
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeArg(..), IxTerm(..), TypeName(..), TypeRef(..))
@@ -35,6 +36,8 @@ tests =
     "Poly.DSL"
     [ testCase "parse/elab monoid doctrine and normalize" testPolyDSLNormalize
     , testCase "implicit index arg infers bound binder index" testImplicitBinderIndexInference
+    , testCase "index_mode without explicit theory entries elaborates" testIndexModeWithoutTheoryEntry
+    , testCase "nested binder elaboration keeps fresh index vars distinct" testNestedBinderFreshSupply
     , testCase "morphism declared in example file" testPolyMorphismDSL
     , testCase "doctrine extends produces fromBase morphism" testPolyFromBaseMorphism
     , testCase "pushout renames gen types" testPolyPushoutRenamesTypes
@@ -139,6 +142,70 @@ testImplicitBinderIndexInference = do
         Right c -> pure c
       cod @?= [TCon (TypeRef (ModeName "M") (TypeName "Vec")) [TAIndex (IXBound 0)]]
     _ -> assertFailure "expected single wrap edge with one concrete binder argument"
+
+testIndexModeWithoutTheoryEntry :: Assertion
+testIndexModeWithoutTheoryEntry = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  mode I;"
+        , "  index_mode I;"
+        , "  type Nat @I;"
+        , "  type Vec(n : Nat) @M;"
+        , "  gen mk(n : Nat) : [] -> [Vec(n)] @M;"
+        , "}"
+        ]
+  env <- case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right e -> pure e
+  doc <- case M.lookup "D" (meDoctrines env) of
+    Nothing -> assertFailure "expected doctrine D"
+    Just d -> pure d
+  expr <- case parseDiagExpr "mk" of
+    Left err -> assertFailure (T.unpack err)
+    Right e -> pure e
+  case elabDiagExpr emptyEnv doc (ModeName "M") [] expr of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()
+
+testNestedBinderFreshSupply :: Assertion
+testNestedBinderFreshSupply = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M;"
+        , "  mode I;"
+        , "  index_mode I;"
+        , "  type Nat @I;"
+        , "  index_fun Z : Nat @I;"
+        , "  type Inner(a@M, n : Nat) @M;"
+        , "  type Outer(a@M, n : Nat) @M;"
+        , "  gen src(a@M, n : Nat) : [] -> [Inner(a, n)] @M;"
+        , "  gen sink(a@M, n : Nat) : [Inner(a, n)] -> [] @M;"
+        , "  gen outer(a@M, n : Nat) : [binder { k : Nat } : []] -> [Outer(a, n)] @M;"
+        , "}"
+        ]
+  env <- case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertFailure (T.unpack err)
+        Right e -> pure e
+  doc <- case M.lookup "D" (meDoctrines env) of
+    Nothing -> assertFailure "expected doctrine D"
+    Just d -> pure d
+  expr <- case parseDiagExpr "outer[(src ; sink)]" of
+    Left err -> assertFailure (T.unpack err)
+    Right e -> pure e
+  diag <- case elabDiagExpr emptyEnv doc (ModeName "M") [] expr of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  let tyVars = freeTyVarsDiagram diag
+  let ixVars = freeIxVarsDiagram diag
+  assertBool "expected distinct free type variables across outer and binder elaborations" (S.size tyVars >= 2)
+  assertBool "expected distinct free index variables across outer and binder elaborations" (S.size ixVars >= 2)
 
 testPolyMorphismDSL :: Assertion
 testPolyMorphismDSL = do

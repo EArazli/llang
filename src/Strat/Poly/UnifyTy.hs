@@ -168,45 +168,73 @@ unifyIx
   -> IxTerm
   -> Either Text Subst
 unifyIx tt ixCtx ixFlex subst expectedSort ix1 ix2 = do
-  expectedSort' <- applySubstTy tt subst expectedSort
+  expectedSort0 <- applySubstTy tt subst expectedSort
+  expectedSort' <- normalizeTypeDeep tt expectedSort0
   lhs0 <- applySubstIx tt subst expectedSort' ix1
   rhs0 <- applySubstIx tt subst expectedSort' ix2
   lhs <- normalizeIx tt expectedSort' lhs0
   rhs <- normalizeIx tt expectedSort' rhs0
-  unifyIxNorm subst lhs rhs
+  unifyIxNorm subst expectedSort' lhs rhs
   where
-    unifyIxNorm s a b =
+    unifyIxNorm s currentSort a b =
       case (a, b) of
-        (IXBound i, IXBound j)
-          | i == j -> Right s
-          | otherwise -> Left "unifyIx: bound index mismatch"
+        (IXBound i, IXBound j) -> do
+          checkBoundSort s currentSort i
+          checkBoundSort s currentSort j
+          if i == j
+            then Right s
+            else Left "unifyIx: bound index mismatch"
         (IXFun f xs, IXFun g ys)
-          | f == g && length xs == length ys -> foldl step (Right s) (zip xs ys)
+          | f == g && length xs == length ys -> do
+              sig <- requireFunSig s currentSort f xs
+              foldl step (Right s) (zip3 (ifArgs sig) xs ys)
           | otherwise -> Left "unifyIx: function mismatch"
-        (IXVar v, IXVar w)
-          | sameIxVarId v w -> Right s
-          | v `S.member` ixFlex -> bindIxVar s v (IXVar w)
-          | w `S.member` ixFlex -> bindIxVar s w (IXVar v)
-          | otherwise -> Left "unifyIx: rigid index variable mismatch"
-        (IXVar v, t)
-          | v `S.member` ixFlex -> bindIxVar s v t
-        (t, IXVar v)
-          | v `S.member` ixFlex -> bindIxVar s v t
+        (IXVar v, IXVar w) -> do
+          checkIxVarSort s currentSort v
+          checkIxVarSort s currentSort w
+          if sameIxVarId v w
+            then Right s
+            else
+              if v `S.member` ixFlex
+                then bindIxVar s currentSort v (IXVar w)
+                else
+                  if w `S.member` ixFlex
+                    then bindIxVar s currentSort w (IXVar v)
+                    else Left "unifyIx: rigid index variable mismatch"
+        (IXVar v, t) -> do
+          checkIxVarSort s currentSort v
+          ensureIxTermSort s currentSort t
+          if v `S.member` ixFlex
+            then bindIxVar s currentSort v t
+            else Left "unifyIx: rigid index variable mismatch"
+        (t, IXVar v) -> do
+          checkIxVarSort s currentSort v
+          ensureIxTermSort s currentSort t
+          if v `S.member` ixFlex
+            then bindIxVar s currentSort v t
+            else Left "unifyIx: rigid index variable mismatch"
         _ -> Left "unifyIx: cannot unify index terms"
       where
-        step acc (x, y) = do
+        step acc (argSort, x, y) = do
           s1 <- acc
-          x' <- applySubstIx tt s1 expectedSort x
-          y' <- applySubstIx tt s1 expectedSort y
-          xNorm <- normalizeIx tt expectedSort x'
-          yNorm <- normalizeIx tt expectedSort y'
-          s2 <- unifyIxNorm s1 xNorm yNorm
+          argSort0 <- applySubstTy tt s1 argSort
+          argSort' <- normalizeTypeDeep tt argSort0
+          x' <- applySubstIx tt s1 argSort' x
+          y' <- applySubstIx tt s1 argSort' y
+          xNorm <- normalizeIx tt argSort' x'
+          yNorm <- normalizeIx tt argSort' y'
+          s2 <- unifyIxNorm s1 argSort' xNorm yNorm
           composeSubst tt s2 s1
 
-    bindIxVar s v t = do
+    bindIxVar s currentSort v t = do
       sortV0 <- applySubstTy tt s (ixvSort v)
-      sortV <- normalizeTypeExpr (ttModes tt) sortV0
+      sortV <- normalizeTypeDeep tt sortV0
+      currentSort' <- normalizeTypeDeep tt currentSort
+      if sortV /= currentSort'
+        then Left "unifyIx: variable sort mismatch"
+        else Right ()
       t' <- applySubstIx tt s sortV t
+      ensureIxTermSort s sortV t'
       if occursIxVar v t'
         then Left "unifyIx: occurs check failed"
         else do
@@ -217,10 +245,59 @@ unifyIx tt ixCtx ixFlex subst expectedSort ix1 ix2 = do
               then Left "unifyIx: scope-0 metavariable cannot mention bound indices"
               else composeSubst tt (Subst M.empty (M.singleton v t')) s
 
+    checkIxVarSort s currentSort v = do
+      sortV0 <- applySubstTy tt s (ixvSort v)
+      sortV <- normalizeTypeDeep tt sortV0
+      currentSort' <- normalizeTypeDeep tt currentSort
+      if sortV == currentSort'
+        then Right ()
+        else Left "unifyIx: index variable sort mismatch"
+
+    checkBoundSort s currentSort i =
+      if i < length ixCtx
+        then do
+          boundSort0 <- applySubstTy tt s (ixCtx !! i)
+          boundSort <- normalizeTypeDeep tt boundSort0
+          currentSort' <- normalizeTypeDeep tt currentSort
+          if boundSort == currentSort'
+            then Right ()
+            else Left "unifyIx: bound index sort mismatch"
+        else Left "unifyIx: bound index out of scope"
+
+    ensureIxTermSort s currentSort tm =
+      case tm of
+        IXVar v -> checkIxVarSort s currentSort v
+        IXBound i -> checkBoundSort s currentSort i
+        IXFun f args -> do
+          sig <- requireFunSig s currentSort f args
+          mapM_ (uncurry (ensureIxTermSort s)) (zip (ifArgs sig) args)
+
+    requireFunSig s currentSort f args = do
+      currentSort0 <- applySubstTy tt s currentSort
+      currentSort' <- normalizeTypeDeep tt currentSort0
+      ixTheory <- requireTheoryForSort currentSort'
+      sig <-
+        case M.lookup f (itFuns ixTheory) of
+          Nothing -> Left "unifyIx: unknown index function"
+          Just sig' -> Right sig'
+      if length (ifArgs sig) /= length args
+        then Left "unifyIx: function arity mismatch"
+        else Right ()
+      resSort0 <- applySubstTy tt s (ifRes sig)
+      resSort <- normalizeTypeDeep tt resSort0
+      if resSort == currentSort'
+        then Right sig
+        else Left "unifyIx: function result sort mismatch"
+
+    requireTheoryForSort sortTy =
+      case M.lookup (typeMode sortTy) (ttIndex tt) of
+        Nothing -> Left "unifyIx: expected sort is not in an index mode"
+        Just ixTheory -> Right ixTheory
+
 applySubstTy :: TypeTheory -> Subst -> TypeExpr -> Either Text TypeExpr
 applySubstTy tt subst ty = do
   raw <- goTy S.empty ty
-  normalizeTypeExpr (ttModes tt) raw
+  normalizeTypeDeep tt raw
   where
     goTy seen expr =
       case expr of
@@ -232,17 +309,33 @@ applySubstTy tt subst ty = do
                 then Right (TVar v)
                 else goTy (S.insert v seen) t
         TCon ref args -> do
-          args' <- mapM (goArg seen) args
+          args' <-
+            case M.lookup ref (ttTypeParams tt) of
+              Just params ->
+                if length params /= length args
+                  then Left "applySubstTy: type constructor arity mismatch"
+                  else mapM (goArgBySig seen) (zip params args)
+              Nothing ->
+                mapM (goArgNoSig seen) args
           Right (TCon ref args')
         TMod me inner -> TMod me <$> goTy seen inner
 
-    goArg seen arg =
+    goArgBySig seen (param, arg) =
+      case (param, arg) of
+        (TPS_Ty _, TAType innerTy) ->
+          TAType <$> goTy seen innerTy
+        (TPS_Ix sortTy, TAIndex ix) -> do
+          sort' <- goTy seen sortTy
+          TAIndex <$> applySubstIx tt subst sort' ix
+        (TPS_Ty _, TAIndex _) ->
+          Left "applySubstTy: expected type argument for constructor parameter"
+        (TPS_Ix _, TAType _) ->
+          Left "applySubstTy: expected index argument for constructor parameter"
+
+    goArgNoSig seen arg =
       case arg of
         TAType innerTy -> TAType <$> goTy seen innerTy
-        TAIndex ix ->
-          case inferIxSortFromTerm tt [] subst ix of
-            Left _ -> TAIndex <$> applyIxNoNorm seen ix
-            Right sortTy -> TAIndex <$> applySubstIx tt subst sortTy ix
+        TAIndex ix -> TAIndex <$> applyIxNoNorm seen ix
 
     applyIxNoNorm seen tm =
       case tm of

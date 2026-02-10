@@ -47,17 +47,11 @@ data Match = Match
 mkLegacyTypeTheory :: ModeTheory -> TypeTheory
 mkLegacyTypeTheory mt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
 
-applySubstTyCompat :: TypeTheory -> Subst -> TypeExpr -> TypeExpr
-applySubstTyCompat tt subst ty =
-  case applySubstTy tt subst ty of
-    Right ty' -> ty'
-    Left _ -> ty
+applySubstTyCompat :: TypeTheory -> Subst -> TypeExpr -> Either Text TypeExpr
+applySubstTyCompat = applySubstTy
 
-composeSubstCompat :: TypeTheory -> Subst -> Subst -> Subst
-composeSubstCompat tt s2 s1 =
-  case composeSubst tt s2 s1 of
-    Right s -> s
-    Left _ -> s1
+composeSubstCompat :: TypeTheory -> Subst -> Subst -> Either Text Subst
+composeSubstCompat = composeSubst
 
 findFirstMatch :: Doctrine -> Diagram -> Diagram -> Either Text (Maybe Match)
 findFirstMatch doc lhs host =
@@ -290,6 +284,7 @@ extendMatch tt tyFlex ixFlex attrFlex lhs host match patEdge hostEdge = do
     unifyPorts tySubst p h = do
       pTy <- requirePortType lhs p
       hTy <- requirePortType host h
+      pTySub <- applySubstTyCompat tt tySubst pTy
       s1 <-
         unifyTyFlex
           tt
@@ -297,9 +292,9 @@ extendMatch tt tyFlex ixFlex attrFlex lhs host match patEdge hostEdge = do
           tyFlex
           ixFlex
           emptySubst
-          (applySubstTyCompat tt tySubst pTy)
+          pTySub
           hTy
-      pure (composeSubstCompat tt s1 tySubst)
+      composeSubstCompat tt s1 tySubst
 
 payloadSubsts
   :: TypeTheory
@@ -340,10 +335,11 @@ payloadSubsts tt tyFlex ixFlex attrFlex _ _ match patEdge hostEdge =
                   let dPat' = applyAttrSubstDiagram attrSubst0 dPatSub
                   let dHost' = applyAttrSubstDiagram attrSubst0 dHostSub
                   subs <- diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex dPat' dHost'
-                  pure
-                    [ (composeSubstCompat tt tySub tySubst0, composeAttrSubst attrSub attrSubst0, binderSub0)
-                    | (tySub, attrSub) <- subs
-                    ]
+                  mapM
+                    (\(tySub, attrSub) -> do
+                      tySubst <- composeSubstCompat tt tySub tySubst0
+                      pure (tySubst, composeAttrSubst attrSub attrSubst0, binderSub0))
+                    subs
                 _ -> Right []
             (BAMeta x, BAConcrete dHost) ->
               case M.lookup x binderSub0 of
@@ -367,10 +363,11 @@ payloadSubsts tt tyFlex ixFlex attrFlex _ _ match patEdge hostEdge =
           let d1' = applyAttrSubstDiagram attrSubst d1Sub
           let d2' = applyAttrSubstDiagram attrSubst d2Sub
           subs <- diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2'
-          Right
-            [ (composeSubstCompat tt tySub tySubst, composeAttrSubst attrSub attrSubst, mBinderSub match)
-            | (tySub, attrSub) <- subs
-            ]
+          mapM
+            (\(tySub, attrSub) -> do
+              tySubst' <- composeSubstCompat tt tySub tySubst
+              pure (tySubst', composeAttrSubst attrSub attrSubst, mBinderSub match))
+            subs
         _ -> Right []
 
     (PSplice x, PSplice y)
@@ -407,22 +404,27 @@ completeBoundary tt flexTy flexIx lhs host match =
         else case requirePortType host h of
           Left _ -> chooseCandidate m p pTy rest
           Right hTy ->
-            case
-              unifyTyFlex
-                tt
-                (dIxCtx lhs)
-                flexTy
-                flexIx
-                emptySubst
-                (applySubstTyCompat tt (mTySubst m) pTy)
-                hTy
-              of
-                Left _ -> chooseCandidate m p pTy rest
-                Right s1 ->
-                  let subst' = composeSubstCompat tt s1 (mTySubst m)
-                      ports' = M.insert p h (mPortMap m)
-                      used' = S.insert h (mUsedHostPorts m)
-                   in Right m { mPortMap = ports', mUsedHostPorts = used', mTySubst = subst' }
+            case applySubstTyCompat tt (mTySubst m) pTy of
+              Left _ -> chooseCandidate m p pTy rest
+              Right pTySub ->
+                case
+                  unifyTyFlex
+                    tt
+                    (dIxCtx lhs)
+                    flexTy
+                    flexIx
+                    emptySubst
+                    pTySub
+                    hTy
+                  of
+                    Left _ -> chooseCandidate m p pTy rest
+                    Right s1 ->
+                      case composeSubstCompat tt s1 (mTySubst m) of
+                        Left _ -> chooseCandidate m p pTy rest
+                        Right subst' ->
+                          let ports' = M.insert p h (mPortMap m)
+                              used' = S.insert h (mUsedHostPorts m)
+                           in Right m { mPortMap = ports', mUsedHostPorts = used', mTySubst = subst' }
 
 pickNextEdge :: Match -> M.Map EdgeId (S.Set EdgeId) -> [EdgeId] -> Maybe EdgeId
 pickNextEdge match adj allEdges =

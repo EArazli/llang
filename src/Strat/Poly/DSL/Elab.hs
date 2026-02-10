@@ -9,7 +9,6 @@ module Strat.Poly.DSL.Elab
 
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Control.Monad (foldM, when)
@@ -338,7 +337,13 @@ elabPolyItem env doc item =
     RPIndexMode name -> do
       let mode = ModeName name
       ensureMode doc mode
-      pure doc { dIndexModes = S.insert mode (dIndexModes doc) }
+      let ixTheory' =
+            M.insertWith
+              (\_ old -> old)
+              mode
+              (IxTheory M.empty [])
+              (dIxTheory doc)
+      pure doc { dIndexModes = S.insert mode (dIndexModes doc), dIxTheory = ixTheory' }
     RPIndexFun decl -> do
       let mode = ModeName (rifMode decl)
       ensureMode doc mode
@@ -955,7 +960,22 @@ elabDiagExprWith
   -> RawDiagExpr
   -> Either Text (Diagram, M.Map BinderMetaVar BinderSig)
 elabDiagExprWith env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSplice expr =
-  evalFresh (build ixCtx binderSigs0 expr)
+  evalFresh (elabDiagExprWithFresh env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSplice expr)
+
+elabDiagExprWithFresh
+  :: ModuleEnv
+  -> Doctrine
+  -> ModeName
+  -> [TypeExpr]
+  -> [TyVar]
+  -> [IxVar]
+  -> M.Map BinderMetaVar BinderSig
+  -> BinderMetaMode
+  -> Bool
+  -> RawDiagExpr
+  -> Fresh (Diagram, M.Map BinderMetaVar BinderSig)
+elabDiagExprWithFresh env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSplice expr =
+  build ixCtx binderSigs0 expr
   where
     rigidTy = S.fromList tyVars
     rigidIx = S.fromList ixVars
@@ -971,12 +991,9 @@ elabDiagExprWith env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSpli
           tyRename <- freshTySubst (gdTyVars gen)
           ixRename <- freshIxSubst (length curIxCtx) (gdIxVars gen)
           let renameSubst = U.Subst { U.sTy = tyRename, U.sIx = ixRename }
-          let dom0 = applySubstCtxDoc renameSubst (gdPlainDom gen)
-          let cod0 = applySubstCtxDoc renameSubst (gdCod gen)
-          let binderSlots0 =
-                [ applySubstBinderSig renameSubst bs
-                | InBinder bs <- gdDom gen
-                ]
+          dom0 <- applySubstCtxDoc renameSubst (gdPlainDom gen)
+          cod0 <- applySubstCtxDoc renameSubst (gdCod gen)
+          binderSlots0 <- mapM (applySubstBinderSig renameSubst) [ bs | InBinder bs <- gdDom gen ]
           (dom, cod, binderSlots) <-
             case mArgs of
               Nothing -> pure (dom0, cod0, binderSlots0)
@@ -999,9 +1016,9 @@ elabDiagExprWith env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSpli
                             { U.sTy = M.fromList (zip freshTyVars tyArgs)
                             , U.sIx = M.fromList (zip freshIxVars ixArgs)
                             }
-                    let dom1 = applySubstCtxDoc argSubst dom0
-                    let cod1 = applySubstCtxDoc argSubst cod0
-                    let binderSlots1 = map (applySubstBinderSig argSubst) binderSlots0
+                    dom1 <- applySubstCtxDoc argSubst dom0
+                    cod1 <- applySubstCtxDoc argSubst cod0
+                    binderSlots1 <- mapM (applySubstBinderSig argSubst) binderSlots0
                     pure (dom1, cod1, binderSlots1)
           attrs <- liftEither (elabGenAttrs doc gen mAttrArgs)
           (binderArgs, binderSigs') <- elaborateBinderArgs curIxCtx binderSigs binderSlots mBinderArgs
@@ -1061,19 +1078,7 @@ elabDiagExprWith env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSpli
         RDComp a b -> do
           (d1, binderSigs1) <- build curIxCtx binderSigs a
           (d2, binderSigs2) <- build curIxCtx binderSigs1 b
-          cod1 <- liftEither (diagramCod d1)
-          dom2 <- liftEither (diagramDom d2)
-          let freeTy = S.union (freeTyVarsDiagram d1) (freeTyVarsDiagram d2)
-          let freeIx = S.union (freeIxVarsDiagram d1) (freeIxVarsDiagram d2)
-          let flexTy = S.difference freeTy rigidTy
-          let flexIx = S.difference freeIx rigidIx
-          subst <- liftEither $
-            case unifyCtxFlexLocal ttDoc curIxCtx flexTy flexIx cod1 dom2 of
-              Left err -> Left ("diagram composition boundary mismatch: " <> err)
-              Right s -> Right s
-          let d1' = applySubstDiagramDoc subst d1
-          let d2' = applySubstDiagramDoc subst d2
-          dComp <- liftEither (compD (dModes doc) d2' d1')
+          dComp <- liftEither (compDTT ttDoc d2 d1)
           pure (dComp, binderSigs2)
         RDTensor a b -> do
           (d1, binderSigs1) <- build curIxCtx binderSigs a
@@ -1096,23 +1101,25 @@ elabDiagExprWith env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSpli
           case rawArg of
             RBAExpr exprArg -> do
               (diagArg, _) <-
-                liftEither
-                  ( elabDiagExprWith
-                      env
-                      doc
-                      mode
-                      (bsIxCtx slot)
-                      tyVars
-                      ixVars
-                      M.empty
-                      BMNoMeta
-                      False
-                      exprArg
-                  )
+                elabDiagExprWithFresh
+                  env
+                  doc
+                  mode
+                  (bsIxCtx slot)
+                  tyVars
+                  ixVars
+                  M.empty
+                  BMNoMeta
+                  False
+                  exprArg
               diagArg' <- liftEither (unifyBoundary ttDoc rigidTy rigidIx (bsDom slot) (bsCod slot) diagArg)
               domArg <- liftEither (diagramDom diagArg')
               codArg <- liftEither (diagramCod diagArg')
-              if domArg == bsDom slot && codArg == bsCod slot
+              domArg' <- canonicalCtx domArg
+              codArg' <- canonicalCtx codArg
+              slotDom' <- canonicalCtx (bsDom slot)
+              slotCod' <- canonicalCtx (bsCod slot)
+              if domArg' == slotDom' && codArg' == slotCod'
                 then pure (acc <> [BAConcrete diagArg'], bsMap)
                 else liftEither (Left "binder argument boundary mismatch")
             RBAMeta name ->
@@ -1152,38 +1159,15 @@ elabDiagExprWith env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSpli
       validateDiagram d3
       pure d3
 
-    applySubstTyDoc subst ty =
-      case U.applySubstTy ttDoc subst ty of
-        Right ty' -> ty'
-        Left _ -> ty
+    canonicalCtx ctx = liftEither (mapM (U.applySubstTy ttDoc U.emptySubst) ctx)
 
-    applySubstCtxDoc subst = map (applySubstTyDoc subst)
+    applySubstCtxDoc subst ctx = liftEither (U.applySubstCtx ttDoc subst ctx)
 
-    applySubstBinderSig subst bs =
-      bs
-        { bsIxCtx = applySubstCtxDoc subst (bsIxCtx bs)
-        , bsDom = applySubstCtxDoc subst (bsDom bs)
-        , bsCod = applySubstCtxDoc subst (bsCod bs)
-        }
-
-    applySubstDiagramDoc subst diag =
-      let dPortTy' = IM.map (applySubstTyDoc subst) (dPortTy diag)
-          dIxCtx' = map (applySubstTyDoc subst) (dIxCtx diag)
-          dEdges' = IM.map mapEdge (dEdges diag)
-       in diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
-      where
-        mapEdge edge =
-          case ePayload edge of
-            PGen g attrs bargs ->
-              edge { ePayload = PGen g attrs (map mapBinderArg bargs) }
-            PBox name inner ->
-              edge { ePayload = PBox name (applySubstDiagramDoc subst inner) }
-            PSplice meta ->
-              edge { ePayload = PSplice meta }
-        mapBinderArg barg =
-          case barg of
-            BAConcrete inner -> BAConcrete (applySubstDiagramDoc subst inner)
-            BAMeta x -> BAMeta x
+    applySubstBinderSig subst bs = do
+      ixCtx' <- applySubstCtxDoc subst (bsIxCtx bs)
+      dom' <- applySubstCtxDoc subst (bsDom bs)
+      cod' <- applySubstCtxDoc subst (bsCod bs)
+      pure bs { bsIxCtx = ixCtx', bsDom = dom', bsCod = cod' }
 
     allocPorts [] diag = ([], diag)
     allocPorts (ty:rest) diag =
@@ -1218,13 +1202,12 @@ unifyBoundary tt rigidTy rigidIx dom cod diag = do
   let flexTy0 = S.difference (freeTyVarsDiagram diag) rigidTy
   let flexIx0 = S.difference (freeIxVarsDiagram diag) rigidIx
   s1 <- unifyCtxFlexLocal tt (dIxCtx diag) flexTy0 flexIx0 domDiag dom
-  let diag1 = applySubstDiagramWithTT tt s1 diag
+  diag1 <- applySubstDiagramWithTT tt s1 diag
   codDiag <- diagramCod diag1
   let flexTy1 = S.difference (freeTyVarsDiagram diag1) rigidTy
   let flexIx1 = S.difference (freeIxVarsDiagram diag1) rigidIx
   s2 <- unifyCtxFlexLocal tt (dIxCtx diag1) flexTy1 flexIx1 codDiag cod
-  let diag2 = applySubstDiagramWithTT tt s2 diag1
-  pure diag2
+  applySubstDiagramWithTT tt s2 diag1
 
 unifyCtxFlexLocal :: TypeTheory -> [TypeExpr] -> S.Set TyVar -> S.Set IxVar -> Context -> Context -> Either Text Subst
 unifyCtxFlexLocal tt ixCtx flexTy flexIx ctx1 ctx2
@@ -1233,43 +1216,19 @@ unifyCtxFlexLocal tt ixCtx flexTy flexIx ctx1 ctx2
   where
     step acc (a, b) = do
       s <- acc
-      let a' = applySubstTyWithTT tt s a
-      let b' = applySubstTyWithTT tt s b
+      a' <- applySubstTyWithTT tt s a
+      b' <- applySubstTyWithTT tt s b
       s' <- U.unifyTyFlex tt ixCtx flexTy flexIx U.emptySubst a' b'
       composeSubstWithTT tt s' s
 
-applySubstTyWithTT :: TypeTheory -> Subst -> TypeExpr -> TypeExpr
-applySubstTyWithTT tt subst ty =
-  case U.applySubstTy tt subst ty of
-    Right ty' -> ty'
-    Left _ -> ty
+applySubstTyWithTT :: TypeTheory -> Subst -> TypeExpr -> Either Text TypeExpr
+applySubstTyWithTT = U.applySubstTy
 
 composeSubstWithTT :: TypeTheory -> Subst -> Subst -> Either Text Subst
-composeSubstWithTT tt s2 s1 =
-  case U.composeSubst tt s2 s1 of
-    Right s -> Right s
-    Left err -> Left err
+composeSubstWithTT = U.composeSubst
 
-applySubstDiagramWithTT :: TypeTheory -> Subst -> Diagram -> Diagram
-applySubstDiagramWithTT tt subst diag =
-  let dPortTy' = IM.map (applySubstTyWithTT tt subst) (dPortTy diag)
-      dIxCtx' = map (applySubstTyWithTT tt subst) (dIxCtx diag)
-      dEdges' = IM.map mapEdge (dEdges diag)
-   in diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
-  where
-    mapEdge edge =
-      case ePayload edge of
-        PGen g attrs bargs ->
-          edge { ePayload = PGen g attrs (map mapBinderArg bargs) }
-        PBox name inner ->
-          edge { ePayload = PBox name (applySubstDiagramWithTT tt subst inner) }
-        PSplice x ->
-          edge { ePayload = PSplice x }
-
-    mapBinderArg barg =
-      case barg of
-        BAConcrete inner -> BAConcrete (applySubstDiagramWithTT tt subst inner)
-        BAMeta x -> BAMeta x
+applySubstDiagramWithTT :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
+applySubstDiagramWithTT = applySubstDiagramTT
 
 elabGenAttrs :: Doctrine -> GenDecl -> Maybe [RawAttrArg] -> Either Text AttrMap
 elabGenAttrs doc gen mArgs =

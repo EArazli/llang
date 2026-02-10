@@ -8,6 +8,7 @@ module Strat.Poly.Diagram
   , genDWithAttrsIx
   , genDWithAttrs
   , compD
+  , compDTT
   , tensorD
   , unionDiagram
   , diagramDom
@@ -90,17 +91,42 @@ compD mt g f
       let subst = fromTyOnlySubst substTy
       let f' = applySubstDiagram mt subst f
       let g' = applySubstDiagram mt subst g
-      let gShift = shiftDiagram (dNextPort f') (dNextEdge f') g'
-      merged <- unionDiagram f' gShift
-      let merged' = merged { dIn = dIn f', dOut = dOut gShift }
-      let outsF = dOut f'
-      let insG = dIn gShift
-      if length outsF /= length insG
-        then Left "diagram composition boundary mismatch"
-        else do
-          merged'' <- foldl step (Right merged') (zip outsF insG)
-          validateDiagram merged''
-          pure merged''
+      composeAligned g' f'
+
+compDTT :: TypeTheory -> Diagram -> Diagram -> Either Text Diagram
+compDTT tt g f
+  | dMode g /= dMode f = Left "diagram composition mode mismatch"
+  | otherwise = do
+      ixCtxF <- applySubstCtx tt emptySubst (dIxCtx f)
+      ixCtxG <- applySubstCtx tt emptySubst (dIxCtx g)
+      if ixCtxG == ixCtxF
+        then Right ()
+        else Left "diagram composition index-context mismatch"
+      domG <- diagramDom g
+      codF <- diagramCod f
+      let tyFlex = S.unions (map freeTyVarsTypeLocal (codF <> domG))
+      let ixFlex = S.unions (map freeIxVarsType (codF <> domG))
+      subst <-
+        case unifyCtx tt ixCtxF tyFlex ixFlex codF domG of
+          Left err -> Left ("diagram composition boundary mismatch: " <> err)
+          Right s -> Right s
+      f' <- applySubstDiagramTT tt subst f
+      g' <- applySubstDiagramTT tt subst g
+      composeAligned g' f'
+
+composeAligned :: Diagram -> Diagram -> Either Text Diagram
+composeAligned g f = do
+  let gShift = shiftDiagram (dNextPort f) (dNextEdge f) g
+  merged <- unionDiagram f gShift
+  let merged' = merged { dIn = dIn f, dOut = dOut gShift }
+  let outsF = dOut f
+  let insG = dIn gShift
+  if length outsF /= length insG
+    then Left "diagram composition boundary mismatch"
+    else do
+      merged'' <- foldl step (Right merged') (zip outsF insG)
+      validateDiagram merged''
+      pure merged''
   where
     step acc (pOut, pIn) = do
       d <- acc
@@ -200,6 +226,9 @@ varsInTy ty =
         IXVar v -> varsInTy (ixvSort v)
         IXBound _ -> []
         IXFun _ args -> concatMap varsInIx args
+
+freeTyVarsTypeLocal :: TypeExpr -> S.Set TyVar
+freeTyVarsTypeLocal = S.fromList . varsInTy
 
 freeTyVarsPayload :: Edge -> S.Set TyVar
 freeTyVarsPayload edge =

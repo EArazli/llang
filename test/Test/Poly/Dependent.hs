@@ -21,7 +21,7 @@ import Strat.Poly.TypeExpr
   , IxTerm(..)
   )
 import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..), IxRule(..), normalizeIx)
-import Strat.Poly.TypeTheory (TypeTheory(..))
+import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..))
 import Strat.Poly.UnifyTy (unifyIx, unifyTyFlex, emptySubst, sIx)
 import Strat.Poly.Graph
   ( BinderMetaVar(..)
@@ -33,9 +33,9 @@ import Strat.Poly.Graph
   , freshPort
   , addEdgePayload
   , validateDiagram
-  , diagramIsoEq
+    , diagramIsoEq
   )
-import Strat.Poly.Diagram (Diagram, idD)
+import Strat.Poly.Diagram (Diagram, idD, genDIx, compDTT)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Rewrite (RewriteRule(..), rewriteOnce)
 import Test.Poly.Helpers (mkModes)
@@ -48,6 +48,7 @@ tests =
     [ testCase "index normalization reduces add(S(Z),S(Z))" testNormalizeIx
     , testCase "scoped index unification rejects escapes" testScopedIxUnify
     , testCase "dependent unification normalizes index arguments" testDependentUnify
+    , testCase "dependent composition respects definitional index equality" testDependentCompDefEq
     , testCase "binder metas + splice rewrite" testBinderMetaSplice
     ]
 
@@ -81,15 +82,38 @@ testScopedIxUnify = do
 
 testDependentUnify :: Assertion
 testDependentUnify = do
-  (tt, natTy, modeM, _modeI) <- require mkNatTypeTheory
+  (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = TypeRef modeM (TypeName "Vec")
   let aTy = TCon (TypeRef modeM (TypeName "A")) []
+  let tt = tt0 { ttTypeParams = M.fromList [ (vecRef, [TPS_Ix natTy, TPS_Ty modeM]) ] }
   let n = IxVar { ixvName = "n", ixvSort = natTy, ixvScope = 0 }
   let z = IXFun (IxFunName "Z") []
   let add x y = IXFun (IxFunName "add") [x, y]
   let lhs = TCon vecRef [TAIndex (add (IXVar n) z), TAType aTy]
   let rhs = TCon vecRef [TAIndex (IXVar n), TAType aTy]
   _ <- require (unifyTyFlex tt [] S.empty (S.singleton n) emptySubst lhs rhs)
+  pure ()
+
+testDependentCompDefEq :: Assertion
+testDependentCompDefEq = do
+  (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
+  let vecRef = TypeRef modeM (TypeName "Vec")
+  let outRef = TypeRef modeM (TypeName "Out")
+  let z = IXFun (IxFunName "Z") []
+  let add x y = IXFun (IxFunName "add") [x, y]
+  let vecTy ix = TCon vecRef [TAIndex ix]
+  let outTy = TCon outRef []
+  let tt =
+        tt0
+          { ttTypeParams =
+              M.fromList
+                [ (vecRef, [TPS_Ix natTy])
+                , (outRef, [])
+                ]
+          }
+  f <- require (genDIx modeM [] [] [vecTy (add z z)] (GenName "f"))
+  g <- require (genDIx modeM [] [vecTy z] [outTy] (GenName "g"))
+  _ <- require (compDTT tt g f)
   pure ()
 
 testBinderMetaSplice :: Assertion
