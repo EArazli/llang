@@ -45,8 +45,8 @@ compileDiagramArtifact env targetName mMode mSurface uses morphs policy fuel exp
       surf <- lookupSurface env name
       docSurface <- lookupDoctrine env (psDoctrine surf)
       mode <- resolveMode docSurface mMode (Just surf)
-      diag <- elabSurfaceExpr env docSurface surf exprText
-      pure (docSurface, mode, diag)
+      (docOut, diagOut) <- elabSurfaceExpr env docSurface surf exprText
+      pure (docOut, mode, diagOut)
   morphsFromUses <- resolveUses env targetName uses
   (docUsed, diagUsed) <- applyMorphisms env docSurface diag0 morphsFromUses
   let usesMismatch = (not (null uses)) && dName docUsed /= targetName

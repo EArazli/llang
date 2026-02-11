@@ -54,24 +54,16 @@ surface QuadLin where {
 
   expr {
     atom:
-      ident "(" <expr> ")" => CALL(name, args)
-    | ident => VAR(name)
-    | "out" <expr> => OUT(expr)
-    | "diag" "{" <expr> "}" => DIAG(expr)
+      ident(name) "(" <expr> ")" => $1 ; #name
+    | ident(name) => $name
+    | "out" <expr> => $1
+    | "diag" "{" <expr> "}" => $1
     | "(" <expr> ")" => <expr>
     ;
     prefix:
-      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+      "in" ident(name) ":" <type>(ty) ";" <expr> => <expr> bind in(name, ty, 1)
     ;
-    infixr 10 "," => LIST(lhs, rhs);
-  }
-
-  elaborate {
-    VAR(x) => $x;;
-    LIST(a, b) => $1 * $2;;
-    OUT(e) => $1;;
-    DIAG(e) => $1;;
-    IN(x, ty, body) => $1;;
+    infixr 10 "," => $1 * $2;
   }
 }
 
@@ -86,24 +78,16 @@ surface QuadAff where {
 
   expr {
     atom:
-      ident "(" <expr> ")" => CALL(name, args)
-    | ident => VAR(name)
-    | "out" <expr> => OUT(expr)
-    | "diag" "{" <expr> "}" => DIAG(expr)
+      ident(name) "(" <expr> ")" => $1 ; #name
+    | ident(name) => $name
+    | "out" <expr> => $1
+    | "diag" "{" <expr> "}" => $1
     | "(" <expr> ")" => <expr>
     ;
     prefix:
-      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+      "in" ident(name) ":" <type>(ty) ";" <expr> => <expr> bind in(name, ty, 1)
     ;
-    infixr 10 "," => LIST(lhs, rhs);
-  }
-
-  elaborate {
-    VAR(x) => $x;;
-    LIST(a, b) => $1 * $2;;
-    OUT(e) => $1;;
-    DIAG(e) => $1;;
-    IN(x, ty, body) => $1;;
+    infixr 10 "," => $1 * $2;
   }
 }
 
@@ -118,24 +102,16 @@ surface QuadRel where {
 
   expr {
     atom:
-      ident "(" <expr> ")" => CALL(name, args)
-    | ident => VAR(name)
-    | "out" <expr> => OUT(expr)
-    | "diag" "{" <expr> "}" => DIAG(expr)
+      ident(name) "(" <expr> ")" => $1 ; #name
+    | ident(name) => $name
+    | "out" <expr> => $1
+    | "diag" "{" <expr> "}" => $1
     | "(" <expr> ")" => <expr>
     ;
     prefix:
-      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+      "in" ident(name) ":" <type>(ty) ";" <expr> => <expr> bind in(name, ty, 1)
     ;
-    infixr 10 "," => LIST(lhs, rhs);
-  }
-
-  elaborate {
-    VAR(x) => $x;;
-    LIST(a, b) => $1 * $2;;
-    OUT(e) => $1;;
-    DIAG(e) => $1;;
-    IN(x, ty, body) => $1;;
+    infixr 10 "," => $1 * $2;
   }
 }
 
@@ -150,23 +126,15 @@ surface QuadCart where {
 
   expr {
     atom:
-      ident "(" <expr> ")" => CALL(name, args)
-    | ident => VAR(name)
-    | "out" <expr> => OUT(expr)
-    | "diag" "{" <expr> "}" => DIAG(expr)
+      ident(name) "(" <expr> ")" => $1 ; #name
+    | ident(name) => $name
+    | "out" <expr> => $1
+    | "diag" "{" <expr> "}" => $1
     | "(" <expr> ")" => <expr>
     ;
     prefix:
-      "in" ident ":" <type> ";" <expr> => IN(name, ty, body)
+      "in" ident(name) ":" <type>(ty) ";" <expr> => <expr> bind in(name, ty, 1)
     ;
-    infixr 10 "," => LIST(lhs, rhs);
-  }
-
-  elaborate {
-    VAR(x) => $x;;
-    LIST(a, b) => $1 * $2;;
-    OUT(e) => $1;;
-    DIAG(e) => $1;;
-    IN(x, ty, body) => $1;;
+    infixr 10 "," => $1 * $2;
   }
 }

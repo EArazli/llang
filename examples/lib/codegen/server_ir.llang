@@ -19,25 +19,17 @@ surface ServerIR_Surface where {
 
   expr {
     atom:
-      string => STR(s)
-    | "serve" "(" <expr> ")" => SERVE(e)
-    | ident => VAR(x)
+      string(s) => stringLit(s=#s)
+    | "serve" "(" <expr> ")" => $1 ; serve
+    | ident(x) => $x
     | "(" <expr> ")" => <expr>
     ;
 
     prefix:
-      "let" ident "=" <expr> ";" <expr> => LET(name, bound, body)
+      "let" ident(name) "=" <expr> ";" <expr> => $1 * $2 bind let(name, 1, 2)
     ;
 
-    infixl 10 "+" => ADD(lhs, rhs);
-  }
-
-  elaborate {
-    STR(s) => stringLit(s=#s);;
-    VAR(x) => $x;;
-    ADD(a, b) => ($1 * $2) ; concat;;
-    SERVE(e) => $1 ; serve;;
-    LET(name, bound, body) => ($1 * $2);;
+    infixl 10 "+" => ($1 * $2) ; concat;
   }
 }
 

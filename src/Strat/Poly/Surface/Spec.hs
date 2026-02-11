@@ -5,20 +5,20 @@ module Strat.Poly.Surface.Spec
   , LexerSpec(..)
   , ExprSpec(..)
   , ExprRule(..)
+  , BinderDecl(..)
   , InfixAssoc(..)
   , InfixRule(..)
   , AppRule(..)
   , PatItem(..)
   , Action(..)
-  , ElabRule(..)
+  , GenRef(..)
   , TemplateExpr(..)
+  , TemplateBinderArg(..)
   , TemplateAttrArg(..)
   , AttrTemplate(..)
-  , SurfaceAST(..)
   ) where
 
 import Data.Text (Text)
-import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.DSL.AST (RawPolyTypeExpr)
 import Strat.Poly.Attr (AttrLit)
@@ -26,6 +26,7 @@ import Strat.Poly.Attr (AttrLit)
 data PolySurfaceDef = PolySurfaceDef
   { psName :: Text
   , psDoctrine :: Text
+  , psBaseDoctrine :: Maybe Text
   , psMode :: ModeName
   , psSpec :: SurfaceSpec
   } deriving (Eq, Show)
@@ -33,10 +34,10 @@ data PolySurfaceDef = PolySurfaceDef
 data SurfaceSpec = SurfaceSpec
   { ssName :: Text
   , ssDoctrine :: Text
+  , ssBaseDoctrine :: Maybe Text
   , ssMode :: Text
   , ssLexer :: Maybe LexerSpec
   , ssExprSpec :: Maybe ExprSpec
-  , ssElabRules :: M.Map Text ElabRule
   } deriving (Eq, Show)
 
 data LexerSpec = LexerSpec
@@ -54,7 +55,21 @@ data ExprSpec = ExprSpec
 data ExprRule = ExprRule
   { erPattern :: [PatItem]
   , erAction :: Action
+  , erBinder :: Maybe BinderDecl
   } deriving (Eq, Show)
+
+data BinderDecl
+  = BindIn
+      { bdVarCap :: Text
+      , bdTypeCap :: Text
+      , bdBodyHole :: Int
+      }
+  | BindLet
+      { bdVarCap :: Text
+      , bdValueHole :: Int
+      , bdBodyHole :: Int
+      }
+  deriving (Eq, Show)
 
 data InfixAssoc = AssocL | AssocR
   deriving (Eq, Show)
@@ -72,28 +87,27 @@ newtype AppRule = AppRule
 
 data PatItem
   = PatLit Text
-  | PatIdent
-  | PatInt
-  | PatString
-  | PatBool
+  | PatIdent (Maybe Text)
+  | PatInt (Maybe Text)
+  | PatString (Maybe Text)
+  | PatBool (Maybe Text)
   | PatExpr
-  | PatType
+  | PatType (Maybe Text)
   deriving (Eq, Show)
 
 data Action
-  = ActionCtor Text [Text]
-  | ActionExpr
+  = ActionExpr
+  | ActionTemplate TemplateExpr
   deriving (Eq, Show)
 
-data ElabRule = ElabRule
-  { erCtor :: Text
-  , erArgs :: [Text]
-  , erTemplate :: TemplateExpr
-  } deriving (Eq, Show)
+data GenRef
+  = GenLit Text
+  | GenHole Text
+  deriving (Eq, Show)
 
 data TemplateExpr
   = TId [RawPolyTypeExpr]
-  | TGen Text (Maybe [RawPolyTypeExpr]) (Maybe [TemplateAttrArg])
+  | TGen GenRef (Maybe [RawPolyTypeExpr]) (Maybe [TemplateAttrArg]) (Maybe [TemplateBinderArg])
   | TTermRef Text
   | TBox Text TemplateExpr
   | TLoop TemplateExpr
@@ -101,6 +115,11 @@ data TemplateExpr
   | TTensor TemplateExpr TemplateExpr
   | THole Int
   | TVar Text
+  deriving (Eq, Show)
+
+data TemplateBinderArg
+  = TBAExpr TemplateExpr
+  | TBAMeta Text
   deriving (Eq, Show)
 
 data TemplateAttrArg
@@ -112,11 +131,4 @@ data AttrTemplate
   = ATLIT AttrLit
   | ATHole Text
   | ATVar Text
-  deriving (Eq, Show)
-
-data SurfaceAST
-  = SAIdent Text
-  | SALit AttrLit
-  | SAType RawPolyTypeExpr
-  | SANode Text [SurfaceAST]
   deriving (Eq, Show)

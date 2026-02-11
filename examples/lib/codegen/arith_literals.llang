@@ -21,18 +21,12 @@ surface ArithInfix where {
 
   expr {
     atom:
-      int => LIT(n)
+      int(n) => lit(n=#n)
     | "(" <expr> ")" => <expr>
     ;
 
-    infixl 20 "*" => MUL(lhs, rhs);
-    infixl 10 "+" => ADD(lhs, rhs);
-  }
-
-  elaborate {
-    LIT(n) => lit(n=#n);;
-    MUL(a, b) => ($1 * $2) ; mul;;
-    ADD(a, b) => ($1 * $2) ; add;;
+    infixl 20 "*" => ($1 * $2) ; mul;
+    infixl 10 "+" => ($1 * $2) ; add;
   }
 }
 

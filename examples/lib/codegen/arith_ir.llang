@@ -20,20 +20,13 @@ surface ArithIR_Surface where {
 
   expr {
     atom:
-      string => LIT(value)
-    | ident => VAR(name)
+      string(value) => lit(value=#value)
+    | ident(name) => var(name=#name)
     | "(" <expr> ")" => <expr>
     ;
 
-    infixl 20 "*" => MUL(lhs, rhs);
-    infixl 10 "+" => ADD(lhs, rhs);
-  }
-
-  elaborate {
-    LIT(value) => lit(value=#value);;
-    VAR(name) => var(name=#name);;
-    MUL(a, b) => ($1 * $2) ; mul;;
-    ADD(a, b) => ($1 * $2) ; add;;
+    infixl 20 "*" => ($1 * $2) ; mul;
+    infixl 10 "+" => ($1 * $2) ; add;
   }
 }
 

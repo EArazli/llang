@@ -108,18 +108,15 @@ testSurfaceLiteralCapture = do
         , "  }"
         , "  expr {"
         , "    atom:"
-        , "      int => LIT(n)"
+        , "      int(n) => Lit(n=#n)"
         , "    ;"
-        , "  }"
-        , "  elaborate {"
-        , "    LIT(n) => Lit(n=#n);;"
         , "  }"
         , "}"
         ]
   env <- require (elabSource src)
   doc <- lookupDoctrine "D" env
   surf <- lookupSurface "NumLit" env
-  diag <- require (elabSurfaceExpr emptyEnv doc surf "42")
+  diag <- require (fmap snd (elabSurfaceExpr emptyEnv doc surf "42"))
   payload <- require (singleGenPayload diag)
   payload @?= (GenName "Lit", M.fromList [("n", ATLit (ALInt 42))])
 
@@ -310,18 +307,15 @@ testSurfaceRejectsDirectAttrGenCall = do
         , "  }"
         , "  expr {"
         , "    atom:"
-        , "      ident => REF(name)"
+        , "      ident(name) => $name"
         , "    ;"
-        , "  }"
-        , "  elaborate {"
-        , "    REF(name) => $name;;"
         , "  }"
         , "}"
         ]
   env <- require (elabSource src)
   doc <- lookupDoctrine "D" env
   surf <- lookupSurface "S" env
-  case elabSurfaceExpr emptyEnv doc surf "Lit" of
+  case fmap snd (elabSurfaceExpr emptyEnv doc surf "Lit") of
     Left err ->
       assertBool
         "expected explicit rejection for attribute-bearing direct generator calls"
@@ -386,18 +380,15 @@ testSurfaceRejectsConflictingAttrVarSorts = do
         , "  }"
         , "  expr {"
         , "    atom:"
-        , "      \"u\" => MIX"
+        , "      \"u\" => GI(x) * GB(x)"
         , "    ;"
-        , "  }"
-        , "  elaborate {"
-        , "    MIX => GI(x) * GB(x);;"
         , "  }"
         , "}"
         ]
   env <- require (elabSource src)
   doc <- lookupDoctrine "D" env
   surf <- lookupSurface "S" env
-  case elabSurfaceExpr emptyEnv doc surf "u" of
+  case fmap snd (elabSurfaceExpr emptyEnv doc surf "u") of
     Left err ->
       assertBool
         "expected conflicting attribute-variable sorts to be rejected"

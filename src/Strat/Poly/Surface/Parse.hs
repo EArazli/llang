@@ -1,25 +1,43 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Surface.Parse
-  ( parseSurfaceSpec
+  ( SurfaceNode(..)
+  , SurfaceParam(..)
+  , parseSurfaceSpec
   , parseSurfaceExpr
   , surfaceSpecBlock
   ) where
 
+import Data.Char (isAlphaNum)
+import Data.Functor (($>))
+import Data.Functor (void)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Data.Void (Void)
-import Data.Char (isAlphaNum)
-import Data.Functor (void)
-import Data.Functor (($>))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
 
-import Strat.Poly.Surface.Spec
-import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
 import Strat.Poly.Attr (AttrLit(..))
+import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
+import Strat.Poly.Surface.Spec
+
+
+-- Surface expression parse tree
+
+data SurfaceParam
+  = SPIdent Text
+  | SPLit AttrLit
+  | SPType RawPolyTypeExpr
+  deriving (Eq, Show)
+
+data SurfaceNode = SurfaceNode
+  { snTemplate :: TemplateExpr
+  , snParams :: M.Map Text SurfaceParam
+  , snChildren :: [SurfaceNode]
+  , snBinder :: Maybe BinderDecl
+  } deriving (Eq, Show)
 
 
 -- Spec parser
@@ -41,11 +59,14 @@ keyword kw = lexeme (try (string kw <* notFollowedBy identChar))
 identChar :: Parser Char
 identChar = satisfy (\x -> isAlphaNum x || x == '_')
 
-identRaw :: Parser Text
-identRaw = lexeme $ do
+identBody :: Parser Text
+identBody = do
   c <- letterChar <|> char '_'
   rest <- many identChar
-  pure (T.pack (c:rest))
+  pure (T.pack (c : rest))
+
+identRaw :: Parser Text
+identRaw = lexeme identBody
 
 ident :: Parser Text
 ident = identRaw
@@ -59,6 +80,13 @@ stringLiteral = lexeme $ do
 integer :: Parser Integer
 integer = lexeme L.decimal
 
+positiveInt :: Parser Int
+positiveInt = do
+  n <- lexeme L.decimal
+  if n > (0 :: Int)
+    then pure n
+    else fail "expected a positive integer"
+
 parseSurfaceSpec :: Text -> Either Text SurfaceSpec
 parseSurfaceSpec input =
   case runParser (sc *> surfaceSpec <* eof) "<surface>" input of
@@ -67,10 +95,10 @@ parseSurfaceSpec input =
 
 data SpecItem
   = ItemDoctrine Text
+  | ItemBase Text
   | ItemMode Text
   | ItemLexer LexerSpec
   | ItemExpr ExprSpec
-  | ItemElab [ElabRule]
 
 surfaceSpec :: Parser SurfaceSpec
 surfaceSpec = do
@@ -78,36 +106,35 @@ surfaceSpec = do
   let spec0 = SurfaceSpec
         { ssName = ""
         , ssDoctrine = ""
+        , ssBaseDoctrine = Nothing
         , ssMode = ""
         , ssLexer = Nothing
         , ssExprSpec = Nothing
-        , ssElabRules = M.empty
         }
   let spec = foldl applySpec spec0 items
   if T.null (ssDoctrine spec)
     then fail "surface: missing doctrine"
-    else if T.null (ssMode spec)
-      then fail "surface: missing mode"
-      else pure spec
+    else
+      if T.null (ssMode spec)
+        then fail "surface: missing mode"
+        else pure spec
   where
     applySpec spec item =
       case item of
         ItemDoctrine t -> spec { ssDoctrine = t }
+        ItemBase t -> spec { ssBaseDoctrine = Just t }
         ItemMode t -> spec { ssMode = t }
         ItemLexer l -> spec { ssLexer = Just l }
         ItemExpr e -> spec { ssExprSpec = Just e }
-        ItemElab rules -> spec { ssElabRules = foldl insertRule (ssElabRules spec) rules }
-    insertRule mp rule =
-      M.insert (erCtor rule) rule mp
 
 surfaceItem :: Parser SpecItem
 surfaceItem =
   choice
     [ ItemDoctrine <$> (symbol "doctrine" *> ident <* optionalSemi)
+    , ItemBase <$> (symbol "base" *> ident <* optionalSemi)
     , ItemMode <$> (symbol "mode" *> ident <* optionalSemi)
     , ItemLexer <$> lexerBlock
     , ItemExpr <$> exprBlock
-    , ItemElab <$> elaborateBlock
     ]
 
 optionalSemi :: Parser ()
@@ -147,9 +174,10 @@ exprBlock = do
   let prefixes = concat [xs | ExprPrefixes xs <- items]
   let infixes = concat [xs | ExprInfixes xs <- items]
   let apps = [x | ExprApp x <- items]
-  let app = case apps of
-        [] -> Nothing
-        (a:_) -> Just a
+  let app =
+        case apps of
+          [] -> Nothing
+          (a:_) -> Just a
   pure ExprSpec
     { esAtoms = atoms
     , esPrefixes = prefixes
@@ -203,49 +231,65 @@ exprBlock = do
       pats <- patternItems
       _ <- symbol "=>"
       act <- action
-      pure ExprRule { erPattern = pats, erAction = act }
+      binder <- optional binderDecl
+      pure ExprRule { erPattern = pats, erAction = act, erBinder = binder }
 
 patternItems :: Parser [PatItem]
 patternItems = manyTill patItem (lookAhead (symbol "=>" <|> symbol "|" <|> symbol ";"))
 
+captureName :: Parser (Maybe Text)
+captureName = optional (symbol "(" *> identRaw <* symbol ")")
+
 patItem :: Parser PatItem
 patItem =
   choice
-    [ symbol "ident" $> PatIdent
-    , symbol "int" $> PatInt
-    , symbol "string" $> PatString
-    , symbol "bool" $> PatBool
+    [ symbol "ident" *> (PatIdent <$> captureName)
+    , symbol "int" *> (PatInt <$> captureName)
+    , symbol "string" *> (PatString <$> captureName)
+    , symbol "bool" *> (PatBool <$> captureName)
     , try (symbol "<" *> symbol "expr" *> symbol ">" $> PatExpr)
-    , try (symbol "<" *> symbol "type" *> symbol ">" $> PatType)
+    , try (symbol "<" *> symbol "type" *> symbol ">" *> (PatType <$> captureName))
     , PatLit <$> stringLiteral
     ]
 
 action :: Parser Action
 action =
-  (symbol "<" *> symbol "expr" *> symbol ">" $> ActionExpr)
-    <|> do
-      ctor <- ident
-      args <- option [] (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
-      pure (ActionCtor ctor args)
+  try (symbol "<" *> symbol "expr" *> symbol ">" $> ActionExpr)
+    <|> (ActionTemplate <$> templateExpr)
 
-elaborateBlock :: Parser [ElabRule]
-elaborateBlock = do
-  _ <- symbol "elaborate"
-  _ <- symbol "{"
-  rules <- sepEndBy elabRule elabSep
-  _ <- symbol "}"
-  optionalSemi
-  pure rules
+binderDecl :: Parser BinderDecl
+binderDecl = do
+  _ <- symbol "bind"
+  bindIn <|> bindLet
   where
-    elabSep = symbol ";;"
-
-elabRule :: Parser ElabRule
-elabRule = do
-  ctor <- ident
-  args <- option [] (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
-  _ <- symbol "=>"
-  templ <- templateExpr
-  pure ElabRule { erCtor = ctor, erArgs = args, erTemplate = templ }
+    bindIn = do
+      _ <- symbol "in"
+      _ <- symbol "("
+      varCap <- ident
+      _ <- symbol ","
+      typeCap <- ident
+      _ <- symbol ","
+      bodyHole <- positiveInt
+      _ <- symbol ")"
+      pure BindIn
+        { bdVarCap = varCap
+        , bdTypeCap = typeCap
+        , bdBodyHole = bodyHole
+        }
+    bindLet = do
+      _ <- symbol "let"
+      _ <- symbol "("
+      varCap <- ident
+      _ <- symbol ","
+      valueHole <- positiveInt
+      _ <- symbol ","
+      bodyHole <- positiveInt
+      _ <- symbol ")"
+      pure BindLet
+        { bdVarCap = varCap
+        , bdValueHole = valueHole
+        , bdBodyHole = bodyHole
+        }
 
 -- Template expressions (diag expr + placeholders)
 
@@ -256,7 +300,7 @@ templateExpr = makeExprParser templateTerm operators
       [ [ InfixL (symbol "*" $> TTensor) ]
       , [ InfixL (semiOp $> TComp) ]
       ]
-    semiOp = try (symbol ";" <* notFollowedBy (char ';'))
+    semiOp = try (symbol ";" <* lookAhead templateTerm)
 
 templateTerm :: Parser TemplateExpr
 templateTerm =
@@ -266,7 +310,7 @@ templateTerm =
     , try templateLoop
     , try templateHole
     , try templateTermRef
-    , templateGen
+    , try templateGen
     , parens templateExpr
     ]
 
@@ -278,10 +322,35 @@ templateId = do
 
 templateGen :: Parser TemplateExpr
 templateGen = do
-  name <- ident
+  ref <- templateGenRef
   mArgs <- optional (symbol "{" *> typeExpr `sepBy` symbol "," <* symbol "}")
   mAttrArgs <- optional templateAttrArgs
-  pure (TGen name mArgs mAttrArgs)
+  mBinderArgs <- optional templateBinderArgs
+  pure (TGen ref mArgs mAttrArgs mBinderArgs)
+
+templateGenRef :: Parser GenRef
+templateGenRef =
+  (GenHole <$> hashIdent) <|> (GenLit <$> identTemplate)
+
+hashIdent :: Parser Text
+hashIdent = lexeme (char '#' *> identBody)
+
+identTemplate :: Parser Text
+identTemplate = do
+  name <- ident
+  if name `elem` templateReserved
+    then fail "reserved keyword in template expression"
+    else pure name
+
+templateReserved :: [Text]
+templateReserved =
+  [ "atom"
+  , "prefix"
+  , "application"
+  , "infixl"
+  , "infixr"
+  , "bind"
+  ]
 
 templateBox :: Parser TemplateExpr
 templateBox = do
@@ -306,9 +375,7 @@ templateHole = lexeme $ do
   number <- optional (some digitChar)
   case number of
     Just ds -> pure (THole (read ds))
-    Nothing -> do
-      name <- identRaw
-      pure (TVar name)
+    Nothing -> TVar <$> identBody
 
 templateTermRef :: Parser TemplateExpr
 templateTermRef = do
@@ -327,9 +394,9 @@ templateAttrArgs = do
   where
     mixedArgStyles [] = False
     mixedArgStyles xs =
-      let named = [ () | TAName _ _ <- xs ]
-          positional = [ () | TAPos _ <- xs ]
-      in not (null named) && not (null positional)
+      let named = [() | TAName _ _ <- xs]
+          positional = [() | TAPos _ <- xs]
+       in not (null named) && not (null positional)
 
 templateAttrArg :: Parser TemplateAttrArg
 templateAttrArg =
@@ -357,6 +424,21 @@ templateAttrTerm =
       _ <- symbol "#"
       name <- ident
       pure (ATHole name)
+
+templateBinderArgs :: Parser [TemplateBinderArg]
+templateBinderArgs = do
+  _ <- symbol "["
+  args <- templateBinderArg `sepBy` symbol ","
+  _ <- symbol "]"
+  pure args
+
+templateBinderArg :: Parser TemplateBinderArg
+templateBinderArg =
+  try (TBAMeta <$> binderMetaVar)
+    <|> (TBAExpr <$> templateExpr)
+
+binderMetaVar :: Parser Text
+binderMetaVar = lexeme (char '?' *> identBody)
 
 contextExpr :: Parser [RawPolyTypeExpr]
 contextExpr = do
@@ -396,7 +478,7 @@ typeExpr = lexeme (try modApp <|> regular)
       case mQual of
         Just qualName ->
           let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }
-          in pure (RPTCon ref (maybe [] id mArgs))
+           in pure (RPTCon ref (maybe [] id mArgs))
         Nothing ->
           case T.uncons name of
             Nothing -> fail "empty type"
@@ -404,13 +486,13 @@ typeExpr = lexeme (try modApp <|> regular)
               case mArgs of
                 Just args ->
                   let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-                  in pure (RPTCon ref args)
+                   in pure (RPTCon ref args)
                 Nothing ->
                   if isLowerChar c
                     then pure (RPTVar name)
                     else
                       let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-                      in pure (RPTCon ref [])
+                       in pure (RPTCon ref [])
     isLowerChar ch = ch >= 'a' && ch <= 'z'
 
 parens :: Parser a -> Parser a
@@ -418,7 +500,7 @@ parens p = symbol "(" *> p <* symbol ")"
 
 -- Surface program parsing (expressions)
 
-parseSurfaceExpr :: SurfaceSpec -> Text -> Either Text SurfaceAST
+parseSurfaceExpr :: SurfaceSpec -> Text -> Either Text SurfaceNode
 parseSurfaceExpr spec input =
   case ssExprSpec spec of
     Nothing -> Left "surface: expression grammar missing"
@@ -431,19 +513,20 @@ parseSurfaceExpr spec input =
             Right ast -> Right ast
 
 data Capture
-  = CapIdent Text
-  | CapLit AttrLit
-  | CapType RawPolyTypeExpr
-  | CapExpr SurfaceAST
+  = CapIdent (Maybe Text) Text
+  | CapLit (Maybe Text) AttrLit
+  | CapType (Maybe Text) RawPolyTypeExpr
+  | CapExpr SurfaceNode
   | CapSkip
   deriving (Eq, Show)
 
-parseExpr :: LexerSpec -> ExprSpec -> Int -> Parser SurfaceAST
+parseExpr :: LexerSpec -> ExprSpec -> Int -> Parser SurfaceNode
 parseExpr lexSpec exprSpec minPrec = do
   left <- parseTerm lexSpec exprSpec
   parseRest left
   where
     appPrec = maximum (0 : map irPrec (esInfixes exprSpec)) + 1
+
     parseRest left = do
       mApp <- try (parseApplication lexSpec exprSpec minPrec appPrec left) <|> pure Nothing
       case mApp of
@@ -454,7 +537,7 @@ parseExpr lexSpec exprSpec minPrec = do
             Just next -> parseRest next
             Nothing -> pure left
 
-parseApplication :: LexerSpec -> ExprSpec -> Int -> Int -> SurfaceAST -> Parser (Maybe SurfaceAST)
+parseApplication :: LexerSpec -> ExprSpec -> Int -> Int -> SurfaceNode -> Parser (Maybe SurfaceNode)
 parseApplication lexSpec exprSpec minPrec appPrec left =
   case esApp exprSpec of
     Nothing -> pure Nothing
@@ -466,11 +549,11 @@ parseApplication lexSpec exprSpec minPrec appPrec left =
           case mRight of
             Nothing -> pure Nothing
             Just right ->
-              case applyAction act [CapExpr left, CapExpr right] of
+              case applyAction act Nothing [CapExpr left, CapExpr right] of
                 Left err -> fail (T.unpack err)
                 Right ast -> pure (Just ast)
 
-parseInfix :: LexerSpec -> ExprSpec -> Int -> SurfaceAST -> Parser (Maybe SurfaceAST)
+parseInfix :: LexerSpec -> ExprSpec -> Int -> SurfaceNode -> Parser (Maybe SurfaceNode)
 parseInfix lexSpec exprSpec minPrec left = do
   let rules = esInfixes exprSpec
   parseAny rules
@@ -485,65 +568,83 @@ parseInfix lexSpec exprSpec minPrec left = do
           case matched of
             Nothing -> parseAny rs
             Just _ -> do
-              let nextMin = case irAssoc r of
-                    AssocL -> prec + 1
-                    AssocR -> prec
+              let nextMin =
+                    case irAssoc r of
+                      AssocL -> prec + 1
+                      AssocR -> prec
               right <- parseExpr lexSpec exprSpec nextMin
-              case applyAction (irAction r) [CapExpr left, CapExpr right] of
+              case applyAction (irAction r) Nothing [CapExpr left, CapExpr right] of
                 Left err -> fail (T.unpack err)
                 Right ast -> pure (Just ast)
 
-parseTerm :: LexerSpec -> ExprSpec -> Parser SurfaceAST
+parseTerm :: LexerSpec -> ExprSpec -> Parser SurfaceNode
 parseTerm lexSpec exprSpec =
   choice
     [ try (parsePatternRules lexSpec exprSpec (esPrefixes exprSpec))
     , parsePatternRules lexSpec exprSpec (esAtoms exprSpec)
     ]
 
-parsePatternRules :: LexerSpec -> ExprSpec -> [ExprRule] -> Parser SurfaceAST
+parsePatternRules :: LexerSpec -> ExprSpec -> [ExprRule] -> Parser SurfaceNode
 parsePatternRules lexSpec exprSpec rules =
   choice (map (try . parsePatternRule lexSpec exprSpec) rules)
 
-parsePatternRule :: LexerSpec -> ExprSpec -> ExprRule -> Parser SurfaceAST
+parsePatternRule :: LexerSpec -> ExprSpec -> ExprRule -> Parser SurfaceNode
 parsePatternRule lexSpec exprSpec rule = do
-  caps <- mapM (parsePatItem lexSpec exprSpec) (erPattern rule)
-  case applyAction (erAction rule) caps of
+  caps <- mapM (parseRulePatItem lexSpec exprSpec) (erPattern rule)
+  case applyAction (erAction rule) (erBinder rule) caps of
     Left err -> fail (T.unpack err)
     Right ast -> pure ast
 
-parsePatItem :: LexerSpec -> ExprSpec -> PatItem -> Parser Capture
-parsePatItem lexSpec exprSpec item =
+parseRulePatItem :: LexerSpec -> ExprSpec -> PatItem -> Parser Capture
+parseRulePatItem lexSpec exprSpec item =
   case item of
     PatLit lit -> literalToken lexSpec lit *> pure CapSkip
-    PatIdent -> CapIdent <$> identToken lexSpec
-    PatInt -> CapLit . ALInt . fromIntegral <$> integer
-    PatString -> CapLit . ALString <$> stringLiteral
-    PatBool ->
-      (literalToken lexSpec "true" $> CapLit (ALBool True))
-        <|> (literalToken lexSpec "false" $> CapLit (ALBool False))
+    PatIdent cap -> CapIdent cap <$> identToken lexSpec
+    PatInt cap -> CapLit cap . ALInt . fromIntegral <$> integer
+    PatString cap -> CapLit cap . ALString <$> stringLiteral
+    PatBool cap ->
+      (literalToken lexSpec "true" $> CapLit cap (ALBool True))
+        <|> (literalToken lexSpec "false" $> CapLit cap (ALBool False))
     PatExpr -> CapExpr <$> parseExpr lexSpec exprSpec 0
-    PatType -> CapType <$> typeExpr
+    PatType cap -> CapType cap <$> typeExpr
 
-applyAction :: Action -> [Capture] -> Either Text SurfaceAST
-applyAction act caps =
-  case act of
-    ActionExpr ->
-      case [e | CapExpr e <- caps] of
-        [expr] -> Right expr
-        _ -> Left "surface: <expr> action expects exactly one expression capture"
-    ActionCtor ctor args ->
-      let args' = [a | a <- map capToAst caps, a /= SANode "__skip__" []]
-      in if null args || length args == length args'
-        then Right (SANode ctor args')
-        else Left "surface: action constructor arity mismatch"
+applyAction :: Action -> Maybe BinderDecl -> [Capture] -> Either Text SurfaceNode
+applyAction act binder caps = do
+  params <- buildParamMap caps
+  let children = [e | CapExpr e <- caps]
+  template <-
+    case act of
+      ActionExpr ->
+        case children of
+          [_] -> Right (THole 1)
+          _ -> Left "surface: <expr> action expects exactly one expression capture"
+      ActionTemplate t -> Right t
+  pure SurfaceNode
+    { snTemplate = template
+    , snParams = params
+    , snChildren = children
+    , snBinder = binder
+    }
+
+buildParamMap :: [Capture] -> Either Text (M.Map Text SurfaceParam)
+buildParamMap = foldl step (Right M.empty)
   where
-    capToAst cap =
+    step acc cap = do
+      mp <- acc
       case cap of
-        CapIdent t -> SAIdent t
-        CapLit lit -> SALit lit
-        CapType ty -> SAType ty
-        CapExpr e -> e
-        CapSkip -> SANode "__skip__" []
+        CapIdent mName v -> insertNamed mName (SPIdent v) mp
+        CapLit mName lit -> insertNamed mName (SPLit lit) mp
+        CapType mName ty -> insertNamed mName (SPType ty) mp
+        CapExpr _ -> Right mp
+        CapSkip -> Right mp
+
+    insertNamed mName value mp =
+      case mName of
+        Nothing -> Right mp
+        Just name ->
+          if M.member name mp
+            then Left ("surface: duplicate capture name: " <> name)
+            else Right (M.insert name value mp)
 
 identToken :: LexerSpec -> Parser Text
 identToken lexSpec = do

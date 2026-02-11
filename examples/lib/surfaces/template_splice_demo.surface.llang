@@ -11,11 +11,7 @@ surface SpliceSurface where {
 
   expr {
     atom:
-      "term" "{" "}" => TERM
+      "term" "{" "}" => @SomePredefinedTerm
     ;
-  }
-
-  elaborate {
-    TERM => @SomePredefinedTerm;;
   }
 }

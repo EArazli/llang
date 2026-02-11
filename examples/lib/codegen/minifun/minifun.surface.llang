@@ -11,16 +11,11 @@ surface MiniFun where {
 
   expr {
     atom:
-      ident "(" <expr> ")" => CALL(name, args)
-    | ident => VAR(name)
+      ident(name) "(" <expr> ")" => $1 ; #name
+    | ident(name) => $name
     | "(" <expr> ")" => <expr>
     ;
 
-    infixr 10 "," => LIST(lhs, rhs);
-  }
-
-  elaborate {
-    VAR(x) => $x;;
-    LIST(a, b) => $1 * $2;;
+    infixr 10 "," => $1 * $2;
   }
 }

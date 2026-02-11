@@ -656,16 +656,15 @@ remembers its doctrine and mode and can be referenced via `@<TermName>`.
 
 ### 6.6 Surfaces
 
-Surfaces define a surface language and its
-elaboration to diagrams.
+Surfaces define a surface language with direct template actions and explicit binders.
 
 ```
 surface <Name> where {
-  doctrine <Doctrine>;
+  doctrine <SurfaceDoctrine>;
+  base <BaseDoctrine>;   -- optional; defaults to doctrine
   mode <Mode>;
   lexer { ... }
   expr  { ... }
-  elaborate { ... }
 }
 ```
 
@@ -708,41 +707,30 @@ expr {
 Patterns are sequences of items:
 
 ```
-ident       -- identifier capture
-int         -- integer literal capture
-string      -- string literal capture
-bool        -- boolean literal capture
-<expr>      -- expression capture
-<type>      -- type capture
-"literal"   -- exact token match
+ident(x)      -- identifier capture (name optional)
+int(n)        -- integer literal capture (name optional)
+string(s)     -- string literal capture (name optional)
+bool(b)       -- bool literal capture (name optional)
+<expr>        -- expression capture (positional)
+<type>(ty)    -- type capture (name optional)
+"literal"     -- exact token match
 ```
 
-Actions construct the surface AST:
+Actions are templates:
 
-- `=> <expr>` returns the single captured expression (exactly one is required).
-- `=> Ctor(a, b, ...)` builds an AST node with the captured items in order.
-- Literal captures become `SALit` nodes.
-
-#### Elaboration rules
-
-```
-elaborate {
-  Ctor(x, y, z) => <template>;
-  ...
-}
-```
-
-Rules in `elaborate` blocks are separated by `;;` to avoid ambiguity with the
-composition operator `;` inside templates.
+- `=> <expr>` means the first expression capture (equivalent to `$1`; exactly one `<expr>` capture required).
+- otherwise the right-hand side is a diagram template.
 
 Templates use the diagram-expression language (`id`, `box`, `loop`, `;`, `*`,
 generators) plus **placeholders**:
 
-- `$1`, `$2`, ... refer to child elaborations (positional).
-- `$x` refers to a bound variable occurrence (see binding rules below).
+- `$1`, `$2`, ... refer to expression captures (positional).
+- `$x` uses the identifier captured by `ident(x)` as an SSA variable reference (or zero-arg generator fallback).
 - `@TermName` splices a previously-defined term diagram into the template.
+- `#f` in generator position means dynamic generator lookup from `ident(f)`.
 - Template generator calls may include attribute arguments (named or positional), e.g.
   `Gen{...}(n=#hole, ...)` or `Gen{...}(...)`.
+- Template generator calls may include binder arguments: `Gen(...)[arg1, ?meta, ...]`.
 
 Template `@TermName` splicing is strict: the referenced term must exist and have the
 same doctrine and mode as the current surface elaboration.
@@ -755,20 +743,18 @@ Template attribute terms are:
   - literal capture -> same literal,
   - identifier capture -> string literal of the identifier text.
 
-A constructor named `CALL` with arguments `(name, arg)` is treated as a generator
-call: `name` is the generator name, and `arg` elaborates to its argument diagram.
-Direct calls via `CALL` or bare identifiers cannot target generators with attributes;
-those must be called from templates that explicitly provide attribute arguments.
+#### Explicit binders
 
-#### Binding rules + structural discipline
+Productions may declare binders explicitly:
 
-Binding is inferred by syntax:
+```
+bind in(varCap, typeCap, bodyHole)
+bind let(varCap, valueHole, bodyHole)
+```
 
-- If a constructor captures `ident` immediately followed by `<type>`, it is an
-  **input binder**. The last expression capture is the body.
-- Otherwise, if it captures an `ident` and **at least two** expression captures,
-  it is a **value binder**. The first expression after the ident is the bound
-  value; the last expression capture is the body.
+- `bind in` introduces a fresh input wire typed by `<type>(typeCap)` and binds it to `ident(varCap)` in `bodyHole`.
+- `bind let` binds `ident(varCap)` to the output of `valueHole` and makes it available in `bodyHole`.
+- Hole indices are 1-based over expression captures in that production.
 
 Elaboration semantics:
 
@@ -784,6 +770,23 @@ Elaboration semantics:
     multiple uses insert a **left‑associated** `dup` chain: for 3 uses the
     inserted shape is `dup ; (dup * id[a])` (i.e. the second `dup` consumes
     the **left** output of the first `dup`).
+
+#### Elaboration to base doctrine
+
+Surface parsing elaborates to a diagram in the surface doctrine `S`. If `base D` is set
+and `D != S`, elaboration runs elimination-only normalization:
+
+1. `Σ = Gen(S, mode) \\ Gen(D, mode)` (surface-only generators).
+2. `μ(diag)` = number of occurrences of generators in `Σ`
+   (counting inside boxes and binder arguments).
+3. Candidate rewrite rules come from `S` in the selected mode.
+4. Keep only rules with strict decrease: `μ(lhs) > μ(rhs)`.
+5. Normalize using only those rules with fuel `μ(initialDiag)`.
+6. Require `μ(result) = 0`; otherwise elaboration fails.
+7. Defensively require every generator in `result` is in `Gen(D, mode)`.
+
+The elaboration API returns `(outputDoctrine, diagram)` where `outputDoctrine` is `S`
+when no base doctrine is requested, otherwise `D` after successful elimination.
 
 ### 6.7 Models
 

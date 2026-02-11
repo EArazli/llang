@@ -26,12 +26,8 @@ surface StageExpr where {
 
   expr {
     atom:
-      "stage" => STAGE()
+      "stage" => stage
     ;
-  }
-
-  elaborate {
-    STAGE() => stage;;
   }
 }
 
@@ -46,12 +42,8 @@ surface StageExprCT where {
 
   expr {
     atom:
-      "stageq" => STAGEQ()
+      "stageq" => stageq
     ;
-  }
-
-  elaborate {
-    STAGEQ() => stageq;;
   }
 }
 

@@ -27,7 +27,7 @@ import Strat.Poly.Attr
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePolyCoproduct)
 import Strat.Poly.Surface (elabPolySurfaceDecl)
-import Strat.Poly.Surface.Spec (ssDoctrine)
+import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 import Strat.RunSpec (RunSpec)
 import Strat.Frontend.Compile (compileDiagramArtifact)
 
@@ -80,7 +80,14 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
         DeclSurface name spec -> do
           ensureAbsent "surface" name (meSurfaces env)
           doc <- lookupDoctrine env (ssDoctrine spec)
-          def <- elabPolySurfaceDecl name doc spec
+          mBaseDoc <-
+            case ssBaseDoctrine spec of
+              Nothing -> Right Nothing
+              Just baseName ->
+                if baseName == ssDoctrine spec
+                  then Right (Just doc)
+                  else Just <$> lookupDoctrine env baseName
+          def <- elabPolySurfaceDecl name doc mBaseDoc spec
           let env' = env { meSurfaces = M.insert name def (meSurfaces env) }
           pure (env', rawTerms, rawRuns)
         DeclModel name doc mBase items -> do

@@ -3,25 +3,27 @@ module Strat.Poly.Surface.Elab
   ( elabSurfaceExpr
   ) where
 
+import Control.Monad (foldM)
+import qualified Data.IntMap.Strict as IM
+import Data.List (sort)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Control.Monad (foldM)
 
-import Strat.Poly.Surface.Spec
-import Strat.Poly.Surface.Parse (parseSurfaceExpr)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), lookupTypeSig, gdPlainDom)
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), VarDiscipline(..), modeDiscipline, allowsDrop, allowsDup)
-import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Context, typeMode)
-import qualified Strat.Poly.TypeExpr as Ty
-import qualified Strat.Poly.UnifyTy as U
-import Strat.Poly.Diagram (Diagram(..), idD, unionDiagram, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
+import Strat.Common.Rules (RewritePolicy(..))
+import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Poly.Attr
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), lookupTypeSig, gdPlainDom, doctrineTypeTheory)
+import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
+import Strat.Poly.Diagram (Diagram(..), idD, unionDiagram, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
 import Strat.Poly.Graph
   ( PortId(..)
+  , Edge(..)
+  , BinderMetaVar(..)
+  , BinderArg(..)
   , EdgePayload(..)
+  , ePayload
   , emptyDiagram
   , freshPort
   , addEdgePayload
@@ -31,8 +33,15 @@ import Strat.Poly.Graph
   , shiftDiagram
   , diagramPortType
   )
-import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
-import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), VarDiscipline(..), modeDiscipline, allowsDrop, allowsDup)
+import Strat.Poly.Names (GenName(..), BoxName(..))
+import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
+import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
+import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurfaceExpr)
+import Strat.Poly.Surface.Spec
+import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Context, typeMode)
+import qualified Strat.Poly.TypeExpr as Ty
+import qualified Strat.Poly.UnifyTy as U
 
 
 type Subst = U.TyOnlySubst
@@ -61,23 +70,127 @@ freeTyVarsTy ty =
         Ty.TAType t -> freeTyVarsTy t
         Ty.TAIndex ix -> S.unions [ freeTyVarsTy (Ty.ixvSort v) | v <- S.toList (Ty.freeIxVarsIx ix) ]
 
+freeTyVarsCtx :: Context -> S.Set TyVar
+freeTyVarsCtx = S.unions . map freeTyVarsTy
+
 
 -- Public entrypoint
 
-elabSurfaceExpr :: ModuleEnv -> Doctrine -> PolySurfaceDef -> Text -> Either Text Diagram
-elabSurfaceExpr menv doc surf src = do
-  let mt = dModes doc
+elabSurfaceExpr :: ModuleEnv -> Doctrine -> PolySurfaceDef -> Text -> Either Text (Doctrine, Diagram)
+elabSurfaceExpr menv docS surf src = do
+  let mode = psMode surf
+  let mt = dModes docS
   let spec = psSpec surf
-  ast <- parseSurfaceExpr spec src
-  ops <- requireStructuralOps doc (psMode surf)
+  node <- parseSurfaceExpr spec src
+  ops <- requireStructuralOps docS mode
   env0 <- initEnv
-  diag <- evalFresh (elabAst menv doc mt (psMode surf) spec ops env0 ast)
-  if M.null (sdUses diag)
-    then do
-      validateDiagram (sdDiag diag)
-      ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (sdDiag diag))
-      pure (sdDiag diag)
+  surfDiag <- evalFresh (elabNode menv docS mt mode ops env0 node)
+  if M.null (sdUses surfDiag)
+    then pure ()
     else Left "surface: unresolved variables"
+  validateDiagram (sdDiag surfDiag)
+  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (sdDiag surfDiag))
+  docBase <- resolveBaseDoctrine menv docS surf
+  diagOut <-
+    if dName docBase == dName docS
+      then Right (sdDiag surfDiag)
+      else eliminateToBase docS docBase mode (sdDiag surfDiag)
+  validateDiagram diagOut
+  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diagOut)
+  pure (docBase, diagOut)
+
+resolveBaseDoctrine :: ModuleEnv -> Doctrine -> PolySurfaceDef -> Either Text Doctrine
+resolveBaseDoctrine menv docS surf =
+  case psBaseDoctrine surf of
+    Nothing -> Right docS
+    Just baseName ->
+      if baseName == dName docS
+        then Right docS
+        else
+          case M.lookup baseName (meDoctrines menv) of
+            Nothing -> Left ("surface: unknown base doctrine: " <> baseName)
+            Just docBase -> do
+              let mode = psMode surf
+              if M.member mode (mtModes (dModes docBase))
+                then Right ()
+                else Left "surface: base doctrine is missing surface mode"
+              let gensS = genSetForMode docS mode
+              let gensB = genSetForMode docBase mode
+              if S.isSubsetOf gensB gensS
+                then Right docBase
+                else
+                  let missing = S.toList (S.difference gensB gensS)
+                   in Left ("surface: base generators are not included in surface doctrine: " <> renderGenList missing)
+
+eliminateToBase :: Doctrine -> Doctrine -> ModeName -> Diagram -> Either Text Diagram
+eliminateToBase docS docB mode diag0 = do
+  let gensS = genSetForMode docS mode
+  let gensB = genSetForMode docB mode
+  let sigma = S.difference gensS gensB
+  let rules0 = [ rr | rr <- rulesFromPolicy UseAllOriented (dCells2 docS), dMode (rrLHS rr) == mode ]
+  let rulesElim =
+        [ rr
+        | rr <- rules0
+        , surfaceMeasure sigma (rrLHS rr) > surfaceMeasure sigma (rrRHS rr)
+        ]
+  let fuel = surfaceMeasure sigma diag0
+  status <- normalize (doctrineTypeTheory docS) fuel rulesElim diag0
+  let diagNorm =
+        case status of
+          Finished d -> d
+          OutOfFuel d -> d
+  let remainingSurface = S.intersection sigma (gensInDiagram diagNorm)
+  if S.null remainingSurface
+    then Right ()
+    else Left ("surface elimination did not reach base doctrine; remaining surface generators: " <> renderGenList (S.toList remainingSurface))
+  let remainingOutsideBase = S.difference (gensInDiagram diagNorm) gensB
+  if S.null remainingOutsideBase
+    then Right diagNorm
+    else Left ("surface elimination produced generators outside base doctrine: " <> renderGenList (S.toList remainingOutsideBase))
+
+renderGenList :: [GenName] -> Text
+renderGenList names =
+  T.intercalate ", " [ g | GenName g <- sortByName names ]
+  where
+    sortByName = sortOnGen
+    sortOnGen = sortByText . map unwrap
+    unwrap gn@(GenName t) = (t, gn)
+    sortByText xs = map snd (sort xs)
+
+genSetForMode :: Doctrine -> ModeName -> S.Set GenName
+genSetForMode doc mode = maybe S.empty M.keysSet (M.lookup mode (dGens doc))
+
+gensInDiagram :: Diagram -> S.Set GenName
+gensInDiagram diag =
+  S.unions (map edgeGens (IM.elems (dEdges diag)))
+  where
+    edgeGens edge =
+      case ePayload edge of
+        PGen g _ bargs -> S.insert g (S.unions (map binderGens bargs))
+        PBox _ inner -> gensInDiagram inner
+        PSplice _ -> S.empty
+
+    binderGens barg =
+      case barg of
+        BAConcrete inner -> gensInDiagram inner
+        BAMeta _ -> S.empty
+
+surfaceMeasure :: S.Set GenName -> Diagram -> Int
+surfaceMeasure sigma diag =
+  sum (map edgeMeasure (IM.elems (dEdges diag)))
+  where
+    edgeMeasure edge =
+      case ePayload edge of
+        PGen g _ bargs ->
+          let own = if g `S.member` sigma then 1 else 0
+           in own + sum (map binderMeasure bargs)
+        PBox _ inner -> surfaceMeasure sigma inner
+        PSplice _ -> 0
+
+    binderMeasure barg =
+      case barg of
+        BAConcrete inner -> surfaceMeasure sigma inner
+        BAMeta _ -> 0
 
 
 -- Elaboration environment
@@ -145,7 +258,9 @@ elabSurfaceTypeExpr doc mode expr =
                 then Just (RMComp [modeTok, name], inner)
                 else Nothing
         _ -> Nothing
+
     hasModality tok = M.member (ModName tok) (mtDecls (dModes doc))
+
     hasQualifiedType modeTok tyTok =
       let mode' = ModeName modeTok
           tyName = TypeName tyTok
@@ -204,10 +319,12 @@ elabRawModExprSurface mt raw =
        in if M.member name (mtDecls mt)
             then Right name
             else Left ("surface: unknown modality in expression: " <> tok)
+
     requireDecl name =
       case M.lookup name (mtDecls mt) of
         Nothing -> Left "surface: unknown modality"
         Just decl -> Right decl
+
     step cur name = do
       decl <- requireDecl name
       if mdSrc decl == cur
@@ -234,7 +351,7 @@ emptySurf :: Diagram -> SurfDiag
 emptySurf d = SurfDiag d M.empty M.empty
 
 mergeUses :: Uses -> Uses -> Uses
-mergeUses = M.unionWith (<> )
+mergeUses = M.unionWith (<>)
 
 shiftUses :: Int -> Uses -> Uses
 shiftUses off = M.map (map shiftPort)
@@ -247,7 +364,7 @@ replacePortUses keep drop = M.map (dedupe . map replace)
     replace p = if p == drop then keep else p
 
 mergeTags :: Tags -> Tags -> Tags
-mergeTags = M.unionWith (<> )
+mergeTags = M.unionWith (<>)
 
 shiftTags :: Int -> Tags -> Tags
 shiftTags off = M.map (map shiftPort)
@@ -268,7 +385,8 @@ dedupe = go S.empty
       | otherwise = x : go (S.insert x seen) xs
 
 applySubstSurf :: ModeTheory -> Subst -> SurfDiag -> SurfDiag
-applySubstSurf mt subst sd = sd { sdDiag = applySubstDiagram mt (U.fromTyOnlySubst subst) (sdDiag sd) }
+applySubstSurf mt subst sd =
+  sd { sdDiag = applySubstDiagram mt (U.fromTyOnlySubst subst) (sdDiag sd) }
 
 unifyCtxFlex :: ModeTheory -> S.Set TyVar -> Context -> Context -> Either Text Subst
 unifyCtxFlex mt flex ctx1 ctx2
@@ -302,22 +420,17 @@ requireStructuralOps doc mode = do
       else Right Nothing
   mapM_ ensureDupShape dup
   mapM_ ensureDropShape dropGen
-  pure StructuralOps
-    { soDiscipline = disc
-    , soDup = dup
-    , soDrop = dropGen
-    }
+  pure
+    StructuralOps
+      { soDiscipline = disc
+      , soDup = dup
+      , soDrop = dropGen
+      }
   where
     requireGenDecl label =
       case M.lookup mode (dGens doc) >>= M.lookup (GenName label) of
         Nothing -> Left ("surface structural: missing " <> label <> " generator")
         Just gen -> Right gen
-
-requireGen :: Doctrine -> ModeName -> Text -> Either Text GenDecl
-requireGen doc mode name =
-  case M.lookup mode (dGens doc) >>= M.lookup (GenName name) of
-    Nothing -> Left ("surface: missing generator " <> name)
-    Just gen -> Right gen
 
 ensureDupShape :: GenDecl -> Either Text ()
 ensureDupShape gen =
@@ -339,26 +452,87 @@ ensureDropShape gen =
         _ -> Left "surface structural: configured drop generator has wrong type"
 
 
-
 -- Elaboration core
 
-elabAst :: ModuleEnv -> Doctrine -> ModeTheory -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> SurfaceAST -> Fresh SurfDiag
-elabAst menv doc mt mode spec cart env ast =
-  case ast of
-    SAIdent name ->
-      case M.lookup name (eeVars env) of
-        Just ty -> elabVarRef mt doc mode env (eeTypeSubst env) name ty
-        Nothing -> elabZeroArgGen mt doc mode env name
-    SALit _ -> liftEither (Left "surface: bare literal must be handled by an elaboration rule")
-    SAType _ -> liftEither (Left "surface: unexpected type where expression expected")
-    SANode ctor args ->
-      if ctor == "CALL"
-        then elabCall menv doc mt mode spec cart env args
-        else do
-          rule <- case M.lookup ctor (ssElabRules spec) of
-            Nothing -> liftEither (Left ("surface: missing elaboration rule for " <> ctor))
-            Just r -> pure r
-          elabNode menv doc mt mode spec cart env rule args
+data RuntimeBinder
+  = RBInput Text TypeExpr
+  | RBValue Text Int
+  deriving (Eq, Show)
+
+elabNode :: ModuleEnv -> Doctrine -> ModeTheory -> ModeName -> StructuralOps -> ElabEnv -> SurfaceNode -> Fresh SurfDiag
+elabNode menv doc mt mode ops env node = do
+  typeSubst <- liftEither (buildTypeSubst doc mode env (snParams node))
+  (mBinder, mBodyHole, bodyEnv) <- prepareBinder doc mode mt env (snParams node) (snBinder node)
+  let children = snChildren node
+  childDiags <-
+    mapM
+      (\(idx, child) ->
+        let childEnv =
+              case mBodyHole of
+                Just bodyIdx | idx == bodyIdx -> bodyEnv
+                _ -> env
+         in elabNode menv doc mt mode ops childEnv child)
+      (zip [1 ..] children)
+  surf <- evalTemplate menv doc mt mode ops env (snParams node) typeSubst childDiags (snTemplate node)
+  applyBinder mt doc mode ops mBinder surf
+
+prepareBinder
+  :: Doctrine
+  -> ModeName
+  -> ModeTheory
+  -> ElabEnv
+  -> M.Map Text SurfaceParam
+  -> Maybe BinderDecl
+  -> Fresh (Maybe RuntimeBinder, Maybe Int, ElabEnv)
+prepareBinder _doc _mode _mt env _params Nothing =
+  pure (Nothing, Nothing, env)
+prepareBinder doc mode mt env params (Just decl) =
+  case decl of
+    BindIn varCap typeCap bodyHole -> do
+      varName <- liftEither (requireIdentParam params varCap)
+      tyRaw <- liftEither (requireTypeParam params typeCap)
+      tyAnn <- liftEither (elabSurfaceTypeExpr doc mode tyRaw)
+      if typeMode tyAnn /= mode
+        then liftEither (Left "surface: binder type must be in surface mode")
+        else pure ()
+      let ty = applySubstTy mt (eeTypeSubst env) tyAnn
+      let env' =
+            env
+              { eeVars = M.insert varName ty (eeVars env)
+              , eeVarDefs = M.delete varName (eeVarDefs env)
+              }
+      pure (Just (RBInput varName ty), Just bodyHole, env')
+    BindLet varCap valueHole bodyHole -> do
+      varName <- liftEither (requireIdentParam params varCap)
+      fresh <- freshTyVar (TyVar { tvName = varName, tvMode = mode })
+      let ty = Ty.TVar fresh
+      let env' =
+            env
+              { eeVars = M.insert varName ty (eeVars env)
+              , eeVarDefs = M.delete varName (eeVarDefs env)
+              }
+      pure (Just (RBValue varName valueHole), Just bodyHole, env')
+
+requireIdentParam :: M.Map Text SurfaceParam -> Text -> Either Text Text
+requireIdentParam params cap =
+  case M.lookup cap params of
+    Just (SPIdent name) -> Right name
+    _ -> Left ("surface: missing ident capture for " <> cap)
+
+requireTypeParam :: M.Map Text SurfaceParam -> Text -> Either Text RawPolyTypeExpr
+requireTypeParam params cap =
+  case M.lookup cap params of
+    Just (SPType ty) -> Right ty
+    _ -> Left ("surface: missing <type> capture for " <> cap)
+
+elabVarRef :: ModeTheory -> ElabEnv -> Subst -> Text -> TypeExpr -> Fresh SurfDiag
+elabVarRef mt env subst name ty = do
+  let ty' = applySubstTy mt subst ty
+  let base0 =
+        case M.lookup name (eeVarDefs env) of
+          Just def -> emptySurf def
+          Nothing -> varSurf name ty'
+  pure (applySubstSurf mt subst base0)
 
 elabZeroArgGen :: ModeTheory -> Doctrine -> ModeName -> ElabEnv -> Text -> Fresh SurfDiag
 elabZeroArgGen mt doc mode env name = do
@@ -366,250 +540,131 @@ elabZeroArgGen mt doc mode env name = do
   liftEither (ensureDirectGenCallAttrs gen)
   if null (gdPlainDom gen)
     then do
-      diag <- genDFromDecl mt mode env gen Nothing M.empty
+      diag <- genDFromDecl mt mode env gen Nothing M.empty []
       pure (emptySurf diag)
     else liftEither (Left ("surface: unknown variable " <> name))
-
-elabCall :: ModuleEnv -> Doctrine -> ModeTheory -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> [SurfaceAST] -> Fresh SurfDiag
-elabCall menv doc mt mode _spec _cart env args =
-  case args of
-    [SAIdent name, argExpr] -> do
-      argDiag <- elabAst menv doc mt mode _spec _cart env argExpr
-      gen <- liftEither (lookupGen doc mode (GenName name))
-      buildGenCall mt doc mode env gen argDiag
-    _ -> liftEither (Left "surface: CALL expects name and argument expression")
-
-buildGenCall :: ModeTheory -> Doctrine -> ModeName -> ElabEnv -> GenDecl -> SurfDiag -> Fresh SurfDiag
-buildGenCall mt _doc mode env gen argDiag = do
-  liftEither (ensureDirectGenCallAttrs gen)
-  argTypes <- liftEither (diagramCod (sdDiag argDiag))
-  renameSubst <- freshSubst (gdTyVars gen)
-  let dom0 = applySubstCtx mt renameSubst (gdPlainDom gen)
-  let cod0 = applySubstCtx mt renameSubst (gdCod gen)
-  let dom1 = applySubstCtx mt (eeTypeSubst env) dom0
-  let cod1 = applySubstCtx mt (eeTypeSubst env) cod0
-  let flex = S.union (freeTyVarsDiagram (sdDiag argDiag)) (S.unions (map freeTyVarsTy dom1))
-  subst <- liftEither (unifyCtxFlex mt flex dom1 argTypes)
-  let argDiag' = applySubstSurf mt subst argDiag
-  let cod = applySubstCtx mt subst cod1
-  let argPorts = dOut (sdDiag argDiag')
-  let (outPorts, diag1) = allocPorts cod (sdDiag argDiag')
-  diag2 <- liftEither (addEdgePayload (PGen (gdName gen) M.empty []) argPorts outPorts diag1)
-  let diag3 = diag2 { dOut = outPorts }
-  liftEither (validateDiagram diag3)
-  pure argDiag' { sdDiag = diag3 }
 
 ensureDirectGenCallAttrs :: GenDecl -> Either Text ()
 ensureDirectGenCallAttrs gen =
   if null (gdAttrs gen)
     then Right ()
-    else Left "surface: generator requires attribute arguments; supply via an elaboration rule/template"
-
-elabNode :: ModuleEnv -> Doctrine -> ModeTheory -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> ElabRule -> [SurfaceAST] -> Fresh SurfDiag
-elabNode menv doc mt mode spec cart env rule args = do
-  let params = erArgs rule
-  if length params /= length args
-    then liftEither (Left "surface: elaboration rule arity mismatch")
-    else do
-      let paramMap = M.fromList (zip params args)
-      typeSubst <- liftEither (buildTypeSubst doc mode env paramMap)
-      let (binder, bodyIndex, exprInfos) = detectBinder params args
-      (childDiags, holeMap) <- elabChildren menv doc mt mode spec cart env binder bodyIndex exprInfos
-      let childList = map snd childDiags
-      surf <- evalTemplate menv doc mt mode spec cart env paramMap typeSubst holeMap childList (erTemplate rule)
-      surf' <- applyBinder mt doc mode cart env binder holeMap surf
-      pure surf'
-
-
--- Detect binder information
-
-data BinderKind
-  = BinderInput Text RawPolyTypeExpr
-  | BinderValue Text Int
-  deriving (Eq, Show)
-
-data BinderInfo = BinderInfo
-  { biName :: Text
-  , biKind :: BinderKind
-  } deriving (Eq, Show)
-
-detectBinder :: [Text] -> [SurfaceAST] -> (Maybe BinderInfo, Maybe Int, [(Int, SurfaceAST)])
-detectBinder params args =
-  let indexed = zip3 [0..] params args
-      exprInfos0 =
-        [ (idx, arg)
-        | (idx, _p, arg) <- indexed
-        , isExprArg arg
-        ]
-      bodyIndex = if null exprInfos0 then Nothing else Just (fst (last exprInfos0))
-      binder = findBinder indexed exprInfos0 bodyIndex
-      exprInfos =
-        case binder of
-          Nothing -> exprInfos0
-          Just (BinderInfo _ _) ->
-            [ (idx, arg)
-            | (idx, arg) <- exprInfos0
-            , not (isBinderIdent exprInfos0 bodyIndex idx indexed)
-            ]
-  in (binder, bodyIndex, exprInfos)
-  where
-    isExprArg a =
-      case a of
-        SAType _ -> False
-        SALit _ -> False
-        _ -> True
-
-    isBinderIdent exprInfos bodyIdx idx indexed =
-      case [ () | (i, _p, arg) <- indexed, i == idx, isIdentArg arg ] of
-        [] -> False
-        _ ->
-          case findBinder indexed exprInfos bodyIdx of
-            Just (BinderInfo name _) ->
-              case [ p | (i, p, _arg) <- indexed, i == idx ] of
-                [pname] -> pname == name
-                _ -> False
-            Nothing -> False
-
-    isIdentArg arg =
-      case arg of
-        SAIdent _ -> True
-        _ -> False
-
-    findBinder indexed exprInfos bodyIndex =
-      case bodyIndex of
-        Nothing -> Nothing
-        Just bodyIdx ->
-          let exprIndices = map fst exprInfos
-              tryBinder [] = Nothing
-              tryBinder ((idx, pname, arg):rest) =
-                case arg of
-                  SAIdent varName ->
-                    case lookup (idx + 1) [(i, a) | (i, _p, a) <- indexed] of
-                      Just (SAType ty) ->
-                        Just (BinderInfo pname (BinderInput varName ty))
-                      _ ->
-                        let exprAfter = filter (> idx) exprIndices
-                        in if length exprAfter >= 2 && bodyIdx == last exprAfter
-                          then Just (BinderInfo pname (BinderValue varName (head exprAfter)))
-                          else tryBinder rest
-                  _ -> tryBinder rest
-          in tryBinder indexed
-
-
--- Elaborate child expressions
-
-type HoleMap = M.Map Int Int
-
-elabChildren :: ModuleEnv -> Doctrine -> ModeTheory -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> Maybe BinderInfo -> Maybe Int -> [(Int, SurfaceAST)] -> Fresh ([(Int, SurfDiag)], HoleMap)
-elabChildren menv doc mt mode spec cart env binder bodyIndex exprInfos = do
-  let exprIndices = map fst exprInfos
-  let holeMap = M.fromList (zip exprIndices [1..])
-  childDiags <- mapM (elabOne holeMap) exprInfos
-  pure (childDiags, holeMap)
-  where
-    elabOne hm (idx, expr) = do
-      env' <- case (binder, bodyIndex) of
-        (Just b, Just bodyIdx) | idx == bodyIdx ->
-          extendEnv mt doc mode env b
-        _ -> pure env
-      d <- elabAst menv doc mt mode spec cart env' expr
-      pure (idx, d)
-
-extendEnv :: ModeTheory -> Doctrine -> ModeName -> ElabEnv -> BinderInfo -> Fresh ElabEnv
-extendEnv mt doc mode env (BinderInfo _ (BinderInput varName tyAnn)) = do
-  tyAnn' <- liftEither (elabSurfaceTypeExpr doc mode tyAnn)
-  if typeMode tyAnn' /= mode
-    then liftEither (Left "surface: binder type must be in surface mode")
-    else pure ()
-  let ty0 = applySubstTy mt (eeTypeSubst env) tyAnn'
-  pure env
-    { eeVars = M.insert varName ty0 (eeVars env)
-    , eeVarDefs = M.delete varName (eeVarDefs env)
-    }
-extendEnv _mt _doc mode env (BinderInfo _ (BinderValue varName _)) = do
-  fresh <- freshTyVar (TyVar { tvName = varName, tvMode = mode })
-  let ty = Ty.TVar fresh
-  pure env
-    { eeVars = M.insert varName ty (eeVars env)
-    , eeVarDefs = M.delete varName (eeVarDefs env)
-    }
-
-elabVarRef :: ModeTheory -> Doctrine -> ModeName -> ElabEnv -> Subst -> Text -> TypeExpr -> Fresh SurfDiag
-elabVarRef mt _doc mode env subst name ty = do
-  let ty' = applySubstTy mt subst ty
-  let base0 =
-        case M.lookup name (eeVarDefs env) of
-          Just def -> emptySurf def
-          Nothing -> varSurf mode name ty'
-  pure (applySubstSurf mt subst base0)
+    else Left "surface: generator requires attribute arguments; supply via a template action"
 
 
 -- Template evaluation
 
-evalTemplate :: ModuleEnv -> Doctrine -> ModeTheory -> ModeName -> SurfaceSpec -> StructuralOps -> ElabEnv -> M.Map Text SurfaceAST -> Subst -> HoleMap -> [SurfDiag] -> TemplateExpr -> Fresh SurfDiag
-evalTemplate menv doc mt mode _spec _cart env paramMap subst holeMap childList templ =
+evalTemplate
+  :: ModuleEnv
+  -> Doctrine
+  -> ModeTheory
+  -> ModeName
+  -> StructuralOps
+  -> ElabEnv
+  -> M.Map Text SurfaceParam
+  -> Subst
+  -> [SurfDiag]
+  -> TemplateExpr
+  -> Fresh SurfDiag
+evalTemplate menv doc mt mode ops env paramMap subst childList templ =
   case templ of
     THole n ->
       case drop (n - 1) childList of
-        (sd:_) ->
-          -- Child tags are local to the child template; re-tag only at this level.
-          pure (tagHole n sd { sdTags = M.empty })
+        (sd : _) -> pure (tagHole n sd { sdTags = M.empty })
         [] -> liftEither (Left "surface: template hole out of range")
-    TVar name -> do
-      varName <- case M.lookup name paramMap of
-        Just (SAIdent v) -> pure v
-        _ -> liftEither (Left "surface: unknown variable placeholder")
+    TVar cap -> do
+      varName <-
+        case M.lookup cap paramMap of
+          Just (SPIdent v) -> pure v
+          _ -> liftEither (Left ("surface: variable placeholder requires ident capture: " <> cap))
       case M.lookup varName (eeVars env) of
         Nothing -> elabZeroArgGen mt doc mode env varName
-        Just ty -> elabVarRef mt doc mode env subst varName ty
+        Just ty -> elabVarRef mt env subst varName ty
     TTermRef name ->
       case M.lookup name (meTerms menv) of
         Nothing -> liftEither (Left ("surface: unknown term reference @" <> name))
         Just td ->
           if tdDoctrine td /= dName doc
             then liftEither (Left ("surface: term @" <> name <> " doctrine mismatch"))
-            else if tdMode td /= mode
-              then liftEither (Left ("surface: term @" <> name <> " mode mismatch"))
-              else pure (emptySurf (tdDiagram td))
+            else
+              if tdMode td /= mode
+                then liftEither (Left ("surface: term @" <> name <> " mode mismatch"))
+                else pure (emptySurf (tdDiagram td))
     TId ctx -> do
       ctx'0 <- liftEither (mapM (elabSurfaceTypeExpr doc mode) ctx)
       let ctx' = map (applySubstTy mt subst) ctx'0
       pure (emptySurf (idD mode ctx'))
-    TGen name mArgs mAttrArgs -> do
-      gen <- liftEither (lookupGen doc mode (GenName name))
-      args0 <- case mArgs of
-        Nothing -> pure Nothing
-        Just args -> do
-          tys <- liftEither (mapM (elabSurfaceTypeExpr doc mode) args)
-          pure (Just tys)
+    TGen ref mArgs mAttrArgs mBinderArgs -> do
+      genName <-
+        case ref of
+          GenLit name -> pure name
+          GenHole cap ->
+            case M.lookup cap paramMap of
+              Just (SPIdent name) -> pure name
+              _ -> liftEither (Left ("surface: generator hole requires ident capture: " <> cap))
+      gen <- liftEither (lookupGen doc mode (GenName genName))
+      args0 <-
+        case mArgs of
+          Nothing -> pure Nothing
+          Just args -> do
+            tys <- liftEither (mapM (elabSurfaceTypeExpr doc mode) args)
+            pure (Just tys)
       let args' = fmap (map (applySubstTy mt subst)) args0
       attrs <- liftEither (elabTemplateGenAttrs doc gen paramMap mAttrArgs)
-      diag <- genDFromDecl mt mode env gen args' attrs
+      bargs <- evalTemplateBinderArgs menv doc mt mode ops env paramMap subst childList mBinderArgs
+      diag <- genDFromDecl mt mode env gen args' attrs bargs
       pure (emptySurf diag)
     TBox name inner -> do
-      innerDiag <- evalTemplate menv doc mt mode _spec _cart env paramMap subst holeMap childList inner
+      innerDiag <- evalTemplate menv doc mt mode ops env paramMap subst childList inner
       liftEither (boxSurf mode name innerDiag)
     TLoop inner -> do
-      innerDiag <- evalTemplate menv doc mt mode _spec _cart env paramMap subst holeMap childList inner
+      innerDiag <- evalTemplate menv doc mt mode ops env paramMap subst childList inner
       liftEither (loopSurf innerDiag)
     TComp a b -> do
-      d1 <- evalTemplate menv doc mt mode _spec _cart env paramMap subst holeMap childList a
-      d2 <- evalTemplate menv doc mt mode _spec _cart env paramMap subst holeMap childList b
+      d1 <- evalTemplate menv doc mt mode ops env paramMap subst childList a
+      d2 <- evalTemplate menv doc mt mode ops env paramMap subst childList b
       liftEither (compSurf mt d1 d2)
     TTensor a b -> do
-      d1 <- evalTemplate menv doc mt mode _spec _cart env paramMap subst holeMap childList a
-      d2 <- evalTemplate menv doc mt mode _spec _cart env paramMap subst holeMap childList b
+      d1 <- evalTemplate menv doc mt mode ops env paramMap subst childList a
+      d2 <- evalTemplate menv doc mt mode ops env paramMap subst childList b
       liftEither (tensorSurf d1 d2)
 
-buildTypeSubst :: Doctrine -> ModeName -> ElabEnv -> M.Map Text SurfaceAST -> Either Text Subst
+evalTemplateBinderArgs
+  :: ModuleEnv
+  -> Doctrine
+  -> ModeTheory
+  -> ModeName
+  -> StructuralOps
+  -> ElabEnv
+  -> M.Map Text SurfaceParam
+  -> Subst
+  -> [SurfDiag]
+  -> Maybe [TemplateBinderArg]
+  -> Fresh [BinderArg]
+evalTemplateBinderArgs _menv _doc _mt _mode _ops _env _paramMap _subst _children Nothing =
+  pure []
+evalTemplateBinderArgs menv doc mt mode ops env paramMap subst children (Just args) =
+  mapM evalOne args
+  where
+    evalOne arg =
+      case arg of
+        TBAMeta name -> pure (BAMeta (BinderMetaVar name))
+        TBAExpr expr -> do
+          sd <- evalTemplate menv doc mt mode ops env paramMap subst children expr
+          if M.null (sdUses sd)
+            then do
+              liftEither (validateDiagram (sdDiag sd))
+              pure (BAConcrete (sdDiag sd))
+            else liftEither (Left "surface: binder argument uses unresolved surface variables")
+
+buildTypeSubst :: Doctrine -> ModeName -> ElabEnv -> M.Map Text SurfaceParam -> Either Text Subst
 buildTypeSubst doc mode env paramMap = do
   pairs <- mapM toPair (M.toList paramMap)
   let local = M.fromList (concat pairs)
   pure (M.union local (eeTypeSubst env))
   where
-    toPair (name, ast) =
-      case ast of
-        SAType rawTy -> do
+    toPair (name, param) =
+      case param of
+        SPType rawTy -> do
           ty <- elabSurfaceTypeExpr doc mode rawTy
           let var = TyVar { tvName = name, tvMode = mode }
           pure [(var, ty)]
@@ -618,7 +673,7 @@ buildTypeSubst doc mode env paramMap = do
 elabTemplateGenAttrs
   :: Doctrine
   -> GenDecl
-  -> M.Map Text SurfaceAST
+  -> M.Map Text SurfaceParam
   -> Maybe [TemplateAttrArg]
   -> Either Text AttrMap
 elabTemplateGenAttrs doc gen paramMap mArgs =
@@ -642,13 +697,14 @@ normalizeTemplateAttrArgs
   -> Either Text [(AttrName, AttrSort, AttrTemplate)]
 normalizeTemplateAttrArgs fields args =
   case (namedArgs, positionalArgs) of
-    (_:_, _:_) -> Left "surface: template attribute arguments must be either all named or all positional"
-    (_:_, []) -> normalizeNamed namedArgs
+    (_ : _, _ : _) -> Left "surface: template attribute arguments must be either all named or all positional"
+    (_ : _, []) -> normalizeNamed namedArgs
     ([], _) -> normalizePos positionalArgs
   where
     namedArgs = [ (name, term) | TAName name term <- args ]
     positionalArgs = [ term | TAPos term <- args ]
     fieldNames = map fst fields
+
     normalizeNamed named = do
       ensureDistinctText "surface: duplicate generator attribute argument" (map fst named)
       if length named /= length fields
@@ -664,6 +720,7 @@ normalizeTemplateAttrArgs fields args =
             Nothing -> Left "surface: missing generator attribute argument"
             Just term -> Right (fieldName, fieldSort, term))
         fields
+
     normalizePos positional =
       if length positional /= length fields
         then Left "surface: generator attribute argument mismatch"
@@ -675,7 +732,7 @@ ensureDistinctText label names =
     then Right ()
     else Left label
 
-elabTemplateAttrTerm :: Doctrine -> AttrSort -> M.Map Text SurfaceAST -> AttrTemplate -> Either Text AttrTerm
+elabTemplateAttrTerm :: Doctrine -> AttrSort -> M.Map Text SurfaceParam -> AttrTemplate -> Either Text AttrTerm
 elabTemplateAttrTerm doc expectedSort paramMap termTemplate =
   case termTemplate of
     ATLIT lit -> do
@@ -683,10 +740,10 @@ elabTemplateAttrTerm doc expectedSort paramMap termTemplate =
       Right (ATLit lit)
     ATHole name ->
       case M.lookup name paramMap of
-        Just (SALit lit) -> do
+        Just (SPLit lit) -> do
           ensureLiteralAllowed doc expectedSort lit
           Right (ATLit lit)
-        Just (SAIdent identName) -> do
+        Just (SPIdent identName) -> do
           let lit = ALString identName
           ensureLiteralAllowed doc expectedSort lit
           Right (ATLit lit)
@@ -712,46 +769,39 @@ ensureLiteralAllowed doc sortName lit = do
 
 -- Apply binder after template evaluation
 
-applyBinder :: ModeTheory -> Doctrine -> ModeName -> StructuralOps -> ElabEnv -> Maybe BinderInfo -> HoleMap -> SurfDiag -> Fresh SurfDiag
-applyBinder _mt _doc _mode _cart _env Nothing _holeMap sd = pure sd
-applyBinder mt doc mode cart env (Just binder) holeMap sd =
+applyBinder :: ModeTheory -> Doctrine -> ModeName -> StructuralOps -> Maybe RuntimeBinder -> SurfDiag -> Fresh SurfDiag
+applyBinder _mt _doc _mode _ops Nothing sd = pure sd
+applyBinder mt doc mode ops (Just binder) sd =
   case binder of
-    BinderInfo _ (BinderInput varName tyAnn) -> do
-      tyAnn' <- liftEither (elabSurfaceTypeExpr doc mode tyAnn)
-      let varTy = applySubstTy mt (eeTypeSubst env) tyAnn'
+    RBInput varName varTy -> do
       let (source, diag1) = freshPort varTy (sdDiag sd)
       diag1a <- liftEither (setPortLabel source varName diag1)
       let sd1 = sd { sdDiag = diag1a }
-      sd2 <- connectVar doc mode cart varName source varTy sd1 True
-      pure sd2
-    BinderInfo _ (BinderValue varName valueArgIdx) -> do
-      let holeIdx = M.lookup valueArgIdx holeMap
-      case holeIdx of
-        Nothing -> liftEither (Left "surface: missing bound value")
-        Just hidx -> do
-          let ports = M.findWithDefault [] (TagHole hidx) (sdTags sd)
-          case ports of
-            [source] -> do
-              let tySource = diagramPortType (sdDiag sd) source
-              ty <- case tySource of
-                Nothing -> liftEither (Left "surface: missing bound value type")
-                Just t -> pure t
-              sd1 <- unifyVarType mt varName ty sd
-              diagLabeled <- liftEither (setPortLabel source varName (sdDiag sd1))
-              let sd1a = sd1 { sdDiag = diagLabeled }
-              sd2 <- connectVar doc mode cart varName source ty sd1a False
-              let tags' = M.delete (TagHole hidx) (sdTags sd2)
-              pure sd2 { sdTags = tags' }
-            _ ->
-              let count = length ports
-              in liftEither (Left ("surface: bound value must have exactly one output (" <> T.pack (show count) <> ")"))
+      connectVar doc mode ops varName source varTy sd1 True
+    RBValue varName valueHole -> do
+      let ports = M.findWithDefault [] (TagHole valueHole) (sdTags sd)
+      case ports of
+        [source] -> do
+          ty <-
+            case diagramPortType (sdDiag sd) source of
+              Nothing -> liftEither (Left "surface: missing bound value type")
+              Just t -> pure t
+          sd1 <- unifyVarType mt varName ty sd
+          diagLabeled <- liftEither (setPortLabel source varName (sdDiag sd1))
+          let sd1a = sd1 { sdDiag = diagLabeled }
+          sd2 <- connectVar doc mode ops varName source ty sd1a False
+          let tags' = M.delete (TagHole valueHole) (sdTags sd2)
+          pure sd2 { sdTags = tags' }
+        _ ->
+          let count = length ports
+           in liftEither (Left ("surface: bound value must have exactly one output (" <> T.pack (show count) <> ")"))
 
 unifyVarType :: ModeTheory -> Text -> TypeExpr -> SurfDiag -> Fresh SurfDiag
 unifyVarType mt varName ty sd =
   case M.lookup varName (sdUses sd) of
     Nothing -> pure sd
     Just [] -> pure sd
-    Just (p:_) ->
+    Just (p : _) ->
       case diagramPortType (sdDiag sd) p of
         Nothing -> pure sd
         Just tyUse -> do
@@ -769,52 +819,54 @@ connectVar _doc _mode ops varName source ty sd sourceIsInput = do
   let dOut' =
         if sourceIsInput
           then dOut diag1
-          else if useInOutput
-            then dOut diag1
-            else removePort source (dOut diag1)
+          else
+            if useInOutput
+              then dOut diag1
+              else removePort source (dOut diag1)
   let diag2 = diag1 { dIn = dIn', dOut = dOut' }
   pure sd1 { sdDiag = diag2, sdUses = M.delete varName (sdUses sd1) }
   where
-    ensureIn p xs = if p `elem` xs then xs else p:xs
+    ensureIn p xs = if p `elem` xs then xs else p : xs
     removePort p = filter (/= p)
 
 connectUses :: StructuralOps -> Text -> PortId -> TypeExpr -> [PortId] -> SurfDiag -> Fresh SurfDiag
 connectUses ops varName source ty uses sd =
   case uses of
-    [] -> do
+    [] ->
       case (soDiscipline ops, soDrop ops) of
         (Affine, Just dropGen) -> addDrop dropGen
         (Cartesian, Just dropGen) -> addDrop dropGen
         (disc, _) ->
-          liftEither
-            (Left ("surface: variable " <> varName <> " dropped (uses 0) under " <> renderDiscipline disc))
+          liftEither (Left ("surface: variable " <> varName <> " dropped (uses 0) under " <> renderDiscipline disc))
     [p] -> do
       (diag1, uses1, tags1) <- mergePortsAll source p sd
       pure sd { sdDiag = diag1, sdUses = uses1, sdTags = tags1 }
-    _ -> do
+    _ ->
       case (soDiscipline ops, soDup ops) of
         (Relevant, Just dupGen) -> addDup dupGen
         (Cartesian, Just dupGen) -> addDup dupGen
         (disc, _) ->
-          liftEither
-            (Left ("surface: variable " <> varName <> " duplicated (uses " <> T.pack (show (length uses)) <> ") under " <> renderDiscipline disc))
+          liftEither (Left ("surface: variable " <> varName <> " duplicated (uses " <> T.pack (show (length uses)) <> ") under " <> renderDiscipline disc))
   where
     addDrop dropGen = do
       liftEither (ensureStructuralGenAttrs dropGen)
       let diag0 = sdDiag sd
       diag1 <- liftEither (addEdgePayload (PGen (gdName dropGen) M.empty []) [source] [] diag0)
       pure sd { sdDiag = diag1 }
+
     addDup dupGen = do
       liftEither (ensureStructuralGenAttrs dupGen)
       (outs, diag1) <- dupOutputs dupGen source ty (sdDiag sd) (length uses)
       let sd1 = sd { sdDiag = diag1 }
       foldM mergeOne sd1 (zip outs uses)
+
     renderDiscipline disc =
       case disc of
         Linear -> "linear discipline"
         Affine -> "affine discipline"
         Relevant -> "relevant discipline"
         Cartesian -> "cartesian discipline"
+
     mergeOne acc (outP, useP) = do
       (diag1, uses1, tags1) <- mergePortsAll outP useP acc
       let diag2 = diag1 { dIn = filter (/= outP) (dIn diag1) }
@@ -857,12 +909,13 @@ tagHole n sd =
   let tag = TagHole n
       ports = dOut (sdDiag sd)
       tags' = M.insertWith (<>) tag ports (sdTags sd)
-  in sd { sdTags = tags' }
+   in sd { sdTags = tags' }
 
-varSurf :: ModeName -> Text -> TypeExpr -> SurfDiag
-varSurf mode name ty =
-  let diag = idD mode [ty]
-  in SurfDiag diag (M.singleton name (dIn diag)) M.empty
+varSurf :: Text -> TypeExpr -> SurfDiag
+varSurf name ty =
+  let mode = typeMode ty
+      diag = idD mode [ty]
+   in SurfDiag diag (M.singleton name (dIn diag)) M.empty
 
 
 -- Diagram construction helpers
@@ -876,41 +929,108 @@ lookupGen doc mode name =
     renderMode (ModeName m) = m
     renderGen (GenName g) = g
 
-genDFromDecl :: ModeTheory -> ModeName -> ElabEnv -> GenDecl -> Maybe [TypeExpr] -> AttrMap -> Fresh Diagram
-genDFromDecl mt mode env gen mArgs attrs = do
+genDFromDecl :: ModeTheory -> ModeName -> ElabEnv -> GenDecl -> Maybe [TypeExpr] -> AttrMap -> [BinderArg] -> Fresh Diagram
+genDFromDecl mt mode env gen mArgs attrs bargs = do
   let tyVars = gdTyVars gen
   let subst0 = eeTypeSubst env
   renameSubst <- freshSubst tyVars
   let dom0 = applySubstCtx mt renameSubst (gdPlainDom gen)
   let cod0 = applySubstCtx mt renameSubst (gdCod gen)
-  let (dom1, cod1) = (applySubstCtx mt subst0 dom0, applySubstCtx mt subst0 cod0)
-  (dom, cod) <- case mArgs of
-    Nothing -> pure (dom1, cod1)
-    Just args -> do
-      let args' = map (applySubstTy mt subst0) args
-      if length args' /= length tyVars
-        then liftEither (Left "surface: generator type argument mismatch")
-        else do
-          freshVars <- liftEither (extractFreshVars tyVars renameSubst)
-          let subst = M.fromList (zip freshVars args')
-          pure (applySubstCtx mt subst dom1, applySubstCtx mt subst cod1)
-  liftEither (buildGenDiagram mode dom cod (gdName gen) attrs)
+  let slots0 = map (applySubstBinderSigTy mt renameSubst) [ bs | InBinder bs <- gdDom gen ]
+  let (dom1, cod1, slots1) =
+        ( applySubstCtx mt subst0 dom0
+        , applySubstCtx mt subst0 cod0
+        , map (applySubstBinderSigTy mt subst0) slots0
+        )
+  (dom2, cod2, slots2) <-
+    case mArgs of
+      Nothing -> pure (dom1, cod1, slots1)
+      Just args -> do
+        let args' = map (applySubstTy mt subst0) args
+        if length args' /= length tyVars
+          then liftEither (Left "surface: generator type argument mismatch")
+          else do
+            freshVars <- liftEither (extractFreshVars tyVars renameSubst)
+            let subst = M.fromList (zip freshVars args')
+            pure
+              ( applySubstCtx mt subst dom1
+              , applySubstCtx mt subst cod1
+              , map (applySubstBinderSigTy mt subst) slots1
+              )
+  (domFinal, codFinal, bargsFinal) <- liftEither (checkBinderArgs mt dom2 cod2 slots2 bargs)
+  liftEither (buildGenDiagram mode domFinal codFinal (gdName gen) attrs bargsFinal)
 
-buildGenDiagram :: ModeName -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
-buildGenDiagram mode dom cod gen attrs = do
+applySubstBinderSigTy :: ModeTheory -> Subst -> BinderSig -> BinderSig
+applySubstBinderSigTy mt subst bs =
+  bs
+    { bsIxCtx = map (applySubstTy mt subst) (bsIxCtx bs)
+    , bsDom = applySubstCtx mt subst (bsDom bs)
+    , bsCod = applySubstCtx mt subst (bsCod bs)
+    }
+
+checkBinderArgs
+  :: ModeTheory
+  -> Context
+  -> Context
+  -> [BinderSig]
+  -> [BinderArg]
+  -> Either Text (Context, Context, [BinderArg])
+checkBinderArgs mt dom cod slots args =
+  case (slots, args) of
+    ([], []) -> Right (dom, cod, [])
+    ([], _ : _) -> Left "surface: generator does not accept binder arguments"
+    (_ : _, []) -> Left "surface: missing generator binder arguments"
+    _ ->
+      if length slots /= length args
+        then Left "surface: generator binder argument mismatch"
+        else do
+          (substFinal, checked0) <- foldM step (M.empty, []) (zip slots args)
+          let domFinal = applySubstCtx mt substFinal dom
+          let codFinal = applySubstCtx mt substFinal cod
+          let checked = map (applySubstBinderArg mt substFinal) checked0
+          Right (domFinal, codFinal, checked)
+  where
+    step (substAcc, out) (slot0, barg0) =
+      case barg0 of
+        BAMeta _ -> Right (substAcc, out <> [barg0])
+        BAConcrete inner0 -> do
+          let slot = applySubstBinderSigTy mt substAcc slot0
+          let inner = applySubstDiagram mt (U.fromTyOnlySubst substAcc) inner0
+          domArg <- diagramDom inner
+          let flexDom = S.union (freeTyVarsCtx (bsDom slot)) (freeTyVarsCtx domArg)
+          sDom <- unifyCtxFlex mt flexDom (bsDom slot) domArg
+          let subst1 = composeSubst mt sDom substAcc
+          let slot1 = applySubstBinderSigTy mt sDom slot
+          let inner1 = applySubstDiagram mt (U.fromTyOnlySubst sDom) inner
+          codArg <- diagramCod inner1
+          let flexCod = S.union (freeTyVarsCtx (bsCod slot1)) (freeTyVarsCtx codArg)
+          sCod <- unifyCtxFlex mt flexCod (bsCod slot1) codArg
+          let subst2 = composeSubst mt sCod subst1
+          let inner2 = applySubstDiagram mt (U.fromTyOnlySubst sCod) inner1
+          Right (subst2, out <> [BAConcrete inner2])
+
+applySubstBinderArg :: ModeTheory -> Subst -> BinderArg -> BinderArg
+applySubstBinderArg mt subst barg =
+  case barg of
+    BAMeta _ -> barg
+    BAConcrete inner -> BAConcrete (applySubstDiagram mt (U.fromTyOnlySubst subst) inner)
+
+buildGenDiagram :: ModeName -> Context -> Context -> GenName -> AttrMap -> [BinderArg] -> Either Text Diagram
+buildGenDiagram mode dom cod gen attrs bargs = do
   let (inPorts, diag1) = allocPorts dom (emptyDiagram mode [])
   let (outPorts, diag2) = allocPorts cod diag1
-  diag3 <- addEdgePayload (PGen gen attrs []) inPorts outPorts diag2
+  diag3 <- addEdgePayload (PGen gen attrs bargs) inPorts outPorts diag2
   let diagFinal = diag3 { dIn = inPorts, dOut = outPorts }
   validateDiagram diagFinal
   pure diagFinal
 
 allocPorts :: Context -> Diagram -> ([PortId], Diagram)
 allocPorts [] diag = ([], diag)
-allocPorts (ty:rest) diag =
+allocPorts (ty : rest) diag =
   let (pid, diag1) = freshPort ty diag
       (pids, diag2) = allocPorts rest diag1
-  in (pid:pids, diag2)
+   in (pid : pids, diag2)
+
 
 -- Composition with tags and uses
 
@@ -927,7 +1047,11 @@ compSurf mt a b = do
   let tagsShift = shiftTags (dNextPort (sdDiag a')) (sdTags b')
   merged <- unionDiagram (sdDiag a') bShift
   let merged0 = merged { dIn = dIn (sdDiag a'), dOut = dOut bShift }
-  (diagFinal, usesFinal, tagsFinal) <- foldM mergeStep (merged0, mergeUses (sdUses a') usesShift, mergeTags (sdTags a') tagsShift) (zip (dOut (sdDiag a')) (dIn bShift))
+  (diagFinal, usesFinal, tagsFinal) <-
+    foldM
+      mergeStep
+      (merged0, mergeUses (sdUses a') usesShift, mergeTags (sdTags a') tagsShift)
+      (zip (dOut (sdDiag a')) (dIn bShift))
   pure SurfDiag { sdDiag = diagFinal, sdUses = usesFinal, sdTags = tagsFinal }
   where
     mergeStep (d, u, t) (pOut, pIn) = do
@@ -943,11 +1067,12 @@ tensorSurf a b = do
   let usesShift = shiftUses (dNextPort (sdDiag a)) (sdUses b)
   let tagsShift = shiftTags (dNextPort (sdDiag a)) (sdTags b)
   let diagFinal = merged { dIn = dIn (sdDiag a) <> dIn bShift, dOut = dOut (sdDiag a) <> dOut bShift }
-  pure SurfDiag
-    { sdDiag = diagFinal
-    , sdUses = mergeUses (sdUses a) usesShift
-    , sdTags = mergeTags (sdTags a) tagsShift
-    }
+  pure
+    SurfDiag
+      { sdDiag = diagFinal
+      , sdUses = mergeUses (sdUses a) usesShift
+      , sdTags = mergeTags (sdTags a) tagsShift
+      }
 
 boxSurf :: ModeName -> Text -> SurfDiag -> Either Text SurfDiag
 boxSurf mode name inner = do
@@ -965,7 +1090,7 @@ boxSurf mode name inner = do
 loopSurf :: SurfDiag -> Either Text SurfDiag
 loopSurf sd =
   case (dIn (sdDiag sd), dOut (sdDiag sd)) of
-    ([pIn], pOut:pOuts) -> do
+    ([pIn], pOut : pOuts) -> do
       diag1 <- mergePorts (sdDiag sd) pOut pIn
       let uses' = replacePortUses pOut pIn (sdUses sd)
       let tags' = replacePortTags pOut pIn (sdTags sd)
@@ -1005,24 +1130,27 @@ newtype Fresh a = Fresh { runFresh :: Int -> Either Text (a, Int) }
 
 instance Functor Fresh where
   fmap f (Fresh g) =
-    Fresh (\n -> do
-      (a, n') <- g n
-      pure (f a, n'))
+    Fresh
+      (\n -> do
+        (a, n') <- g n
+        pure (f a, n'))
 
 instance Applicative Fresh where
   pure a = Fresh (\n -> Right (a, n))
   Fresh f <*> Fresh g =
-    Fresh (\n -> do
-      (h, n1) <- f n
-      (a, n2) <- g n1
-      pure (h a, n2))
+    Fresh
+      (\n -> do
+        (h, n1) <- f n
+        (a, n2) <- g n1
+        pure (h a, n2))
 
 instance Monad Fresh where
   Fresh g >>= k =
-    Fresh (\n -> do
-      (a, n1) <- g n
-      let Fresh h = k a
-      h n1)
+    Fresh
+      (\n -> do
+        (a, n1) <- g n
+        let Fresh h = k a
+        h n1)
 
 evalFresh :: Fresh a -> Either Text a
 evalFresh (Fresh f) = fmap fst (f 0)
