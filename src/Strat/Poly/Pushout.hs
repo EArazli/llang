@@ -21,7 +21,7 @@ import Strat.Poly.IndexTheory (IxTheory(..), IxRule(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
 import Strat.Poly.Diagram (Diagram(..), genD, genDWithAttrs, diagramDom, diagramCod)
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), renumberDiagram, diagramPortIds, diagramIsoEq)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), renumberDiagram, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 
 
@@ -280,9 +280,12 @@ requireGenRenameMap mor = do
           Right imgName
       pure ((mode, gdName gen), img)
 
-singleGenName :: Morphism -> GenDecl -> Diagram -> Either Text GenName
-singleGenName mor srcGen diag = do
-  canon <- renumberDiagram diag
+singleGenName :: Morphism -> GenDecl -> GenImage -> Either Text GenName
+singleGenName mor srcGen image0 = do
+  if giBinderSigs image0 == expectedBinderSigs
+    then Right ()
+    else Left "poly pushout requires generator mappings to preserve binder-hole signatures"
+  canon <- renumberDiagram (giDiagram image0)
   case IM.elems (dEdges canon) of
     [edge] -> do
       let boundary = dIn canon <> dOut canon
@@ -291,12 +294,16 @@ singleGenName mor srcGen diag = do
       expectedAttrs <- expectedAttrMap mor srcGen
       case ePayload edge of
         PGen g attrs bargs ->
-          if boundary == edgePorts && length allPorts == length boundary && null bargs && attrs == expectedAttrs
+          if boundary == edgePorts && length allPorts == length boundary && bargs == expectedBargs && attrs == expectedAttrs
             then Right g
             else Left "poly pushout requires generator mappings to be a single generator"
         _ -> Left "poly pushout requires generator mappings to be a single generator"
     _ -> Left "poly pushout requires generator mappings to be a single generator"
   where
+    binderSlots = [ bs | InBinder bs <- gdDom srcGen ]
+    holes = [ BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length binderSlots - 1] ]
+    expectedBargs = map BAMeta holes
+    expectedBinderSigs = M.fromList (zip holes binderSlots)
     expectedAttrMap m gen = fmap M.fromList (mapM toField (gdAttrs gen))
       where
         toField (fieldName, srcSort) = do
@@ -1040,7 +1047,7 @@ buildGenMap
   -> TypeRenameMap
   -> TypePermMap
   -> M.Map (ModeName, GenName) GenName
-  -> Either Text (M.Map (ModeName, GenName) Diagram)
+  -> Either Text (M.Map (ModeName, GenName) GenImage)
 buildGenMap src tgt attrRen tyRen permRen genRen =
   fmap M.fromList (mapM build (allGens src))
   where
@@ -1055,8 +1062,20 @@ buildGenMap src tgt attrRen tyRen permRen genRen =
               [ (fieldName, ATVar (AttrVar fieldName (M.findWithDefault sortName sortName attrRen)))
               | (fieldName, sortName) <- gdAttrs gen
               ]
-      d <- genDWithAttrs mode dom cod genName' attrs
-      pure ((mode, genName), d)
+      d0 <- genDWithAttrs mode dom cod genName' attrs
+      let binderSlots = [ bs | InBinder bs <- gdDom gen ]
+      let holes = [ BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length binderSlots - 1] ]
+      let bargs = map BAMeta holes
+      let binderSigs = M.fromList (zip holes binderSlots)
+      d <- setSingleGenBargs genName' attrs bargs d0
+      pure ((mode, genName), GenImage d binderSigs)
+
+    setSingleGenBargs genName attrs bargs diag =
+      case IM.toList (dEdges diag) of
+        [(edgeKey, edge)] ->
+          let edge' = edge { ePayload = PGen genName attrs bargs }
+          in Right diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+        _ -> Left "poly pushout: generated image is not a single generator edge"
 
 checkGenerated :: Text -> Morphism -> Either Text ()
 checkGenerated label mor =

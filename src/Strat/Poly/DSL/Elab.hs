@@ -110,7 +110,22 @@ elabPolyMorphism env raw = do
   modMap <- buildModMap src tgt modeMap [ mm | RPMModality mm <- rpmItems raw ]
   attrSortMap <- buildAttrSortMap src tgt [ a | RPMAttrSort a <- rpmItems raw ]
   typeMap <- foldM (addTypeMap src tgt modeMap) M.empty [ t | RPMType t <- rpmItems raw ]
-  genMap <- foldM (addGenMap src tgt modeMap) M.empty [ g | RPMGen g <- rpmItems raw ]
+  let ixFunMap = M.empty
+  let mor0 = Morphism
+        { morName = rpmName raw
+        , morSrc = src
+        , morTgt = tgt
+        , morIsCoercion = not (null coercionFlags)
+        , morModeMap = modeMap
+        , morModMap = modMap
+        , morAttrSortMap = attrSortMap
+        , morTypeMap = typeMap
+        , morGenMap = M.empty
+        , morIxFunMap = ixFunMap
+        , morPolicy = policy
+        , morFuel = fuel
+        }
+  genMap <- foldM (addGenMap src tgt modeMap mor0) M.empty [ g | RPMGen g <- rpmItems raw ]
   ensureAllGenMapped src genMap
   let mor = Morphism
         { morName = rpmName raw
@@ -122,7 +137,7 @@ elabPolyMorphism env raw = do
         , morAttrSortMap = attrSortMap
         , morTypeMap = typeMap
         , morGenMap = genMap
-        , morIxFunMap = M.empty
+        , morIxFunMap = ixFunMap
         , morPolicy = policy
         , morFuel = fuel
         }
@@ -240,6 +255,9 @@ elabPolyMorphism env raw = do
     mapTyVarMode modeMap v = do
       mode' <- lookupModeMap modeMap (tvMode v)
       pure v { tvMode = mode' }
+    mapIxVarSort mor v = do
+      sort' <- applyMorphismTy mor (ixvSort v)
+      pure v { ixvSort = sort' }
     addTypeMap src tgt modeMap mp decl = do
       let modeSrc = ModeName (rpmtSrcMode decl)
       let modeTgtDecl = ModeName (rpmtTgtMode decl)
@@ -261,23 +279,44 @@ elabPolyMorphism env raw = do
       if M.member key mp
         then Left "morphism: duplicate type mapping"
         else Right (M.insert key (TypeTemplate tmplParams tgtExpr) mp)
-    addGenMap src tgt modeMap mp decl = do
+    addGenMap src tgt modeMap mor0 mp decl = do
       let modeSrc = ModeName (rpmgMode decl)
       ensureMode src modeSrc
       modeTgt <- lookupModeMap modeMap modeSrc
       ensureMode tgt modeTgt
       gen <- lookupGen src modeSrc (GenName (rpmgSrcGen decl))
       tyVarsTgt <- mapM (mapTyVarMode modeMap) (gdTyVars gen)
-      diag <- elabDiagExpr env tgt modeTgt tyVarsTgt (rpmgRhs decl)
-      let free = freeTyVarsDiagram diag
-      let allowed = S.fromList tyVarsTgt
-      if S.isSubsetOf free allowed
+      ixVarsTgt <- mapM (mapIxVarSort mor0) (gdIxVars gen)
+      binderSigs0 <- buildBinderHoleSigs mor0 gen
+      (diag, _) <- elabDiagExprWith env tgt modeTgt [] tyVarsTgt ixVarsTgt binderSigs0 BMUse True (rpmgRhs decl)
+      let freeTy = freeTyVarsDiagram diag
+      let allowedTy = S.fromList tyVarsTgt
+      if S.isSubsetOf freeTy allowedTy
         then Right ()
         else Left "morphism: generator mapping uses undeclared type variables"
+      let freeIx = freeIxVarsDiagram diag
+      let allowedIx = S.fromList ixVarsTgt
+      if S.isSubsetOf freeIx allowedIx
+        then Right ()
+        else Left "morphism: generator mapping uses undeclared index variables"
+      let usedMetas = binderMetaVarsDiagram diag
+      let allowedMetas = M.keysSet binderSigs0
+      if S.isSubsetOf usedMetas allowedMetas
+        then Right ()
+        else Left "morphism: generator mapping uses undeclared binder holes"
       let key = (modeSrc, gdName gen)
       if M.member key mp
         then Left "morphism: duplicate generator mapping"
-        else Right (M.insert key diag mp)
+        else Right (M.insert key (GenImage diag binderSigs0) mp)
+    buildBinderHoleSigs mor gen =
+      let slots = [ bs | InBinder bs <- gdDom gen ]
+          holes = [ BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length slots - 1] ]
+      in fmap M.fromList (mapM (mapOne mor) (zip holes slots))
+    mapOne mor (hole, sig) = do
+      ixCtx' <- mapM (applyMorphismTy mor) (bsIxCtx sig)
+      dom' <- mapM (applyMorphismTy mor) (bsDom sig)
+      cod' <- mapM (applyMorphismTy mor) (bsCod sig)
+      pure (hole, sig { bsIxCtx = ixCtx', bsDom = dom', bsCod = cod' })
     -- no template restriction; any target type expression using only params is allowed
     ensureAllGenMapped src mp = do
       let gens = [ (mode, gdName g) | (mode, table) <- M.toList (dGens src), g <- M.elems table ]

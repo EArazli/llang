@@ -377,7 +377,7 @@ A morphism `F : D → E` consists of:
 - a **mode map** (a total mapping from source modes to target modes),
 - an **attribute-sort map** (`AttrSort -> AttrSort`),
 - a **mode-indexed type map** (`TypeRef ↦ (a1…an ⊢ τ)` templates),
-- a **mode‑indexed generator map** (`(ModeName, GenName) ↦ Diagram`),
+- a **mode‑indexed generator map** (`(ModeName, GenName) ↦` diagram template + binder-hole signatures),
 - rewrite policy and fuel for equation checking.
 
 ### 5.1 Applying a morphism
@@ -389,7 +389,8 @@ To apply `F` to a diagram:
    their name and only their mode is translated).
 2. Map attribute-variable sorts via the attribute-sort map.
 3. For each edge in source mode `m`, instantiate the generator mapping (using unification
-   to recover type parameters and attribute substitutions), then apply it in target mode `mapMode(m)`.
+   to recover type/index parameters and attribute substitutions), then instantiate binder holes
+   (`?b0..?b(k-1)`) with the source edge’s mapped binder arguments and apply it in target mode `mapMode(m)`.
 4. Splice the mapped diagram into the host by boundary identification.
 
 ### 5.2 Morphism checking
@@ -553,6 +554,10 @@ morphism <Name> : <Src> -> <Tgt> where {
 - When a morphism is used as a **pushout leg**, its type mappings must be **invertible renamings**
   (constructor rename + parameter permutation).
 - Generator mappings must elaborate to diagrams in the target doctrine/mode `mapMode(<Mode>)`.
+- In morphism `gen` RHS diagrams, binder holes `?b0..?b(k-1)` refer to the source generator’s
+  binder slots in declaration order.
+- These holes may be used both as binder arguments (`g[?b0]`) and in `splice(?b0)`.
+- Generator mappings may mention both mapped source type binders and mapped source index binders.
 - Generator mappings may use target generator attribute arguments; attribute terms are
   identifiers or literals (`int`, `string`, `bool`) under the target field sorts.
 - Attrsort mappings must preserve literal kinds (`int`, `string`, `bool`) when the source
@@ -587,7 +592,7 @@ morphism <Name> : <Src> -> <Tgt> where {
 id[<Ctx>]
 <GenName>{<Arg>,...}(<AttrArgs>)[<BinderArgs>]  -- all argument groups optional
 @<TermName>           -- splice a named term
-splice(?X)            -- RHS-only binder splice
+splice(?X)            -- RHS-only binder splice (rule RHS / morphism gen RHS)
 box <Name> { <d> }    -- boxed subdiagram
 loop { <d> }          -- feedback: connects the single output of <d> to its single input
 <d1> ; <d2>           -- composition (first d1 then d2)
@@ -603,7 +608,7 @@ Generator calls:
   declares binder slots.
 - Each binder argument is either:
   - a concrete diagram expression,
-  - or binder meta `?X` (allowed only in rewrite rules).
+  - or binder meta `?X` (allowed in rewrite rules and morphism `gen` RHS; morphism holes are `?b0..?b(k-1)`).
 - Attribute arguments must be either all named or all positional:
 
 ```
@@ -625,7 +630,7 @@ The **first** output port is identified with the input port (feedback); the rema
 outputs become the outputs of the looped diagram. The result has **no inputs** and
 `(n−1)` outputs.
 
-`splice(?X)` is allowed only in rewrite-rule RHS and requires `?X` to be captured in LHS binder args.
+`splice(?X)` is allowed in rewrite-rule RHS and morphism `gen` RHS. In rules it requires `?X` captured in LHS binder args; in morphisms it must reference a declared hole (`?b0..?b(k-1)`).
 
 ---
 

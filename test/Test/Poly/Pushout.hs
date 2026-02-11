@@ -13,10 +13,10 @@ import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..
 import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), TypeArg(..), IxVar(..), IxTerm(..))
 import Strat.Poly.IndexTheory (IxTheory(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Diagram (genD, idD)
+import Strat.Poly.Diagram (Diagram, genD, idD)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), gdPlainDom, validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Poly.Morphism (Morphism(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram)
+import Strat.Poly.Morphism (Morphism(..), GenImage(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram)
 import Strat.Poly.Pushout (computePolyPushout, PolyPushoutResult(..))
 import Strat.Poly.Graph (diagramIsoEq)
 import Strat.Common.Rules (RuleClass(..), Orientation(..), RewritePolicy(..))
@@ -39,6 +39,9 @@ tests =
 
 require :: Either Text a -> IO a
 require = either (assertFailure . T.unpack) pure
+
+plainImage :: Diagram -> GenImage
+plainImage diag = GenImage diag M.empty
 
 tvar :: ModeName -> Text -> TyVar
 tvar mode name = TyVar { tvName = name, tvMode = mode }
@@ -130,7 +133,7 @@ mkInclusionMorph name src tgt tyVar =
       diag = case genD mode [TVar tyVar] [TVar tyVar] (GenName "f") of
         Left _ -> error "mkInclusionMorph: genD failed"
         Right d -> d
-      genMap = M.fromList [((mode, GenName "f"), diag)]
+      genMap = M.fromList [((mode, GenName "f"), plainImage diag)]
   in Morphism
       { morName = name
       , morSrc = src
@@ -279,7 +282,7 @@ mkIdMorph name src tgt =
       diag = case genD mode [tcon mode "A" []] [tcon mode "A" []] (GenName "f") of
         Left _ -> error "mkIdMorph: genD failed"
         Right d -> d
-      genMap = M.fromList [((mode, GenName "f"), diag)]
+      genMap = M.fromList [((mode, GenName "f"), plainImage diag)]
   in Morphism
       { morName = name
       , morSrc = src
@@ -635,7 +638,7 @@ testPushoutCellIxAlphaEq = do
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
           , morTypeMap = M.empty
-          , morGenMap = M.fromList [((modeM, genName), img)]
+          , morGenMap = M.fromList [((modeM, genName), plainImage img)]
           , morIxFunMap = M.empty
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
@@ -650,7 +653,7 @@ testPushoutCellIxAlphaEq = do
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
           , morTypeMap = M.empty
-          , morGenMap = M.fromList [((modeM, genName), img)]
+          , morGenMap = M.fromList [((modeM, genName), plainImage img)]
           , morIxFunMap = M.empty
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
@@ -700,7 +703,7 @@ mkModeEqMorph name src tgt varName =
       , morModeMap = identityModeMap src
       , morModMap = identityModMap src
       , morTypeMap = M.empty
-      , morGenMap = M.fromList [((mode, GenName "h"), hImg), ((mode, GenName "modal"), modalImg)]
+      , morGenMap = M.fromList [((mode, GenName "h"), plainImage hImg), ((mode, GenName "modal"), plainImage modalImg)]
       , morIxFunMap = M.empty
       , morAttrSortMap = M.empty
       , morPolicy = UseAllOriented

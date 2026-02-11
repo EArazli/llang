@@ -16,7 +16,7 @@ import Strat.Poly.TypeExpr
 import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..))
 import Strat.Poly.Names
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (Edge(..), EdgePayload(..))
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), diagramIsoEq)
 import Strat.Poly.Cell2
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
@@ -34,6 +34,9 @@ tests =
     , testCase "morphism rejects index function maps with arity mismatch" testIxFunMapArityMismatch
     , testCase "morphism rejects index function maps with sort mismatch" testIxFunMapSortMismatch
     , testCase "morphism instantiation fails on dependent substitution errors" testMorphismInstantiationSubstFailure
+    , testCase "binder generator identity morphism preserves binder arguments" testBinderIdentityMorphismPreservesBinders
+    , testCase "morphism rejects cyclic type templates" testTypeTemplateCycleRejected
+    , testCase "morphism rejects indexed template sort mismatch in same mode" testIndexedTemplateSortMismatch
     , testCase "morphism type map instantiates indexed templates" testIndexedTypeTemplateInstantiation
     , testCase "morphism rejects indexed template parameter kind mismatch" testIndexedTemplateKindMismatch
     ]
@@ -43,6 +46,9 @@ tvar mode name = TyVar { tvName = name, tvMode = mode }
 
 tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
 tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
+
+plainImage :: Diagram -> GenImage
+plainImage diag = GenImage diag M.empty
 
 testMonoidMorphism :: Assertion
 testMonoidMorphism = do
@@ -61,7 +67,7 @@ testMonoidMorphism = do
         , morModMap = identityModMap docSrc
         , morAttrSortMap = M.empty
         , morTypeMap = typeMap
-        , morGenMap = M.fromList [((modeM, GenName "unit"), unitImg), ((modeM, GenName "mul"), mulImg)]
+        , morGenMap = M.fromList [((modeM, GenName "unit"), plainImage unitImg), ((modeM, GenName "mul"), plainImage mulImg)]
         , morIxFunMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 20
@@ -135,7 +141,7 @@ testTypeMapReorder = do
         , morModMap = identityModMap docSrc'
         , morAttrSortMap = M.empty
         , morTypeMap = typeMap
-        , morGenMap = M.fromList [((mode, genName), img)]
+        , morGenMap = M.fromList [((mode, genName), plainImage img)]
         , morIxFunMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 20
@@ -208,7 +214,7 @@ testCrossModeMorphism = do
         , morModMap = identityModMap docSrc'
         , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(aRef, TypeTemplate [] bTy)]
-        , morGenMap = M.fromList [((modeC, GenName "f"), img)]
+        , morGenMap = M.fromList [((modeC, GenName "f"), plainImage img)]
         , morIxFunMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 20
@@ -352,7 +358,7 @@ testModalityMapRewritesTypeModalities = do
         , morModMap = M.fromList [(modF, gTgt), (modH, kTgt)]
         , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(TypeRef modeA (TypeName "Base"), TypeTemplate [] baseTgt)]
-        , morGenMap = M.fromList [((modeB, GenName "g"), imgG), ((modeB, GenName "gg"), imgGG)]
+        , morGenMap = M.fromList [((modeB, GenName "g"), plainImage imgG), ((modeB, GenName "gg"), plainImage imgGG)]
         , morIxFunMap = M.empty
         , morPolicy = UseAllOriented
         , morFuel = 20
@@ -634,7 +640,7 @@ testMorphismInstantiationSubstFailure = do
           , morModMap = identityModMap src
           , morAttrSortMap = M.empty
           , morTypeMap = M.empty
-          , morGenMap = M.fromList [((mode, GenName "f"), badImg)]
+          , morGenMap = M.fromList [((mode, GenName "f"), plainImage badImg)]
           , morIxFunMap = M.empty
           , morPolicy = UseAllOriented
           , morFuel = 20
@@ -642,6 +648,200 @@ testMorphismInstantiationSubstFailure = do
   case applyMorphismDiagram mor srcDiag of
     Left _ -> pure ()
     Right _ -> assertFailure "expected applyMorphismDiagram to fail on substitution error"
+
+testBinderIdentityMorphismPreservesBinders :: Assertion
+testBinderIdentityMorphismPreservesBinders = do
+  let mode = ModeName "M"
+  let lamName = GenName "lam"
+  let aTy' = TCon (TypeRef mode (TypeName "A")) []
+  let slotSig = BinderSig { bsIxCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
+  let lamGen =
+        GenDecl
+          { gdName = lamName
+          , gdMode = mode
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = [InBinder slotSig]
+          , gdCod = [aTy']
+          , gdAttrs = []
+          }
+  let doc =
+        Doctrine
+          { dName = "LamDoc"
+          , dModes = mkModes [mode]
+          , dIndexModes = S.empty
+          , dIxTheory = M.empty
+          , dAttrSorts = M.empty
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
+          , dCells2 = []
+          }
+  doc' <- case validateDoctrine doc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure doc
+  let body = idD mode [aTy']
+  srcDiag0 <- either (assertFailure . T.unpack) pure (genD mode [] [aTy'] lamName)
+  srcDiag <- either (assertFailure . T.unpack) pure (setSingleEdgeBargs srcDiag0 [BAConcrete body])
+  img0 <- either (assertFailure . T.unpack) pure (genD mode [] [aTy'] lamName)
+  let hole = BinderMetaVar "b0"
+  img <- either (assertFailure . T.unpack) pure (setSingleEdgeBargs img0 [BAMeta hole])
+  let mor =
+        Morphism
+          { morName = "LamId"
+          , morSrc = doc'
+          , morTgt = doc'
+          , morIsCoercion = False
+          , morModeMap = identityModeMap doc'
+          , morModMap = identityModMap doc'
+          , morAttrSortMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.fromList [((mode, lamName), GenImage img (M.fromList [(hole, slotSig)]))]
+          , morIxFunMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 20
+          }
+  case checkMorphism mor of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  mapped <- case applyMorphismDiagram mor srcDiag of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  case IM.elems (dEdges mapped) of
+    [Edge _ (PGen g attrs [BAConcrete body']) _ _] -> do
+      g @?= lamName
+      attrs @?= M.empty
+      same <- case diagramIsoEq body body' of
+        Left err -> assertFailure (T.unpack err)
+        Right ok -> pure ok
+      assertBool "expected mapped binder body to be preserved" same
+    _ ->
+      assertFailure "expected mapped diagram to be a single lam edge with one concrete binder argument"
+  where
+    setSingleEdgeBargs diag bargs =
+      case IM.toList (dEdges diag) of
+        [(edgeKey, edge@(Edge _ (PGen g attrs _) ins outs))] ->
+          let edge' = edge { ePayload = PGen g attrs bargs }
+          in pure diag { dEdges = IM.insert edgeKey edge' (dEdges diag), dIn = ins, dOut = outs }
+        _ -> Left "expected a single generator edge"
+
+testTypeTemplateCycleRejected :: Assertion
+testTypeTemplateCycleRejected = do
+  let mode = ModeName "M"
+  let aRef = TypeRef mode (TypeName "A")
+  let bRef = TypeRef mode (TypeName "B")
+  let doc =
+        Doctrine
+          { dName = "CycleDoc"
+          , dModes = mkModes [mode]
+          , dIndexModes = S.empty
+          , dIxTheory = M.empty
+          , dAttrSorts = M.empty
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig []), (TypeName "B", TypeSig [])])]
+          , dGens = M.empty
+          , dCells2 = []
+          }
+  doc' <- case validateDoctrine doc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure doc
+  let mor =
+        Morphism
+          { morName = "CycleTypeMap"
+          , morSrc = doc'
+          , morTgt = doc'
+          , morIsCoercion = False
+          , morModeMap = identityModeMap doc'
+          , morModMap = identityModMap doc'
+          , morAttrSortMap = M.empty
+          , morTypeMap =
+              M.fromList
+                [ (aRef, TypeTemplate [] (TCon bRef []))
+                , (bRef, TypeTemplate [] (TCon aRef []))
+                ]
+          , morGenMap = M.empty
+          , morIxFunMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 20
+          }
+  case checkMorphism mor of
+    Left err ->
+      assertBool "expected cyclic type template rejection" ("cyclic type template map" `T.isInfixOf` err)
+    Right () ->
+      assertFailure "expected checkMorphism to reject cyclic templates"
+
+testIndexedTemplateSortMismatch :: Assertion
+testIndexedTemplateSortMismatch = do
+  let modeM' = ModeName "M"
+  let modeI' = ModeName "I"
+  let natRef = TypeRef modeI' (TypeName "Nat")
+  let boolRef = TypeRef modeI' (TypeName "Bool")
+  let vecRef = TypeRef modeM' (TypeName "Vec")
+  let natTy = TCon natRef []
+  let boolTy = TCon boolRef []
+  let srcDoc =
+        Doctrine
+          { dName = "SrcSortMismatch"
+          , dModes = mkModes [modeM', modeI']
+          , dIndexModes = S.singleton modeI'
+          , dIxTheory = M.empty
+          , dAttrSorts = M.empty
+          , dTypes =
+              M.fromList
+                [ (modeI', M.fromList [(TypeName "Nat", TypeSig []), (TypeName "Bool", TypeSig [])])
+                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Ix natTy, PS_Ty modeM'])])
+                ]
+          , dGens = M.empty
+          , dCells2 = []
+          }
+  let tgtDoc =
+        Doctrine
+          { dName = "TgtSortMismatch"
+          , dModes = mkModes [modeM', modeI']
+          , dIndexModes = S.singleton modeI'
+          , dIxTheory = M.empty
+          , dAttrSorts = M.empty
+          , dTypes =
+              M.fromList
+                [ (modeI', M.fromList [(TypeName "Nat", TypeSig []), (TypeName "Bool", TypeSig [])])
+                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Ix natTy, PS_Ty modeM'])])
+                ]
+          , dGens = M.empty
+          , dCells2 = []
+          }
+  src <- case validateDoctrine srcDoc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure srcDoc
+  tgt <- case validateDoctrine tgtDoc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure tgtDoc
+  let nWrong = IxVar { ixvName = "n", ixvSort = boolTy, ixvScope = 0 }
+  let aVar = TyVar { tvName = "a", tvMode = modeM' }
+  let mor =
+        Morphism
+          { morName = "SortMismatch"
+          , morSrc = src
+          , morTgt = tgt
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morAttrSortMap = M.empty
+          , morTypeMap =
+              M.fromList
+                [ ( vecRef
+                  , TypeTemplate
+                      [TPIx nWrong, TPType aVar]
+                      (TVar aVar)
+                  )
+                ]
+          , morGenMap = M.empty
+          , morIxFunMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 20
+          }
+  case checkMorphism mor of
+    Left err ->
+      assertBool "expected index-parameter sort mismatch" ("index-parameter sort mismatch" `T.isInfixOf` err)
+    Right () ->
+      assertFailure "expected checkMorphism to reject index sort mismatch"
 
 testIndexedTypeTemplateInstantiation :: Assertion
 testIndexedTypeTemplateInstantiation = do

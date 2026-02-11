@@ -1,13 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Morphism
   ( Morphism(..)
+  , GenImage(..)
   , TemplateParam(..)
   , TypeTemplate(..)
+  , applyMorphismTy
   , applyMorphismDiagram
   , checkMorphism
   ) where
 
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
@@ -56,10 +59,15 @@ data Morphism = Morphism
   , morModMap :: M.Map ModName ModExpr
   , morAttrSortMap :: M.Map AttrSort AttrSort
   , morTypeMap :: M.Map TypeRef TypeTemplate
-  , morGenMap  :: M.Map (ModeName, GenName) Diagram
+  , morGenMap  :: M.Map (ModeName, GenName) GenImage
   , morIxFunMap :: M.Map IxFunName IxFunName
   , morPolicy  :: RewritePolicy
   , morFuel    :: Int
+  } deriving (Eq, Show)
+
+data GenImage = GenImage
+  { giDiagram :: Diagram
+  , giBinderSigs :: M.Map BinderMetaVar BinderSig
   } deriving (Eq, Show)
 
 data TemplateParam
@@ -186,21 +194,28 @@ applyMorphismDiagram mor diagSrc = do
           Just edgeSrc ->
             case ePayload edgeSrc of
               PGen genName attrsSrc bargsSrc -> do
-                if not (null bargsSrc)
-                  then Left "applyMorphismDiagram: binder arguments not supported in morphisms"
-                  else Right ()
                 genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
-                subst <- instantiateGen srcTheory genDecl diagSrc edgeSrc
-                substTgt <- mapSubst mor subst
+                substSrc <- instantiateGen srcTheory genDecl diagSrc edgeSrc
+                substTgt <- mapSubst mor substSrc
                 case M.lookup (modeSrc, genName) (morGenMap mor) of
                   Nothing -> Left "applyMorphismDiagram: missing generator mapping"
-                  Just image -> do
+                  Just image0 -> do
+                    let image = giDiagram image0
                     if dMode image /= modeTgt
                       then Left "applyMorphismDiagram: generator mapping mode mismatch"
                       else Right ()
                     attrSubst <- instantiateAttrSubst mor genDecl attrsSrc
+                    mappedBargs <- mapM (applyMorphismBinderArg mor) bargsSrc
+                    holeSub <- buildBinderHoleSub genDecl mappedBargs
                     instImage0 <- applySubstDiagramTT tgtTheory substTgt image
-                    let instImage = applyAttrSubstDiagram attrSubst instImage0
+                    instHoleSigs0 <- applySubstBinderSigsTT tgtTheory substTgt (giBinderSigs image0)
+                    let instImage1 = applyAttrSubstDiagram attrSubst instImage0
+                    instImage <- instantiateGenImageBinders tgtTheory instHoleSigs0 holeSub instImage1
+                    let holeKeys = S.fromList (binderHoleNames (length (binderSlots genDecl)))
+                    let remaining = S.intersection holeKeys (binderMetaVarsDiagram instImage)
+                    if S.null remaining
+                      then Right ()
+                      else Left "applyMorphismDiagram: uninstantiated binder holes in generator image"
                     spliceEdge diagTgt edgeKey instImage
               PBox name inner -> do
                 inner' <- applyMorphismDiagram mor inner
@@ -212,6 +227,24 @@ applyMorphismDiagram mor diagSrc = do
   pure diagTgt
   where
     modeSrc = dMode diagSrc
+
+    binderSlots gen =
+      [ bs
+      | InBinder bs <- gdDom gen
+      ]
+
+    binderHoleNames n =
+      [ BinderMetaVar ("b" <> T.pack (show i))
+      | i <- [0 .. n - 1]
+      ]
+
+    buildBinderHoleSub gen bargs = do
+      let slots = binderSlots gen
+      if length slots /= length bargs
+        then Left "applyMorphismDiagram: source binder argument arity mismatch"
+        else Right ()
+      let holes = binderHoleNames (length bargs)
+      pure (M.fromList (zip holes bargs))
 
 mapSubst :: Morphism -> Subst -> Either Text Subst
 mapSubst mor subst = do
@@ -227,6 +260,166 @@ mapSubst mor subst = do
       sort' <- applyMorphismTy mor (ixvSort v)
       t' <- applyMorphismIxTerm mor t
       pure (v { ixvSort = sort' }, t')
+
+applyMorphismBinderArg :: Morphism -> BinderArg -> Either Text BinderArg
+applyMorphismBinderArg mor barg =
+  case barg of
+    BAConcrete d -> BAConcrete <$> applyMorphismDiagram mor d
+    BAMeta x -> Right (BAMeta x)
+
+applySubstBinderSigTT :: TypeTheory -> Subst -> BinderSig -> Either Text BinderSig
+applySubstBinderSigTT tt subst sig = do
+  ixCtx' <- applySubstCtx tt subst (bsIxCtx sig)
+  dom' <- applySubstCtx tt subst (bsDom sig)
+  cod' <- applySubstCtx tt subst (bsCod sig)
+  pure sig { bsIxCtx = ixCtx', bsDom = dom', bsCod = cod' }
+
+applySubstBinderSigsTT :: TypeTheory -> Subst -> M.Map BinderMetaVar BinderSig -> Either Text (M.Map BinderMetaVar BinderSig)
+applySubstBinderSigsTT tt subst =
+  traverse (applySubstBinderSigTT tt subst)
+
+data SpliceAction
+  = SpliceRename BinderMetaVar
+  | SpliceInsert Diagram
+
+instantiateGenImageBinders
+  :: TypeTheory
+  -> M.Map BinderMetaVar BinderSig
+  -> M.Map BinderMetaVar BinderArg
+  -> Diagram
+  -> Either Text Diagram
+instantiateGenImageBinders tt binderSigs holeSub diag0 = do
+  diag1 <- recurseDiagram diag0
+  expandSplicesLoop diag1
+  where
+    recurseDiagram diag = do
+      edges' <- traverse (recurseEdge diag) (dEdges diag)
+      pure diag { dEdges = edges' }
+
+    recurseEdge diag edge =
+      case ePayload edge of
+        PGen g attrs bargs -> do
+          bargs' <- mapM recurseBinderArg bargs
+          pure edge { ePayload = PGen g attrs bargs' }
+        PBox name inner -> do
+          inner' <- instantiateGenImageBinders tt binderSigs holeSub inner
+          pure edge { ePayload = PBox name inner' }
+        PSplice x ->
+          pure edge { ePayload = PSplice x }
+      where
+        recurseBinderArg barg =
+          case barg of
+            BAConcrete inner ->
+              BAConcrete <$> instantiateGenImageBinders tt binderSigs holeSub inner
+            BAMeta x ->
+              case M.lookup x holeSub of
+                Nothing ->
+                  if M.member x binderSigs
+                    then Left "applyMorphismDiagram: missing binder-hole substitution"
+                    else Right (BAMeta x)
+                Just mapped ->
+                  case mapped of
+                    BAConcrete d -> do
+                      checkConcreteAgainstSig x d
+                      Right (BAConcrete d)
+                    BAMeta y ->
+                      Right (BAMeta y)
+
+    expandSplicesLoop diag = do
+      mNext <- findExpandableSplice diag
+      case mNext of
+        Nothing -> Right diag
+        Just (edgeKey, action) ->
+          case action of
+            SpliceRename x' -> do
+              diag' <- updateEdgePayload diag edgeKey (PSplice x')
+              expandSplicesLoop diag'
+            SpliceInsert d -> do
+              diag' <- spliceEdge diag edgeKey d
+              expandSplicesLoop diag'
+
+    findExpandableSplice diag =
+      go (IM.toAscList (dEdges diag))
+      where
+        go [] = Right Nothing
+        go ((edgeKey, edge):rest) =
+          case ePayload edge of
+            PSplice hole -> do
+              resolved <- resolveSpliceHole hole
+              case resolved of
+                BAMeta x'
+                  | x' /= hole -> Right (Just (edgeKey, SpliceRename x'))
+                  | otherwise -> go rest
+                BAConcrete d -> do
+                  checkConcreteAgainstSig hole d
+                  checkSpliceInsertion diag edge d
+                  Right (Just (edgeKey, SpliceInsert d))
+            _ -> go rest
+
+    resolveSpliceHole x = resolveAliasChain S.empty [] x
+
+    resolveAliasChain seen chain x
+      | x `S.member` seen =
+          Left ("applyMorphismDiagram: binder-hole alias cycle: " <> renderAliasCycle (reverse (x : chain)))
+      | otherwise =
+          case M.lookup x holeSub of
+            Nothing ->
+              if M.member x binderSigs
+                then Left "applyMorphismDiagram: missing binder-hole substitution"
+                else Right (BAMeta x)
+            Just (BAConcrete d) ->
+              Right (BAConcrete d)
+            Just (BAMeta y) ->
+              if M.member y holeSub
+                then resolveAliasChain (S.insert x seen) (x : chain) y
+                else
+                  if M.member y binderSigs
+                    then Left "applyMorphismDiagram: missing binder-hole substitution"
+                    else Right (BAMeta y)
+
+    checkSpliceInsertion diag edge d = do
+      if dMode d == dMode diag
+        then Right ()
+        else Left "applyMorphismDiagram: splice insertion mode mismatch"
+      ixCaptured <- applySubstCtx tt emptySubst (dIxCtx d)
+      ixHost <- applySubstCtx tt emptySubst (dIxCtx diag)
+      if ixCaptured == ixHost
+        then Right ()
+        else Left "applyMorphismDiagram: splice insertion index-context mismatch"
+      if length (dIn d) == length (eIns edge) && length (dOut d) == length (eOuts edge)
+        then Right ()
+        else Left "applyMorphismDiagram: splice insertion boundary arity mismatch"
+      domSplice <- mapM (requirePortType diag) (eIns edge)
+      codSplice <- mapM (requirePortType diag) (eOuts edge)
+      domCaptured <- mapM (requirePortType d) (dIn d)
+      codCaptured <- mapM (requirePortType d) (dOut d)
+      if domSplice == domCaptured && codSplice == codCaptured
+        then Right ()
+        else Left "applyMorphismDiagram: splice insertion boundary mismatch"
+
+    checkConcreteAgainstSig hole d =
+      case M.lookup hole binderSigs of
+        Nothing -> Right ()
+        Just sig -> do
+          sigIx <- applySubstCtx tt emptySubst (bsIxCtx sig)
+          dIx <- applySubstCtx tt emptySubst (dIxCtx d)
+          if dIx == sigIx
+            then Right ()
+            else Left "applyMorphismDiagram: binder argument index-context mismatch"
+          dDom <- diagramDom d
+          dCod <- diagramCod d
+          dDom' <- applySubstCtx tt emptySubst dDom
+          dCod' <- applySubstCtx tt emptySubst dCod
+          sigDom <- applySubstCtx tt emptySubst (bsDom sig)
+          sigCod <- applySubstCtx tt emptySubst (bsCod sig)
+          if dDom' == sigDom && dCod' == sigCod
+            then Right ()
+            else Left "applyMorphismDiagram: binder argument boundary mismatch"
+
+    renderAliasCycle xs =
+      T.intercalate " -> " (map renderMeta xs)
+
+    renderMeta (BinderMetaVar name) = "?" <> name
 
 checkMorphism :: Morphism -> Either Text ()
 checkMorphism mor = do
@@ -365,8 +558,11 @@ validateAttrSortMap mor = do
 
 validateTypeMap :: Morphism -> Either Text ()
 validateTypeMap mor = do
+  ensureAcyclicTypeTemplates mor
   mapM_ checkEntry (M.toList (morTypeMap mor))
   where
+    ttTgt = doctrineTypeTheory (morTgt mor)
+
     checkEntry (srcRef, tmpl) = do
       srcSig <-
         case lookupTypeSig (morSrc mor) srcRef of
@@ -406,13 +602,96 @@ validateTypeMap mor = do
           if typeMode (ixvSort ixv) == expectedMode
             then
               if expectedMode `S.member` dIndexModes (morTgt mor)
-                then Right ()
+                then do
+                  expectedSortTgt <- applyMorphismTy mor srcSort
+                  sortOk <- sortDefEq expectedSortTgt (ixvSort ixv)
+                  if sortOk
+                    then Right ()
+                    else Left "checkMorphism: type template index-parameter sort mismatch"
                 else Left "checkMorphism: type template index parameter sort is not in an index mode"
             else Left "checkMorphism: type template index-parameter mode mismatch"
         (PS_Ty _, _) ->
           Left "checkMorphism: type template kind mismatch"
         (PS_Ix _, _) ->
           Left "checkMorphism: type template kind mismatch"
+
+    sortDefEq lhs rhs = do
+      lhs' <- normalizeTypeDeep ttTgt lhs
+      rhs' <- normalizeTypeDeep ttTgt rhs
+      pure (lhs' == rhs')
+
+ensureAcyclicTypeTemplates :: Morphism -> Either Text ()
+ensureAcyclicTypeTemplates mor =
+  case findTemplateCycle mor of
+    Nothing -> Right ()
+    Just refs ->
+      Left ("checkMorphism: cyclic type template map: " <> renderCycle refs)
+  where
+    renderCycle refs = T.intercalate " -> " (map renderRef refs)
+    renderRef ref = renderMode (trMode ref) <> "." <> renderType (trName ref)
+    renderMode (ModeName name) = name
+    renderType (TypeName name) = name
+
+findTemplateCycle :: Morphism -> Maybe [TypeRef]
+findTemplateCycle mor =
+  goRoots S.empty (M.keys (morTypeMap mor))
+  where
+    keys = M.keysSet (morTypeMap mor)
+
+    goRoots _ [] = Nothing
+    goRoots seen (ref:rest)
+      | ref `S.member` seen = goRoots seen rest
+      | otherwise =
+          case dfs seen [] ref of
+            (seen', Nothing) -> goRoots seen' rest
+            (_, Just cyc) -> Just cyc
+
+    dfs seen stack ref
+      | ref `elem` stack = (seen, Just (cycleFrom ref stack))
+      | ref `S.member` seen = (seen, Nothing)
+      | otherwise =
+          let seen' = S.insert ref seen
+              deps = templateDeps ref
+          in dfsDeps seen' (ref : stack) deps
+
+    dfsDeps seen _ [] = (seen, Nothing)
+    dfsDeps seen stack (dep:rest) =
+      case dfs seen stack dep of
+        (seen', Nothing) -> dfsDeps seen' stack rest
+        (seen', Just cyc) -> (seen', Just cyc)
+
+    templateDeps ref =
+      case M.lookup ref (morTypeMap mor) of
+        Nothing -> []
+        Just tmpl ->
+          [ dep
+          | dep <- S.toList (typeRefsInType (ttBody tmpl))
+          , dep `S.member` keys
+          ]
+
+    cycleFrom ref stack =
+      let prefix = takeWhile (/= ref) stack
+      in ref : reverse prefix <> [ref]
+
+typeRefsInType :: TypeExpr -> S.Set TypeRef
+typeRefsInType ty =
+  case ty of
+    TVar _ -> S.empty
+    TCon ref args ->
+      S.insert ref (S.unions (map typeRefsInArg args))
+    TMod _ inner ->
+      typeRefsInType inner
+  where
+    typeRefsInArg arg =
+      case arg of
+        TAType t -> typeRefsInType t
+        TAIndex ix -> typeRefsInIx ix
+
+    typeRefsInIx ix =
+      case ix of
+        IXVar v -> typeRefsInType (ixvSort v)
+        IXBound _ -> S.empty
+        IXFun _ args -> S.unions (map typeRefsInIx args)
 
 modeMapIsIdentity :: Morphism -> Bool
 modeMapIsIdentity mor =
@@ -455,9 +734,10 @@ checkGenMapping mor gen = do
   modeTgt <- mapMode mor modeSrc
   dom <- mapM (applyMorphismTy mor) (gdPlainDom gen)
   cod <- mapM (applyMorphismTy mor) (gdCod gen)
-  image <- case M.lookup (modeSrc, gdName gen) (morGenMap mor) of
+  image0 <- case M.lookup (modeSrc, gdName gen) (morGenMap mor) of
     Nothing -> Left "checkMorphism: missing generator mapping"
     Just d -> Right d
+  let image = giDiagram image0
   if dMode image /= modeTgt
     then Left "checkMorphism: generator mapping mode mismatch"
     else do
@@ -465,6 +745,11 @@ checkGenMapping mor gen = do
       codImg <- diagramCod image
       _ <- unifyCtxCompat ttTgt [] dom domImg
       _ <- unifyCtxCompat ttTgt [] cod codImg
+      let usedMetas = binderMetaVarsDiagram image
+      let declaredMetas = M.keysSet (giBinderSigs image0)
+      if usedMetas `S.isSubsetOf` declaredMetas
+        then Right ()
+        else Left "checkMorphism: generator mapping uses undeclared binder metas"
       pure ()
 
 checkCell :: Morphism -> Cell2 -> Either Text ()
@@ -509,15 +794,10 @@ inclusionFastPath mor
     genIsIdentity m gen = do
       let mode = gdMode gen
       let name = gdName gen
-      let dom = gdPlainDom gen
-      let cod = gdCod gen
       case M.lookup (mode, name) (morGenMap m) of
         Nothing -> Right False
-        Just image -> do
-          expected <- genDWithAttrs mode dom cod name (identityAttrArgs (gdAttrs gen))
-          isoOrFalse expected image
-    identityAttrArgs attrs =
-      M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- attrs ]
+        Just image ->
+          pure (singleGenNameMaybe gen image == Just name)
     cellMatches tgtMap cell =
       case M.lookup (cellKey cell) tgtMap of
         Nothing -> Right False
@@ -714,34 +994,47 @@ buildGenRenaming mor = do
       mp <- acc
       let mode = gdMode gen
       let name = gdName gen
-      diag <- M.lookup (mode, name) (morGenMap mor)
-      case singleGenNameMaybe gen diag of
+      image <- M.lookup (mode, name) (morGenMap mor)
+      case singleGenNameMaybe gen image of
         Nothing -> Nothing
         Just tgtName ->
           case M.lookup mode (dGens tgt) >>= M.lookup tgtName of
             Nothing -> Nothing
             Just _ -> Just (M.insert (mode, name) tgtName mp)
 
-singleGenNameMaybe :: GenDecl -> Diagram -> Maybe GenName
-singleGenNameMaybe srcGen diag =
-  case renumberDiagram diag of
-    Left _ -> Nothing
-    Right canon ->
-      case IM.elems (dEdges canon) of
-        [edge] ->
-          let boundary = dIn canon <> dOut canon
-              edgePorts = eIns edge <> eOuts edge
-              allPorts = diagramPortIds canon
-          in case ePayload edge of
-            PGen g attrs bargs
-              | boundary == edgePorts
-              , length allPorts == length boundary
-              , null bargs
-              , attrs == passThroughAttrs (gdAttrs srcGen) ->
-                  Just g
+singleGenNameMaybe :: GenDecl -> GenImage -> Maybe GenName
+singleGenNameMaybe srcGen image0 =
+  if giBinderSigs image0 /= expectedBinderSigs
+    then Nothing
+    else
+      case renumberDiagram (giDiagram image0) of
+        Left _ -> Nothing
+        Right canon ->
+          case IM.elems (dEdges canon) of
+            [edge] ->
+              let boundary = dIn canon <> dOut canon
+                  edgePorts = eIns edge <> eOuts edge
+                  allPorts = diagramPortIds canon
+              in case ePayload edge of
+                PGen g attrs bargs
+                  | boundary == edgePorts
+                  , length allPorts == length boundary
+                  , bargs == expectedBinderArgs
+                  , attrs == passThroughAttrs (gdAttrs srcGen) ->
+                      Just g
+                _ -> Nothing
             _ -> Nothing
-        _ -> Nothing
   where
+    binderSlots =
+      [ bs
+      | InBinder bs <- gdDom srcGen
+      ]
+    holes =
+      [ BinderMetaVar ("b" <> T.pack (show i))
+      | i <- [0 .. length binderSlots - 1]
+      ]
+    expectedBinderArgs = map BAMeta holes
+    expectedBinderSigs = M.fromList (zip holes binderSlots)
     passThroughAttrs attrs =
       M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- attrs ]
 
@@ -846,7 +1139,40 @@ instantiateGen tt gen diag edge = do
   s1 <- unifyCtxCompat tt (dIxCtx diag) (gdPlainDom gen) dom
   codExpected <- applySubstCtx tt s1 (gdCod gen)
   s2 <- unifyCtxCompat tt (dIxCtx diag) codExpected cod
-  composeSubst tt s2 s1
+  s0 <- composeSubst tt s2 s1
+  if length binderSlots /= length bargs
+    then Left "applyMorphismDiagram: source binder argument arity mismatch"
+    else foldM checkBinderSlot s0 (zip binderSlots bargs)
+  where
+    binderSlots =
+      [ bs
+      | InBinder bs <- gdDom gen
+      ]
+
+    bargs =
+      case ePayload edge of
+        PGen _ _ bs -> bs
+        _ -> []
+
+    checkBinderSlot subst (slot, barg) =
+      case barg of
+        BAMeta _ ->
+          Right subst
+        BAConcrete inner -> do
+          slot0 <- applySubstBinderSigTT tt subst slot
+          slotIx <- applySubstCtx tt emptySubst (bsIxCtx slot0)
+          innerIx <- applySubstCtx tt emptySubst (dIxCtx inner)
+          if innerIx == slotIx
+            then Right ()
+            else Left "applyMorphismDiagram: binder argument index-context mismatch"
+          domInner <- diagramDom inner
+          sDom <- unifyCtxCompat tt slotIx (bsDom slot0) domInner
+          subst1 <- composeSubst tt sDom subst
+          slot1 <- applySubstBinderSigTT tt subst1 slot
+          slotIx1 <- applySubstCtx tt emptySubst (bsIxCtx slot1)
+          codInner <- diagramCod inner
+          sCod <- unifyCtxCompat tt slotIx1 (bsCod slot1) codInner
+          composeSubst tt sCod subst1
 
 instantiateAttrSubst :: Morphism -> GenDecl -> AttrMap -> Either Text AttrSubst
 instantiateAttrSubst mor gen attrsSrc = do

@@ -8,6 +8,7 @@ import Control.Monad (foldM)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Data.Maybe (listToMaybe)
 import Strat.Common.Rules (RewritePolicy(..))
@@ -19,8 +20,9 @@ import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, elabPolyRun, par
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), InputShape(..), gdPlainDom)
 import Strat.Poly.ModeTheory (ModeTheory(..), ModDecl(..), ModExpr(..))
+import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
 import Strat.Poly.Attr
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePolyCoproduct)
@@ -515,8 +517,19 @@ buildPolyFromBase baseName newName env newDoc = do
       ]
     genImage (mode, gen) = do
       let attrs = M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- gdAttrs gen ]
-      img <- genDWithAttrs mode (gdPlainDom gen) (gdCod gen) (gdName gen) attrs
-      pure ((mode, gdName gen), img)
+      img0 <- genDWithAttrs mode (gdPlainDom gen) (gdCod gen) (gdName gen) attrs
+      let binderSlots = [ bs | InBinder bs <- gdDom gen ]
+      let holes = [ BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length binderSlots - 1] ]
+      let bargs = map BAMeta holes
+      let binderSigs = M.fromList (zip holes binderSlots)
+      img <- setSingleGenBargs (gdName gen) attrs bargs img0
+      pure ((mode, gdName gen), PolyMorph.GenImage img binderSigs)
+    setSingleGenBargs genName attrs bargs img =
+      case IM.toList (dEdges img) of
+        [(edgeKey, edge)] ->
+          let edge' = edge { ePayload = PGen genName attrs bargs }
+          in Right img { dEdges = IM.insert edgeKey edge' (dEdges img) }
+        _ -> Left "generated morphism image is not a single generator edge"
     identityModeMap doc =
       M.fromList [ (m, m) | m <- M.keys (mtModes (dModes doc)) ]
     identityModMap doc =
