@@ -22,7 +22,7 @@ import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..), IxRule(..))
 import qualified Strat.Poly.UnifyTy as U
-import Strat.Poly.TypeTheory (TypeTheory(..))
+import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
 import Strat.Poly.Attr
 import Strat.Poly.Morphism
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
@@ -34,12 +34,9 @@ import Strat.RunSpec (RunShow(..), RunSpec(..))
 
 type Subst = U.Subst
 
-legacyTheory :: ModeTheory -> TypeTheory
-legacyTheory mt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
-
 applySubstTy :: ModeTheory -> Subst -> TypeExpr -> TypeExpr
 applySubstTy mt subst ty =
-  case U.applySubstTy (legacyTheory mt) subst ty of
+  case U.applySubstTy (modeOnlyTypeTheory mt) subst ty of
     Right ty' -> ty'
     Left _ -> ty
 
@@ -48,11 +45,11 @@ applySubstCtx mt subst = map (applySubstTy mt subst)
 
 unifyTyFlex :: ModeTheory -> S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text Subst
 unifyTyFlex mt flex t1 t2 =
-  U.unifyTyFlex (legacyTheory mt) [] flex S.empty U.emptySubst t1 t2
+  U.unifyTyFlex (modeOnlyTypeTheory mt) [] flex S.empty U.emptySubst t1 t2
 
 composeSubst :: ModeTheory -> Subst -> Subst -> Subst
 composeSubst mt s2 s1 =
-  case U.composeSubst (legacyTheory mt) s2 s1 of
+  case U.composeSubst (modeOnlyTypeTheory mt) s2 s1 of
     Right s -> s
     Left _ -> s1
 

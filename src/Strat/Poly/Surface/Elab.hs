@@ -197,12 +197,11 @@ surfaceMeasure sigma diag =
 
 data ElabEnv = ElabEnv
   { eeVars :: M.Map Text TypeExpr
-  , eeVarDefs :: M.Map Text Diagram
   , eeTypeSubst :: Subst
   } deriving (Eq, Show)
 
 initEnv :: Either Text ElabEnv
-initEnv = Right (ElabEnv M.empty M.empty M.empty)
+initEnv = Right (ElabEnv M.empty M.empty)
 
 elabSurfaceTypeExpr :: Doctrine -> ModeName -> RawPolyTypeExpr -> Either Text TypeExpr
 elabSurfaceTypeExpr doc mode expr =
@@ -437,19 +436,19 @@ ensureDupShape gen =
   if not (null (gdAttrs gen))
     then Left "surface: structural generator dup/drop must not declare attributes"
     else
-      case (gdTyVars gen, gdPlainDom gen, gdCod gen) of
-        ([v], [Ty.TVar v1], [Ty.TVar v2, Ty.TVar v3])
+      case (gdTyVars gen, gdDom gen, gdCod gen) of
+        ([v], [InPort (Ty.TVar v1)], [Ty.TVar v2, Ty.TVar v3])
           | v == v1 && v == v2 && v == v3 -> Right ()
-        _ -> Left "surface structural: configured dup generator has wrong type"
+        _ -> Left "surface structural: configured dup generator has wrong type (must be [a] -> [a,a] with no binder slots)"
 
 ensureDropShape :: GenDecl -> Either Text ()
 ensureDropShape gen =
   if not (null (gdAttrs gen))
     then Left "surface: structural generator dup/drop must not declare attributes"
     else
-      case (gdTyVars gen, gdPlainDom gen, gdCod gen) of
-        ([v], [Ty.TVar v1], []) | v == v1 -> Right ()
-        _ -> Left "surface structural: configured drop generator has wrong type"
+      case (gdTyVars gen, gdDom gen, gdCod gen) of
+        ([v], [InPort (Ty.TVar v1)], []) | v == v1 -> Right ()
+        _ -> Left "surface structural: configured drop generator has wrong type (must be [a] -> [] with no binder slots)"
 
 
 -- Elaboration core
@@ -499,7 +498,6 @@ prepareBinder doc mode mt env params (Just decl) =
       let env' =
             env
               { eeVars = M.insert varName ty (eeVars env)
-              , eeVarDefs = M.delete varName (eeVarDefs env)
               }
       pure (Just (RBInput varName ty), Just bodyHole, env')
     BindLet varCap valueHole bodyHole -> do
@@ -509,7 +507,6 @@ prepareBinder doc mode mt env params (Just decl) =
       let env' =
             env
               { eeVars = M.insert varName ty (eeVars env)
-              , eeVarDefs = M.delete varName (eeVarDefs env)
               }
       pure (Just (RBValue varName valueHole), Just bodyHole, env')
 
@@ -525,13 +522,10 @@ requireTypeParam params cap =
     Just (SPType ty) -> Right ty
     _ -> Left ("surface: missing <type> capture for " <> cap)
 
-elabVarRef :: ModeTheory -> ElabEnv -> Subst -> Text -> TypeExpr -> Fresh SurfDiag
-elabVarRef mt env subst name ty = do
+elabVarRef :: ModeTheory -> Subst -> Text -> TypeExpr -> Fresh SurfDiag
+elabVarRef mt subst name ty = do
   let ty' = applySubstTy mt subst ty
-  let base0 =
-        case M.lookup name (eeVarDefs env) of
-          Just def -> emptySurf def
-          Nothing -> varSurf name ty'
+  let base0 = varSurf name ty'
   pure (applySubstSurf mt subst base0)
 
 elabZeroArgGen :: ModeTheory -> Doctrine -> ModeName -> ElabEnv -> Text -> Fresh SurfDiag
@@ -578,7 +572,7 @@ evalTemplate menv doc mt mode ops env paramMap subst childList templ =
           _ -> liftEither (Left ("surface: variable placeholder requires ident capture: " <> cap))
       case M.lookup varName (eeVars env) of
         Nothing -> elabZeroArgGen mt doc mode env varName
-        Just ty -> elabVarRef mt env subst varName ty
+        Just ty -> elabVarRef mt subst varName ty
     TTermRef name ->
       case M.lookup name (meTerms menv) of
         Nothing -> liftEither (Left ("surface: unknown term reference @" <> name))

@@ -19,7 +19,7 @@ import Strat.Frontend.Env (emptyEnv)
 import Strat.Poly.Diagram (diagramDom)
 import Strat.Poly.UnifyTy (unifyTy)
 import Strat.Poly.Graph (emptyDiagram, freshPort, validateDiagram)
-import Strat.Poly.TypeTheory (TypeTheory(..))
+import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 
 
 tests :: TestTree
@@ -127,7 +127,7 @@ testUnifyModeMismatch :: Assertion
 testUnifyModeMismatch = do
   let aVar = tvar modeC "a"
   let aTy = tcon modeC "A" []
-  let tt = TypeTheory { ttModes = emptyModeTheory, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+  let tt = modeOnlyTypeTheory emptyModeTheory
   case unifyTy tt (TVar aVar) aTy of
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()

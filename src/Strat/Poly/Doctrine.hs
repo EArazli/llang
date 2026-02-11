@@ -92,7 +92,7 @@ doctrineTypeTheory doc =
           | (mode, typeTable) <- M.toList (dTypes doc)
           , (tyName, sig) <- M.toList typeTable
           ]
-    , ttIxFuel = 200
+    , ttIxFuel = defaultIxFuel
     }
   where
     toTParam ps =
@@ -474,18 +474,18 @@ checkStructuralByDiscipline doc =
       if not (null (gdAttrs gen))
         then Left ("dup in mode " <> renderModeName mode <> " must not declare attributes")
         else
-          case (gdTyVars gen, gdPlainDom gen, gdCod gen) of
-            ([v], [TVar v1], [TVar v2, TVar v3])
+          case (gdTyVars gen, gdDom gen, gdCod gen) of
+            ([v], [InPort (TVar v1)], [TVar v2, TVar v3])
               | v == v1 && v == v2 && v == v3 -> Right ()
-            _ -> Left "validateDoctrine: dup must have shape (a@M) : [a] -> [a,a]"
+            _ -> Left "validateDoctrine: dup must have shape (a@M) : [a] -> [a,a] (no binder slots)"
 
     ensureDropShape mode gen =
       if not (null (gdAttrs gen))
         then Left ("drop in mode " <> renderModeName mode <> " must not declare attributes")
         else
-          case (gdTyVars gen, gdPlainDom gen, gdCod gen) of
-            ([v], [TVar v1], []) | v == v1 -> Right ()
-            _ -> Left "validateDoctrine: drop must have shape (a@M) : [a] -> []"
+          case (gdTyVars gen, gdDom gen, gdCod gen) of
+            ([v], [InPort (TVar v1)], []) | v == v1 -> Right ()
+            _ -> Left "validateDoctrine: drop must have shape (a@M) : [a] -> [] (no binder slots)"
 
     requireCoassoc mode = do
       (lhs, rhs) <- lawCoassoc mode

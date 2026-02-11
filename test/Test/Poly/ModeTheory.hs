@@ -14,7 +14,7 @@ import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
-import Strat.Poly.TypeTheory (TypeTheory(..))
+import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 import Strat.Poly.Names (GenName(..))
 import Test.Poly.Helpers (mkModes)
 
@@ -27,6 +27,8 @@ tests =
     , testCase "substitution re-normalizes modality type" testSubstReNormalizes
     , testCase "adjunction auto-generates unit/counit generators" testAdjunctionGens
     , testCase "structural dup with attributes is rejected directly" testDupAttrsRejected
+    , testCase "structural dup rejects binder slots" testDupBinderSlotRejected
+    , testCase "structural drop rejects binder slots" testDropBinderSlotRejected
     ]
 
 testNormalizeTypeExprByModEq :: Assertion
@@ -52,7 +54,7 @@ testSubstReNormalizes = do
   let aVar = TyVar { tvName = "A", tvMode = rt }
   let quoteE = ModExpr { meSrc = rt, meTgt = ct, mePath = [quote] }
   let spliceE = ModExpr { meSrc = ct, meTgt = rt, mePath = [splice] }
-  let tt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+  let tt = modeOnlyTypeTheory mt
   subst <- requireEither (unifyTy tt (TVar xVar) (TMod quoteE (TVar aVar)))
   got <- requireEither (applySubstTy tt subst (TMod spliceE (TVar xVar)))
   got @?= TVar aVar
@@ -117,6 +119,42 @@ testDupAttrsRejected = do
   case parseRawFile src >>= elabRawFile of
     Left err ->
       assertBool "expected direct dup-attrs structural error" ("must not declare attributes" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected doctrine validation failure"
+
+testDupBinderSlotRejected :: Assertion
+testDupBinderSlotRejected = do
+  let src = T.unlines
+        [ "doctrine BadStructBinderDup where {"
+        , "  mode M;"
+        , "  structure M = cartesian;"
+        , "  type A @M;"
+        , "  gen dup (a@M) : [a, binder {x:a} : [a]] -> [a, a] @M;"
+        , "  gen drop (a@M) : [a] -> [] @M;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        "expected dup shape rejection mentioning binder slots"
+        ("dup must have shape" `T.isInfixOf` err || "binder" `T.isInfixOf` err || "no binder slots" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected doctrine validation failure"
+
+testDropBinderSlotRejected :: Assertion
+testDropBinderSlotRejected = do
+  let src = T.unlines
+        [ "doctrine BadStructBinderDrop where {"
+        , "  mode M;"
+        , "  structure M = cartesian;"
+        , "  type A @M;"
+        , "  gen dup (a@M) : [a] -> [a, a] @M;"
+        , "  gen drop (a@M) : [a, binder {x:a} : [a]] -> [] @M;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        "expected drop shape rejection mentioning binder slots"
+        ("drop must have shape" `T.isInfixOf` err || "binder" `T.isInfixOf` err || "no binder slots" `T.isInfixOf` err)
     Right _ -> assertFailure "expected doctrine validation failure"
 
 buildStagingTheory :: ModeName -> ModeName -> Either T.Text ModeTheory

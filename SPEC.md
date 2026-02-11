@@ -444,6 +444,8 @@ doctrine <Name> [extends <Base>] where {
 - `index_fun`/`index_rule` must be mode-consistent with their result sort mode.
 - `structure` can only upgrade discipline according to the partial order
   `linear <= affine <= cartesian` and `linear <= relevant <= cartesian`.
+- For modes requiring structural operators, `dup`/`drop` are fixed generator names and
+  must have plain port domains only (no binder slots).
 - Modality expressions use:
   - `id@M` for identity on mode `M`.
   - `U.F` for composition (`U ∘ F`, rightmost applies first).
@@ -677,6 +679,8 @@ Surface variable-use behavior is derived from the doctrine mode structure only:
 
 Required structural generator names are fixed: `dup` and `drop`.
 Required structural generators `dup`/`drop` must declare no attributes (`gdAttrs = []`).
+Required structural generators `dup`/`drop` must have no binder slots in their domain
+(`gdDom` must contain only `InPort` entries).
 
 #### Lexer
 

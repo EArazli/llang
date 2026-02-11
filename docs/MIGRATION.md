@@ -38,18 +38,21 @@ User-facing changes:
 
 User-facing changes:
 
-- Surfaces can declare a `structural { ... }` block:
-  `discipline: linear | affine | relevant | cartesian`,
-  with optional `dup:` and `drop:` generator names.
-- If the block is omitted, it defaults to **cartesian** with `dup`/`drop` generators
-  named `dup` and `drop`.
-- If the block is present, `discipline` defaults to `cartesian` and `dup`/`drop` are
-  unset unless specified.
-- Variable‑use discipline is enforced:
+- Surface variable discipline is taken from the doctrine mode declaration:
+  `structure M = linear | affine | relevant | cartesian;`.
+- Structural generator names are fixed to `dup` and `drop` (no surface-level renaming).
+- Required structural generators must:
+  - declare no attributes,
+  - have the expected structural shape,
+  - and have no binder slots in their domain.
+- Variable‑use discipline is enforced during surface elaboration:
   linear = exactly once; affine = at most once (drop inserted for 0 uses);
   relevant = at least once (dup inserted for >1); cartesian = any uses.
-- Configured `dup`/`drop` generators must exist in the surface mode and have shapes
-  `dup(a) : a → (a, a)` and `drop(a) : a → []`.
+- Surface grammar uses direct template actions and explicit binder clauses:
+  - `bind in(varCap, typeCap, bodyHole)`
+  - `bind let(varCap, valueHole, bodyHole)`
+- Surfaces may declare `base D;`. When present and `D != doctrine`, elaboration normalizes
+  away surface-only generators and returns a diagram in the base doctrine.
 
 ## Phase 4 — Terms and `@term` references
 

@@ -48,9 +48,6 @@ fromTyOnlySubst tySubst = Subst tySubst M.empty
 toTyOnlySubst :: Subst -> TyOnlySubst
 toTyOnlySubst = sTy
 
-legacyTheory :: ModeTheory -> TypeTheory
-legacyTheory mt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
-
 unifyTy :: TypeTheory -> TypeExpr -> TypeExpr -> Either Text Subst
 unifyTy tt t1 t2 =
   let tyFlex = S.union (freeTyVarsType t1) (freeTyVarsType t2)
@@ -399,7 +396,7 @@ composeSubst tt s2 s1 = do
 
 applySubstTyLegacy :: ModeTheory -> TyOnlySubst -> TypeExpr -> TypeExpr
 applySubstTyLegacy mt subst ty =
-  case applySubstTy (legacyTheory mt) (fromTyOnlySubst subst) ty of
+  case applySubstTy (modeOnlyTypeTheory mt) (fromTyOnlySubst subst) ty of
     Right ty' -> ty'
     Left _ -> ty
 
@@ -408,24 +405,24 @@ applySubstCtxLegacy mt subst = map (applySubstTyLegacy mt subst)
 
 unifyTyFlexLegacy :: ModeTheory -> S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text TyOnlySubst
 unifyTyFlexLegacy mt flex t1 t2 = do
-  subst <- unifyTyFlex (legacyTheory mt) [] flex S.empty emptySubst t1 t2
+  subst <- unifyTyFlex (modeOnlyTypeTheory mt) [] flex S.empty emptySubst t1 t2
   pure (toTyOnlySubst subst)
 
 unifyCtxLegacy :: ModeTheory -> Context -> Context -> Either Text TyOnlySubst
 unifyCtxLegacy mt ctx1 ctx2 = do
   let flex = S.unions (map freeTyVarsType (ctx1 <> ctx2))
-  subst <- unifyCtx (legacyTheory mt) [] flex S.empty ctx1 ctx2
+  subst <- unifyCtx (modeOnlyTypeTheory mt) [] flex S.empty ctx1 ctx2
   pure (toTyOnlySubst subst)
 
 normalizeSubstLegacy :: ModeTheory -> TyOnlySubst -> TyOnlySubst
 normalizeSubstLegacy mt subst =
-  case normalizeSubst (legacyTheory mt) (fromTyOnlySubst subst) of
+  case normalizeSubst (modeOnlyTypeTheory mt) (fromTyOnlySubst subst) of
     Right s -> toTyOnlySubst s
     Left _ -> subst
 
 composeSubstLegacy :: ModeTheory -> TyOnlySubst -> TyOnlySubst -> TyOnlySubst
 composeSubstLegacy mt s2 s1 =
-  case composeSubst (legacyTheory mt) (fromTyOnlySubst s2) (fromTyOnlySubst s1) of
+  case composeSubst (modeOnlyTypeTheory mt) (fromTyOnlySubst s2) (fromTyOnlySubst s1) of
     Right s -> toTyOnlySubst s
     Left _ -> s1
 

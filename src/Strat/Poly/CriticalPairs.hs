@@ -27,13 +27,10 @@ import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.ModeTheory (ModeTheory)
-import Strat.Poly.TypeTheory (TypeTheory(..))
+import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
 
 
 type Subst = U.Subst
-
-mkLegacyTypeTheory :: ModeTheory -> TypeTheory
-mkLegacyTypeTheory mt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
 
 fatalSubstPrefix :: Text
 fatalSubstPrefix = "criticalPairs: substitution failure: "
@@ -83,7 +80,7 @@ criticalPairsForDoctrine mode policy doc =
 
 criticalPairsForRules :: ModeTheory -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
 criticalPairsForRules mt mode rules =
-  criticalPairsForRulesTT (mkLegacyTypeTheory mt) mode rules
+  criticalPairsForRulesTT (modeOnlyTypeTheory mt) mode rules
 
 criticalPairsForRulesTT :: TypeTheory -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
 criticalPairsForRulesTT tt mode rules = do

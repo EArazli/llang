@@ -22,7 +22,7 @@ import Strat.Poly.TypeExpr
   , IxTerm(..)
   )
 import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..), IxRule(..), normalizeIx)
-import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..))
+import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), defaultIxFuel, modeOnlyTypeTheory)
 import Strat.Poly.UnifyTy (unifyIx, unifyTyFlex, emptySubst, sIx)
 import Strat.Poly.Match (findAllMatchesWithVars)
 import Strat.Poly.Graph
@@ -115,7 +115,7 @@ testBoundSortUsesSubstitution = do
           { ttModes = mkModes [modeM, modeI]
           , ttIndex = M.fromList [(modeI, IxTheory M.empty [])]
           , ttTypeParams = M.fromList [(lenRef, [TPS_Ty modeM])]
-          , ttIxFuel = 200
+          , ttIxFuel = defaultIxFuel
           }
   case unifyIx tt [ixCtxSort] S.empty emptySubst expectedSort (IXBound 0) (IXBound 0) of
     Left _ -> pure ()
@@ -158,7 +158,7 @@ testMatchIxCtxCompatibility = do
           { ttModes = mkModes [modeM, modeI]
           , ttIndex = M.empty
           , ttTypeParams = M.empty
-          , ttIxFuel = 200
+          , ttIxFuel = defaultIxFuel
           }
   let lhs = (idD modeM [aTy]) { dIxCtx = [natTy] }
   let host = (idD modeM [aTy]) { dIxCtx = [boolTy] }
@@ -172,7 +172,7 @@ testIsoMatchDropsSubstFailure = do
   let mode = ModeName "M"
   let goodTy = TCon (TypeRef mode (TypeName "A")) []
   let badSort = TCon (TypeRef mode (TypeName "BadSort")) [TAType goodTy]
-  let tt = TypeTheory { ttModes = mkModes [mode], ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+  let tt = modeOnlyTypeTheory (mkModes [mode])
   let inner = emptyDiagram mode [badSort]
   _ <- require (validateDiagram inner)
   lhs <- require (mkWrapWithBinder mode goodTy inner)
@@ -192,7 +192,7 @@ testBinderMetaSplice = do
   rhs <- require (mkSpliceRHS mode aTy meta)
 
   let rule = RewriteRule { rrName = "beta", rrLHS = lhs, rrRHS = rhs, rrTyVars = [], rrIxVars = [] }
-  let tt = TypeTheory { ttModes = mkModes [mode], ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
+  let tt = modeOnlyTypeTheory (mkModes [mode])
   step <- require (rewriteOnce tt [rule] host)
   out <-
     case step of
@@ -255,5 +255,5 @@ mkNatTypeTheory = do
               , IxRule { irVars = [vN], irLHS = add (IXVar vN) z, irRHS = IXVar vN }
               ]
           }
-  let tt = TypeTheory { ttModes = mt1, ttIndex = M.fromList [(modeI, theory)], ttTypeParams = M.empty, ttIxFuel = 200 }
+  let tt = TypeTheory { ttModes = mt1, ttIndex = M.fromList [(modeI, theory)], ttTypeParams = M.empty, ttIxFuel = defaultIxFuel }
   pure (tt, natTy, modeM, modeI)

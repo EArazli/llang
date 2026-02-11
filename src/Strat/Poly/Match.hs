@@ -31,7 +31,7 @@ import Strat.Poly.TypeExpr (TypeExpr, TyVar, IxVar)
 import Strat.Poly.UnifyTy
 import Strat.Poly.Attr
 import Strat.Poly.ModeTheory (ModeTheory, emptyModeTheory)
-import Strat.Poly.TypeTheory (TypeTheory(..))
+import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
 
 
 data Match = Match
@@ -43,9 +43,6 @@ data Match = Match
   , mUsedHostPorts :: S.Set PortId
   , mUsedHostEdges :: S.Set EdgeId
   } deriving (Eq, Show)
-
-mkLegacyTypeTheory :: ModeTheory -> TypeTheory
-mkLegacyTypeTheory mt = TypeTheory { ttModes = mt, ttIndex = M.empty, ttTypeParams = M.empty, ttIxFuel = 200 }
 
 applySubstTyCompat :: TypeTheory -> Subst -> TypeExpr -> Either Text TypeExpr
 applySubstTyCompat = applySubstTy
@@ -76,7 +73,7 @@ findAllMatches doc lhs host =
 findFirstMatchNoDoc :: Diagram -> Diagram -> Either Text (Maybe Match)
 findFirstMatchNoDoc lhs host =
   findFirstMatchInternal
-    (mkLegacyTypeTheory emptyModeTheory)
+    (modeOnlyTypeTheory emptyModeTheory)
     (freeTyVarsDiagram lhs)
     (freeIxVarsDiagram lhs)
     (freeAttrVarsDiagram lhs)
@@ -86,7 +83,7 @@ findFirstMatchNoDoc lhs host =
 findAllMatchesNoDoc :: Diagram -> Diagram -> Either Text [Match]
 findAllMatchesNoDoc lhs host =
   findAllMatchesInternal
-    (mkLegacyTypeTheory emptyModeTheory)
+    (modeOnlyTypeTheory emptyModeTheory)
     (freeTyVarsDiagram lhs)
     (freeIxVarsDiagram lhs)
     (freeAttrVarsDiagram lhs)
@@ -97,7 +94,7 @@ findFirstMatchWithTyVars :: ModeTheory -> S.Set TyVar -> Diagram -> Diagram -> E
 findFirstMatchWithTyVars mt flex lhs host = do
   matches <-
     findAllMatchesInternal
-      (mkLegacyTypeTheory mt)
+      (modeOnlyTypeTheory mt)
       flex
       S.empty
       (freeAttrVarsDiagram lhs)
@@ -108,7 +105,7 @@ findFirstMatchWithTyVars mt flex lhs host = do
 findAllMatchesWithTyVars :: ModeTheory -> S.Set TyVar -> Diagram -> Diagram -> Either Text [Match]
 findAllMatchesWithTyVars mt flex lhs host =
   findAllMatchesInternal
-    (mkLegacyTypeTheory mt)
+    (modeOnlyTypeTheory mt)
     flex
     S.empty
     (freeAttrVarsDiagram lhs)

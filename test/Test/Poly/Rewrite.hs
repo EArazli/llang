@@ -18,7 +18,7 @@ import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Match (Match(..), findFirstMatchNoDoc, findFirstMatchWithTyVarsNoDoc)
 import Strat.Poly.UnifyTy (Subst(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory, ModName(..), ModDecl(..), ModExpr(..), ModEqn(..), addMode, addModDecl, addModEqn)
-import Strat.Poly.TypeTheory (TypeTheory(..))
+import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
 import Strat.Poly.Pretty (renderDiagram)
 import qualified Data.IntMap.Strict as IM
 import Test.Poly.Helpers (mkModes)
@@ -58,13 +58,7 @@ require :: Either Text a -> IO a
 require = either (assertFailure . T.unpack) pure
 
 mkTypeTheory :: ModeTheory -> TypeTheory
-mkTypeTheory mt =
-  TypeTheory
-    { ttModes = mt
-    , ttIndex = M.empty
-    , ttTypeParams = M.empty
-    , ttIxFuel = 200
-    }
+mkTypeTheory = modeOnlyTypeTheory
 
 assocRule :: Either Text RewriteRule
 assocRule = do
