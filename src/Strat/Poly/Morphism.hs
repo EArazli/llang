@@ -5,6 +5,7 @@ module Strat.Poly.Morphism
   , TemplateParam(..)
   , TypeTemplate(..)
   , applyMorphismTy
+  , applyMorphismBinderSig
   , applyMorphismDiagram
   , checkMorphism
   ) where
@@ -266,6 +267,13 @@ applyMorphismBinderArg mor barg =
   case barg of
     BAConcrete d -> BAConcrete <$> applyMorphismDiagram mor d
     BAMeta x -> Right (BAMeta x)
+
+applyMorphismBinderSig :: Morphism -> BinderSig -> Either Text BinderSig
+applyMorphismBinderSig mor sig = do
+  ixCtx' <- mapM (applyMorphismTy mor) (bsIxCtx sig)
+  dom' <- mapM (applyMorphismTy mor) (bsDom sig)
+  cod' <- mapM (applyMorphismTy mor) (bsCod sig)
+  pure sig { bsIxCtx = ixCtx', bsDom = dom', bsCod = cod' }
 
 applySubstBinderSigTT :: TypeTheory -> Subst -> BinderSig -> Either Text BinderSig
 applySubstBinderSigTT tt subst sig = do
@@ -745,6 +753,19 @@ checkGenMapping mor gen = do
       codImg <- diagramCod image
       _ <- unifyCtxCompat ttTgt [] dom domImg
       _ <- unifyCtxCompat ttTgt [] cod codImg
+      let binderSlotsSrc =
+            [ bs
+            | InBinder bs <- gdDom gen
+            ]
+      let holes =
+            [ BinderMetaVar ("b" <> T.pack (show i))
+            | i <- [0 .. length binderSlotsSrc - 1]
+            ]
+      binderSlotsTgt <- mapM (applyMorphismBinderSig mor) binderSlotsSrc
+      let expectedBinderSigs = M.fromList (zip holes binderSlotsTgt)
+      if giBinderSigs image0 == expectedBinderSigs
+        then Right ()
+        else Left "checkMorphism: generator mapping binder-hole signatures mismatch"
       let usedMetas = binderMetaVarsDiagram image
       let declaredMetas = M.keysSet (giBinderSigs image0)
       if usedMetas `S.isSubsetOf` declaredMetas

@@ -282,6 +282,8 @@ requireGenRenameMap mor = do
 
 singleGenName :: Morphism -> GenDecl -> GenImage -> Either Text GenName
 singleGenName mor srcGen image0 = do
+  binderSlotsTgt <- mapM (applyMorphismBinderSig mor) binderSlotsSrc
+  let expectedBinderSigs = M.fromList (zip holes binderSlotsTgt)
   if giBinderSigs image0 == expectedBinderSigs
     then Right ()
     else Left "poly pushout requires generator mappings to preserve binder-hole signatures"
@@ -300,10 +302,9 @@ singleGenName mor srcGen image0 = do
         _ -> Left "poly pushout requires generator mappings to be a single generator"
     _ -> Left "poly pushout requires generator mappings to be a single generator"
   where
-    binderSlots = [ bs | InBinder bs <- gdDom srcGen ]
-    holes = [ BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length binderSlots - 1] ]
+    binderSlotsSrc = [ bs | InBinder bs <- gdDom srcGen ]
+    holes = [ BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length binderSlotsSrc - 1] ]
     expectedBargs = map BAMeta holes
-    expectedBinderSigs = M.fromList (zip holes binderSlots)
     expectedAttrMap m gen = fmap M.fromList (mapM toField (gdAttrs gen))
       where
         toField (fieldName, srcSort) = do
@@ -564,11 +565,14 @@ renameInputShape :: TypeRenameMap -> TypePermMap -> InputShape -> Either Text In
 renameInputShape ren permRen shape =
   case shape of
     InPort ty -> InPort <$> renameTypeExpr ren permRen ty
-    InBinder bs -> do
-      ix' <- mapM (renameTypeExpr ren permRen) (bsIxCtx bs)
-      dom' <- mapM (renameTypeExpr ren permRen) (bsDom bs)
-      cod' <- mapM (renameTypeExpr ren permRen) (bsCod bs)
-      Right (InBinder bs { bsIxCtx = ix', bsDom = dom', bsCod = cod' })
+    InBinder bs -> InBinder <$> renameBinderSig ren permRen bs
+
+renameBinderSig :: TypeRenameMap -> TypePermMap -> BinderSig -> Either Text BinderSig
+renameBinderSig ren permRen sig = do
+  ix' <- mapM (renameTypeExpr ren permRen) (bsIxCtx sig)
+  dom' <- mapM (renameTypeExpr ren permRen) (bsDom sig)
+  cod' <- mapM (renameTypeExpr ren permRen) (bsCod sig)
+  pure sig { bsIxCtx = ix', bsDom = dom', bsCod = cod' }
 
 renameTypeExpr :: TypeRenameMap -> TypePermMap -> TypeExpr -> Either Text TypeExpr
 renameTypeExpr ren permRen ty =
@@ -1064,9 +1068,10 @@ buildGenMap src tgt attrRen tyRen permRen genRen =
               ]
       d0 <- genDWithAttrs mode dom cod genName' attrs
       let binderSlots = [ bs | InBinder bs <- gdDom gen ]
+      binderSlotsRenamed <- mapM (renameBinderSig tyRen permRen) binderSlots
       let holes = [ BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length binderSlots - 1] ]
       let bargs = map BAMeta holes
-      let binderSigs = M.fromList (zip holes binderSlots)
+      let binderSigs = M.fromList (zip holes binderSlotsRenamed)
       d <- setSingleGenBargs genName' attrs bargs d0
       pure ((mode, genName), GenImage d binderSigs)
 

@@ -9,16 +9,17 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.IntMap.Strict as IM
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModEqn(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), mtModes, mtDecls)
 import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), TypeArg(..), IxVar(..), IxTerm(..))
 import Strat.Poly.IndexTheory (IxTheory(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Diagram (Diagram, genD, idD)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), gdPlainDom, validateDoctrine)
+import Strat.Poly.Diagram (genD, idD)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), gdPlainDom, validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Morphism (Morphism(..), GenImage(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram)
 import Strat.Poly.Pushout (computePolyPushout, PolyPushoutResult(..))
-import Strat.Poly.Graph (diagramIsoEq)
+import Strat.Poly.Graph (diagramIsoEq, Diagram(..), BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..), RewritePolicy(..))
 
 
@@ -35,6 +36,8 @@ tests =
     , testCase "pushout handles alpha-renaming with mode equations" testPushoutAlphaRenameWithModeEq
     , testCase "pushout supports indexed type maps" testPushoutIndexedTypeMaps
     , testCase "pushout merges cells alpha-equivalent over index vars" testPushoutCellIxAlphaEq
+    , testCase "pushout injection morphism preserves concrete binder arguments" testPushoutInjectionPreservesBinderArgs
+    , testCase "pushout accepts renaming morphisms with binder signatures in target doctrine" testPushoutAcceptsRenamingWithBinders
     ]
 
 require :: Either Text a -> IO a
@@ -42,6 +45,14 @@ require = either (assertFailure . T.unpack) pure
 
 plainImage :: Diagram -> GenImage
 plainImage diag = GenImage diag M.empty
+
+setSingleEdgeBargs :: Diagram -> [BinderArg] -> Either Text Diagram
+setSingleEdgeBargs diag bargs =
+  case IM.toList (dEdges diag) of
+    [(edgeKey, edge@(Edge _ (PGen g attrs _) _ _))] ->
+      let edge' = edge { ePayload = PGen g attrs bargs }
+      in pure diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+    _ -> Left "expected a single generator edge"
 
 tvar :: ModeName -> Text -> TyVar
 tvar mode name = TyVar { tvName = name, tvMode = mode }
@@ -663,6 +674,181 @@ testPushoutCellIxAlphaEq = do
     Left err -> assertFailure (T.unpack err)
     Right out -> pure out
   length (dCells2 (poDoctrine res)) @?= 1
+
+testPushoutInjectionPreservesBinderArgs :: Assertion
+testPushoutInjectionPreservesBinderArgs = do
+  let mode = ModeName "M"
+  let aTy = TCon (TypeRef mode (TypeName "A")) []
+  let gName = GenName "g"
+  let slotSig = BinderSig { bsIxCtx = [], bsDom = [aTy], bsCod = [aTy] }
+  let gDecl =
+        GenDecl
+          { gdName = gName
+          , gdMode = mode
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = [InBinder slotSig]
+          , gdCod = [aTy]
+          , gdAttrs = []
+          }
+  let iface =
+        Doctrine
+          { dName = "IfaceBinder"
+          , dModes = mkModes (S.singleton mode)
+          , dIndexModes = S.empty
+          , dIxTheory = M.empty
+          , dTypes = M.empty
+          , dGens = M.empty
+          , dCells2 = []
+          , dAttrSorts = M.empty
+          }
+  let left =
+        iface
+          { dName = "LeftBinder"
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
+          }
+  let right = iface { dName = "RightBinder" }
+  case validateDoctrine iface of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine left of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine right of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  let mkIfaceIn name tgt =
+        Morphism
+          { morName = name
+          , morSrc = iface
+          , morTgt = tgt
+          , morIsCoercion = False
+          , morModeMap = identityModeMap iface
+          , morModMap = identityModMap iface
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morIxFunMap = M.empty
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 10
+          }
+  let morLeft = mkIfaceIn "iface.left" left
+  let morRight = mkIfaceIn "iface.right" right
+  res <- case computePolyPushout "PBindInj" morLeft morRight of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> pure out
+  let body = idD mode [aTy]
+  leftDiag0 <- require (genD mode [] [aTy] gName)
+  leftDiag <- require (setSingleEdgeBargs leftDiag0 [BAConcrete body])
+  mapped <- case applyMorphismDiagram (poInl res) leftDiag of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  case IM.elems (dEdges mapped) of
+    [Edge _ (PGen _ _ [BAConcrete _]) _ _] -> pure ()
+    _ -> assertFailure "expected mapped injection image to preserve one concrete binder argument"
+
+testPushoutAcceptsRenamingWithBinders :: Assertion
+testPushoutAcceptsRenamingWithBinders = do
+  let mode = ModeName "M"
+  let aRef = TypeRef mode (TypeName "A")
+  let a1Ref = TypeRef mode (TypeName "A1")
+  let aTy = TCon aRef []
+  let a1Ty = TCon a1Ref []
+  let gName = GenName "g"
+  let g1Name = GenName "g1"
+  let slotSigSrc = BinderSig { bsIxCtx = [], bsDom = [aTy], bsCod = [aTy] }
+  let slotSigTgt = BinderSig { bsIxCtx = [], bsDom = [a1Ty], bsCod = [a1Ty] }
+  let ifaceGen =
+        GenDecl
+          { gdName = gName
+          , gdMode = mode
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = [InBinder slotSigSrc]
+          , gdCod = [aTy]
+          , gdAttrs = []
+          }
+  let leftGen =
+        GenDecl
+          { gdName = g1Name
+          , gdMode = mode
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = [InBinder slotSigTgt]
+          , gdCod = [a1Ty]
+          , gdAttrs = []
+          }
+  let iface =
+        Doctrine
+          { dName = "IfaceRenameBinder"
+          , dModes = mkModes (S.singleton mode)
+          , dIndexModes = S.empty
+          , dIxTheory = M.empty
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dGens = M.fromList [(mode, M.fromList [(gName, ifaceGen)])]
+          , dCells2 = []
+          , dAttrSorts = M.empty
+          }
+  let left =
+        Doctrine
+          { dName = "LeftRenameBinder"
+          , dModes = mkModes (S.singleton mode)
+          , dIndexModes = S.empty
+          , dIxTheory = M.empty
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A1", TypeSig [])])]
+          , dGens = M.fromList [(mode, M.fromList [(g1Name, leftGen)])]
+          , dCells2 = []
+          , dAttrSorts = M.empty
+          }
+  let right = iface { dName = "RightRenameBinder" }
+  case validateDoctrine iface of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine left of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine right of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  let hole = BinderMetaVar "b0"
+  imgLeft0 <- require (genD mode [] [a1Ty] g1Name)
+  imgLeft <- require (setSingleEdgeBargs imgLeft0 [BAMeta hole])
+  imgRight0 <- require (genD mode [] [aTy] gName)
+  imgRight <- require (setSingleEdgeBargs imgRight0 [BAMeta hole])
+  let morLeft =
+        Morphism
+          { morName = "fRenameBinder"
+          , morSrc = iface
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap iface
+          , morModMap = identityModMap iface
+          , morTypeMap = M.fromList [(aRef, TypeTemplate [] a1Ty)]
+          , morGenMap = M.fromList [((mode, gName), GenImage imgLeft (M.fromList [(hole, slotSigTgt)]))]
+          , morIxFunMap = M.empty
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 10
+          }
+  let morRight =
+        Morphism
+          { morName = "gRenameBinder"
+          , morSrc = iface
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap iface
+          , morModMap = identityModMap iface
+          , morTypeMap = M.empty
+          , morGenMap = M.fromList [((mode, gName), GenImage imgRight (M.fromList [(hole, slotSigSrc)]))]
+          , morIxFunMap = M.empty
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 10
+          }
+  case computePolyPushout "PRenameBinder" morLeft morRight of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()
 
 mkModeEqTheory :: ModeName -> ModName -> ModName -> ModeTheory
 mkModeEqTheory mode modF modU =

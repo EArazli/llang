@@ -35,6 +35,8 @@ tests =
     , testCase "morphism rejects index function maps with sort mismatch" testIxFunMapSortMismatch
     , testCase "morphism instantiation fails on dependent substitution errors" testMorphismInstantiationSubstFailure
     , testCase "binder generator identity morphism preserves binder arguments" testBinderIdentityMorphismPreservesBinders
+    , testCase "morphism rewrites splice binder holes to substituted binder metas" testMorphismSpliceRenamesToBinderMeta
+    , testCase "morphism checker rejects incorrect binder-hole signatures" testMorphismRejectsBadBinderHoleSignatures
     , testCase "morphism rejects cyclic type templates" testTypeTemplateCycleRejected
     , testCase "morphism rejects indexed template sort mismatch in same mode" testIndexedTemplateSortMismatch
     , testCase "morphism type map instantiates indexed templates" testIndexedTypeTemplateInstantiation
@@ -49,6 +51,22 @@ tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
 
 plainImage :: Diagram -> GenImage
 plainImage diag = GenImage diag M.empty
+
+setSingleEdgeBargs :: Diagram -> [BinderArg] -> Either Text Diagram
+setSingleEdgeBargs diag bargs =
+  case IM.toList (dEdges diag) of
+    [(edgeKey, edge@(Edge _ (PGen g attrs _) _ _))] ->
+      let edge' = edge { ePayload = PGen g attrs bargs }
+      in pure diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+    _ -> Left "expected a single generator edge"
+
+setSingleEdgePayload :: Diagram -> EdgePayload -> Either Text Diagram
+setSingleEdgePayload diag payload =
+  case IM.toList (dEdges diag) of
+    [(edgeKey, edge)] ->
+      let edge' = edge { ePayload = payload }
+      in pure diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+    _ -> Left "expected a single edge"
 
 testMonoidMorphism :: Assertion
 testMonoidMorphism = do
@@ -716,13 +734,127 @@ testBinderIdentityMorphismPreservesBinders = do
       assertBool "expected mapped binder body to be preserved" same
     _ ->
       assertFailure "expected mapped diagram to be a single lam edge with one concrete binder argument"
-  where
-    setSingleEdgeBargs diag bargs =
-      case IM.toList (dEdges diag) of
-        [(edgeKey, edge@(Edge _ (PGen g attrs _) ins outs))] ->
-          let edge' = edge { ePayload = PGen g attrs bargs }
-          in pure diag { dEdges = IM.insert edgeKey edge' (dEdges diag), dIn = ins, dOut = outs }
-        _ -> Left "expected a single generator edge"
+
+testMorphismSpliceRenamesToBinderMeta :: Assertion
+testMorphismSpliceRenamesToBinderMeta = do
+  let mode = ModeName "M"
+  let gName = GenName "g"
+  let aTy' = TCon (TypeRef mode (TypeName "A")) []
+  let slotSig = BinderSig { bsIxCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
+  let gDecl =
+        GenDecl
+          { gdName = gName
+          , gdMode = mode
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = [InPort aTy', InBinder slotSig]
+          , gdCod = [aTy']
+          , gdAttrs = []
+          }
+  let doc =
+        Doctrine
+          { dName = "SpliceMetaDoc"
+          , dModes = mkModes [mode]
+          , dIndexModes = S.empty
+          , dIxTheory = M.empty
+          , dAttrSorts = M.empty
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
+          , dCells2 = []
+          }
+  doc' <- case validateDoctrine doc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure doc
+  let xMeta = BinderMetaVar "X"
+  let b0 = BinderMetaVar "b0"
+  srcDiag0 <- either (assertFailure . T.unpack) pure (genD mode [aTy'] [aTy'] gName)
+  srcDiag <- either (assertFailure . T.unpack) pure (setSingleEdgeBargs srcDiag0 [BAMeta xMeta])
+  img0 <- either (assertFailure . T.unpack) pure (genD mode [aTy'] [aTy'] (GenName "tmp"))
+  img <- either (assertFailure . T.unpack) pure (setSingleEdgePayload img0 (PSplice b0))
+  let mor =
+        Morphism
+          { morName = "SpliceRename"
+          , morSrc = doc'
+          , morTgt = doc'
+          , morIsCoercion = False
+          , morModeMap = identityModeMap doc'
+          , morModMap = identityModMap doc'
+          , morAttrSortMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.fromList [((mode, gName), GenImage img (M.fromList [(b0, slotSig)]))]
+          , morIxFunMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 20
+          }
+  case checkMorphism mor of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  mapped <- case applyMorphismDiagram mor srcDiag of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  let metas = binderMetaVarsDiagram mapped
+  assertBool "expected mapped splice to contain ?X" (xMeta `S.member` metas)
+  assertBool "expected mapped splice not to contain ?b0" (S.notMember b0 metas)
+  case IM.elems (dEdges mapped) of
+    [Edge _ (PSplice x) _ _] -> x @?= xMeta
+    _ -> assertFailure "expected mapped image to be a single splice edge"
+
+testMorphismRejectsBadBinderHoleSignatures :: Assertion
+testMorphismRejectsBadBinderHoleSignatures = do
+  let mode = ModeName "M"
+  let lamName = GenName "lam"
+  let aTy' = TCon (TypeRef mode (TypeName "A")) []
+  let slotSig = BinderSig { bsIxCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
+  let wrongSig = BinderSig { bsIxCtx = [], bsDom = [], bsCod = [aTy'] }
+  let lamGen =
+        GenDecl
+          { gdName = lamName
+          , gdMode = mode
+          , gdTyVars = []
+          , gdIxVars = []
+          , gdDom = [InBinder slotSig]
+          , gdCod = [aTy']
+          , gdAttrs = []
+          }
+  let doc =
+        Doctrine
+          { dName = "BadBinderSigsDoc"
+          , dModes = mkModes [mode]
+          , dIndexModes = S.empty
+          , dIxTheory = M.empty
+          , dAttrSorts = M.empty
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
+          , dCells2 = []
+          }
+  doc' <- case validateDoctrine doc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure doc
+  let hole = BinderMetaVar "b0"
+  img0 <- either (assertFailure . T.unpack) pure (genD mode [] [aTy'] lamName)
+  img <- either (assertFailure . T.unpack) pure (setSingleEdgeBargs img0 [BAMeta hole])
+  let mor =
+        Morphism
+          { morName = "BadBinderSigs"
+          , morSrc = doc'
+          , morTgt = doc'
+          , morIsCoercion = False
+          , morModeMap = identityModeMap doc'
+          , morModMap = identityModMap doc'
+          , morAttrSortMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.fromList [((mode, lamName), GenImage img (M.fromList [(hole, wrongSig)]))]
+          , morIxFunMap = M.empty
+          , morPolicy = UseAllOriented
+          , morFuel = 20
+          }
+  case checkMorphism mor of
+    Left err ->
+      assertBool
+        "expected binder-hole signature mismatch"
+        ("binder-hole signatures mismatch" `T.isInfixOf` err)
+    Right () ->
+      assertFailure "expected checkMorphism to reject incorrect binder-hole signatures"
 
 testTypeTemplateCycleRejected :: Assertion
 testTypeTemplateCycleRejected = do
