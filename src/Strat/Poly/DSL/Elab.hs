@@ -22,7 +22,7 @@ import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..), IxRule(..))
 import qualified Strat.Poly.UnifyTy as U
-import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.Attr
 import Strat.Poly.Morphism
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
@@ -33,28 +33,6 @@ import Strat.RunSpec (RunShow(..), RunSpec(..))
 
 
 type Subst = U.Subst
-
-applySubstTy :: ModeTheory -> Subst -> TypeExpr -> TypeExpr
-applySubstTy mt subst ty =
-  case U.applySubstTy (modeOnlyTypeTheory mt) subst ty of
-    Right ty' -> ty'
-    Left _ -> ty
-
-applySubstCtx :: ModeTheory -> Subst -> Context -> Context
-applySubstCtx mt subst = map (applySubstTy mt subst)
-
-unifyTyFlex :: ModeTheory -> S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text Subst
-unifyTyFlex mt flex t1 t2 =
-  U.unifyTyFlex (modeOnlyTypeTheory mt) [] flex S.empty U.emptySubst t1 t2
-
-composeSubst :: ModeTheory -> Subst -> Subst -> Subst
-composeSubst mt s2 s1 =
-  case U.composeSubst (modeOnlyTypeTheory mt) s2 s1 of
-    Right s -> s
-    Left _ -> s1
-
-applySubstDiagramTyOnly :: ModeTheory -> Subst -> Diagram -> Diagram
-applySubstDiagramTyOnly mt subst = applySubstDiagram mt subst
 
 
 elabPolyRun :: Text -> RawRun -> Either Text RunSpec
@@ -681,32 +659,6 @@ elabIxDeclVar :: Doctrine -> [TyVar] -> RawIxVarDecl -> Either Text IxVar
 elabIxDeclVar doc tyVars decl = do
   sortTy <- elabTypeExpr doc tyVars [] M.empty (rivSort decl)
   pure IxVar { ixvName = rivName decl, ixvSort = sortTy, ixvScope = 0 }
-
-ensureDistinctRawTyVarNames :: Text -> [RawTyVarDecl] -> Either Text ()
-ensureDistinctRawTyVarNames label vars =
-  let names = map rtvName vars
-      set = S.fromList names
-  in if S.size set == length names then Right () else Left label
-
-ensureDistinctTyVarNames :: Text -> [TyVar] -> Either Text ()
-ensureDistinctTyVarNames label vars =
-  let names = map tvName vars
-      set = S.fromList names
-  in if S.size set == length names then Right () else Left label
-
-lookupTyVarByName :: [TyVar] -> Text -> Either Text TyVar
-lookupTyVarByName vars name =
-  case [v | v <- vars, tvName v == name] of
-    [v] -> Right v
-    [] -> Left ("unknown type variable: " <> name)
-    _ -> Left ("duplicate type variable name: " <> name)
-
-lookupIxVarByName :: [IxVar] -> Text -> Either Text IxVar
-lookupIxVarByName vars name =
-  case [v | v <- vars, ixvName v == name] of
-    [v] -> Right v
-    [] -> Left ("unknown index variable: " <> name)
-    _ -> Left ("duplicate index variable name: " <> name)
 
 elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text ([TyVar], [IxVar], [ParamSig])
 elabParamDecls doc defaultMode params = go [] [] [] params
@@ -1375,7 +1327,7 @@ elabRawAttrTerm doc expectedSort varSorts rawTerm =
 
 -- Freshening monad
 
-newtype Fresh a = Fresh { runFresh :: Int -> Either Text (a, Int) }
+newtype Fresh a = Fresh (Int -> Either Text (a, Int))
 
 instance Functor Fresh where
   fmap f (Fresh g) =

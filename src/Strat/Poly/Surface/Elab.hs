@@ -1120,7 +1120,7 @@ remapTags inner outerIns outerOuts tags = do
 
 -- Fresh monad
 
-newtype Fresh a = Fresh { runFresh :: Int -> Either Text (a, Int) }
+newtype Fresh a = Fresh (Int -> Either Text (a, Int))
 
 instance Functor Fresh where
   fmap f (Fresh g) =
