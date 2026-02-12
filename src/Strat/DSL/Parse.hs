@@ -577,7 +577,13 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 
 polyDiagTerm :: Parser PolyAST.RawDiagExpr
 polyDiagTerm =
-  polyTermRefTerm <|> try polyIdTerm <|> polySpliceTerm <|> polyLoopTerm <|> polyBoxTerm <|> polyGenTerm <|> parens polyDiagExpr
+  polyMetaVarTerm <|> polyTermRefTerm <|> try polyIdTerm <|> polySpliceTerm <|> polyLoopTerm <|> polyBoxTerm <|> polyGenTerm <|> parens polyDiagExpr
+
+polyMetaVarTerm :: Parser PolyAST.RawDiagExpr
+polyMetaVarTerm = do
+  _ <- symbol "?"
+  name <- ident
+  pure (PolyAST.RDMetaVar name)
 
 polyIdTerm :: Parser PolyAST.RawDiagExpr
 polyIdTerm = do
@@ -691,6 +697,7 @@ data MorphismItem
   | MorphismType RawPolyTypeMap
   | MorphismGen RawPolyGenMap
   | MorphismCoercion
+  | MorphismCheck Text
   | MorphismPolicy Text
   | MorphismFuel Int
 
@@ -709,6 +716,7 @@ morphismItem =
     <|> morphismTypeMap
     <|> morphismGenMap
     <|> morphismCoercionItem
+    <|> morphismCheck
     <|> morphismPolicy
     <|> morphismFuel
 
@@ -777,6 +785,13 @@ morphismPolicy = do
   optionalSemi
   pure (MorphismPolicy name)
 
+morphismCheck :: Parser MorphismItem
+morphismCheck = do
+  _ <- symbol "check"
+  name <- ident
+  optionalSemi
+  pure (MorphismCheck name)
+
 morphismFuel :: Parser MorphismItem
 morphismFuel = do
   _ <- symbol "fuel"
@@ -797,6 +812,7 @@ buildPolyMorphism name src tgt items =
           <> [ RPMType i | MorphismType i <- items ]
           <> [ RPMGen j | MorphismGen j <- items ]
           <> [ RPMCoercion | MorphismCoercion <- items ]
+    , rpmCheck = firstJust [ c | MorphismCheck c <- items ]
     , rpmPolicy = firstJust [ p | MorphismPolicy p <- items ]
     , rpmFuel = firstJust [ f | MorphismFuel f <- items ]
     }

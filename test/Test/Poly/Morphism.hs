@@ -11,6 +11,8 @@ import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
+import Strat.DSL.Parse (parseRawFile)
+import Strat.DSL.Elab (elabRawFile)
 import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
 import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..))
@@ -41,6 +43,12 @@ tests =
     , testCase "morphism rejects indexed template sort mismatch in same mode" testIndexedTemplateSortMismatch
     , testCase "morphism type map instantiates indexed templates" testIndexedTypeTemplateInstantiation
     , testCase "morphism rejects indexed template parameter kind mismatch" testIndexedTemplateKindMismatch
+    , testCase "morphism check all enforces computational equations" testMorphismCheckAllEnforcesComputational
+    , testCase "morphism check structural ignores computational equations" testMorphismCheckStructuralIgnoresComputational
+    , testCase "morphism check none skips structural equations" testMorphismCheckNoneSkipsStructural
+    , testCase "morphism elaboration rejects generator images with wrong boundaries" testMorphismRejectsBadGenImageBoundaryAtElab
+    , testCase "wire metavariable rules elaborate" testWireMetaRuleElaborates
+    , testCase "wire metavariables reject duplicate names in one diagram" testWireMetaRuleRejectsDuplicateName
     ]
 
 tvar :: ModeName -> Text -> TyVar
@@ -87,6 +95,7 @@ testMonoidMorphism = do
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((modeM, GenName "unit"), plainImage unitImg), ((modeM, GenName "mul"), plainImage mulImg)]
         , morIxFunMap = M.empty
+        , morCheck = CheckAll
         , morPolicy = UseAllOriented
         , morFuel = 20
         }
@@ -163,6 +172,7 @@ testTypeMapReorder = do
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((mode, genName), plainImage img)]
         , morIxFunMap = M.empty
+        , morCheck = CheckAll
         , morPolicy = UseAllOriented
         , morFuel = 20
         }
@@ -238,6 +248,7 @@ testCrossModeMorphism = do
         , morTypeMap = M.fromList [(aRef, TypeTemplate [] bTy)]
         , morGenMap = M.fromList [((modeC, GenName "f"), plainImage img)]
         , morIxFunMap = M.empty
+        , morCheck = CheckAll
         , morPolicy = UseAllOriented
         , morFuel = 20
         }
@@ -384,6 +395,7 @@ testModalityMapRewritesTypeModalities = do
         , morTypeMap = M.fromList [(TypeRef modeA (TypeName "Base"), TypeTemplate [] baseTgt)]
         , morGenMap = M.fromList [((modeB, GenName "g"), plainImage imgG), ((modeB, GenName "gg"), plainImage imgGG)]
         , morIxFunMap = M.empty
+        , morCheck = CheckAll
         , morPolicy = UseAllOriented
         , morFuel = 20
         }
@@ -497,6 +509,7 @@ testIxFunMapArityMismatch = do
           , morTypeMap = M.empty
           , morGenMap = M.empty
           , morIxFunMap = M.fromList [(IxFunName "pair", IxFunName "single")]
+        , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
@@ -595,6 +608,7 @@ testIxFunMapSortMismatch = do
           , morTypeMap = M.empty
           , morGenMap = M.empty
           , morIxFunMap = M.fromList [(IxFunName "f", IxFunName "g")]
+        , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
@@ -672,6 +686,7 @@ testMorphismInstantiationSubstFailure = do
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((mode, GenName "f"), plainImage badImg)]
           , morIxFunMap = M.empty
+        , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
@@ -728,6 +743,7 @@ testBinderIdentityMorphismPreservesBinders = do
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((mode, lamName), GenImage img (M.fromList [(hole, slotSig)]))]
           , morIxFunMap = M.empty
+        , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
@@ -797,6 +813,7 @@ testMorphismSpliceRenamesToBinderMeta = do
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((mode, gName), GenImage img (M.fromList [(b0, slotSig)]))]
           , morIxFunMap = M.empty
+        , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
@@ -860,6 +877,7 @@ testMorphismRejectsBadBinderHoleSignatures = do
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((mode, lamName), GenImage img (M.fromList [(hole, wrongSig)]))]
           , morIxFunMap = M.empty
+        , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
@@ -907,6 +925,7 @@ testTypeTemplateCycleRejected = do
                 ]
           , morGenMap = M.empty
           , morIxFunMap = M.empty
+        , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
@@ -984,6 +1003,7 @@ testIndexedTemplateSortMismatch = do
                 ]
           , morGenMap = M.empty
           , morIxFunMap = M.empty
+        , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
@@ -1083,6 +1103,7 @@ testIndexedTypeTemplateInstantiation = do
                 ]
           , morGenMap = M.empty
           , morIxFunMap = M.empty
+        , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
@@ -1170,6 +1191,7 @@ testIndexedTemplateKindMismatch = do
                 ]
           , morGenMap = M.empty
           , morIxFunMap = M.empty
+        , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
@@ -1330,3 +1352,126 @@ unitRule name ty unitName mulName leftSide = do
     , c2LHS = expr
     , c2RHS = id1
     }
+
+testMorphismCheckAllEnforcesComputational :: Assertion
+testMorphismCheckAllEnforcesComputational =
+  case elabProgram morphismCheckAllProgram of
+    Left err ->
+      assertBool "expected equation-preservation failure" ("equation" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected morphism elaboration to fail under check all"
+
+testMorphismCheckStructuralIgnoresComputational :: Assertion
+testMorphismCheckStructuralIgnoresComputational =
+  case elabProgram morphismCheckStructuralProgram of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()
+
+testMorphismCheckNoneSkipsStructural :: Assertion
+testMorphismCheckNoneSkipsStructural =
+  case elabProgram morphismCheckNoneProgram of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()
+
+testMorphismRejectsBadGenImageBoundaryAtElab :: Assertion
+testMorphismRejectsBadGenImageBoundaryAtElab =
+  case elabProgram morphismBadBoundaryProgram of
+    Left err ->
+      assertBool
+        "expected generator-image boundary mismatch"
+        ("length mismatch" `T.isInfixOf` err || "boundary mismatch" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected morphism elaboration to reject a wrong-boundary generator image"
+
+testWireMetaRuleElaborates :: Assertion
+testWireMetaRuleElaborates =
+  case elabProgram wireMetaRuleProgram of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()
+
+testWireMetaRuleRejectsDuplicateName :: Assertion
+testWireMetaRuleRejectsDuplicateName =
+  case elabProgram wireMetaDuplicateProgram of
+    Left err ->
+      assertBool
+        "expected duplicate wire metavariable rejection"
+        ("diagram metavariable `?x` used more than once" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected duplicate wire metavariable usage to fail"
+
+elabProgram :: Text -> Either Text ()
+elabProgram src = do
+  raw <- parseRawFile src
+  _ <- elabRawFile raw
+  pure ()
+
+morphismCheckAllProgram :: Text
+morphismCheckAllProgram =
+  "doctrine S where {\n"
+    <> "  mode M;\n"
+    <> "  type B @M;\n"
+    <> "  gen f : [B] -> [B] @M;\n"
+    <> "  rule computational f_id -> : [B] -> [B] @M =\n"
+    <> "    f == id[B]\n"
+    <> "}\n"
+    <> "doctrine T where {\n"
+    <> "  mode M;\n"
+    <> "  type B @M;\n"
+    <> "  gen g : [B] -> [B] @M;\n"
+    <> "}\n"
+    <> "morphism m : S -> T where {\n"
+    <> "  check all;\n"
+    <> "  mode M -> M;\n"
+    <> "  gen f @M -> g\n"
+    <> "}\n"
+
+morphismCheckStructuralProgram :: Text
+morphismCheckStructuralProgram =
+  T.replace "check all;" "check structural;" morphismCheckAllProgram
+
+morphismCheckNoneProgram :: Text
+morphismCheckNoneProgram =
+  T.replace
+    "rule computational f_id -> : [B] -> [B] @M =\n    f == id[B]"
+    "rule structural f_id -> : [B] -> [B] @M =\n    f == id[B]"
+    (T.replace "check all;" "check none;" morphismCheckAllProgram)
+
+morphismBadBoundaryProgram :: Text
+morphismBadBoundaryProgram =
+  "doctrine S where {\n"
+    <> "  mode M;\n"
+    <> "  type B @M;\n"
+    <> "  gen and : [B, B] -> [B] @M;\n"
+    <> "}\n"
+    <> "doctrine T where {\n"
+    <> "  mode M;\n"
+    <> "  type B @M;\n"
+    <> "  gen true : [] -> [B] @M;\n"
+    <> "}\n"
+    <> "morphism bad : S -> T where {\n"
+    <> "  check none;\n"
+    <> "  mode M -> M;\n"
+    <> "  gen and @M -> true\n"
+    <> "}\n"
+
+wireMetaRuleProgram :: Text
+wireMetaRuleProgram =
+  "doctrine D where {\n"
+    <> "  mode M;\n"
+    <> "  type B @M;\n"
+    <> "  gen true : [] -> [B] @M;\n"
+    <> "  gen and : [B, B] -> [B] @M;\n"
+    <> "  rule computational and_true_r -> : [B] -> [B] @M =\n"
+    <> "    (true * ?x) ; and == ?x\n"
+    <> "}\n"
+
+wireMetaDuplicateProgram :: Text
+wireMetaDuplicateProgram =
+  "doctrine D where {\n"
+    <> "  mode M;\n"
+    <> "  type B @M;\n"
+    <> "  gen true : [] -> [B] @M;\n"
+    <> "  gen and : [B, B] -> [B] @M;\n"
+    <> "  rule computational and_bad -> : [B] -> [B] @M =\n"
+    <> "    (true * ?x) ; and == (?x * ?x) ; and\n"
+    <> "}\n"

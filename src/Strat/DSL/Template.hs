@@ -177,6 +177,7 @@ substDiagExpr :: M.Map Text Text -> P.RawDiagExpr -> P.RawDiagExpr
 substDiagExpr subst expr =
   case expr of
     P.RDId ctx -> P.RDId (map (substTypeExpr subst) ctx)
+    P.RDMetaVar name -> P.RDMetaVar (lookupText subst name)
     P.RDGen name mArgs mAttrArgs mBArgs ->
       P.RDGen
         (lookupText subst name)

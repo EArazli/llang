@@ -378,6 +378,7 @@ A morphism `F : D → E` consists of:
 - an **attribute-sort map** (`AttrSort -> AttrSort`),
 - a **mode-indexed type map** (`TypeRef ↦ (a1…an ⊢ τ)` templates),
 - a **mode‑indexed generator map** (`(ModeName, GenName) ↦` diagram template + binder-hole signatures),
+- an equation-check mode (`all | structural | none`),
 - rewrite policy and fuel for equation checking.
 
 ### 5.1 Applying a morphism
@@ -395,14 +396,18 @@ To apply `F` to a diagram:
 
 ### 5.2 Morphism checking
 
-For each source 2‑cell `L == R`:
+Source obligations are selected by `check`:
+
+- `check all` (default): all source 2-cells are obligations.
+- `check structural`: only source `rule structural` cells are obligations.
+- `check none`: skip equation-preservation obligations.
+
+For each selected source 2‑cell `L == R`:
 
 1. Translate both sides under `F`.
-2. Normalize in the target doctrine (fuel‑bounded).
+2. Normalize in the target doctrine (fuel‑bounded) using the morphism `policy`/`fuel`.
 3. If both normalize, require syntactic equality.
 4. Otherwise, use `joinableWithin` under the target rewrite system.
-
-This mirrors the implementation’s `checkMorphism` behavior.
 
 The mode map must be total on source modes and must land in modes that exist in the
 target doctrine; generator mappings must elaborate to diagrams in the mapped target mode.
@@ -538,6 +543,7 @@ morphism <Name> : <Src> -> <Tgt> where {
   type <SrcType>(<tyvar> [, ...]) @<Mode> -> <TgtTypeExpr> @<Mode>;
   gen  <SrcGen>  @<Mode> -> <DiagExpr>;
   coercion;
+  check all | structural | none;
   policy <RewritePolicy>;
   fuel <N>;
 }
@@ -556,6 +562,8 @@ morphism <Name> : <Src> -> <Tgt> where {
 - When a morphism is used as a **pushout leg**, its type mappings must be **invertible renamings**
   (constructor rename + parameter permutation).
 - Generator mappings must elaborate to diagrams in the target doctrine/mode `mapMode(<Mode>)`.
+- Generator mapping boundaries are checked at morphism definition time by unifying the
+  elaborated image boundary against the mapped source generator domain/codomain.
 - In morphism `gen` RHS diagrams, binder holes `?b0..?b(k-1)` refer to the source generator’s
   binder slots in declaration order.
 - These holes may be used both as binder arguments (`g[?b0]`) and in `splice(?b0)`.
@@ -595,6 +603,7 @@ id[<Ctx>]
 <GenName>{<Arg>,...}(<AttrArgs>)[<BinderArgs>]  -- all argument groups optional
 @<TermName>           -- splice a named term
 splice(?X)            -- RHS-only binder splice (rule RHS / morphism gen RHS)
+?x                    -- wire metavariable (fresh identity wire, inferred type)
 box <Name> { <d> }    -- boxed subdiagram
 loop { <d> }          -- feedback: connects the single output of <d> to its single input
 <d1> ; <d2>           -- composition (first d1 then d2)
@@ -611,6 +620,8 @@ Generator calls:
 - Each binder argument is either:
   - a concrete diagram expression,
   - or binder meta `?X` (allowed in rewrite rules and morphism `gen` RHS; morphism holes are `?b0..?b(k-1)`).
+- Wire metavariables (`?x`) are linear per diagram expression: the same name may appear
+  at most once in a single diagram expression.
 - Attribute arguments must be either all named or all positional:
 
 ```

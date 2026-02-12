@@ -25,6 +25,7 @@ tests =
     , testCase "extract foliate without with{} uses derived default policy" testDerivedDefaultPolicy
     , testCase "derived doctrine reserves and materializes .forget" testDerivedForgetReservedAndMaterialized
     , testCase "ArtSSA can apply morphism sourced from derived doctrine" testApplyDerivedSourceMorphism
+    , testCase ".forget rejects diagram artifacts" testForgetRejectsDiagramArtifact
     ]
 
 
@@ -75,6 +76,18 @@ testApplyDerivedSourceMorphism = do
   result <- require (runWithEnv env runDef)
   assertBool "expected SSA morphism output to mention generator a" ("a" `T.isInfixOf` prOutput result)
   assertBool "expected SSA morphism output to mention generator b" ("b" `T.isInfixOf` prOutput result)
+
+testForgetRejectsDiagramArtifact :: Assertion
+testForgetRejectsDiagramArtifact = do
+  env <- require (elabProgram forgetDiagramProgram)
+  runDef <- require (selectRun env (Just "main"))
+  case runWithEnv env runDef of
+    Left err ->
+      assertBool
+        "expected explicit .forget-on-diagram rejection"
+        ("only defined on SSA artifacts produced by `extract foliate`" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected .forget to reject diagram artifacts"
 
 
 program :: Text
@@ -198,6 +211,26 @@ derivedSourceMorphismProgram =
     <> "}\n"
     <> "---\n"
     <> "a; b\n"
+    <> "---\n"
+
+forgetDiagramProgram :: Text
+forgetDiagramProgram =
+  "doctrine D where {\n"
+    <> "  mode M acyclic;\n"
+    <> "  type T @M;\n"
+    <> "  gen a : [] -> [T] @M;\n"
+    <> "}\n"
+    <> "derived doctrine D_SSA = foliated D mode M;\n"
+    <> "pipeline p where {\n"
+    <> "  apply D_SSA.forget;\n"
+    <> "  extract diagram;\n"
+    <> "}\n"
+    <> "run main using p where {\n"
+    <> "  source doctrine D;\n"
+    <> "  source mode M;\n"
+    <> "}\n"
+    <> "---\n"
+    <> "a\n"
     <> "---\n"
 
 

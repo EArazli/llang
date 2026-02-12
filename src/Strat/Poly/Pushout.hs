@@ -130,6 +130,7 @@ computePolyCoproduct name a b = do
         , morTypeMap = M.empty
         , morGenMap = M.empty
         , morIxFunMap = M.empty
+        , morCheck = CheckAll
         , morPolicy = UseAllOriented
         , morFuel = 50
         }
@@ -144,6 +145,7 @@ computePolyCoproduct name a b = do
         , morTypeMap = M.empty
         , morGenMap = M.empty
         , morIxFunMap = M.empty
+        , morCheck = CheckAll
         , morPolicy = UseAllOriented
         , morFuel = 50
         }
@@ -980,6 +982,7 @@ buildGlue name src tgt = do
     , morTypeMap = M.empty
     , morGenMap = genMap
     , morIxFunMap = M.empty
+    , morCheck = CheckAll
     , morPolicy = UseOnlyComputationalLR
     , morFuel = 10
     }
@@ -1008,6 +1011,7 @@ buildInj name src tgt attrRen tyRen permRen genRen = do
     , morTypeMap = typeMap
     , morGenMap = genMap
     , morIxFunMap = M.empty
+    , morCheck = CheckAll
     , morPolicy = UseOnlyComputationalLR
     , morFuel = 10
     }

@@ -338,6 +338,7 @@ buildDerivedForgetMorphism name srcDoc tgtDoc mode =
     , PolyMorph.morTypeMap = M.empty
     , PolyMorph.morGenMap = M.empty
     , PolyMorph.morIxFunMap = M.empty
+    , PolyMorph.morCheck = PolyMorph.CheckNone
     , PolyMorph.morPolicy = UseStructuralAsBidirectional
     , PolyMorph.morFuel = 50
     }
@@ -530,6 +531,7 @@ buildPolyFromBase baseName newName env newDoc = do
           , PolyMorph.morTypeMap = M.empty
           , PolyMorph.morGenMap = genMap
           , PolyMorph.morIxFunMap = M.empty
+          , PolyMorph.morCheck = PolyMorph.CheckAll
           , PolyMorph.morPolicy = UseStructuralAsBidirectional
           , PolyMorph.morFuel = 50
           }

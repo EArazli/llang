@@ -32,13 +32,20 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 
 polyDiagTerm :: Parser RawDiagExpr
 polyDiagTerm =
-  try polyIdTerm
+  polyMetaVarTerm
+    <|> try polyIdTerm
     <|> polySpliceTerm
     <|> polyLoopTerm
     <|> polyBoxTerm
     <|> polyTermRefTerm
     <|> polyGenTerm
     <|> parens polyDiagExpr
+
+polyMetaVarTerm :: Parser RawDiagExpr
+polyMetaVarTerm = do
+  _ <- symbol "?"
+  name <- ident
+  pure (RDMetaVar name)
 
 polyIdTerm :: Parser RawDiagExpr
 polyIdTerm = do

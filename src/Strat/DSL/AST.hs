@@ -144,6 +144,7 @@ data RawPolyMorphism = RawPolyMorphism
   , rpmSrc :: Text
   , rpmTgt :: Text
   , rpmItems :: [RawPolyMorphismItem]
+  , rpmCheck :: Maybe Text
   , rpmPolicy :: Maybe Text
   , rpmFuel :: Maybe Int
   } deriving (Eq, Show)

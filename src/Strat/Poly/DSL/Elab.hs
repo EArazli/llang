@@ -16,7 +16,7 @@ import Strat.DSL.AST (RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeM
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (emptyDiagram, freshPort, addEdgePayload, Edge(..), EdgeId(..), PortId(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), validateDiagram, diagramPortType, FeedbackSpec(..))
+import Strat.Poly.Graph (emptyDiagram, freshPort, setPortLabel, addEdgePayload, Edge(..), EdgeId(..), PortId(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), validateDiagram, diagramPortType, FeedbackSpec(..))
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
@@ -37,6 +37,8 @@ elabPolyMorphism :: ModuleEnv -> RawPolyMorphism -> Either Text Morphism
 elabPolyMorphism env raw = do
   src <- lookupPolyDoctrine env (rpmSrc raw)
   tgt <- lookupPolyDoctrine env (rpmTgt raw)
+  let checkName = maybe "all" id (rpmCheck raw)
+  checkMode <- parseMorphismCheck checkName
   let policyName = maybe "UseStructuralAsBidirectional" id (rpmPolicy raw)
   policy <- parsePolicy policyName
   let fuel = maybe 50 id (rpmFuel raw)
@@ -58,6 +60,7 @@ elabPolyMorphism env raw = do
         , morTypeMap = typeMap
         , morGenMap = M.empty
         , morIxFunMap = ixFunMap
+        , morCheck = checkMode
         , morPolicy = policy
         , morFuel = fuel
         }
@@ -74,6 +77,7 @@ elabPolyMorphism env raw = do
         , morTypeMap = typeMap
         , morGenMap = genMap
         , morIxFunMap = ixFunMap
+        , morCheck = checkMode
         , morPolicy = policy
         , morFuel = fuel
         }
@@ -224,7 +228,15 @@ elabPolyMorphism env raw = do
       tyVarsTgt <- mapM (mapTyVarMode modeMap) (gdTyVars gen)
       ixVarsTgt <- mapM (mapIxVarSort mor0) (gdIxVars gen)
       binderSigs0 <- buildBinderHoleSigs mor0 gen
-      (diag, _) <- elabDiagExprWith env tgt modeTgt [] tyVarsTgt ixVarsTgt binderSigs0 BMUse True (rpmgRhs decl)
+      (diag0, _) <- elabDiagExprWith env tgt modeTgt [] tyVarsTgt ixVarsTgt binderSigs0 BMUse True (rpmgRhs decl)
+      let domSrc = gdPlainDom gen
+      let codSrc = gdCod gen
+      domTgt <- mapM (applyMorphismTy mor0) domSrc
+      codTgt <- mapM (applyMorphismTy mor0) codSrc
+      let rigidTy = S.fromList tyVarsTgt
+      let rigidIx = S.fromList ixVarsTgt
+      let ttTgt = doctrineTypeTheory tgt
+      diag <- unifyBoundary ttTgt rigidTy rigidIx domTgt codTgt diag0
       let freeTy = freeTyVarsDiagram diag
       let allowedTy = S.fromList tyVarsTgt
       if S.isSubsetOf freeTy allowedTy
@@ -267,6 +279,19 @@ parsePolicy name =
     "UseStructuralAsBidirectional" -> Right UseStructuralAsBidirectional
     "UseAllOriented" -> Right UseAllOriented
     _ -> Left ("Unknown policy: " <> name)
+
+parseMorphismCheck :: Text -> Either Text MorphismCheck
+parseMorphismCheck name =
+  case name of
+    "all" -> Right CheckAll
+    "structural" -> Right CheckStructural
+    "none" -> Right CheckNone
+    other ->
+      Left
+        ( "Unknown morphism check mode: "
+            <> other
+            <> " (expected: all | structural | none)"
+        )
 
 elabPolyDoctrine :: ModuleEnv -> RawPolyDoctrine -> Either Text Doctrine
 elabPolyDoctrine env raw = do
@@ -942,7 +967,7 @@ elabDiagExprWith
   -> RawDiagExpr
   -> Either Text (Diagram, M.Map BinderMetaVar BinderSig)
 elabDiagExprWith env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSplice expr =
-  evalFresh (elabDiagExprWithFresh env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSplice expr)
+  ensureLinearMetaVars expr *> evalFresh (elabDiagExprWithFresh env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allowSplice expr)
 
 elabDiagExprWithFresh
   :: ModuleEnv
@@ -968,6 +993,11 @@ elabDiagExprWithFresh env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allo
         RDId ctx -> do
           ctx' <- liftEither (elabContext doc mode tyVars ixVars M.empty ctx)
           pure (idDIx mode curIxCtx ctx', binderSigs)
+        RDMetaVar name -> do
+          (_, ty) <- freshTyVar TyVar { tvName = "mv_" <> name, tvMode = mode }
+          let (pid, d0) = freshPort ty (emptyDiagram mode curIxCtx)
+          d1 <- liftEither (setPortLabel pid name d0)
+          pure (d1 { dIn = [pid], dOut = [pid] }, binderSigs)
         RDGen name mArgs mAttrArgs mBinderArgs -> do
           gen <- liftEither (lookupGen doc mode (GenName name))
           tyRename <- freshTySubst (gdTyVars gen)
@@ -1181,6 +1211,44 @@ elabDiagExprWithFresh env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allo
       case M.lookup name (meDoctrines env') of
         Nothing -> Left ("Unknown doctrine: " <> name)
         Just doc' -> Right doc'
+
+metaVarsIn :: RawDiagExpr -> [Text]
+metaVarsIn expr =
+  case expr of
+    RDId _ -> []
+    RDMetaVar name -> [name]
+    RDGen _ _ _ mBinderArgs ->
+      case mBinderArgs of
+        Nothing -> []
+        Just args -> concatMap binderArgMetaVars args
+    RDTermRef _ -> []
+    RDSplice _ -> []
+    RDBox _ inner -> metaVarsIn inner
+    RDLoop inner -> metaVarsIn inner
+    RDComp a b -> metaVarsIn a <> metaVarsIn b
+    RDTensor a b -> metaVarsIn a <> metaVarsIn b
+  where
+    binderArgMetaVars barg =
+      case barg of
+        RBAExpr d -> metaVarsIn d
+        RBAMeta _ -> []
+
+ensureLinearMetaVars :: RawDiagExpr -> Either Text ()
+ensureLinearMetaVars expr =
+  case firstDup (metaVarsIn expr) of
+    Nothing -> Right ()
+    Just name ->
+      Left
+        ( "diagram metavariable `?"
+            <> name
+            <> "` used more than once in the same diagram; this language is linear at the diagram level. Use explicit duplication (e.g. `dup`) in a cartesian/affine mode if you intend sharing."
+        )
+  where
+    firstDup = go S.empty
+    go _ [] = Nothing
+    go seen (x:xs)
+      | x `S.member` seen = Just x
+      | otherwise = go (S.insert x seen) xs
 
 lookupGen :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGen doc mode name =

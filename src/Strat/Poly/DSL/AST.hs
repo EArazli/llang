@@ -187,6 +187,7 @@ type RawPolyContext = [RawPolyTypeExpr]
 
 data RawDiagExpr
   = RDId RawPolyContext
+  | RDMetaVar Text
   | RDGen Text (Maybe [RawPolyTypeExpr]) (Maybe [RawAttrArg]) (Maybe [RawBinderArg])
   | RDTermRef Text
   | RDSplice Text

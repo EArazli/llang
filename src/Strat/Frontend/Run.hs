@@ -115,15 +115,23 @@ runPhase env art phase =
   case phase of
     ApplyMorph name ->
       case art of
-        ArtDiagram doc diag -> do
-          mor <- lookupMorphism env name
-          if dName (Morph.morSrc mor) /= dName doc
-            then Left ("pipeline: morphism source mismatch for " <> name)
+        ArtDiagram doc diag ->
+          if ".forget" `T.isSuffixOf` name
+            then
+              Left
+                ( "cannot apply `"
+                    <> name
+                    <> "` to a diagram; `.forget` is only defined on SSA artifacts produced by `extract foliate`."
+                )
             else do
-              diag' <- Morph.applyMorphismDiagram mor diag
-              let doc' = Morph.morTgt mor
-              ensureAcyclicIfRequired doc' diag'
-              pure (ArtDiagram doc' diag')
+              mor <- lookupMorphism env name
+              if dName (Morph.morSrc mor) /= dName doc
+                then Left ("pipeline: morphism source mismatch for " <> name)
+                else do
+                  diag' <- Morph.applyMorphismDiagram mor diag
+                  let doc' = Morph.morTgt mor
+                  ensureAcyclicIfRequired doc' diag'
+                  pure (ArtDiagram doc' diag')
         ArtSSA baseDoc derivedName ssa ->
           if name == derivedName <> ".forget"
             then do

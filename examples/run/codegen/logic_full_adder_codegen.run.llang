@@ -15,6 +15,12 @@ doctrine LogicJS where {
   gen or  : [B, B] -> [B] @M;
   gen xor : [B, B] -> [B] @M;
 
+  rule computational and_true_r -> : [B] -> [B] @M =
+    (true * ?x) ; and == ?x
+
+  rule computational xor_false_r -> : [B] -> [B] @M =
+    (false * ?x) ; xor == ?x
+
   gen emit2 { name:Str, k1:Str, k2:Str } : [B, B] -> [P] @M;
   gen concat : [P, P] -> [P] @M;
 }
@@ -22,6 +28,8 @@ doctrine LogicJS where {
 derived doctrine LogicJS_SSA = foliated LogicJS mode M;
 
 morphism emitJS : LogicJS -> Doc where {
+  check structural;
+
   mode M -> Doc;
 
   attrsort Str -> Str;

@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Morphism
   ( Morphism(..)
+  , MorphismCheck(..)
   , GenImage(..)
   , TemplateParam(..)
   , TypeTemplate(..)
@@ -62,9 +63,16 @@ data Morphism = Morphism
   , morTypeMap :: M.Map TypeRef TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) GenImage
   , morIxFunMap :: M.Map IxFunName IxFunName
+  , morCheck :: MorphismCheck
   , morPolicy  :: RewritePolicy
   , morFuel    :: Int
   } deriving (Eq, Show)
+
+data MorphismCheck
+  = CheckAll
+  | CheckStructural
+  | CheckNone
+  deriving (Eq, Ord, Show)
 
 data GenImage = GenImage
   { giDiagram :: Diagram
@@ -444,16 +452,22 @@ checkMorphism mor = do
   validateIxFunMap mor
   validateTypeMap mor
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
-  let cells = filter (cellEnabled (morPolicy mor)) (dCells2 (morSrc mor))
-  fastOk <- inclusionFastPath mor
-  if fastOk
-    then Right ()
-    else do
-      renameOk <- renamingFastPath mor cells
-      if renameOk
+  case morCheck mor of
+    CheckNone -> Right ()
+    _ -> do
+      let srcCells =
+            case morCheck mor of
+              CheckAll -> dCells2 (morSrc mor)
+              CheckStructural -> filter ((== Structural) . c2Class) (dCells2 (morSrc mor))
+      fastOk <- inclusionFastPath mor
+      if fastOk
         then Right ()
-        else mapM_ (checkCell mor) cells
-  pure ()
+        else do
+          renameOk <- renamingFastPath mor srcCells
+          if renameOk
+            then Right ()
+            else mapM_ (checkCell mor) srcCells
+      pure ()
 
 validateModeMap :: Morphism -> Either Text ()
 validateModeMap mor = do
@@ -1120,17 +1134,6 @@ injective :: Ord a => [a] -> Bool
 injective xs =
   let set = S.fromList xs
   in length xs == S.size set
-
-cellEnabled :: RewritePolicy -> Cell2 -> Bool
-cellEnabled policy cell =
-  case policy of
-    UseStructuralAsBidirectional -> True
-    UseOnlyComputationalLR ->
-      c2Class cell == Computational && (c2Orient cell == LR || c2Orient cell == Bidirectional)
-    UseAllOriented ->
-      case c2Orient cell of
-        Unoriented -> False
-        _ -> True
 
 allM :: (a -> Either Text Bool) -> [a] -> Either Text Bool
 allM _ [] = Right True
