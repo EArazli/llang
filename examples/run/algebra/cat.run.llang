@@ -1,9 +1,14 @@
 import "../../lib/algebra/cat.llang";
 
-run main where {
-  doctrine Cat;
-  mode M;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine Cat;
+  source mode M;
 }
 ---
 f ; g ; h
+---

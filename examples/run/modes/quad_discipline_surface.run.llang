@@ -1,11 +1,14 @@
 import "../../lib/modes/quad_discipline.llang";
 
-run main where {
-  doctrine QuadDiscipline;
-  mode Cart;
-  surface QuadCart;
-  show input;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine QuadDiscipline;
+  source mode Cart;
+  source surface QuadCart;
 }
 ---
 diag {
@@ -14,12 +17,15 @@ diag {
 }
 ---
 
-run rel_dup where {
-  doctrine QuadDiscipline;
-  mode Rel;
-  surface QuadRel;
-  show input;
-  show normalized;
+pipeline legacy_rel_dup where {
+  normalize;
+  extract diagram;
+}
+
+run rel_dup using legacy_rel_dup where {
+  source doctrine QuadDiscipline;
+  source mode Rel;
+  source surface QuadRel;
 }
 ---
 diag {
@@ -28,12 +34,15 @@ diag {
 }
 ---
 
-run aff_dup where {
-  doctrine QuadDiscipline;
-  mode Aff;
-  surface QuadAff;
-  show input;
-  show normalized;
+pipeline legacy_aff_dup where {
+  normalize;
+  extract diagram;
+}
+
+run aff_dup using legacy_aff_dup where {
+  source doctrine QuadDiscipline;
+  source mode Aff;
+  source surface QuadAff;
 }
 ---
 diag {
@@ -42,12 +51,15 @@ diag {
 }
 ---
 
-run lin_dup where {
-  doctrine QuadDiscipline;
-  mode Lin;
-  surface QuadLin;
-  show input;
-  show normalized;
+pipeline legacy_lin_dup where {
+  normalize;
+  extract diagram;
+}
+
+run lin_dup using legacy_lin_dup where {
+  source doctrine QuadDiscipline;
+  source mode Lin;
+  source surface QuadLin;
 }
 ---
 diag {
@@ -56,12 +68,15 @@ diag {
 }
 ---
 
-run cart_drop where {
-  doctrine QuadDiscipline;
-  mode Cart;
-  surface QuadCart;
-  show input;
-  show normalized;
+pipeline legacy_cart_drop where {
+  normalize;
+  extract diagram;
+}
+
+run cart_drop using legacy_cart_drop where {
+  source doctrine QuadDiscipline;
+  source mode Cart;
+  source surface QuadCart;
 }
 ---
 diag {
@@ -70,12 +85,15 @@ diag {
 }
 ---
 
-run aff_drop where {
-  doctrine QuadDiscipline;
-  mode Aff;
-  surface QuadAff;
-  show input;
-  show normalized;
+pipeline legacy_aff_drop where {
+  normalize;
+  extract diagram;
+}
+
+run aff_drop using legacy_aff_drop where {
+  source doctrine QuadDiscipline;
+  source mode Aff;
+  source surface QuadAff;
 }
 ---
 diag {
@@ -84,12 +102,15 @@ diag {
 }
 ---
 
-run rel_drop where {
-  doctrine QuadDiscipline;
-  mode Rel;
-  surface QuadRel;
-  show input;
-  show normalized;
+pipeline legacy_rel_drop where {
+  normalize;
+  extract diagram;
+}
+
+run rel_drop using legacy_rel_drop where {
+  source doctrine QuadDiscipline;
+  source mode Rel;
+  source surface QuadRel;
 }
 ---
 diag {
@@ -98,12 +119,15 @@ diag {
 }
 ---
 
-run lin_drop where {
-  doctrine QuadDiscipline;
-  mode Lin;
-  surface QuadLin;
-  show input;
-  show normalized;
+pipeline legacy_lin_drop where {
+  normalize;
+  extract diagram;
+}
+
+run lin_drop using legacy_lin_drop where {
+  source doctrine QuadDiscipline;
+  source mode Lin;
+  source surface QuadLin;
 }
 ---
 diag {

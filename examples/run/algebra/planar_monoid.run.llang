@@ -1,8 +1,13 @@
 import "../../lib/algebra/planar_monoid.llang";
 
-run main where {
-  doctrine PlanarMonoid;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine PlanarMonoid;
 }
 ---
 (unit * unit) ; mul
+---

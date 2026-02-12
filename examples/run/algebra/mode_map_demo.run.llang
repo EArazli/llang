@@ -17,11 +17,15 @@ morphism CtoV : D -> D where {
   gen g @V -> g
 }
 
-run main where {
-  doctrine D;
-  mode C;
+pipeline legacy_main where {
+  normalize;
   apply CtoV;
-  show normalized;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine D;
+  source mode C;
 }
 ---
 f

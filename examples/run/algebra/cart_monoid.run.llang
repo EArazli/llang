@@ -1,8 +1,13 @@
 import "../../lib/algebra/cart_monoid.llang";
 
-run main where {
-  doctrine CartMonoid;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine CartMonoid;
 }
 ---
 dup{A} ; mul
+---

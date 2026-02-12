@@ -11,10 +11,15 @@ doctrine FreeIndexMustFail where {
   gen make(n : Nat) : [] -> [Vec(n)] @M;
 }
 
-run main where {
-  doctrine FreeIndexMustFail;
-  mode M;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine FreeIndexMustFail;
+  source mode M;
 }
 ---
 make
+---

@@ -1,9 +1,14 @@
 import "../../lib/modes/lnl.llang";
 
-run main where {
-  doctrine LNL;
-  mode C;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine LNL;
+  source mode C;
 }
 ---
 @unitNat
+---

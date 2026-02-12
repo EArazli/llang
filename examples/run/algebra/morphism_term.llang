@@ -10,11 +10,16 @@ morphism Double : Invol -> Invol where {
   gen f @ M -> f ; f
 }
 
-run main where {
-  doctrine Invol;
-  mode M;
+pipeline legacy_main where {
+  normalize;
   apply Double;
-  show normalized;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine Invol;
+  source mode M;
 }
 ---
 f
+---

@@ -1,22 +1,28 @@
 import "../../lib/modes/staging_mode_map.llang";
 
-run main where {
-  doctrine Staging2;
-  surface StageExpr;
+pipeline legacy_main where {
+  normalize;
   apply StageToStage2;
-  show input;
-  show normalized;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine Staging;
+  source surface StageExpr;
 }
 ---
 stage
 ---
 
-run ct where {
-  doctrine Staging2;
-  surface StageExprCT;
+pipeline legacy_ct where {
+  normalize;
   apply StageToStage2;
-  show input;
-  show normalized;
+  extract diagram;
+}
+
+run ct using legacy_ct where {
+  source doctrine Staging;
+  source surface StageExprCT;
 }
 ---
 stageq

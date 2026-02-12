@@ -1,10 +1,15 @@
 import "../../lib/surfaces/template_splice_demo.surface.llang";
 
-run main where {
-  doctrine SpliceBase;
-  mode M;
-  surface SpliceSurface;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine SpliceBase;
+  source mode M;
+  source surface SpliceSurface;
 }
 ---
 term{}
+---

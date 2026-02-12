@@ -1,9 +1,14 @@
 import "../../lib/modes/lnl.counit.term.llang";
 
-run main where {
-  doctrine LNL;
-  mode L;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine LNL;
+  source mode L;
 }
 ---
 @counitNat
+---

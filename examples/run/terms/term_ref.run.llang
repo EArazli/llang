@@ -4,8 +4,14 @@ doctrine Ext extends Base where {
   gen g : [A] -> [A] @M;
 }
 
-run main where {
-  doctrine Ext;
-  show normalized;
-} ---
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine Ext;
+}
+---
 @t ; g
+---

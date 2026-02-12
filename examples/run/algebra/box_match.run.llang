@@ -1,8 +1,12 @@
 import "../../lib/algebra/box_match.llang";
 
-run main where {
-  doctrine BoxMatch;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine BoxMatch;
 }
 ---
 box B { g }

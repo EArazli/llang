@@ -1,9 +1,14 @@
 import "../../lib/algebra/ski.llang";
 
-run main where {
-  doctrine SKI;
-  mode M;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine SKI;
+  source mode M;
 }
 ---
 (((((s * k) ; app) * k) ; app) * id[T]) ; app
+---

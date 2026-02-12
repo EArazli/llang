@@ -13,10 +13,15 @@ doctrine ImplicitBinderIndex where {
   gen wrap : [binder { n : Nat } : [Vec(n)]] -> [Out] @M;
 }
 
-run main where {
-  doctrine ImplicitBinderIndex;
-  mode M;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine ImplicitBinderIndex;
+  source mode M;
 }
 ---
 wrap[use]
+---

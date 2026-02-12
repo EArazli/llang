@@ -1,11 +1,14 @@
 import "../../lib/modes/dual_discipline_term_surface.llang";
 
-run cart_dup where {
-  doctrine DualDiscipline;
-  mode Cart;
-  surface DupTermCart;
-  show input;
-  show normalized;
+pipeline legacy_cart_dup where {
+  normalize;
+  extract diagram;
+}
+
+run cart_dup using legacy_cart_dup where {
+  source doctrine DualDiscipline;
+  source mode Cart;
+  source surface DupTermCart;
 }
 ---
 diag {
@@ -14,12 +17,15 @@ diag {
 }
 ---
 
-run lin_dup where {
-  doctrine DualDiscipline;
-  mode Lin;
-  surface DupTermLin;
-  show input;
-  show normalized;
+pipeline legacy_lin_dup where {
+  normalize;
+  extract diagram;
+}
+
+run lin_dup using legacy_lin_dup where {
+  source doctrine DualDiscipline;
+  source mode Lin;
+  source surface DupTermLin;
 }
 ---
 diag {
@@ -28,12 +34,15 @@ diag {
 }
 ---
 
-run cart_drop where {
-  doctrine DualDiscipline;
-  mode Cart;
-  surface DupTermCart;
-  show input;
-  show normalized;
+pipeline legacy_cart_drop where {
+  normalize;
+  extract diagram;
+}
+
+run cart_drop using legacy_cart_drop where {
+  source doctrine DualDiscipline;
+  source mode Cart;
+  source surface DupTermCart;
 }
 ---
 diag {
@@ -42,12 +51,15 @@ diag {
 }
 ---
 
-run lin_drop where {
-  doctrine DualDiscipline;
-  mode Lin;
-  surface DupTermLin;
-  show input;
-  show normalized;
+pipeline legacy_lin_drop where {
+  normalize;
+  extract diagram;
+}
+
+run lin_drop using legacy_lin_drop where {
+  source doctrine DualDiscipline;
+  source mode Lin;
+  source surface DupTermLin;
 }
 ---
 diag {

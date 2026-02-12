@@ -1,9 +1,12 @@
 import "../../lib/algebra/coherence_demo.llang";
 
-run main where {
-  doctrine CoherenceDemo;
-  policy UseAllOriented;
-  show coherence;
+pipeline legacy_main where {
+  normalize { policy = "all_oriented"; };
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine CoherenceDemo;
 }
 ---
 f

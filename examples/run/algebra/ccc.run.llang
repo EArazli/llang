@@ -1,9 +1,14 @@
 import "../../lib/algebra/ccc.llang";
 
-run main where {
-  doctrine CCC;
-  mode M;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine CCC;
+  source mode M;
 }
 ---
 eval
+---

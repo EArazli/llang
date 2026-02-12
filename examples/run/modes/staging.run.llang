@@ -1,9 +1,14 @@
 import "../../lib/modes/staging.llang";
 
-run main where {
-  doctrine Staging;
-  mode RT;
-  show normalized;
+pipeline legacy_main where {
+  normalize;
+  extract diagram;
+}
+
+run main using legacy_main where {
+  source doctrine Staging;
+  source mode RT;
 }
 ---
 @normalizeDemo
+---
