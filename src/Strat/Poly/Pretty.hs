@@ -38,10 +38,9 @@ renderPorts diag ports =
             case getPortLabel diag p of
               Nothing -> renderPortId p
               Just lbl -> renderPortId p <> "(" <> lbl <> ")"
-      in case IM.lookup (portKey p) (dPortTy diag) of
+      in case IM.lookup (unPortId p) (dPortTy diag) of
           Nothing -> renderedPort
           Just ty -> renderedPort <> ":" <> renderType ty
-    portKey (PortId k) = k
 
 renderEdges :: [Edge] -> Either Text Text
 renderEdges edges = do
@@ -71,7 +70,7 @@ renderEdges edges = do
                   <> " [" <> renderPortList (eIns e) <> "] -> [" <> renderPortList (eOuts e) <> "]"
           let body = indent innerTxt
           Right (header <> "\n" <> body)
-        PFeedback _ inner -> do
+        PFeedback inner -> do
           innerTxt <- renderDiagram inner
           let header =
                 "  " <> renderEdgeId (eId e) <> ": feedback"

@@ -537,8 +537,8 @@ checkStructuralByDiscipline doc =
       ida <- pure (idD mode [TVar a])
       lhsTail <- tensorD dup ida
       rhsTail <- tensorD ida dup
-      lhs <- compD (dModes doc) lhsTail dup
-      rhs <- compD (dModes doc) rhsTail dup
+      lhs <- compDTT (doctrineTypeTheory doc) lhsTail dup
+      rhs <- compDTT (doctrineTypeTheory doc) rhsTail dup
       Right (lhs, rhs)
 
     lawCounitLeft mode = do
@@ -547,7 +547,7 @@ checkStructuralByDiscipline doc =
       dropA <- genD mode [TVar a] [] (GenName "drop")
       ida <- pure (idD mode [TVar a])
       tailL <- tensorD dropA ida
-      lhs <- compD (dModes doc) tailL dup
+      lhs <- compDTT (doctrineTypeTheory doc) tailL dup
       let rhs = idD mode [TVar a]
       Right (lhs, rhs)
 
@@ -557,7 +557,7 @@ checkStructuralByDiscipline doc =
       dropA <- genD mode [TVar a] [] (GenName "drop")
       ida <- pure (idD mode [TVar a])
       tailL <- tensorD ida dropA
-      lhs <- compD (dModes doc) tailL dup
+      lhs <- compDTT (doctrineTypeTheory doc) tailL dup
       let rhs = idD mode [TVar a]
       Right (lhs, rhs)
 

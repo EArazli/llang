@@ -20,7 +20,6 @@ import Strat.Poly.Graph
   , EdgeId(..)
   , Edge(..)
   , EdgePayload(..)
-  , FeedbackSpec
   , BinderArg(..)
   , Diagram(..)
   , getPortLabel
@@ -61,7 +60,6 @@ data SSAStep
       }
   | StepFeedback
       { stepEdgeId :: EdgeId
-      , stepSpec :: FeedbackSpec
       , stepBody :: SSA
       , stepIns :: [PortId]
       , stepOuts :: [PortId]
@@ -115,12 +113,11 @@ foliate policy doc mode diag = do
               , stepIns = eIns edge
               , stepOuts = eOuts edge
               }
-        PFeedback spec body -> do
+        PFeedback body -> do
           bodySSA <- foliate policy doc mode body
           pure
             StepFeedback
               { stepEdgeId = eId edge
-              , stepSpec = spec
               , stepBody = bodySSA
               , stepIns = eIns edge
               , stepOuts = eOuts edge

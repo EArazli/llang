@@ -14,6 +14,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
+import Data.Functor.Identity (runIdentity)
 import Strat.Poly.Graph
 import qualified Strat.Poly.Diagram as Diag
 import Strat.Poly.Diagram
@@ -28,6 +29,7 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.ModeTheory (ModeTheory)
 import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
+import Strat.Poly.Traversal (traverseDiagram)
 
 
 type Subst = U.Subst
@@ -344,38 +346,23 @@ payloadSubsts tt tyFlex ixFlex attrFlex tySubst attrSubst p1 p2 =
         binderArgSubsts tySubst0 attrSubst0 (lhsArg, rhsArg) =
           case (lhsArg, rhsArg) of
             (BAConcrete d1, BAConcrete d2) ->
-              case (applySubstsDiagramLocal tt tySubst0 attrSubst0 d1, applySubstsDiagramLocal tt tySubst0 attrSubst0 d2) of
-                (Right d1', Right d2') ->
-                  case Strat.Poly.Graph.diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2' of
-                    Left _ -> Right []
-                    Right subs ->
-                      fmap concat
-                        ( mapM
-                            (\(tySub, attrSub) -> do
-                              tySub' <- mapLeft fatalSubstError (U.composeSubst tt tySub tySubst0)
-                              pure [(tySub', composeAttrSubst attrSub attrSubst0)]
-                            )
-                            subs
-                        )
-                (Left err, _) -> Left (fatalSubstError err)
-                (_, Left err) -> Left (fatalSubstError err)
+              fmap
+                (map (\(tySub', attrSub') -> (tySub', attrSub')))
+                ( mapLeft
+                    fatalSubstError
+                    (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex ixFlex attrFlex tySubst0 attrSubst0 d1 d2)
+                )
             (BAMeta x, BAMeta y) ->
               if x == y then Right [(tySubst0, attrSubst0)] else Right []
             _ -> Right []
     (PBox _ d1, PBox _ d2) -> do
-      d1' <- mapLeft fatalSubstError (applySubstsDiagramLocal tt tySubst attrSubst d1)
-      d2' <- mapLeft fatalSubstError (applySubstsDiagramLocal tt tySubst attrSubst d2)
-      case Strat.Poly.Graph.diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2' of
-        Left _ -> Right []
-        Right subs ->
-          fmap concat
-            ( mapM
-                (\(tySub, attrSub) -> do
-                  tySub' <- mapLeft fatalSubstError (U.composeSubst tt tySub tySubst)
-                  pure [(tySub', composeAttrSubst attrSub attrSubst)]
-                )
-                subs
-            )
+      mapLeft
+        fatalSubstError
+        (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex ixFlex attrFlex tySubst attrSubst d1 d2)
+    (PFeedback d1, PFeedback d2) ->
+      mapLeft
+        fatalSubstError
+        (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex ixFlex attrFlex tySubst attrSubst d1 d2)
     (PSplice x, PSplice y) | x == y -> Right [(tySubst, attrSubst)]
     _ -> Right []
 
@@ -391,13 +378,12 @@ payloadCompatible p1 p2 =
     (PGen g1 attrs1 bargs1, PGen g2 attrs2 bargs2) ->
       g1 == g2 && M.keysSet attrs1 == M.keysSet attrs2 && length bargs1 == length bargs2
     (PBox _ _, PBox _ _) -> True
+    (PFeedback _, PFeedback _) -> True
     (PSplice x, PSplice y) -> x == y
     _ -> False
 
 sortEdges :: [Edge] -> [Edge]
-sortEdges = L.sortOn (\e -> edgeKey (eId e))
-  where
-    edgeKey (EdgeId k) = k
+sortEdges = L.sortOn (unEdgeId . eId)
 
 requirePortType :: Diagram -> PortId -> Either Text TypeExpr
 requirePortType diag pid =
@@ -546,7 +532,7 @@ danglingOk lhs host match =
         Just (Just eid) -> eid `S.member` matched
         Just Nothing -> True
         Nothing -> False
-    portKey (PortId k) = k
+    portKey = unPortId
 
 applyRuleAtMatch :: TypeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyRuleAtMatch tt rule match host = do
@@ -555,7 +541,7 @@ applyRuleAtMatch tt rule match host = do
   host1 <- deleteMatchedEdges host (M.elems (mEdgeMap match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPortMap match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs
-  host3 <- insertDiagram host2 rhsShift
+  host3 <- unionDiagram host2 rhsShift
   let lhsBoundary = dIn lhs <> dOut lhs
   let rhsBoundary = dIn rhsShift <> dOut rhsShift
   if length lhsBoundary /= length rhsBoundary
@@ -589,22 +575,19 @@ deleteMatchedEdges diag edgeIds = foldl step (Right diag) edgeIds
   where
     step acc eid = do
       d <- acc
-      case IM.lookup (edgeKey eid) (dEdges d) of
+      case IM.lookup (unEdgeId eid) (dEdges d) of
         Nothing -> Left "criticalPairs: missing edge"
         Just edge -> do
-          let d1 = d { dEdges = IM.delete (edgeKey eid) (dEdges d) }
+          let d1 = d { dEdges = IM.delete (unEdgeId eid) (dEdges d) }
           let d2 = clearConsumers d1 (eIns edge)
           let d3 = clearProducers d2 (eOuts edge)
           pure d3
-    edgeKey (EdgeId k) = k
     clearConsumers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (portKey p) mp
-          portKey (PortId k) = k
+      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
           mp = dCons d
       in d { dCons = foldl clearOne mp ports }
     clearProducers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (portKey p) mp
-          portKey (PortId k) = k
+      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
           mp = dProd d
       in d { dProd = foldl clearOne mp ports }
 
@@ -619,8 +602,7 @@ deleteMatchedPorts diag ports portMap = foldl step (Right diag) ports
 
 deletePort :: Diagram -> PortId -> Either Text Diagram
 deletePort diag pid =
-  let k = portKey pid
-      portKey (PortId n) = n
+  let k = unPortId pid
   in case (IM.lookup k (dProd diag), IM.lookup k (dCons diag)) of
       (Just Nothing, Just Nothing) ->
         let d1 = diag
@@ -634,71 +616,36 @@ deletePort diag pid =
         in Right d1
       _ -> Left "criticalPairs: cannot delete port with remaining incidence"
 
-insertDiagram :: Diagram -> Diagram -> Either Text Diagram
-insertDiagram base extra = do
-  portTy <- unionDisjointIntMap "criticalPairs: insert ports" (dPortTy base) (dPortTy extra)
-  portLabel <- unionDisjointIntMap "criticalPairs: insert labels" (dPortLabel base) (dPortLabel extra)
-  prod <- unionDisjointIntMap "criticalPairs: insert producers" (dProd base) (dProd extra)
-  cons <- unionDisjointIntMap "criticalPairs: insert consumers" (dCons base) (dCons extra)
-  edges <- unionDisjointIntMap "criticalPairs: insert edges" (dEdges base) (dEdges extra)
-  pure base
-    { dPortTy = portTy
-    , dPortLabel = portLabel
-    , dProd = prod
-    , dCons = cons
-    , dEdges = edges
-    , dNextPort = dNextPort extra
-    , dNextEdge = dNextEdge extra
-    }
-
 applySubstsDiagramLocal :: TypeTheory -> Subst -> AttrSubst -> Diagram -> Either Text Diagram
 applySubstsDiagramLocal tt tySubst attrSubst diag = do
   dTy <- mapLeft fatalSubstError (Diag.applySubstDiagramTT tt tySubst diag)
   pure (applyAttrSubstDiagram attrSubst dTy)
 
 renameIxVarsDiagram :: (TypeExpr -> TypeExpr) -> Diagram -> Diagram
-renameIxVarsDiagram renameTy diag =
-  let dPortTy' = IM.map renameTy (dPortTy diag)
-      dIxCtx' = map renameTy (dIxCtx diag)
-      dEdges' = IM.map renameEdge (dEdges diag)
-   in diag { dPortTy = dPortTy', dIxCtx = dIxCtx', dEdges = dEdges' }
+renameIxVarsDiagram renameTy =
+  runIdentity . traverseDiagram onDiag pure pure
   where
-    renameEdge edge =
-      case ePayload edge of
-        PGen g attrs bargs ->
-          edge { ePayload = PGen g attrs (map renameBinderArg bargs) }
-        PBox name inner ->
-          edge { ePayload = PBox name (renameIxVarsDiagram renameTy inner) }
-        PFeedback spec inner ->
-          edge { ePayload = PFeedback spec (renameIxVarsDiagram renameTy inner) }
-        PSplice x ->
-          edge { ePayload = PSplice x }
-
-    renameBinderArg barg =
-      case barg of
-        BAConcrete inner -> BAConcrete (renameIxVarsDiagram renameTy inner)
-        BAMeta x -> BAMeta x
+    onDiag d =
+      pure d
+        { dPortTy = IM.map renameTy (dPortTy d)
+        , dIxCtx = map renameTy (dIxCtx d)
+        }
 
 renameBinderMetasDiagram :: (BinderMetaVar -> BinderMetaVar) -> Diagram -> Diagram
-renameBinderMetasDiagram renameMeta diag =
-  let dEdges' = IM.map renameEdge (dEdges diag)
-   in diag { dEdges = dEdges' }
+renameBinderMetasDiagram renameMeta =
+  runIdentity . traverseDiagram pure onPayload onBArg
   where
-    renameEdge edge =
-      case ePayload edge of
-        PGen g attrs bargs ->
-          edge { ePayload = PGen g attrs (map renameBinderArg bargs) }
-        PBox name inner ->
-          edge { ePayload = PBox name (renameBinderMetasDiagram renameMeta inner) }
-        PFeedback spec inner ->
-          edge { ePayload = PFeedback spec (renameBinderMetasDiagram renameMeta inner) }
-        PSplice x ->
-          edge { ePayload = PSplice (renameMeta x) }
+    onPayload payload =
+      pure $
+        case payload of
+          PSplice x -> PSplice (renameMeta x)
+          _ -> payload
 
-    renameBinderArg barg =
-      case barg of
-        BAConcrete inner -> BAConcrete (renameBinderMetasDiagram renameMeta inner)
-        BAMeta x -> BAMeta (renameMeta x)
+    onBArg barg =
+      pure $
+        case barg of
+          BAMeta x -> BAMeta (renameMeta x)
+          _ -> barg
 
 dedupCriticalPairs :: [CriticalPairInfo] -> Either Text [CriticalPairInfo]
 dedupCriticalPairs pairs = go [] pairs

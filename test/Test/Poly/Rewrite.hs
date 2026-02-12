@@ -15,7 +15,7 @@ import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
-import Strat.Poly.Match (Match(..), findFirstMatchNoDoc, findFirstMatchWithTyVarsNoDoc)
+import Strat.Poly.Match (Match(..), MatchConfig(..), findFirstMatch)
 import Strat.Poly.UnifyTy (Subst(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory, ModName(..), ModDecl(..), ModExpr(..), ModEqn(..), addMode, addModDecl, addModEqn)
 import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
@@ -65,9 +65,9 @@ assocRule = do
   mul <- mkGen "mul" [aTy, aTy] [aTy]
   id1 <- pure (idD modeName [aTy])
   left <- tensorD mul id1
-  lhs <- compD (mkModes [modeName]) mul left
+  lhs <- compDTT (modeOnlyTypeTheory (mkModes [modeName])) mul left
   right <- tensorD id1 mul
-  rhs <- compD (mkModes [modeName]) mul right
+  rhs <- compDTT (modeOnlyTypeTheory (mkModes [modeName])) mul right
   pure RewriteRule
     { rrName = "assoc"
     , rrLHS = lhs
@@ -109,7 +109,7 @@ testDanglingReject :: Assertion
 testDanglingReject = do
   f <- require (mkGen "f" [aTy] [aTy])
   g <- require (mkGen "g" [aTy] [aTy])
-  lhs <- require (compD (mkModes [modeName]) g f)
+  lhs <- require (compDTT (modeOnlyTypeTheory (mkModes [modeName])) g f)
   let rhs = lhs
   let rule = RewriteRule
         { rrName = "dangling"
@@ -136,7 +136,8 @@ testInjectiveMatch = do
   g <- require (mkGen "f" [aTy] [aTy])
   pat <- require (tensorD g g)
   let host = g
-  res <- case findFirstMatchNoDoc pat host of
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) S.empty S.empty S.empty
+  res <- case findFirstMatch cfg pat host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
   case res of
@@ -257,7 +258,8 @@ testNestedBoxesMatch = do
   inner <- require (mkBoxDiagram "Inner" f aTy)
   lhs <- require (mkBoxDiagram "Outer" inner aTy)
   host <- require (mkBoxDiagram "Outer" inner aTy)
-  res <- case findFirstMatchNoDoc lhs host of
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) S.empty S.empty S.empty
+  res <- case findFirstMatch cfg lhs host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
   case res of
@@ -274,7 +276,8 @@ testBoxTypeVarUnify = do
   fConcrete <- require (mkGen "f" [aConcrete] [aConcrete])
   lhs <- require (mkBoxDiagram "B" fVar aVarTy)
   host <- require (mkBoxDiagram "B" fConcrete aConcrete)
-  res <- case findFirstMatchWithTyVarsNoDoc (S.singleton aVar) lhs host of
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) (S.singleton aVar) S.empty S.empty
+  res <- case findFirstMatch cfg lhs host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
   case res of
@@ -320,7 +323,7 @@ testNormalizeDeterminism = do
   mul <- require (mkGen "mul" [aTy, aTy] [aTy])
   id1 <- pure (idD modeName [aTy])
   d1 <- require (tensorD mul id1)
-  d2 <- require (compD (mkModes [modeName]) mul d1)
+  d2 <- require (compDTT (modeOnlyTypeTheory (mkModes [modeName])) mul d1)
   let rules = [rule]
   let mt = mkModes [modeName]
   r1 <- require (normalize (mkTypeTheory mt) 10 rules d2)

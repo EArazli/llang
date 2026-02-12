@@ -7,14 +7,12 @@ module Strat.Poly.Diagram
   , genD
   , genDWithAttrsIx
   , genDWithAttrs
-  , compD
   , compDTT
   , tensorD
   , unionDiagram
   , diagramDom
   , diagramCod
   , applySubstDiagramTT
-  , applySubstDiagram
   , applyAttrSubstDiagram
   , renameAttrVarsDiagram
   , freeTyVarsDiagram
@@ -29,13 +27,15 @@ import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Data.Functor.Identity (runIdentity)
 import Strat.Poly.Graph
-import Strat.Poly.ModeTheory (ModeName, ModeTheory)
+import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.TypeExpr (Context, TypeExpr(..), TyVar, TypeArg(..), IxTerm(..), IxVar(..), freeIxVarsType)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
 import Strat.Poly.UnifyTy
 import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.Traversal (foldDiagram, traverseDiagram)
 
 
 idDIx :: ModeName -> [TypeExpr] -> Context -> Diagram
@@ -73,25 +73,6 @@ genDWithAttrs mode = genDWithAttrsIx mode []
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
-
-compD :: ModeTheory -> Diagram -> Diagram -> Either Text Diagram
-compD mt g f
-  | dMode g /= dMode f = Left "diagram composition mode mismatch"
-  | dIxCtx g /= dIxCtx f = Left "diagram composition index-context mismatch"
-  | otherwise = do
-      domG <- diagramDom g
-      codF <- diagramCod f
-      substTy <-
-        case unifyCtxLegacy mt codF domG of
-          Right s -> Right s
-          Left err ->
-            if codF == domG
-              then Right M.empty
-              else Left ("diagram composition boundary mismatch: " <> err)
-      let subst = fromTyOnlySubst substTy
-      let f' = applySubstDiagram mt subst f
-      let g' = applySubstDiagram mt subst g
-      composeAligned g' f'
 
 compDTT :: TypeTheory -> Diagram -> Diagram -> Either Text Diagram
 compDTT tt g f
@@ -150,64 +131,77 @@ diagramDom :: Diagram -> Either Text Context
 diagramDom diag = mapM (lookupPort "diagramDom") (dIn diag)
   where
     lookupPort label pid =
-      case IM.lookup (portKey pid) (dPortTy diag) of
+      case IM.lookup (unPortId pid) (dPortTy diag) of
         Nothing -> Left (label <> ": missing port type")
         Just ty -> Right ty
-    portKey (PortId k) = k
 
 diagramCod :: Diagram -> Either Text Context
 diagramCod diag = mapM (lookupPort "diagramCod") (dOut diag)
   where
     lookupPort label pid =
-      case IM.lookup (portKey pid) (dPortTy diag) of
+      case IM.lookup (unPortId pid) (dPortTy diag) of
         Nothing -> Left (label <> ": missing port type")
         Just ty -> Right ty
-    portKey (PortId k) = k
-
-applySubstDiagram :: ModeTheory -> Subst -> Diagram -> Diagram
-applySubstDiagram mt subst diag =
-  let dPortTy' = IM.map (applySubstTyLegacy mt (toTyOnlySubst subst)) (dPortTy diag)
-      dIxCtx' = map (applySubstTyLegacy mt (toTyOnlySubst subst)) (dIxCtx diag)
-      dEdges' = IM.map (mapEdgePayload mt subst) (dEdges diag)
-  in diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
-
-binderArgMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
-binderArgMetaVarsDiagram diag =
-  S.unions (map binderArgMetasPayload (IM.elems (dEdges diag)))
-
-spliceMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
-spliceMetaVarsDiagram diag =
-  S.unions (map spliceMetasPayload (IM.elems (dEdges diag)))
 
 applySubstDiagramTT :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
-applySubstDiagramTT tt subst diag = do
-  dPortTy' <- traverse (applySubstTy tt subst) (dPortTy diag)
-  dIxCtx' <- mapM (applySubstTy tt subst) (dIxCtx diag)
-  dEdges' <- traverse (mapEdgePayloadTT tt subst) (dEdges diag)
-  pure diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
+applySubstDiagramTT tt subst =
+  traverseDiagram onDiag pure pure
+  where
+    onDiag d = do
+      dPortTy' <- IM.traverseWithKey (\_ ty -> applySubstTy tt subst ty) (dPortTy d)
+      dIxCtx' <- mapM (applySubstTy tt subst) (dIxCtx d)
+      pure d { dIxCtx = dIxCtx', dPortTy = dPortTy' }
 
 freeTyVarsDiagram :: Diagram -> S.Set TyVar
-freeTyVarsDiagram diag =
-  let portVars = S.fromList (concatMap varsInTy (IM.elems (dPortTy diag)))
-      ixCtxVars = S.fromList (concatMap varsInTy (dIxCtx diag))
-      payloadVars = S.unions (map freeTyVarsPayload (IM.elems (dEdges diag)))
-  in S.unions [portVars, ixCtxVars, payloadVars]
+freeTyVarsDiagram =
+  foldDiagram onDiag (\_ -> mempty) (\_ -> mempty)
+  where
+    onDiag d =
+      S.unions
+        [ S.unions (map freeTyVarsTypeLocal (IM.elems (dPortTy d)))
+        , S.unions (map freeTyVarsTypeLocal (dIxCtx d))
+        ]
 
 freeAttrVarsDiagram :: Diagram -> S.Set AttrVar
-freeAttrVarsDiagram diag =
-  let payloadVars = S.unions (map freeAttrVarsPayload (IM.elems (dEdges diag)))
-  in payloadVars
+freeAttrVarsDiagram =
+  foldDiagram (\_ -> mempty) onPayload (\_ -> mempty)
+  where
+    onPayload payload =
+      case payload of
+        PGen _ attrs _ -> freeAttrVarsMap attrs
+        _ -> mempty
 
 freeIxVarsDiagram :: Diagram -> S.Set IxVar
-freeIxVarsDiagram diag =
-  let portVars = S.unions (map freeIxVarsType (IM.elems (dPortTy diag)))
-      ixCtxVars = S.unions (map freeIxVarsType (dIxCtx diag))
-      payloadVars = S.unions (map freeIxVarsPayload (IM.elems (dEdges diag)))
-   in S.unions [portVars, ixCtxVars, payloadVars]
+freeIxVarsDiagram =
+  foldDiagram onDiag (\_ -> mempty) (\_ -> mempty)
+  where
+    onDiag d =
+      S.unions
+        [ S.unions (map freeIxVarsType (IM.elems (dPortTy d)))
+        , S.unions (map freeIxVarsType (dIxCtx d))
+        ]
+
+binderArgMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
+binderArgMetaVarsDiagram =
+  foldDiagram (\_ -> mempty) (\_ -> mempty) onBArg
+  where
+    onBArg barg =
+      case barg of
+        BAMeta x -> S.singleton x
+        _ -> mempty
+
+spliceMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
+spliceMetaVarsDiagram =
+  foldDiagram (\_ -> mempty) onPayload (\_ -> mempty)
+  where
+    onPayload payload =
+      case payload of
+        PSplice x -> S.singleton x
+        _ -> mempty
 
 binderMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
-binderMetaVarsDiagram diag =
-  S.union (binderArgMetaVarsDiagram diag) (spliceMetaVarsDiagram diag)
+binderMetaVarsDiagram d =
+  binderArgMetaVarsDiagram d <> spliceMetaVarsDiagram d
 
 varsInTy :: TypeExpr -> [TyVar]
 varsInTy ty =
@@ -230,164 +224,25 @@ varsInTy ty =
 freeTyVarsTypeLocal :: TypeExpr -> S.Set TyVar
 freeTyVarsTypeLocal = S.fromList . varsInTy
 
-freeTyVarsPayload :: Edge -> S.Set TyVar
-freeTyVarsPayload edge =
-  case ePayload edge of
-    PGen _ _ bargs ->
-      S.unions (map freeFromBinderArg bargs)
-    PBox _ inner ->
-      freeTyVarsDiagram inner
-    PFeedback _ inner ->
-      freeTyVarsDiagram inner
-    PSplice _ ->
-      S.empty
-  where
-    freeFromBinderArg barg =
-      case barg of
-        BAConcrete inner -> freeTyVarsDiagram inner
-        BAMeta _ -> S.empty
-
-freeAttrVarsPayload :: Edge -> S.Set AttrVar
-freeAttrVarsPayload edge =
-  case ePayload edge of
-    PGen _ attrs bargs ->
-      S.union (freeAttrVarsMap attrs) (S.unions (map freeFromBinderArg bargs))
-    PBox _ inner ->
-      freeAttrVarsDiagram inner
-    PFeedback _ inner ->
-      freeAttrVarsDiagram inner
-    PSplice _ ->
-      S.empty
-  where
-    freeFromBinderArg barg =
-      case barg of
-        BAConcrete inner -> freeAttrVarsDiagram inner
-        BAMeta _ -> S.empty
-
-freeIxVarsPayload :: Edge -> S.Set IxVar
-freeIxVarsPayload edge =
-  case ePayload edge of
-    PGen _ _ bargs ->
-      S.unions (map freeFromBinderArg bargs)
-    PBox _ inner ->
-      freeIxVarsDiagram inner
-    PFeedback _ inner ->
-      freeIxVarsDiagram inner
-    PSplice _ ->
-      S.empty
-  where
-    freeFromBinderArg barg =
-      case barg of
-        BAConcrete inner -> freeIxVarsDiagram inner
-        BAMeta _ -> S.empty
-
-binderArgMetasPayload :: Edge -> S.Set BinderMetaVar
-binderArgMetasPayload edge =
-  case ePayload edge of
-    PGen _ _ bargs ->
-      S.unions (map fromBinderArg bargs)
-    PBox _ inner ->
-      binderArgMetaVarsDiagram inner
-    PFeedback _ inner ->
-      binderArgMetaVarsDiagram inner
-    PSplice _ ->
-      S.empty
-  where
-    fromBinderArg barg =
-      case barg of
-        BAConcrete inner -> binderArgMetaVarsDiagram inner
-        BAMeta x -> S.singleton x
-
-spliceMetasPayload :: Edge -> S.Set BinderMetaVar
-spliceMetasPayload edge =
-  case ePayload edge of
-    PGen _ _ bargs ->
-      S.unions (map fromBinderArg bargs)
-    PBox _ inner ->
-      spliceMetaVarsDiagram inner
-    PFeedback _ inner ->
-      spliceMetaVarsDiagram inner
-    PSplice x ->
-      S.singleton x
-  where
-    fromBinderArg barg =
-      case barg of
-        BAConcrete inner -> spliceMetaVarsDiagram inner
-        BAMeta _ -> S.empty
-
-mapEdgePayload :: ModeTheory -> Subst -> Edge -> Edge
-mapEdgePayload mt subst edge =
-  case ePayload edge of
-    PGen g attrs bargs -> edge { ePayload = PGen g attrs (map mapBinderArg bargs) }
-    PBox name inner -> edge { ePayload = PBox name (applySubstDiagram mt subst inner) }
-    PFeedback spec inner ->
-      edge
-        { ePayload =
-            PFeedback spec { fbTy = applySubstTyLegacy mt (toTyOnlySubst subst) (fbTy spec) } (applySubstDiagram mt subst inner)
-        }
-    PSplice x -> edge { ePayload = PSplice x }
-  where
-    mapBinderArg barg =
-      case barg of
-        BAConcrete inner -> BAConcrete (applySubstDiagram mt subst inner)
-        BAMeta x -> BAMeta x
-
-mapEdgePayloadTT :: TypeTheory -> Subst -> Edge -> Either Text Edge
-mapEdgePayloadTT tt subst edge =
-  case ePayload edge of
-    PGen g attrs bargs -> do
-      bargs' <- mapM mapBinderArgTT bargs
-      pure edge { ePayload = PGen g attrs bargs' }
-    PBox name inner -> do
-      inner' <- applySubstDiagramTT tt subst inner
-      pure edge { ePayload = PBox name inner' }
-    PFeedback spec inner -> do
-      fbTy' <- applySubstTy tt subst (fbTy spec)
-      inner' <- applySubstDiagramTT tt subst inner
-      pure edge { ePayload = PFeedback spec { fbTy = fbTy' } inner' }
-    PSplice x -> pure edge { ePayload = PSplice x }
-  where
-    mapBinderArgTT barg =
-      case barg of
-        BAConcrete inner -> BAConcrete <$> applySubstDiagramTT tt subst inner
-        BAMeta x -> Right (BAMeta x)
-
-
 applyAttrSubstDiagram :: AttrSubst -> Diagram -> Diagram
-applyAttrSubstDiagram subst diag =
-  let dEdges' = IM.map (mapEdgePayloadAttr subst) (dEdges diag)
-  in diag { dEdges = dEdges' }
+applyAttrSubstDiagram subst =
+  runIdentity . traverseDiagram pure onPayload pure
+  where
+    onPayload payload =
+      pure $
+        case payload of
+          PGen g attrs bargs -> PGen g (applyAttrSubstMap subst attrs) bargs
+          _ -> payload
 
 renameAttrVarsDiagram :: (Text -> Text) -> Diagram -> Diagram
-renameAttrVarsDiagram rename diag =
-  let dEdges' = IM.map (mapEdgePayloadRename rename) (dEdges diag)
-  in diag { dEdges = dEdges' }
-
-mapEdgePayloadAttr :: AttrSubst -> Edge -> Edge
-mapEdgePayloadAttr subst edge =
-  case ePayload edge of
-    PGen g attrs bargs -> edge { ePayload = PGen g (applyAttrSubstMap subst attrs) (map mapBinderArg bargs) }
-    PBox name inner -> edge { ePayload = PBox name (applyAttrSubstDiagram subst inner) }
-    PFeedback spec inner -> edge { ePayload = PFeedback spec (applyAttrSubstDiagram subst inner) }
-    PSplice x -> edge { ePayload = PSplice x }
+renameAttrVarsDiagram rename =
+  runIdentity . traverseDiagram pure onPayload pure
   where
-    mapBinderArg barg =
-      case barg of
-        BAConcrete inner -> BAConcrete (applyAttrSubstDiagram subst inner)
-        BAMeta x -> BAMeta x
-
-mapEdgePayloadRename :: (Text -> Text) -> Edge -> Edge
-mapEdgePayloadRename rename edge =
-  case ePayload edge of
-    PGen g attrs bargs -> edge { ePayload = PGen g (M.map (renameAttrTerm rename) attrs) (map mapBinderArg bargs) }
-    PBox name inner -> edge { ePayload = PBox name (renameAttrVarsDiagram rename inner) }
-    PFeedback spec inner -> edge { ePayload = PFeedback spec (renameAttrVarsDiagram rename inner) }
-    PSplice x -> edge { ePayload = PSplice x }
-  where
-    mapBinderArg barg =
-      case barg of
-        BAConcrete inner -> BAConcrete (renameAttrVarsDiagram rename inner)
-        BAMeta x -> BAMeta x
+    onPayload payload =
+      pure $
+        case payload of
+          PGen g attrs bargs -> PGen g (M.map (renameAttrTerm rename) attrs) bargs
+          _ -> payload
 
 allocPorts :: Context -> Diagram -> ([PortId], Diagram)
 allocPorts [] diag = ([], diag)

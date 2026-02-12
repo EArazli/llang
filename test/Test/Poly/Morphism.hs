@@ -22,6 +22,7 @@ import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar
 import Strat.Poly.Cell2
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
+import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 import Test.Poly.Helpers (mkModes, identityModeMap, identityModMap)
 
 
@@ -1317,9 +1318,9 @@ assocRule name ty mulName = do
   mul <- genD modeM [ty, ty] [ty] mulName
   id1 <- pure (idD modeM [ty])
   left <- tensorD mul id1
-  lhs <- compD (mkModes [modeM]) mul left
+  lhs <- compDTT (modeOnlyTypeTheory (mkModes [modeM])) mul left
   right <- tensorD id1 mul
-  rhs <- compD (mkModes [modeM]) mul right
+  rhs <- compDTT (modeOnlyTypeTheory (mkModes [modeM])) mul right
   pure Cell2
     { c2Name = name
     , c2Class = Computational
@@ -1339,10 +1340,10 @@ unitRule name ty unitName mulName leftSide = do
     if leftSide
       then do
         tens <- tensorD unit id1
-        compD (mkModes [modeM]) mul tens
+        compDTT (modeOnlyTypeTheory (mkModes [modeM])) mul tens
       else do
         tens <- tensorD id1 unit
-        compD (mkModes [modeM]) mul tens
+        compDTT (modeOnlyTypeTheory (mkModes [modeM])) mul tens
   pure Cell2
     { c2Name = name
     , c2Class = Computational

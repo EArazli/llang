@@ -16,7 +16,7 @@ import Strat.DSL.AST (RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeM
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (emptyDiagram, freshPort, setPortLabel, addEdgePayload, Edge(..), EdgeId(..), PortId(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), validateDiagram, diagramPortType, FeedbackSpec(..))
+import Strat.Poly.Graph (emptyDiagram, freshPort, setPortLabel, addEdgePayload, Edge(..), EdgeId(..), PortId(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), validateDiagram, diagramPortType)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
@@ -1089,8 +1089,7 @@ elabDiagExprWithFresh env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allo
                 else liftEither (Left "loop: body first output type must match input type")
               outTys <- mapM (liftEither . lookupPortTy inner) pOuts
               let (outs, diag0) = allocPorts outTys (emptyDiagram mode curIxCtx)
-              let spec = FeedbackSpec { fbTy = stateInTy, fbOutArity = length pOuts }
-              diag1 <- liftEither (addEdgePayload (PFeedback spec inner) [] outs diag0)
+              diag1 <- liftEither (addEdgePayload (PFeedback inner) [] outs diag0)
               let diag2 = diag1 { dIn = [], dOut = outs }
               liftEither (validateDiagram diag2)
               pure (diag2, binderSigs')
@@ -1386,7 +1385,7 @@ ensureAcyclicMode doc mode diag =
     checkInner edge =
       case ePayload edge of
         PBox _ inner -> ensureAcyclicMode doc mode inner
-        PFeedback _ inner -> ensureAcyclicMode doc mode inner
+        PFeedback inner -> ensureAcyclicMode doc mode inner
         _ -> Right ()
 
 topologicalEdges :: Diagram -> Either Text [Edge]

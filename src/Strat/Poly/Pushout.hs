@@ -11,6 +11,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import Control.Monad (filterM, foldM)
+import Data.Functor.Identity (runIdentity)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.Doctrine
@@ -23,6 +24,7 @@ import Strat.Poly.Attr
 import Strat.Poly.Diagram (Diagram(..), genD, genDWithAttrs, diagramDom, diagramCod)
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), renumberDiagram, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
+import Strat.Poly.Traversal (traverseDiagram)
 
 
 data PolyPushoutResult = PolyPushoutResult
@@ -531,33 +533,23 @@ renameCell attrRen tyRen permRen genRen cellRen cell = do
     }
 
 renameDiagram :: AttrSortRenameMap -> TypeRenameMap -> TypePermMap -> M.Map (ModeName, GenName) GenName -> Diagram -> Either Text Diagram
-renameDiagram attrRen tyRen permRen genRen diag = do
-  let mode = dMode diag
-  dIxCtx' <- mapM (renameTypeExpr tyRen permRen) (dIxCtx diag)
-  dPortTy' <- traverse (renameTypeExpr tyRen permRen) (dPortTy diag)
-  dEdges' <- traverse (renameEdge mode) (dEdges diag)
-  pure diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
+renameDiagram attrRen tyRen permRen genRen diag =
+  traverseDiagram onDiag onPayload pure diag
   where
-    renameEdge mode edge =
-      case ePayload edge of
+    mode = dMode diag
+
+    onDiag d = do
+      dIxCtx' <- mapM (renameTypeExpr tyRen permRen) (dIxCtx d)
+      dPortTy' <- traverse (renameTypeExpr tyRen permRen) (dPortTy d)
+      pure d { dIxCtx = dIxCtx', dPortTy = dPortTy' }
+
+    onPayload payload =
+      case payload of
         PGen gen attrs bargs -> do
           let gen' = M.findWithDefault gen (mode, gen) genRen
               attrs' = M.map (renameAttrSortTerm attrRen) attrs
-          bargs' <- mapM renameBinderArg bargs
-          pure edge { ePayload = PGen gen' attrs' bargs' }
-        PBox name inner -> do
-          inner' <- renameDiagram attrRen tyRen permRen genRen inner
-          pure edge { ePayload = PBox name inner' }
-        PFeedback spec inner -> do
-          inner' <- renameDiagram attrRen tyRen permRen genRen inner
-          pure edge { ePayload = PFeedback spec inner' }
-        PSplice x ->
-          pure edge { ePayload = PSplice x }
-
-    renameBinderArg barg =
-      case barg of
-        BAConcrete inner -> BAConcrete <$> renameDiagram attrRen tyRen permRen genRen inner
-        BAMeta x -> Right (BAMeta x)
+          pure (PGen gen' attrs' bargs)
+        _ -> pure payload
 
 renameAttrSortTerm :: AttrSortRenameMap -> AttrTerm -> AttrTerm
 renameAttrSortTerm ren term =
@@ -892,28 +884,14 @@ renameInputShapeAlpha tyMap ixMap shape =
       in InBinder bs { bsIxCtx = ixCtx', bsDom = dom', bsCod = cod' }
 
 renameDiagramAlpha :: M.Map TyVar TyVar -> M.Map IxVar IxVar -> Diagram -> Diagram
-renameDiagramAlpha tyMap ixMap diag =
-  diag
-    { dIxCtx = map (renameTypeAlpha tyMap ixMap) (dIxCtx diag)
-    , dPortTy = IM.map (renameTypeAlpha tyMap ixMap) (dPortTy diag)
-    , dEdges = IM.map renameEdge (dEdges diag)
-    }
+renameDiagramAlpha tyMap ixMap =
+  runIdentity . traverseDiagram onDiag pure pure
   where
-    renameEdge edge =
-      case ePayload edge of
-        PGen g attrs bargs ->
-          edge { ePayload = PGen g attrs (map renameBinderArg bargs) }
-        PBox name inner ->
-          edge { ePayload = PBox name (renameDiagramAlpha tyMap ixMap inner) }
-        PFeedback spec inner ->
-          edge { ePayload = PFeedback spec (renameDiagramAlpha tyMap ixMap inner) }
-        PSplice x ->
-          edge { ePayload = PSplice x }
-
-    renameBinderArg barg =
-      case barg of
-        BAConcrete inner -> BAConcrete (renameDiagramAlpha tyMap ixMap inner)
-        BAMeta x -> BAMeta x
+    onDiag d =
+      pure d
+        { dIxCtx = map (renameTypeAlpha tyMap ixMap) (dIxCtx d)
+        , dPortTy = IM.map (renameTypeAlpha tyMap ixMap) (dPortTy d)
+        }
 
 normalizeDiagramModes :: ModeTheory -> Diagram -> Either Text Diagram
 normalizeDiagramModes mt diag = do
@@ -930,9 +908,9 @@ normalizeDiagramModes mt diag = do
         PBox name inner -> do
           inner' <- normalizeDiagramModes mt inner
           pure edge { ePayload = PBox name inner' }
-        PFeedback spec inner -> do
+        PFeedback inner -> do
           inner' <- normalizeDiagramModes mt inner
-          pure edge { ePayload = PFeedback spec inner' }
+          pure edge { ePayload = PFeedback inner' }
         PSplice x ->
           pure edge { ePayload = PSplice x }
 

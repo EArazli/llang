@@ -17,6 +17,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Control.Monad (foldM)
+import Data.Functor.Identity (runIdentity)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Cell2
@@ -32,6 +33,7 @@ import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), composeMod, normalizeModExpr)
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
+import Strat.Poly.Traversal (traverseDiagram)
 
 unifyCtxCompat :: TypeTheory -> [TypeExpr] -> Context -> Context -> Either Text Subst
 unifyCtxCompat tt ixCtx ctxA ctxB =
@@ -229,10 +231,9 @@ applyMorphismDiagram mor diagSrc = do
               PBox name inner -> do
                 inner' <- applyMorphismDiagram mor inner
                 updateEdgePayload diagTgt edgeKey (PBox name inner')
-              PFeedback spec inner -> do
-                fbTy' <- applyMorphismTy mor (fbTy spec)
+              PFeedback inner -> do
                 inner' <- applyMorphismDiagram mor inner
-                updateEdgePayload diagTgt edgeKey (PFeedback spec { fbTy = fbTy' } inner')
+                updateEdgePayload diagTgt edgeKey (PFeedback inner')
               PSplice x ->
                 updateEdgePayload diagTgt edgeKey (PSplice x)
   diagTgt <- foldl step (Right diagTgt0) edgeIds
@@ -324,9 +325,9 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
         PBox name inner -> do
           inner' <- instantiateGenImageBinders tt binderSigs holeSub inner
           pure edge { ePayload = PBox name inner' }
-        PFeedback spec inner -> do
+        PFeedback inner -> do
           inner' <- instantiateGenImageBinders tt binderSigs holeSub inner
-          pure edge { ePayload = PFeedback spec inner' }
+          pure edge { ePayload = PFeedback inner' }
         PSplice x ->
           pure edge { ePayload = PSplice x }
       where
@@ -1082,32 +1083,21 @@ singleGenNameMaybe srcGen image0 =
 
 renameDiagram :: M.Map TypeRef TypeRef -> M.Map (ModeName, GenName) GenName -> Diagram -> Diagram
 renameDiagram tyRen genRen diag =
-  let mode = dMode diag
-      dIxCtx' = map (renameTypeExpr tyRen) (dIxCtx diag)
-      dPortTy' = IM.map (renameTypeExpr tyRen) (dPortTy diag)
-      dEdges' = IM.map (renameEdge mode) (dEdges diag)
-  in diag { dIxCtx = dIxCtx', dPortTy = dPortTy', dEdges = dEdges' }
+  runIdentity (traverseDiagram onDiag onPayload pure diag)
   where
-    renameEdge mode edge =
-      case ePayload edge of
-        PGen gen attrs bargs ->
-          let gen' = M.findWithDefault gen (mode, gen) genRen
-              bargs' = map renameBinderArg bargs
-          in edge { ePayload = PGen gen' attrs bargs' }
-        PBox name inner ->
-          let inner' = renameDiagram tyRen genRen inner
-          in edge { ePayload = PBox name inner' }
-        PFeedback spec inner ->
-          let inner' = renameDiagram tyRen genRen inner
-              spec' = spec { fbTy = renameTypeExpr tyRen (fbTy spec) }
-          in edge { ePayload = PFeedback spec' inner' }
-        PSplice x ->
-          edge { ePayload = PSplice x }
+    onDiag d =
+      pure d
+        { dIxCtx = map (renameTypeExpr tyRen) (dIxCtx d)
+        , dPortTy = IM.map (renameTypeExpr tyRen) (dPortTy d)
+        }
 
-    renameBinderArg barg =
-      case barg of
-        BAConcrete inner -> BAConcrete (renameDiagram tyRen genRen inner)
-        BAMeta x -> BAMeta x
+    onPayload payload =
+      pure $
+        case payload of
+          PGen gen attrs bargs ->
+            let gen' = M.findWithDefault gen (dMode diag, gen) genRen
+            in PGen gen' attrs bargs
+          _ -> payload
 
 renameTypeExpr :: M.Map TypeRef TypeRef -> TypeExpr -> TypeExpr
 renameTypeExpr ren ty =
@@ -1244,7 +1234,7 @@ spliceEdge diag edgeKey image = do
   let outs = eOuts edge
   diag1 <- deleteEdge diag edgeKey
   let imageShift = shiftDiagram (dNextPort diag1) (dNextEdge diag1) image
-  diag2 <- insertDiagram diag1 imageShift
+  diag2 <- unionDiagram diag1 imageShift
   let boundary = dIn imageShift <> dOut imageShift
   if length boundary /= length (ins <> outs)
     then Left "spliceEdge: boundary mismatch"
@@ -1283,31 +1273,12 @@ deleteEdge diag edgeKey =
 
 clearConsumers :: Diagram -> [PortId] -> Diagram
 clearConsumers d ports =
-  let clearOne mp p = IM.adjust (const Nothing) (portKey p) mp
-      portKey (PortId k) = k
+  let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
       mp = dCons d
   in d { dCons = foldl clearOne mp ports }
 
 clearProducers :: Diagram -> [PortId] -> Diagram
 clearProducers d ports =
-  let clearOne mp p = IM.adjust (const Nothing) (portKey p) mp
-      portKey (PortId k) = k
+  let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
       mp = dProd d
   in d { dProd = foldl clearOne mp ports }
-
-insertDiagram :: Diagram -> Diagram -> Either Text Diagram
-insertDiagram base extra = do
-  portTy <- unionDisjointIntMap "insertDiagram ports" (dPortTy base) (dPortTy extra)
-  portLabel <- unionDisjointIntMap "insertDiagram labels" (dPortLabel base) (dPortLabel extra)
-  prod <- unionDisjointIntMap "insertDiagram producers" (dProd base) (dProd extra)
-  cons <- unionDisjointIntMap "insertDiagram consumers" (dCons base) (dCons extra)
-  edges <- unionDisjointIntMap "insertDiagram edges" (dEdges base) (dEdges extra)
-  pure base
-    { dPortTy = portTy
-    , dPortLabel = portLabel
-    , dProd = prod
-    , dCons = cons
-    , dEdges = edges
-    , dNextPort = dNextPort extra
-    , dNextEdge = dNextEdge extra
-    }

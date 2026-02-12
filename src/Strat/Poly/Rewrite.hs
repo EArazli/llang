@@ -11,6 +11,7 @@ import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Data.Monoid (Any(..), getAny)
 import Strat.Poly.Graph
 import Strat.Poly.Diagram
 import Strat.Poly.Match
@@ -19,8 +20,9 @@ import Strat.Poly.Cell2
 import Strat.Poly.UnifyTy (emptySubst)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
-import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
+import Strat.Poly.Doctrine (Doctrine(..))
 import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.Traversal (foldDiagram, traverseDiagram)
 
 
 data RewriteRule = RewriteRule
@@ -48,13 +50,7 @@ rewriteOnceTop tt rules diag = go rules
         then go rs
         else do
           rejectSplice "rewrite rule lhs" (rrLHS r)
-          matches <-
-            findAllMatchesWithVars
-              tt
-              (S.fromList (rrTyVars r))
-              (S.fromList (rrIxVars r))
-              (rrLHS r)
-              diag
+          matches <- findAllMatches (mkMatchConfig tt r) (rrLHS r) diag
           tryMatches matches
       where
         tryMatches [] = go rs
@@ -82,12 +78,12 @@ rewriteOnceNested tt rules diag =
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
               canon <- renumberDiagram diag'
               pure (Just canon)
-        PFeedback spec inner -> do
+        PFeedback inner -> do
           innerRes <- rewriteOnce tt rules inner
           case innerRes of
             Nothing -> go rest
             Just inner' -> do
-              let edge' = edge { ePayload = PFeedback spec inner' }
+              let edge' = edge { ePayload = PFeedback inner' }
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
               canon <- renumberDiagram diag'
               pure (Just canon)
@@ -127,13 +123,7 @@ rewriteAll tt cap rules diag = do
           if dMode (rrLHS r) /= dMode diag'
             then go acc rs
             else do
-              matches <-
-                findAllMatchesWithVars
-                  tt'
-                  (S.fromList (rrTyVars r))
-                  (S.fromList (rrIxVars r))
-                  (rrLHS r)
-                  diag'
+              matches <- findAllMatches (mkMatchConfig tt' r) (rrLHS r) diag'
               applied <- foldl collect (Right []) matches
               canon <- mapM renumberDiagram applied
               go (acc <> canon) rs
@@ -163,11 +153,11 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
           let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
           renumberDiagram diag')
         innerRes
-    PFeedback spec inner -> do
+    PFeedback inner -> do
       innerRes <- rewriteAll tt cap rules inner
       mapM
         (\d -> do
-          let edge' = edge { ePayload = PFeedback spec d }
+          let edge' = edge { ePayload = PFeedback d }
           let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
           renumberDiagram diag')
         innerRes
@@ -206,7 +196,7 @@ applyMatch tt rule match host = do
   host1 <- deleteMatchedEdges hostNorm (M.elems (mEdgeMap match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPortMap match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs
-  host3 <- insertDiagram host2 rhsShift
+  host3 <- unionDiagram host2 rhsShift
   let lhsBoundary = dIn lhs <> dOut lhs
   let rhsBoundary = dIn rhsShift <> dOut rhsShift
   if length lhsBoundary /= length rhsBoundary
@@ -231,29 +221,12 @@ applyMatch tt rule match host = do
           pure (diag', seen)
 
 instantiateBinderMetas :: M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
-instantiateBinderMetas binderSub diag =
-  fmap (\edges' -> diag { dEdges = edges' }) (traverseEdges (dEdges diag))
+instantiateBinderMetas binderSub =
+  traverseDiagram pure pure onBinderArg
   where
-    traverseEdges edges =
-      fmap IM.fromList
-        (mapM
-          (\(k, edge) -> do
-            payload' <- traversePayload (ePayload edge)
-            pure (k, edge { ePayload = payload' }))
-          (IM.toList edges))
-
-    traversePayload payload =
-      case payload of
-        PBox name inner -> PBox name <$> instantiateBinderMetas binderSub inner
-        PFeedback spec inner -> PFeedback spec <$> instantiateBinderMetas binderSub inner
-        PSplice x -> Right (PSplice x)
-        PGen gen attrs bargs -> do
-          bargs' <- mapM traverseBinderArg bargs
-          Right (PGen gen attrs bargs')
-
-    traverseBinderArg barg =
+    onBinderArg barg =
       case barg of
-        BAConcrete inner -> BAConcrete <$> instantiateBinderMetas binderSub inner
+        BAConcrete inner -> Right (BAConcrete inner)
         BAMeta x ->
           case M.lookup x binderSub of
             Nothing -> Left "rewriteOnce: RHS uses uncaptured binder meta"
@@ -277,7 +250,7 @@ expandSplices binderSub diag0 = do
     recursePayload payload =
       case payload of
         PBox name inner -> PBox name <$> expandSplices binderSub inner
-        PFeedback spec inner -> PFeedback spec <$> expandSplices binderSub inner
+        PFeedback inner -> PFeedback <$> expandSplices binderSub inner
         PSplice x -> Right (PSplice x)
         PGen gen attrs bargs -> do
           bargs' <- mapM recurseBinderArg bargs
@@ -308,7 +281,7 @@ expandSplices binderSub diag0 = do
             else Right ()
           diagNoEdge <- deleteEdgeKeepPorts diag edgeKey edge
           let capturedShift = shiftDiagram (dNextPort diagNoEdge) (dNextEdge diagNoEdge) captured
-          diagInserted <- insertDiagram diagNoEdge capturedShift
+          diagInserted <- unionDiagram diagNoEdge capturedShift
           let splicePairs = zip (eIns edge) (dIn capturedShift) <> zip (eOuts edge) (dOut capturedShift)
           (diagMerged, _) <- foldl mergePair (Right (diagInserted, M.empty)) splicePairs
           validateDiagram diagMerged
@@ -343,13 +316,11 @@ deleteEdgeKeepPorts diag edgeKey edge = do
   pure diag3
   where
     clearConsumers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (portKey p) mp
-          portKey (PortId k) = k
+      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
        in d { dCons = foldl clearOne (dCons d) ports }
 
     clearProducers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (portKey p) mp
-          portKey (PortId k) = k
+      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
        in d { dProd = foldl clearOne (dProd d) ports }
 
 requirePortType :: Diagram -> PortId -> Either Text TypeExpr
@@ -369,24 +340,20 @@ deleteMatchedEdges diag edgeIds = foldl step (Right diag) edgeIds
   where
     step acc eid = do
       d <- acc
-      case IM.lookup (edgeKey eid) (dEdges d) of
+      case IM.lookup (unEdgeId eid) (dEdges d) of
         Nothing -> Left "rewriteOnce: missing edge"
         Just edge -> do
-          let d1 = d { dEdges = IM.delete (edgeKey eid) (dEdges d) }
+          let d1 = d { dEdges = IM.delete (unEdgeId eid) (dEdges d) }
           let d2 = clearConsumers d1 (eIns edge)
           let d3 = clearProducers d2 (eOuts edge)
           pure d3
 
-    edgeKey (EdgeId k) = k
-
     clearConsumers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (portKey p) mp
-          portKey (PortId k) = k
+      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
        in d { dCons = foldl clearOne (dCons d) ports }
 
     clearProducers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (portKey p) mp
-          portKey (PortId k) = k
+      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
        in d { dProd = foldl clearOne (dProd d) ports }
 
 deleteMatchedPorts :: Diagram -> [PortId] -> M.Map PortId PortId -> Either Text Diagram
@@ -400,8 +367,7 @@ deleteMatchedPorts diag ports portMap = foldl step (Right diag) ports
 
 deletePort :: Diagram -> PortId -> Either Text Diagram
 deletePort diag pid =
-  let k = portKey pid
-      portKey (PortId n) = n
+  let k = unPortId pid
    in case (IM.lookup k (dProd diag), IM.lookup k (dCons diag)) of
         (Just Nothing, Just Nothing) ->
           let d1 =
@@ -415,24 +381,6 @@ deletePort diag pid =
                   }
            in Right d1
         _ -> Left "rewriteOnce: cannot delete port with remaining incidence"
-
-insertDiagram :: Diagram -> Diagram -> Either Text Diagram
-insertDiagram base extra = do
-  portTy <- unionDisjointIntMap "insertDiagram ports" (dPortTy base) (dPortTy extra)
-  portLabel <- unionDisjointIntMap "insertDiagram labels" (dPortLabel base) (dPortLabel extra)
-  prod <- unionDisjointIntMap "insertDiagram producers" (dProd base) (dProd extra)
-  cons <- unionDisjointIntMap "insertDiagram consumers" (dCons base) (dCons extra)
-  edges <- unionDisjointIntMap "insertDiagram edges" (dEdges base) (dEdges extra)
-  pure
-    base
-      { dPortTy = portTy
-      , dPortLabel = portLabel
-      , dProd = prod
-      , dCons = cons
-      , dEdges = edges
-      , dNextPort = dNextPort extra
-      , dNextEdge = dNextEdge extra
-      }
 
 rulesFromDoctrine :: Doctrine -> [RewriteRule]
 rulesFromDoctrine doc = rulesFromPolicy UseAllOriented (dCells2 doc)
@@ -485,17 +433,20 @@ rejectSplice label diag =
     else Right ()
 
 hasSplice :: Diagram -> Bool
-hasSplice diag =
-  any edgeHasSplice (IM.elems (dEdges diag))
+hasSplice =
+  getAny . foldDiagram (\_ -> mempty) onPayload (\_ -> mempty)
   where
-    edgeHasSplice edge =
-      case ePayload edge of
-        PSplice _ -> True
-        PBox _ inner -> hasSplice inner
-        PFeedback _ inner -> hasSplice inner
-        PGen _ _ bargs -> any binderHasSplice bargs
+    onPayload payload =
+      Any $
+        case payload of
+          PSplice _ -> True
+          _ -> False
 
-    binderHasSplice barg =
-      case barg of
-        BAConcrete inner -> hasSplice inner
-        BAMeta _ -> False
+mkMatchConfig :: TypeTheory -> RewriteRule -> MatchConfig
+mkMatchConfig tt rule =
+  MatchConfig
+    { mcTheory = tt
+    , mcTyFlex = S.fromList (rrTyVars rule)
+    , mcIxFlex = S.fromList (rrIxVars rule)
+    , mcAttrFlex = freeAttrVarsDiagram (rrLHS rule)
+    }

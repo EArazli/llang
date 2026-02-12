@@ -52,7 +52,7 @@ hasFeedback diag =
   where
     isFeedback edge =
       case ePayload edge of
-        PFeedback _ _ -> True
+        PFeedback _ -> True
         _ -> False
 
 

@@ -12,13 +12,14 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..), TypeArg(..))
-import Strat.Poly.UnifyTy (applySubstTyLegacy, normalizeSubstLegacy)
+import Strat.Poly.UnifyTy (Subst(..), applySubstTy, normalizeSubst)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Names (BoxName(..))
 import Strat.Poly.Diagram
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
+import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 import Strat.Poly.Graph
   ( Diagram(..)
   , EdgeId(..)
@@ -31,6 +32,8 @@ import Strat.Poly.Graph
   , validateDiagram
   , unionDisjointIntMap
   , diagramIsoEq
+  , unPortId
+  , unEdgeId
   )
 import Test.Poly.Helpers (mkModes)
 
@@ -94,7 +97,7 @@ testCompMismatch = do
   let b = tcon mode "B" []
   let g = idD mode [a]
   let f = idD mode [b]
-  case compD (mkModes [mode]) g f of
+  case compDTT (modeOnlyTypeTheory (mkModes [mode])) g f of
     Left _ -> pure ()
     Right _ -> assertFailure "expected boundary mismatch"
 
@@ -187,22 +190,28 @@ testApplySubstChase = do
   let a = tvar mode "a"
   let b = tvar mode "b"
   let c = tcon mode "C" []
-  let subst = M.fromList [(a, TVar b), (b, c)]
-  applySubstTyLegacy (mkModes [mode]) subst (TVar a) @?= c
+  let tt = modeOnlyTypeTheory (mkModes [mode])
+  let subst = Subst (M.fromList [(a, TVar b), (b, c)]) M.empty
+  ty <- require (applySubstTy tt subst (TVar a))
+  ty @?= c
 
 testApplySubstCycle :: Assertion
 testApplySubstCycle = do
   let mode = ModeName "M"
   let a = tvar mode "a"
   let b = tvar mode "b"
-  let subst = M.fromList [(a, TVar b), (b, TVar a)]
-  applySubstTyLegacy (mkModes [mode]) subst (TVar a) @?= TVar a
+  let tt = modeOnlyTypeTheory (mkModes [mode])
+  let subst = Subst (M.fromList [(a, TVar b), (b, TVar a)]) M.empty
+  ty <- require (applySubstTy tt subst (TVar a))
+  ty @?= TVar a
 
 testNormalizeSubstIdentity :: Assertion
 testNormalizeSubstIdentity = do
   let mode = ModeName "M"
   let a = tvar mode "a"
-  normalizeSubstLegacy (mkModes [mode]) (M.fromList [(a, TVar a)]) @?= M.empty
+  let tt = modeOnlyTypeTheory (mkModes [mode])
+  subst <- require (normalizeSubst tt (Subst (M.fromList [(a, TVar a)]) M.empty))
+  sTy subst @?= M.empty
 
 testDiagramIsoBoxName :: Assertion
 testDiagramIsoBoxName = do
@@ -411,30 +420,30 @@ permuteIsoDiagram diag = do
       let p3 = PortId 3
       let e0 = EdgeId 0
       let e1 = EdgeId 1
-      let portMap = IM.fromList [ (portKey p2, p3), (portKey p3, p2) ]
-      let edgeMap = IM.fromList [ (edgeKey e0, e1), (edgeKey e1, e0) ]
+      let portMap = IM.fromList [(unPortId p2, p3), (unPortId p3, p2)]
+      let edgeMap = IM.fromList [(unEdgeId e0, e1), (unEdgeId e1, e0)]
       let remapPort pid =
-            case IM.lookup (portKey pid) portMap of
+            case IM.lookup (unPortId pid) portMap of
               Just pid' -> pid'
               Nothing -> pid
       let remapEdge eid =
-            case IM.lookup (edgeKey eid) edgeMap of
+            case IM.lookup (unEdgeId eid) edgeMap of
               Just eid' -> eid'
               Nothing -> eid
       let dPortTy' = IM.fromList
-            [ (portKey (remapPort (PortId k)), ty)
+            [ (unPortId (remapPort (PortId k)), ty)
             | (k, ty) <- IM.toList (dPortTy diag)
             ]
       let dPortLabel' = IM.fromList
-            [ (portKey (remapPort (PortId k)), label)
+            [ (unPortId (remapPort (PortId k)), label)
             | (k, label) <- IM.toList (dPortLabel diag)
             ]
       let dProd' = IM.fromList
-            [ (portKey (remapPort (PortId k)), fmap remapEdge prod)
+            [ (unPortId (remapPort (PortId k)), fmap remapEdge prod)
             | (k, prod) <- IM.toList (dProd diag)
             ]
       let dCons' = IM.fromList
-            [ (portKey (remapPort (PortId k)), fmap remapEdge cons)
+            [ (unPortId (remapPort (PortId k)), fmap remapEdge cons)
             | (k, cons) <- IM.toList (dCons diag)
             ]
       let remapEdgeRec edge =
@@ -444,7 +453,7 @@ permuteIsoDiagram diag = do
               , eOuts = map remapPort (eOuts edge)
               }
       let dEdges' = IM.fromList
-            [ (edgeKey (remapEdge (EdgeId k)), remapEdgeRec edge)
+            [ (unEdgeId (remapEdge (EdgeId k)), remapEdgeRec edge)
             | (k, edge) <- IM.toList (dEdges diag)
             ]
       let diag' = diag
@@ -459,6 +468,3 @@ permuteIsoDiagram diag = do
       validateDiagram diag'
       pure diag'
     _ -> Left "unexpected boundary shape for permutation"
-  where
-    portKey (PortId k) = k
-    edgeKey (EdgeId k) = k

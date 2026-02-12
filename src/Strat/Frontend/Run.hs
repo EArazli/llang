@@ -269,7 +269,7 @@ ensureAcyclicIfRequired doc diag =
     checkInner edge =
       case ePayload edge of
         PBox _ inner -> ensureAcyclicIfRequired doc inner
-        PFeedback _ body -> ensureAcyclicIfRequired doc body
+        PFeedback body -> ensureAcyclicIfRequired doc body
         _ -> Right ()
 
 
@@ -526,7 +526,7 @@ evalArtifactDiagram diag = do
             _ -> Left "extract FileTree: concatTree expects 2 inputs"
         PGen _ _ _ -> Left "extract value: unsupported generator"
         PBox _ _ -> Left "extract value: boxes are not supported"
-        PFeedback _ _ -> Left "extract value: feedback is not supported"
+        PFeedback _ -> Left "extract value: feedback is not supported"
         PSplice _ -> Left "extract value: splice is not supported"
 
 
@@ -634,7 +634,7 @@ renderSSA ssa =
             <> renderPorts outs
             <> " innerSteps="
             <> T.pack (show (length (ssaSteps inner)))
-        StepFeedback eid _ body ins outs ->
+        StepFeedback eid body ins outs ->
           "  feedback "
             <> renderEdgeId eid
             <> " in="

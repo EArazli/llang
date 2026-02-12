@@ -16,13 +16,12 @@ import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Poly.Attr
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), lookupTypeSig, gdPlainDom, doctrineTypeTheory)
 import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
-import Strat.Poly.Diagram (Diagram(..), idD, unionDiagram, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
+import Strat.Poly.Diagram (Diagram(..), idD, unionDiagram, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagramTT)
 import Strat.Poly.Graph
   ( PortId(..)
   , Edge(..)
   , BinderMetaVar(..)
   , BinderArg(..)
-  , FeedbackSpec(..)
   , EdgePayload(..)
   , ePayload
   , emptyDiagram
@@ -42,22 +41,27 @@ import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurface
 import Strat.Poly.Surface.Spec
 import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Context, typeMode)
 import qualified Strat.Poly.TypeExpr as Ty
+import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 import qualified Strat.Poly.UnifyTy as U
 
 
-type Subst = U.TyOnlySubst
+type Subst = U.Subst
 
-applySubstTy :: ModeTheory -> Subst -> TypeExpr -> TypeExpr
-applySubstTy = U.applySubstTyLegacy
+applySubstTy :: ModeTheory -> Subst -> TypeExpr -> Either Text TypeExpr
+applySubstTy mt =
+  U.applySubstTy (modeOnlyTypeTheory mt)
 
-applySubstCtx :: ModeTheory -> Subst -> Context -> Context
-applySubstCtx = U.applySubstCtxLegacy
+applySubstCtx :: ModeTheory -> Subst -> Context -> Either Text Context
+applySubstCtx mt =
+  U.applySubstCtx (modeOnlyTypeTheory mt)
 
 unifyTyFlex :: ModeTheory -> S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text Subst
-unifyTyFlex = U.unifyTyFlexLegacy
+unifyTyFlex mt flex =
+  U.unifyTyFlex (modeOnlyTypeTheory mt) [] flex S.empty U.emptySubst
 
-composeSubst :: ModeTheory -> Subst -> Subst -> Subst
-composeSubst = U.composeSubstLegacy
+composeSubst :: ModeTheory -> Subst -> Subst -> Either Text Subst
+composeSubst mt =
+  U.composeSubst (modeOnlyTypeTheory mt)
 
 freeTyVarsTy :: TypeExpr -> S.Set TyVar
 freeTyVarsTy ty =
@@ -169,7 +173,7 @@ gensInDiagram diag =
       case ePayload edge of
         PGen g _ bargs -> S.insert g (S.unions (map binderGens bargs))
         PBox _ inner -> gensInDiagram inner
-        PFeedback _ inner -> gensInDiagram inner
+        PFeedback inner -> gensInDiagram inner
         PSplice _ -> S.empty
 
     binderGens barg =
@@ -187,7 +191,7 @@ surfaceMeasure sigma diag =
           let own = if g `S.member` sigma then 1 else 0
            in own + sum (map binderMeasure bargs)
         PBox _ inner -> surfaceMeasure sigma inner
-        PFeedback _ inner -> surfaceMeasure sigma inner
+        PFeedback inner -> surfaceMeasure sigma inner
         PSplice _ -> 0
 
     binderMeasure barg =
@@ -204,7 +208,7 @@ data ElabEnv = ElabEnv
   } deriving (Eq, Show)
 
 initEnv :: Either Text ElabEnv
-initEnv = Right (ElabEnv M.empty M.empty)
+initEnv = Right (ElabEnv M.empty U.emptySubst)
 
 elabSurfaceTypeExpr :: Doctrine -> ModeName -> RawPolyTypeExpr -> Either Text TypeExpr
 elabSurfaceTypeExpr doc mode expr =
@@ -386,19 +390,22 @@ dedupe = go S.empty
       | x `S.member` seen = go seen xs
       | otherwise = x : go (S.insert x seen) xs
 
-applySubstSurf :: ModeTheory -> Subst -> SurfDiag -> SurfDiag
-applySubstSurf mt subst sd =
-  sd { sdDiag = applySubstDiagram mt (U.fromTyOnlySubst subst) (sdDiag sd) }
+applySubstSurf :: ModeTheory -> Subst -> SurfDiag -> Either Text SurfDiag
+applySubstSurf mt subst sd = do
+  diag' <- applySubstDiagramTT (modeOnlyTypeTheory mt) subst (sdDiag sd)
+  pure sd { sdDiag = diag' }
 
 unifyCtxFlex :: ModeTheory -> S.Set TyVar -> Context -> Context -> Either Text Subst
 unifyCtxFlex mt flex ctx1 ctx2
   | length ctx1 /= length ctx2 = Left "surface: context length mismatch"
-  | otherwise = foldl step (Right M.empty) (zip ctx1 ctx2)
+  | otherwise = foldl step (Right U.emptySubst) (zip ctx1 ctx2)
   where
     step acc (a, b) = do
       s <- acc
-      s' <- unifyTyFlex mt flex (applySubstTy mt s a) (applySubstTy mt s b)
-      pure (composeSubst mt s' s)
+      a' <- applySubstTy mt s a
+      b' <- applySubstTy mt s b
+      s' <- unifyTyFlex mt flex a' b'
+      composeSubst mt s' s
 
 
 -- Structural discipline
@@ -497,7 +504,7 @@ prepareBinder doc mode mt env params (Just decl) =
       if typeMode tyAnn /= mode
         then liftEither (Left "surface: binder type must be in surface mode")
         else pure ()
-      let ty = applySubstTy mt (eeTypeSubst env) tyAnn
+      ty <- liftEither (applySubstTy mt (eeTypeSubst env) tyAnn)
       let env' =
             env
               { eeVars = M.insert varName ty (eeVars env)
@@ -527,9 +534,9 @@ requireTypeParam params cap =
 
 elabVarRef :: ModeTheory -> Subst -> Text -> TypeExpr -> Fresh SurfDiag
 elabVarRef mt subst name ty = do
-  let ty' = applySubstTy mt subst ty
+  ty' <- liftEither (applySubstTy mt subst ty)
   let base0 = varSurf name ty'
-  pure (applySubstSurf mt subst base0)
+  liftEither (applySubstSurf mt subst base0)
 
 elabZeroArgGen :: ModeTheory -> Doctrine -> ModeName -> ElabEnv -> Text -> Fresh SurfDiag
 elabZeroArgGen mt doc mode env name = do
@@ -588,7 +595,7 @@ evalTemplate menv doc mt mode ops env paramMap subst childList templ =
                 else pure (emptySurf (tdDiagram td))
     TId ctx -> do
       ctx'0 <- liftEither (mapM (elabSurfaceTypeExpr doc mode) ctx)
-      let ctx' = map (applySubstTy mt subst) ctx'0
+      ctx' <- liftEither (mapM (applySubstTy mt subst) ctx'0)
       pure (emptySurf (idD mode ctx'))
     TGen ref mArgs mAttrArgs mBinderArgs -> do
       genName <-
@@ -605,7 +612,12 @@ evalTemplate menv doc mt mode ops env paramMap subst childList templ =
           Just args -> do
             tys <- liftEither (mapM (elabSurfaceTypeExpr doc mode) args)
             pure (Just tys)
-      let args' = fmap (map (applySubstTy mt subst)) args0
+      args' <-
+        liftEither
+          ( case args0 of
+              Nothing -> Right Nothing
+              Just args -> Just <$> mapM (applySubstTy mt subst) args
+          )
       attrs <- liftEither (elabTemplateGenAttrs doc gen paramMap mAttrArgs)
       bargs <- evalTemplateBinderArgs menv doc mt mode ops env paramMap subst childList mBinderArgs
       diag <- genDFromDecl mt mode env gen args' attrs bargs
@@ -656,8 +668,9 @@ evalTemplateBinderArgs menv doc mt mode ops env paramMap subst children (Just ar
 buildTypeSubst :: Doctrine -> ModeName -> ElabEnv -> M.Map Text SurfaceParam -> Either Text Subst
 buildTypeSubst doc mode env paramMap = do
   pairs <- mapM toPair (M.toList paramMap)
-  let local = M.fromList (concat pairs)
-  pure (M.union local (eeTypeSubst env))
+  let localTy = M.fromList (concat pairs)
+      envSub = eeTypeSubst env
+  pure envSub { U.sTy = M.union localTy (U.sTy envSub) }
   where
     toPair (name, param) =
       case param of
@@ -804,7 +817,7 @@ unifyVarType mt varName ty sd =
         Just tyUse -> do
           let flex = S.union (freeTyVarsTy tyUse) (freeTyVarsTy ty)
           subst <- liftEither (unifyTyFlex mt flex tyUse ty)
-          pure (applySubstSurf mt subst sd)
+          liftEither (applySubstSurf mt subst sd)
 
 connectVar :: Doctrine -> ModeName -> StructuralOps -> Text -> PortId -> TypeExpr -> SurfDiag -> Bool -> Fresh SurfDiag
 connectVar _doc _mode ops varName source ty sd sourceIsInput = do
@@ -931,39 +944,35 @@ genDFromDecl mt mode env gen mArgs attrs bargs = do
   let tyVars = gdTyVars gen
   let subst0 = eeTypeSubst env
   renameSubst <- freshSubst tyVars
-  let dom0 = applySubstCtx mt renameSubst (gdPlainDom gen)
-  let cod0 = applySubstCtx mt renameSubst (gdCod gen)
-  let slots0 = map (applySubstBinderSigTy mt renameSubst) [ bs | InBinder bs <- gdDom gen ]
-  let (dom1, cod1, slots1) =
-        ( applySubstCtx mt subst0 dom0
-        , applySubstCtx mt subst0 cod0
-        , map (applySubstBinderSigTy mt subst0) slots0
-        )
+  dom0 <- liftEither (applySubstCtx mt renameSubst (gdPlainDom gen))
+  cod0 <- liftEither (applySubstCtx mt renameSubst (gdCod gen))
+  slots0 <- liftEither (mapM (applySubstBinderSigTy mt renameSubst) [ bs | InBinder bs <- gdDom gen ])
+  dom1 <- liftEither (applySubstCtx mt subst0 dom0)
+  cod1 <- liftEither (applySubstCtx mt subst0 cod0)
+  slots1 <- liftEither (mapM (applySubstBinderSigTy mt subst0) slots0)
   (dom2, cod2, slots2) <-
     case mArgs of
       Nothing -> pure (dom1, cod1, slots1)
       Just args -> do
-        let args' = map (applySubstTy mt subst0) args
+        args' <- liftEither (mapM (applySubstTy mt subst0) args)
         if length args' /= length tyVars
           then liftEither (Left "surface: generator type argument mismatch")
           else do
             freshVars <- liftEither (extractFreshVars tyVars renameSubst)
-            let subst = M.fromList (zip freshVars args')
-            pure
-              ( applySubstCtx mt subst dom1
-              , applySubstCtx mt subst cod1
-              , map (applySubstBinderSigTy mt subst) slots1
-              )
+            let subst = U.Subst (M.fromList (zip freshVars args')) M.empty
+            dom2' <- liftEither (applySubstCtx mt subst dom1)
+            cod2' <- liftEither (applySubstCtx mt subst cod1)
+            slots2' <- liftEither (mapM (applySubstBinderSigTy mt subst) slots1)
+            pure (dom2', cod2', slots2')
   (domFinal, codFinal, bargsFinal) <- liftEither (checkBinderArgs mt dom2 cod2 slots2 bargs)
   liftEither (buildGenDiagram mode domFinal codFinal (gdName gen) attrs bargsFinal)
 
-applySubstBinderSigTy :: ModeTheory -> Subst -> BinderSig -> BinderSig
-applySubstBinderSigTy mt subst bs =
-  bs
-    { bsIxCtx = map (applySubstTy mt subst) (bsIxCtx bs)
-    , bsDom = applySubstCtx mt subst (bsDom bs)
-    , bsCod = applySubstCtx mt subst (bsCod bs)
-    }
+applySubstBinderSigTy :: ModeTheory -> Subst -> BinderSig -> Either Text BinderSig
+applySubstBinderSigTy mt subst bs = do
+  ixCtx' <- mapM (applySubstTy mt subst) (bsIxCtx bs)
+  dom' <- applySubstCtx mt subst (bsDom bs)
+  cod' <- applySubstCtx mt subst (bsCod bs)
+  pure bs { bsIxCtx = ixCtx', bsDom = dom', bsCod = cod' }
 
 checkBinderArgs
   :: ModeTheory
@@ -981,36 +990,37 @@ checkBinderArgs mt dom cod slots args =
       if length slots /= length args
         then Left "surface: generator binder argument mismatch"
         else do
-          (substFinal, checked0) <- foldM step (M.empty, []) (zip slots args)
-          let domFinal = applySubstCtx mt substFinal dom
-          let codFinal = applySubstCtx mt substFinal cod
-          let checked = map (applySubstBinderArg mt substFinal) checked0
+          (substFinal, checked0) <- foldM step (U.emptySubst, []) (zip slots args)
+          domFinal <- applySubstCtx mt substFinal dom
+          codFinal <- applySubstCtx mt substFinal cod
+          checked <- mapM (applySubstBinderArg mt substFinal) checked0
           Right (domFinal, codFinal, checked)
   where
     step (substAcc, out) (slot0, barg0) =
       case barg0 of
         BAMeta _ -> Right (substAcc, out <> [barg0])
         BAConcrete inner0 -> do
-          let slot = applySubstBinderSigTy mt substAcc slot0
-          let inner = applySubstDiagram mt (U.fromTyOnlySubst substAcc) inner0
+          slot <- applySubstBinderSigTy mt substAcc slot0
+          inner <- applySubstDiagramTT (modeOnlyTypeTheory mt) substAcc inner0
           domArg <- diagramDom inner
           let flexDom = S.union (freeTyVarsCtx (bsDom slot)) (freeTyVarsCtx domArg)
           sDom <- unifyCtxFlex mt flexDom (bsDom slot) domArg
-          let subst1 = composeSubst mt sDom substAcc
-          let slot1 = applySubstBinderSigTy mt sDom slot
-          let inner1 = applySubstDiagram mt (U.fromTyOnlySubst sDom) inner
+          subst1 <- composeSubst mt sDom substAcc
+          slot1 <- applySubstBinderSigTy mt sDom slot
+          inner1 <- applySubstDiagramTT (modeOnlyTypeTheory mt) sDom inner
           codArg <- diagramCod inner1
           let flexCod = S.union (freeTyVarsCtx (bsCod slot1)) (freeTyVarsCtx codArg)
           sCod <- unifyCtxFlex mt flexCod (bsCod slot1) codArg
-          let subst2 = composeSubst mt sCod subst1
-          let inner2 = applySubstDiagram mt (U.fromTyOnlySubst sCod) inner1
+          subst2 <- composeSubst mt sCod subst1
+          inner2 <- applySubstDiagramTT (modeOnlyTypeTheory mt) sCod inner1
           Right (subst2, out <> [BAConcrete inner2])
 
-applySubstBinderArg :: ModeTheory -> Subst -> BinderArg -> BinderArg
+applySubstBinderArg :: ModeTheory -> Subst -> BinderArg -> Either Text BinderArg
 applySubstBinderArg mt subst barg =
   case barg of
-    BAMeta _ -> barg
-    BAConcrete inner -> BAConcrete (applySubstDiagram mt (U.fromTyOnlySubst subst) inner)
+    BAMeta _ -> Right barg
+    BAConcrete inner ->
+      BAConcrete <$> applySubstDiagramTT (modeOnlyTypeTheory mt) subst inner
 
 buildGenDiagram :: ModeName -> Context -> Context -> GenName -> AttrMap -> [BinderArg] -> Either Text Diagram
 buildGenDiagram mode dom cod gen attrs bargs = do
@@ -1037,8 +1047,8 @@ compSurf mt a b = do
   domB <- diagramDom (sdDiag b)
   let flex = S.union (freeTyVarsDiagram (sdDiag a)) (freeTyVarsDiagram (sdDiag b))
   subst <- unifyCtxFlex mt flex codA domB
-  let a' = applySubstSurf mt subst a
-  let b' = applySubstSurf mt subst b
+  a' <- applySubstSurf mt subst a
+  b' <- applySubstSurf mt subst b
   let bShift = shiftDiagram (dNextPort (sdDiag a')) (dNextEdge (sdDiag a')) (sdDiag b')
   let usesShift = shiftUses (dNextPort (sdDiag a')) (sdUses b')
   let tagsShift = shiftTags (dNextPort (sdDiag a')) (sdTags b')
@@ -1095,8 +1105,7 @@ loopSurf sd =
         else Left "loop: body first output type must match input type"
       outTys <- mapM (requirePortTy (sdDiag sd)) pOuts
       let (outs, diag0) = allocPorts outTys (emptyDiagram (dMode (sdDiag sd)) (dIxCtx (sdDiag sd)))
-      let spec = FeedbackSpec { fbTy = stateInTy, fbOutArity = length pOuts }
-      diag1 <- addEdgePayload (PFeedback spec (sdDiag sd)) [] outs diag0
+      diag1 <- addEdgePayload (PFeedback (sdDiag sd)) [] outs diag0
       let diag2 = diag1 { dIn = [], dOut = outs }
       validateDiagram diag2
       let mapping = M.fromList (zip pOuts outs)
@@ -1170,14 +1179,14 @@ evalFresh (Fresh f) = fmap fst (f 0)
 freshSubst :: [TyVar] -> Fresh Subst
 freshSubst vars = do
   pairs <- mapM freshVar vars
-  pure (M.fromList pairs)
+  pure (U.Subst (M.fromList pairs) M.empty)
 
 extractFreshVars :: [TyVar] -> Subst -> Either Text [TyVar]
 extractFreshVars vars subst =
   mapM lookupVar vars
   where
     lookupVar v =
-      case M.lookup v subst of
+      case M.lookup v (U.sTy subst) of
         Just (Ty.TVar v') -> Right v'
         _ -> Left "internal error: expected fresh type variable"
 

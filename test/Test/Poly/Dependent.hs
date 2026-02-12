@@ -24,7 +24,7 @@ import Strat.Poly.TypeExpr
 import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..), IxRule(..), normalizeIx)
 import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), defaultIxFuel, modeOnlyTypeTheory)
 import Strat.Poly.UnifyTy (unifyIx, unifyTyFlex, emptySubst, sIx)
-import Strat.Poly.Match (findAllMatchesWithVars)
+import Strat.Poly.Match (MatchConfig(..), findAllMatches)
 import Strat.Poly.Graph
   ( Diagram(..)
   , BinderMetaVar(..)
@@ -164,7 +164,8 @@ testMatchIxCtxCompatibility = do
   let host = (idD modeM [aTy]) { dIxCtx = [boolTy] }
   _ <- require (validateDiagram lhs)
   _ <- require (validateDiagram host)
-  matches <- require (findAllMatchesWithVars tt S.empty S.empty lhs host)
+  let cfg = MatchConfig tt S.empty S.empty S.empty
+  matches <- require (findAllMatches cfg lhs host)
   assertBool "expected no matches for incompatible index contexts" (null matches)
 
 testIsoMatchDropsSubstFailure :: Assertion

@@ -150,6 +150,7 @@ library
   other-modules:
       Strat.DSL.Template
       Strat.Frontend.Compile
+      Strat.Poly.Traversal
       Strat.Poly.TypePretty
   hs-source-dirs:
       src

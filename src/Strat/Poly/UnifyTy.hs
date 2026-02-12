@@ -11,15 +11,6 @@ module Strat.Poly.UnifyTy
   , applySubstCtx
   , normalizeSubst
   , composeSubst
-  , TyOnlySubst
-  , fromTyOnlySubst
-  , toTyOnlySubst
-  , applySubstTyLegacy
-  , applySubstCtxLegacy
-  , unifyTyFlexLegacy
-  , unifyCtxLegacy
-  , normalizeSubstLegacy
-  , composeSubstLegacy
   ) where
 
 import Data.Text (Text)
@@ -27,7 +18,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.IndexTheory
-import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModeTheory)
+import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..))
 import Strat.Poly.TypeExpr
 import Strat.Poly.TypeTheory
 
@@ -39,14 +30,6 @@ data Subst = Subst
 
 emptySubst :: Subst
 emptySubst = Subst M.empty M.empty
-
-type TyOnlySubst = M.Map TyVar TypeExpr
-
-fromTyOnlySubst :: TyOnlySubst -> Subst
-fromTyOnlySubst tySubst = Subst tySubst M.empty
-
-toTyOnlySubst :: Subst -> TyOnlySubst
-toTyOnlySubst = sTy
 
 unifyTy :: TypeTheory -> TypeExpr -> TypeExpr -> Either Text Subst
 unifyTy tt t1 t2 =
@@ -393,38 +376,6 @@ composeSubst tt s2 s1 = do
       sort' <- applySubstTy tt s2 (ixvSort v)
       t' <- applySubstIx tt s2 sort' t
       pure (v { ixvSort = sort' }, t')
-
-applySubstTyLegacy :: ModeTheory -> TyOnlySubst -> TypeExpr -> TypeExpr
-applySubstTyLegacy mt subst ty =
-  case applySubstTy (modeOnlyTypeTheory mt) (fromTyOnlySubst subst) ty of
-    Right ty' -> ty'
-    Left _ -> ty
-
-applySubstCtxLegacy :: ModeTheory -> TyOnlySubst -> Context -> Context
-applySubstCtxLegacy mt subst = map (applySubstTyLegacy mt subst)
-
-unifyTyFlexLegacy :: ModeTheory -> S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text TyOnlySubst
-unifyTyFlexLegacy mt flex t1 t2 = do
-  subst <- unifyTyFlex (modeOnlyTypeTheory mt) [] flex S.empty emptySubst t1 t2
-  pure (toTyOnlySubst subst)
-
-unifyCtxLegacy :: ModeTheory -> Context -> Context -> Either Text TyOnlySubst
-unifyCtxLegacy mt ctx1 ctx2 = do
-  let flex = S.unions (map freeTyVarsType (ctx1 <> ctx2))
-  subst <- unifyCtx (modeOnlyTypeTheory mt) [] flex S.empty ctx1 ctx2
-  pure (toTyOnlySubst subst)
-
-normalizeSubstLegacy :: ModeTheory -> TyOnlySubst -> TyOnlySubst
-normalizeSubstLegacy mt subst =
-  case normalizeSubst (modeOnlyTypeTheory mt) (fromTyOnlySubst subst) of
-    Right s -> toTyOnlySubst s
-    Left _ -> subst
-
-composeSubstLegacy :: ModeTheory -> TyOnlySubst -> TyOnlySubst -> TyOnlySubst
-composeSubstLegacy mt s2 s1 =
-  case composeSubst (modeOnlyTypeTheory mt) (fromTyOnlySubst s2) (fromTyOnlySubst s1) of
-    Right s -> toTyOnlySubst s
-    Left _ -> s1
 
 inferExpectedIxSort :: TypeTheory -> [TypeExpr] -> Subst -> IxTerm -> IxTerm -> Either Text TypeExpr
 inferExpectedIxSort tt ixCtx subst lhs rhs =
