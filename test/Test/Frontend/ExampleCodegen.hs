@@ -15,6 +15,7 @@ tests =
   testGroup
     "Frontend.ExampleCodegen"
     [ testCase "logic_full_adder_codegen main emits structured JavaScript" testLogicFullAdderMain
+    , testCase "logic_full_adder_codegen ssa shows attrs and producer links" testLogicFullAdderSsa
     ]
 
 
@@ -30,6 +31,17 @@ testLogicFullAdderMain = do
   assertBool "expected and emission" ("&&" `T.isInfixOf` out)
   assertBool "expected or emission" ("||" `T.isInfixOf` out)
   assertBool "expected cin lookup" ("env[\"cin\"]" `T.isInfixOf` out)
+
+testLogicFullAdderSsa :: Assertion
+testLogicFullAdderSsa = do
+  env <- requireIO =<< loadModule "examples/run/codegen/logic_full_adder_codegen.run.llang"
+  runDef <- require (selectRun env (Just "ssa"))
+  result <- require (runWithEnv env runDef)
+  let out = prOutput result
+  assertBool "expected var attribute for a" ("attrs={s=\"a\"}" `T.isInfixOf` out)
+  assertBool "expected var attribute for b" ("attrs={s=\"b\"}" `T.isInfixOf` out)
+  assertBool "expected xor step" (" xor " `T.isInfixOf` out)
+  assertBool "expected producer links in inputs" (" <- e" `T.isInfixOf` out)
 
 
 require :: Either T.Text a -> IO a

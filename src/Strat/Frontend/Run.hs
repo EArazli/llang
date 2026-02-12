@@ -14,6 +14,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
+import Data.List (findIndex)
 import Strat.Frontend.Loader (loadModule)
 import Strat.Frontend.Env
 import Strat.Frontend.Compile (compileSourceDiagram)
@@ -597,18 +598,107 @@ attrInt key attrs =
 renderSSA :: SSA -> Text
 renderSSA ssa =
   T.unlines
-    (["SSA " <> ssaBaseDoctrine ssa <> " {", "  steps = " <> T.pack (show (length (ssaSteps ssa)))]
-      <> map renderStep (ssaSteps ssa)
-      <> ["}"])
+    ( [ "SSA " <> ssaBaseDoctrine ssa <> " {"
+      , "  steps = " <> T.pack (show (length (ssaSteps ssa)))
+      , "  inputs = " <> renderPorts (ssaInputs ssa)
+      , "  outputs = " <> renderPorts (ssaOutputs ssa)
+      ]
+        <> map renderStep (ssaSteps ssa)
+        <> ["}"]
+    )
   where
+    diag = ssaOriginal ssa
+    inIndex = M.fromList (zip (ssaInputs ssa) [0 :: Int ..])
+
     renderStep st =
       case st of
-        StepGen eid gen _attrs _ins _outs _ ->
-          "  gen " <> T.pack (show eid) <> " " <> T.pack (show gen)
-        StepBox eid _ _ _ _ ->
-          "  box " <> T.pack (show eid)
-        StepFeedback eid _ _ _ _ ->
-          "  feedback " <> T.pack (show eid)
+        StepGen eid gen attrs ins outs binders ->
+          "  gen "
+            <> renderEdgeId eid
+            <> " "
+            <> renderGenName gen
+            <> renderAttrs attrs
+            <> " in="
+            <> renderInputs ins
+            <> " out="
+            <> renderPorts outs
+            <> renderBinderCount binders
+        StepBox eid box inner ins outs ->
+          "  box "
+            <> renderEdgeId eid
+            <> " "
+            <> renderBoxName box
+            <> " in="
+            <> renderInputs ins
+            <> " out="
+            <> renderPorts outs
+            <> " innerSteps="
+            <> T.pack (show (length (ssaSteps inner)))
+        StepFeedback eid _ body ins outs ->
+          "  feedback "
+            <> renderEdgeId eid
+            <> " in="
+            <> renderInputs ins
+            <> " out="
+            <> renderPorts outs
+            <> " bodySteps="
+            <> T.pack (show (length (ssaSteps body)))
+
+    renderGenName (GenName n) = n
+    renderBoxName (BoxName n) = n
+    renderEdgeId (EdgeId i) = "e" <> T.pack (show i)
+    renderPortId (PortId i) = "p" <> T.pack (show i)
+
+    renderPort pid =
+      let pidTxt = renderPortId pid
+          nm = M.findWithDefault pidTxt pid (ssaPortNames ssa)
+       in if nm == pidTxt then pidTxt else pidTxt <> ":" <> nm
+
+    renderPorts ps = "[" <> T.intercalate ", " (map renderPort ps) <> "]"
+
+    renderInputs ps = "[" <> T.intercalate ", " (map renderInput ps) <> "]"
+
+    renderInput pid = renderPort pid <> " <- " <> renderProducer pid
+
+    renderProducer pid =
+      case IM.lookup (portInt pid) (dProd diag) of
+        Just (Just eid) ->
+          case IM.lookup (edgeInt eid) (dEdges diag) of
+            Just edge ->
+              case findIndex (== pid) (eOuts edge) of
+                Just outIx -> renderEdgeId eid <> "#" <> T.pack (show outIx)
+                Nothing -> renderEdgeId eid
+            Nothing -> "<missing-edge>"
+        _ ->
+          case M.lookup pid inIndex of
+            Just ix -> "input#" <> T.pack (show ix)
+            Nothing -> "<open>"
+
+    renderAttrs attrs
+      | M.null attrs = " attrs={}"
+      | otherwise =
+          " attrs={"
+            <> T.intercalate ", " (map renderOne (M.toList attrs))
+            <> "}"
+      where
+        renderOne (k, v) = k <> "=" <> renderAttrTerm v
+
+    renderAttrTerm term =
+      case term of
+        ATVar v -> "$" <> avName v
+        ATLit lit ->
+          case lit of
+            ALInt n -> T.pack (show n)
+            ALString s -> T.pack (show s)
+            ALBool b -> if b then "true" else "false"
+
+    renderBinderCount binders =
+      if null binders
+        then ""
+        else " binders=" <> T.pack (show (length binders))
+
+    portInt (PortId i) = i
+    edgeInt (EdgeId i) = i
 
 
 renderModeName :: ModeName -> Text
