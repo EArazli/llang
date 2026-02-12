@@ -1,0 +1,137 @@
+doctrine LogicJS where {
+  mode M acyclic;
+
+  attrsort Str = string;
+
+  type B @M;
+  type P @M;
+
+  gen true  : [] -> [B] @M;
+  gen false : [] -> [B] @M;
+  gen var { s:Str } : [] -> [B] @M;
+
+  gen not : [B] -> [B] @M;
+  gen and : [B, B] -> [B] @M;
+  gen or  : [B, B] -> [B] @M;
+  gen xor : [B, B] -> [B] @M;
+
+  gen emit2 { name:Str, k1:Str, k2:Str } : [B, B] -> [P] @M;
+  gen concat : [P, P] -> [P] @M;
+}
+
+derived doctrine LogicJS_SSA = foliated LogicJS mode M;
+
+morphism emitJS : LogicJS -> Doc where {
+  mode M -> Doc;
+
+  attrsort Str -> Str;
+
+  type B @M -> Doc @Doc;
+  type P @M -> Doc @Doc;
+
+  gen true  @M -> text(s = "true")
+  gen false @M -> text(s = "false")
+
+  -- env["x"]
+  gen var @M ->
+    ((text(s = "env[\"") * text(s = s)) ; cat) ;
+    (id[Doc] * text(s = "\"]")) ; cat
+
+  gen not @M ->
+    (text(s = "(!") * id[Doc]) ; cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen and @M ->
+    (((text(s = "(") * id[Doc]) ; cat) * id[Doc]) ;
+    (((id[Doc] * text(s = " && ")) ; cat) * id[Doc]) ;
+    cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen or @M ->
+    (((text(s = "(") * id[Doc]) ; cat) * id[Doc]) ;
+    (((id[Doc] * text(s = " || ")) ; cat) * id[Doc]) ;
+    cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen xor @M ->
+    (((text(s = "(") * id[Doc]) ; cat) * id[Doc]) ;
+    (((id[Doc] * text(s = " !== ")) ; cat) * id[Doc]) ;
+    cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  -- export const <name> = env => ({ <k1>: e1, <k2>: e2 });
+  gen emit2 @M ->
+    (
+      ((((id[Doc] * ((((text(s = ", ") * text(s = k2)) ; cat) * text(s = ": ")) ; cat)) ; cat) * id[Doc]) ; cat)
+      ;
+      (
+        (
+          (((((((text(s = "export const ") * text(s = name)) ; cat) * text(s = " = env => ({ ")) ; cat) * text(s = k1)) ; cat) * text(s = ": ")) ; cat
+        ) * id[Doc]
+      ) ; cat
+      ;
+      (
+        (id[Doc] * ((text(s = " });") * line) ; cat) ; cat
+      )
+    )
+    )
+
+  -- doc1 ++ "\n\n" ++ doc2
+  gen concat @M ->
+    (((id[Doc] * line) ; cat ; (id[Doc] * line) ; cat) * id[Doc]) ; cat
+}
+
+pipeline js_codegen where {
+  normalize { policy = "computational_lr"; fuel = 200; };
+  apply emitJS;
+  extract Doc { stdout = true; };
+}
+
+pipeline show_ssa where {
+  extract foliate into LogicJS_SSA;
+  extract diagram;
+}
+
+run main using js_codegen where {
+  source doctrine LogicJS;
+  source mode M;
+}
+---
+(
+  (
+    (
+      ((var(s = "a") * var(s = "b")) ; xor)
+      *
+      ((var(s = "a") * var(s = "b")) ; and)
+    ) ; emit2(name = "halfAdder", k1 = "sum", k2 = "carry")
+  )
+  *
+  (
+    (
+      (
+        ((var(s = "a") * var(s = "b")) ; xor) * var(s = "cin")
+      ) ; xor
+      *
+      (
+        (
+          ((var(s = "a") * var(s = "b")) ; and)
+          *
+          ((var(s = "cin") * ((var(s = "a") * var(s = "b")) ; xor)) ; and)
+        ) ; or
+      )
+    ) ; emit2(name = "fullAdder", k1 = "sum", k2 = "carry")
+  )
+) ; concat
+---
+
+run ssa using show_ssa where {
+  source doctrine LogicJS;
+  source mode M;
+}
+---
+(
+  ((var(s = "a") * var(s = "b")) ; xor)
+  *
+  ((var(s = "a") * var(s = "b")) ; and)
+) ; emit2(name = "halfAdder", k1 = "sum", k2 = "carry")
+---

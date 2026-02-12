@@ -17,7 +17,7 @@ preludeDoctrines :: M.Map Text Doctrine
 preludeDoctrines =
   M.fromList
     [ (dName docDoctrine, docDoctrine)
-    , (dName fileTreeDoctrine, fileTreeDoctrine)
+    , (dName artifactDoctrine, artifactDoctrine)
     ]
 
 
@@ -50,37 +50,51 @@ docDoctrine =
     docTy = TCon (TypeRef docMode (TypeName "Doc")) []
 
 
-fileTreeDoctrine :: Doctrine
-fileTreeDoctrine =
+artifactDoctrine :: Doctrine
+artifactDoctrine =
   Doctrine
-    { dName = "FileTree"
-    , dModes = singleMode fileTreeMode
-    , dAcyclicModes = S.singleton fileTreeMode
+    { dName = "Artifact"
+    , dModes = singleMode artifactMode
+    , dAcyclicModes = S.singleton artifactMode
     , dIndexModes = S.empty
     , dIxTheory = M.empty
     , dAttrSorts =
         M.fromList
           [ (strSort, AttrSortDecl strSort (Just LKString))
+          , (intSort, AttrSortDecl intSort (Just LKInt))
           ]
-    , dTypes = M.singleton fileTreeMode (M.singleton (TypeName "FileTree") (TypeSig []))
-    , dGens = M.singleton fileTreeMode gens
+    , dTypes =
+        M.singleton
+          artifactMode
+          ( M.fromList
+              [ (TypeName "Doc", TypeSig [])
+              , (TypeName "FileTree", TypeSig [])
+              ]
+          )
+    , dGens = M.singleton artifactMode gens
     , dCells2 = []
     }
   where
+    docTy = TCon (TypeRef artifactMode (TypeName "Doc")) []
+    ftTy = TCon (TypeRef artifactMode (TypeName "FileTree")) []
     gens =
       M.fromList
-        [ (GenName "singleFile", simpleGen "singleFile" [] [ftTy] [("path", strSort), ("content", strSort)])
+        [ (GenName "empty", simpleGen "empty" [] [docTy] [])
+        , (GenName "text", simpleGen "text" [] [docTy] [("s", strSort)])
+        , (GenName "line", simpleGen "line" [] [docTy] [])
+        , (GenName "cat", simpleGen "cat" [docTy, docTy] [docTy] [])
+        , (GenName "indent", simpleGen "indent" [docTy] [docTy] [("n", intSort)])
+        , (GenName "singleFile", simpleGen "singleFile" [docTy] [ftTy] [("path", strSort)])
         , (GenName "concatTree", simpleGen "concatTree" [ftTy, ftTy] [ftTy] [])
         ]
-    ftTy = TCon (TypeRef fileTreeMode (TypeName "FileTree")) []
 
 
 docMode :: ModeName
 docMode = ModeName "Doc"
 
 
-fileTreeMode :: ModeName
-fileTreeMode = ModeName "FileTree"
+artifactMode :: ModeName
+artifactMode = ModeName "Artifact"
 
 
 strSort :: AttrSort

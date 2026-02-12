@@ -20,6 +20,7 @@ import qualified Test.Poly.Acyclic as PolyAcyclic
 import qualified Test.Poly.Feedback as PolyFeedback
 import qualified Test.Value.Doc as ValueDoc
 import qualified Test.Frontend.Pipeline as FrontendPipeline
+import qualified Test.Frontend.ExampleCodegen as FrontendExampleCodegen
 
 main :: IO ()
 main =
@@ -44,5 +45,6 @@ main =
       , PolyFeedback.tests
       , ValueDoc.tests
       , FrontendPipeline.tests
+      , FrontendExampleCodegen.tests
       , NoPolyPrefixes.tests
       ]

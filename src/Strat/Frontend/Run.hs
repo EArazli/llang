@@ -21,9 +21,10 @@ import Strat.Pipeline
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
-import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Attr
 import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeRef(..), TypeName(..))
 import qualified Strat.Poly.Morphism as Morph
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Poly.Foliation (SSA(..), SSAStep(..), foliate, forgetSSA)
@@ -131,14 +132,24 @@ runPhase env art phase =
               pure (ArtDiagram baseDoc diag)
             else do
               mor <- lookupMorphism env name
-              if dName (Morph.morSrc mor) /= dName baseDoc
-                then Left ("pipeline: morphism source mismatch for " <> name)
-                else do
-                  let diagBase = forgetSSA ssa
-                  diag' <- Morph.applyMorphismDiagram mor diagBase
+              let srcName = dName (Morph.morSrc mor)
+              if srcName == derivedName
+                then do
+                  derivedDoc <- lookupDoctrine env derivedName
+                  ssaDiag <- encodeSSAArtifact derivedDoc ssa
+                  diag' <- Morph.applyMorphismDiagram mor ssaDiag
                   let doc' = Morph.morTgt mor
                   ensureAcyclicIfRequired doc' diag'
                   pure (ArtDiagram doc' diag')
+                else
+                  if srcName == dName baseDoc
+                    then do
+                      let diagBase = forgetSSA ssa
+                      diag' <- Morph.applyMorphismDiagram mor diagBase
+                      let doc' = Morph.morTgt mor
+                      ensureAcyclicIfRequired doc' diag'
+                      pure (ArtDiagram doc' diag')
+                    else Left ("pipeline: morphism source mismatch for " <> name)
         ArtExtracted{} ->
           Left "pipeline: cannot apply morphism after extraction"
     Normalize policy fuel ->
@@ -154,7 +165,7 @@ runPhase env art phase =
           pure (ArtDiagram doc diag')
         ArtSSA{} -> Left "pipeline: normalize expects a diagram artifact"
         ArtExtracted{} -> Left "pipeline: cannot normalize extracted host value"
-    ExtractFoliation targetName folPolicy ->
+    ExtractFoliation targetName mFolPolicy ->
       case art of
         ArtDiagram doc diag -> do
           derived <- lookupDerivedDoctrine env targetName
@@ -165,6 +176,7 @@ runPhase env art phase =
               if expectedMode /= renderModeName (dMode diag)
                 then Left "pipeline: foliation target mode mismatch"
                 else do
+                  let folPolicy = maybe (ddDefaultPolicy derived) id mFolPolicy
                   ssa <- foliate folPolicy doc (dMode diag) diag
                   pure (ArtSSA doc targetName ssa)
         ArtSSA{} -> Left "pipeline: foliate expects a diagram artifact"
@@ -172,7 +184,7 @@ runPhase env art phase =
     ExtractValue doctrineName extractorSpec ->
       case art of
         ArtDiagram doc diag -> do
-          if dName doc /= doctrineName
+          if not (extractorDoctrineMatches doctrineName doc)
             then Left ("pipeline: extractor doctrine mismatch, expected " <> doctrineName)
             else extractValue extractorSpec doc diag
         ArtSSA{} -> Left "pipeline: extract value expects a diagram artifact"
@@ -222,6 +234,19 @@ lookupDerivedDoctrine env name =
   case M.lookup name (meDerivedDoctrines env) of
     Nothing -> Left ("Unknown derived doctrine: " <> name)
     Just dd -> Right dd
+
+
+lookupDoctrine :: ModuleEnv -> Text -> Either Text Doctrine
+lookupDoctrine env name =
+  case M.lookup name (meDoctrines env) of
+    Nothing -> Left ("Unknown doctrine: " <> name)
+    Just doc -> Right doc
+
+
+extractorDoctrineMatches :: Text -> Doctrine -> Bool
+extractorDoctrineMatches doctrineName doc =
+  dName doc == doctrineName
+    || (dName doc == "Artifact" && (doctrineName == "Doc" || doctrineName == "FileTree"))
 
 
 ensureAcyclicIfRequired :: Doctrine -> Diagram -> Either Text ()
@@ -304,6 +329,92 @@ topologicalEdges diag =
     portInt (PortId i) = i
 
 
+encodeSSAArtifact :: Doctrine -> SSA -> Either Text Diagram
+encodeSSAArtifact doc ssa = do
+  let mode = ssaMode ssa
+      tt = doctrineTypeTheory doc
+      requireType0 tName = do
+        _ <- lookupTypeSig doc (TypeRef mode (TypeName tName))
+        pure (TCon (TypeRef mode (TypeName tName)) [])
+      requireGen gName =
+        case M.lookup mode (dGens doc) >>= M.lookup (GenName gName) of
+          Nothing -> Left ("pipeline: derived doctrine missing SSA generator " <> gName)
+          Just _ -> Right ()
+      portName pid =
+        case M.lookup pid (ssaPortNames ssa) of
+          Just name -> name
+          Nothing ->
+            case pid of
+              PortId i -> "p" <> T.pack (show i)
+  portTy <- requireType0 "PortRef"
+  portsTy <- requireType0 "PortList"
+  stepTy <- requireType0 "Step"
+  stepsTy <- requireType0 "StepList"
+  ssaTy <- requireType0 "SSA"
+  mapM_ requireGen
+    [ "portRef"
+    , "portsNil"
+    , "portsCons"
+    , "stepGen"
+    , "stepBox"
+    , "stepFeedback"
+    , "stepsNil"
+    , "stepsCons"
+    , "ssaProgram"
+    ]
+  let mkPortList names =
+        case names of
+          [] -> genD mode [] [portsTy] (GenName "portsNil")
+          n:rest -> do
+            headPort <- genDWithAttrs mode [] [portTy] (GenName "portRef") (M.singleton "name" (ATLit (ALString n)))
+            tailPorts <- mkPortList rest
+            pair <- tensorD headPort tailPorts
+            cons <- genD mode [portTy, portsTy] [portsTy] (GenName "portsCons")
+            compDTT tt cons pair
+      mkStepEdge st =
+        case st of
+          StepGen _ gen _ _ _ _ ->
+            genDWithAttrs
+              mode
+              [portsTy, portsTy]
+              [stepTy]
+              (GenName "stepGen")
+              (M.singleton "name" (ATLit (ALString (renderGenName gen))))
+          StepBox _ box _ _ _ ->
+            genDWithAttrs
+              mode
+              [portsTy, portsTy]
+              [stepTy]
+              (GenName "stepBox")
+              (M.singleton "name" (ATLit (ALString (renderBoxName box))))
+          StepFeedback{} ->
+            genD mode [portsTy, portsTy] [stepTy] (GenName "stepFeedback")
+      mkStep st = do
+        ins <- mkPortList (map portName (stepIns st))
+        outs <- mkPortList (map portName (stepOuts st))
+        pair <- tensorD ins outs
+        mk <- mkStepEdge st
+        compDTT tt mk pair
+      mkStepList steps =
+        case steps of
+          [] -> genD mode [] [stepsTy] (GenName "stepsNil")
+          st:rest -> do
+            headStep <- mkStep st
+            tailSteps <- mkStepList rest
+            pair <- tensorD headStep tailSteps
+            cons <- genD mode [stepTy, stepsTy] [stepsTy] (GenName "stepsCons")
+            compDTT tt cons pair
+      renderGenName (GenName name) = name
+      renderBoxName (BoxName name) = name
+  inPorts <- mkPortList (map portName (ssaInputs ssa))
+  outPorts <- mkPortList (map portName (ssaOutputs ssa))
+  steps <- mkStepList (ssaSteps ssa)
+  tuple2 <- tensorD inPorts outPorts
+  tuple3 <- tensorD tuple2 steps
+  build <- genD mode [portsTy, portsTy, stepsTy] [ssaTy] (GenName "ssaProgram")
+  compDTT tt build tuple3
+
+
 extractValue :: ValueExtractorSpec -> Doctrine -> Diagram -> Either Text Artifact
 extractValue extractorSpec _doc diag =
   case extractorSpec of
@@ -318,91 +429,115 @@ extractValue extractorSpec _doc diag =
 
 extractDoc :: Diagram -> Either Text Text
 extractDoc diag = do
+  env <- evalArtifactDiagram diag
+  vals <- mapM (lookupOut env "extract Doc") (dOut diag)
+  docs <- mapM expectDoc vals
+  pure (T.concat (map renderDoc docs))
+  where
+    lookupOut env label p =
+      case M.lookup p env of
+        Nothing -> Left (label <> ": open output port")
+        Just v -> Right v
+
+extractFileTree :: Diagram -> Either Text (M.Map FilePath Text)
+extractFileTree diag = do
+  env <- evalArtifactDiagram diag
+  vals <- mapM (lookupOut env "extract FileTree") (dOut diag)
+  trees <- mapM expectFileTree vals
+  foldM mergeOne M.empty trees
+  where
+    lookupOut env label p =
+      case M.lookup p env of
+        Nothing -> Left (label <> ": open output port")
+        Just v -> Right v
+
+    mergeOne acc v =
+      case v of
+        FTFile path bodyDoc ->
+          if M.member path acc
+            then Left "extract FileTree: duplicate file path"
+            else Right (M.insert path (renderDoc bodyDoc) acc)
+        FTConcat xs -> foldM mergeOne acc xs
+
+
+evalArtifactDiagram :: Diagram -> Either Text (M.Map PortId RuntimeValue)
+evalArtifactDiagram diag = do
   ordered <- topologicalEdges diag
-  env <- foldM step M.empty ordered
-  vals <- mapM (lookupPort env) (dOut diag)
-  pure (T.concat (map renderDoc vals))
+  foldM step M.empty ordered
   where
     step env edge = do
       ins <- mapM (lookupPort env) (eIns edge)
       outs <- evalEdge edge ins
       if length outs /= length (eOuts edge)
-        then Left "extract Doc: arity mismatch"
+        then Left "extract value: arity mismatch"
         else Right (insertMany env (zip (eOuts edge) outs))
 
     lookupPort env p =
       case M.lookup p env of
-        Nothing -> Left "extract Doc: open input port"
+        Nothing -> Left "extract value: open input port"
         Just v -> Right v
 
     insertMany env pairs = foldl (\m (k, v) -> M.insert k v m) env pairs
 
     evalEdge edge ins =
       case ePayload edge of
-        PGen (GenName "empty") _ _ -> Right [DEmpty]
+        PGen (GenName "empty") _ _ -> Right [RVDoc DEmpty]
         PGen (GenName "text") attrs _ -> do
           s <- attrString "s" attrs
-          Right [DText s]
-        PGen (GenName "line") _ _ -> Right [DLine]
+          Right [RVDoc (DText s)]
+        PGen (GenName "line") _ _ -> Right [RVDoc DLine]
         PGen (GenName "cat") _ _ ->
           case ins of
-            [a, b] -> Right [DCat a b]
+            [a, b] -> do
+              da <- expectDoc a
+              db <- expectDoc b
+              Right [RVDoc (DCat da db)]
             _ -> Left "extract Doc: cat expects 2 inputs"
         PGen (GenName "indent") attrs _ ->
           case ins of
             [d] -> do
               n <- attrInt "n" attrs
-              Right [DIndent n d]
+              dd <- expectDoc d
+              Right [RVDoc (DIndent n dd)]
             _ -> Left "extract Doc: indent expects 1 input"
-        PGen _ _ _ -> Left "extract Doc: unsupported generator"
-        PBox _ _ -> Left "extract Doc: boxes are not supported"
-        PFeedback _ _ -> Left "extract Doc: feedback is not supported"
-        PSplice _ -> Left "extract Doc: splice is not supported"
-
-
-extractFileTree :: Diagram -> Either Text (M.Map FilePath Text)
-extractFileTree diag = do
-  ordered <- topologicalEdges diag
-  env <- foldM step M.empty ordered
-  vals <- mapM (lookupPort env) (dOut diag)
-  foldM mergeOne M.empty vals
-  where
-    step env edge = do
-      ins <- mapM (lookupPort env) (eIns edge)
-      outs <- evalEdge edge ins
-      if length outs /= length (eOuts edge)
-        then Left "extract FileTree: arity mismatch"
-        else Right (insertMany env (zip (eOuts edge) outs))
-
-    lookupPort env p =
-      case M.lookup p env of
-        Nothing -> Left "extract FileTree: open input port"
-        Just v -> Right v
-
-    insertMany env pairs = foldl (\m (k, v) -> M.insert k v m) env pairs
-
-    evalEdge edge ins =
-      case ePayload edge of
         PGen (GenName "singleFile") attrs _ -> do
           path <- T.unpack <$> attrString "path" attrs
-          content <- attrString "content" attrs
-          Right [FTFile path content]
+          body <-
+            case ins of
+              [v] -> expectDoc v
+              [] -> DText <$> attrString "content" attrs
+              _ -> Left "extract FileTree: singleFile expects 1 Doc input"
+          Right [RVFileTree (FTFile path body)]
         PGen (GenName "concatTree") _ _ ->
           case ins of
-            [a, b] -> Right [FTConcat [a, b]]
+            [a, b] -> do
+              ta <- expectFileTree a
+              tb <- expectFileTree b
+              Right [RVFileTree (FTConcat [ta, tb])]
             _ -> Left "extract FileTree: concatTree expects 2 inputs"
-        PGen _ _ _ -> Left "extract FileTree: unsupported generator"
-        PBox _ _ -> Left "extract FileTree: boxes are not supported"
-        PFeedback _ _ -> Left "extract FileTree: feedback is not supported"
-        PSplice _ -> Left "extract FileTree: splice is not supported"
+        PGen _ _ _ -> Left "extract value: unsupported generator"
+        PBox _ _ -> Left "extract value: boxes are not supported"
+        PFeedback _ _ -> Left "extract value: feedback is not supported"
+        PSplice _ -> Left "extract value: splice is not supported"
 
-    mergeOne acc v =
-      case v of
-        FTFile path body ->
-          if M.member path acc
-            then Left "extract FileTree: duplicate file path"
-            else Right (M.insert path body acc)
-        FTConcat xs -> foldM mergeOne acc xs
+
+data RuntimeValue
+  = RVDoc DocValue
+  | RVFileTree FileTreeValue
+
+
+expectDoc :: RuntimeValue -> Either Text DocValue
+expectDoc val =
+  case val of
+    RVDoc doc -> Right doc
+    RVFileTree _ -> Left "extract Doc: expected Doc output"
+
+
+expectFileTree :: RuntimeValue -> Either Text FileTreeValue
+expectFileTree val =
+  case val of
+    RVDoc _ -> Left "extract FileTree: expected FileTree output"
+    RVFileTree tree -> Right tree
 
 
 data DocValue
@@ -433,7 +568,7 @@ indentAfterNewline n txt =
 
 
 data FileTreeValue
-  = FTFile FilePath Text
+  = FTFile FilePath DocValue
   | FTConcat [FileTreeValue]
 
 

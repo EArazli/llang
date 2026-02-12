@@ -32,3 +32,4 @@ Quick index (non-exhaustive):
   - `basic_foliate.run.llang` (foliation + forget roundtrip)
 - `examples/run/codegen/`
   - `simple_codegen.run.llang` (foliation + morphism-based emission to `Doc`)
+  - `logic_full_adder_codegen.run.llang` (half/full-adder JS module + optional SSA dump)

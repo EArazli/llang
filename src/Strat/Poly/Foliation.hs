@@ -71,25 +71,25 @@ data SSAStep
 
 foliate :: FoliationPolicy -> Doctrine -> ModeName -> Diagram -> Either Text SSA
 foliate policy doc mode diag = do
-  if mode /= dMode diag
+  diag0 <- canonicalizeDiagram diag
+  if mode /= dMode diag0
     then Left "foliate: mode mismatch"
     else Right ()
   if mode `S.member` dAcyclicModes doc
     then Right ()
     else Left "foliate: mode is not declared acyclic"
-  ordered <- topoOrder diag
-  names <- assignPortNames policy diag
+  ordered <- topoOrder diag0
+  names <- assignPortNames policy diag0
   steps <- mapM mkStep ordered
-  original <- canonicalizeDiagram diag
   pure
     SSA
       { ssaBaseDoctrine = dName doc
       , ssaMode = mode
-      , ssaInputs = dIn diag
+      , ssaInputs = dIn diag0
       , ssaSteps = steps
-      , ssaOutputs = dOut diag
+      , ssaOutputs = dOut diag0
       , ssaPortNames = names
-      , ssaOriginal = original
+      , ssaOriginal = diag0
       }
   where
     mkStep edge =
@@ -209,9 +209,15 @@ topoOrder diag =
 assignPortNames :: FoliationPolicy -> Diagram -> Either Text (M.Map PortId Text)
 assignPortNames pol diag = go S.empty M.empty ordered
   where
-    ordered = boundaryOrder <> internalOrder
+    ordered = boundaryItems <> internalItems
 
-    boundaryOrder = dIn diag <> dOut diag
+    boundaryItems =
+      zipWith (\i p -> (p, True, i)) [0 :: Int ..] boundaryOrder
+
+    internalItems =
+      zipWith (\i p -> (p, False, i)) [0 :: Int ..] internalOrder
+
+    boundaryOrder = dedupePorts (dIn diag <> dOut diag)
 
     boundarySet = S.fromList boundaryOrder
 
@@ -222,17 +228,21 @@ assignPortNames pol diag = go S.empty M.empty ordered
       ]
 
     go _ acc [] = Right acc
-    go used acc (p:ps) = do
-      base <-
-        case fpNaming pol of
-          BoundaryLabelsFirst ->
-            case getPortLabel diag p of
-              Just lbl | not (T.null lbl) -> Right (sanitize lbl)
-              _ -> Right (defaultName p)
-      name <- uniqueName used base
-      go (S.insert name used) (M.insert p name acc) ps
-
-    defaultName (PortId i) = T.pack ("p" <> show i)
+    go used acc ((p, isBoundary, i):ps)
+      | M.member p acc = go used acc ps
+      | otherwise = do
+          base <-
+            case fpNaming pol of
+              BoundaryLabelsFirst ->
+                if isBoundary
+                  then
+                    case getPortLabel diag p of
+                      Just lbl | not (T.null lbl) -> Right (sanitize lbl)
+                      _ -> Right ("p" <> T.pack (show i))
+                  else
+                    Right ("t" <> T.pack (show i))
+          name <- uniqueName used base
+          go (S.insert name used) (M.insert p name acc) ps
 
     sanitize txt =
       let mapped = T.map mapChar txt
@@ -241,19 +251,24 @@ assignPortNames pol diag = go S.empty M.empty ordered
     mapChar c = if isAlphaNum c || c == '_' then c else '_'
 
     uniqueName used base =
-      if base `S.member` allReserved
+      if base `S.member` reserved
         then trySuffix 1
         else Right base
       where
-        allReserved = S.insert base used `S.union` fpReserved pol
+        reserved = used `S.union` fpReserved pol
 
         trySuffix n =
           let candidate = base <> "_" <> T.pack (show n)
-           in if candidate `S.member` allReserved
+           in if candidate `S.member` reserved
                 then trySuffix (n + 1)
                 else Right candidate
 
-    portInt (PortId i) = i
+    dedupePorts = goDedupe S.empty []
+      where
+        goDedupe _ acc [] = reverse acc
+        goDedupe seen acc (p:ps)
+          | p `S.member` seen = goDedupe seen acc ps
+          | otherwise = goDedupe (S.insert p seen) (p : acc) ps
 
 
 forgetSSA :: SSA -> Diagram

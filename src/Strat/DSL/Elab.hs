@@ -21,9 +21,20 @@ import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, parsePolicy)
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), InputShape(..), gdPlainDom)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), InputShape(..), TypeSig(..), gdPlainDom)
 import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
-import Strat.Poly.ModeTheory (ModeTheory(..), ModDecl(..), ModExpr(..), ModeName(..))
+import Strat.Poly.ModeTheory
+  ( ModeTheory(..)
+  , ModDecl(..)
+  , ModExpr(..)
+  , ModeName(..)
+  , emptyModeTheory
+  , addMode
+  , setModeDiscipline
+  , modeDiscipline
+  )
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeRef(..), TypeName(..))
+import Strat.Poly.Names (GenName(..))
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePolyCoproduct)
 import Strat.Poly.Surface (elabPolySurfaceDecl)
@@ -223,12 +234,20 @@ elabDoctrineEffects env name baseName effects = do
 insertDerivedDoctrine :: ModuleEnv -> RawDerivedDoctrine -> Either Text ModuleEnv
 insertDerivedDoctrine env raw = do
   ensureAbsent "derived doctrine" (rddName raw) (meDerivedDoctrines env)
+  ensureAbsent "doctrine" (rddName raw) (meDoctrines env)
   baseDoc <- lookupDoctrine env (rddBase raw)
   let mode = ModeName (rddMode raw)
   if M.member mode (mtModes (dModes baseDoc))
     then Right ()
     else Left "derived doctrine: unknown mode"
+  if mode `S.member` dAcyclicModes baseDoc
+    then Right ()
+    else Left "derived doctrine: mode is not declared acyclic in base doctrine"
   policy <- elabFoliationPolicy (rddPolicy raw)
+  let forgetName = rddName raw <> ".forget"
+  ensureAbsent "morphism" forgetName (meMorphisms env)
+  derivedDoc <- buildFoliatedDoctrine (rddName raw) baseDoc mode
+  let forgetMorph = buildDerivedForgetMorphism forgetName derivedDoc baseDoc mode
   let dd =
         DerivedFoliated
           { ddName = rddName raw
@@ -236,8 +255,92 @@ insertDerivedDoctrine env raw = do
           , ddMode = rddMode raw
           , ddDefaultPolicy = policy
           }
-  let env' = env { meDerivedDoctrines = M.insert (rddName raw) dd (meDerivedDoctrines env) }
+  let env' =
+        env
+          { meDoctrines = M.insert (rddName raw) derivedDoc (meDoctrines env)
+          , meMorphisms = M.insert forgetName forgetMorph (meMorphisms env)
+          , meDerivedDoctrines = M.insert (rddName raw) dd (meDerivedDoctrines env)
+          }
   pure env'
+
+
+buildFoliatedDoctrine :: Text -> Doctrine -> ModeName -> Either Text Doctrine
+buildFoliatedDoctrine name baseDoc mode = do
+  disc <- modeDiscipline (dModes baseDoc) mode
+  mt0 <- addMode mode emptyModeTheory
+  mt <- setModeDiscipline mode disc mt0
+  let strSort = AttrSort "Str"
+      portTy = ty "PortRef"
+      portsTy = ty "PortList"
+      stepTy = ty "Step"
+      stepsTy = ty "StepList"
+      ssaTy = ty "SSA"
+      ty tName = TCon (TypeRef mode (TypeName tName)) []
+      mkType tName = (TypeName tName, TypeSig [])
+      mkGen gName dom cod attrs =
+        ( GenName gName
+        , GenDecl
+            { gdName = GenName gName
+            , gdMode = mode
+            , gdTyVars = []
+            , gdIxVars = []
+            , gdDom = map InPort dom
+            , gdCod = cod
+            , gdAttrs = attrs
+            }
+        )
+      gens =
+        M.fromList
+          [ mkGen "portRef" [] [portTy] [("name", strSort)]
+          , mkGen "portsNil" [] [portsTy] []
+          , mkGen "portsCons" [portTy, portsTy] [portsTy] []
+          , mkGen "stepGen" [portsTy, portsTy] [stepTy] [("name", strSort)]
+          , mkGen "stepBox" [portsTy, portsTy] [stepTy] [("name", strSort)]
+          , mkGen "stepFeedback" [portsTy, portsTy] [stepTy] []
+          , mkGen "stepsNil" [] [stepsTy] []
+          , mkGen "stepsCons" [stepTy, stepsTy] [stepsTy] []
+          , mkGen "ssaProgram" [portsTy, portsTy, stepsTy] [ssaTy] []
+          ]
+  pure
+    Doctrine
+      { dName = name
+      , dModes = mt
+      , dAcyclicModes = S.singleton mode
+      , dIndexModes = S.empty
+      , dIxTheory = M.empty
+      , dAttrSorts = M.singleton strSort (AttrSortDecl strSort (Just LKString))
+      , dTypes =
+          M.singleton
+            mode
+            ( M.fromList
+                [ mkType "PortRef"
+                , mkType "PortList"
+                , mkType "Step"
+                , mkType "StepList"
+                , mkType "SSA"
+                ]
+            )
+      , dGens = M.singleton mode gens
+      , dCells2 = []
+      }
+
+
+buildDerivedForgetMorphism :: Text -> Doctrine -> Doctrine -> ModeName -> PolyMorph.Morphism
+buildDerivedForgetMorphism name srcDoc tgtDoc mode =
+  PolyMorph.Morphism
+    { PolyMorph.morName = name
+    , PolyMorph.morSrc = srcDoc
+    , PolyMorph.morTgt = tgtDoc
+    , PolyMorph.morIsCoercion = False
+    , PolyMorph.morModeMap = M.singleton mode mode
+    , PolyMorph.morModMap = M.empty
+    , PolyMorph.morAttrSortMap = M.empty
+    , PolyMorph.morTypeMap = M.empty
+    , PolyMorph.morGenMap = M.empty
+    , PolyMorph.morIxFunMap = M.empty
+    , PolyMorph.morPolicy = UseStructuralAsBidirectional
+    , PolyMorph.morFuel = 50
+    }
 
 
 elabPipeline :: RawPipeline -> Either Text Pipeline
@@ -254,9 +357,13 @@ elabPhase raw =
       policy <- parsePipelinePolicy (rnoPolicy opts)
       let fuel = maybe 50 id (rnoFuel opts)
       Right (Normalize policy fuel)
-    RPExtractFoliate targetName opts -> do
-      foliatePolicy <- elabFoliationPolicy opts
-      Right (ExtractFoliation targetName foliatePolicy)
+    RPExtractFoliate targetName mOpts ->
+      case mOpts of
+        Nothing ->
+          Right (ExtractFoliation targetName Nothing)
+        Just opts -> do
+          foliatePolicy <- elabFoliationPolicy opts
+          Right (ExtractFoliation targetName (Just foliatePolicy))
     RPExtractValue doctrineName opts ->
       case doctrineName of
         "Doc" ->

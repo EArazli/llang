@@ -875,7 +875,7 @@ pipelineExtractFoliateItem = do
   _ <- symbol "foliate"
   _ <- symbol "into"
   target <- ident
-  opts <- option (RawFoliationOpts Nothing Nothing []) (symbol "with" *> foliationOptsBlock)
+  opts <- optional (symbol "with" *> foliationOptsBlock)
   optionalSemi
   pure (RPExtractFoliate target opts)
 

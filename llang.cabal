@@ -71,6 +71,7 @@ data-files:
     examples/run/algebra/planar_monoid.run.llang
     examples/run/algebra/ski.run.llang
     examples/run/codegen/simple_codegen.run.llang
+    examples/run/codegen/logic_full_adder_codegen.run.llang
     examples/run/data/list.run.llang
     examples/run/doc/hello_doc.run.llang
     examples/run/effects/combined_with_handler.run.llang
@@ -209,6 +210,7 @@ test-suite llang-test
       Test.Poly.NoLegacy
       Test.Value.Doc
       Test.Frontend.Pipeline
+      Test.Frontend.ExampleCodegen
       Paths_llang
   autogen-modules:
       Paths_llang
