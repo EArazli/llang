@@ -1,5 +1,4 @@
 import "../../../stdlib/bool.llang";
-import "../../lib/models/bool.models.llang";
 
 surface BoolTerm where {
   doctrine Bool;
@@ -27,13 +26,15 @@ surface BoolTerm where {
   }
 }
 
-run main where {
-  doctrine Bool;
-  mode M;
-  surface BoolTerm;
-  model BoolNative;
-  show normalized;
-  show value;
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run main using debug where {
+  source doctrine Bool;
+  source mode M;
+  source surface BoolTerm;
 }
 ---
 term {

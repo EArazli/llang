@@ -12,5 +12,5 @@ If you have the `llang` executable on your PATH, you can also run:
   llang <path-to-run-file>
 
 Notes:
-- `examples/run/codegen/compile_to_js.run.llang` prints **JS source text** via a model.
-  It does not execute JavaScript.
+- Pipelines are explicit (`pipeline ...`) and runs bind a pipeline via
+  `run ... using ... where { source ... }`.

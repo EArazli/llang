@@ -73,6 +73,7 @@ mkDoctrine cells =
   in Doctrine
       { dName = "D"
       , dModes = mkModes (S.singleton modeName)
+    , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dTypes = M.fromList [(modeName, M.fromList [(TypeName "A", TypeSig [])])]

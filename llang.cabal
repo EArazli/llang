@@ -20,42 +20,32 @@ extra-source-files:
     CHANGELOG.md
     examples/README.md
 data-files:
+    examples/dependent/free_index_must_fail.llang
+    examples/dependent/implicit_binder_index.llang
+    examples/dependent/lambda_beta.llang
+    examples/dependent/vec.llang
     examples/lib/algebra/box_match.llang
     examples/lib/algebra/cart_monoid.llang
     examples/lib/algebra/cat.llang
     examples/lib/algebra/ccc.llang
     examples/lib/algebra/coherence_demo.llang
-    examples/lib/algebra/hello_world.llang
     examples/lib/algebra/loop_demo.llang
     examples/lib/algebra/monoid_to_string.llang
     examples/lib/algebra/peano.llang
     examples/lib/algebra/planar_monoid.llang
     examples/lib/algebra/ski.llang
     examples/lib/algebra/subdiagram_match.llang
-    examples/lib/algebra/tiny_source.llang
-    examples/lib/codegen/js_ast.llang
-    examples/lib/codegen/arith_literals.llang
-    examples/lib/codegen/arith_ir.llang
-    examples/lib/codegen/server_ir.llang
     examples/lib/codegen/minifun/console.llang
     examples/lib/codegen/minifun/minifun.surface.llang
-    examples/lib/codegen/minifun/js.llang
-    examples/lib/codegen/minifun/compile.llang
     examples/lib/effects/combined.llang
     examples/lib/modes/dual_discipline_surface.llang
     examples/lib/modes/dual_discipline_term_surface.llang
-    examples/lib/modes/lnl_backend_switch.llang
     examples/lib/modes/lnl.counit.term.llang
     examples/lib/modes/lnl.llang
     examples/lib/modes/quad_discipline.llang
     examples/lib/modes/staging.llang
     examples/lib/modes/staging_mode_map.llang
     examples/lib/modes/uf_cancel.llang
-    examples/lib/models/bool.models.llang
-    examples/lib/models/peano.models.llang
-    examples/lib/models/pushout/nat_bool.models.llang
-    examples/lib/models/pushout/nat_bool_plus.models.llang
-    examples/lib/pushout/ambiguous_model_restriction.llang
     examples/lib/pushout/category_bool_nat_base.llang
     examples/lib/pushout/comm_monoid.llang
     examples/lib/pushout/nat_bool.llang
@@ -68,15 +58,11 @@ data-files:
     examples/lib/templates/state.template.llang
     examples/lib/terms/splice_source.llang
     examples/lib/terms/term_defs.llang
-    examples/dependent/lambda_beta.llang
-    examples/dependent/vec.llang
     examples/run/algebra/box_match.run.llang
     examples/run/algebra/cart_monoid.run.llang
     examples/run/algebra/cat.run.llang
     examples/run/algebra/ccc.run.llang
     examples/run/algebra/coherence_demo.run.llang
-    examples/run/algebra/hello_world.run.llang
-    examples/run/algebra/loop_demo.run.llang
     examples/run/algebra/mode_map_demo.run.llang
     examples/run/algebra/monoid.run.llang
     examples/run/algebra/morphism_term.llang
@@ -84,17 +70,12 @@ data-files:
     examples/run/algebra/peano.run.llang
     examples/run/algebra/planar_monoid.run.llang
     examples/run/algebra/ski.run.llang
-    examples/run/codegen/compile_to_js.run.llang
-    examples/run/codegen/arith_literals.run.llang
-    examples/run/codegen/arith_targets.run.llang
-    examples/run/codegen/server_targets.run.llang
-    examples/run/codegen/minifun/concat2.run.llang
+    examples/run/codegen/simple_codegen.run.llang
     examples/run/data/list.run.llang
+    examples/run/doc/hello_doc.run.llang
     examples/run/effects/combined_with_handler.run.llang
-    examples/run/modes/dual_discipline_surface.run.llang
+    examples/run/foliation/basic_foliate.run.llang
     examples/run/modes/dual_discipline_term_surface.run.llang
-    examples/run/modes/lnl_backend_switch.run.llang
-    examples/run/modes/lnl.typewalk.run.llang
     examples/run/modes/lnl.counit.run.llang
     examples/run/modes/lnl.unit.run.llang
     examples/run/modes/modality_rename_visible.run.llang
@@ -102,10 +83,7 @@ data-files:
     examples/run/modes/staging.run.llang
     examples/run/modes/staging_mode_map.run.llang
     examples/run/modes/uf_cancel.run.llang
-    examples/run/pushout/nat_bool.run.llang
-    examples/run/pushout/nat_bool_plus.run.llang
     examples/run/pushout/pushout_basic.run.llang
-    examples/run/runspec/multi.llang
     examples/run/surfaces/implements_uses.run.llang
     examples/run/surfaces/planar_monoid.ssa.run.llang
     examples/run/surfaces/template_splice_demo.run.llang
@@ -120,7 +98,6 @@ data-files:
     stdlib/effects/writer.template.llang
     stdlib/nat.llang
     stdlib/struct.cartesian.llang
-    stdlib/struct.cartesian.models.llang
     stdlib/struct.planar.llang
     stdlib/struct.symmetric.llang
 
@@ -139,8 +116,9 @@ library
       Strat.Frontend.Coerce
       Strat.Frontend.Env
       Strat.Frontend.Loader
+      Strat.Frontend.Prelude
       Strat.Frontend.Run
-      Strat.Model.Spec
+      Strat.Pipeline
       Strat.Poly.Attr
       Strat.Poly.Cell2
       Strat.Poly.Coherence
@@ -150,8 +128,7 @@ library
       Strat.Poly.DSL.AST
       Strat.Poly.DSL.Elab
       Strat.Poly.DSL.Parse
-      Strat.Poly.Eval
-      Strat.Poly.Fold
+      Strat.Poly.Foliation
       Strat.Poly.Graph
       Strat.Poly.IndexTheory
       Strat.Poly.Match
@@ -169,7 +146,6 @@ library
       Strat.Poly.TypeExpr
       Strat.Poly.TypeTheory
       Strat.Poly.UnifyTy
-      Strat.RunSpec
   other-modules:
       Strat.DSL.Template
       Strat.Frontend.Compile
@@ -213,31 +189,26 @@ test-suite llang-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-      Test.CLI.Golden
-      Test.DSL.Effects
-      Test.DSL.TermRefsInDecls
-      Test.DSL.Templates
-      Test.Frontend.Coerce
       Test.NoPolyPrefixes
       Test.Poly.Basic
       Test.Poly.Rewrite
-      Test.Poly.DSL
-      Test.Poly.Literals
       Test.Poly.CriticalPairs
       Test.Poly.Morphism
-      Test.Poly.Eval
-      Test.Poly.Fold
       Test.Poly.Pushout
       Test.Poly.CCC
       Test.Poly.Coherence
       Test.Poly.DataMacro
       Test.Poly.Dependent
       Test.Poly.Helpers
+      Test.Poly.Foliation
+      Test.Poly.Acyclic
+      Test.Poly.Feedback
       Test.Poly.ModeTheory
       Test.Poly.Surface
       Test.Poly.TypeModes
       Test.Poly.NoLegacy
-      Test.Poly.StdlibCoherence
+      Test.Value.Doc
+      Test.Frontend.Pipeline
       Paths_llang
   autogen-modules:
       Paths_llang

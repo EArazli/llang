@@ -1,10 +1,14 @@
 import "../../lib/surfaces/planar_monoid.ssa.surface.llang";
 
-run main where {
-  doctrine CartMonoid;
-  mode M;
-  surface PlanarSSA;
-  show normalized;
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run main using debug where {
+  source doctrine CartMonoid;
+  source mode M;
+  source surface PlanarSSA;
 }
 ---
 diag {

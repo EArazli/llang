@@ -1,5 +1,4 @@
 import "../../lib/algebra/peano.llang";
-import "../../lib/models/peano.models.llang";
 
 surface PeanoTerm where {
   doctrine Peano;
@@ -27,13 +26,15 @@ surface PeanoTerm where {
   }
 }
 
-run main where {
-  doctrine Peano;
-  mode M;
-  surface PeanoTerm;
-  model PeanoNative;
-  show normalized;
-  show value;
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run main using debug where {
+  source doctrine Peano;
+  source mode M;
+  source surface PeanoTerm;
 }
 ---
 term {

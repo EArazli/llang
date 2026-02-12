@@ -237,6 +237,8 @@ freeTyVarsPayload edge =
       S.unions (map freeFromBinderArg bargs)
     PBox _ inner ->
       freeTyVarsDiagram inner
+    PFeedback _ inner ->
+      freeTyVarsDiagram inner
     PSplice _ ->
       S.empty
   where
@@ -251,6 +253,8 @@ freeAttrVarsPayload edge =
     PGen _ attrs bargs ->
       S.union (freeAttrVarsMap attrs) (S.unions (map freeFromBinderArg bargs))
     PBox _ inner ->
+      freeAttrVarsDiagram inner
+    PFeedback _ inner ->
       freeAttrVarsDiagram inner
     PSplice _ ->
       S.empty
@@ -267,6 +271,8 @@ freeIxVarsPayload edge =
       S.unions (map freeFromBinderArg bargs)
     PBox _ inner ->
       freeIxVarsDiagram inner
+    PFeedback _ inner ->
+      freeIxVarsDiagram inner
     PSplice _ ->
       S.empty
   where
@@ -281,6 +287,8 @@ binderArgMetasPayload edge =
     PGen _ _ bargs ->
       S.unions (map fromBinderArg bargs)
     PBox _ inner ->
+      binderArgMetaVarsDiagram inner
+    PFeedback _ inner ->
       binderArgMetaVarsDiagram inner
     PSplice _ ->
       S.empty
@@ -297,6 +305,8 @@ spliceMetasPayload edge =
       S.unions (map fromBinderArg bargs)
     PBox _ inner ->
       spliceMetaVarsDiagram inner
+    PFeedback _ inner ->
+      spliceMetaVarsDiagram inner
     PSplice x ->
       S.singleton x
   where
@@ -310,6 +320,11 @@ mapEdgePayload mt subst edge =
   case ePayload edge of
     PGen g attrs bargs -> edge { ePayload = PGen g attrs (map mapBinderArg bargs) }
     PBox name inner -> edge { ePayload = PBox name (applySubstDiagram mt subst inner) }
+    PFeedback spec inner ->
+      edge
+        { ePayload =
+            PFeedback spec { fbTy = applySubstTyLegacy mt (toTyOnlySubst subst) (fbTy spec) } (applySubstDiagram mt subst inner)
+        }
     PSplice x -> edge { ePayload = PSplice x }
   where
     mapBinderArg barg =
@@ -326,6 +341,10 @@ mapEdgePayloadTT tt subst edge =
     PBox name inner -> do
       inner' <- applySubstDiagramTT tt subst inner
       pure edge { ePayload = PBox name inner' }
+    PFeedback spec inner -> do
+      fbTy' <- applySubstTy tt subst (fbTy spec)
+      inner' <- applySubstDiagramTT tt subst inner
+      pure edge { ePayload = PFeedback spec { fbTy = fbTy' } inner' }
     PSplice x -> pure edge { ePayload = PSplice x }
   where
     mapBinderArgTT barg =
@@ -349,6 +368,7 @@ mapEdgePayloadAttr subst edge =
   case ePayload edge of
     PGen g attrs bargs -> edge { ePayload = PGen g (applyAttrSubstMap subst attrs) (map mapBinderArg bargs) }
     PBox name inner -> edge { ePayload = PBox name (applyAttrSubstDiagram subst inner) }
+    PFeedback spec inner -> edge { ePayload = PFeedback spec (applyAttrSubstDiagram subst inner) }
     PSplice x -> edge { ePayload = PSplice x }
   where
     mapBinderArg barg =
@@ -361,6 +381,7 @@ mapEdgePayloadRename rename edge =
   case ePayload edge of
     PGen g attrs bargs -> edge { ePayload = PGen g (M.map (renameAttrTerm rename) attrs) (map mapBinderArg bargs) }
     PBox name inner -> edge { ePayload = PBox name (renameAttrVarsDiagram rename inner) }
+    PFeedback spec inner -> edge { ePayload = PFeedback spec (renameAttrVarsDiagram rename inner) }
     PSplice x -> edge { ePayload = PSplice x }
   where
     mapBinderArg barg =

@@ -50,6 +50,7 @@ mkDoctrine tables =
   Doctrine
     { dName = "D"
     , dModes = mkModes (S.fromList (map fst tables))
+    , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dAttrSorts = M.empty

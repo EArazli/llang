@@ -2,7 +2,6 @@
 module Strat.Poly.DSL.Elab
   ( elabPolyDoctrine
   , elabPolyMorphism
-  , elabPolyRun
   , elabDiagExpr
   , parsePolicy
   ) where
@@ -10,13 +9,14 @@ module Strat.Poly.DSL.Elab
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Control.Monad (foldM, when)
-import Strat.DSL.AST (RawRun(..), RawRunShow(..), RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..), RawPolyModalityMap(..), RawPolyAttrSortMap(..))
+import Strat.DSL.AST (RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..), RawPolyModalityMap(..), RawPolyAttrSortMap(..))
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (emptyDiagram, freshPort, addEdgePayload, Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), validateDiagram, mergePorts)
+import Strat.Poly.Graph (emptyDiagram, freshPort, addEdgePayload, Edge(..), EdgeId(..), PortId(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), validateDiagram, diagramPortType, FeedbackSpec(..))
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
@@ -29,48 +29,9 @@ import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
-import Strat.RunSpec (RunShow(..), RunSpec(..))
 
 
 type Subst = U.Subst
-
-
-elabPolyRun :: Text -> RawRun -> Either Text RunSpec
-elabPolyRun name raw = do
-  doctrine <- maybe (Left "run: missing doctrine") Right (rrDoctrine raw)
-  exprText <- maybe (Left "run: missing expression") Right (rrExprText raw)
-  let fuel = maybe 50 id (rrFuel raw)
-  let flags = if null (rrShowFlags raw) then [ShowNormalized] else map toShow (rrShowFlags raw)
-  let policyName = maybe "UseStructuralAsBidirectional" id (rrPolicy raw)
-  policy <- parsePolicy policyName
-  ensureShowFlags flags
-  pure RunSpec
-    { prName = name
-    , prDoctrine = doctrine
-    , prMode = rrMode raw
-    , prSurface = rrSurface raw
-    , prModel = rrModel raw
-    , prMorphisms = rrMorphisms raw
-    , prUses = rrUses raw
-    , prPolicy = policy
-    , prFuel = fuel
-    , prShowFlags = flags
-    , prExprText = exprText
-    }
-  where
-    toShow s =
-      case s of
-        RawShowNormalized -> ShowNormalized
-        RawShowInput -> ShowInput
-        RawShowValue -> ShowValue
-        RawShowCat -> ShowCat
-        RawShowCoherence -> ShowCoherence
-    ensureShowFlags flags =
-      if ShowCat `elem` flags
-        then Left "run: show cat is not supported"
-        else if ShowValue `elem` flags && rrModel raw == Nothing
-          then Left "run: show value requires model"
-          else Right ()
 
 elabPolyMorphism :: ModuleEnv -> RawPolyMorphism -> Either Text Morphism
 elabPolyMorphism env raw = do
@@ -326,6 +287,7 @@ seedDoctrine name base =
     Nothing -> Doctrine
       { dName = name
       , dModes = emptyModeTheory
+      , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dAttrSorts = M.empty
@@ -338,10 +300,14 @@ seedDoctrine name base =
 elabPolyItem :: ModuleEnv -> Doctrine -> RawPolyItem -> Either Text Doctrine
 elabPolyItem env doc item =
   case item of
-    RPMode name -> do
-      let mode = ModeName name
+    RPMode decl -> do
+      let mode = ModeName (rmdName decl)
       mt' <- addMode mode (dModes doc)
-      pure doc { dModes = mt' }
+      let acyclic' =
+            if rmdAcyclic decl
+              then S.insert mode (dAcyclicModes doc)
+              else dAcyclicModes doc
+      pure doc { dModes = mt', dAcyclicModes = acyclic' }
     RPIndexMode name -> do
       let mode = ModeName name
       ensureMode doc mode
@@ -935,6 +901,7 @@ elabRuleLHS
 elabRuleLHS env doc mode tyVars ixVars expr = do
   (diag, metas) <- elabDiagExprWith env doc mode [] tyVars ixVars M.empty BMCollect False expr
   ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
+  ensureAcyclicMode doc mode diag
   pure (diag, metas)
 
 elabRuleRHS
@@ -951,6 +918,7 @@ elabRuleRHS env doc mode tyVars ixVars binderSigs expr = do
   if metas == binderSigs
     then do
       ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
+      ensureAcyclicMode doc mode diag
       pure diag
     else Left "rule RHS introduces fresh binder metas"
 
@@ -958,6 +926,7 @@ elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [TyVar] -> RawDiagExpr -> E
 elabDiagExpr env doc mode ruleVars expr = do
   (diag, _) <- elabDiagExprWith env doc mode [] ruleVars [] M.empty BMNoMeta False expr
   ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
+  ensureAcyclicMode doc mode diag
   pure diag
 
 elabDiagExprWith
@@ -1082,9 +1051,17 @@ elabDiagExprWithFresh env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allo
         RDLoop innerExpr -> do
           (inner, binderSigs') <- build curIxCtx binderSigs innerExpr
           case (dIn inner, dOut inner) of
-            ([pIn], pOut:pOuts) -> do
-              diag1 <- liftEither (mergePorts inner pOut pIn)
-              let diag2 = diag1 { dIn = [], dOut = pOuts }
+            ([pIn], pState:pOuts) -> do
+              stateInTy <- liftEither (lookupPortTy inner pIn)
+              stateOutTy <- liftEither (lookupPortTy inner pState)
+              if stateInTy == stateOutTy
+                then pure ()
+                else liftEither (Left "loop: body first output type must match input type")
+              outTys <- mapM (liftEither . lookupPortTy inner) pOuts
+              let (outs, diag0) = allocPorts outTys (emptyDiagram mode curIxCtx)
+              let spec = FeedbackSpec { fbTy = stateInTy, fbOutArity = length pOuts }
+              diag1 <- liftEither (addEdgePayload (PFeedback spec inner) [] outs diag0)
+              let diag2 = diag1 { dIn = [], dOut = outs }
               liftEither (validateDiagram diag2)
               pure (diag2, binderSigs')
             _ -> liftEither (Left "loop: expected exactly one input and at least one output")
@@ -1171,6 +1148,11 @@ elabDiagExprWithFresh env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allo
       let d3 = d2 { dIn = ins, dOut = outs }
       validateDiagram d3
       pure d3
+
+    lookupPortTy d pid =
+      case diagramPortType d pid of
+        Nothing -> Left "loop: internal missing port type"
+        Just ty -> Right ty
 
     canonicalCtx ctx = liftEither (mapM (U.applySubstTy ttDoc U.emptySubst) ctx)
 
@@ -1324,6 +1306,84 @@ elabRawAttrTerm doc expectedSort varSorts rawTerm =
       case asLitKind decl of
         Just allowed | allowed == kind -> Right ()
         _ -> Left "attribute sort does not admit this literal kind"
+
+ensureAcyclicMode :: Doctrine -> ModeName -> Diagram -> Either Text ()
+ensureAcyclicMode doc mode diag =
+  if modeIsAcyclic doc mode
+    then do
+      _ <- topologicalEdges diag
+      mapM_ checkInner (IM.elems (dEdges diag))
+    else Right ()
+  where
+    checkInner edge =
+      case ePayload edge of
+        PBox _ inner -> ensureAcyclicMode doc mode inner
+        PFeedback _ inner -> ensureAcyclicMode doc mode inner
+        _ -> Right ()
+
+topologicalEdges :: Diagram -> Either Text [Edge]
+topologicalEdges diag =
+  if IM.null edgeTable
+    then Right []
+    else
+      if length orderedIds == IM.size edgeTable
+        then mapM lookupEdge orderedIds
+        else Left "acyclic mode violation: diagram contains a cycle"
+  where
+    edgeTable = dEdges diag
+    edgeIds = map eId (IM.elems edgeTable)
+
+    deps0 = M.fromList [(eid, depsFor eid) | eid <- edgeIds]
+    dependents = foldl insertDeps M.empty (M.toList deps0)
+
+    insertDeps acc (eid, deps) =
+      S.foldl' (\m dep -> M.insertWith S.union dep (S.singleton eid) m) acc deps
+
+    depsFor eid =
+      case findEdge eid of
+        Nothing -> S.empty
+        Just edge ->
+          S.fromList
+            [ prod
+            | p <- eIns edge
+            , Just (Just prod) <- [IM.lookup (portInt p) (dProd diag)]
+            ]
+
+    ready0 =
+      S.fromList
+        [ eid
+        | (eid, deps) <- M.toList deps0
+        , S.null deps
+        ]
+
+    orderedIds = go ready0 deps0 []
+
+    go ready deps acc =
+      case S.lookupMin ready of
+        Nothing -> reverse acc
+        Just eid ->
+          let readyRest = S.deleteMin ready
+              out = M.findWithDefault S.empty eid dependents
+              (deps', ready') = S.foldl' (dropDep eid) (deps, readyRest) out
+           in go ready' deps' (eid : acc)
+
+    dropDep done (deps, ready) target =
+      let old = M.findWithDefault S.empty target deps
+          new = S.delete done old
+          deps' = M.insert target new deps
+          ready' = if S.null new then S.insert target ready else ready
+       in (deps', ready')
+
+    findEdge eid =
+      let EdgeId k = eid
+       in IM.lookup k edgeTable
+
+    lookupEdge eid =
+      case findEdge eid of
+        Nothing -> Left "internal error: missing edge"
+        Just edge -> Right edge
+
+    portInt (PortId i) = i
 
 -- Freshening monad
 

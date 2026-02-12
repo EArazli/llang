@@ -32,7 +32,11 @@ substRawPolyDoctrine subst doc =
 substItem :: M.Map Text Text -> P.RawPolyItem -> P.RawPolyItem
 substItem subst item =
   case item of
-    P.RPMode name -> P.RPMode (lookupText subst name)
+    P.RPMode decl ->
+      P.RPMode
+        decl
+          { P.rmdName = lookupText subst (P.rmdName decl)
+          }
     P.RPIndexMode name -> P.RPIndexMode (lookupText subst name)
     P.RPIndexFun decl ->
       P.RPIndexFun

@@ -5,7 +5,6 @@ module Strat.DSL.Parse
 
 import Strat.DSL.AST
 import Strat.Common.Rules
-import Strat.Model.Spec (DefaultBehavior(..), MExpr(..))
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.Surface.Parse (surfaceSpecBlock)
 import qualified Strat.Poly.ModeTheory
@@ -40,11 +39,11 @@ decl =
   importDecl
     <|> doctrineTemplateDecl
     <|> doctrineDecl
+    <|> derivedDoctrineDecl
     <|> morphismDecl
     <|> surfaceDecl
-    <|> modelDecl
+    <|> pipelineDecl
     <|> implementsDecl
-    <|> runSpecDecl
     <|> termDecl
     <|> runDecl
 
@@ -128,17 +127,28 @@ surfaceDecl = do
   optionalSemi
   pure (DeclSurface name spec)
 
-modelDecl :: Parser RawDecl
-modelDecl = do
-  _ <- symbol "model"
+derivedDoctrineDecl :: Parser RawDecl
+derivedDoctrineDecl = do
+  _ <- symbol "derived"
+  _ <- symbol "doctrine"
   name <- ident
-  _ <- symbol ":"
-  doc <- ident
-  base <- optional (symbol "using" *> ident)
-  _ <- symbol "where"
-  items <- modelBlock
+  _ <- symbol "="
+  _ <- symbol "foliated"
+  base <- ident
+  _ <- symbol "mode"
+  modeName <- ident
+  opts <- option (RawFoliationOpts Nothing Nothing []) (symbol "with" *> foliationOptsBlock)
   optionalSemi
-  pure (DeclModel name doc base items)
+  pure (DeclDerivedDoctrine (RawDerivedDoctrine name base modeName opts))
+
+pipelineDecl :: Parser RawDecl
+pipelineDecl = do
+  _ <- symbol "pipeline"
+  name <- ident
+  _ <- symbol "where"
+  phases <- pipelineBlock
+  optionalSemi
+  pure (DeclPipeline (RawPipeline name phases))
 
 morphismDecl :: Parser RawDecl
 morphismDecl = do
@@ -166,26 +176,15 @@ implementsDecl = do
   optionalSemi
   pure (DeclImplements iface tgt name)
 
-runSpecDecl :: Parser RawDecl
-runSpecDecl = do
-  _ <- symbol "run_spec"
-  name <- ident
-  mUsing <- optional (symbol "using" *> ident)
-  _ <- symbol "where"
-  items <- runBlock
-  mExprText <- optional (try runBody)
-  optionalSemi
-  pure (DeclRunSpec name (RawRunSpec mUsing (buildRun items mExprText)))
-
 runDecl :: Parser RawDecl
 runDecl = do
   _ <- symbol "run"
   name <- ident
-  using <- optional (symbol "using" *> ident)
-  items <- option [] (symbol "where" *> runBlock)
+  using <- symbol "using" *> ident
+  items <- symbol "where" *> runBlock
   mExprText <- optional (try runBody)
   optionalSemi
-  pure (DeclRun (RawNamedRun name using (buildRun items mExprText)))
+  pure (DeclRun (RawNamedRun name (buildRun (Just using) items mExprText)))
 
 termDecl :: Parser RawDecl
 termDecl = do
@@ -238,8 +237,9 @@ polyModeDecl :: Parser PolyAST.RawPolyItem
 polyModeDecl = do
   _ <- symbol "mode"
   name <- ident
+  acyclic <- option False (True <$ symbol "acyclic")
   optionalSemi
-  pure (PolyAST.RPMode name)
+  pure (PolyAST.RPMode (PolyAST.RawModeDecl name acyclic))
 
 polyIndexModeDecl :: Parser PolyAST.RawPolyItem
 polyIndexModeDecl = do
@@ -804,18 +804,181 @@ buildPolyMorphism name src tgt items =
     firstJust [] = Nothing
     firstJust (x:_) = Just x
 
+-- Pipeline block
+
+pipelineBlock :: Parser [RawPhase]
+pipelineBlock = do
+  _ <- symbol "{"
+  items <- many pipelineItem
+  _ <- symbol "}"
+  pure items
+
+pipelineItem :: Parser RawPhase
+pipelineItem =
+  pipelineApplyItem
+    <|> pipelineNormalizeItem
+    <|> try pipelineExtractFoliateItem
+    <|> pipelineExtractItem
+
+pipelineApplyItem :: Parser RawPhase
+pipelineApplyItem = do
+  _ <- symbol "apply"
+  name <- qualifiedIdent
+  optionalSemi
+  pure (RPApply name)
+
+pipelineNormalizeItem :: Parser RawPhase
+pipelineNormalizeItem = do
+  _ <- symbol "normalize"
+  opts <- option (RawNormalizeOpts Nothing Nothing) normalizeOptsBlock
+  optionalSemi
+  pure (RPNormalize opts)
+
+normalizeOptsBlock :: Parser RawNormalizeOpts
+normalizeOptsBlock = do
+  _ <- symbol "{"
+  items <- many normalizeItem
+  _ <- symbol "}"
+  pure
+    RawNormalizeOpts
+      { rnoPolicy = firstJust [ p | NormPolicy p <- items ]
+      , rnoFuel = firstJust [ n | NormFuel n <- items ]
+      }
+  where
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
+
+data NormalizeItem
+  = NormPolicy Text
+  | NormFuel Int
+
+normalizeItem :: Parser NormalizeItem
+normalizeItem =
+  normPolicy <|> normFuel
+  where
+    normPolicy = do
+      _ <- symbol "policy"
+      _ <- symbol "="
+      txt <- stringLiteral
+      optionalSemi
+      pure (NormPolicy txt)
+    normFuel = do
+      _ <- symbol "fuel"
+      _ <- symbol "="
+      n <- fromIntegral <$> integer
+      optionalSemi
+      pure (NormFuel n)
+
+pipelineExtractFoliateItem :: Parser RawPhase
+pipelineExtractFoliateItem = do
+  _ <- symbol "extract"
+  _ <- symbol "foliate"
+  _ <- symbol "into"
+  target <- ident
+  opts <- option (RawFoliationOpts Nothing Nothing []) (symbol "with" *> foliationOptsBlock)
+  optionalSemi
+  pure (RPExtractFoliate target opts)
+
+pipelineExtractItem :: Parser RawPhase
+pipelineExtractItem = do
+  _ <- symbol "extract"
+  (do
+      _ <- symbol "diagram"
+      optionalSemi
+      pure RPExtractDiagramPretty)
+    <|> do
+      doctrineName <- ident
+      opts <- option (RawValueExtractOpts Nothing Nothing) valueExtractOptsBlock
+      optionalSemi
+      pure (RPExtractValue doctrineName opts)
+
+foliationOptsBlock :: Parser RawFoliationOpts
+foliationOptsBlock = do
+  _ <- symbol "{"
+  items <- many foliationOptItem
+  _ <- symbol "}"
+  pure
+    RawFoliationOpts
+      { rfoPolicy = firstJust [ p | FOPolicy p <- items ]
+      , rfoNaming = firstJust [ p | FONaming p <- items ]
+      , rfoReserved = concat [ xs | FOReserved xs <- items ]
+      }
+  where
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
+
+data FoliationOptItem
+  = FOPolicy Text
+  | FONaming Text
+  | FOReserved [Text]
+
+foliationOptItem :: Parser FoliationOptItem
+foliationOptItem =
+  foPolicy <|> foNaming <|> foReserved
+  where
+    foPolicy = do
+      _ <- symbol "policy"
+      _ <- symbol "="
+      txt <- stringLiteral
+      optionalSemi
+      pure (FOPolicy txt)
+    foNaming = do
+      _ <- symbol "naming"
+      _ <- symbol "="
+      txt <- stringLiteral
+      optionalSemi
+      pure (FONaming txt)
+    foReserved = do
+      _ <- symbol "reserved"
+      _ <- symbol "="
+      _ <- symbol "["
+      xs <- stringLiteral `sepBy` symbol ","
+      _ <- symbol "]"
+      optionalSemi
+      pure (FOReserved xs)
+
+valueExtractOptsBlock :: Parser RawValueExtractOpts
+valueExtractOptsBlock = do
+  _ <- symbol "{"
+  items <- many valueExtractOptItem
+  _ <- symbol "}"
+  pure
+    RawValueExtractOpts
+      { rveStdout = firstJust [ b | VEStdout b <- items ]
+      , rveRoot = firstJust [ T.unpack p | VERoot p <- items ]
+      }
+  where
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
+
+data ValueExtractOptItem
+  = VEStdout Bool
+  | VERoot Text
+
+valueExtractOptItem :: Parser ValueExtractOptItem
+valueExtractOptItem =
+  veStdout <|> veRoot
+  where
+    veStdout = do
+      _ <- symbol "stdout"
+      _ <- symbol "="
+      b <- boolLiteral
+      optionalSemi
+      pure (VEStdout b)
+    veRoot = do
+      _ <- symbol "root"
+      _ <- symbol "="
+      p <- stringLiteral
+      optionalSemi
+      pure (VERoot p)
+
 -- Run block
 
 data RunItem
-  = RunDoctrine Text
-  | RunMode Text
-  | RunSurface Text
-  | RunModel Text
-  | RunApply Text
+  = RunSourceDoctrine Text
+  | RunSourceMode Text
+  | RunSourceSurface Text
   | RunUses [Text]
-  | RunPolicy Text
-  | RunFuel Int
-  | RunShow RawRunShow
 
 runBlock :: Parser [RunItem]
 runBlock = do
@@ -826,92 +989,48 @@ runBlock = do
 
 runItem :: Parser RunItem
 runItem =
-  runDoctrineItem
-    <|> runModeItem
-    <|> runSurfaceItem
-    <|> runModelItem
-    <|> runApplyItem
-    <|> runUsesItem
-    <|> runPolicyItem
-    <|> runFuelItem
-    <|> runShowItem
+  runUsesItem
+    <|> runSourceItem
 
-runDoctrineItem :: Parser RunItem
-runDoctrineItem = do
-  _ <- symbol "doctrine"
-  name <- ident
-  optionalSemi
-  pure (RunDoctrine name)
-
-runModeItem :: Parser RunItem
-runModeItem = do
-  _ <- keyword "mode"
-  name <- ident
-  optionalSemi
-  pure (RunMode name)
-
-runSurfaceItem :: Parser RunItem
-runSurfaceItem = do
-  _ <- symbol "surface"
-  name <- ident
-  optionalSemi
-  pure (RunSurface name)
-
-runModelItem :: Parser RunItem
-runModelItem = do
-  _ <- keyword "model"
-  name <- ident
-  optionalSemi
-  pure (RunModel name)
-
-runApplyItem :: Parser RunItem
-runApplyItem = do
-  _ <- symbol "apply"
-  name <- ident
-  optionalSemi
-  pure (RunApply name)
+runSourceItem :: Parser RunItem
+runSourceItem = do
+  _ <- symbol "source"
+  ( do
+      _ <- symbol "doctrine"
+      name <- ident
+      optionalSemi
+      pure (RunSourceDoctrine name)
+    )
+    <|> ( do
+            _ <- symbol "mode"
+            name <- ident
+            optionalSemi
+            pure (RunSourceMode name)
+        )
+    <|> ( do
+            _ <- symbol "surface"
+            name <- ident
+            optionalSemi
+            pure (RunSourceSurface name)
+        )
 
 runUsesItem :: Parser RunItem
 runUsesItem = do
   _ <- symbol "uses"
-  _ <- optional (symbol ":")
-  names <- ident `sepBy1` symbol ","
+  _ <- symbol "["
+  files <- stringLiteral `sepBy` symbol ","
+  _ <- symbol "]"
   optionalSemi
-  pure (RunUses names)
+  pure (RunUses files)
 
-runPolicyItem :: Parser RunItem
-runPolicyItem = do
-  _ <- symbol "policy"
-  name <- ident
-  optionalSemi
-  pure (RunPolicy name)
-
-runFuelItem :: Parser RunItem
-runFuelItem = do
-  _ <- symbol "fuel"
-  n <- fromIntegral <$> integer
-  optionalSemi
-  pure (RunFuel n)
-
-runShowItem :: Parser RunItem
-runShowItem = do
-  _ <- symbol "show"
-  flag <- showFlag
-  optionalSemi
-  pure (RunShow flag)
-
-buildRun :: [RunItem] -> Maybe Text -> RawRun
-buildRun items mExprText =
+buildRun :: Maybe Text -> [RunItem] -> Maybe Text -> RawRun
+buildRun mPipeline items mExprText =
   RawRun
-    { rrDoctrine = firstJust [ d | RunDoctrine d <- items ]
-    , rrMode = firstJust [ m | RunMode m <- items ]
-    , rrSurface = firstJust [ s | RunSurface s <- items ]
-    , rrModel = firstJust [ m | RunModel m <- items ]
-    , rrMorphisms = [ n | RunApply n <- items ]
+    { rrPipeline = mPipeline
+    , rrDoctrine = firstJust [ d | RunSourceDoctrine d <- items ]
+    , rrMode = firstJust [ m | RunSourceMode m <- items ]
+    , rrSurface = firstJust [ s | RunSourceSurface s <- items ]
     , rrUses = concat [ ns | RunUses ns <- items ]
-    , rrPolicy = firstJust [ p | RunPolicy p <- items ]
-    , rrFuel = firstJust [ f | RunFuel f <- items ]
-    , rrShowFlags = [ s | RunShow s <- items ]
     , rrExprText = mExprText
     }
   where
@@ -945,8 +1064,6 @@ termItem =
     <|> termUsesItem
     <|> termPolicyItem
     <|> termFuelItem
-    <|> termModelForbidden
-    <|> termShowForbidden
 
 termDoctrineItem :: Parser TermItem
 termDoctrineItem = do
@@ -998,16 +1115,6 @@ termFuelItem = do
   optionalSemi
   pure (TermFuel n)
 
-termModelForbidden :: Parser TermItem
-termModelForbidden = do
-  _ <- keyword "model"
-  fail "term: model is not allowed"
-
-termShowForbidden :: Parser TermItem
-termShowForbidden = do
-  _ <- keyword "show"
-  fail "term: show is not allowed"
-
 buildTerm :: [TermItem] -> Text -> RawTerm
 buildTerm items exprText =
   RawTerm
@@ -1023,134 +1130,6 @@ buildTerm items exprText =
   where
     firstJust [] = Nothing
     firstJust (x:_) = Just x
-
-showFlag :: Parser RawRunShow
-showFlag =
-  (symbol "normalized" $> RawShowNormalized)
-    <|> (symbol "value" $> RawShowValue)
-    <|> (symbol "cat" $> RawShowCat)
-    <|> (symbol "input" $> RawShowInput)
-    <|> (symbol "coherence" $> RawShowCoherence)
-
--- Model block
-
-modelBlock :: Parser [RawModelItem]
-modelBlock = do
-  _ <- symbol "{"
-  items <- many modelItem
-  _ <- symbol "}"
-  pure items
-
-modelItem :: Parser RawModelItem
-modelItem = backendItem <|> defaultItem <|> foldItem <|> clauseItem
-
-backendItem :: Parser RawModelItem
-backendItem = do
-  _ <- symbol "backend"
-  _ <- symbol "="
-  b <- (symbol "algebra" $> RMBAlgebra) <|> (try (symbol "fold_ssa") $> RMBFold) <|> (symbol "fold" $> RMBFold)
-  _ <- symbol ";"
-  pure (RMBackend b)
-
-defaultItem :: Parser RawModelItem
-defaultItem = do
-  _ <- symbol "default"
-  _ <- symbol "="
-  def <- (symbol "symbolic" $> DefaultSymbolic) <|> (symbol "error" *> (DefaultError <$> stringLiteral))
-  optionalSemi
-  pure (RMDefault def)
-
-clauseItem :: Parser RawModelItem
-clauseItem = do
-  _ <- symbol "op"
-  name <- qualifiedIdent
-  args <- optional (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
-  _ <- symbol "="
-  expr' <- mexpr
-  optionalSemi
-  pure (RMClause (RawModelClause name (maybe [] id args) expr'))
-
-foldItem :: Parser RawModelItem
-foldItem = do
-  _ <- symbol "fold"
-  _ <- symbol "{"
-  items <- many foldBlockItem
-  _ <- symbol "}"
-  pure (RMFold items)
-
-foldBlockItem :: Parser RawFoldItem
-foldBlockItem = foldIndentItem <|> foldReservedItem <|> foldHookItem
-
-foldIndentItem :: Parser RawFoldItem
-foldIndentItem = do
-  _ <- symbol "indent"
-  _ <- symbol "="
-  txt <- stringLiteral
-  _ <- symbol ";"
-  pure (RFIndent txt)
-
-foldReservedItem :: Parser RawFoldItem
-foldReservedItem = do
-  _ <- symbol "reserved"
-  _ <- symbol "="
-  _ <- symbol "["
-  names <- stringLiteral `sepBy` symbol ","
-  _ <- symbol "]"
-  _ <- symbol ";"
-  pure (RFReserved names)
-
-foldHookItem :: Parser RawFoldItem
-foldHookItem = do
-  name <- ident
-  args <- symbol "(" *> ident `sepBy` symbol "," <* symbol ")"
-  _ <- symbol "="
-  expr' <- mexpr
-  _ <- symbol ";"
-  pure (RFHook (RawModelClause name args expr'))
-
--- Model expressions
-
-mexpr :: Parser MExpr
-mexpr = ifExpr <|> makeExprParser mterm mops
-
-ifExpr :: Parser MExpr
-ifExpr = do
-  _ <- symbol "if"
-  cond <- mexpr
-  _ <- symbol "then"
-  t <- mexpr
-  _ <- symbol "else"
-  e <- mexpr
-  pure (MIf cond t e)
-
-mterm :: Parser MExpr
-mterm =
-  choice
-    [ parens mexpr
-    , MInt . fromIntegral <$> integer
-    , MBool True <$ symbol "true"
-    , MBool False <$ symbol "false"
-    , MString <$> stringLiteral
-    , listExpr
-    , MVar <$> ident
-    ]
-
-listExpr :: Parser MExpr
-listExpr = do
-  _ <- symbol "["
-  xs <- mexpr `sepBy` symbol ","
-  _ <- symbol "]"
-  pure (MList xs)
-
-mops :: [[Operator Parser MExpr]]
-mops =
-  [ [binary "*" (MBinOp "*")]
-  , [binary "++" (MBinOp "++"), binary "+" (MBinOp "+")]
-  , [binary "==" (MBinOp "==")]
-  ]
-
-binary :: Text -> (MExpr -> MExpr -> MExpr) -> Operator Parser MExpr
-binary name f = InfixL (f <$ symbol name)
 
 -- Helpers
 
@@ -1198,6 +1177,11 @@ keyword kw = lexeme (try (string kw <* notFollowedBy identChar))
 
 stringLiteral :: Parser Text
 stringLiteral = lexeme (T.pack <$> (char '"' *> manyTill L.charLiteral (char '"')))
+
+boolLiteral :: Parser Bool
+boolLiteral =
+  (True <$ keyword "true")
+    <|> (False <$ keyword "false")
 
 integer :: Parser Integer
 integer = lexeme L.decimal

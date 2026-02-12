@@ -71,6 +71,13 @@ renderEdges edges = do
                   <> " [" <> renderPortList (eIns e) <> "] -> [" <> renderPortList (eOuts e) <> "]"
           let body = indent innerTxt
           Right (header <> "\n" <> body)
+        PFeedback _ inner -> do
+          innerTxt <- renderDiagram inner
+          let header =
+                "  " <> renderEdgeId (eId e) <> ": feedback"
+                  <> " [" <> renderPortList (eIns e) <> "] -> [" <> renderPortList (eOuts e) <> "]"
+          let body = indent innerTxt
+          Right (header <> "\n" <> body)
         PSplice x ->
           Right
             ( "  "

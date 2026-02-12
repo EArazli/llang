@@ -125,6 +125,7 @@ testTypeMapReorder = do
   let docSrc = Doctrine
         { dName = "Src"
         , dModes = mkModes [mode]
+    , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dAttrSorts = M.empty
@@ -135,6 +136,7 @@ testTypeMapReorder = do
   let docTgt = Doctrine
         { dName = "Tgt"
         , dModes = mkModes [mode]
+    , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dAttrSorts = M.empty
@@ -199,6 +201,7 @@ testCrossModeMorphism = do
   let docSrc = Doctrine
         { dName = "Src"
         , dModes = mkModes [modeC]
+    , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dAttrSorts = M.empty
@@ -209,6 +212,7 @@ testCrossModeMorphism = do
   let docTgt = Doctrine
         { dName = "Tgt"
         , dModes = mkModes [modeV]
+    , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dAttrSorts = M.empty
@@ -342,6 +346,7 @@ testModalityMapRewritesTypeModalities = do
   let docSrc = Doctrine
         { dName = "SrcModal"
         , dModes = modeTheorySrc
+    , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dAttrSorts = M.empty
@@ -352,6 +357,7 @@ testModalityMapRewritesTypeModalities = do
   let docTgt = Doctrine
         { dName = "TgtModal"
         , dModes = modeTheoryTgt
+    , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dAttrSorts = M.empty
@@ -421,6 +427,7 @@ testIxFunMapArityMismatch = do
         Doctrine
           { dName = "SrcIx"
           , dModes = mkModes [modeI, modeJ]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.fromList [modeI, modeJ]
           , dIxTheory =
               M.fromList
@@ -450,6 +457,7 @@ testIxFunMapArityMismatch = do
         Doctrine
           { dName = "TgtIx"
           , dModes = mkModes [modeI, modeJ]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.fromList [modeI, modeJ]
           , dIxTheory =
               M.fromList
@@ -507,6 +515,7 @@ testIxFunMapSortMismatch = do
         Doctrine
           { dName = "SrcIxSort"
           , dModes = mkModes [modeI, modeJ]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.fromList [modeI, modeJ]
           , dIxTheory =
               M.fromList
@@ -541,6 +550,7 @@ testIxFunMapSortMismatch = do
         Doctrine
           { dName = "TgtIxSort"
           , dModes = mkModes [modeI, modeJ]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.fromList [modeI, modeJ]
           , dIxTheory =
               M.fromList
@@ -621,6 +631,7 @@ testMorphismInstantiationSubstFailure = do
         Doctrine
           { dName = "SrcSubstFail"
           , dModes = mkModes [mode]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.empty
           , dIxTheory = M.empty
           , dAttrSorts = M.empty
@@ -632,6 +643,7 @@ testMorphismInstantiationSubstFailure = do
         Doctrine
           { dName = "TgtSubstFail"
           , dModes = mkModes [mode]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.empty
           , dIxTheory = M.empty
           , dAttrSorts = M.empty
@@ -687,6 +699,7 @@ testBinderIdentityMorphismPreservesBinders = do
         Doctrine
           { dName = "LamDoc"
           , dModes = mkModes [mode]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.empty
           , dIxTheory = M.empty
           , dAttrSorts = M.empty
@@ -755,6 +768,7 @@ testMorphismSpliceRenamesToBinderMeta = do
         Doctrine
           { dName = "SpliceMetaDoc"
           , dModes = mkModes [mode]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.empty
           , dIxTheory = M.empty
           , dAttrSorts = M.empty
@@ -820,6 +834,7 @@ testMorphismRejectsBadBinderHoleSignatures = do
         Doctrine
           { dName = "BadBinderSigsDoc"
           , dModes = mkModes [mode]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.empty
           , dIxTheory = M.empty
           , dAttrSorts = M.empty
@@ -865,6 +880,7 @@ testTypeTemplateCycleRejected = do
         Doctrine
           { dName = "CycleDoc"
           , dModes = mkModes [mode]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.empty
           , dIxTheory = M.empty
           , dAttrSorts = M.empty
@@ -913,6 +929,7 @@ testIndexedTemplateSortMismatch = do
         Doctrine
           { dName = "SrcSortMismatch"
           , dModes = mkModes [modeM', modeI']
+    , dAcyclicModes = S.empty
           , dIndexModes = S.singleton modeI'
           , dIxTheory = M.empty
           , dAttrSorts = M.empty
@@ -928,6 +945,7 @@ testIndexedTemplateSortMismatch = do
         Doctrine
           { dName = "TgtSortMismatch"
           , dModes = mkModes [modeM', modeI']
+    , dAcyclicModes = S.empty
           , dIndexModes = S.singleton modeI'
           , dIxTheory = M.empty
           , dAttrSorts = M.empty
@@ -1000,6 +1018,7 @@ testIndexedTypeTemplateInstantiation = do
         Doctrine
           { dName = "SrcIndexedTemplate"
           , dModes = mkModes [modeM', modeI']
+    , dAcyclicModes = S.empty
           , dIndexModes = S.singleton modeI'
           , dIxTheory = M.fromList [(modeI', ixTheory)]
           , dAttrSorts = M.empty
@@ -1020,6 +1039,7 @@ testIndexedTypeTemplateInstantiation = do
         Doctrine
           { dName = "TgtIndexedTemplate"
           , dModes = mkModes [modeM', modeI']
+    , dAcyclicModes = S.empty
           , dIndexModes = S.singleton modeI'
           , dIxTheory = M.fromList [(modeI', ixTheory)]
           , dAttrSorts = M.empty
@@ -1095,6 +1115,7 @@ testIndexedTemplateKindMismatch = do
         Doctrine
           { dName = "SrcIndexedTemplateBad"
           , dModes = mkModes [modeM', modeI']
+    , dAcyclicModes = S.empty
           , dIndexModes = S.singleton modeI'
           , dIxTheory = M.fromList [(modeI', ixTheory)]
           , dAttrSorts = M.empty
@@ -1110,6 +1131,7 @@ testIndexedTemplateKindMismatch = do
         Doctrine
           { dName = "TgtIndexedTemplateBad"
           , dModes = mkModes [modeM', modeI']
+    , dAcyclicModes = S.empty
           , dIndexModes = S.singleton modeI'
           , dIxTheory = M.fromList [(modeI', ixTheory)]
           , dAttrSorts = M.empty
@@ -1205,6 +1227,7 @@ mkMonoid = do
   let doc = Doctrine
         { dName = "Monoid"
         , dModes = mt
+    , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dAttrSorts = M.empty
@@ -1255,6 +1278,7 @@ mkStringMonoid = do
   let doc = Doctrine
         { dName = "StringMonoid"
         , dModes = mt
+    , dAcyclicModes = S.empty
       , dIndexModes = S.empty
       , dIxTheory = M.empty
       , dAttrSorts = M.empty

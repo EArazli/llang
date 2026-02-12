@@ -9,10 +9,14 @@ doctrine LambdaBeta where {
     (lam[?Body] * id[A]) ; app == splice(?Body)
 }
 
-run main where {
-  doctrine LambdaBeta;
-  mode M;
-  show normalized;
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run main using debug where {
+  source doctrine LambdaBeta;
+  source mode M;
 }
 ---
 (lam[id[A]] * id[A]) ; app

@@ -20,10 +20,14 @@ doctrine VecDependent where {
   gen expect22(a@M) : [Vec(S(S(Z)), a)] -> [Vec(S(S(Z)), a)] @M;
 }
 
-run main where {
-  doctrine VecDependent;
-  mode M;
-  show normalized;
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run main using debug where {
+  source doctrine VecDependent;
+  source mode M;
 }
 ---
 append{A, S(Z), S(Z)} ; expect22{A}

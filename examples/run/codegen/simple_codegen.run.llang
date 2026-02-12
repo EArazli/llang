@@ -1,0 +1,33 @@
+doctrine IR where {
+  mode M acyclic;
+  type I @M;
+  gen lit1 : [] -> [I] @M;
+  gen lit2 : [] -> [I] @M;
+  gen add : [I, I] -> [I] @M;
+}
+
+derived doctrine IR_SSA = foliated IR mode M;
+
+morphism emitDoc : IR -> Doc where {
+  mode M -> Doc;
+  type I @M -> Doc @Doc;
+  gen lit1 @M -> text(s = "1")
+  gen lit2 @M -> text(s = "2")
+  gen add @M -> cat
+}
+
+pipeline compile_doc where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract foliate into IR_SSA;
+  apply IR_SSA.forget;
+  apply emitDoc;
+  extract Doc { stdout = true };
+}
+
+run main using compile_doc where {
+  source doctrine IR;
+  source mode M;
+}
+---
+lit1 * lit2 ; add
+---

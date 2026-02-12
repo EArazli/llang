@@ -141,6 +141,7 @@ testCriticalPairsFailOnSubstFailure = do
         Doctrine
           { dName = "D"
           , dModes = mkModes [mode]
+    , dAcyclicModes = S.empty
           , dIndexModes = S.empty
           , dIxTheory = M.empty
           , dAttrSorts = M.empty

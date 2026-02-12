@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Frontend.Compile
   ( compileDiagramArtifact
+  , compileSourceDiagram
   , applyMorphisms
   ) where
 
@@ -34,6 +35,32 @@ compileDiagramArtifact
   -> Text        -- expr text
   -> Either Text (Doctrine, Diagram, Diagram)
 compileDiagramArtifact env targetName mMode mSurface uses morphs policy fuel exprText = do
+  (docUsed, diagUsed) <- compileSourceDiagram env targetName mMode mSurface uses exprText
+  (docApplied, diagApplied) <- applyMorphisms env docUsed diagUsed morphs
+  (docFinal, diagFinal) <-
+    if dName docApplied == targetName
+      then Right (docApplied, diagApplied)
+      else do
+        case coerceDiagramTo env docApplied diagApplied targetName of
+          Right ok -> Right ok
+          Left err -> Left ("morphism chain did not reach target doctrine; " <> err)
+  let rules = rulesFromPolicy policy (dCells2 docFinal)
+  status <- normalize (doctrineTypeTheory docFinal) fuel rules diagFinal
+  let norm =
+        case status of
+          Finished d -> d
+          OutOfFuel d -> d
+  pure (docFinal, diagFinal, norm)
+
+compileSourceDiagram
+  :: ModuleEnv
+  -> Text
+  -> Maybe Text
+  -> Maybe Text
+  -> [Text]
+  -> Text
+  -> Either Text (Doctrine, Diagram)
+compileSourceDiagram env targetName mMode mSurface uses exprText = do
   docTarget <- lookupDoctrine env targetName
   (docSurface, _mode, diag0) <- case mSurface of
     Nothing -> do
@@ -50,27 +77,20 @@ compileDiagramArtifact env targetName mMode mSurface uses morphs policy fuel exp
   morphsFromUses <- resolveUses env targetName uses
   (docUsed, diagUsed) <- applyMorphisms env docSurface diag0 morphsFromUses
   let usesMismatch = (not (null uses)) && dName docUsed /= targetName
-  (docApplied, diagApplied) <- applyMorphisms env docUsed diagUsed morphs
   (docFinal, diagFinal) <-
-    if dName docApplied == targetName
-      then Right (docApplied, diagApplied)
+    if dName docUsed == targetName
+      then Right (docUsed, diagUsed)
       else do
-        case coerceDiagramTo env docApplied diagApplied targetName of
+        case coerceDiagramTo env docUsed diagUsed targetName of
           Right ok -> Right ok
           Left err -> Left (renderMismatch usesMismatch err)
   if S.null (freeTyVarsDiagram diagFinal)
     then Right ()
-    else Left "unresolved type variables in diagram"
+  else Left "unresolved type variables in diagram"
   if S.null (freeIxVarsDiagram diagFinal)
     then Right ()
-    else Left "unresolved index variables in diagram"
-  let rules = rulesFromPolicy policy (dCells2 docFinal)
-  status <- normalize (doctrineTypeTheory docFinal) fuel rules diagFinal
-  let norm =
-        case status of
-          Finished d -> d
-          OutOfFuel d -> d
-  pure (docFinal, diagFinal, norm)
+  else Left "unresolved index variables in diagram"
+  pure (docFinal, diagFinal)
   where
     renderMismatch usesMismatch err =
       let label =

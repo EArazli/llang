@@ -1,14 +1,4 @@
 import "../../lib/algebra/cart_monoid.llang";
-import "../../../stdlib/struct.cartesian.models.llang";
-
-model CartMonoidNative : CartMonoid where {
-  default = symbolic;
-  op dup(x) = [x, x];
-  op drop(x) = [];
-  op swap(x,y) = [y, x];
-  op unit() = "";
-  op mul(a,b) = a ++ b;
-}
 
 surface CartTerm where {
   doctrine CartMonoid;
@@ -36,13 +26,15 @@ surface CartTerm where {
   }
 }
 
-run main where {
-  doctrine CartMonoid;
-  mode M;
-  surface CartTerm;
-  model CartMonoidNative;
-  show normalized;
-  show value;
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run main using debug where {
+  source doctrine CartMonoid;
+  source mode M;
+  source surface CartTerm;
 }
 ---
 term {

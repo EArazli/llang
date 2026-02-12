@@ -7,6 +7,7 @@ import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.AST (RawFile(..), RawDecl(..))
 import Strat.DSL.Elab (elabRawFileWithEnv)
 import Strat.Frontend.Env
+import Strat.Frontend.Prelude (preludeDoctrines)
 import Data.Text (Text)
 import qualified Data.Text.IO as TIO
 import qualified Data.Set as S
@@ -95,8 +96,9 @@ depsFromMods mods = Right (S.unions (map lmDeps mods))
 
 envFromDeps :: LoadState -> S.Set FilePath -> Either Text ModuleEnv
 envFromDeps st deps =
-  foldM step emptyEnv (S.toList deps)
+  foldM step preludeEnv (S.toList deps)
   where
+    preludeEnv = emptyEnv { meDoctrines = preludeDoctrines }
     step acc path =
       case M.lookup path (lsLoaded st) of
         Nothing -> Left "internal error: missing loaded module"
@@ -107,9 +109,9 @@ diffEnv full base = ModuleEnv
   { meDoctrines = M.difference (meDoctrines full) (meDoctrines base)
   , meMorphisms = M.difference (meMorphisms full) (meMorphisms base)
   , meSurfaces = M.difference (meSurfaces full) (meSurfaces base)
-  , meModels = M.difference (meModels full) (meModels base)
+  , mePipelines = M.difference (mePipelines full) (mePipelines base)
+  , meDerivedDoctrines = M.difference (meDerivedDoctrines full) (meDerivedDoctrines base)
   , meImplDefaults = diffImplDefaults (meImplDefaults full) (meImplDefaults base)
-  , meRunSpecs = M.difference (meRunSpecs full) (meRunSpecs base)
   , meRuns = M.difference (meRuns full) (meRuns base)
   , meTerms = M.difference (meTerms full) (meTerms base)
   , meTemplates = M.difference (meTemplates full) (meTemplates base)

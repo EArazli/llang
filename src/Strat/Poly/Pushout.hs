@@ -110,6 +110,7 @@ computePolyCoproduct name a b = do
   let empty = Doctrine
         { dName = "Empty"
         , dModes = dModes a
+        , dAcyclicModes = S.empty
         , dIndexModes = S.empty
         , dIxTheory = M.empty
         , dAttrSorts = M.empty
@@ -545,6 +546,9 @@ renameDiagram attrRen tyRen permRen genRen diag = do
         PBox name inner -> do
           inner' <- renameDiagram attrRen tyRen permRen genRen inner
           pure edge { ePayload = PBox name inner' }
+        PFeedback spec inner -> do
+          inner' <- renameDiagram attrRen tyRen permRen genRen inner
+          pure edge { ePayload = PFeedback spec inner' }
         PSplice x ->
           pure edge { ePayload = PSplice x }
 
@@ -899,6 +903,8 @@ renameDiagramAlpha tyMap ixMap diag =
           edge { ePayload = PGen g attrs (map renameBinderArg bargs) }
         PBox name inner ->
           edge { ePayload = PBox name (renameDiagramAlpha tyMap ixMap inner) }
+        PFeedback spec inner ->
+          edge { ePayload = PFeedback spec (renameDiagramAlpha tyMap ixMap inner) }
         PSplice x ->
           edge { ePayload = PSplice x }
 
@@ -922,6 +928,9 @@ normalizeDiagramModes mt diag = do
         PBox name inner -> do
           inner' <- normalizeDiagramModes mt inner
           pure edge { ePayload = PBox name inner' }
+        PFeedback spec inner -> do
+          inner' <- normalizeDiagramModes mt inner
+          pure edge { ePayload = PFeedback spec inner' }
         PSplice x ->
           pure edge { ePayload = PSplice x }
 

@@ -1,6 +1,7 @@
 module Strat.Poly.DSL.AST
   ( RawPolyDoctrine(..)
   , RawPolyItem(..)
+  , RawModeDecl(..)
   , RawIndexFunDecl(..)
   , RawIndexRuleDecl(..)
   , RawModExpr(..)
@@ -40,7 +41,7 @@ data RawPolyDoctrine = RawPolyDoctrine
   } deriving (Eq, Show)
 
 data RawPolyItem
-  = RPMode Text
+  = RPMode RawModeDecl
   | RPIndexMode Text
   | RPIndexFun RawIndexFunDecl
   | RPIndexRule RawIndexRuleDecl
@@ -54,6 +55,11 @@ data RawPolyItem
   | RPGen RawPolyGenDecl
   | RPRule RawPolyRuleDecl
   deriving (Eq, Show)
+
+data RawModeDecl = RawModeDecl
+  { rmdName :: Text
+  , rmdAcyclic :: Bool
+  } deriving (Eq, Show)
 
 data RawModExpr
   = RMId Text

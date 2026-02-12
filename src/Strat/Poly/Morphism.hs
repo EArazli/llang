@@ -221,6 +221,10 @@ applyMorphismDiagram mor diagSrc = do
               PBox name inner -> do
                 inner' <- applyMorphismDiagram mor inner
                 updateEdgePayload diagTgt edgeKey (PBox name inner')
+              PFeedback spec inner -> do
+                fbTy' <- applyMorphismTy mor (fbTy spec)
+                inner' <- applyMorphismDiagram mor inner
+                updateEdgePayload diagTgt edgeKey (PFeedback spec { fbTy = fbTy' } inner')
               PSplice x ->
                 updateEdgePayload diagTgt edgeKey (PSplice x)
   diagTgt <- foldl step (Right diagTgt0) edgeIds
@@ -312,6 +316,9 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
         PBox name inner -> do
           inner' <- instantiateGenImageBinders tt binderSigs holeSub inner
           pure edge { ePayload = PBox name inner' }
+        PFeedback spec inner -> do
+          inner' <- instantiateGenImageBinders tt binderSigs holeSub inner
+          pure edge { ePayload = PFeedback spec inner' }
         PSplice x ->
           pure edge { ePayload = PSplice x }
       where
@@ -1076,6 +1083,10 @@ renameDiagram tyRen genRen diag =
         PBox name inner ->
           let inner' = renameDiagram tyRen genRen inner
           in edge { ePayload = PBox name inner' }
+        PFeedback spec inner ->
+          let inner' = renameDiagram tyRen genRen inner
+              spec' = spec { fbTy = renameTypeExpr tyRen (fbTy spec) }
+          in edge { ePayload = PFeedback spec' inner' }
         PSplice x ->
           edge { ePayload = PSplice x }
 

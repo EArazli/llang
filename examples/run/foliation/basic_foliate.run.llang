@@ -1,0 +1,24 @@
+doctrine D where {
+  mode M acyclic;
+  type T @M;
+  gen a : [] -> [T] @M;
+  gen b : [T] -> [T] @M;
+  gen c : [T] -> [] @M;
+}
+
+derived doctrine D_SSA = foliated D mode M;
+
+pipeline p where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract foliate into D_SSA;
+  apply D_SSA.forget;
+  extract diagram;
+}
+
+run main using p where {
+  source doctrine D;
+  source mode M;
+}
+---
+a ; b ; c
+---

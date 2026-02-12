@@ -40,11 +40,16 @@ surface IfaceSSA where {
   }
 }
 
-run main where {
-  doctrine Target;
-  surface IfaceSSA;
-  uses: Iface;
-  show normalized;
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run main using debug where {
+  source doctrine Target;
+  source mode M;
+  source surface IfaceSSA;
+  uses ["Iface"];
 }
 ---
 diag {

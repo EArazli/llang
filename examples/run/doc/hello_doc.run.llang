@@ -1,0 +1,24 @@
+doctrine HelloWorld where {
+  mode M acyclic;
+  type Unit @M;
+  gen hello : [] -> [Unit] @M;
+}
+
+morphism helloToDoc : HelloWorld -> Doc where {
+  mode M -> Doc;
+  type Unit @M -> Doc @Doc;
+  gen hello @M -> text(s = "hello, world")
+}
+
+pipeline helloPipeline where {
+  apply helloToDoc;
+  extract Doc { stdout = true };
+}
+
+run main using helloPipeline where {
+  source doctrine HelloWorld;
+  source mode M;
+}
+---
+hello
+---

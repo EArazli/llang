@@ -1,7 +1,0 @@
-import "./struct.cartesian.llang";
-
-model StructCartesianNative : StructCartesian where {
-  op dup(x) = [x, x];
-  op drop(x) = [];
-  op swap(x,y) = [y, x];
-}

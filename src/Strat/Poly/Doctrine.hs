@@ -12,6 +12,7 @@ module Strat.Poly.Doctrine
   , checkType
   , validateDoctrine
   , cartMode
+  , modeIsAcyclic
   ) where
 
 import Data.Text (Text)
@@ -70,6 +71,7 @@ gdPlainDom gd =
 data Doctrine = Doctrine
   { dName :: Text
   , dModes :: ModeTheory
+  , dAcyclicModes :: S.Set ModeName
   , dIndexModes :: S.Set ModeName
   , dIxTheory :: M.Map ModeName IxTheory
   , dAttrSorts :: M.Map AttrSort AttrSortDecl
@@ -103,6 +105,9 @@ doctrineTypeTheory doc =
 validateDoctrine :: Doctrine -> Either Text ()
 validateDoctrine doc = do
   checkModeTheory (dModes doc)
+  if all (`M.member` mtModes (dModes doc)) (S.toList (dAcyclicModes doc))
+    then Right ()
+    else Left "validateDoctrine: acyclic mode references unknown mode"
   checkIndexModes doc
   mapM_ (checkIxTheoryTable doc) (M.toList (dIxTheory doc))
   mapM_ checkAttrSortDecl (M.toList (dAttrSorts doc))
@@ -111,6 +116,9 @@ validateDoctrine doc = do
   mapM_ (checkCell doc) (dCells2 doc)
   checkStructuralByDiscipline doc
   pure ()
+
+modeIsAcyclic :: Doctrine -> ModeName -> Bool
+modeIsAcyclic doc mode = mode `S.member` dAcyclicModes doc
 
 lookupTypeSig :: Doctrine -> TypeRef -> Either Text TypeSig
 lookupTypeSig doc ref =

@@ -669,6 +669,8 @@ renameIxVarsDiagram renameTy diag =
           edge { ePayload = PGen g attrs (map renameBinderArg bargs) }
         PBox name inner ->
           edge { ePayload = PBox name (renameIxVarsDiagram renameTy inner) }
+        PFeedback spec inner ->
+          edge { ePayload = PFeedback spec (renameIxVarsDiagram renameTy inner) }
         PSplice x ->
           edge { ePayload = PSplice x }
 
@@ -688,6 +690,8 @@ renameBinderMetasDiagram renameMeta diag =
           edge { ePayload = PGen g attrs (map renameBinderArg bargs) }
         PBox name inner ->
           edge { ePayload = PBox name (renameBinderMetasDiagram renameMeta inner) }
+        PFeedback spec inner ->
+          edge { ePayload = PFeedback spec (renameBinderMetasDiagram renameMeta inner) }
         PSplice x ->
           edge { ePayload = PSplice (renameMeta x) }
 

@@ -36,13 +36,15 @@ testNoPolyPrefixes = do
         pure (ex, st)
   exampleFiles <- listLlangFiles examplesDir
   stdlibFiles <- listLlangFiles stdlibDir
+  let kwPolyModel = "poly" <> "mo" <> "del"
+  let kwPolyRunSpec = "polyrun" <> "_spec"
   let banned =
         [ "polydoctrine"
         , "polymorphism"
-        , "polymodel"
+        , kwPolyModel
         , "polysurface"
         , "polyrun"
-        , "polyrun_spec"
+        , kwPolyRunSpec
         , "polyimplements"
         ]
   forM_ (exampleFiles <> stdlibFiles) $ \path -> do

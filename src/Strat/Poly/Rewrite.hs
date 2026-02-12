@@ -82,6 +82,15 @@ rewriteOnceNested tt rules diag =
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
               canon <- renumberDiagram diag'
               pure (Just canon)
+        PFeedback spec inner -> do
+          innerRes <- rewriteOnce tt rules inner
+          case innerRes of
+            Nothing -> go rest
+            Just inner' -> do
+              let edge' = edge { ePayload = PFeedback spec inner' }
+              let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+              canon <- renumberDiagram diag'
+              pure (Just canon)
         PGen gen attrs bargs -> do
           bargRes <- rewriteOnceBinderArgs bargs
           case bargRes of
@@ -151,6 +160,14 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
       mapM
         (\d -> do
           let edge' = edge { ePayload = PBox name d }
+          let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+          renumberDiagram diag')
+        innerRes
+    PFeedback spec inner -> do
+      innerRes <- rewriteAll tt cap rules inner
+      mapM
+        (\d -> do
+          let edge' = edge { ePayload = PFeedback spec d }
           let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
           renumberDiagram diag')
         innerRes
@@ -228,6 +245,7 @@ instantiateBinderMetas binderSub diag =
     traversePayload payload =
       case payload of
         PBox name inner -> PBox name <$> instantiateBinderMetas binderSub inner
+        PFeedback spec inner -> PFeedback spec <$> instantiateBinderMetas binderSub inner
         PSplice x -> Right (PSplice x)
         PGen gen attrs bargs -> do
           bargs' <- mapM traverseBinderArg bargs
@@ -259,6 +277,7 @@ expandSplices binderSub diag0 = do
     recursePayload payload =
       case payload of
         PBox name inner -> PBox name <$> expandSplices binderSub inner
+        PFeedback spec inner -> PFeedback spec <$> expandSplices binderSub inner
         PSplice x -> Right (PSplice x)
         PGen gen attrs bargs -> do
           bargs' <- mapM recurseBinderArg bargs
@@ -473,6 +492,7 @@ hasSplice diag =
       case ePayload edge of
         PSplice _ -> True
         PBox _ inner -> hasSplice inner
+        PFeedback _ inner -> hasSplice inner
         PGen _ _ bargs -> any binderHasSplice bargs
 
     binderHasSplice barg =

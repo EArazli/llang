@@ -22,6 +22,7 @@ import Strat.Poly.Graph
   , Edge(..)
   , BinderMetaVar(..)
   , BinderArg(..)
+  , FeedbackSpec(..)
   , EdgePayload(..)
   , ePayload
   , emptyDiagram
@@ -168,6 +169,7 @@ gensInDiagram diag =
       case ePayload edge of
         PGen g _ bargs -> S.insert g (S.unions (map binderGens bargs))
         PBox _ inner -> gensInDiagram inner
+        PFeedback _ inner -> gensInDiagram inner
         PSplice _ -> S.empty
 
     binderGens barg =
@@ -185,6 +187,7 @@ surfaceMeasure sigma diag =
           let own = if g `S.member` sigma then 1 else 0
            in own + sum (map binderMeasure bargs)
         PBox _ inner -> surfaceMeasure sigma inner
+        PFeedback _ inner -> surfaceMeasure sigma inner
         PSplice _ -> 0
 
     binderMeasure barg =
@@ -1084,14 +1087,29 @@ boxSurf mode name inner = do
 loopSurf :: SurfDiag -> Either Text SurfDiag
 loopSurf sd =
   case (dIn (sdDiag sd), dOut (sdDiag sd)) of
-    ([pIn], pOut : pOuts) -> do
-      diag1 <- mergePorts (sdDiag sd) pOut pIn
-      let uses' = replacePortUses pOut pIn (sdUses sd)
-      let tags' = replacePortTags pOut pIn (sdTags sd)
-      let diag2 = diag1 { dIn = [], dOut = pOuts }
+    ([pIn], pState : pOuts) -> do
+      stateInTy <- requirePortTy (sdDiag sd) pIn
+      stateOutTy <- requirePortTy (sdDiag sd) pState
+      if stateInTy == stateOutTy
+        then Right ()
+        else Left "loop: body first output type must match input type"
+      outTys <- mapM (requirePortTy (sdDiag sd)) pOuts
+      let (outs, diag0) = allocPorts outTys (emptyDiagram (dMode (sdDiag sd)) (dIxCtx (sdDiag sd)))
+      let spec = FeedbackSpec { fbTy = stateInTy, fbOutArity = length pOuts }
+      diag1 <- addEdgePayload (PFeedback spec (sdDiag sd)) [] outs diag0
+      let diag2 = diag1 { dIn = [], dOut = outs }
       validateDiagram diag2
+      let mapping = M.fromList (zip pOuts outs)
+      let remap p = M.findWithDefault p p mapping
+      let uses' = M.map (map remap) (sdUses sd)
+      let tags' = M.map (map remap) (sdTags sd)
       pure sd { sdDiag = diag2, sdUses = uses', sdTags = tags' }
     _ -> Left "loop: expected exactly one input and at least one output"
+  where
+    requirePortTy d p =
+      case diagramPortType d p of
+        Nothing -> Left "loop: internal missing port type"
+        Just ty -> Right ty
 
 remapUses :: Diagram -> [PortId] -> [PortId] -> Uses -> Either Text Uses
 remapUses inner outerIns outerOuts uses = do

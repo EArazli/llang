@@ -1,15 +1,15 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Strat.DSL.AST
   ( RawDecl(..)
   , RawFile(..)
-  , RawModelItem(..)
-  , RawModelBackend(..)
-  , RawFoldItem(..)
-  , RawModelClause(..)
-  , RawRunShow(..)
+  , RawPipeline(..)
+  , RawPhase(..)
+  , RawNormalizeOpts(..)
+  , RawFoliationOpts(..)
+  , RawValueExtractOpts(..)
+  , RawDerivedDoctrine(..)
   , RawRun(..)
-  , RawRunSpec(..)
   , RawNamedRun(..)
   , RawDoctrineTemplate(..)
   , RawDoctrineInstantiate(..)
@@ -25,7 +25,6 @@ module Strat.DSL.AST
   ) where
 
 import Data.Text (Text)
-import Strat.Model.Spec (DefaultBehavior, MExpr)
 import Strat.Poly.Surface.Spec (SurfaceSpec)
 import qualified Strat.Poly.DSL.AST as PolyAST
 
@@ -42,11 +41,11 @@ data RawDecl
       }
   | DeclDoctrineTemplate RawDoctrineTemplate
   | DeclDoctrineInstantiate RawDoctrineInstantiate
+  | DeclDerivedDoctrine RawDerivedDoctrine
   | DeclSurface Text SurfaceSpec
-  | DeclModel Text Text (Maybe Text) [RawModelItem]
+  | DeclPipeline RawPipeline
   | DeclMorphism RawPolyMorphism
   | DeclImplements Text Text Text
-  | DeclRunSpec Text RawRunSpec
   | DeclRun RawNamedRun
   | DeclTerm RawNamedTerm
   deriving (Eq, Show)
@@ -55,59 +54,60 @@ newtype RawFile = RawFile [RawDecl]
   deriving (Eq, Show)
 
 
-data RawModelBackend = RMBAlgebra | RMBFold
-  deriving (Eq, Ord, Show)
-
-data RawFoldItem
-  = RFIndent Text
-  | RFReserved [Text]
-  | RFHook RawModelClause
-  deriving (Eq, Show)
-
-data RawModelItem
-  = RMDefault DefaultBehavior
-  | RMClause RawModelClause
-  | RMBackend RawModelBackend
-  | RMFold [RawFoldItem]
-  deriving (Eq, Show)
-
-data RawModelClause = RawModelClause
-  { rmcOp :: Text
-  , rmcArgs :: [Text]
-  , rmcExpr :: MExpr
+data RawPipeline = RawPipeline
+  { rplName :: Text
+  , rplPhases :: [RawPhase]
   } deriving (Eq, Show)
 
 
-data RawRunShow
-  = RawShowNormalized
-  | RawShowValue
-  | RawShowCat
-  | RawShowInput
-  | RawShowCoherence
-  deriving (Eq, Ord, Show)
+data RawNormalizeOpts = RawNormalizeOpts
+  { rnoPolicy :: Maybe Text
+  , rnoFuel :: Maybe Int
+  } deriving (Eq, Show)
+
+
+data RawFoliationOpts = RawFoliationOpts
+  { rfoPolicy :: Maybe Text
+  , rfoNaming :: Maybe Text
+  , rfoReserved :: [Text]
+  } deriving (Eq, Show)
+
+
+data RawValueExtractOpts = RawValueExtractOpts
+  { rveStdout :: Maybe Bool
+  , rveRoot :: Maybe FilePath
+  } deriving (Eq, Show)
+
+
+data RawPhase
+  = RPApply Text
+  | RPNormalize RawNormalizeOpts
+  | RPExtractFoliate Text RawFoliationOpts
+  | RPExtractValue Text RawValueExtractOpts
+  | RPExtractDiagramPretty
+  deriving (Eq, Show)
+
+
+data RawDerivedDoctrine = RawDerivedDoctrine
+  { rddName :: Text
+  , rddBase :: Text
+  , rddMode :: Text
+  , rddPolicy :: RawFoliationOpts
+  } deriving (Eq, Show)
 
 
 data RawRun = RawRun
-  { rrDoctrine :: Maybe Text
+  { rrPipeline :: Maybe Text
+  , rrDoctrine :: Maybe Text
   , rrMode :: Maybe Text
   , rrSurface :: Maybe Text
-  , rrModel :: Maybe Text
-  , rrMorphisms :: [Text]
   , rrUses :: [Text]
-  , rrPolicy :: Maybe Text
-  , rrFuel :: Maybe Int
-  , rrShowFlags :: [RawRunShow]
   , rrExprText :: Maybe Text
   } deriving (Eq, Show)
 
-data RawRunSpec = RawRunSpec
-  { rrsUsing :: Maybe Text
-  , rrsRun :: RawRun
-  } deriving (Eq, Show)
 
 data RawNamedRun = RawNamedRun
   { rnrName :: Text
-  , rnrUsing :: Maybe Text
   , rnrRun :: RawRun
   } deriving (Eq, Show)
 

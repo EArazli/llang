@@ -4,6 +4,7 @@ module Strat.Poly.Graph
   , EdgeId(..)
   , BinderMetaVar(..)
   , BinderArg(..)
+  , FeedbackSpec(..)
   , EdgePayload(..)
   , Edge(..)
   , Diagram(..)
@@ -48,9 +49,15 @@ data BinderArg
   | BAMeta BinderMetaVar
   deriving (Eq, Ord, Show)
 
+data FeedbackSpec = FeedbackSpec
+  { fbTy :: TypeExpr
+  , fbOutArity :: Int
+  } deriving (Eq, Ord, Show)
+
 data EdgePayload
   = PGen GenName AttrMap [BinderArg]
   | PBox BoxName Diagram
+  | PFeedback FeedbackSpec Diagram
   | PSplice BinderMetaVar
   deriving (Eq, Ord, Show)
 
@@ -298,6 +305,37 @@ validateDiagram diag = do
           if domOuter == domInner && codOuter == codInner
             then Right ()
             else Left "validateDiagram: box boundary mismatch"
+        PFeedback spec inner -> do
+          if dMode inner /= dMode diag
+            then Left "validateDiagram: feedback mode mismatch"
+            else Right ()
+          if dIxCtx inner /= dIxCtx diag
+            then Left "validateDiagram: feedback index context mismatch"
+            else Right ()
+          validateDiagram inner
+          innerDom <- mapM (requirePortType inner) (dIn inner)
+          innerCod <- mapM (requirePortType inner) (dOut inner)
+          case (innerDom, innerCod) of
+            ([stateIn], stateOut : codTail) -> do
+              if stateIn /= stateOut
+                then Left "validateDiagram: feedback body first output must match input type"
+                else Right ()
+              if stateIn /= fbTy spec
+                then Left "validateDiagram: feedback state type mismatch"
+                else Right ()
+              if length codTail /= fbOutArity spec
+                then Left "validateDiagram: feedback output arity mismatch"
+                else Right ()
+              outerDom <- mapM (requirePortType diag) (eIns edge)
+              outerCod <- mapM (requirePortType diag) (eOuts edge)
+              if null outerDom
+                then Right ()
+                else Left "validateDiagram: feedback edge must not consume outer inputs"
+              if outerCod == codTail
+                then Right ()
+                else Left "validateDiagram: feedback outer outputs mismatch body outputs"
+            _ ->
+              Left "validateDiagram: feedback body must have one input and at least one output"
         PSplice _ -> Right ()
     checkBinderArg barg =
       case barg of
@@ -414,6 +452,7 @@ shiftDiagram portOff edgeOff diag =
         case payload of
           PGen g attrs bargs -> PGen g attrs (map shiftBinderArg bargs)
           PBox name inner -> PBox name (shiftDiagram portOff edgeOff inner)
+          PFeedback spec inner -> PFeedback spec (shiftDiagram portOff edgeOff inner)
           PSplice x -> PSplice x
       shiftBinderArg barg =
         case barg of
@@ -509,6 +548,9 @@ renumberDiagram diag = do
         PBox name inner -> do
           inner' <- renumberDiagram inner
           Right (PBox name inner')
+        PFeedback spec inner -> do
+          inner' <- renumberDiagram inner
+          Right (PFeedback spec inner')
         PSplice x -> Right (PSplice x)
     mapBinderArg barg =
       case barg of
@@ -635,6 +677,12 @@ diagramIsoEq left right
         (PBox _ d1, PBox _ d2) -> do
           ok <- diagramIsoEq d1 d2
           if ok then Right () else Left "diagramIsoEq: box diagram mismatch"
+        (PFeedback spec1 d1, PFeedback spec2 d2) ->
+          if spec1 /= spec2
+            then Left "diagramIsoEq: feedback spec mismatch"
+            else do
+              ok <- diagramIsoEq d1 d2
+              if ok then Right () else Left "diagramIsoEq: feedback body mismatch"
         (PSplice x, PSplice y) ->
           if x == y
             then Right ()
@@ -869,6 +917,27 @@ diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex left right
                         subs
                     )
             _ -> Right []
+        (PFeedback spec1 d1, PFeedback spec2 d2) ->
+          if spec1 /= spec2
+            then Right []
+            else do
+              let tySubst = imsTySubst st
+              let attrSubst = imsAttrSubst st
+              case (applySubstsDiagramLocal tt tySubst attrSubst d1, applySubstsDiagramLocal tt tySubst attrSubst d2) of
+                (Right d1', Right d2') ->
+                  case diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex d1' d2' of
+                    Left _ -> Right []
+                    Right subs ->
+                      fmap concat
+                        ( mapM
+                            (\(tySub, attrSub) ->
+                              case composeSubst tt tySub tySubst of
+                                Left _ -> Right []
+                                Right tySub' -> Right [(tySub', composeAttrSubst attrSub attrSubst)]
+                            )
+                            subs
+                        )
+                _ -> Right []
         (PSplice x, PSplice y) ->
           if x == y then Right [(imsTySubst st, imsAttrSubst st)] else Right []
         _ -> Right []
@@ -900,6 +969,7 @@ diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex left right
         (PGen g1 attrs1 bargs1, PGen g2 attrs2 bargs2) ->
           g1 == g2 && M.keysSet attrs1 == M.keysSet attrs2 && length bargs1 == length bargs2
         (PBox _ _, PBox _ _) -> True
+        (PFeedback spec1 _, PFeedback spec2 _) -> spec1 == spec2
         (PSplice x, PSplice y) -> x == y
         _ -> False
 
@@ -920,6 +990,10 @@ applySubstsDiagramLocal tt tySubst attrSubst diag = do
         PBox name inner -> do
           inner' <- applySubstsDiagramLocal tt tyS attrS inner
           Right (edge { ePayload = PBox name inner' })
+        PFeedback spec inner -> do
+          specTy' <- applySubstTy tt tyS (fbTy spec)
+          inner' <- applySubstsDiagramLocal tt tyS attrS inner
+          Right (edge { ePayload = PFeedback spec { fbTy = specTy' } inner' })
         PSplice x -> Right (edge { ePayload = PSplice x })
 
     mapBinderArg tyS attrS barg =
