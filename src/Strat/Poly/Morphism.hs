@@ -37,21 +37,9 @@ import Strat.Poly.Traversal (traverseDiagram)
 
 unifyCtxCompat :: TypeTheory -> [TypeExpr] -> Context -> Context -> Either Text Subst
 unifyCtxCompat tt ixCtx ctxA ctxB =
-  let tyFlex = S.unions (map freeTyVarsTypeLocal (ctxA <> ctxB))
+  let tyFlex = S.unions (map freeTyVarsType (ctxA <> ctxB))
       ixFlex = S.unions (map freeIxVarsType (ctxA <> ctxB))
    in unifyCtx tt ixCtx tyFlex ixFlex ctxA ctxB
-
-freeTyVarsTypeLocal :: TypeExpr -> S.Set TyVar
-freeTyVarsTypeLocal ty =
-  case ty of
-    TVar v -> S.singleton v
-    TCon _ args -> S.unions (map freeArg args)
-    TMod _ inner -> freeTyVarsTypeLocal inner
-  where
-    freeArg arg =
-      case arg of
-        TAType t -> freeTyVarsTypeLocal t
-        TAIndex ix -> S.unions [ freeTyVarsTypeLocal (ixvSort v) | v <- S.toList (freeIxVarsIx ix) ]
 
 
 data Morphism = Morphism
@@ -218,7 +206,7 @@ applyMorphismDiagram mor diagSrc = do
                     attrSubst <- instantiateAttrSubst mor genDecl attrsSrc
                     mappedBargs <- mapM (applyMorphismBinderArg mor) bargsSrc
                     holeSub <- buildBinderHoleSub genDecl mappedBargs
-                    instImage0 <- applySubstDiagramTT tgtTheory substTgt image
+                    instImage0 <- applySubstDiagram tgtTheory substTgt image
                     instHoleSigs0 <- applySubstBinderSigsTT tgtTheory substTgt (giBinderSigs image0)
                     let instImage1 = applyAttrSubstDiagram attrSubst instImage0
                     instImage <- instantiateGenImageBinders tgtTheory instHoleSigs0 holeSub instImage1

@@ -439,18 +439,6 @@ lookupIxById v mp =
       | sameIxVarId k v = Just (k, tm)
       | otherwise = findIxById rest
 
-freeTyVarsType :: TypeExpr -> S.Set TyVar
-freeTyVarsType ty =
-  case ty of
-    TVar v -> S.singleton v
-    TCon _ args -> S.unions (map freeArg args)
-    TMod _ inner -> freeTyVarsType inner
-  where
-    freeArg arg =
-      case arg of
-        TAType innerTy -> freeTyVarsType innerTy
-        TAIndex ix -> S.unions (map (freeTyVarsType . ixvSort) (S.toList (freeIxVarsIx ix)))
-
 renderTy :: TypeExpr -> Text
 renderTy ty =
   case ty of

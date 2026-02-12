@@ -8,7 +8,6 @@ module Strat.Frontend.Env
 
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
-import qualified Data.Set as S
 import Strat.DSL.AST (RawDoctrineTemplate)
 import Strat.Pipeline (Pipeline, Run, DerivedDoctrine)
 import Strat.Poly.Diagram (Diagram)
@@ -16,6 +15,7 @@ import Strat.Poly.Doctrine (Doctrine)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Morphism (Morphism)
 import Strat.Poly.Surface (PolySurfaceDef)
+import Strat.Util.List (dedupe)
 
 
 data TermDef = TermDef
@@ -81,16 +81,6 @@ mergeEnv a b = do
     mergeMap label f = mergeNamed label id (f a) (f b)
     mergeImplDefaults left right = M.unionWith mergeDefaults left right
     mergeDefaults xs ys = dedupe (xs <> ys)
-
-
-dedupe :: Ord a => [a] -> [a]
-dedupe = go S.empty
-  where
-    go _ [] = []
-    go seen (x:xs)
-      | x `S.member` seen = go seen xs
-      | otherwise = x : go (S.insert x seen) xs
-
 
 mergeNamed :: (Ord k, Eq v) => Text -> (k -> Text) -> M.Map k v -> M.Map k v -> Either Text (M.Map k v)
 mergeNamed label renderKey left right =

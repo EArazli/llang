@@ -39,7 +39,7 @@ import Strat.Poly.Graph
   , validateDiagram
     , diagramIsoEq
   )
-import Strat.Poly.Diagram (idD, genDIx, compDTT)
+import Strat.Poly.Diagram (idD, genDIx, compD)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Rewrite (RewriteRule(..), rewriteOnce)
 import Test.Poly.Helpers (mkModes)
@@ -53,6 +53,7 @@ tests =
     , testCase "scoped index unification rejects escapes" testScopedIxUnify
     , testCase "dependent unification normalizes index arguments" testDependentUnify
     , testCase "bound index sort checks apply current substitution" testBoundSortUsesSubstitution
+    , testCase "matching applies current substitution to bound index sorts" testMatchBoundSortUsesCurrentSubst
     , testCase "dependent composition respects definitional index equality" testDependentCompDefEq
     , testCase "matching requires index-context compatibility" testMatchIxCtxCompatibility
     , testCase "iso matching drops candidates when dependent substitution fails" testIsoMatchDropsSubstFailure
@@ -124,6 +125,46 @@ testBoundSortUsesSubstitution = do
   _ <- require (unifyIx tt [ixCtxSort] S.empty subst expectedSort (IXBound 0) (IXBound 0))
   pure ()
 
+testMatchBoundSortUsesCurrentSubst :: Assertion
+testMatchBoundSortUsesCurrentSubst = do
+  let modeM = ModeName "M"
+  let modeI = ModeName "I"
+  let aVar = TyVar { tvName = "a", tvMode = modeM }
+  let lenRef = TypeRef modeI (TypeName "Len")
+  let fooRef = TypeRef modeM (TypeName "Foo")
+  let concrete = TCon (TypeRef modeM (TypeName "AConcrete")) []
+  let ixCtxSort = TCon lenRef [TAType (TVar aVar)]
+  let expectedSort = TCon lenRef [TAType concrete]
+  let tt =
+        TypeTheory
+          { ttModes = mkModes [modeM, modeI]
+          , ttIndex = M.fromList [(modeI, IxTheory M.empty [])]
+          , ttTypeParams =
+              M.fromList
+                [ (lenRef, [TPS_Ty modeM])
+                , (fooRef, [TPS_Ix expectedSort])
+                ]
+          , ttIxFuel = defaultIxFuel
+          }
+
+  let d0 = emptyDiagram modeM [ixCtxSort]
+  let (p1, d1) = freshPort (TVar aVar) d0
+  let (p2, d2) = freshPort (TCon fooRef [TAIndex (IXBound 0)]) d1
+  d3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [p1, p2] [] d2)
+  let lhs = d3 { dIn = [p1, p2], dOut = [] }
+  _ <- require (validateDiagram lhs)
+
+  let h0 = emptyDiagram modeM [ixCtxSort]
+  let (h1, h1d) = freshPort concrete h0
+  let (h2, h2d) = freshPort (TCon fooRef [TAIndex (IXBound 0)]) h1d
+  h3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [h1, h2] [] h2d)
+  let host = h3 { dIn = [h1, h2], dOut = [] }
+  _ <- require (validateDiagram host)
+
+  let cfg = MatchConfig tt (S.singleton aVar) S.empty S.empty
+  matches <- require (findAllMatches cfg lhs host)
+  assertBool "expected at least one match" (not (null matches))
+
 testDependentCompDefEq :: Assertion
 testDependentCompDefEq = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
@@ -143,7 +184,7 @@ testDependentCompDefEq = do
           }
   f <- require (genDIx modeM [] [] [vecTy (add z z)] (GenName "f"))
   g <- require (genDIx modeM [] [vecTy z] [outTy] (GenName "g"))
-  _ <- require (compDTT tt g f)
+  _ <- require (compD tt g f)
   pure ()
 
 testMatchIxCtxCompatibility :: Assertion

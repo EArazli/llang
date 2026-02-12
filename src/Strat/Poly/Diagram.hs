@@ -7,12 +7,12 @@ module Strat.Poly.Diagram
   , genD
   , genDWithAttrsIx
   , genDWithAttrs
-  , compDTT
+  , compD
   , tensorD
   , unionDiagram
   , diagramDom
   , diagramCod
-  , applySubstDiagramTT
+  , applySubstDiagram
   , applyAttrSubstDiagram
   , renameAttrVarsDiagram
   , freeTyVarsDiagram
@@ -30,7 +30,7 @@ import qualified Data.Set as S
 import Data.Functor.Identity (runIdentity)
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.TypeExpr (Context, TypeExpr(..), TyVar, TypeArg(..), IxTerm(..), IxVar(..), freeIxVarsType)
+import Strat.Poly.TypeExpr (Context, TypeExpr, TyVar, IxVar, freeTyVarsType, freeIxVarsType)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
 import Strat.Poly.UnifyTy
@@ -74,8 +74,8 @@ genDWithAttrs mode = genDWithAttrsIx mode []
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
 
-compDTT :: TypeTheory -> Diagram -> Diagram -> Either Text Diagram
-compDTT tt g f
+compD :: TypeTheory -> Diagram -> Diagram -> Either Text Diagram
+compD tt g f
   | dMode g /= dMode f = Left "diagram composition mode mismatch"
   | otherwise = do
       ixCtxF <- applySubstCtx tt emptySubst (dIxCtx f)
@@ -85,14 +85,14 @@ compDTT tt g f
         else Left "diagram composition index-context mismatch"
       domG <- diagramDom g
       codF <- diagramCod f
-      let tyFlex = S.unions (map freeTyVarsTypeLocal (codF <> domG))
+      let tyFlex = S.unions (map freeTyVarsType (codF <> domG))
       let ixFlex = S.unions (map freeIxVarsType (codF <> domG))
       subst <-
         case unifyCtx tt ixCtxF tyFlex ixFlex codF domG of
           Left err -> Left ("diagram composition boundary mismatch: " <> err)
           Right s -> Right s
-      f' <- applySubstDiagramTT tt subst f
-      g' <- applySubstDiagramTT tt subst g
+      f' <- applySubstDiagram tt subst f
+      g' <- applySubstDiagram tt subst g
       composeAligned g' f'
 
 composeAligned :: Diagram -> Diagram -> Either Text Diagram
@@ -143,8 +143,8 @@ diagramCod diag = mapM (lookupPort "diagramCod") (dOut diag)
         Nothing -> Left (label <> ": missing port type")
         Just ty -> Right ty
 
-applySubstDiagramTT :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
-applySubstDiagramTT tt subst =
+applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
+applySubstDiagram tt subst =
   traverseDiagram onDiag pure pure
   where
     onDiag d = do
@@ -158,8 +158,8 @@ freeTyVarsDiagram =
   where
     onDiag d =
       S.unions
-        [ S.unions (map freeTyVarsTypeLocal (IM.elems (dPortTy d)))
-        , S.unions (map freeTyVarsTypeLocal (dIxCtx d))
+        [ S.unions (map freeTyVarsType (IM.elems (dPortTy d)))
+        , S.unions (map freeTyVarsType (dIxCtx d))
         ]
 
 freeAttrVarsDiagram :: Diagram -> S.Set AttrVar
@@ -202,27 +202,6 @@ spliceMetaVarsDiagram =
 binderMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
 binderMetaVarsDiagram d =
   binderArgMetaVarsDiagram d <> spliceMetaVarsDiagram d
-
-varsInTy :: TypeExpr -> [TyVar]
-varsInTy ty =
-  case ty of
-    TVar v -> [v]
-    TCon _ args -> concatMap varsInArg args
-    TMod _ inner -> varsInTy inner
-  where
-    varsInArg arg =
-      case arg of
-        TAType innerTy -> varsInTy innerTy
-        TAIndex ix -> varsInIx ix
-
-    varsInIx ix =
-      case ix of
-        IXVar v -> varsInTy (ixvSort v)
-        IXBound _ -> []
-        IXFun _ args -> concatMap varsInIx args
-
-freeTyVarsTypeLocal :: TypeExpr -> S.Set TyVar
-freeTyVarsTypeLocal = S.fromList . varsInTy
 
 applyAttrSubstDiagram :: AttrSubst -> Diagram -> Diagram
 applyAttrSubstDiagram subst =

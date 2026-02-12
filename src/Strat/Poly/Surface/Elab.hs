@@ -16,7 +16,7 @@ import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Poly.Attr
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), lookupTypeSig, gdPlainDom, doctrineTypeTheory)
 import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
-import Strat.Poly.Diagram (Diagram(..), idD, unionDiagram, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagramTT)
+import Strat.Poly.Diagram (Diagram(..), idD, unionDiagram, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
 import Strat.Poly.Graph
   ( PortId(..)
   , Edge(..)
@@ -39,10 +39,11 @@ import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
 import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
 import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurfaceExpr)
 import Strat.Poly.Surface.Spec
-import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Context, typeMode)
+import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Context, typeMode, freeTyVarsType)
 import qualified Strat.Poly.TypeExpr as Ty
 import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 import qualified Strat.Poly.UnifyTy as U
+import Strat.Util.List (dedupe)
 
 
 type Subst = U.Subst
@@ -55,28 +56,16 @@ applySubstCtx :: ModeTheory -> Subst -> Context -> Either Text Context
 applySubstCtx mt =
   U.applySubstCtx (modeOnlyTypeTheory mt)
 
-unifyTyFlex :: ModeTheory -> S.Set TyVar -> TypeExpr -> TypeExpr -> Either Text Subst
+unifyTyFlex :: ModeTheory -> S.Set TyVar -> Subst -> TypeExpr -> TypeExpr -> Either Text Subst
 unifyTyFlex mt flex =
-  U.unifyTyFlex (modeOnlyTypeTheory mt) [] flex S.empty U.emptySubst
+  U.unifyTyFlex (modeOnlyTypeTheory mt) [] flex S.empty
 
 composeSubst :: ModeTheory -> Subst -> Subst -> Either Text Subst
 composeSubst mt =
   U.composeSubst (modeOnlyTypeTheory mt)
 
-freeTyVarsTy :: TypeExpr -> S.Set TyVar
-freeTyVarsTy ty =
-  case ty of
-    Ty.TVar v -> S.singleton v
-    Ty.TCon _ args -> S.unions (map freeArg args)
-    Ty.TMod _ inner -> freeTyVarsTy inner
-  where
-    freeArg arg =
-      case arg of
-        Ty.TAType t -> freeTyVarsTy t
-        Ty.TAIndex ix -> S.unions [ freeTyVarsTy (Ty.ixvSort v) | v <- S.toList (Ty.freeIxVarsIx ix) ]
-
 freeTyVarsCtx :: Context -> S.Set TyVar
-freeTyVarsCtx = S.unions . map freeTyVarsTy
+freeTyVarsCtx = S.unions . map freeTyVarsType
 
 
 -- Public entrypoint
@@ -382,30 +371,17 @@ replacePortTags keep drop = M.map (dedupe . map replace)
   where
     replace p = if p == drop then keep else p
 
-dedupe :: Ord a => [a] -> [a]
-dedupe = go S.empty
-  where
-    go _ [] = []
-    go seen (x:xs)
-      | x `S.member` seen = go seen xs
-      | otherwise = x : go (S.insert x seen) xs
-
 applySubstSurf :: ModeTheory -> Subst -> SurfDiag -> Either Text SurfDiag
 applySubstSurf mt subst sd = do
-  diag' <- applySubstDiagramTT (modeOnlyTypeTheory mt) subst (sdDiag sd)
+  diag' <- applySubstDiagram (modeOnlyTypeTheory mt) subst (sdDiag sd)
   pure sd { sdDiag = diag' }
 
 unifyCtxFlex :: ModeTheory -> S.Set TyVar -> Context -> Context -> Either Text Subst
 unifyCtxFlex mt flex ctx1 ctx2
   | length ctx1 /= length ctx2 = Left "surface: context length mismatch"
-  | otherwise = foldl step (Right U.emptySubst) (zip ctx1 ctx2)
+  | otherwise = foldM step U.emptySubst (zip ctx1 ctx2)
   where
-    step acc (a, b) = do
-      s <- acc
-      a' <- applySubstTy mt s a
-      b' <- applySubstTy mt s b
-      s' <- unifyTyFlex mt flex a' b'
-      composeSubst mt s' s
+    step s (a, b) = unifyTyFlex mt flex s a b
 
 
 -- Structural discipline
@@ -815,8 +791,8 @@ unifyVarType mt varName ty sd =
       case diagramPortType (sdDiag sd) p of
         Nothing -> pure sd
         Just tyUse -> do
-          let flex = S.union (freeTyVarsTy tyUse) (freeTyVarsTy ty)
-          subst <- liftEither (unifyTyFlex mt flex tyUse ty)
+          let flex = S.union (freeTyVarsType tyUse) (freeTyVarsType ty)
+          subst <- liftEither (unifyTyFlex mt flex U.emptySubst tyUse ty)
           liftEither (applySubstSurf mt subst sd)
 
 connectVar :: Doctrine -> ModeName -> StructuralOps -> Text -> PortId -> TypeExpr -> SurfDiag -> Bool -> Fresh SurfDiag
@@ -1001,18 +977,18 @@ checkBinderArgs mt dom cod slots args =
         BAMeta _ -> Right (substAcc, out <> [barg0])
         BAConcrete inner0 -> do
           slot <- applySubstBinderSigTy mt substAcc slot0
-          inner <- applySubstDiagramTT (modeOnlyTypeTheory mt) substAcc inner0
+          inner <- applySubstDiagram (modeOnlyTypeTheory mt) substAcc inner0
           domArg <- diagramDom inner
           let flexDom = S.union (freeTyVarsCtx (bsDom slot)) (freeTyVarsCtx domArg)
           sDom <- unifyCtxFlex mt flexDom (bsDom slot) domArg
           subst1 <- composeSubst mt sDom substAcc
           slot1 <- applySubstBinderSigTy mt sDom slot
-          inner1 <- applySubstDiagramTT (modeOnlyTypeTheory mt) sDom inner
+          inner1 <- applySubstDiagram (modeOnlyTypeTheory mt) sDom inner
           codArg <- diagramCod inner1
           let flexCod = S.union (freeTyVarsCtx (bsCod slot1)) (freeTyVarsCtx codArg)
           sCod <- unifyCtxFlex mt flexCod (bsCod slot1) codArg
           subst2 <- composeSubst mt sCod subst1
-          inner2 <- applySubstDiagramTT (modeOnlyTypeTheory mt) sCod inner1
+          inner2 <- applySubstDiagram (modeOnlyTypeTheory mt) sCod inner1
           Right (subst2, out <> [BAConcrete inner2])
 
 applySubstBinderArg :: ModeTheory -> Subst -> BinderArg -> Either Text BinderArg
@@ -1020,7 +996,7 @@ applySubstBinderArg mt subst barg =
   case barg of
     BAMeta _ -> Right barg
     BAConcrete inner ->
-      BAConcrete <$> applySubstDiagramTT (modeOnlyTypeTheory mt) subst inner
+      BAConcrete <$> applySubstDiagram (modeOnlyTypeTheory mt) subst inner
 
 buildGenDiagram :: ModeName -> Context -> Context -> GenName -> AttrMap -> [BinderArg] -> Either Text Diagram
 buildGenDiagram mode dom cod gen attrs bargs = do

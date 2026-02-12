@@ -313,9 +313,10 @@ unifyPorts tt l1 l2 flex ixFlex subst p1 p2 = do
   hTy <- requirePortType l2 p2
   pTy' <- mapLeft fatalSubstError (U.applySubstTy tt subst pTy)
   hTy' <- mapLeft fatalSubstError (U.applySubstTy tt subst hTy)
+  ixCtx' <- mapLeft fatalSubstError (U.applySubstCtx tt subst (dIxCtx l1))
   U.unifyTyFlex
     tt
-    (dIxCtx l1)
+    ixCtx'
     flex
     ixFlex
     U.emptySubst
@@ -618,7 +619,7 @@ deletePort diag pid =
 
 applySubstsDiagramLocal :: TypeTheory -> Subst -> AttrSubst -> Diagram -> Either Text Diagram
 applySubstsDiagramLocal tt tySubst attrSubst diag = do
-  dTy <- mapLeft fatalSubstError (Diag.applySubstDiagramTT tt tySubst diag)
+  dTy <- mapLeft fatalSubstError (Diag.applySubstDiagram tt tySubst diag)
   pure (applyAttrSubstDiagram attrSubst dTy)
 
 renameIxVarsDiagram :: (TypeExpr -> TypeExpr) -> Diagram -> Diagram

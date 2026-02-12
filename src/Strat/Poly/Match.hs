@@ -18,8 +18,6 @@ import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.UnifyTy
   ( Subst
   , applySubstCtx
-  , applySubstTy
-  , composeSubst
   , emptySubst
   , unifyTyFlex
   )
@@ -180,17 +178,14 @@ extendMatch tt tyFlex ixFlex attrFlex lhs host match patEdge hostEdge
     unifyPorts tySubst p h = do
       pTy <- requirePortType lhs p
       hTy <- requirePortType host h
-      pTySub <- applySubstTy tt tySubst pTy
-      s1 <-
-        unifyTyFlex
-          tt
-          (dIxCtx lhs)
-          tyFlex
-          ixFlex
-          emptySubst
-          pTySub
-          hTy
-      composeSubst tt s1 tySubst
+      unifyTyFlex
+        tt
+        (dIxCtx lhs)
+        tyFlex
+        ixFlex
+        tySubst
+        pTy
+        hTy
 
 payloadSubsts
   :: TypeTheory
@@ -316,27 +311,21 @@ completeBoundary tt flexTy flexIx lhs host match =
           case requirePortType host h of
             Left _ -> chooseCandidate m p pTy rest
             Right hTy ->
-              case applySubstTy tt (mTySubst m) pTy of
+              case
+                unifyTyFlex
+                  tt
+                  (dIxCtx lhs)
+                  flexTy
+                  flexIx
+                  (mTySubst m)
+                  pTy
+                  hTy
+                of
                 Left _ -> chooseCandidate m p pTy rest
-                Right pTySub ->
-                  case
-                    unifyTyFlex
-                      tt
-                      (dIxCtx lhs)
-                      flexTy
-                      flexIx
-                      emptySubst
-                      pTySub
-                      hTy
-                    of
-                    Left _ -> chooseCandidate m p pTy rest
-                    Right s1 ->
-                      case composeSubst tt s1 (mTySubst m) of
-                        Left _ -> chooseCandidate m p pTy rest
-                        Right subst' ->
-                          let ports' = M.insert p h (mPortMap m)
-                              used' = S.insert h (mUsedHostPorts m)
-                           in Right m { mPortMap = ports', mUsedHostPorts = used', mTySubst = subst' }
+                Right subst' ->
+                  let ports' = M.insert p h (mPortMap m)
+                      used' = S.insert h (mUsedHostPorts m)
+                   in Right m { mPortMap = ports', mUsedHostPorts = used', mTySubst = subst' }
 
 pickNextEdge :: Match -> M.Map EdgeId (S.Set EdgeId) -> [EdgeId] -> Maybe EdgeId
 pickNextEdge match adj allEdges =

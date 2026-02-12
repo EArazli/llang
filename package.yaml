@@ -129,6 +129,7 @@ library:
   - Strat.Frontend.Compile
   - Strat.Poly.Traversal
   - Strat.Poly.TypePretty
+  - Strat.Util.List
 
 executables:
   llang-exe:

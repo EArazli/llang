@@ -65,9 +65,9 @@ assocRule = do
   mul <- mkGen "mul" [aTy, aTy] [aTy]
   id1 <- pure (idD modeName [aTy])
   left <- tensorD mul id1
-  lhs <- compDTT (modeOnlyTypeTheory (mkModes [modeName])) mul left
+  lhs <- compD (modeOnlyTypeTheory (mkModes [modeName])) mul left
   right <- tensorD id1 mul
-  rhs <- compDTT (modeOnlyTypeTheory (mkModes [modeName])) mul right
+  rhs <- compD (modeOnlyTypeTheory (mkModes [modeName])) mul right
   pure RewriteRule
     { rrName = "assoc"
     , rrLHS = lhs
@@ -109,7 +109,7 @@ testDanglingReject :: Assertion
 testDanglingReject = do
   f <- require (mkGen "f" [aTy] [aTy])
   g <- require (mkGen "g" [aTy] [aTy])
-  lhs <- require (compDTT (modeOnlyTypeTheory (mkModes [modeName])) g f)
+  lhs <- require (compD (modeOnlyTypeTheory (mkModes [modeName])) g f)
   let rhs = lhs
   let rule = RewriteRule
         { rrName = "dangling"
@@ -323,7 +323,7 @@ testNormalizeDeterminism = do
   mul <- require (mkGen "mul" [aTy, aTy] [aTy])
   id1 <- pure (idD modeName [aTy])
   d1 <- require (tensorD mul id1)
-  d2 <- require (compDTT (modeOnlyTypeTheory (mkModes [modeName])) mul d1)
+  d2 <- require (compD (modeOnlyTypeTheory (mkModes [modeName])) mul d1)
   let rules = [rule]
   let mt = mkModes [modeName]
   r1 <- require (normalize (mkTypeTheory mt) 10 rules d2)

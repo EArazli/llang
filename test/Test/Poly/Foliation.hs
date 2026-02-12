@@ -89,15 +89,15 @@ mkDiag doc = do
   a <- genD modeM [] [tyT] (GenName "a")
   b <- genD modeM [tyT] [tyT] (GenName "b")
   c <- genD modeM [tyT] [] (GenName "c")
-  ab <- compDTT (doctrineTypeTheory doc) b a
-  compDTT (doctrineTypeTheory doc) c ab
+  ab <- compD (doctrineTypeTheory doc) b a
+  compD (doctrineTypeTheory doc) c ab
 
 
 mkTwoStepDiag :: Doctrine -> Either Text Diagram
 mkTwoStepDiag doc = do
   b1 <- genD modeM [tyT] [tyT] (GenName "b")
   b2 <- genD modeM [tyT] [tyT] (GenName "b")
-  compDTT (doctrineTypeTheory doc) b2 b1
+  compD (doctrineTypeTheory doc) b2 b1
 
 
 mkDoctrine :: Doctrine

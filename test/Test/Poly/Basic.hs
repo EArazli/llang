@@ -97,7 +97,7 @@ testCompMismatch = do
   let b = tcon mode "B" []
   let g = idD mode [a]
   let f = idD mode [b]
-  case compDTT (modeOnlyTypeTheory (mkModes [mode])) g f of
+  case compD (modeOnlyTypeTheory (mkModes [mode])) g f of
     Left _ -> pure ()
     Right _ -> assertFailure "expected boundary mismatch"
 

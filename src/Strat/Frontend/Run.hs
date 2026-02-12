@@ -379,7 +379,7 @@ encodeSSAArtifact doc ssa = do
             tailPorts <- mkPortList rest
             pair <- tensorD headPort tailPorts
             cons <- genD mode [portTy, portsTy] [portsTy] (GenName "portsCons")
-            compDTT tt cons pair
+            compD tt cons pair
       mkStepEdge st =
         case st of
           StepGen _ gen _ _ _ _ ->
@@ -403,7 +403,7 @@ encodeSSAArtifact doc ssa = do
         outs <- mkPortList (map portName (stepOuts st))
         pair <- tensorD ins outs
         mk <- mkStepEdge st
-        compDTT tt mk pair
+        compD tt mk pair
       mkStepList steps =
         case steps of
           [] -> genD mode [] [stepsTy] (GenName "stepsNil")
@@ -412,7 +412,7 @@ encodeSSAArtifact doc ssa = do
             tailSteps <- mkStepList rest
             pair <- tensorD headStep tailSteps
             cons <- genD mode [stepTy, stepsTy] [stepsTy] (GenName "stepsCons")
-            compDTT tt cons pair
+            compD tt cons pair
       renderGenName (GenName name) = name
       renderBoxName (BoxName name) = name
   inPorts <- mkPortList (map portName (ssaInputs ssa))
@@ -421,7 +421,7 @@ encodeSSAArtifact doc ssa = do
   tuple2 <- tensorD inPorts outPorts
   tuple3 <- tensorD tuple2 steps
   build <- genD mode [portsTy, portsTy, stepsTy] [ssaTy] (GenName "ssaProgram")
-  compDTT tt build tuple3
+  compD tt build tuple3
 
 
 extractValue :: ValueExtractorSpec -> Doctrine -> Diagram -> Either Text Artifact

@@ -1318,9 +1318,9 @@ assocRule name ty mulName = do
   mul <- genD modeM [ty, ty] [ty] mulName
   id1 <- pure (idD modeM [ty])
   left <- tensorD mul id1
-  lhs <- compDTT (modeOnlyTypeTheory (mkModes [modeM])) mul left
+  lhs <- compD (modeOnlyTypeTheory (mkModes [modeM])) mul left
   right <- tensorD id1 mul
-  rhs <- compDTT (modeOnlyTypeTheory (mkModes [modeM])) mul right
+  rhs <- compD (modeOnlyTypeTheory (mkModes [modeM])) mul right
   pure Cell2
     { c2Name = name
     , c2Class = Computational
@@ -1340,10 +1340,10 @@ unitRule name ty unitName mulName leftSide = do
     if leftSide
       then do
         tens <- tensorD unit id1
-        compDTT (modeOnlyTypeTheory (mkModes [modeM])) mul tens
+        compD (modeOnlyTypeTheory (mkModes [modeM])) mul tens
       else do
         tens <- tensorD id1 unit
-        compDTT (modeOnlyTypeTheory (mkModes [modeM])) mul tens
+        compD (modeOnlyTypeTheory (mkModes [modeM])) mul tens
   pure Cell2
     { c2Name = name
     , c2Class = Computational

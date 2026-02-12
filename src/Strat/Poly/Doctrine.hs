@@ -259,12 +259,12 @@ checkCell doc cell = do
       ctxL <- diagramDom (c2LHS cell)
       ctxR <- diagramDom (c2RHS cell)
       let tt = doctrineTypeTheory doc
-      let tyFlexDom = S.unions (map freeTyVarsTypeLocal (ctxL <> ctxR))
+      let tyFlexDom = S.unions (map freeTyVarsType (ctxL <> ctxR))
       let ixFlexDom = S.unions (map freeIxVarsType (ctxL <> ctxR))
       _ <- unifyCtx tt [] tyFlexDom ixFlexDom ctxL ctxR
       codL <- diagramCod (c2LHS cell)
       codR <- diagramCod (c2RHS cell)
-      let tyFlexCod = S.unions (map freeTyVarsTypeLocal (codL <> codR))
+      let tyFlexCod = S.unions (map freeTyVarsType (codL <> codR))
       let ixFlexCod = S.unions (map freeIxVarsType (codL <> codR))
       _ <- unifyCtx tt [] tyFlexCod ixFlexCod codL codR
       let lhsVars = freeTyVarsDiagram (c2LHS cell)
@@ -537,8 +537,8 @@ checkStructuralByDiscipline doc =
       ida <- pure (idD mode [TVar a])
       lhsTail <- tensorD dup ida
       rhsTail <- tensorD ida dup
-      lhs <- compDTT (doctrineTypeTheory doc) lhsTail dup
-      rhs <- compDTT (doctrineTypeTheory doc) rhsTail dup
+      lhs <- compD (doctrineTypeTheory doc) lhsTail dup
+      rhs <- compD (doctrineTypeTheory doc) rhsTail dup
       Right (lhs, rhs)
 
     lawCounitLeft mode = do
@@ -547,7 +547,7 @@ checkStructuralByDiscipline doc =
       dropA <- genD mode [TVar a] [] (GenName "drop")
       ida <- pure (idD mode [TVar a])
       tailL <- tensorD dropA ida
-      lhs <- compDTT (doctrineTypeTheory doc) tailL dup
+      lhs <- compD (doctrineTypeTheory doc) tailL dup
       let rhs = idD mode [TVar a]
       Right (lhs, rhs)
 
@@ -557,7 +557,7 @@ checkStructuralByDiscipline doc =
       dropA <- genD mode [TVar a] [] (GenName "drop")
       ida <- pure (idD mode [TVar a])
       tailL <- tensorD ida dropA
-      lhs <- compDTT (doctrineTypeTheory doc) tailL dup
+      lhs <- compD (doctrineTypeTheory doc) tailL dup
       let rhs = idD mode [TVar a]
       Right (lhs, rhs)
 
@@ -586,15 +586,3 @@ inferIxSortRule tt theory varSorts tm =
           if length (ifArgs sig) /= length args
             then Left "validateDoctrine: index_rule function arity mismatch"
             else Right (ifRes sig)
-
-freeTyVarsTypeLocal :: TypeExpr -> S.Set TyVar
-freeTyVarsTypeLocal ty =
-  case ty of
-    TVar v -> S.singleton v
-    TCon _ args -> S.unions (map freeArg args)
-    TMod _ inner -> freeTyVarsTypeLocal inner
-  where
-    freeArg arg =
-      case arg of
-        TAType t -> freeTyVarsTypeLocal t
-        TAIndex ix -> S.unions [ freeTyVarsTypeLocal (ixvSort v) | v <- S.toList (freeIxVarsIx ix) ]

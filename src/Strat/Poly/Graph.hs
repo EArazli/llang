@@ -36,10 +36,11 @@ import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.TypeExpr (TypeExpr, TyVar, IxVar, boundIxIndicesType, typeMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.UnifyTy (Subst, emptySubst, unifyTyFlex, applySubstCtx, composeSubst)
+import Strat.Poly.UnifyTy (Subst, emptySubst, unifyTyFlex, applySubstCtx)
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, unifyAttrFlex)
 import Strat.Poly.TypePretty (renderType)
 import Strat.Poly.TypeTheory (TypeTheory(..))
+import Strat.Util.List (dedupe)
 
 
 newtype PortId = PortId Int deriving (Eq, Ord, Show)
@@ -432,14 +433,6 @@ mergePorts diag keep drop
       edge { eIns = map replace (eIns edge), eOuts = map replace (eOuts edge) }
       where
         replace p = if p == drop' then keep' else p
-
-dedupe :: Ord a => [a] -> [a]
-dedupe = go S.empty
-  where
-    go _ [] = []
-    go seen (x:xs)
-      | x `S.member` seen = go seen xs
-      | otherwise = x : go (S.insert x seen) xs
 
 shiftDiagram :: Int -> Int -> Diagram -> Diagram
 shiftDiagram portOff edgeOff diag =
@@ -860,11 +853,8 @@ algoMatch tt tyFlex ixFlex attrFlex =
         Right ixCtx' ->
           case unifyTyFlex tt ixCtx' tyFlex ixFlex (ieTySubst extra) ty1 ty2 of
             Left _ -> Right []
-            Right s1 ->
-              case composeSubst tt s1 (ieTySubst extra) of
-                Left _ -> Right []
-                Right tySubst' ->
-                  Right [extra { ieTySubst = tySubst' }]
+            Right tySubst' ->
+              Right [extra { ieTySubst = tySubst' }]
 
     comparePayload recurse extra p1 p2 =
       case (p1, p2) of

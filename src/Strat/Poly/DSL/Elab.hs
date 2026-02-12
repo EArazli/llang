@@ -1097,7 +1097,7 @@ elabDiagExprWithFresh env doc mode ixCtx tyVars ixVars binderSigs0 metaMode allo
         RDComp a b -> do
           (d1, binderSigs1) <- build curIxCtx binderSigs a
           (d2, binderSigs2) <- build curIxCtx binderSigs1 b
-          dComp <- liftEither (compDTT ttDoc d2 d1)
+          dComp <- liftEither (compD ttDoc d2 d1)
           pure (dComp, binderSigs2)
         RDTensor a b -> do
           (d1, binderSigs1) <- build curIxCtx binderSigs a
@@ -1274,23 +1274,13 @@ unifyBoundary tt rigidTy rigidIx dom cod diag = do
 unifyCtxFlexLocal :: TypeTheory -> [TypeExpr] -> S.Set TyVar -> S.Set IxVar -> Context -> Context -> Either Text Subst
 unifyCtxFlexLocal tt ixCtx flexTy flexIx ctx1 ctx2
   | length ctx1 /= length ctx2 = Left "unifyCtxFlex: length mismatch"
-  | otherwise = foldl step (Right U.emptySubst) (zip ctx1 ctx2)
+  | otherwise = foldM step U.emptySubst (zip ctx1 ctx2)
   where
-    step acc (a, b) = do
-      s <- acc
-      a' <- applySubstTyWithTT tt s a
-      b' <- applySubstTyWithTT tt s b
-      s' <- U.unifyTyFlex tt ixCtx flexTy flexIx U.emptySubst a' b'
-      composeSubstWithTT tt s' s
-
-applySubstTyWithTT :: TypeTheory -> Subst -> TypeExpr -> Either Text TypeExpr
-applySubstTyWithTT = U.applySubstTy
-
-composeSubstWithTT :: TypeTheory -> Subst -> Subst -> Either Text Subst
-composeSubstWithTT = U.composeSubst
+    step s (a, b) =
+      U.unifyTyFlex tt ixCtx flexTy flexIx s a b
 
 applySubstDiagramWithTT :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
-applySubstDiagramWithTT = applySubstDiagramTT
+applySubstDiagramWithTT = applySubstDiagram
 
 elabGenAttrs :: Doctrine -> GenDecl -> Maybe [RawAttrArg] -> Either Text AttrMap
 elabGenAttrs doc gen mArgs =

@@ -11,6 +11,7 @@ module Strat.Poly.TypeExpr
   , Context
   , mapIxTerm
   , mapTypeExpr
+  , freeTyVarsType
   , freeIxVarsType
   , freeIxVarsIx
   , boundIxIndicesType
@@ -86,6 +87,18 @@ mapTypeExpr fTy fIx = goTy
       case arg of
         TAType ty -> TAType (goTy ty)
         TAIndex ix -> TAIndex (mapIxTerm fIx ix)
+
+freeTyVarsType :: TypeExpr -> S.Set TyVar
+freeTyVarsType ty =
+  case ty of
+    TVar v -> S.singleton v
+    TCon _ args -> S.unions (map freeTyVarsArg args)
+    TMod _ inner -> freeTyVarsType inner
+  where
+    freeTyVarsArg arg =
+      case arg of
+        TAType innerTy -> freeTyVarsType innerTy
+        TAIndex ix -> S.unions (map (freeTyVarsType . ixvSort) (S.toList (freeIxVarsIx ix)))
 
 freeIxVarsIx :: IxTerm -> S.Set IxVar
 freeIxVarsIx tm =

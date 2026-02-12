@@ -187,9 +187,9 @@ applyMatch tt rule match host = do
   rejectSplice "rewrite host" host
   -- Normalize host boundary types before gluing so mergePorts compares
   -- canonicalized types (e.g. after modality/index equations).
-  hostNorm <- applySubstDiagramTT tt emptySubst host
+  hostNorm <- applySubstDiagram tt emptySubst host
   let lhs = rrLHS rule
-  rhsSub <- applySubstDiagramTT tt (mTySubst match) (rrRHS rule)
+  rhsSub <- applySubstDiagram tt (mTySubst match) (rrRHS rule)
   let rhs0 = applyAttrSubstDiagram (mAttrSubst match) rhsSub
   rhs1 <- instantiateBinderMetas (mBinderSub match) rhs0
   rhs <- expandSplices (mBinderSub match) rhs1
