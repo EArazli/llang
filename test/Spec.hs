@@ -3,6 +3,7 @@ module Main (main) where
 import Test.Tasty
 import qualified Test.NoPolyPrefixes as NoPolyPrefixes
 import qualified Test.Poly.Basic as PolyBasic
+import qualified Test.Poly.DiagramUnion as PolyDiagramUnion
 import qualified Test.Poly.Rewrite as PolyRewrite
 import qualified Test.Poly.CriticalPairs as PolyCriticalPairs
 import qualified Test.Poly.Morphism as PolyMorphism
@@ -28,6 +29,7 @@ main =
     testGroup
       "All"
       [ PolyBasic.tests
+      , PolyDiagramUnion.tests
       , PolyRewrite.tests
       , PolyCriticalPairs.tests
       , PolyMorphism.tests

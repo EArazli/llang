@@ -159,6 +159,7 @@ tests:
     other-modules:
     - Test.NoPolyPrefixes
     - Test.Poly.Basic
+    - Test.Poly.DiagramUnion
     - Test.Poly.Rewrite
     - Test.Poly.CriticalPairs
     - Test.Poly.Morphism

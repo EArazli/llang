@@ -30,9 +30,6 @@ import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
 
-
-type Subst = U.Subst
-
 elabPolyMorphism :: ModuleEnv -> RawPolyMorphism -> Either Text Morphism
 elabPolyMorphism env raw = do
   src <- lookupPolyDoctrine env (rpmSrc raw)
@@ -1263,24 +1260,13 @@ unifyBoundary tt rigidTy rigidIx dom cod diag = do
   domDiag <- diagramDom diag
   let flexTy0 = S.difference (freeTyVarsDiagram diag) rigidTy
   let flexIx0 = S.difference (freeIxVarsDiagram diag) rigidIx
-  s1 <- unifyCtxFlexLocal tt (dIxCtx diag) flexTy0 flexIx0 domDiag dom
-  diag1 <- applySubstDiagramWithTT tt s1 diag
+  s1 <- U.unifyCtx tt (dIxCtx diag) flexTy0 flexIx0 domDiag dom
+  diag1 <- applySubstDiagram tt s1 diag
   codDiag <- diagramCod diag1
   let flexTy1 = S.difference (freeTyVarsDiagram diag1) rigidTy
   let flexIx1 = S.difference (freeIxVarsDiagram diag1) rigidIx
-  s2 <- unifyCtxFlexLocal tt (dIxCtx diag1) flexTy1 flexIx1 codDiag cod
-  applySubstDiagramWithTT tt s2 diag1
-
-unifyCtxFlexLocal :: TypeTheory -> [TypeExpr] -> S.Set TyVar -> S.Set IxVar -> Context -> Context -> Either Text Subst
-unifyCtxFlexLocal tt ixCtx flexTy flexIx ctx1 ctx2
-  | length ctx1 /= length ctx2 = Left "unifyCtxFlex: length mismatch"
-  | otherwise = foldM step U.emptySubst (zip ctx1 ctx2)
-  where
-    step s (a, b) =
-      U.unifyTyFlex tt ixCtx flexTy flexIx s a b
-
-applySubstDiagramWithTT :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
-applySubstDiagramWithTT = applySubstDiagram
+  s2 <- U.unifyCtx tt (dIxCtx diag1) flexTy1 flexIx1 codDiag cod
+  applySubstDiagram tt s2 diag1
 
 elabGenAttrs :: Doctrine -> GenDecl -> Maybe [RawAttrArg] -> Either Text AttrMap
 elabGenAttrs doc gen mArgs =

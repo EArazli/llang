@@ -202,23 +202,15 @@ applyMatch tt rule match host = do
   if length lhsBoundary /= length rhsBoundary
     then Left "rewriteOnce: boundary length mismatch"
     else do
-      (host4, _) <- foldl step (Right (host3, M.empty)) (zip lhsBoundary rhsBoundary)
+      boundaryPairs <- mapM toBoundaryPair (zip lhsBoundary rhsBoundary)
+      host4 <- mergeBoundaryPairs host3 boundaryPairs
       validateDiagram host4
       pure host4
   where
-    step acc (lhsPort, rhsPort) = do
-      (diag, seen) <- acc
-      hostPort <-
-        case M.lookup lhsPort (mPortMap match) of
-          Nothing -> Left "rewriteOnce: missing boundary port mapping"
-          Just p -> Right p
-      case M.lookup rhsPort seen of
-        Nothing -> do
-          diag' <- mergePorts diag hostPort rhsPort
-          pure (diag', M.insert rhsPort hostPort seen)
-        Just hostPort' -> do
-          diag' <- mergePorts diag hostPort' hostPort
-          pure (diag', seen)
+    toBoundaryPair (lhsPort, rhsPort) =
+      case M.lookup lhsPort (mPortMap match) of
+        Nothing -> Left "rewriteOnce: missing boundary port mapping"
+        Just hostPort -> Right (hostPort, rhsPort)
 
 instantiateBinderMetas :: M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
 instantiateBinderMetas binderSub =
@@ -233,38 +225,13 @@ instantiateBinderMetas binderSub =
             Just captured -> Right (BAConcrete captured)
 
 expandSplices :: M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
-expandSplices binderSub diag0 = do
-  diag1 <- recurseEdges diag0
-  expandTop diag1
+expandSplices binderSub =
+  traverseDiagram expandTop pure pure
   where
-    recurseEdges diag = do
-      edges' <-
-        fmap IM.fromList
-          (mapM
-            (\(k, edge) -> do
-              payload' <- recursePayload (ePayload edge)
-              pure (k, edge { ePayload = payload' }))
-            (IM.toList (dEdges diag)))
-      pure diag { dEdges = edges' }
-
-    recursePayload payload =
-      case payload of
-        PBox name inner -> PBox name <$> expandSplices binderSub inner
-        PFeedback inner -> PFeedback <$> expandSplices binderSub inner
-        PSplice x -> Right (PSplice x)
-        PGen gen attrs bargs -> do
-          bargs' <- mapM recurseBinderArg bargs
-          Right (PGen gen attrs bargs')
-
-    recurseBinderArg barg =
-      case barg of
-        BAConcrete inner -> BAConcrete <$> expandSplices binderSub inner
-        BAMeta x -> Right (BAMeta x)
-
     expandTop diag =
       case findSpliceEdge diag of
         Nothing -> Right diag
-        Just (edgeKey, edge, x) -> do
+        Just (_, edge, x) -> do
           captured <-
             case M.lookup x binderSub of
               Nothing -> Left "rewriteOnce: splice uses uncaptured binder meta"
@@ -279,23 +246,13 @@ expandSplices binderSub diag0 = do
           if domSplice /= domCaptured || codSplice /= codCaptured
             then Left "rewriteOnce: splice boundary mismatch"
             else Right ()
-          diagNoEdge <- deleteEdgeKeepPorts diag edgeKey edge
+          diagNoEdge <- deleteEdgeKeepPorts diag (eId edge)
           let capturedShift = shiftDiagram (dNextPort diagNoEdge) (dNextEdge diagNoEdge) captured
           diagInserted <- unionDiagram diagNoEdge capturedShift
           let splicePairs = zip (eIns edge) (dIn capturedShift) <> zip (eOuts edge) (dOut capturedShift)
-          (diagMerged, _) <- foldl mergePair (Right (diagInserted, M.empty)) splicePairs
+          diagMerged <- mergeBoundaryPairs diagInserted splicePairs
           validateDiagram diagMerged
           expandTop diagMerged
-
-    mergePair acc (hostPort, capturedPort) = do
-      (d, seen) <- acc
-      case M.lookup capturedPort seen of
-        Nothing -> do
-          d' <- mergePorts d hostPort capturedPort
-          pure (d', M.insert capturedPort hostPort seen)
-        Just mappedHostPort -> do
-          d' <- mergePorts d mappedHostPort hostPort
-          pure (d', seen)
 
 findSpliceEdge :: Diagram -> Maybe (Int, Edge, BinderMetaVar)
 findSpliceEdge diag =
@@ -307,21 +264,6 @@ findSpliceEdge diag =
     of
       [] -> Nothing
       (x:_) -> Just x
-
-deleteEdgeKeepPorts :: Diagram -> Int -> Edge -> Either Text Diagram
-deleteEdgeKeepPorts diag edgeKey edge = do
-  let diag1 = diag { dEdges = IM.delete edgeKey (dEdges diag) }
-  let diag2 = clearConsumers diag1 (eIns edge)
-  let diag3 = clearProducers diag2 (eOuts edge)
-  pure diag3
-  where
-    clearConsumers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
-       in d { dCons = foldl clearOne (dCons d) ports }
-
-    clearProducers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
-       in d { dProd = foldl clearOne (dProd d) ports }
 
 requirePortType :: Diagram -> PortId -> Either Text TypeExpr
 requirePortType diag pid =
@@ -340,21 +282,7 @@ deleteMatchedEdges diag edgeIds = foldl step (Right diag) edgeIds
   where
     step acc eid = do
       d <- acc
-      case IM.lookup (unEdgeId eid) (dEdges d) of
-        Nothing -> Left "rewriteOnce: missing edge"
-        Just edge -> do
-          let d1 = d { dEdges = IM.delete (unEdgeId eid) (dEdges d) }
-          let d2 = clearConsumers d1 (eIns edge)
-          let d3 = clearProducers d2 (eOuts edge)
-          pure d3
-
-    clearConsumers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
-       in d { dCons = foldl clearOne (dCons d) ports }
-
-    clearProducers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
-       in d { dProd = foldl clearOne (dProd d) ports }
+      deleteEdgeKeepPorts d eid
 
 deleteMatchedPorts :: Diagram -> [PortId] -> M.Map PortId PortId -> Either Text Diagram
 deleteMatchedPorts diag ports portMap = foldl step (Right diag) ports
@@ -363,24 +291,7 @@ deleteMatchedPorts diag ports portMap = foldl step (Right diag) ports
       d <- acc
       case M.lookup p portMap of
         Nothing -> Left "rewriteOnce: missing port mapping"
-        Just hostPort -> deletePort d hostPort
-
-deletePort :: Diagram -> PortId -> Either Text Diagram
-deletePort diag pid =
-  let k = unPortId pid
-   in case (IM.lookup k (dProd diag), IM.lookup k (dCons diag)) of
-        (Just Nothing, Just Nothing) ->
-          let d1 =
-                diag
-                  { dPortTy = IM.delete k (dPortTy diag)
-                  , dPortLabel = IM.delete k (dPortLabel diag)
-                  , dProd = IM.delete k (dProd diag)
-                  , dCons = IM.delete k (dCons diag)
-                  , dIn = filter (/= pid) (dIn diag)
-                  , dOut = filter (/= pid) (dOut diag)
-                  }
-           in Right d1
-        _ -> Left "rewriteOnce: cannot delete port with remaining incidence"
+        Just hostPort -> deletePortIfDangling d hostPort
 
 rulesFromDoctrine :: Doctrine -> [RewriteRule]
 rulesFromDoctrine doc = rulesFromPolicy UseAllOriented (dCells2 doc)

@@ -188,7 +188,7 @@ A diagram is an **open directed hypergraph** with **ports as vertices** and gene
 
 - **Ports** have types.
 - **Edges** have ordered input ports and ordered output ports; each edge payload is either
-  a generator instance, a box, or a splice edge.
+  a generator instance, a box, a feedback edge, or a splice edge.
 - **Boundary** consists of ordered input ports and ordered output ports.
 - **Index context** `dIxCtx :: [TypeExpr]` stores bound index sorts in scope.
 - **Linearity invariant**: each port has at most one producer and at most one consumer.
@@ -199,7 +199,7 @@ Generator payloads carry attributes and binder arguments:
 
 ```
 BinderArg   = BAConcrete Diagram | BAMeta BinderMetaVar
-EdgePayload = PGen GenName AttrMap [BinderArg] | PBox BoxName Diagram | PSplice BinderMetaVar
+EdgePayload = PGen GenName AttrMap [BinderArg] | PBox BoxName Diagram | PFeedback Diagram | PSplice BinderMetaVar
 AttrMap     = AttrName -> AttrTerm
 AttrTerm    = ATVar AttrVar | ATLit AttrLit
 AttrVar     = { name :: Text, sort :: AttrSort }
@@ -219,6 +219,15 @@ For a **box** edge, the nested diagram must:
 - share the outer diagram’s `dIxCtx`,
 - have input/output boundary types matching the edge’s input/output port types.
 - recursively carry generator payload attributes by the same representation.
+
+For a **feedback** edge, the nested diagram must:
+
+- share the outer diagram’s mode and `dIxCtx`,
+- have exactly one input and at least one output,
+- have no outer inputs on the feedback edge (`eIns = []`),
+- with inner outputs `(stateOut : outsTail)` and the single inner input `stateIn`:
+  `type(stateIn) == type(stateOut)`,
+- and the feedback edge outputs must match `outsTail` (in order and type).
 
 The internal representation (`Strat.Poly.Graph`) stores:
 
@@ -641,7 +650,7 @@ shortest coercion path; ambiguity or absence is an error.
 `loop { <d> }` requires `<d>` to have exactly one input and **at least one output**.
 The **first** output port is identified with the input port (feedback); the remaining
 outputs become the outputs of the looped diagram. The result has **no inputs** and
-`(n−1)` outputs.
+`(n−1)` outputs. Elaboration encodes this as a `PFeedback` edge in the core diagram AST.
 
 `splice(?X)` is allowed in rewrite-rule RHS and morphism `gen` RHS. In rules it requires `?X` captured in LHS binder args; in morphisms it must reference a declared hole (`?b0..?b(k-1)`).
 

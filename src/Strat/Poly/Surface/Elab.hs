@@ -376,13 +376,6 @@ applySubstSurf mt subst sd = do
   diag' <- applySubstDiagram (modeOnlyTypeTheory mt) subst (sdDiag sd)
   pure sd { sdDiag = diag' }
 
-unifyCtxFlex :: ModeTheory -> S.Set TyVar -> Context -> Context -> Either Text Subst
-unifyCtxFlex mt flex ctx1 ctx2
-  | length ctx1 /= length ctx2 = Left "surface: context length mismatch"
-  | otherwise = foldM step U.emptySubst (zip ctx1 ctx2)
-  where
-    step s (a, b) = unifyTyFlex mt flex s a b
-
 
 -- Structural discipline
 
@@ -980,13 +973,13 @@ checkBinderArgs mt dom cod slots args =
           inner <- applySubstDiagram (modeOnlyTypeTheory mt) substAcc inner0
           domArg <- diagramDom inner
           let flexDom = S.union (freeTyVarsCtx (bsDom slot)) (freeTyVarsCtx domArg)
-          sDom <- unifyCtxFlex mt flexDom (bsDom slot) domArg
+          sDom <- U.unifyCtx (modeOnlyTypeTheory mt) [] flexDom S.empty (bsDom slot) domArg
           subst1 <- composeSubst mt sDom substAcc
           slot1 <- applySubstBinderSigTy mt sDom slot
           inner1 <- applySubstDiagram (modeOnlyTypeTheory mt) sDom inner
           codArg <- diagramCod inner1
           let flexCod = S.union (freeTyVarsCtx (bsCod slot1)) (freeTyVarsCtx codArg)
-          sCod <- unifyCtxFlex mt flexCod (bsCod slot1) codArg
+          sCod <- U.unifyCtx (modeOnlyTypeTheory mt) [] flexCod S.empty (bsCod slot1) codArg
           subst2 <- composeSubst mt sCod subst1
           inner2 <- applySubstDiagram (modeOnlyTypeTheory mt) sCod inner1
           Right (subst2, out <> [BAConcrete inner2])
@@ -1022,7 +1015,7 @@ compSurf mt a b = do
   codA <- diagramCod (sdDiag a)
   domB <- diagramDom (sdDiag b)
   let flex = S.union (freeTyVarsDiagram (sdDiag a)) (freeTyVarsDiagram (sdDiag b))
-  subst <- unifyCtxFlex mt flex codA domB
+  subst <- U.unifyCtx (modeOnlyTypeTheory mt) [] flex S.empty codA domB
   a' <- applySubstSurf mt subst a
   b' <- applySubstSurf mt subst b
   let bShift = shiftDiagram (dNextPort (sdDiag a')) (dNextEdge (sdDiag a')) (sdDiag b')

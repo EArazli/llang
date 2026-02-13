@@ -15,6 +15,10 @@ module Strat.Poly.Graph
   , addEdgePayload
   , validateDiagram
   , mergePorts
+  , mergeBoundaryPairs
+  , deleteEdgeKeepPorts
+  , deletePortIfDangling
+  , deletePortsIfDangling
   , renumberDiagram
   , diagramIsoEq
   , diagramIsoMatchWithVars
@@ -33,6 +37,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
+import Control.Monad (foldM)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.TypeExpr (TypeExpr, TyVar, IxVar, boundIxIndicesType, typeMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
@@ -433,6 +438,62 @@ mergePorts diag keep drop
       edge { eIns = map replace (eIns edge), eOuts = map replace (eOuts edge) }
       where
         replace p = if p == drop' then keep' else p
+
+mergeBoundaryPairs :: Diagram -> [(PortId, PortId)] -> Either Text Diagram
+mergeBoundaryPairs diag pairs = fst <$> foldM step (diag, M.empty) pairs
+  where
+    step (d, seen) (keep, dropPort) =
+      case M.lookup dropPort seen of
+        Nothing -> do
+          d' <- mergePorts d keep dropPort
+          pure (d', M.insert dropPort keep seen)
+        Just keep' -> do
+          d' <- mergePorts d keep' keep
+          pure (d', seen)
+
+deleteEdgeKeepPorts :: Diagram -> EdgeId -> Either Text Diagram
+deleteEdgeKeepPorts diag eid = do
+  edge <-
+    case IM.lookup (unEdgeId eid) (dEdges diag) of
+      Nothing -> Left "deleteEdgeKeepPorts: missing edge"
+      Just e -> Right e
+  cons' <- clearIncidence "consumer" (dCons diag) (eIns edge)
+  prod' <- clearIncidence "producer" (dProd diag) (eOuts edge)
+  pure
+    diag
+      { dEdges = IM.delete (unEdgeId eid) (dEdges diag)
+      , dCons = cons'
+      , dProd = prod'
+      }
+  where
+    clearIncidence label mp ports =
+      foldM clearOne mp ports
+      where
+        clearOne mp' pid =
+          case IM.lookup (unPortId pid) mp' of
+            Nothing -> Left ("deleteEdgeKeepPorts: missing " <> label <> " incidence entry")
+            Just _ -> Right (IM.insert (unPortId pid) Nothing mp')
+
+deletePortIfDangling :: Diagram -> PortId -> Either Text Diagram
+deletePortIfDangling diag pid =
+  let k = unPortId pid
+   in case (IM.lookup k (dProd diag), IM.lookup k (dCons diag)) of
+        (Just Nothing, Just Nothing) ->
+          Right
+            diag
+              { dPortTy = IM.delete k (dPortTy diag)
+              , dPortLabel = IM.delete k (dPortLabel diag)
+              , dProd = IM.delete k (dProd diag)
+              , dCons = IM.delete k (dCons diag)
+              , dIn = filter (/= pid) (dIn diag)
+              , dOut = filter (/= pid) (dOut diag)
+              }
+        (Nothing, _) -> Left "deletePortIfDangling: missing producer incidence entry"
+        (_, Nothing) -> Left "deletePortIfDangling: missing consumer incidence entry"
+        _ -> Left "deletePortIfDangling: port still has incidence"
+
+deletePortsIfDangling :: Diagram -> [PortId] -> Either Text Diagram
+deletePortsIfDangling = foldM deletePortIfDangling
 
 shiftDiagram :: Int -> Int -> Diagram -> Diagram
 shiftDiagram portOff edgeOff diag =

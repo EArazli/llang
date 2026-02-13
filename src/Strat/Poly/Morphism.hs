@@ -1220,26 +1220,16 @@ spliceEdge diag edgeKey image = do
       Just e -> Right e
   let ins = eIns edge
   let outs = eOuts edge
-  diag1 <- deleteEdge diag edgeKey
+  diag1 <- deleteEdgeKeepPorts diag (EdgeId edgeKey)
   let imageShift = shiftDiagram (dNextPort diag1) (dNextEdge diag1) image
   diag2 <- unionDiagram diag1 imageShift
   let boundary = dIn imageShift <> dOut imageShift
   if length boundary /= length (ins <> outs)
     then Left "spliceEdge: boundary mismatch"
     else do
-      (diag3, _) <- foldl step (Right (diag2, M.empty)) (zip (ins <> outs) boundary)
+      diag3 <- mergeBoundaryPairs diag2 (zip (ins <> outs) boundary)
       validateDiagram diag3
       pure diag3
-  where
-    step acc (hostPort, imgPort) = do
-      (d, seen) <- acc
-      case M.lookup imgPort seen of
-        Nothing -> do
-          d' <- mergePorts d hostPort imgPort
-          pure (d', M.insert imgPort hostPort seen)
-        Just hostPort' -> do
-          d' <- mergePorts d hostPort' hostPort
-          pure (d', seen)
 
 updateEdgePayload :: Diagram -> Int -> EdgePayload -> Either Text Diagram
 updateEdgePayload diag edgeKey payload =
@@ -1248,25 +1238,3 @@ updateEdgePayload diag edgeKey payload =
     Just edge ->
       let edge' = edge { ePayload = payload }
       in Right diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-
-deleteEdge :: Diagram -> Int -> Either Text Diagram
-deleteEdge diag edgeKey =
-  case IM.lookup edgeKey (dEdges diag) of
-    Nothing -> Left "deleteEdge: missing edge"
-    Just edge -> do
-      let d1 = diag { dEdges = IM.delete edgeKey (dEdges diag) }
-      let d2 = clearConsumers d1 (eIns edge)
-      let d3 = clearProducers d2 (eOuts edge)
-      pure d3
-
-clearConsumers :: Diagram -> [PortId] -> Diagram
-clearConsumers d ports =
-  let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
-      mp = dCons d
-  in d { dCons = foldl clearOne mp ports }
-
-clearProducers :: Diagram -> [PortId] -> Diagram
-clearProducers d ports =
-  let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
-      mp = dProd d
-  in d { dProd = foldl clearOne mp ports }

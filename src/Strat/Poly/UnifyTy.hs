@@ -17,6 +17,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Control.Monad (foldM)
 import Strat.Poly.IndexTheory
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..))
 import Strat.Poly.TypeExpr
@@ -74,28 +75,20 @@ unifyTyFlex tt ixCtx tyFlex ixFlex subst t1 t2 = do
     step acc (argA, argB) = do
       s <- acc
       case (argA, argB) of
-        (TAType tyA, TAType tyB) -> do
-          tyA' <- applySubstTy tt s tyA
-          tyB' <- applySubstTy tt s tyB
-          s1 <- unifyTyFlex tt ixCtx tyFlex ixFlex s tyA' tyB'
-          composeSubst tt s1 s
+        (TAType tyA, TAType tyB) ->
+          unifyTyFlex tt ixCtx tyFlex ixFlex s tyA tyB
         (TAIndex ixA, TAIndex ixB) -> do
           sort <- inferExpectedIxSort tt ixCtx s ixA ixB
-          s1 <- unifyIx tt ixCtx ixFlex s sort ixA ixB
-          composeSubst tt s1 s
+          unifyIx tt ixCtx ixFlex s sort ixA ixB
         _ -> Left "unifyTyFlex: mixed type/index arguments cannot unify"
 
     stepBySig acc (paramSig, (argA, argB)) = do
       s <- acc
       case (paramSig, argA, argB) of
-        (TPS_Ty _, TAType tyA, TAType tyB) -> do
-          tyA' <- applySubstTy tt s tyA
-          tyB' <- applySubstTy tt s tyB
-          s1 <- unifyTyFlex tt ixCtx tyFlex ixFlex s tyA' tyB'
-          composeSubst tt s1 s
-        (TPS_Ix sort, TAIndex ixA, TAIndex ixB) -> do
-          s1 <- unifyIx tt ixCtx ixFlex s sort ixA ixB
-          composeSubst tt s1 s
+        (TPS_Ty _, TAType tyA, TAType tyB) ->
+          unifyTyFlex tt ixCtx tyFlex ixFlex s tyA tyB
+        (TPS_Ix sort, TAIndex ixA, TAIndex ixB) ->
+          unifyIx tt ixCtx ixFlex s sort ixA ixB
         (TPS_Ty _, _, _) ->
           Left "unifyTyFlex: expected type argument for constructor parameter"
         (TPS_Ix _, _, _) ->
@@ -129,14 +122,11 @@ unifyCtx
   -> Either Text Subst
 unifyCtx tt ixCtx tyFlex ixFlex ctx1 ctx2
   | length ctx1 /= length ctx2 = Left "unifyCtx: length mismatch"
-  | otherwise = foldl step (Right emptySubst) (zip ctx1 ctx2)
-  where
-    step acc (a, b) = do
-      s <- acc
-      a' <- applySubstTy tt s a
-      b' <- applySubstTy tt s b
-      s1 <- unifyTyFlex tt ixCtx tyFlex ixFlex s a' b'
-      composeSubst tt s1 s
+  | otherwise =
+      foldM
+        (\s (a, b) -> unifyTyFlex tt ixCtx tyFlex ixFlex s a b)
+        emptySubst
+        (zip ctx1 ctx2)
 
 unifyIx
   :: TypeTheory
@@ -203,8 +193,7 @@ unifyIx tt ixCtx ixFlex subst expectedSort ix1 ix2 = do
           y' <- applySubstIx tt s1 argSort' y
           xNorm <- normalizeIx tt argSort' x'
           yNorm <- normalizeIx tt argSort' y'
-          s2 <- unifyIxNorm s1 argSort' xNorm yNorm
-          composeSubst tt s2 s1
+          unifyIxNorm s1 argSort' xNorm yNorm
 
     bindIxVar s currentSort v t = do
       sortV0 <- applySubstTy tt s (ixvSort v)

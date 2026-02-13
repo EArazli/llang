@@ -235,17 +235,17 @@ unionDiagram left right
   | dMode left /= dMode right = Left "unionDiagram: mode mismatch"
   | dIxCtx left /= dIxCtx right = Left "unionDiagram: index-context mismatch"
   | otherwise = do
-  portTy <- unionDisjointIntMap "unionDiagram ports" (dPortTy left) (dPortTy right)
-  portLabel <- unionDisjointIntMap "unionDiagram labels" (dPortLabel left) (dPortLabel right)
-  prod <- unionDisjointIntMap "unionDiagram producers" (dProd left) (dProd right)
-  cons <- unionDisjointIntMap "unionDiagram consumers" (dCons left) (dCons right)
-  edges <- unionDisjointIntMap "unionDiagram edges" (dEdges left) (dEdges right)
-  pure left
-    { dPortTy = portTy
-    , dPortLabel = portLabel
-    , dProd = prod
-    , dCons = cons
-    , dEdges = edges
-    , dNextPort = dNextPort right
-    , dNextEdge = dNextEdge right
-    }
+      portTy <- unionDisjointIntMap "unionDiagram ports" (dPortTy left) (dPortTy right)
+      portLabel <- unionDisjointIntMap "unionDiagram labels" (dPortLabel left) (dPortLabel right)
+      prod <- unionDisjointIntMap "unionDiagram producers" (dProd left) (dProd right)
+      cons <- unionDisjointIntMap "unionDiagram consumers" (dCons left) (dCons right)
+      edges <- unionDisjointIntMap "unionDiagram edges" (dEdges left) (dEdges right)
+      pure left
+        { dPortTy = portTy
+        , dPortLabel = portLabel
+        , dProd = prod
+        , dCons = cons
+        , dEdges = edges
+        , dNextPort = max (dNextPort left) (dNextPort right)
+        , dNextEdge = max (dNextEdge left) (dNextEdge right)
+        }

@@ -548,22 +548,15 @@ applyRuleAtMatch tt rule match host = do
   if length lhsBoundary /= length rhsBoundary
     then Left "criticalPairs: boundary length mismatch"
     else do
-      (host4, _) <- foldl step (Right (host3, M.empty)) (zip lhsBoundary rhsBoundary)
+      boundaryPairs <- mapM toBoundaryPair (zip lhsBoundary rhsBoundary)
+      host4 <- mergeBoundaryPairs host3 boundaryPairs
       validateDiagram host4
       pure host4
   where
-    step acc (lhsPort, rhsPort) = do
-      (diag, seen) <- acc
-      hostPort <- case M.lookup lhsPort (mPortMap match) of
+    toBoundaryPair (lhsPort, rhsPort) =
+      case M.lookup lhsPort (mPortMap match) of
         Nothing -> Left "criticalPairs: missing boundary port mapping"
-        Just p -> Right p
-      case M.lookup rhsPort seen of
-        Nothing -> do
-          diag' <- mergePorts diag hostPort rhsPort
-          pure (diag', M.insert rhsPort hostPort seen)
-        Just hostPort' -> do
-          diag' <- mergePorts diag hostPort' hostPort
-          pure (diag', seen)
+        Just hostPort -> Right (hostPort, rhsPort)
 
 internalPorts :: Diagram -> [PortId]
 internalPorts diag =
@@ -576,21 +569,7 @@ deleteMatchedEdges diag edgeIds = foldl step (Right diag) edgeIds
   where
     step acc eid = do
       d <- acc
-      case IM.lookup (unEdgeId eid) (dEdges d) of
-        Nothing -> Left "criticalPairs: missing edge"
-        Just edge -> do
-          let d1 = d { dEdges = IM.delete (unEdgeId eid) (dEdges d) }
-          let d2 = clearConsumers d1 (eIns edge)
-          let d3 = clearProducers d2 (eOuts edge)
-          pure d3
-    clearConsumers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
-          mp = dCons d
-      in d { dCons = foldl clearOne mp ports }
-    clearProducers d ports =
-      let clearOne mp p = IM.adjust (const Nothing) (unPortId p) mp
-          mp = dProd d
-      in d { dProd = foldl clearOne mp ports }
+      deleteEdgeKeepPorts d eid
 
 deleteMatchedPorts :: Diagram -> [PortId] -> M.Map PortId PortId -> Either Text Diagram
 deleteMatchedPorts diag ports portMap = foldl step (Right diag) ports
@@ -599,23 +578,7 @@ deleteMatchedPorts diag ports portMap = foldl step (Right diag) ports
       d <- acc
       case M.lookup p portMap of
         Nothing -> Left "criticalPairs: missing port mapping"
-        Just hostPort -> deletePort d hostPort
-
-deletePort :: Diagram -> PortId -> Either Text Diagram
-deletePort diag pid =
-  let k = unPortId pid
-  in case (IM.lookup k (dProd diag), IM.lookup k (dCons diag)) of
-      (Just Nothing, Just Nothing) ->
-        let d1 = diag
-              { dPortTy = IM.delete k (dPortTy diag)
-              , dPortLabel = IM.delete k (dPortLabel diag)
-              , dProd = IM.delete k (dProd diag)
-              , dCons = IM.delete k (dCons diag)
-              , dIn = filter (/= pid) (dIn diag)
-              , dOut = filter (/= pid) (dOut diag)
-              }
-        in Right d1
-      _ -> Left "criticalPairs: cannot delete port with remaining incidence"
+        Just hostPort -> deletePortIfDangling d hostPort
 
 applySubstsDiagramLocal :: TypeTheory -> Subst -> AttrSubst -> Diagram -> Either Text Diagram
 applySubstsDiagramLocal tt tySubst attrSubst diag = do

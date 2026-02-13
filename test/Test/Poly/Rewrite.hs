@@ -34,6 +34,7 @@ tests =
     , testCase "matching requires injective host mapping" testInjectiveMatch
     , testCase "non-injective match does not trigger rewrite" testNonInjectiveRewrite
     , testCase "rewrite inside box" testRewriteInsideBox
+    , testCase "splice expands inside nested box payloads" testSpliceExpandsInsideBox
     , testCase "box mismatch rejects" testBoxMismatchRejects
     , testCase "box match accepts" testBoxMatchAccepts
     , testCase "nested boxes match" testNestedBoxesMatch
@@ -197,6 +198,38 @@ testRewriteInsideBox = do
             _ -> assertFailure "expected box edge"
         _ -> assertFailure "expected single box edge"
 
+testSpliceExpandsInsideBox :: Assertion
+testSpliceExpandsInsideBox = do
+  let hole = BinderMetaVar "X"
+  captured <- require (mkGen "captured" [aTy] [aTy])
+  lhs <- require (mkWrapDiagram (BAMeta hole))
+  rhs <- require (mkBoxWithSplice hole)
+  host <- require (mkWrapDiagram (BAConcrete captured))
+  let rule =
+        RewriteRule
+          { rrName = "splice-nested-box"
+          , rrLHS = lhs
+          , rrRHS = rhs
+          , rrTyVars = []
+          , rrIxVars = []
+          }
+  let mt = mkModes [modeName]
+  res <- case rewriteOnce (mkTypeTheory mt) [rule] host of
+    Left err -> assertFailure (T.unpack err)
+    Right r -> pure r
+  out <-
+    case res of
+      Nothing -> assertFailure "expected rewrite to fire" >> fail "unreachable"
+      Just d -> pure d
+  case IM.elems (dEdges out) of
+    [edge] ->
+      case ePayload edge of
+        PBox _ inner -> do
+          ok <- require (diagramIsoEq inner captured)
+          assertBool "expected nested splice to expand to captured diagram" ok
+        _ -> assertFailure "expected box edge after rewrite"
+    _ -> assertFailure "expected one edge after rewrite"
+
 testBoxMismatchRejects :: Assertion
 testBoxMismatchRejects = do
   f <- require (mkGen "f" [aTy] [aTy])
@@ -340,3 +373,21 @@ mkBoxDiagram name inner ty = do
   let boxEdge = PBox (BoxName name) inner
   d2 <- addEdgePayload boxEdge [inP] [outP] d1
   pure d2 { dIn = [inP], dOut = [outP] }
+
+mkWrapDiagram :: BinderArg -> Either Text Diagram
+mkWrapDiagram barg = do
+  let (inP, d0) = freshPort aTy (emptyDiagram modeName [])
+  let (outP, d1) = freshPort aTy d0
+  d2 <- addEdgePayload (PGen (GenName "wrap") M.empty [barg]) [inP] [outP] d1
+  let diag = d2 { dIn = [inP], dOut = [outP] }
+  validateDiagram diag
+  pure diag
+
+mkBoxWithSplice :: BinderMetaVar -> Either Text Diagram
+mkBoxWithSplice hole = do
+  let (inP, d0) = freshPort aTy (emptyDiagram modeName [])
+  let (outP, d1) = freshPort aTy d0
+  d2 <- addEdgePayload (PSplice hole) [inP] [outP] d1
+  let inner = d2 { dIn = [inP], dOut = [outP] }
+  validateDiagram inner
+  mkBoxDiagram "spliceBox" inner aTy
