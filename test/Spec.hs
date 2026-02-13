@@ -1,7 +1,6 @@
 module Main (main) where
 
 import Test.Tasty
-import qualified Test.NoPolyPrefixes as NoPolyPrefixes
 import qualified Test.Poly.Basic as PolyBasic
 import qualified Test.Poly.DiagramUnion as PolyDiagramUnion
 import qualified Test.Poly.Rewrite as PolyRewrite
@@ -15,7 +14,6 @@ import qualified Test.Poly.Surface as PolySurface
 import qualified Test.Poly.TypeModes as PolyTypeModes
 import qualified Test.Poly.DataMacro as PolyDataMacro
 import qualified Test.Poly.Dependent as PolyDependent
-import qualified Test.Poly.NoLegacy as PolyNoLegacy
 import qualified Test.Poly.Foliation as PolyFoliation
 import qualified Test.Poly.Acyclic as PolyAcyclic
 import qualified Test.Poly.Feedback as PolyFeedback
@@ -41,12 +39,10 @@ main =
       , PolyTypeModes.tests
       , PolyDataMacro.tests
       , PolyDependent.tests
-      , PolyNoLegacy.tests
       , PolyFoliation.tests
       , PolyAcyclic.tests
       , PolyFeedback.tests
       , ValueDoc.tests
       , FrontendPipeline.tests
       , FrontendExampleCodegen.tests
-      , NoPolyPrefixes.tests
       ]

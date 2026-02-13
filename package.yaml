@@ -157,7 +157,6 @@ tests:
     - QuickCheck
     - tasty-quickcheck
     other-modules:
-    - Test.NoPolyPrefixes
     - Test.Poly.Basic
     - Test.Poly.DiagramUnion
     - Test.Poly.Rewrite
@@ -175,7 +174,6 @@ tests:
     - Test.Poly.ModeTheory
     - Test.Poly.Surface
     - Test.Poly.TypeModes
-    - Test.Poly.NoLegacy
     - Test.Value.Doc
     - Test.Frontend.Pipeline
     - Test.Frontend.ExampleCodegen

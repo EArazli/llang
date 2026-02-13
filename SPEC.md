@@ -139,7 +139,7 @@ attrs :: [(AttrName, AttrSort)]
   - `bsCod`: binder body codomain.
 - Types in `bsDom`/`bsCod` may use `IXBound i` referencing `bsIxCtx[i]`.
 - Binder names are surface metadata only and are not stored in kernel objects.
-- `gdPlainDom` extracts only `InPort` entries (legacy plain domain projection).
+- `gdPlainDom` extracts only `InPort` entries (a convenience projection for the port-only input domain).
 - Attribute field names are distinct within a generator.
 - Every attribute field sort must exist in `dAttrSorts`.
 - Generator instances in diagrams carry exactly the declared attribute fields.

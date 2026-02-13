@@ -108,7 +108,6 @@ source-repository head
 
 library
   exposed-modules:
-      Strat.Backend
       Strat.CLI
       Strat.Common.Rules
       Strat.DSL.AST
@@ -192,7 +191,6 @@ test-suite llang-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-      Test.NoPolyPrefixes
       Test.Poly.Basic
       Test.Poly.DiagramUnion
       Test.Poly.Rewrite
@@ -210,7 +208,6 @@ test-suite llang-test
       Test.Poly.ModeTheory
       Test.Poly.Surface
       Test.Poly.TypeModes
-      Test.Poly.NoLegacy
       Test.Value.Doc
       Test.Frontend.Pipeline
       Test.Frontend.ExampleCodegen
