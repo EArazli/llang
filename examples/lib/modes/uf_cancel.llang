@@ -2,9 +2,6 @@ doctrine UFCancel where {
   mode A;
   mode B;
 
-  structure A = linear;
-  structure B = linear;
-
   modality F : A -> B;
   modality U : B -> A;
   mod_eq U.F -> id@A;

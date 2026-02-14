@@ -1,23 +1,59 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.TypeTheory
   ( TypeTheory(..)
   , TypeParamSig(..)
-  , defaultIxFuel
+  , TmFunSig(..)
+  , TmRule(..)
+  , lookupTmFunSig
+  , defaultTmFuel
   , modeOnlyTypeTheory
   ) where
 
 import qualified Data.Map.Strict as M
-import Strat.Poly.IndexTheory (TypeTheory(..), TypeParamSig(..))
-import Strat.Poly.ModeTheory (ModeTheory)
+import Strat.Common.Rules (RewritePolicy(..))
+import Strat.Poly.ModeTheory (ModeName, ModeTheory)
+import Strat.Poly.TypeExpr
 
 
-defaultIxFuel :: Int
-defaultIxFuel = 200
+data TypeTheory = TypeTheory
+  { ttModes :: ModeTheory
+  , ttTypeParams :: M.Map TypeRef [TypeParamSig]
+  , ttTmFuns :: M.Map ModeName (M.Map TmFunName TmFunSig)
+  , ttTmRules :: M.Map ModeName [TmRule]
+  , ttTmFuel :: Int
+  , ttTmPolicy :: RewritePolicy
+  } deriving (Eq, Show)
+
+data TypeParamSig
+  = TPS_Ty ModeName
+  | TPS_Tm TypeExpr
+  deriving (Eq, Ord, Show)
+
+data TmFunSig = TmFunSig
+  { tfsArgs :: [TypeExpr]
+  , tfsRes :: TypeExpr
+  } deriving (Eq, Ord, Show)
+
+data TmRule = TmRule
+  { trVars :: [TmVar]
+  , trLHS :: TermDiagram
+  , trRHS :: TermDiagram
+  } deriving (Eq, Ord, Show)
+
+defaultTmFuel :: Int
+defaultTmFuel = 200
 
 modeOnlyTypeTheory :: ModeTheory -> TypeTheory
 modeOnlyTypeTheory mt =
   TypeTheory
     { ttModes = mt
-    , ttIndex = M.empty
     , ttTypeParams = M.empty
-    , ttIxFuel = defaultIxFuel
+    , ttTmFuns = M.empty
+    , ttTmRules = M.empty
+    , ttTmFuel = defaultTmFuel
+    , ttTmPolicy = UseOnlyComputationalLR
     }
+
+lookupTmFunSig :: TypeTheory -> ModeName -> TmFunName -> Maybe TmFunSig
+lookupTmFunSig tt mode f =
+  M.lookup mode (ttTmFuns tt) >>= M.lookup f

@@ -10,16 +10,15 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
-import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModEqn(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), mtModes, mtDecls)
-import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), TypeArg(..), IxVar(..), IxTerm(..))
-import Strat.Poly.IndexTheory (IxTheory(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModEqn(..), ModeTheory(..), ModeInfo(..), mtModes, mtDecls)
+import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), TypeArg(..), TmVar(..), TermDiagram(..), typeMode)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD, idD)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), gdPlainDom, validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram)
 import Strat.Poly.Pushout (computePolyPushout, PolyPushoutResult(..))
-import Strat.Poly.Graph (diagramIsoEq, Diagram(..), BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
+import Strat.Poly.Graph (diagramIsoEq, Diagram(..), BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..), emptyDiagram, freshPort, addEdgePayload)
 import Strat.Common.Rules (RuleClass(..), Orientation(..), RewritePolicy(..))
 
 
@@ -34,8 +33,8 @@ tests =
     , testCase "pushout rejects name conflict with different bodies" testPushoutNameConflict
     , testCase "pushout rejects non-identity mode maps" testPushoutRejectsModeMap
     , testCase "pushout handles alpha-renaming with mode equations" testPushoutAlphaRenameWithModeEq
-    , testCase "pushout supports indexed type maps" testPushoutIndexedTypeMaps
-    , testCase "pushout merges cells alpha-equivalent over index vars" testPushoutCellIxAlphaEq
+    , testCase "pushout supports term-parameterized type maps" testPushoutTermTypeMaps
+    , testCase "pushout merges cells alpha-equivalent over term vars" testPushoutCellTmAlphaEq
     , testCase "pushout injection morphism preserves concrete binder arguments" testPushoutInjectionPreservesBinderArgs
     , testCase "pushout accepts renaming morphisms with binder signatures in target doctrine" testPushoutAcceptsRenamingWithBinders
     ]
@@ -60,6 +59,16 @@ tvar mode name = TyVar { tvName = name, tvMode = mode }
 tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
 tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
 
+tmMeta :: TmVar -> TermDiagram
+tmMeta v =
+  let mode = typeMode (tmvSort v)
+      (outPid, d0) = freshPort (tmvSort v) (emptyDiagram mode [])
+      d1 =
+        case addEdgePayload (PTmMeta v) [] [outPid] d0 of
+          Left err -> error (T.unpack err)
+          Right d -> d
+  in TermDiagram d1 { dOut = [outPid] }
+
 identityModeMap :: Doctrine -> M.Map ModeName ModeName
 identityModeMap doc =
   M.fromList [ (m, m) | m <- M.keys (mtModes (dModes doc)) ]
@@ -74,10 +83,10 @@ identityModMap doc =
 mkModes :: S.Set ModeName -> ModeTheory
 mkModes modes =
   ModeTheory
-    (M.fromList [ (m, ModeInfo m Linear) | m <- S.toList modes ])
-    M.empty
-    []
-    []
+    { mtModes = M.fromList [ (m, ModeInfo m) | m <- S.toList modes ]
+    , mtDecls = M.empty
+    , mtEqns = []
+    }
 
 
 testPushoutDedupByBody :: Assertion
@@ -106,7 +115,7 @@ mkDoctrine mode name tyVar cellName = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = [tyVar]
-        , gdIxVars = []
+        , gdTmVars = []
     , gdDom = map InPort [TVar tyVar]
         , gdCod = [TVar tyVar]
         , gdAttrs = []
@@ -120,7 +129,7 @@ mkDoctrine mode name tyVar cellName = do
         , c2Class = Computational
         , c2Orient = LR
         , c2TyVars = [tyVar]
-        , c2IxVars = []
+        , c2TmVars = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -128,11 +137,11 @@ mkDoctrine mode name tyVar cellName = do
         { dName = name
         , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
+      , dActions = M.empty
+      , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
@@ -155,7 +164,6 @@ mkInclusionMorph name src tgt tyVar =
       , morModMap = identityModMap src
       , morTypeMap = M.empty
       , morGenMap = genMap
-      , morIxFunMap = M.empty
         , morCheck = CheckAll
       , morAttrSortMap = M.empty
       , morPolicy = UseAllOriented
@@ -215,7 +223,7 @@ mkCellDoctrine mode name cls orient = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
-        , gdIxVars = []
+        , gdTmVars = []
     , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
@@ -226,7 +234,7 @@ mkCellDoctrine mode name cls orient = do
         , c2Class = cls
         , c2Orient = orient
         , c2TyVars = []
-        , c2IxVars = []
+        , c2TmVars = []
         , c2LHS = lhs
         , c2RHS = lhs
         }
@@ -234,11 +242,11 @@ mkCellDoctrine mode name cls orient = do
         { dName = name
         , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
+      , dActions = M.empty
+      , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
@@ -252,7 +260,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
-        , gdIxVars = []
+        , gdTmVars = []
     , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
@@ -261,7 +269,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
         { gdName = GenName "g"
         , gdMode = mode
         , gdTyVars = []
-        , gdIxVars = []
+        , gdTmVars = []
     , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
@@ -272,7 +280,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
         , c2Class = cls
         , c2Orient = orient
         , c2TyVars = []
-        , c2IxVars = []
+        , c2TmVars = []
         , c2LHS = lhs
         , c2RHS = lhs
         }
@@ -280,11 +288,11 @@ mkCellDoctrineWithAlt mode name cls orient = do
         { dName = name
         , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
         , dCells2 = [cell]
+      , dActions = M.empty
+      , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
@@ -307,7 +315,6 @@ mkIdMorph name src tgt =
       , morModMap = identityModMap src
       , morTypeMap = M.empty
       , morGenMap = genMap
-      , morIxFunMap = M.empty
         , morCheck = CheckAll
       , morAttrSortMap = M.empty
       , morPolicy = UseAllOriented
@@ -348,7 +355,6 @@ testPushoutTypePermutationCommutes = do
         , morModMap = identityModMap base
         , morTypeMap = M.fromList [(TypeRef mode prod, tmplF)]
         , morGenMap = M.empty
-      , morIxFunMap = M.empty
         , morCheck = CheckAll
         , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
@@ -363,7 +369,6 @@ testPushoutTypePermutationCommutes = do
         , morModMap = identityModMap base
         , morTypeMap = M.empty
         , morGenMap = M.empty
-      , morIxFunMap = M.empty
         , morCheck = CheckAll
         , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
@@ -396,11 +401,11 @@ testPushoutRejectsModeMap = do
         { dName = "Base"
         , dModes = modes
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.empty
         , dGens = M.empty
         , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
         , dAttrSorts = M.empty
         }
   let left = base { dName = "Left" }
@@ -415,7 +420,6 @@ testPushoutRejectsModeMap = do
         , morModMap = identityModMap base
         , morTypeMap = M.empty
         , morGenMap = M.empty
-      , morIxFunMap = M.empty
         , morCheck = CheckAll
         , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
@@ -430,7 +434,6 @@ testPushoutRejectsModeMap = do
         , morModMap = identityModMap base
         , morTypeMap = M.empty
         , morGenMap = M.empty
-      , morIxFunMap = M.empty
         , morCheck = CheckAll
         , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
@@ -467,8 +470,8 @@ testPushoutAlphaRenameWithModeEq = do
         [TMod me (TVar _)] -> mePath me @?= [modF]
         _ -> assertFailure "expected modal generator domain to retain non-canceling modality"
 
-testPushoutIndexedTypeMaps :: Assertion
-testPushoutIndexedTypeMaps = do
+testPushoutTermTypeMaps :: Assertion
+testPushoutTermTypeMaps = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
   let natRef = TypeRef modeI (TypeName "Nat")
@@ -480,15 +483,15 @@ testPushoutIndexedTypeMaps = do
           { dName = "SrcIdx"
           , dModes = mkModes (S.fromList [modeM, modeI])
     , dAcyclicModes = S.empty
-          , dIndexModes = S.singleton modeI
-          , dIxTheory = M.empty
           , dTypes =
               M.fromList
                 [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Ix natTy, PS_Ty modeM])])
+                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM])])
                 ]
           , dGens = M.empty
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           , dAttrSorts = M.empty
           }
   let left =
@@ -496,15 +499,15 @@ testPushoutIndexedTypeMaps = do
           { dName = "LeftIdx"
           , dModes = mkModes (S.fromList [modeM, modeI])
     , dAcyclicModes = S.empty
-          , dIndexModes = S.singleton modeI
-          , dIxTheory = M.empty
           , dTypes =
               M.fromList
                 [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(TypeName "Vec2", TypeSig [PS_Ix natTy, PS_Ty modeM])])
+                , (modeM, M.fromList [(TypeName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM])])
                 ]
           , dGens = M.empty
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           , dAttrSorts = M.empty
           }
   let right = src { dName = "RightIdx" }
@@ -517,7 +520,7 @@ testPushoutIndexedTypeMaps = do
   case validateDoctrine right of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  let nVar = IxVar { ixvName = "n", ixvSort = natTy, ixvScope = 0 }
+  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
   let aVar = TyVar { tvName = "a", tvMode = modeM }
   let morF =
         Morphism
@@ -531,12 +534,11 @@ testPushoutIndexedTypeMaps = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPIx nVar, TPType aVar]
-                      (TCon vec2Ref [TAIndex (IXVar nVar), TAType (TVar aVar)])
+                      [TPTm nVar, TPType aVar]
+                      (TCon vec2Ref [TATm (tmMeta nVar), TAType (TVar aVar)])
                   )
                 ]
           , morGenMap = M.empty
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
@@ -552,7 +554,6 @@ testPushoutIndexedTypeMaps = do
           , morModMap = identityModMap src
           , morTypeMap = M.empty
           , morGenMap = M.empty
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
@@ -562,26 +563,36 @@ testPushoutIndexedTypeMaps = do
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()
 
-testPushoutCellIxAlphaEq :: Assertion
-testPushoutCellIxAlphaEq = do
+testPushoutCellTmAlphaEq :: Assertion
+testPushoutCellTmAlphaEq = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
   let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
   let vecRef = TypeRef modeM (TypeName "Vec")
   let genName = GenName "f"
-  let mkIx name = IxVar { ixvName = name, ixvSort = natTy, ixvScope = 0 }
-  let vecTy ixv = TCon vecRef [TAIndex (IXVar ixv)]
-  let srcIx = mkIx "n"
-  let leftIx = mkIx "i"
-  let rightIx = mkIx "j"
+  let mkTm name = TmVar { tmvName = name, tmvSort = natTy, tmvScope = 0 }
+  let vecTy tmVar = TCon vecRef [TATm (tmMeta tmVar)]
+  let srcTm = mkTm "n"
+  let leftTm = mkTm "i"
+  let rightTm = mkTm "j"
+  let zDecl =
+        GenDecl
+          { gdName = GenName "Z"
+          , gdMode = modeI
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = []
+          , gdCod = [natTy]
+          , gdAttrs = []
+          }
   let srcGen =
         GenDecl
           { gdName = genName
           , gdMode = modeM
           , gdTyVars = []
-          , gdIxVars = [srcIx]
-          , gdDom = [InPort (vecTy srcIx)]
-          , gdCod = [vecTy srcIx]
+          , gdTmVars = [srcTm]
+          , gdDom = [InPort (vecTy srcTm)]
+          , gdCod = [vecTy srcTm]
           , gdAttrs = []
           }
   let leftGen =
@@ -589,9 +600,9 @@ testPushoutCellIxAlphaEq = do
           { gdName = genName
           , gdMode = modeM
           , gdTyVars = []
-          , gdIxVars = [leftIx]
-          , gdDom = [InPort (vecTy leftIx)]
-          , gdCod = [vecTy leftIx]
+          , gdTmVars = [leftTm]
+          , gdDom = [InPort (vecTy leftTm)]
+          , gdCod = [vecTy leftTm]
           , gdAttrs = []
           }
   let rightGen =
@@ -599,52 +610,56 @@ testPushoutCellIxAlphaEq = do
           { gdName = genName
           , gdMode = modeM
           , gdTyVars = []
-          , gdIxVars = [rightIx]
-          , gdDom = [InPort (vecTy rightIx)]
-          , gdCod = [vecTy rightIx]
+          , gdTmVars = [rightTm]
+          , gdDom = [InPort (vecTy rightTm)]
+          , gdCod = [vecTy rightTm]
           , gdAttrs = []
           }
-  leftLHS <- require (genD modeM [vecTy leftIx] [vecTy leftIx] genName)
-  rightLHS <- require (genD modeM [vecTy rightIx] [vecTy rightIx] genName)
+  leftLHS <- require (genD modeM [vecTy leftTm] [vecTy leftTm] genName)
+  rightLHS <- require (genD modeM [vecTy rightTm] [vecTy rightTm] genName)
   let leftCell =
         Cell2
-          { c2Name = "eqLeftIx"
+          { c2Name = "eqLeftTm"
           , c2Class = Computational
           , c2Orient = LR
           , c2TyVars = []
-          , c2IxVars = [leftIx]
+          , c2TmVars = [leftTm]
           , c2LHS = leftLHS
-          , c2RHS = idD modeM [vecTy leftIx]
+          , c2RHS = idD modeM [vecTy leftTm]
           }
   let rightCell =
         Cell2
-          { c2Name = "eqRightIx"
+          { c2Name = "eqRightTm"
           , c2Class = Computational
           , c2Orient = LR
           , c2TyVars = []
-          , c2IxVars = [rightIx]
+          , c2TmVars = [rightTm]
           , c2LHS = rightLHS
-          , c2RHS = idD modeM [vecTy rightIx]
+          , c2RHS = idD modeM [vecTy rightTm]
           }
   let commonDoc name gen cell =
         Doctrine
           { dName = name
           , dModes = mkModes (S.fromList [modeM, modeI])
     , dAcyclicModes = S.empty
-          , dIndexModes = S.singleton modeI
-          , dIxTheory = M.fromList [(modeI, IxTheory M.empty [])]
           , dTypes =
               M.fromList
                 [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Ix natTy])])
+                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy])])
                 ]
-          , dGens = M.fromList [(modeM, M.fromList [(genName, gen)])]
+          , dGens =
+              M.fromList
+                [ (modeI, M.fromList [(GenName "Z", zDecl)])
+                , (modeM, M.fromList [(genName, gen)])
+                ]
           , dCells2 = cell
+        , dActions = M.empty
+        , dObligations = []
           , dAttrSorts = M.empty
           }
-  let src = commonDoc "SrcIxAlpha" srcGen []
-  let left = commonDoc "LeftIxAlpha" leftGen [leftCell]
-  let right = commonDoc "RightIxAlpha" rightGen [rightCell]
+  let src = commonDoc "SrcTmAlpha" srcGen []
+  let left = commonDoc "LeftTmAlpha" leftGen [leftCell]
+  let right = commonDoc "RightTmAlpha" rightGen [rightCell]
   case validateDoctrine src of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
@@ -654,18 +669,22 @@ testPushoutCellIxAlphaEq = do
   case validateDoctrine right of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  img <- require (genD modeM [vecTy srcIx] [vecTy srcIx] genName)
+  img <- require (genD modeM [vecTy srcTm] [vecTy srcTm] genName)
+  zImg <- require (genD modeI [] [natTy] (GenName "Z"))
   let morLeft =
         Morphism
-          { morName = "fIxAlpha"
+          { morName = "fTmAlpha"
           , morSrc = src
           , morTgt = left
           , morIsCoercion = False
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
           , morTypeMap = M.empty
-          , morGenMap = M.fromList [((modeM, genName), plainImage img)]
-          , morIxFunMap = M.empty
+          , morGenMap =
+              M.fromList
+                [ ((modeI, GenName "Z"), plainImage zImg)
+                , ((modeM, genName), plainImage img)
+                ]
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
@@ -673,21 +692,24 @@ testPushoutCellIxAlphaEq = do
           }
   let morRight =
         Morphism
-          { morName = "gIxAlpha"
+          { morName = "gTmAlpha"
           , morSrc = src
           , morTgt = right
           , morIsCoercion = False
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
           , morTypeMap = M.empty
-          , morGenMap = M.fromList [((modeM, genName), plainImage img)]
-          , morIxFunMap = M.empty
+          , morGenMap =
+              M.fromList
+                [ ((modeI, GenName "Z"), plainImage zImg)
+                , ((modeM, genName), plainImage img)
+                ]
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
           , morFuel = 10
           }
-  res <- case computePolyPushout "PIxAlpha" morLeft morRight of
+  res <- case computePolyPushout "PTmAlpha" morLeft morRight of
     Left err -> assertFailure (T.unpack err)
     Right out -> pure out
   length (dCells2 (poDoctrine res)) @?= 1
@@ -697,13 +719,13 @@ testPushoutInjectionPreservesBinderArgs = do
   let mode = ModeName "M"
   let aTy = TCon (TypeRef mode (TypeName "A")) []
   let gName = GenName "g"
-  let slotSig = BinderSig { bsIxCtx = [], bsDom = [aTy], bsCod = [aTy] }
+  let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy], bsCod = [aTy] }
   let gDecl =
         GenDecl
           { gdName = gName
           , gdMode = mode
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy]
           , gdAttrs = []
@@ -713,11 +735,11 @@ testPushoutInjectionPreservesBinderArgs = do
           { dName = "IfaceBinder"
           , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-          , dIndexModes = S.empty
-          , dIxTheory = M.empty
           , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           , dAttrSorts = M.empty
           }
   let left =
@@ -746,7 +768,6 @@ testPushoutInjectionPreservesBinderArgs = do
           , morModMap = identityModMap iface
           , morTypeMap = M.empty
           , morGenMap = M.empty
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
@@ -776,14 +797,14 @@ testPushoutAcceptsRenamingWithBinders = do
   let a1Ty = TCon a1Ref []
   let gName = GenName "g"
   let g1Name = GenName "g1"
-  let slotSigSrc = BinderSig { bsIxCtx = [], bsDom = [aTy], bsCod = [aTy] }
-  let slotSigTgt = BinderSig { bsIxCtx = [], bsDom = [a1Ty], bsCod = [a1Ty] }
+  let slotSigSrc = BinderSig { bsTmCtx = [], bsDom = [aTy], bsCod = [aTy] }
+  let slotSigTgt = BinderSig { bsTmCtx = [], bsDom = [a1Ty], bsCod = [a1Ty] }
   let ifaceGen =
         GenDecl
           { gdName = gName
           , gdMode = mode
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = [InBinder slotSigSrc]
           , gdCod = [aTy]
           , gdAttrs = []
@@ -793,7 +814,7 @@ testPushoutAcceptsRenamingWithBinders = do
           { gdName = g1Name
           , gdMode = mode
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = [InBinder slotSigTgt]
           , gdCod = [a1Ty]
           , gdAttrs = []
@@ -803,11 +824,11 @@ testPushoutAcceptsRenamingWithBinders = do
           { dName = "IfaceRenameBinder"
           , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-          , dIndexModes = S.empty
-          , dIxTheory = M.empty
           , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(gName, ifaceGen)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           , dAttrSorts = M.empty
           }
   let left =
@@ -815,11 +836,11 @@ testPushoutAcceptsRenamingWithBinders = do
           { dName = "LeftRenameBinder"
           , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-          , dIndexModes = S.empty
-          , dIxTheory = M.empty
           , dTypes = M.fromList [(mode, M.fromList [(TypeName "A1", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(g1Name, leftGen)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           , dAttrSorts = M.empty
           }
   let right = iface { dName = "RightRenameBinder" }
@@ -847,7 +868,6 @@ testPushoutAcceptsRenamingWithBinders = do
           , morModMap = identityModMap iface
           , morTypeMap = M.fromList [(aRef, TypeTemplate [] a1Ty)]
           , morGenMap = M.fromList [((mode, gName), GenImage imgLeft (M.fromList [(hole, slotSigTgt)]))]
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
@@ -863,7 +883,6 @@ testPushoutAcceptsRenamingWithBinders = do
           , morModMap = identityModMap iface
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((mode, gName), GenImage imgRight (M.fromList [(hole, slotSigSrc)]))]
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
@@ -876,7 +895,7 @@ testPushoutAcceptsRenamingWithBinders = do
 mkModeEqTheory :: ModeName -> ModName -> ModName -> ModeTheory
 mkModeEqTheory mode modF modU =
   ModeTheory
-    { mtModes = M.singleton mode (ModeInfo mode Linear)
+    { mtModes = M.singleton mode (ModeInfo mode)
     , mtDecls =
         M.fromList
           [ (modF, ModDecl modF mode mode)
@@ -887,7 +906,6 @@ mkModeEqTheory mode modF modU =
             (ModExpr { meSrc = mode, meTgt = mode, mePath = [modF, modU] })
             (ModExpr { meSrc = mode, meTgt = mode, mePath = [] })
         ]
-    , mtAdjs = []
     }
 
 mkModeEqMorph :: Text -> Doctrine -> Doctrine -> Text -> Morphism
@@ -913,7 +931,6 @@ mkModeEqMorph name src tgt varName =
       , morModMap = identityModMap src
       , morTypeMap = M.empty
       , morGenMap = M.fromList [((mode, GenName "h"), plainImage hImg), ((mode, GenName "modal"), plainImage modalImg)]
-      , morIxFunMap = M.empty
         , morCheck = CheckAll
       , morAttrSortMap = M.empty
       , morPolicy = UseAllOriented
@@ -939,7 +956,7 @@ mkModeEqDoctrine name mt varName useUF = do
         , c2Class = Computational
         , c2Orient = LR
         , c2TyVars = [v]
-        , c2IxVars = []
+        , c2TmVars = []
         , c2LHS = lhs
         , c2RHS = idD mode [hTy]
         }
@@ -947,7 +964,7 @@ mkModeEqDoctrine name mt varName useUF = do
         { gdName = GenName "h"
         , gdMode = mode
         , gdTyVars = [v]
-        , gdIxVars = []
+        , gdTmVars = []
     , gdDom = map InPort [TVar v]
         , gdCod = [TVar v]
         , gdAttrs = []
@@ -956,7 +973,7 @@ mkModeEqDoctrine name mt varName useUF = do
         { gdName = GenName "modal"
         , gdMode = mode
         , gdTyVars = [v]
-        , gdIxVars = []
+        , gdTmVars = []
     , gdDom = map InPort [modalTy]
         , gdCod = [modalTy]
         , gdAttrs = []
@@ -965,11 +982,11 @@ mkModeEqDoctrine name mt varName useUF = do
         { dName = name
         , dModes = mt
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(GenName "h", genH), (GenName "modal", genModal)])]
         , dCells2 = [cell]
+      , dActions = M.empty
+      , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
@@ -983,11 +1000,11 @@ mkTypeDoctrine mode name types = do
         { dName = name
         , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, types')]
         , dGens = M.empty
         , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of

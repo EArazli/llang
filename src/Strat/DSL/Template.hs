@@ -37,26 +37,6 @@ substItem subst item =
         decl
           { P.rmdName = lookupText subst (P.rmdName decl)
           }
-    P.RPIndexMode name -> P.RPIndexMode (lookupText subst name)
-    P.RPIndexFun decl ->
-      P.RPIndexFun
-        decl
-          { P.rifName = lookupText subst (P.rifName decl)
-          , P.rifArgs = map (substIxVarDecl subst) (P.rifArgs decl)
-          , P.rifRes = substTypeExpr subst (P.rifRes decl)
-          , P.rifMode = lookupText subst (P.rifMode decl)
-          }
-    P.RPIndexRule decl ->
-      P.RPIndexRule
-        decl
-          { P.rirName = lookupText subst (P.rirName decl)
-          , P.rirVars = map (substIxVarDecl subst) (P.rirVars decl)
-          , P.rirLHS = substTypeExpr subst (P.rirLHS decl)
-          , P.rirRHS = substTypeExpr subst (P.rirRHS decl)
-          , P.rirMode = lookupText subst (P.rirMode decl)
-          }
-    P.RPStructure decl ->
-      P.RPStructure decl { P.rsMode = lookupText subst (P.rsMode decl) }
     P.RPModality decl ->
       P.RPModality
         decl
@@ -70,11 +50,26 @@ substItem subst item =
           { P.rmeLHS = substModExpr subst (P.rmeLHS decl)
           , P.rmeRHS = substModExpr subst (P.rmeRHS decl)
           }
-    P.RPAdjunction decl ->
-      P.RPAdjunction
+    P.RPAction decl ->
+      P.RPAction
         decl
-          { P.raLeft = lookupText subst (P.raLeft decl)
-          , P.raRight = lookupText subst (P.raRight decl)
+          { P.radModName = lookupText subst (P.radModName decl)
+          , P.radGenMap =
+              [ (lookupText subst g, substDiagExpr subst rhs)
+              | (g, rhs) <- P.radGenMap decl
+              ]
+          }
+    P.RPObligation decl ->
+      P.RPObligation
+        decl
+          { P.rodName = lookupText subst (P.rodName decl)
+          , P.rodForGen = P.rodForGen decl
+          , P.rodVars = map (substParamDecl subst) (P.rodVars decl)
+          , P.rodDom = map (substTypeExpr subst) (P.rodDom decl)
+          , P.rodCod = map (substTypeExpr subst) (P.rodCod decl)
+          , P.rodMode = lookupText subst (P.rodMode decl)
+          , P.rodLHS = substOblExpr subst (P.rodLHS decl)
+          , P.rodRHS = substOblExpr subst (P.rodRHS decl)
           }
     P.RPAttrSort decl ->
       P.RPAttrSort decl
@@ -124,23 +119,22 @@ substTyVarDecl :: M.Map Text Text -> P.RawTyVarDecl -> P.RawTyVarDecl
 substTyVarDecl subst decl =
   decl { P.rtvMode = fmap (lookupText subst) (P.rtvMode decl) }
 
-substIxVarDecl :: M.Map Text Text -> P.RawIxVarDecl -> P.RawIxVarDecl
-substIxVarDecl subst decl =
+substTmVarDecl :: M.Map Text Text -> P.RawTmVarDecl -> P.RawTmVarDecl
+substTmVarDecl subst decl =
   decl
-    { P.rivSort = substTypeExpr subst (P.rivSort decl)
+    { P.rtvdSort = substTypeExpr subst (P.rtvdSort decl)
     }
 
 substParamDecl :: M.Map Text Text -> P.RawParamDecl -> P.RawParamDecl
 substParamDecl subst decl =
   case decl of
     P.RPDType tv -> P.RPDType (substTyVarDecl subst tv)
-    P.RPDIndex iv -> P.RPDIndex (substIxVarDecl subst iv)
+    P.RPDTerm tv -> P.RPDTerm (substTmVarDecl subst tv)
 
 substTypeExpr :: M.Map Text Text -> P.RawPolyTypeExpr -> P.RawPolyTypeExpr
 substTypeExpr subst expr =
   case expr of
     P.RPTVar name -> P.RPTVar (lookupText subst name)
-    P.RPTBound i -> P.RPTBound i
     P.RPTCon ref args ->
       P.RPTCon (substTypeRef subst ref) (map (substTypeExpr subst) args)
     P.RPTMod me inner ->
@@ -188,8 +182,20 @@ substDiagExpr subst expr =
     P.RDSplice name -> P.RDSplice (lookupText subst name)
     P.RDBox name inner -> P.RDBox (lookupText subst name) (substDiagExpr subst inner)
     P.RDLoop inner -> P.RDLoop (substDiagExpr subst inner)
+    P.RDMap me inner -> P.RDMap (substModExpr subst me) (substDiagExpr subst inner)
     P.RDComp a b -> P.RDComp (substDiagExpr subst a) (substDiagExpr subst b)
     P.RDTensor a b -> P.RDTensor (substDiagExpr subst a) (substDiagExpr subst b)
+
+substOblExpr :: M.Map Text Text -> P.RawOblExpr -> P.RawOblExpr
+substOblExpr subst expr =
+  case expr of
+    P.ROEDiag d -> P.ROEDiag (substDiagExpr subst d)
+    P.ROEMap me e -> P.ROEMap (substModExpr subst me) (substOblExpr subst e)
+    P.ROEGen -> P.ROEGen
+    P.ROELiftDom d -> P.ROELiftDom (substDiagExpr subst d)
+    P.ROELiftCod d -> P.ROELiftCod (substDiagExpr subst d)
+    P.ROEComp a b -> P.ROEComp (substOblExpr subst a) (substOblExpr subst b)
+    P.ROETensor a b -> P.ROETensor (substOblExpr subst a) (substOblExpr subst b)
 
 substBinderArg :: M.Map Text Text -> P.RawBinderArg -> P.RawBinderArg
 substBinderArg subst barg =

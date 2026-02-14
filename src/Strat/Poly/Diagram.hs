@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Diagram
   ( Diagram(..)
-  , idDIx
+  , idDTm
   , idD
-  , genDIx
+  , genDTm
   , genD
-  , genDWithAttrsIx
+  , genDWithAttrsTm
   , genDWithAttrs
   , compD
   , tensorD
@@ -16,7 +16,7 @@ module Strat.Poly.Diagram
   , applyAttrSubstDiagram
   , renameAttrVarsDiagram
   , freeTyVarsDiagram
-  , freeIxVarsDiagram
+  , freeTmVarsDiagram
   , freeAttrVarsDiagram
   , binderArgMetaVarsDiagram
   , spliceMetaVarsDiagram
@@ -30,36 +30,42 @@ import qualified Data.Set as S
 import Data.Functor.Identity (runIdentity)
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.TypeExpr (Context, TypeExpr, TyVar, IxVar, freeTyVarsType, freeIxVarsType)
+import Strat.Poly.TypeExpr (Context, TypeExpr, TyVar, TmVar(..), freeTyVarsType, freeTmVarsType)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
-import Strat.Poly.UnifyTy
+import {-# SOURCE #-} Strat.Poly.UnifyTy
+  ( Subst
+  , emptySubst
+  , applySubstCtx
+  , unifyCtx
+  , applySubstTy
+  )
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.Traversal (foldDiagram, traverseDiagram)
 
 
-idDIx :: ModeName -> [TypeExpr] -> Context -> Diagram
-idDIx mode ixCtx ctx =
-  let (ports, diag') = allocPorts ctx (emptyDiagram mode ixCtx)
+idDTm :: ModeName -> [TypeExpr] -> Context -> Diagram
+idDTm mode tmCtx ctx =
+  let (ports, diag') = allocPorts ctx (emptyDiagram mode tmCtx)
   in diag'
       { dIn = ports
       , dOut = ports
       }
 
 idD :: ModeName -> Context -> Diagram
-idD mode = idDIx mode []
+idD mode = idDTm mode []
 
-genDIx :: ModeName -> [TypeExpr] -> Context -> Context -> GenName -> Either Text Diagram
-genDIx mode ixCtx dom cod gen =
-  genDWithAttrsIx mode ixCtx dom cod gen M.empty
+genDTm :: ModeName -> [TypeExpr] -> Context -> Context -> GenName -> Either Text Diagram
+genDTm mode tmCtx dom cod gen =
+  genDWithAttrsTm mode tmCtx dom cod gen M.empty
 
 genD :: ModeName -> Context -> Context -> GenName -> Either Text Diagram
 genD mode dom cod gen =
-  genDIx mode [] dom cod gen
+  genDTm mode [] dom cod gen
 
-genDWithAttrsIx :: ModeName -> [TypeExpr] -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
-genDWithAttrsIx mode ixCtx dom cod gen attrs = do
-  let (inPorts, diag1) = allocPorts dom (emptyDiagram mode ixCtx)
+genDWithAttrsTm :: ModeName -> [TypeExpr] -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
+genDWithAttrsTm mode tmCtx dom cod gen attrs = do
+  let (inPorts, diag1) = allocPorts dom (emptyDiagram mode tmCtx)
   let (outPorts, diag2) = allocPorts cod diag1
   diag3 <- case addEdgePayload (PGen gen attrs []) inPorts outPorts diag2 of
     Left err -> Left ("genD " <> renderGen gen <> ": " <> err)
@@ -69,7 +75,7 @@ genDWithAttrsIx mode ixCtx dom cod gen attrs = do
   pure diagFinal
 
 genDWithAttrs :: ModeName -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
-genDWithAttrs mode = genDWithAttrsIx mode []
+genDWithAttrs mode = genDWithAttrsTm mode []
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
@@ -78,17 +84,17 @@ compD :: TypeTheory -> Diagram -> Diagram -> Either Text Diagram
 compD tt g f
   | dMode g /= dMode f = Left "diagram composition mode mismatch"
   | otherwise = do
-      ixCtxF <- applySubstCtx tt emptySubst (dIxCtx f)
-      ixCtxG <- applySubstCtx tt emptySubst (dIxCtx g)
-      if ixCtxG == ixCtxF
+      tmCtxF <- applySubstCtx tt emptySubst (dTmCtx f)
+      tmCtxG <- applySubstCtx tt emptySubst (dTmCtx g)
+      if tmCtxG == tmCtxF
         then Right ()
-        else Left "diagram composition index-context mismatch"
+        else Left "diagram composition term-context mismatch"
       domG <- diagramDom g
       codF <- diagramCod f
       let tyFlex = S.unions (map freeTyVarsType (codF <> domG))
-      let ixFlex = S.unions (map freeIxVarsType (codF <> domG))
+      let tmFlex = S.unions (map freeTmVarsType (codF <> domG))
       subst <-
-        case unifyCtx tt ixCtxF tyFlex ixFlex codF domG of
+        case unifyCtx tt tmCtxF tyFlex tmFlex codF domG of
           Left err -> Left ("diagram composition boundary mismatch: " <> err)
           Right s -> Right s
       f' <- applySubstDiagram tt subst f
@@ -116,7 +122,7 @@ composeAligned g f = do
 tensorD :: Diagram -> Diagram -> Either Text Diagram
 tensorD f g
   | dMode f /= dMode g = Left "diagram tensor mode mismatch"
-  | dIxCtx f /= dIxCtx g = Left "diagram tensor index-context mismatch"
+  | dTmCtx f /= dTmCtx g = Left "diagram tensor term-context mismatch"
   | otherwise = do
       let gShift = shiftDiagram (dNextPort f) (dNextEdge f) g
       merged <- unionDiagram f gShift
@@ -145,12 +151,18 @@ diagramCod diag = mapM (lookupPort "diagramCod") (dOut diag)
 
 applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
 applySubstDiagram tt subst =
-  traverseDiagram onDiag pure pure
+  traverseDiagram onDiag onPayload pure
   where
     onDiag d = do
       dPortTy' <- IM.traverseWithKey (\_ ty -> applySubstTy tt subst ty) (dPortTy d)
-      dIxCtx' <- mapM (applySubstTy tt subst) (dIxCtx d)
-      pure d { dIxCtx = dIxCtx', dPortTy = dPortTy' }
+      dTmCtx' <- mapM (applySubstTy tt subst) (dTmCtx d)
+      pure d { dTmCtx = dTmCtx', dPortTy = dPortTy' }
+    onPayload payload =
+      case payload of
+        PTmMeta v -> do
+          sort' <- applySubstTy tt subst (tmvSort v)
+          pure (PTmMeta v { tmvSort = sort' })
+        _ -> pure payload
 
 freeTyVarsDiagram :: Diagram -> S.Set TyVar
 freeTyVarsDiagram =
@@ -159,7 +171,7 @@ freeTyVarsDiagram =
     onDiag d =
       S.unions
         [ S.unions (map freeTyVarsType (IM.elems (dPortTy d)))
-        , S.unions (map freeTyVarsType (dIxCtx d))
+        , S.unions (map freeTyVarsType (dTmCtx d))
         ]
 
 freeAttrVarsDiagram :: Diagram -> S.Set AttrVar
@@ -171,15 +183,19 @@ freeAttrVarsDiagram =
         PGen _ attrs _ -> freeAttrVarsMap attrs
         _ -> mempty
 
-freeIxVarsDiagram :: Diagram -> S.Set IxVar
-freeIxVarsDiagram =
-  foldDiagram onDiag (\_ -> mempty) (\_ -> mempty)
+freeTmVarsDiagram :: Diagram -> S.Set TmVar
+freeTmVarsDiagram =
+  foldDiagram onDiag onPayload (\_ -> mempty)
   where
     onDiag d =
       S.unions
-        [ S.unions (map freeIxVarsType (IM.elems (dPortTy d)))
-        , S.unions (map freeIxVarsType (dIxCtx d))
+        [ S.unions (map freeTmVarsType (IM.elems (dPortTy d)))
+        , S.unions (map freeTmVarsType (dTmCtx d))
         ]
+    onPayload payload =
+      case payload of
+        PTmMeta v -> S.singleton v
+        _ -> S.empty
 
 binderArgMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
 binderArgMetaVarsDiagram =
@@ -233,7 +249,7 @@ allocPorts (ty:rest) diag =
 unionDiagram :: Diagram -> Diagram -> Either Text Diagram
 unionDiagram left right
   | dMode left /= dMode right = Left "unionDiagram: mode mismatch"
-  | dIxCtx left /= dIxCtx right = Left "unionDiagram: index-context mismatch"
+  | dTmCtx left /= dTmCtx right = Left "unionDiagram: term-context mismatch"
   | otherwise = do
       portTy <- unionDisjointIntMap "unionDiagram ports" (dPortTy left) (dPortTy right)
       portLabel <- unionDisjointIntMap "unionDiagram labels" (dPortLabel left) (dPortLabel right)

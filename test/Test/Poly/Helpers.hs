@@ -15,10 +15,9 @@ import Strat.Poly.ModeTheory
 mkModes :: [ModeName] -> ModeTheory
 mkModes modes =
   ModeTheory
-    { mtModes = M.fromList [ (m, ModeInfo { miName = m, miDiscipline = Linear }) | m <- modes ]
+    { mtModes = M.fromList [ (m, ModeInfo { miName = m }) | m <- modes ]
     , mtDecls = M.empty
     , mtEqns = []
-    , mtAdjs = []
     }
 
 mkModesFromSet :: S.Set ModeName -> ModeTheory

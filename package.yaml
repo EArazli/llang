@@ -67,6 +67,7 @@ data-files:
 - examples/run/doc/hello_doc.run.llang
 - examples/run/effects/combined_with_handler.run.llang
 - examples/run/foliation/basic_foliate.run.llang
+- examples/run/dependent/vec.run.llang
 - examples/run/modes/dual_discipline_term_surface.run.llang
 - examples/run/modes/lnl.counit.run.llang
 - examples/run/modes/lnl.unit.run.llang
@@ -89,6 +90,7 @@ data-files:
 - stdlib/effects/nondet.llang
 - stdlib/effects/writer.template.llang
 - stdlib/nat.llang
+- stdlib/schema.adjunction.llang
 - stdlib/struct.cartesian.llang
 - stdlib/struct.planar.llang
 - stdlib/struct.symmetric.llang

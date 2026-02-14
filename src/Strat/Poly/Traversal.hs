@@ -29,6 +29,7 @@ foldDiagram onDiag onPayload onBArg = goDiag
           PBox _ inner -> goDiag inner
           PFeedback inner -> goDiag inner
           PSplice _ -> mempty
+          PTmMeta _ -> mempty
 
     goBArg ba =
       onBArg ba
@@ -68,6 +69,8 @@ traverseDiagram onDiag onPayload onBArg = goDiag
             pure (PFeedback inner')
           PSplice x ->
             pure (PSplice x)
+          PTmMeta v ->
+            pure (PTmMeta v)
       onPayload p'
 
     goBArg ba = do

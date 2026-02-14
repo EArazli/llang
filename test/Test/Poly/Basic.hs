@@ -237,7 +237,7 @@ testDuplicateGenTyVars = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = [a, a]
-        , gdIxVars = []
+        , gdTmVars = []
     , gdDom = map InPort [TVar a]
         , gdCod = [TVar a]
         , gdAttrs = []
@@ -246,11 +246,11 @@ testDuplicateGenTyVars = do
         { dName = "DupGenTyVars"
         , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
@@ -267,7 +267,7 @@ testDuplicateCellTyVars = do
         , c2Class = Structural
         , c2Orient = Bidirectional
         , c2TyVars = [a, a]
-        , c2IxVars = []
+        , c2TmVars = []
         , c2LHS = diag
         , c2RHS = diag
         }
@@ -275,8 +275,6 @@ testDuplicateCellTyVars = do
         { dName = "DupCellTyVars"
         , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.empty
         , dGens = M.empty
         , dCells2 = [cell]
@@ -295,7 +293,7 @@ testRejectRHSTyVars = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
-        , gdIxVars = []
+        , gdTmVars = []
     , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
@@ -307,7 +305,7 @@ testRejectRHSTyVars = do
         , c2Class = Computational
         , c2Orient = LR
         , c2TyVars = []
-        , c2IxVars = []
+        , c2TmVars = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -315,11 +313,11 @@ testRejectRHSTyVars = do
         { dName = "D"
         , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
+      , dActions = M.empty
+      , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
@@ -335,7 +333,7 @@ testAcceptRHSTyVars = do
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = [aVar]
-        , gdIxVars = []
+        , gdTmVars = []
     , gdDom = map InPort [TVar aVar]
         , gdCod = [TVar aVar]
         , gdAttrs = []
@@ -347,7 +345,7 @@ testAcceptRHSTyVars = do
         , c2Class = Computational
         , c2Orient = LR
         , c2TyVars = [aVar]
-        , c2IxVars = []
+        , c2TmVars = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -355,11 +353,11 @@ testAcceptRHSTyVars = do
         { dName = "D"
         , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
+      , dActions = M.empty
+      , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
@@ -377,7 +375,7 @@ testRejectEmptyLHS = do
         , c2Class = Computational
         , c2Orient = LR
         , c2TyVars = []
-        , c2IxVars = []
+        , c2TmVars = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -385,11 +383,11 @@ testRejectEmptyLHS = do
         { dName = "D"
         , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.empty
         , dCells2 = [cell]
+      , dActions = M.empty
+      , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of

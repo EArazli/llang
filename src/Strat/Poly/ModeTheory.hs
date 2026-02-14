@@ -2,25 +2,16 @@
 module Strat.Poly.ModeTheory
   ( ModeName(..)
   , ModName(..)
-  , VarDiscipline(..)
-  , canUpgrade
-  , upgradeDiscipline
   , ModeInfo(..)
   , ModExpr(..)
   , ModDecl(..)
   , ModEqn(..)
-  , AdjDecl(..)
   , ModeTheory(..)
   , emptyModeTheory
   , addMode
-  , setModeDiscipline
   , addModDecl
   , addModEqn
-  , addAdjDecl
   , composeMod
-  , modeDiscipline
-  , allowsDrop
-  , allowsDup
   , normalizeModExpr
   , checkWellFormed
   ) where
@@ -33,31 +24,8 @@ import Data.Map.Strict (Map)
 newtype ModeName = ModeName Text deriving (Eq, Ord, Show)
 newtype ModName = ModName Text deriving (Eq, Ord, Show)
 
-
-data VarDiscipline = Linear | Affine | Relevant | Cartesian
-  deriving (Eq, Ord, Show, Read)
-
-canUpgrade :: VarDiscipline -> VarDiscipline -> Bool
-canUpgrade old new =
-  case (old, new) of
-    (Linear, _) -> True
-    (Affine, Affine) -> True
-    (Affine, Cartesian) -> True
-    (Relevant, Relevant) -> True
-    (Relevant, Cartesian) -> True
-    (Cartesian, Cartesian) -> True
-    _ -> False
-
-upgradeDiscipline :: VarDiscipline -> VarDiscipline -> Either Text VarDiscipline
-upgradeDiscipline old new =
-  if canUpgrade old new
-    then Right new
-    else Left "mode theory: discipline downgrade is not allowed"
-
-
 data ModeInfo = ModeInfo
   { miName :: ModeName
-  , miDiscipline :: VarDiscipline
   } deriving (Eq, Show)
 
 data ModDecl = ModDecl
@@ -80,59 +48,23 @@ data ModEqn = ModEqn
   , meRHS :: ModExpr
   } deriving (Eq, Show)
 
-data AdjDecl = AdjDecl
-  { adLeft :: ModName
-  , adRight :: ModName
-  } deriving (Eq, Show)
-
-
 data ModeTheory = ModeTheory
   { mtModes :: Map ModeName ModeInfo
   , mtDecls :: Map ModName ModDecl
   , mtEqns :: [ModEqn]
-  , mtAdjs :: [AdjDecl]
   }
   deriving (Eq, Show)
 
 
 emptyModeTheory :: ModeTheory
-emptyModeTheory = ModeTheory M.empty M.empty [] []
-
-modeDiscipline :: ModeTheory -> ModeName -> Either Text VarDiscipline
-modeDiscipline mt mode =
-  case M.lookup mode (mtModes mt) of
-    Nothing -> Left "mode theory: unknown mode"
-    Just info -> Right (miDiscipline info)
-
-allowsDrop :: VarDiscipline -> Bool
-allowsDrop d =
-  case d of
-    Affine -> True
-    Cartesian -> True
-    _ -> False
-
-allowsDup :: VarDiscipline -> Bool
-allowsDup d =
-  case d of
-    Relevant -> True
-    Cartesian -> True
-    _ -> False
+emptyModeTheory = ModeTheory M.empty M.empty []
 
 addMode :: ModeName -> ModeTheory -> Either Text ModeTheory
 addMode name mt
   | M.member name (mtModes mt) = Left "duplicate mode name"
   | otherwise =
-      let info = ModeInfo { miName = name, miDiscipline = Linear }
+      let info = ModeInfo { miName = name }
       in Right mt { mtModes = M.insert name info (mtModes mt) }
-
-setModeDiscipline :: ModeName -> VarDiscipline -> ModeTheory -> Either Text ModeTheory
-setModeDiscipline mode newDisc mt =
-  case M.lookup mode (mtModes mt) of
-    Nothing -> Left "mode theory: unknown mode"
-    Just info -> do
-      disc' <- upgradeDiscipline (miDiscipline info) newDisc
-      let info' = info { miDiscipline = disc' }
-      Right mt { mtModes = M.insert mode info' (mtModes mt) }
 
 addModDecl :: ModDecl -> ModeTheory -> Either Text ModeTheory
 addModDecl decl mt
@@ -146,11 +78,6 @@ addModEqn :: ModEqn -> ModeTheory -> Either Text ModeTheory
 addModEqn eqn mt = do
   validateModEqn mt eqn
   Right mt { mtEqns = mtEqns mt <> [eqn] }
-
-addAdjDecl :: AdjDecl -> ModeTheory -> Either Text ModeTheory
-addAdjDecl adj mt = do
-  validateAdj mt adj
-  Right mt { mtAdjs = mtAdjs mt <> [adj] }
 
 composeMod :: ModeTheory -> ModExpr -> ModExpr -> Either Text ModExpr
 composeMod _ f g
@@ -178,19 +105,10 @@ checkWellFormed mt = do
     else Right ()
   mapM_ checkDecl (M.elems (mtDecls mt))
   mapM_ (validateModEqn mt) (mtEqns mt)
-  mapM_ (validateAdj mt) (mtAdjs mt)
   where
     checkDecl decl
       | M.member (mdSrc decl) (mtModes mt) && M.member (mdTgt decl) (mtModes mt) = Right ()
       | otherwise = Left "modality declaration uses unknown mode"
-
-validateAdj :: ModeTheory -> AdjDecl -> Either Text ()
-validateAdj mt adj = do
-  left <- requireModDecl mt (adLeft adj)
-  right <- requireModDecl mt (adRight adj)
-  if mdSrc left == mdTgt right && mdTgt left == mdSrc right
-    then Right ()
-    else Left "adjunction modalities must have opposite directions"
 
 validateModExpr :: ModeTheory -> ModExpr -> Either Text ()
 validateModExpr mt me = do

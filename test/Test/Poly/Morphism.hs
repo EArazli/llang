@@ -15,14 +15,14 @@ import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
-import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..))
 import Strat.Poly.Names
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), diagramIsoEq)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), diagramIsoEq, emptyDiagram, freshPort, addEdgePayload)
 import Strat.Poly.Cell2
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
 import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
+import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Test.Poly.Helpers (mkModes, identityModeMap, identityModMap)
 
 
@@ -34,16 +34,14 @@ tests =
     , testCase "type map can reorder parameters" testTypeMapReorder
     , testCase "cross-mode morphism applies mode map" testCrossModeMorphism
     , testCase "modality map rewrites modality applications in types" testModalityMapRewritesTypeModalities
-    , testCase "morphism rejects index function maps with arity mismatch" testIxFunMapArityMismatch
-    , testCase "morphism rejects index function maps with sort mismatch" testIxFunMapSortMismatch
     , testCase "morphism instantiation fails on dependent substitution errors" testMorphismInstantiationSubstFailure
     , testCase "binder generator identity morphism preserves binder arguments" testBinderIdentityMorphismPreservesBinders
     , testCase "morphism rewrites splice binder holes to substituted binder metas" testMorphismSpliceRenamesToBinderMeta
     , testCase "morphism checker rejects incorrect binder-hole signatures" testMorphismRejectsBadBinderHoleSignatures
     , testCase "morphism rejects cyclic type templates" testTypeTemplateCycleRejected
-    , testCase "morphism rejects indexed template sort mismatch in same mode" testIndexedTemplateSortMismatch
-    , testCase "morphism type map instantiates indexed templates" testIndexedTypeTemplateInstantiation
-    , testCase "morphism rejects indexed template parameter kind mismatch" testIndexedTemplateKindMismatch
+    , testCase "morphism rejects term-template sort mismatch in same mode" testTermTemplateSortMismatch
+    , testCase "morphism type map instantiates term-templates" testTermTypeTemplateInstantiation
+    , testCase "morphism rejects term-template parameter kind mismatch" testTermTemplateKindMismatch
     , testCase "morphism check all enforces computational equations" testMorphismCheckAllEnforcesComputational
     , testCase "morphism check structural ignores computational equations" testMorphismCheckStructuralIgnoresComputational
     , testCase "morphism check none skips structural equations" testMorphismCheckNoneSkipsStructural
@@ -77,6 +75,16 @@ setSingleEdgePayload diag payload =
       in pure diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
     _ -> Left "expected a single edge"
 
+tmMeta :: TmVar -> TermDiagram
+tmMeta v =
+  let mode = typeMode (tmvSort v)
+      (outPid, d0) = freshPort (tmvSort v) (emptyDiagram mode [])
+      d1 =
+        case addEdgePayload (PTmMeta v) [] [outPid] d0 of
+          Left err -> error (T.unpack err)
+          Right d -> d
+  in TermDiagram d1 { dOut = [outPid] }
+
 testMonoidMorphism :: Assertion
 testMonoidMorphism = do
   docSrc <- either (assertFailure . T.unpack) pure mkMonoid
@@ -95,7 +103,6 @@ testMonoidMorphism = do
         , morAttrSortMap = M.empty
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((modeM, GenName "unit"), plainImage unitImg), ((modeM, GenName "mul"), plainImage mulImg)]
-        , morIxFunMap = M.empty
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         , morFuel = 20
@@ -117,7 +124,7 @@ testTypeMapReorder = do
           { gdName = genName
           , gdMode = mode
           , gdTyVars = [a, b]
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = map InPort [TCon (TypeRef mode prod) [TAType (TVar a), TAType (TVar b)]]
           , gdCod = [TCon (TypeRef mode prod) [TAType (TVar a), TAType (TVar b)]]
           , gdAttrs = []
@@ -127,7 +134,7 @@ testTypeMapReorder = do
           { gdName = genName
           , gdMode = mode
           , gdTyVars = [a, b]
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = map InPort [TCon (TypeRef mode pair) [TAType (TVar a), TAType (TVar b)]]
           , gdCod = [TCon (TypeRef mode pair) [TAType (TVar a), TAType (TVar b)]]
           , gdAttrs = []
@@ -136,23 +143,23 @@ testTypeMapReorder = do
         { dName = "Src"
         , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
       , dAttrSorts = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(prod, TypeSig [PS_Ty mode, PS_Ty mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genSrc)])]
         , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
         }
   let docTgt = Doctrine
         { dName = "Tgt"
         , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
       , dAttrSorts = M.empty
         , dTypes = M.fromList [(mode, M.fromList [(pair, TypeSig [PS_Ty mode, PS_Ty mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genTgt)])]
         , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
         }
   docSrc' <- case validateDoctrine docSrc of
     Left err -> assertFailure (T.unpack err)
@@ -172,7 +179,6 @@ testTypeMapReorder = do
         , morAttrSortMap = M.empty
         , morTypeMap = typeMap
         , morGenMap = M.fromList [((mode, genName), plainImage img)]
-        , morIxFunMap = M.empty
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         , morFuel = 20
@@ -194,7 +200,7 @@ testCrossModeMorphism = do
           { gdName = GenName "f"
           , gdMode = modeC
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
           , gdAttrs = []
@@ -204,7 +210,7 @@ testCrossModeMorphism = do
           { gdName = GenName "g"
           , gdMode = modeV
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = map InPort [bTy]
           , gdCod = [bTy]
           , gdAttrs = []
@@ -213,23 +219,23 @@ testCrossModeMorphism = do
         { dName = "Src"
         , dModes = mkModes [modeC]
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
       , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeC, M.fromList [(TypeName "A", TypeSig [])])]
         , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
         , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
         }
   let docTgt = Doctrine
         { dName = "Tgt"
         , dModes = mkModes [modeV]
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
       , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeV, M.fromList [(TypeName "B", TypeSig [])])]
         , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
         , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
         }
   docSrc' <- case validateDoctrine docSrc of
     Left err -> assertFailure (T.unpack err)
@@ -248,7 +254,6 @@ testCrossModeMorphism = do
         , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(aRef, TypeTemplate [] bTy)]
         , morGenMap = M.fromList [((modeC, GenName "f"), plainImage img)]
-        , morIxFunMap = M.empty
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         , morFuel = 20
@@ -289,8 +294,8 @@ testModalityMapRewritesTypeModalities = do
         ModeTheory
           { mtModes =
               M.fromList
-                [ (modeA, ModeInfo modeA Linear)
-                , (modeB, ModeInfo modeB Linear)
+                [ (modeA, ModeInfo modeA)
+                , (modeB, ModeInfo modeB)
                 ]
           , mtDecls =
               M.fromList
@@ -298,14 +303,13 @@ testModalityMapRewritesTypeModalities = do
                 , (modH, ModDecl modH modeB modeB)
                 ]
           , mtEqns = []
-          , mtAdjs = []
           }
   let modeTheoryTgt =
         ModeTheory
           { mtModes =
               M.fromList
-                [ (modeC, ModeInfo modeC Linear)
-                , (modeD, ModeInfo modeD Linear)
+                [ (modeC, ModeInfo modeC)
+                , (modeD, ModeInfo modeD)
                 ]
           , mtDecls =
               M.fromList
@@ -313,14 +317,13 @@ testModalityMapRewritesTypeModalities = do
                 , (modK, ModDecl modK modeD modeD)
                 ]
           , mtEqns = []
-          , mtAdjs = []
           }
   let genGSrc =
         GenDecl
           { gdName = GenName "g"
           , gdMode = modeB
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = map InPort [fBaseSrc]
           , gdCod = [fBaseSrc]
           , gdAttrs = []
@@ -330,7 +333,7 @@ testModalityMapRewritesTypeModalities = do
           { gdName = GenName "gg"
           , gdMode = modeB
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = map InPort [hfBaseSrc]
           , gdCod = [hfBaseSrc]
           , gdAttrs = []
@@ -340,7 +343,7 @@ testModalityMapRewritesTypeModalities = do
           { gdName = GenName "g"
           , gdMode = modeD
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = map InPort [gBaseTgt]
           , gdCod = [gBaseTgt]
           , gdAttrs = []
@@ -350,7 +353,7 @@ testModalityMapRewritesTypeModalities = do
           { gdName = GenName "gg"
           , gdMode = modeD
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = map InPort [kgBaseTgt]
           , gdCod = [kgBaseTgt]
           , gdAttrs = []
@@ -359,23 +362,23 @@ testModalityMapRewritesTypeModalities = do
         { dName = "SrcModal"
         , dModes = modeTheorySrc
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
       , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeA, M.fromList [(TypeName "Base", TypeSig [])])]
         , dGens = M.fromList [(modeB, M.fromList [(GenName "g", genGSrc), (GenName "gg", genGGSrc)])]
         , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
         }
   let docTgt = Doctrine
         { dName = "TgtModal"
         , dModes = modeTheoryTgt
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
       , dAttrSorts = M.empty
         , dTypes = M.fromList [(modeC, M.fromList [(TypeName "Base", TypeSig [])])]
         , dGens = M.fromList [(modeD, M.fromList [(GenName "g", genGTgt), (GenName "gg", genGGTgt)])]
         , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
         }
   docSrc' <- case validateDoctrine docSrc of
     Left err -> assertFailure (T.unpack err)
@@ -395,7 +398,6 @@ testModalityMapRewritesTypeModalities = do
         , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(TypeRef modeA (TypeName "Base"), TypeTemplate [] baseTgt)]
         , morGenMap = M.fromList [((modeB, GenName "g"), plainImage imgG), ((modeB, GenName "gg"), plainImage imgGG)]
-        , morIxFunMap = M.empty
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         , morFuel = 20
@@ -430,193 +432,6 @@ testModalityMapRewritesTypeModalities = do
           bargs @?= []
         _ -> assertFailure "expected exactly one generator edge"
 
-testIxFunMapArityMismatch :: Assertion
-testIxFunMapArityMismatch = do
-  let modeI = ModeName "I"
-  let modeJ = ModeName "J"
-  let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
-  let symTy = TCon (TypeRef modeJ (TypeName "Sym")) []
-  let srcDoc =
-        Doctrine
-          { dName = "SrcIx"
-          , dModes = mkModes [modeI, modeJ]
-    , dAcyclicModes = S.empty
-          , dIndexModes = S.fromList [modeI, modeJ]
-          , dIxTheory =
-              M.fromList
-                [ ( modeI
-                  , IxTheory
-                      { itFuns = M.fromList [(IxFunName "Z", IxFunSig [] natTy)]
-                      , itRules = []
-                      }
-                  )
-                , ( modeJ
-                  , IxTheory
-                      { itFuns = M.fromList [(IxFunName "pair", IxFunSig [natTy, natTy] symTy)]
-                      , itRules = []
-                      }
-                  )
-                ]
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeJ, M.fromList [(TypeName "Sym", TypeSig [])])
-                ]
-          , dGens = M.empty
-          , dCells2 = []
-          }
-  let tgtDoc =
-        Doctrine
-          { dName = "TgtIx"
-          , dModes = mkModes [modeI, modeJ]
-    , dAcyclicModes = S.empty
-          , dIndexModes = S.fromList [modeI, modeJ]
-          , dIxTheory =
-              M.fromList
-                [ ( modeI
-                  , IxTheory
-                      { itFuns = M.fromList [(IxFunName "Z", IxFunSig [] natTy)]
-                      , itRules = []
-                      }
-                  )
-                , ( modeJ
-                  , IxTheory
-                      { itFuns = M.fromList [(IxFunName "single", IxFunSig [natTy] symTy)]
-                      , itRules = []
-                      }
-                  )
-                ]
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeJ, M.fromList [(TypeName "Sym", TypeSig [])])
-                ]
-          , dGens = M.empty
-          , dCells2 = []
-          }
-  src <- either (assertFailure . T.unpack) pure (validateDoctrine srcDoc >> Right srcDoc)
-  tgt <- either (assertFailure . T.unpack) pure (validateDoctrine tgtDoc >> Right tgtDoc)
-  let mor =
-        Morphism
-          { morName = "BadIxArity"
-          , morSrc = src
-          , morTgt = tgt
-          , morIsCoercion = False
-          , morModeMap = identityModeMap src
-          , morModMap = identityModMap src
-          , morAttrSortMap = M.empty
-          , morTypeMap = M.empty
-          , morGenMap = M.empty
-          , morIxFunMap = M.fromList [(IxFunName "pair", IxFunName "single")]
-        , morCheck = CheckAll
-          , morPolicy = UseAllOriented
-          , morFuel = 20
-          }
-  case checkMorphism mor of
-    Left err -> assertBool "expected arity mismatch error" ("arity mismatch" `T.isInfixOf` err)
-    Right () -> assertFailure "expected morphism check to fail"
-
-testIxFunMapSortMismatch :: Assertion
-testIxFunMapSortMismatch = do
-  let modeI = ModeName "I"
-  let modeJ = ModeName "J"
-  let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
-  let boolTy = TCon (TypeRef modeI (TypeName "Bool")) []
-  let symTy = TCon (TypeRef modeJ (TypeName "Sym")) []
-  let srcDoc =
-        Doctrine
-          { dName = "SrcIxSort"
-          , dModes = mkModes [modeI, modeJ]
-    , dAcyclicModes = S.empty
-          , dIndexModes = S.fromList [modeI, modeJ]
-          , dIxTheory =
-              M.fromList
-                [ ( modeI
-                  , IxTheory
-                      { itFuns = M.fromList [(IxFunName "Z", IxFunSig [] natTy)]
-                      , itRules = []
-                      }
-                  )
-                , ( modeJ
-                  , IxTheory
-                      { itFuns = M.fromList [(IxFunName "f", IxFunSig [natTy] symTy)]
-                      , itRules = []
-                      }
-                  )
-                ]
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ ( modeI
-                  , M.fromList
-                      [ (TypeName "Nat", TypeSig [])
-                      , (TypeName "Bool", TypeSig [])
-                      ]
-                  )
-                , (modeJ, M.fromList [(TypeName "Sym", TypeSig [])])
-                ]
-          , dGens = M.empty
-          , dCells2 = []
-          }
-  let tgtDoc =
-        Doctrine
-          { dName = "TgtIxSort"
-          , dModes = mkModes [modeI, modeJ]
-    , dAcyclicModes = S.empty
-          , dIndexModes = S.fromList [modeI, modeJ]
-          , dIxTheory =
-              M.fromList
-                [ ( modeI
-                  , IxTheory
-                      { itFuns = M.fromList [(IxFunName "B0", IxFunSig [] boolTy)]
-                      , itRules = []
-                      }
-                  )
-                , ( modeJ
-                  , IxTheory
-                      { itFuns = M.fromList [(IxFunName "g", IxFunSig [boolTy] symTy)]
-                      , itRules = []
-                      }
-                  )
-                ]
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ ( modeI
-                  , M.fromList
-                      [ (TypeName "Nat", TypeSig [])
-                      , (TypeName "Bool", TypeSig [])
-                      ]
-                  )
-                , (modeJ, M.fromList [(TypeName "Sym", TypeSig [])])
-                ]
-          , dGens = M.empty
-          , dCells2 = []
-          }
-  src <- either (assertFailure . T.unpack) pure (validateDoctrine srcDoc >> Right srcDoc)
-  tgt <- either (assertFailure . T.unpack) pure (validateDoctrine tgtDoc >> Right tgtDoc)
-  let mor =
-        Morphism
-          { morName = "BadIxSort"
-          , morSrc = src
-          , morTgt = tgt
-          , morIsCoercion = False
-          , morModeMap = identityModeMap src
-          , morModMap = identityModMap src
-          , morAttrSortMap = M.empty
-          , morTypeMap = M.empty
-          , morGenMap = M.empty
-          , morIxFunMap = M.fromList [(IxFunName "f", IxFunName "g")]
-        , morCheck = CheckAll
-          , morPolicy = UseAllOriented
-          , morFuel = 20
-          }
-  case checkMorphism mor of
-    Left err -> assertBool "expected sort mismatch error" ("sort mapping mismatch" `T.isInfixOf` err)
-    Right () -> assertFailure "expected morphism check to fail"
-
 testMorphismInstantiationSubstFailure :: Assertion
 testMorphismInstantiationSubstFailure = do
   let mode = ModeName "M"
@@ -627,7 +442,7 @@ testMorphismInstantiationSubstFailure = do
           { gdName = GenName "f"
           , gdMode = mode
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
           , gdAttrs = []
@@ -637,7 +452,7 @@ testMorphismInstantiationSubstFailure = do
           { gdName = GenName "g"
           , gdMode = mode
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
           , gdAttrs = []
@@ -647,24 +462,24 @@ testMorphismInstantiationSubstFailure = do
           { dName = "SrcSubstFail"
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-          , dIndexModes = S.empty
-          , dIxTheory = M.empty
           , dAttrSorts = M.empty
           , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(GenName "f", srcGen)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   let tgtDoc =
         Doctrine
           { dName = "TgtSubstFail"
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-          , dIndexModes = S.empty
-          , dIxTheory = M.empty
           , dAttrSorts = M.empty
           , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(GenName "g", tgtGen)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   src <- case validateDoctrine srcDoc of
     Left err -> assertFailure (T.unpack err)
@@ -686,7 +501,6 @@ testMorphismInstantiationSubstFailure = do
           , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((mode, GenName "f"), plainImage badImg)]
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
@@ -700,13 +514,13 @@ testBinderIdentityMorphismPreservesBinders = do
   let mode = ModeName "M"
   let lamName = GenName "lam"
   let aTy' = TCon (TypeRef mode (TypeName "A")) []
-  let slotSig = BinderSig { bsIxCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
+  let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
   let lamGen =
         GenDecl
           { gdName = lamName
           , gdMode = mode
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy']
           , gdAttrs = []
@@ -716,12 +530,12 @@ testBinderIdentityMorphismPreservesBinders = do
           { dName = "LamDoc"
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-          , dIndexModes = S.empty
-          , dIxTheory = M.empty
           , dAttrSorts = M.empty
           , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   doc' <- case validateDoctrine doc of
     Left err -> assertFailure (T.unpack err)
@@ -743,7 +557,6 @@ testBinderIdentityMorphismPreservesBinders = do
           , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((mode, lamName), GenImage img (M.fromList [(hole, slotSig)]))]
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
@@ -770,13 +583,13 @@ testMorphismSpliceRenamesToBinderMeta = do
   let mode = ModeName "M"
   let gName = GenName "g"
   let aTy' = TCon (TypeRef mode (TypeName "A")) []
-  let slotSig = BinderSig { bsIxCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
+  let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
   let gDecl =
         GenDecl
           { gdName = gName
           , gdMode = mode
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = [InPort aTy', InBinder slotSig]
           , gdCod = [aTy']
           , gdAttrs = []
@@ -786,12 +599,12 @@ testMorphismSpliceRenamesToBinderMeta = do
           { dName = "SpliceMetaDoc"
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-          , dIndexModes = S.empty
-          , dIxTheory = M.empty
           , dAttrSorts = M.empty
           , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   doc' <- case validateDoctrine doc of
     Left err -> assertFailure (T.unpack err)
@@ -813,7 +626,6 @@ testMorphismSpliceRenamesToBinderMeta = do
           , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((mode, gName), GenImage img (M.fromList [(b0, slotSig)]))]
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
@@ -836,14 +648,14 @@ testMorphismRejectsBadBinderHoleSignatures = do
   let mode = ModeName "M"
   let lamName = GenName "lam"
   let aTy' = TCon (TypeRef mode (TypeName "A")) []
-  let slotSig = BinderSig { bsIxCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
-  let wrongSig = BinderSig { bsIxCtx = [], bsDom = [], bsCod = [aTy'] }
+  let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
+  let wrongSig = BinderSig { bsTmCtx = [], bsDom = [], bsCod = [aTy'] }
   let lamGen =
         GenDecl
           { gdName = lamName
           , gdMode = mode
           , gdTyVars = []
-          , gdIxVars = []
+          , gdTmVars = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy']
           , gdAttrs = []
@@ -853,12 +665,12 @@ testMorphismRejectsBadBinderHoleSignatures = do
           { dName = "BadBinderSigsDoc"
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-          , dIndexModes = S.empty
-          , dIxTheory = M.empty
           , dAttrSorts = M.empty
           , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   doc' <- case validateDoctrine doc of
     Left err -> assertFailure (T.unpack err)
@@ -877,7 +689,6 @@ testMorphismRejectsBadBinderHoleSignatures = do
           , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((mode, lamName), GenImage img (M.fromList [(hole, wrongSig)]))]
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
@@ -900,12 +711,12 @@ testTypeTemplateCycleRejected = do
           { dName = "CycleDoc"
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-          , dIndexModes = S.empty
-          , dIxTheory = M.empty
           , dAttrSorts = M.empty
           , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig []), (TypeName "B", TypeSig [])])]
           , dGens = M.empty
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   doc' <- case validateDoctrine doc of
     Left err -> assertFailure (T.unpack err)
@@ -925,7 +736,6 @@ testTypeTemplateCycleRejected = do
                 , (bRef, TypeTemplate [] (TCon aRef []))
                 ]
           , morGenMap = M.empty
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
@@ -936,8 +746,8 @@ testTypeTemplateCycleRejected = do
     Right () ->
       assertFailure "expected checkMorphism to reject cyclic templates"
 
-testIndexedTemplateSortMismatch :: Assertion
-testIndexedTemplateSortMismatch = do
+testTermTemplateSortMismatch :: Assertion
+testTermTemplateSortMismatch = do
   let modeM' = ModeName "M"
   let modeI' = ModeName "I"
   let natRef = TypeRef modeI' (TypeName "Nat")
@@ -950,32 +760,32 @@ testIndexedTemplateSortMismatch = do
           { dName = "SrcSortMismatch"
           , dModes = mkModes [modeM', modeI']
     , dAcyclicModes = S.empty
-          , dIndexModes = S.singleton modeI'
-          , dIxTheory = M.empty
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
                 [ (modeI', M.fromList [(TypeName "Nat", TypeSig []), (TypeName "Bool", TypeSig [])])
-                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Ix natTy, PS_Ty modeM'])])
+                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
                 ]
           , dGens = M.empty
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   let tgtDoc =
         Doctrine
           { dName = "TgtSortMismatch"
           , dModes = mkModes [modeM', modeI']
     , dAcyclicModes = S.empty
-          , dIndexModes = S.singleton modeI'
-          , dIxTheory = M.empty
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
                 [ (modeI', M.fromList [(TypeName "Nat", TypeSig []), (TypeName "Bool", TypeSig [])])
-                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Ix natTy, PS_Ty modeM'])])
+                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
                 ]
           , dGens = M.empty
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   src <- case validateDoctrine srcDoc of
     Left err -> assertFailure (T.unpack err)
@@ -983,7 +793,7 @@ testIndexedTemplateSortMismatch = do
   tgt <- case validateDoctrine tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
-  let nWrong = IxVar { ixvName = "n", ixvSort = boolTy, ixvScope = 0 }
+  let nWrong = TmVar { tmvName = "n", tmvSort = boolTy, tmvScope = 0 }
   let aVar = TyVar { tvName = "a", tvMode = modeM' }
   let mor =
         Morphism
@@ -998,24 +808,25 @@ testIndexedTemplateSortMismatch = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPIx nWrong, TPType aVar]
+                      [TPTm nWrong, TPType aVar]
                       (TVar aVar)
                   )
                 ]
           , morGenMap = M.empty
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
           }
   case checkMorphism mor of
     Left err ->
-      assertBool "expected index-parameter sort mismatch" ("index-parameter sort mismatch" `T.isInfixOf` err)
+      assertBool
+        "expected term-parameter sort mismatch"
+        ("term-parameter sort mismatch" `T.isInfixOf` err || "term-parameter sort mismatch" `T.isInfixOf` err)
     Right () ->
-      assertFailure "expected checkMorphism to reject index sort mismatch"
+      assertFailure "expected checkMorphism to reject term sort mismatch"
 
-testIndexedTypeTemplateInstantiation :: Assertion
-testIndexedTypeTemplateInstantiation = do
+testTermTypeTemplateInstantiation :: Assertion
+testTermTypeTemplateInstantiation = do
   let modeM' = ModeName "M"
   let modeI' = ModeName "I"
   let natRef = TypeRef modeI' (TypeName "Nat")
@@ -1024,24 +835,33 @@ testIndexedTypeTemplateInstantiation = do
   let vec2Ref = TypeRef modeM' (TypeName "Vec2")
   let natTy = TCon natRef []
   let aTy' = TCon aRef []
-  let z = IXFun (IxFunName "Z") []
-  let s x = IXFun (IxFunName "S") [x]
-  let ixTheory =
-        IxTheory
-          { itFuns =
-              M.fromList
-                [ (IxFunName "Z", IxFunSig [] natTy)
-                , (IxFunName "S", IxFunSig [natTy] natTy)
-                ]
-          , itRules = []
+  let z = TMFun (TmFunName "Z") []
+  let s x = TMFun (TmFunName "S") [x]
+  let zGen =
+        GenDecl
+          { gdName = GenName "Z"
+          , gdMode = modeI'
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = []
+          , gdCod = [natTy]
+          , gdAttrs = []
+          }
+  let sGen =
+        GenDecl
+          { gdName = GenName "S"
+          , gdMode = modeI'
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = [InPort natTy]
+          , gdCod = [natTy]
+          , gdAttrs = []
           }
   let srcDoc =
         Doctrine
-          { dName = "SrcIndexedTemplate"
+          { dName = "SrcTermTemplate"
           , dModes = mkModes [modeM', modeI']
     , dAcyclicModes = S.empty
-          , dIndexModes = S.singleton modeI'
-          , dIxTheory = M.fromList [(modeI', ixTheory)]
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
@@ -1049,20 +869,20 @@ testIndexedTypeTemplateInstantiation = do
                 , ( modeM'
                   , M.fromList
                       [ (TypeName "A", TypeSig [])
-                      , (TypeName "Vec", TypeSig [PS_Ix natTy, PS_Ty modeM'])
+                      , (TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])
                       ]
                   )
                 ]
-          , dGens = M.empty
+          , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen), (GenName "S", sGen)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   let tgtDoc =
         Doctrine
-          { dName = "TgtIndexedTemplate"
+          { dName = "TgtTermTemplate"
           , dModes = mkModes [modeM', modeI']
     , dAcyclicModes = S.empty
-          , dIndexModes = S.singleton modeI'
-          , dIxTheory = M.fromList [(modeI', ixTheory)]
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
@@ -1070,12 +890,14 @@ testIndexedTypeTemplateInstantiation = do
                 , ( modeM'
                   , M.fromList
                       [ (TypeName "A", TypeSig [])
-                      , (TypeName "Vec2", TypeSig [PS_Ix natTy, PS_Ty modeM'])
+                      , (TypeName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM'])
                       ]
                   )
                 ]
-          , dGens = M.empty
+          , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen), (GenName "S", sGen)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   src <- case validateDoctrine srcDoc of
     Left err -> assertFailure (T.unpack err)
@@ -1083,8 +905,23 @@ testIndexedTypeTemplateInstantiation = do
   tgt <- case validateDoctrine tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
-  let nVar = IxVar { ixvName = "n", ixvSort = natTy, ixvScope = 0 }
+  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
   let aVar = TyVar { tvName = "a", tvMode = modeM' }
+  nSucc <- case termExprToDiagram (doctrineTypeTheory src) [] natTy (s (TMVar nVar)) of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right tm -> pure tm
+  zTm <- case termExprToDiagram (doctrineTypeTheory src) [] natTy z of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right tm -> pure tm
+  szTm <- case termExprToDiagram (doctrineTypeTheory src) [] natTy (s z) of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right tm -> pure tm
+  zImg <- case genD modeI' [] [natTy] (GenName "Z") of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  sImg <- case genD modeI' [natTy] [natTy] (GenName "S") of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
   let mor =
         Morphism
           { morName = "MapVec"
@@ -1098,12 +935,15 @@ testIndexedTypeTemplateInstantiation = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPIx nVar, TPType aVar]
-                      (TCon vec2Ref [TAIndex (s (IXVar nVar)), TAType (TVar aVar)])
+                      [TPTm nVar, TPType aVar]
+                      (TCon vec2Ref [TATm nSucc, TAType (TVar aVar)])
                   )
                 ]
-          , morGenMap = M.empty
-          , morIxFunMap = M.empty
+          , morGenMap =
+              M.fromList
+                [ ((modeI', GenName "Z"), plainImage zImg)
+                , ((modeI', GenName "S"), plainImage sImg)
+                ]
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
@@ -1111,59 +951,75 @@ testIndexedTypeTemplateInstantiation = do
   case checkMorphism mor of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  let srcDiag = idD modeM' [TCon vecRef [TAIndex z, TAType aTy']]
+  let srcDiag = idD modeM' [TCon vecRef [TATm zTm, TAType aTy']]
   tgtDiag <- case applyMorphismDiagram mor srcDiag of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   dom <- case diagramDom tgtDiag of
     Left err -> assertFailure (T.unpack err)
     Right ctx -> pure ctx
-  dom @?= [TCon vec2Ref [TAIndex (s z), TAType aTy']]
+  case dom of
+    [TCon ref [TATm gotTm, TAType gotA]] -> do
+      ref @?= vec2Ref
+      gotA @?= aTy'
+      gotExpr <- case diagramToTermExpr (doctrineTypeTheory src) [] natTy gotTm of
+        Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+        Right e -> pure e
+      wantExpr <- case diagramToTermExpr (doctrineTypeTheory src) [] natTy szTm of
+        Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+        Right e -> pure e
+      gotExpr @?= wantExpr
+    _ -> assertFailure "unexpected mapped domain shape"
 
-testIndexedTemplateKindMismatch :: Assertion
-testIndexedTemplateKindMismatch = do
+testTermTemplateKindMismatch :: Assertion
+testTermTemplateKindMismatch = do
   let modeM' = ModeName "M"
   let modeI' = ModeName "I"
   let natRef = TypeRef modeI' (TypeName "Nat")
   let vecRef = TypeRef modeM' (TypeName "Vec")
   let vec2Ref = TypeRef modeM' (TypeName "Vec2")
   let natTy = TCon natRef []
-  let ixTheory =
-        IxTheory
-          { itFuns = M.empty
-          , itRules = []
+  let zGen =
+        GenDecl
+          { gdName = GenName "Z"
+          , gdMode = modeI'
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = []
+          , gdCod = [natTy]
+          , gdAttrs = []
           }
   let srcDoc =
         Doctrine
-          { dName = "SrcIndexedTemplateBad"
+          { dName = "SrcTermTemplateBad"
           , dModes = mkModes [modeM', modeI']
     , dAcyclicModes = S.empty
-          , dIndexModes = S.singleton modeI'
-          , dIxTheory = M.fromList [(modeI', ixTheory)]
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
                 [ (modeI', M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Ix natTy, PS_Ty modeM'])])
+                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
                 ]
-          , dGens = M.empty
+          , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   let tgtDoc =
         Doctrine
-          { dName = "TgtIndexedTemplateBad"
+          { dName = "TgtTermTemplateBad"
           , dModes = mkModes [modeM', modeI']
     , dAcyclicModes = S.empty
-          , dIndexModes = S.singleton modeI'
-          , dIxTheory = M.fromList [(modeI', ixTheory)]
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
                 [ (modeI', M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM', M.fromList [(TypeName "Vec2", TypeSig [PS_Ix natTy, PS_Ty modeM'])])
+                , (modeM', M.fromList [(TypeName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
                 ]
-          , dGens = M.empty
+          , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
           , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
           }
   src <- case validateDoctrine srcDoc of
     Left err -> assertFailure (T.unpack err)
@@ -1171,8 +1027,9 @@ testIndexedTemplateKindMismatch = do
   tgt <- case validateDoctrine tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
-  let nVar = IxVar { ixvName = "n", ixvSort = natTy, ixvScope = 0 }
+  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
   let aVar = TyVar { tvName = "a", tvMode = modeM' }
+  let nVarTm = tmMeta nVar
   let mor =
         Morphism
           { morName = "BadKind"
@@ -1186,12 +1043,11 @@ testIndexedTemplateKindMismatch = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPType aVar, TPIx nVar]
-                      (TCon vec2Ref [TAIndex (IXVar nVar), TAType (TVar aVar)])
+                      [TPType aVar, TPTm nVar]
+                      (TCon vec2Ref [TATm nVarTm, TAType (TVar aVar)])
                   )
                 ]
           , morGenMap = M.empty
-          , morIxFunMap = M.empty
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           , morFuel = 20
@@ -1227,7 +1083,7 @@ mkMonoid = do
                       { gdName = GenName "unit"
                       , gdMode = modeM
                       , gdTyVars = []
-                      , gdIxVars = []
+                      , gdTmVars = []
                       , gdDom = map InPort []
                       , gdCod = [aTy]
                       , gdAttrs = []
@@ -1238,7 +1094,7 @@ mkMonoid = do
                       { gdName = GenName "mul"
                       , gdMode = modeM
                       , gdTyVars = []
-                      , gdIxVars = []
+                      , gdTmVars = []
                       , gdDom = map InPort [aTy, aTy]
                       , gdCod = [aTy]
                       , gdAttrs = []
@@ -1251,12 +1107,12 @@ mkMonoid = do
         { dName = "Monoid"
         , dModes = mt
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
       , dAttrSorts = M.empty
         , dTypes = types
         , dGens = gens
         , dCells2 = [assoc, unitL, unitR]
+      , dActions = M.empty
+      , dObligations = []
         }
   case validateDoctrine doc of
     Left err -> Left err
@@ -1278,7 +1134,7 @@ mkStringMonoid = do
                       { gdName = GenName "empty"
                       , gdMode = modeM
                       , gdTyVars = []
-                      , gdIxVars = []
+                      , gdTmVars = []
                       , gdDom = map InPort []
                       , gdCod = [strTy]
                       , gdAttrs = []
@@ -1289,7 +1145,7 @@ mkStringMonoid = do
                       { gdName = GenName "append"
                       , gdMode = modeM
                       , gdTyVars = []
-                      , gdIxVars = []
+                      , gdTmVars = []
                       , gdDom = map InPort [strTy, strTy]
                       , gdCod = [strTy]
                       , gdAttrs = []
@@ -1302,12 +1158,12 @@ mkStringMonoid = do
         { dName = "StringMonoid"
         , dModes = mt
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
       , dAttrSorts = M.empty
         , dTypes = types
         , dGens = gens
         , dCells2 = [assoc, unitL, unitR]
+      , dActions = M.empty
+      , dObligations = []
         }
   case validateDoctrine doc of
     Left err -> Left err
@@ -1326,7 +1182,7 @@ assocRule name ty mulName = do
     , c2Class = Computational
     , c2Orient = LR
     , c2TyVars = []
-    , c2IxVars = []
+    , c2TmVars = []
     , c2LHS = lhs
     , c2RHS = rhs
     }
@@ -1349,7 +1205,7 @@ unitRule name ty unitName mulName leftSide = do
     , c2Class = Computational
     , c2Orient = LR
     , c2TyVars = []
-    , c2IxVars = []
+    , c2TmVars = []
     , c2LHS = expr
     , c2RHS = id1
     }

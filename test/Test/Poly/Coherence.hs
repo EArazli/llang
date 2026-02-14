@@ -9,7 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD)
@@ -44,7 +44,7 @@ mkGenDecl name =
     { gdName = GenName name
     , gdMode = modeName
     , gdTyVars = []
-    , gdIxVars = []
+    , gdTmVars = []
     , gdDom = map InPort [aTy]
     , gdCod = [aTy]
     , gdAttrs = []
@@ -57,7 +57,7 @@ mkCell name lhs rhs =
     , c2Class = Computational
     , c2Orient = LR
     , c2TyVars = []
-    , c2IxVars = []
+    , c2TmVars = []
     , c2LHS = lhs
     , c2RHS = rhs
     }
@@ -73,22 +73,22 @@ mkDoctrine cells =
   in Doctrine
       { dName = "D"
       , dModes = mkModes (S.singleton modeName)
-    , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
+      , dAcyclicModes = S.empty
       , dTypes = M.fromList [(modeName, M.fromList [(TypeName "A", TypeSig [])])]
       , dGens = M.fromList [(modeName, M.fromList [(gdName g, g) | g <- gens])]
       , dCells2 = cells
       , dAttrSorts = M.empty
+      , dActions = M.empty
+      , dObligations = []
       }
 
 mkModes :: S.Set ModeName -> ModeTheory
 mkModes modes =
   ModeTheory
-    (M.fromList [ (m, ModeInfo m Linear) | m <- S.toList modes ])
-    M.empty
-    []
-    []
+    { mtModes = M.fromList [ (m, ModeInfo m) | m <- S.toList modes ]
+    , mtDecls = M.empty
+    , mtEqns = []
+    }
 
 testCoherenceJoinable :: Assertion
 testCoherenceJoinable = do

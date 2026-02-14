@@ -2,7 +2,7 @@
 module Strat.Poly.TypePretty
   ( renderType
   , renderTypeArg
-  , renderIxTerm
+  , renderTmTerm
   , renderTypeRef
   , renderTypeName
   , renderMode
@@ -31,19 +31,10 @@ renderTypeArg :: TypeArg -> Text
 renderTypeArg arg =
   case arg of
     TAType ty -> renderType ty
-    TAIndex ix -> renderIxTerm ix
+    TATm tm -> renderTmTerm tm
 
-renderIxTerm :: IxTerm -> Text
-renderIxTerm ix =
-  case ix of
-    IXVar v -> ixvName v
-    IXBound i -> "^" <> T.pack (show i)
-    IXFun name [] -> renderIxFunName name
-    IXFun name args ->
-      renderIxFunName name <> "(" <> T.intercalate ", " (map renderIxTerm args) <> ")"
-
-renderIxFunName :: IxFunName -> Text
-renderIxFunName (IxFunName name) = name
+renderTmTerm :: TermDiagram -> Text
+renderTmTerm _ = "<tm>"
 
 renderModExpr :: ModExpr -> Text
 renderModExpr me =

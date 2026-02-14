@@ -1,0 +1,13 @@
+import "../../dependent/vec.llang";
+
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run main using debug where {
+  source doctrine VecDependent;
+  source mode M;
+}
+---
+mk22{A} ; expect22{A}

@@ -172,7 +172,7 @@ requireExprHole :: RuleInfo -> Int -> Text -> Either Text ()
 requireExprHole info hole label =
   if hole >= 1 && hole <= riExprCount info
     then Right ()
-    else Left ("surface: binder " <> label <> " hole index out of range")
+    else Left ("surface: binder " <> label <> " hole term-context position out of range")
 
 validateAction :: RuleInfo -> Action -> Either Text ()
 validateAction info act =

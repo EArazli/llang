@@ -74,7 +74,7 @@ assocRule = do
     , rrLHS = lhs
     , rrRHS = rhs
     , rrTyVars = []
-    , rrIxVars = []
+    , rrTmVars = []
     }
 
 testSimpleRewrite :: Assertion
@@ -117,7 +117,7 @@ testDanglingReject = do
         , rrLHS = lhs
         , rrRHS = rhs
         , rrTyVars = []
-        , rrIxVars = []
+        , rrTmVars = []
         }
   extra <- require (mkGen "h" [aTy] [aTy])
   host0 <- require (tensorD lhs extra)
@@ -154,7 +154,7 @@ testNonInjectiveRewrite = do
         , rrLHS = lhs
         , rrRHS = lhs
         , rrTyVars = []
-        , rrIxVars = []
+        , rrTmVars = []
         }
   let mt = mkModes [modeName]
   res <- case rewriteOnce (mkTypeTheory mt) [rule] g of
@@ -173,7 +173,7 @@ testRewriteInsideBox = do
         , rrLHS = f
         , rrRHS = g
         , rrTyVars = []
-        , rrIxVars = []
+        , rrTmVars = []
         }
   let (inP, d0) = freshPort aTy (emptyDiagram modeName [])
   let (outP, d1) = freshPort aTy d0
@@ -211,7 +211,7 @@ testSpliceExpandsInsideBox = do
           , rrLHS = lhs
           , rrRHS = rhs
           , rrTyVars = []
-          , rrIxVars = []
+          , rrTmVars = []
           }
   let mt = mkModes [modeName]
   res <- case rewriteOnce (mkTypeTheory mt) [rule] host of
@@ -241,7 +241,7 @@ testBoxMismatchRejects = do
         , rrLHS = lhs
         , rrRHS = rhs
         , rrTyVars = []
-        , rrIxVars = []
+        , rrTmVars = []
         }
   host <- require (mkBoxDiagram "B" g aTy)
   let mt = mkModes [modeName]
@@ -264,7 +264,7 @@ testBoxMatchAccepts = do
         , rrLHS = lhs
         , rrRHS = rhs
         , rrTyVars = []
-        , rrIxVars = []
+        , rrTmVars = []
         }
   host <- require (mkBoxDiagram "B" f2 aTy)
   let mt = mkModes [modeName]
@@ -340,7 +340,7 @@ testRewriteUsesModeEq = do
   lhs <- require (genD modeA [base] [base] (GenName "foo"))
   let rhs = idD modeA [base]
   host <- require (genD modeA [ufBase] [ufBase] (GenName "foo"))
-  let rule = RewriteRule { rrName = "foo_id", rrLHS = lhs, rrRHS = rhs, rrTyVars = [], rrIxVars = [] }
+  let rule = RewriteRule { rrName = "foo_id", rrLHS = lhs, rrRHS = rhs, rrTyVars = [], rrTmVars = [] }
   res <- require (rewriteOnce (mkTypeTheory mt) [rule] host)
   out <-
     case res of

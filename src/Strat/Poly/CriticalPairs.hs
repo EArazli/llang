@@ -19,7 +19,7 @@ import Strat.Poly.Graph
 import qualified Strat.Poly.Diagram as Diag
 import Strat.Poly.Diagram
 import Strat.Poly.Match (Match(..))
-import Strat.Poly.TypeExpr (TyVar(..), IxVar(..), IxTerm(..), TypeExpr(..), mapTypeExpr)
+import Strat.Poly.TypeExpr (TyVar(..), TmVar(..), TermDiagram(..), TypeExpr(..), mapTypeExpr)
 import qualified Strat.Poly.UnifyTy as U
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite (RewriteRule(..))
@@ -86,11 +86,11 @@ criticalPairsForRules mt mode rules =
 
 criticalPairsForRulesTT :: TypeTheory -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
 criticalPairsForRulesTT tt mode rules = do
-  let indexed = zip [0 :: Int ..] rules
+  let numbered = zip [0 :: Int ..] rules
   let pairs =
         [ (r1, r2)
-        | (i, r1) <- indexed
-        , (j, r2) <- indexed
+        | (i, r1) <- numbered
+        , (j, r2) <- numbered
         , i <= j
         , allowedPairSym mode r1 r2
         ]
@@ -113,15 +113,15 @@ criticalPairsForPair tt r1 r2 = do
   let r1' = renameRule 0 (riRule r1)
   let r2' = renameRule 1 (riRule r2)
   let tyFlex = S.fromList (rrTyVars r1' <> rrTyVars r2')
-  let ixFlex =
+  let tmFlex =
         S.union
-          (freeIxVarsDiagram (rrLHS r1'))
-          (freeIxVarsDiagram (rrLHS r2'))
+          (freeTmVarsDiagram (rrLHS r1'))
+          (freeTmVarsDiagram (rrLHS r2'))
   let attrFlex =
         S.union
           (freeAttrVarsDiagram (rrLHS r1'))
           (freeAttrVarsDiagram (rrLHS r2'))
-  overlaps <- enumerateOverlaps tt tyFlex ixFlex attrFlex (rrLHS r1') (rrLHS r2')
+  overlaps <- enumerateOverlaps tt tyFlex tmFlex attrFlex (rrLHS r1') (rrLHS r2')
   fmap concat (mapM (buildPair r1 r2 r1' r2') overlaps)
   where
     buildPair r1Info r2Info rule1 rule2 ov = do
@@ -170,7 +170,7 @@ rulesForCellWithClass policy cell =
             , rrLHS = lhs
             , rrRHS = rhs
             , rrTyVars = c2TyVars cell
-            , rrIxVars = c2IxVars cell
+            , rrTmVars = c2TmVars cell
             }
       in RuleInfo label rule (c2Class cell)
     oriented =
@@ -188,7 +188,7 @@ renameRule :: Int -> RewriteRule -> RewriteRule
 renameRule idx rule =
   let idxText = T.pack (show idx)
       tySuffix = ":" <> idxText
-      ixSuffix = "$" <> idxText
+      tmSuffix = "$" <> idxText
       attrSuffix = "#" <> idxText
       binderSuffix = "%" <> idxText
       renamedTyVars = M.fromList [ (v, renameTyVar v) | v <- rrTyVars rule ]
@@ -201,29 +201,40 @@ renameRule idx rule =
               Just v' -> TVar v'
               Nothing -> TVar v
           _ -> ty
-      renameIxVar v =
+      renameTmVar v =
         v
-          { ixvName = ixvName v <> ixSuffix
-          , ixvSort = renameIxType (ixvSort v)
+          { tmvName = tmvName v <> tmSuffix
+          , tmvSort = renameTmType (tmvSort v)
           }
-      renameIxTerm tm =
-        case tm of
-          IXVar v -> IXVar (renameIxVar v)
-          _ -> tm
-      renameIxType ty = mapTypeExpr renameTyNode renameIxTerm ty
-      lhsIx' = renameIxVarsDiagram renameIxType (rrLHS rule)
-      rhsIx' = renameIxVarsDiagram renameIxType (rrRHS rule)
-      lhsB' = renameBinderMetasDiagram renameBinderMeta lhsIx'
-      rhsB' = renameBinderMetasDiagram renameBinderMeta rhsIx'
+      renameTmTerm (TermDiagram diag) =
+        TermDiagram $
+          runIdentity $
+            traverseDiagram onDiag onPayload pure diag
+        where
+          onDiag d =
+            pure d
+              { dPortTy = IM.map renameTmType (dPortTy d)
+              , dTmCtx = map renameTmType (dTmCtx d)
+              }
+          onPayload payload =
+            pure $
+              case payload of
+                PTmMeta v -> PTmMeta (renameTmVar v)
+                _ -> payload
+      renameTmType ty = mapTypeExpr renameTyNode renameTmTerm ty
+      lhsTm' = renameTmVarsDiagram renameTmType (rrLHS rule)
+      rhsTm' = renameTmVarsDiagram renameTmType (rrRHS rule)
+      lhsB' = renameBinderMetasDiagram renameBinderMeta lhsTm'
+      rhsB' = renameBinderMetasDiagram renameBinderMeta rhsTm'
       lhs' = renameAttrVarsDiagram (<> attrSuffix) lhsB'
       rhs' = renameAttrVarsDiagram (<> attrSuffix) rhsB'
       tyvars' = map renameTyVar (rrTyVars rule)
-      ixvars' = map renameIxVar (rrIxVars rule)
-  in rule { rrLHS = lhs', rrRHS = rhs', rrTyVars = tyvars', rrIxVars = ixvars' }
+      tmVars' = map renameTmVar (rrTmVars rule)
+  in rule { rrLHS = lhs', rrRHS = rhs', rrTyVars = tyvars', rrTmVars = tmVars' }
 
-enumerateOverlaps :: TypeTheory -> S.Set TyVar -> S.Set IxVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text [PartialIso]
-enumerateOverlaps tt tyFlex ixFlex attrFlex l1 l2 =
-  if dMode l1 /= dMode l2 || dIxCtx l1 /= dIxCtx l2
+enumerateOverlaps :: TypeTheory -> S.Set TyVar -> S.Set TmVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text [PartialIso]
+enumerateOverlaps tt tyFlex tmFlex attrFlex l1 l2 =
+  if dMode l1 /= dMode l2 || dTmCtx l1 /= dTmCtx l2
     then Right []
     else do
       let edges1 = sortEdges (IM.elems (dEdges l1))
@@ -234,11 +245,11 @@ enumerateOverlaps tt tyFlex ixFlex attrFlex l1 l2 =
     seedFrom edges2 e1 =
       fmap concat (mapM (expandFromSeed e1) edges2)
     expandFromSeed e1 e2 = do
-      seeds <- mapEdge tt tyFlex ixFlex attrFlex l1 l2 emptyState e1 e2
-      fmap concat (mapM (expandState tt l1 l2 tyFlex ixFlex attrFlex) seeds)
+      seeds <- mapEdge tt tyFlex tmFlex attrFlex l1 l2 emptyState e1 e2
+      fmap concat (mapM (expandState tt l1 l2 tyFlex tmFlex attrFlex) seeds)
 
-expandState :: TypeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set IxVar -> S.Set AttrVar -> PartialIso -> Either Text [PartialIso]
-expandState tt l1 l2 tyFlex ixFlex attrFlex st = do
+expandState :: TypeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set TmVar -> S.Set AttrVar -> PartialIso -> Either Text [PartialIso]
+expandState tt l1 l2 tyFlex tmFlex attrFlex st = do
   let mappedPorts = S.fromList (M.keys (piPortMap st))
   let candidates =
         [ e
@@ -246,22 +257,22 @@ expandState tt l1 l2 tyFlex ixFlex attrFlex st = do
         , M.notMember (eId e) (piEdgeMap st)
         , any (`S.member` mappedPorts) (eIns e <> eOuts e)
         ]
-  expanded <- fmap concat (mapM (expandEdge tt l1 l2 tyFlex ixFlex attrFlex st) candidates)
-  deeper <- fmap concat (mapM (expandState tt l1 l2 tyFlex ixFlex attrFlex) expanded)
+  expanded <- fmap concat (mapM (expandEdge tt l1 l2 tyFlex tmFlex attrFlex st) candidates)
+  deeper <- fmap concat (mapM (expandState tt l1 l2 tyFlex tmFlex attrFlex) expanded)
   pure (st : deeper)
 
-expandEdge :: TypeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set IxVar -> S.Set AttrVar -> PartialIso -> Edge -> Either Text [PartialIso]
-expandEdge tt l1 l2 tyFlex ixFlex attrFlex st e1 = do
+expandEdge :: TypeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set TmVar -> S.Set AttrVar -> PartialIso -> Edge -> Either Text [PartialIso]
+expandEdge tt l1 l2 tyFlex tmFlex attrFlex st e1 = do
   let candidates =
         [ e2
         | e2 <- sortEdges (IM.elems (dEdges l2))
         , eId e2 `S.notMember` piUsedEdges st
         , edgeCompatible e1 e2
         ]
-  fmap concat (mapM (mapEdge tt tyFlex ixFlex attrFlex l1 l2 st e1) candidates)
+  fmap concat (mapM (mapEdge tt tyFlex tmFlex attrFlex l1 l2 st e1) candidates)
 
-mapEdge :: TypeTheory -> S.Set TyVar -> S.Set IxVar -> S.Set AttrVar -> Diagram -> Diagram -> PartialIso -> Edge -> Edge -> Either Text [PartialIso]
-mapEdge tt tyFlex ixFlex attrFlex l1 l2 st e1 e2 =
+mapEdge :: TypeTheory -> S.Set TyVar -> S.Set TmVar -> S.Set AttrVar -> Diagram -> Diagram -> PartialIso -> Edge -> Edge -> Either Text [PartialIso]
+mapEdge tt tyFlex tmFlex attrFlex l1 l2 st e1 e2 =
   if M.member (eId e1) (piEdgeMap st)
     then Right []
     else if eId e2 `S.member` piUsedEdges st
@@ -269,12 +280,12 @@ mapEdge tt tyFlex ixFlex attrFlex l1 l2 st e1 e2 =
     else if length (eIns e1) /= length (eIns e2) || length (eOuts e1) /= length (eOuts e2)
       then Right []
       else do
-        substs <- payloadSubsts tt tyFlex ixFlex attrFlex (piTySubst st) (piAttrSubst st) (ePayload e1) (ePayload e2)
+        substs <- payloadSubsts tt tyFlex tmFlex attrFlex (piTySubst st) (piAttrSubst st) (ePayload e1) (ePayload e2)
         fmap concat (mapM extendPorts substs)
   where
     extendPorts (tySubst0, attrSubst0) = do
       let pairs = zip (eIns e1) (eIns e2) <> zip (eOuts e1) (eOuts e2)
-      case foldl (extendPort tt l1 l2 tyFlex ixFlex) (Right (piPortMap st, piUsedPorts st, tySubst0, attrSubst0)) pairs of
+      case foldl (extendPort tt l1 l2 tyFlex tmFlex) (Right (piPortMap st, piUsedPorts st, tySubst0, attrSubst0)) pairs of
         Left err ->
           if isFatalSubstError err
             then Left err
@@ -293,8 +304,8 @@ mapEdge tt tyFlex ixFlex attrFlex l1 l2 st e1 e2 =
                 }
             ]
 
-extendPort :: TypeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set IxVar -> Either Text (M.Map PortId PortId, S.Set PortId, Subst, AttrSubst) -> (PortId, PortId) -> Either Text (M.Map PortId PortId, S.Set PortId, Subst, AttrSubst)
-extendPort tt l1 l2 flex ixFlex acc (p1, p2) = do
+extendPort :: TypeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set TmVar -> Either Text (M.Map PortId PortId, S.Set PortId, Subst, AttrSubst) -> (PortId, PortId) -> Either Text (M.Map PortId PortId, S.Set PortId, Subst, AttrSubst)
+extendPort tt l1 l2 flex tmFlex acc (p1, p2) = do
   (portMap, usedPorts, tySubst, attrSubst) <- acc
   case M.lookup p1 portMap of
     Just p2' ->
@@ -303,28 +314,28 @@ extendPort tt l1 l2 flex ixFlex acc (p1, p2) = do
       if p2 `S.member` usedPorts
         then Left "criticalPairs: target port already used"
         else do
-          s1 <- unifyPorts tt l1 l2 flex ixFlex tySubst p1 p2
+          s1 <- unifyPorts tt l1 l2 flex tmFlex tySubst p1 p2
           tySubst' <- mapLeft fatalSubstError (U.composeSubst tt s1 tySubst)
           Right (M.insert p1 p2 portMap, S.insert p2 usedPorts, tySubst', attrSubst)
 
-unifyPorts :: TypeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set IxVar -> Subst -> PortId -> PortId -> Either Text Subst
-unifyPorts tt l1 l2 flex ixFlex subst p1 p2 = do
+unifyPorts :: TypeTheory -> Diagram -> Diagram -> S.Set TyVar -> S.Set TmVar -> Subst -> PortId -> PortId -> Either Text Subst
+unifyPorts tt l1 l2 flex tmFlex subst p1 p2 = do
   pTy <- requirePortType l1 p1
   hTy <- requirePortType l2 p2
   pTy' <- mapLeft fatalSubstError (U.applySubstTy tt subst pTy)
   hTy' <- mapLeft fatalSubstError (U.applySubstTy tt subst hTy)
-  ixCtx' <- mapLeft fatalSubstError (U.applySubstCtx tt subst (dIxCtx l1))
+  tmCtx' <- mapLeft fatalSubstError (U.applySubstCtx tt subst (dTmCtx l1))
   U.unifyTyFlex
     tt
-    ixCtx'
+    tmCtx'
     flex
-    ixFlex
+    tmFlex
     U.emptySubst
     pTy'
     hTy'
 
-payloadSubsts :: TypeTheory -> S.Set TyVar -> S.Set IxVar -> S.Set AttrVar -> Subst -> AttrSubst -> EdgePayload -> EdgePayload -> Either Text [(Subst, AttrSubst)]
-payloadSubsts tt tyFlex ixFlex attrFlex tySubst attrSubst p1 p2 =
+payloadSubsts :: TypeTheory -> S.Set TyVar -> S.Set TmVar -> S.Set AttrVar -> Subst -> AttrSubst -> EdgePayload -> EdgePayload -> Either Text [(Subst, AttrSubst)]
+payloadSubsts tt tyFlex tmFlex attrFlex tySubst attrSubst p1 p2 =
   case (p1, p2) of
     (PGen g1 attrs1 bargs1, PGen g2 attrs2 bargs2) ->
       if g1 /= g2 || M.keysSet attrs1 /= M.keysSet attrs2 || length bargs1 /= length bargs2
@@ -351,7 +362,7 @@ payloadSubsts tt tyFlex ixFlex attrFlex tySubst attrSubst p1 p2 =
                 (map (\(tySub', attrSub') -> (tySub', attrSub')))
                 ( mapLeft
                     fatalSubstError
-                    (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex ixFlex attrFlex tySubst0 attrSubst0 d1 d2)
+                    (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst0 attrSubst0 d1 d2)
                 )
             (BAMeta x, BAMeta y) ->
               if x == y then Right [(tySubst0, attrSubst0)] else Right []
@@ -359,12 +370,14 @@ payloadSubsts tt tyFlex ixFlex attrFlex tySubst attrSubst p1 p2 =
     (PBox _ d1, PBox _ d2) -> do
       mapLeft
         fatalSubstError
-        (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex ixFlex attrFlex tySubst attrSubst d1 d2)
+        (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst attrSubst d1 d2)
     (PFeedback d1, PFeedback d2) ->
       mapLeft
         fatalSubstError
-        (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex ixFlex attrFlex tySubst attrSubst d1 d2)
+        (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst attrSubst d1 d2)
     (PSplice x, PSplice y) | x == y -> Right [(tySubst, attrSubst)]
+    (PTmMeta x, PTmMeta y)
+      | tmvName x == tmvName y && tmvScope x == tmvScope y -> Right [(tySubst, attrSubst)]
     _ -> Right []
 
 edgeCompatible :: Edge -> Edge -> Bool
@@ -381,6 +394,7 @@ payloadCompatible p1 p2 =
     (PBox _ _, PBox _ _) -> True
     (PFeedback _, PFeedback _) -> True
     (PSplice x, PSplice y) -> x == y
+    (PTmMeta x, PTmMeta y) -> tmvName x == tmvName y && tmvScope x == tmvScope y
     _ -> False
 
 sortEdges :: [Edge] -> [Edge]
@@ -585,15 +599,20 @@ applySubstsDiagramLocal tt tySubst attrSubst diag = do
   dTy <- mapLeft fatalSubstError (Diag.applySubstDiagram tt tySubst diag)
   pure (applyAttrSubstDiagram attrSubst dTy)
 
-renameIxVarsDiagram :: (TypeExpr -> TypeExpr) -> Diagram -> Diagram
-renameIxVarsDiagram renameTy =
-  runIdentity . traverseDiagram onDiag pure pure
+renameTmVarsDiagram :: (TypeExpr -> TypeExpr) -> Diagram -> Diagram
+renameTmVarsDiagram renameTy =
+  runIdentity . traverseDiagram onDiag onPayload pure
   where
     onDiag d =
       pure d
         { dPortTy = IM.map renameTy (dPortTy d)
-        , dIxCtx = map renameTy (dIxCtx d)
+        , dTmCtx = map renameTy (dTmCtx d)
         }
+    onPayload payload =
+      pure $
+        case payload of
+          PTmMeta v -> PTmMeta v { tmvSort = renameTy (tmvSort v) }
+          _ -> payload
 
 renameBinderMetasDiagram :: (BinderMetaVar -> BinderMetaVar) -> Diagram -> Diagram
 renameBinderMetasDiagram renameMeta =

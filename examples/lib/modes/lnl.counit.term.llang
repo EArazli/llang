@@ -5,4 +5,4 @@ term counitNat where {
   mode L;
 }
 ---
-counit_F{L.Nat}
+counit_nat

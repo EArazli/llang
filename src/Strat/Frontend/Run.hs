@@ -528,6 +528,7 @@ evalArtifactDiagram diag = do
         PBox _ _ -> Left "extract value: boxes are not supported"
         PFeedback _ -> Left "extract value: feedback is not supported"
         PSplice _ -> Left "extract value: splice is not supported"
+        PTmMeta _ -> Left "extract value: term-meta nodes are not supported"
 
 
 data RuntimeValue
@@ -666,7 +667,7 @@ renderSSA ssa =
           case IM.lookup (edgeInt eid) (dEdges diag) of
             Just edge ->
               case findIndex (== pid) (eOuts edge) of
-                Just outIx -> renderEdgeId eid <> "#" <> T.pack (show outIx)
+                Just outPos -> renderEdgeId eid <> "#" <> T.pack (show outPos)
                 Nothing -> renderEdgeId eid
             Nothing -> "<missing-edge>"
         _ ->

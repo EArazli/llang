@@ -3,26 +3,31 @@ module Strat.Poly.TypeExpr
   ( TyVar(..)
   , TypeName(..)
   , TypeRef(..)
-  , IxFunName(..)
-  , IxVar(..)
-  , IxTerm(..)
+  , TmFunName(..)
+  , TmVar(..)
+  , TermDiagram(..)
   , TypeArg(..)
   , TypeExpr(..)
   , Context
-  , mapIxTerm
+  , mapTermDiagram
   , mapTypeExpr
   , freeTyVarsType
-  , freeIxVarsType
-  , freeIxVarsIx
-  , boundIxIndicesType
-  , boundIxIndicesIx
+  , freeTyVarsTerm
+  , freeTmVarsType
+  , freeTmVarsTerm
+  , boundTmIndicesType
+  , boundTmIndicesTerm
+  , tmCtxForMode
   , typeMode
   , normalizeTypeExpr
   ) where
 
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Set as S
+import qualified Data.IntMap.Strict as IM
 import Strat.Poly.ModeTheory (ModeName, ModExpr(..), ModeTheory, composeMod, normalizeModExpr)
+import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..), getPortLabel, unPortId)
 
 
 newtype TypeName = TypeName Text deriving (Eq, Ord, Show)
@@ -37,23 +42,20 @@ data TyVar = TyVar
   , tvMode :: ModeName
   } deriving (Eq, Ord, Show)
 
-newtype IxFunName = IxFunName Text deriving (Eq, Ord, Show)
+newtype TmFunName = TmFunName Text deriving (Eq, Ord, Show)
 
-data IxVar = IxVar
-  { ixvName :: Text
-  , ixvSort :: TypeExpr
-  , ixvScope :: Int
+data TmVar = TmVar
+  { tmvName :: Text
+  , tmvSort :: TypeExpr
+  , tmvScope :: Int
   } deriving (Eq, Ord, Show)
 
-data IxTerm
-  = IXVar IxVar
-  | IXBound Int
-  | IXFun IxFunName [IxTerm]
+newtype TermDiagram = TermDiagram { unTerm :: Diagram }
   deriving (Eq, Ord, Show)
 
 data TypeArg
   = TAType TypeExpr
-  | TAIndex IxTerm
+  | TATm TermDiagram
   deriving (Eq, Ord, Show)
 
 data TypeExpr
@@ -64,18 +66,11 @@ data TypeExpr
 
 type Context = [TypeExpr]
 
-mapIxTerm :: (IxTerm -> IxTerm) -> IxTerm -> IxTerm
-mapIxTerm f = go
-  where
-    go tm =
-      f $
-        case tm of
-          IXVar _ -> tm
-          IXBound _ -> tm
-          IXFun name args -> IXFun name (map go args)
+mapTermDiagram :: (TermDiagram -> TermDiagram) -> TermDiagram -> TermDiagram
+mapTermDiagram f tm = f tm
 
-mapTypeExpr :: (TypeExpr -> TypeExpr) -> (IxTerm -> IxTerm) -> TypeExpr -> TypeExpr
-mapTypeExpr fTy fIx = goTy
+mapTypeExpr :: (TypeExpr -> TypeExpr) -> (TermDiagram -> TermDiagram) -> TypeExpr -> TypeExpr
+mapTypeExpr fTy fTm = goTy
   where
     goTy ty =
       fTy $
@@ -86,7 +81,7 @@ mapTypeExpr fTy fIx = goTy
     goArg arg =
       case arg of
         TAType ty -> TAType (goTy ty)
-        TAIndex ix -> TAIndex (mapIxTerm fIx ix)
+        TATm tm -> TATm (mapTermDiagram fTm tm)
 
 freeTyVarsType :: TypeExpr -> S.Set TyVar
 freeTyVarsType ty =
@@ -98,45 +93,101 @@ freeTyVarsType ty =
     freeTyVarsArg arg =
       case arg of
         TAType innerTy -> freeTyVarsType innerTy
-        TAIndex ix -> S.unions (map (freeTyVarsType . ixvSort) (S.toList (freeIxVarsIx ix)))
+        TATm tm -> freeTyVarsTerm tm
 
-freeIxVarsIx :: IxTerm -> S.Set IxVar
-freeIxVarsIx tm =
-  case tm of
-    IXVar v -> S.singleton v
-    IXBound _ -> S.empty
-    IXFun _ args -> S.unions (map freeIxVarsIx args)
+freeTyVarsTerm :: TermDiagram -> S.Set TyVar
+freeTyVarsTerm (TermDiagram diag) =
+  S.unions
+    [ S.unions (map freeTyVarsType (IM.elems (dPortTy diag)))
+    , S.unions (map freeTyVarsType (dTmCtx diag))
+    , S.unions (map edgeTyVars (IM.elems (dEdges diag)))
+    ]
+  where
+    edgeTyVars edge =
+      case ePayload edge of
+        PTmMeta v -> freeTyVarsType (tmvSort v)
+        _ -> S.empty
 
-freeIxVarsType :: TypeExpr -> S.Set IxVar
-freeIxVarsType ty =
+freeTmVarsTerm :: TermDiagram -> S.Set TmVar
+freeTmVarsTerm (TermDiagram diag) =
+  S.unions
+    [ S.unions (map freeTmVarsType (IM.elems (dPortTy diag)))
+    , S.unions (map freeTmVarsType (dTmCtx diag))
+    , S.unions (map edgeTmVars (IM.elems (dEdges diag)))
+    ]
+  where
+    edgeTmVars edge =
+      case ePayload edge of
+        PTmMeta v -> S.singleton v
+        _ -> S.empty
+
+freeTmVarsType :: TypeExpr -> S.Set TmVar
+freeTmVarsType ty =
   case ty of
     TVar _ -> S.empty
-    TCon _ args -> S.unions (map freeIxVarsArg args)
-    TMod _ inner -> freeIxVarsType inner
+    TCon _ args -> S.unions (map freeTmVarsArg args)
+    TMod _ inner -> freeTmVarsType inner
   where
-    freeIxVarsArg arg =
+    freeTmVarsArg arg =
       case arg of
-        TAType innerTy -> freeIxVarsType innerTy
-        TAIndex ix -> freeIxVarsIx ix
+        TAType innerTy -> freeTmVarsType innerTy
+        TATm tm -> freeTmVarsTerm tm
 
-boundIxIndicesIx :: IxTerm -> S.Set Int
-boundIxIndicesIx tm =
-  case tm of
-    IXVar _ -> S.empty
-    IXBound i -> S.singleton i
-    IXFun _ args -> S.unions (map boundIxIndicesIx args)
+boundTmIndicesTerm :: TermDiagram -> S.Set Int
+boundTmIndicesTerm (TermDiagram diag) =
+  S.fromList
+    [ globalTm
+    | (localPos, pid) <- zip [0 :: Int ..] (dIn diag)
+    , inputIsUsed pid
+    , let globalTm = resolveGlobal localPos pid
+    ]
+  where
+    inputIsUsed pid =
+      pid `elem` dOut diag
+        || case IM.lookup (unPortId pid) (dCons diag) of
+             Just (Just _) -> True
+             _ -> False
 
-boundIxIndicesType :: TypeExpr -> S.Set Int
-boundIxIndicesType ty =
+    resolveGlobal localPos pid =
+      case getPortLabel diag pid >>= decodeTmCtxLabel of
+        Just globalTm -> globalTm
+        Nothing ->
+          case drop localPos globals of
+            (globalTm:_) -> globalTm
+            [] -> localPos
+
+    globals =
+      [ i
+      | (i, ty) <- zip [0 :: Int ..] (dTmCtx diag)
+      , typeMode ty == dMode diag
+      ]
+
+    decodeTmCtxLabel lbl =
+      case T.stripPrefix "tmctx:" lbl of
+        Nothing -> Nothing
+        Just raw ->
+          case reads (T.unpack raw) of
+            [(n, "")] -> Just n
+            _ -> Nothing
+
+boundTmIndicesType :: TypeExpr -> S.Set Int
+boundTmIndicesType ty =
   case ty of
     TVar _ -> S.empty
-    TCon _ args -> S.unions (map boundIxIndicesArg args)
-    TMod _ inner -> boundIxIndicesType inner
+    TCon _ args -> S.unions (map boundTmIndicesArg args)
+    TMod _ inner -> boundTmIndicesType inner
   where
-    boundIxIndicesArg arg =
+    boundTmIndicesArg arg =
       case arg of
-        TAType innerTy -> boundIxIndicesType innerTy
-        TAIndex ix -> boundIxIndicesIx ix
+        TAType innerTy -> boundTmIndicesType innerTy
+        TATm tm -> boundTmIndicesTerm tm
+
+tmCtxForMode :: [TypeExpr] -> ModeName -> [TypeExpr]
+tmCtxForMode tele mode =
+  [ ty
+  | ty <- tele
+  , typeMode ty == mode
+  ]
 
 typeMode :: TypeExpr -> ModeName
 typeMode ty =
@@ -171,4 +222,4 @@ normalizeTypeExpr mt ty =
     normalizeArg arg =
       case arg of
         TAType innerTy -> TAType <$> normalizeTypeExpr mt innerTy
-        TAIndex ix -> Right (TAIndex ix)
+        TATm tm -> Right (TATm tm)

@@ -45,7 +45,7 @@ testCriticalPairsRespectModeEq = do
   let ufBaseTy = TMod uExpr (TMod fExpr baseTy)
   let mt =
         ModeTheory
-          { mtModes = M.singleton mode (ModeInfo mode Linear)
+          { mtModes = M.singleton mode (ModeInfo mode)
           , mtDecls =
               M.fromList
                 [ (modF, ModDecl modF mode mode)
@@ -56,7 +56,6 @@ testCriticalPairsRespectModeEq = do
                   (ModExpr { meSrc = mode, meTgt = mode, mePath = [modF, modU] })
                   (ModExpr { meSrc = mode, meTgt = mode, mePath = [] })
               ]
-          , mtAdjs = []
           }
   lhsUF <- require (genD mode [ufBaseTy] [ufBaseTy] (GenName "g"))
   lhsBase <- require (genD mode [baseTy] [baseTy] (GenName "g"))
@@ -66,7 +65,7 @@ testCriticalPairsRespectModeEq = do
           , rrLHS = lhsUF
           , rrRHS = lhsUF
           , rrTyVars = []
-          , rrIxVars = []
+          , rrTmVars = []
           }
   let ruleBase =
         RewriteRule
@@ -74,7 +73,7 @@ testCriticalPairsRespectModeEq = do
           , rrLHS = lhsBase
           , rrRHS = lhsBase
           , rrTyVars = []
-          , rrIxVars = []
+          , rrTmVars = []
           }
   let infoUF = RuleInfo { riLabel = "rule.uf", riRule = ruleUF, riClass = Structural }
   let infoBase = RuleInfo { riLabel = "rule.base", riRule = ruleBase, riClass = Computational }
@@ -98,7 +97,7 @@ testCriticalPairsFreshenTyVars = do
           , rrLHS = lhs1
           , rrRHS = lhs1
           , rrTyVars = [a]
-          , rrIxVars = []
+          , rrTmVars = []
           }
   let rule2 =
         RewriteRule
@@ -106,7 +105,7 @@ testCriticalPairsFreshenTyVars = do
           , rrLHS = lhs2
           , rrRHS = lhs2
           , rrTyVars = [a]
-          , rrIxVars = []
+          , rrTmVars = []
           }
   let info1 = RuleInfo { riLabel = "rule.ty1", riRule = rule1, riClass = Structural }
   let info2 = RuleInfo { riLabel = "rule.ty2", riRule = rule2, riClass = Structural }
@@ -125,15 +124,15 @@ testCriticalPairsFailOnSubstFailure :: Assertion
 testCriticalPairsFailOnSubstFailure = do
   let mode = ModeName "M"
   let aTy = TCon (TypeRef mode (TypeName "A")) []
-  let badIxSort = TCon (TypeRef mode (TypeName "BadSort")) [TAType aTy]
-  lhs <- require (genDIx mode [badIxSort] [aTy] [aTy] (GenName "g"))
+  let badTmSort = TCon (TypeRef mode (TypeName "BadSort")) [TAType aTy]
+  lhs <- require (genDTm mode [badTmSort] [aTy] [aTy] (GenName "g"))
   let cell =
         Cell2
           { c2Name = "bad-subst"
           , c2Class = Structural
           , c2Orient = LR
           , c2TyVars = []
-          , c2IxVars = []
+          , c2TmVars = []
           , c2LHS = lhs
           , c2RHS = lhs
           }
@@ -141,13 +140,13 @@ testCriticalPairsFailOnSubstFailure = do
         Doctrine
           { dName = "D"
           , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
-          , dIndexModes = S.empty
-          , dIxTheory = M.empty
+          , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
           , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = [cell]
+          , dActions = M.empty
+          , dObligations = []
           }
   _ <- require (validateDoctrine doc)
   case criticalPairsForDoctrine CP_All UseAllOriented doc of

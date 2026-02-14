@@ -21,7 +21,15 @@ import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, parsePolicy)
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), InputShape(..), TypeSig(..), gdPlainDom)
+import Strat.Poly.Doctrine
+  ( Doctrine(..)
+  , GenDecl(..)
+  , InputShape(..)
+  , TypeSig(..)
+  , ObligationDecl(..)
+  , doctrineTypeTheory
+  , gdPlainDom
+  )
 import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
 import Strat.Poly.ModeTheory
   ( ModeTheory(..)
@@ -30,13 +38,13 @@ import Strat.Poly.ModeTheory
   , ModeName(..)
   , emptyModeTheory
   , addMode
-  , setModeDiscipline
-  , modeDiscipline
   )
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeRef(..), TypeName(..))
 import Strat.Poly.Names (GenName(..))
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePolyCoproduct)
+import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.Normalize (joinableWithin)
 import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 
@@ -266,9 +274,7 @@ insertDerivedDoctrine env raw = do
 
 buildFoliatedDoctrine :: Text -> Doctrine -> ModeName -> Either Text Doctrine
 buildFoliatedDoctrine name baseDoc mode = do
-  disc <- modeDiscipline (dModes baseDoc) mode
   mt0 <- addMode mode emptyModeTheory
-  mt <- setModeDiscipline mode disc mt0
   let strSort = AttrSort "Str"
       portTy = ty "PortRef"
       portsTy = ty "PortList"
@@ -283,7 +289,7 @@ buildFoliatedDoctrine name baseDoc mode = do
             { gdName = GenName gName
             , gdMode = mode
             , gdTyVars = []
-            , gdIxVars = []
+            , gdTmVars = []
             , gdDom = map InPort dom
             , gdCod = cod
             , gdAttrs = attrs
@@ -304,10 +310,8 @@ buildFoliatedDoctrine name baseDoc mode = do
   pure
     Doctrine
       { dName = name
-      , dModes = mt
+      , dModes = mt0
       , dAcyclicModes = S.singleton mode
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
       , dAttrSorts = M.singleton strSort (AttrSortDecl strSort (Just LKString))
       , dTypes =
           M.singleton
@@ -322,6 +326,8 @@ buildFoliatedDoctrine name baseDoc mode = do
             )
       , dGens = M.singleton mode gens
       , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
       }
 
 
@@ -337,7 +343,6 @@ buildDerivedForgetMorphism name srcDoc tgtDoc mode =
     , PolyMorph.morAttrSortMap = M.empty
     , PolyMorph.morTypeMap = M.empty
     , PolyMorph.morGenMap = M.empty
-    , PolyMorph.morIxFunMap = M.empty
     , PolyMorph.morCheck = PolyMorph.CheckNone
     , PolyMorph.morPolicy = UseStructuralAsBidirectional
     , PolyMorph.morFuel = 50
@@ -429,7 +434,23 @@ elabImplements env ifaceName tgtName morphName = do
     else
       if PolyMorph.morTgt morph /= tgtDoc
         then Left "Morphism target does not match implements target"
-        else Right ((ifaceName, tgtName), morphName)
+        else do
+          checkObligations tgtDoc morph ifaceDoc
+          Right ((ifaceName, tgtName), morphName)
+
+checkObligations :: Doctrine -> PolyMorph.Morphism -> Doctrine -> Either Text ()
+checkObligations tgtDoc morph ifaceDoc =
+  mapM_ checkOne (dObligations ifaceDoc)
+  where
+    tt = doctrineTypeTheory tgtDoc
+    checkOne obl = do
+      lhs <- PolyMorph.applyMorphismDiagram morph (obLHS obl)
+      rhs <- PolyMorph.applyMorphismDiagram morph (obRHS obl)
+      let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
+      ok <- joinableWithin tt (obFuel obl) rules lhs rhs
+      if ok
+        then Right ()
+        else Left ("implements obligation failed: " <> obName obl)
 
 
 elabRuns :: ModuleEnv -> [RawNamedRun] -> Either Text (M.Map Text Run)
@@ -530,7 +551,6 @@ buildPolyFromBase baseName newName env newDoc = do
           , PolyMorph.morAttrSortMap = identityAttrSortMap baseDoc
           , PolyMorph.morTypeMap = M.empty
           , PolyMorph.morGenMap = genMap
-          , PolyMorph.morIxFunMap = M.empty
           , PolyMorph.morCheck = PolyMorph.CheckAll
           , PolyMorph.morPolicy = UseStructuralAsBidirectional
           , PolyMorph.morFuel = 50

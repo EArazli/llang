@@ -7,7 +7,6 @@ import Strat.DSL.AST
 import Strat.Common.Rules
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.Surface.Parse (surfaceSpecBlock)
-import qualified Strat.Poly.ModeTheory
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Maybe (fromMaybe)
@@ -219,14 +218,11 @@ polyBlock = do
 
 polyItem :: Parser PolyAST.RawPolyItem
 polyItem =
-  try polyIndexModeDecl
-    <|> try polyIndexFunDecl
-    <|> try polyIndexRuleDecl
-    <|> polyModeDecl
-    <|> polyStructureDecl
+  polyModeDecl
     <|> polyModalityDecl
     <|> polyModEqDecl
-    <|> polyAdjDecl
+    <|> polyActionDecl
+    <|> polyObligationDecl
     <|> polyAttrSortDecl
     <|> (PolyAST.RPType <$> polyTypeDecl)
     <|> (PolyAST.RPData <$> polyDataDecl)
@@ -240,65 +236,6 @@ polyModeDecl = do
   acyclic <- option False (True <$ symbol "acyclic")
   optionalSemi
   pure (PolyAST.RPMode (PolyAST.RawModeDecl name acyclic))
-
-polyIndexModeDecl :: Parser PolyAST.RawPolyItem
-polyIndexModeDecl = do
-  _ <- symbol "index_mode"
-  name <- ident
-  optionalSemi
-  pure (PolyAST.RPIndexMode name)
-
-polyIndexFunDecl :: Parser PolyAST.RawPolyItem
-polyIndexFunDecl = do
-  _ <- symbol "index_fun"
-  name <- ident
-  vars <- option [] (symbol "(" *> polyIxVarDecl `sepBy` symbol "," <* symbol ")")
-  _ <- symbol ":"
-  res <- polyTypeExpr
-  _ <- symbol "@"
-  mode <- ident
-  optionalSemi
-  pure (PolyAST.RPIndexFun PolyAST.RawIndexFunDecl
-    { PolyAST.rifName = name
-    , PolyAST.rifArgs = vars
-    , PolyAST.rifRes = res
-    , PolyAST.rifMode = mode
-    })
-
-polyIndexRuleDecl :: Parser PolyAST.RawPolyItem
-polyIndexRuleDecl = do
-  _ <- symbol "index_rule"
-  name <- ident
-  vars <- option [] (symbol "(" *> polyIxVarDecl `sepBy` symbol "," <* symbol ")")
-  _ <- symbol ":"
-  lhs <- polyTypeExpr
-  _ <- symbol "->"
-  rhs <- polyTypeExpr
-  _ <- symbol "@"
-  mode <- ident
-  optionalSemi
-  pure (PolyAST.RPIndexRule PolyAST.RawIndexRuleDecl
-    { PolyAST.rirName = name
-    , PolyAST.rirVars = vars
-    , PolyAST.rirLHS = lhs
-    , PolyAST.rirRHS = rhs
-    , PolyAST.rirMode = mode
-    })
-
-polyStructureDecl :: Parser PolyAST.RawPolyItem
-polyStructureDecl = do
-  _ <- symbol "structure"
-  mode <- ident
-  _ <- symbol "="
-  disc <- discipline
-  optionalSemi
-  pure (PolyAST.RPStructure (PolyAST.RawStructureDecl mode disc))
-  where
-    discipline =
-      (symbol "linear" $> Strat.Poly.ModeTheory.Linear)
-        <|> (symbol "affine" $> Strat.Poly.ModeTheory.Affine)
-        <|> (symbol "relevant" $> Strat.Poly.ModeTheory.Relevant)
-        <|> (symbol "cartesian" $> Strat.Poly.ModeTheory.Cartesian)
 
 polyModalityDecl :: Parser PolyAST.RawPolyItem
 polyModalityDecl = do
@@ -320,14 +257,78 @@ polyModEqDecl = do
   optionalSemi
   pure (PolyAST.RPModEq (PolyAST.RawModEqDecl lhs rhs))
 
-polyAdjDecl :: Parser PolyAST.RawPolyItem
-polyAdjDecl = do
-  _ <- symbol "adjunction"
-  left <- ident
-  _ <- symbol "dashv"
-  right <- ident
+polyActionDecl :: Parser PolyAST.RawPolyItem
+polyActionDecl = do
+  _ <- symbol "action"
+  modName <- ident
+  _ <- symbol "where"
+  _ <- symbol "{"
+  mappings <- many actionGenMap
+  _ <- symbol "}"
   optionalSemi
-  pure (PolyAST.RPAdjunction (PolyAST.RawAdjDecl left right))
+  pure (PolyAST.RPAction (PolyAST.RawActionDecl modName mappings))
+  where
+    actionGenMap = do
+      _ <- symbol "gen"
+      g <- ident
+      _ <- symbol "->"
+      rhs <- polyDiagExpr
+      optionalSemi
+      pure (g, rhs)
+
+polyObligationDecl :: Parser PolyAST.RawPolyItem
+polyObligationDecl = do
+  _ <- symbol "obligation"
+  name <- ident
+  mForGen <- optional (keyword "for_gen")
+  case mForGen of
+    Just _ -> do
+      _ <- symbol "@"
+      mode <- ident
+      _ <- symbol "="
+      lhs <- oblExpr
+      _ <- symbol "=="
+      rhs <- oblExpr
+      optionalSemi
+      pure
+        ( PolyAST.RPObligation
+            PolyAST.RawObligationDecl
+              { PolyAST.rodName = name
+              , PolyAST.rodForGen = True
+              , PolyAST.rodVars = []
+              , PolyAST.rodDom = []
+              , PolyAST.rodCod = []
+              , PolyAST.rodMode = mode
+              , PolyAST.rodLHS = lhs
+              , PolyAST.rodRHS = rhs
+              }
+        )
+    Nothing -> do
+      vars <- polyParamList
+      _ <- symbol ":"
+      dom <- polyContext
+      _ <- symbol "->"
+      cod <- polyContext
+      _ <- symbol "@"
+      mode <- ident
+      _ <- symbol "="
+      lhs <- oblExpr
+      _ <- symbol "=="
+      rhs <- oblExpr
+      optionalSemi
+      pure
+        ( PolyAST.RPObligation
+            PolyAST.RawObligationDecl
+              { PolyAST.rodName = name
+              , PolyAST.rodForGen = False
+              , PolyAST.rodVars = vars
+              , PolyAST.rodDom = dom
+              , PolyAST.rodCod = cod
+              , PolyAST.rodMode = mode
+              , PolyAST.rodLHS = lhs
+              , PolyAST.rodRHS = rhs
+              }
+        )
 
 rawModExpr :: Parser PolyAST.RawModExpr
 rawModExpr =
@@ -483,17 +484,18 @@ polyBinderShape = do
 
 polyBinderVarDecl :: Parser PolyAST.RawBinderVarDecl
 polyBinderVarDecl = do
+  _ <- optional (keyword "tm")
   name <- ident
   _ <- symbol ":"
   ty <- polyTypeExpr
   pure PolyAST.RawBinderVarDecl { PolyAST.rbvName = name, PolyAST.rbvType = ty }
 
-polyIxVarDecl :: Parser PolyAST.RawIxVarDecl
-polyIxVarDecl = do
+polyTmVarDecl :: Parser PolyAST.RawTmVarDecl
+polyTmVarDecl = do
   name <- ident
   _ <- symbol ":"
   sortTy <- polyTypeExpr
-  pure PolyAST.RawIxVarDecl { PolyAST.rivName = name, PolyAST.rivSort = sortTy }
+  pure PolyAST.RawTmVarDecl { PolyAST.rtvdName = name, PolyAST.rtvdSort = sortTy }
 
 polyTyVarDecl :: Parser PolyAST.RawTyVarDecl
 polyTyVarDecl = do
@@ -513,10 +515,10 @@ polyTyVarList =
 
 polyParamDecl :: Parser PolyAST.RawParamDecl
 polyParamDecl =
-  try polyIxParam <|> polyTyParam
+  try polyTmParam <|> polyTyParam
   where
     polyTyParam = PolyAST.RPDType <$> polyTyVarDecl
-    polyIxParam = PolyAST.RPDIndex <$> polyIxVarDecl
+    polyTmParam = PolyAST.RPDTerm <$> polyTmVarDecl
 
 polyParamList :: Parser [PolyAST.RawParamDecl]
 polyParamList =
@@ -524,33 +526,8 @@ polyParamList =
     <|> (map PolyAST.RPDType <$> many polyTyVarDeclBare)
 
 polyTypeExpr :: Parser PolyAST.RawPolyTypeExpr
-polyTypeExpr = lexeme (try modApp <|> try bound <|> regular)
+polyTypeExpr = lexeme regular
   where
-    modApp = do
-      me <- rawModExprComplex
-      _ <- symbol "("
-      inner <- polyTypeExpr
-      _ <- symbol ")"
-      pure (PolyAST.RPTMod me inner)
-    bound = do
-      _ <- symbol "^"
-      idx <- fromIntegral <$> integer
-      pure (PolyAST.RPTBound idx)
-    rawModExprComplex =
-      try rawId <|> rawComp
-    rawId = do
-      _ <- symbol "id"
-      _ <- symbol "@"
-      mode <- ident
-      pure (PolyAST.RMId mode)
-    rawComp = do
-      first <- ident
-      _ <- symbol "."
-      second <- ident
-      _ <- symbol "."
-      third <- ident
-      rest <- many (symbol "." *> ident)
-      pure (PolyAST.RMComp (first : second : third : rest))
     regular = do
       name <- identRaw
       mQual <- optional (try (char '.' *> identRaw))
@@ -577,7 +554,15 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 
 polyDiagTerm :: Parser PolyAST.RawDiagExpr
 polyDiagTerm =
-  polyMetaVarTerm <|> polyTermRefTerm <|> try polyIdTerm <|> polySpliceTerm <|> polyLoopTerm <|> polyBoxTerm <|> polyGenTerm <|> parens polyDiagExpr
+  polyMetaVarTerm
+    <|> polyTermRefTerm
+    <|> polyMapTerm
+    <|> try polyIdTerm
+    <|> polySpliceTerm
+    <|> polyLoopTerm
+    <|> polyBoxTerm
+    <|> polyGenTerm
+    <|> parens polyDiagExpr
 
 polyMetaVarTerm :: Parser PolyAST.RawDiagExpr
 polyMetaVarTerm = do
@@ -680,6 +665,64 @@ polyLoopTerm = do
   inner <- polyDiagExpr
   _ <- symbol "}"
   pure (PolyAST.RDLoop inner)
+
+polyMapTerm :: Parser PolyAST.RawDiagExpr
+polyMapTerm = do
+  _ <- symbol "map"
+  _ <- symbol "["
+  me <- rawModExpr
+  _ <- symbol "]"
+  _ <- symbol "("
+  inner <- polyDiagExpr
+  _ <- symbol ")"
+  pure (PolyAST.RDMap me inner)
+
+oblExpr :: Parser PolyAST.RawOblExpr
+oblExpr = makeExprParser oblTerm operators
+  where
+    operators =
+      [ [ InfixL (symbol "*" $> PolyAST.ROETensor) ]
+      , [ InfixL (symbol ";" $> PolyAST.ROEComp) ]
+      ]
+
+oblTerm :: Parser PolyAST.RawOblExpr
+oblTerm =
+  try oblMapTerm
+    <|> try oblGenTerm
+    <|> try oblLiftDomTerm
+    <|> try oblLiftCodTerm
+    <|> parens oblExpr
+    <|> (PolyAST.ROEDiag <$> polyDiagTerm)
+
+oblMapTerm :: Parser PolyAST.RawOblExpr
+oblMapTerm = do
+  _ <- symbol "map"
+  _ <- symbol "["
+  me <- rawModExpr
+  _ <- symbol "]"
+  _ <- symbol "("
+  inner <- oblExpr
+  _ <- symbol ")"
+  pure (PolyAST.ROEMap me inner)
+
+oblGenTerm :: Parser PolyAST.RawOblExpr
+oblGenTerm = PolyAST.ROEGen <$ symbol "@gen"
+
+oblLiftDomTerm :: Parser PolyAST.RawOblExpr
+oblLiftDomTerm = do
+  _ <- symbol "lift_dom"
+  _ <- symbol "("
+  op <- polyDiagExpr
+  _ <- symbol ")"
+  pure (PolyAST.ROELiftDom op)
+
+oblLiftCodTerm :: Parser PolyAST.RawOblExpr
+oblLiftCodTerm = do
+  _ <- symbol "lift_cod"
+  _ <- symbol "("
+  op <- polyDiagExpr
+  _ <- symbol ")"
+  pure (PolyAST.ROELiftCod op)
 
 orientation :: Parser Orientation
 orientation =

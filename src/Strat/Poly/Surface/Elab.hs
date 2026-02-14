@@ -16,7 +16,7 @@ import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Poly.Attr
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), lookupTypeSig, gdPlainDom, doctrineTypeTheory)
 import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
-import Strat.Poly.Diagram (Diagram(..), idD, unionDiagram, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
+import Strat.Poly.Diagram (Diagram(..), idD, genD, unionDiagram, diagramDom, diagramCod, freeTyVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
 import Strat.Poly.Graph
   ( PortId(..)
   , Edge(..)
@@ -33,7 +33,7 @@ import Strat.Poly.Graph
   , shiftDiagram
   , diagramPortType
   )
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), VarDiscipline(..), modeDiscipline, allowsDrop, allowsDup)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..))
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
 import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
@@ -41,8 +41,9 @@ import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurface
 import Strat.Poly.Surface.Spec
 import Strat.Poly.TypeExpr (TypeExpr, TypeName(..), TypeRef(..), TyVar(..), Context, typeMode, freeTyVarsType)
 import qualified Strat.Poly.TypeExpr as Ty
-import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
 import qualified Strat.Poly.UnifyTy as U
+import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Util.List (dedupe)
 
 
@@ -76,7 +77,7 @@ elabSurfaceExpr menv docS surf src = do
   let mt = dModes docS
   let spec = psSpec surf
   node <- parseSurfaceExpr spec src
-  ops <- requireStructuralOps docS mode
+  ops <- requireStructuralOps menv docS mode
   env0 <- initEnv
   surfDiag <- evalFresh (elabNode menv docS mt mode ops env0 node)
   if M.null (sdUses surfDiag)
@@ -164,6 +165,7 @@ gensInDiagram diag =
         PBox _ inner -> gensInDiagram inner
         PFeedback inner -> gensInDiagram inner
         PSplice _ -> S.empty
+        PTmMeta _ -> S.empty
 
     binderGens barg =
       case barg of
@@ -182,6 +184,7 @@ surfaceMeasure sigma diag =
         PBox _ inner -> surfaceMeasure sigma inner
         PFeedback inner -> surfaceMeasure sigma inner
         PSplice _ -> 0
+        PTmMeta _ -> 0
 
     binderMeasure barg =
       case barg of
@@ -204,8 +207,6 @@ elabSurfaceTypeExpr doc mode expr =
   case expr of
     RPTVar name ->
       Right (Ty.TVar (TyVar { tvName = name, tvMode = mode }))
-    RPTBound _ ->
-      Left "surface: bound index terms (^i) are not supported in surface type annotations"
     RPTMod rawMe innerRaw -> do
       me <- elabRawModExprSurface (dModes doc) rawMe
       inner <- elabSurfaceTypeExpr doc mode innerRaw
@@ -234,8 +235,8 @@ elabSurfaceTypeExpr doc mode expr =
                         if typeMode argTy == m
                           then Right ()
                           else Left "surface: type constructor argument mode mismatch"
-                      PS_Ix _ ->
-                        Left "surface: index arguments are not supported in surface type annotations"
+                      PS_Tm _ ->
+                        Left "surface: term arguments are not supported in surface type annotations"
               mapM_ checkParam (zip params args')
               Right (Ty.TCon ref (map Ty.TAType args'))
   where
@@ -379,55 +380,125 @@ applySubstSurf mt subst sd = do
 
 -- Structural discipline
 
-data StructuralOps = StructuralOps
-  { soDiscipline :: VarDiscipline
-  , soDup :: Maybe GenDecl
-  , soDrop :: Maybe GenDecl
-  } deriving (Eq, Show)
+data StructuralOp
+  = SOGen TypeTheory GenDecl
+  | SOFromImpl (TypeExpr -> Either Text Diagram)
 
-requireStructuralOps :: Doctrine -> ModeName -> Either Text StructuralOps
-requireStructuralOps doc mode = do
-  disc <- modeDiscipline (dModes doc) mode
-  dup <-
-    if allowsDup disc
-      then Just <$> requireGenDecl "dup"
-      else Right Nothing
-  dropGen <-
-    if allowsDrop disc
-      then Just <$> requireGenDecl "drop"
-      else Right Nothing
-  mapM_ ensureDupShape dup
-  mapM_ ensureDropShape dropGen
+data StructuralOps = StructuralOps
+  { soDup :: Maybe StructuralOp
+  , soDrop :: Maybe StructuralOp
+  }
+
+requireStructuralOps :: ModuleEnv -> Doctrine -> ModeName -> Either Text StructuralOps
+requireStructuralOps menv doc mode = do
+  implMorphs <- resolveImplMorphisms menv (dName doc)
+  implDup <- resolveImplOp mode isDupShape implMorphs
+  implDrop <- resolveImplOp mode isDropShape implMorphs
   pure
     StructuralOps
-      { soDiscipline = disc
-      , soDup = dup
-      , soDrop = dropGen
+      { soDup = implDup
+      , soDrop = implDrop
       }
+
+data StructuralCandidate = StructuralCandidate
+  { scMorphName :: Text
+  , scIface :: Doctrine
+  , scMorph :: PolyMorph.Morphism
+  , scGen :: GenDecl
+  }
+
+resolveImplMorphisms :: ModuleEnv -> Text -> Either Text [(Text, Doctrine, PolyMorph.Morphism)]
+resolveImplMorphisms menv targetName =
+  fmap concat (mapM fromDefaultKey (M.toList (meImplDefaults menv)))
   where
-    requireGenDecl label =
-      case M.lookup mode (dGens doc) >>= M.lookup (GenName label) of
-        Nothing -> Left ("surface structural: missing " <> label <> " generator")
-        Just gen -> Right gen
+    fromDefaultKey ((ifaceName, tgtName), morphNames)
+      | tgtName /= targetName = Right []
+      | otherwise = do
+          ifaceDoc <-
+            case M.lookup ifaceName (meDoctrines menv) of
+              Nothing -> Left ("surface: unknown implements interface doctrine " <> ifaceName)
+              Just d -> Right d
+          fmap concat (mapM (resolveOne ifaceName ifaceDoc) morphNames)
 
-ensureDupShape :: GenDecl -> Either Text ()
-ensureDupShape gen =
-  if not (null (gdAttrs gen))
-    then Left "surface: structural generator dup/drop must not declare attributes"
-    else
-      case (gdTyVars gen, gdDom gen, gdCod gen) of
-        ([v], [InPort (Ty.TVar v1)], [Ty.TVar v2, Ty.TVar v3])
-          | v == v1 && v == v2 && v == v3 -> Right ()
-        _ -> Left "surface structural: configured dup generator has wrong type (must be [a] -> [a,a] with no binder slots)"
+    resolveOne ifaceName ifaceDoc morphName =
+      case M.lookup morphName (meMorphisms menv) of
+        Nothing -> Left ("surface: unknown implements morphism " <> morphName)
+        Just mor ->
+          if dName (PolyMorph.morSrc mor) == ifaceName && dName (PolyMorph.morTgt mor) == targetName
+            then Right [(morphName, ifaceDoc, mor)]
+            else Right []
 
-ensureDropShape :: GenDecl -> Either Text ()
-ensureDropShape gen =
-  if not (null (gdAttrs gen))
-    then Left "surface: structural generator dup/drop must not declare attributes"
-    else
-      case (gdTyVars gen, gdDom gen, gdCod gen) of
-        ([v], [InPort (Ty.TVar v1)], []) | v == v1 -> Right ()
-        _ -> Left "surface structural: configured drop generator has wrong type (must be [a] -> [] with no binder slots)"
+resolveImplOp
+  :: ModeName
+  -> (GenDecl -> Bool)
+  -> [(Text, Doctrine, PolyMorph.Morphism)]
+  -> Either Text (Maybe StructuralOp)
+resolveImplOp targetMode matchesShape implMorphs =
+  case candidates of
+    [] -> Right Nothing
+    [cand] ->
+      Right
+        ( Just
+            ( SOFromImpl
+                (\ty -> instantiateImplUnaryGen (scIface cand) (scMorph cand) (scGen cand) ty)
+            )
+        )
+    _ ->
+      Left
+        ( "surface: multiple structural capabilities match the required shape: "
+            <> T.intercalate ", " (map renderCandidate candidates)
+        )
+  where
+    candidates = concatMap collect implMorphs
+
+    collect (morphName, iface, mor) =
+      [ StructuralCandidate
+          { scMorphName = morphName
+          , scIface = iface
+          , scMorph = mor
+          , scGen = gd
+          }
+      | (srcMode, mappedMode) <- M.toList (PolyMorph.morModeMap mor)
+      , mappedMode == targetMode
+      , gd <- M.elems (M.findWithDefault M.empty srcMode (dGens iface))
+      , matchesShape gd
+      ]
+
+    renderCandidate cand =
+      dName (scIface cand) <> "." <> renderGenName (gdName (scGen cand)) <> " via " <> scMorphName cand
+
+    renderGenName (GenName g) = g
+
+instantiateImplUnaryGen :: Doctrine -> PolyMorph.Morphism -> GenDecl -> TypeExpr -> Either Text Diagram
+instantiateImplUnaryGen iface mor g ty = do
+  srcVar <-
+    case gdTyVars g of
+      [v] -> Right v
+      _ -> Left "surface: structural schema generator must be unary polymorphic"
+  dSchema <- instantiateUnaryGen (doctrineTypeTheory iface) g (Ty.TVar srcVar)
+  dMapped <- PolyMorph.applyMorphismDiagram mor dSchema
+  tgtMode <-
+    case M.lookup (tvMode srcVar) (PolyMorph.morModeMap mor) of
+      Nothing -> Left "surface: implements morphism is missing a mode mapping for structural schema"
+      Just m -> Right m
+  let tgtVar = srcVar { tvMode = tgtMode }
+  applySubstDiagram
+    (doctrineTypeTheory (PolyMorph.morTgt mor))
+    (U.Subst { U.sTy = M.singleton tgtVar ty, U.sTm = M.empty })
+    dMapped
+
+isDupShape :: GenDecl -> Bool
+isDupShape gen =
+  case (gdTyVars gen, gdTmVars gen, gdAttrs gen, gdDom gen, gdCod gen) of
+    ([v], [], [], [InPort (Ty.TVar v1)], [Ty.TVar v2, Ty.TVar v3]) ->
+      v == v1 && v == v2 && v == v3
+    _ -> False
+
+isDropShape :: GenDecl -> Bool
+isDropShape gen =
+  case (gdTyVars gen, gdTmVars gen, gdAttrs gen, gdDom gen, gdCod gen) of
+    ([v], [], [], [InPort (Ty.TVar v1)], []) -> v == v1
+    _ -> False
 
 
 -- Elaboration core
@@ -812,39 +883,31 @@ connectUses :: StructuralOps -> Text -> PortId -> TypeExpr -> [PortId] -> SurfDi
 connectUses ops varName source ty uses sd =
   case uses of
     [] ->
-      case (soDiscipline ops, soDrop ops) of
-        (Affine, Just dropGen) -> addDrop dropGen
-        (Cartesian, Just dropGen) -> addDrop dropGen
-        (disc, _) ->
-          liftEither (Left ("surface: variable " <> varName <> " dropped (uses 0) under " <> renderDiscipline disc))
+      case soDrop ops of
+        Just dropOp -> addDrop dropOp
+        Nothing ->
+          liftEither (Left ("surface: variable " <> varName <> " dropped but no drop capability is implemented"))
     [p] -> do
       (diag1, uses1, tags1) <- mergePortsAll source p sd
       pure sd { sdDiag = diag1, sdUses = uses1, sdTags = tags1 }
     _ ->
-      case (soDiscipline ops, soDup ops) of
-        (Relevant, Just dupGen) -> addDup dupGen
-        (Cartesian, Just dupGen) -> addDup dupGen
-        (disc, _) ->
-          liftEither (Left ("surface: variable " <> varName <> " duplicated (uses " <> T.pack (show (length uses)) <> ") under " <> renderDiscipline disc))
+      case soDup ops of
+        Just dupOp -> addDup dupOp
+        Nothing ->
+          liftEither (Left ("surface: variable " <> varName <> " duplicated but no dup capability is implemented"))
   where
-    addDrop dropGen = do
-      liftEither (ensureStructuralGenAttrs dropGen)
+    addDrop dropOp = do
       let diag0 = sdDiag sd
-      diag1 <- liftEither (addEdgePayload (PGen (gdName dropGen) M.empty []) [source] [] diag0)
-      pure sd { sdDiag = diag1 }
+      dropDiag <- liftEither (instantiateStructuralOp dropOp ty)
+      (outs, diag1) <- liftEither (attachUnaryDiagram source diag0 dropDiag)
+      if null outs
+        then pure sd { sdDiag = diag1 }
+        else liftEither (Left "surface: drop capability must have codomain []")
 
-    addDup dupGen = do
-      liftEither (ensureStructuralGenAttrs dupGen)
-      (outs, diag1) <- dupOutputs dupGen source ty (sdDiag sd) (length uses)
+    addDup dupOp = do
+      (outs, diag1) <- dupOutputs dupOp source ty (sdDiag sd) (length uses)
       let sd1 = sd { sdDiag = diag1 }
       foldM mergeOne sd1 (zip outs uses)
-
-    renderDiscipline disc =
-      case disc of
-        Linear -> "linear discipline"
-        Affine -> "affine discipline"
-        Relevant -> "relevant discipline"
-        Cartesian -> "cartesian discipline"
 
     mergeOne acc (outP, useP) = do
       (diag1, uses1, tags1) <- mergePortsAll outP useP acc
@@ -861,18 +924,71 @@ mergePortsAll keep drop sd = do
 
 -- Duplication tree (left-associated)
 
-dupOutputs :: GenDecl -> PortId -> TypeExpr -> Diagram -> Int -> Fresh ([PortId], Diagram)
-dupOutputs dupGen source ty diag n
-  | not (null (gdAttrs dupGen)) =
-      liftEither (Left "surface: structural generator dup/drop must not declare attributes")
+dupOutputs :: StructuralOp -> PortId -> TypeExpr -> Diagram -> Int -> Fresh ([PortId], Diagram)
+dupOutputs dupOp source ty diag n
   | n <= 0 = pure ([], diag)
   | n == 1 = pure ([source], diag)
   | otherwise = do
-      let (p1, diag1) = freshPort ty diag
-      let (p2, diag2) = freshPort ty diag1
-      diag3 <- liftEither (addEdgePayload (PGen (gdName dupGen) M.empty []) [source] [p1, p2] diag2)
-      (leftOuts, diag4) <- dupOutputs dupGen p1 ty diag3 (n - 1)
-      pure (leftOuts ++ [p2], diag4)
+      dupDiag <- liftEither (instantiateStructuralOp dupOp ty)
+      (outs, diag1) <- liftEither (attachUnaryDiagram source diag dupDiag)
+      (p1, p2) <-
+        case outs of
+          [a, b] -> pure (a, b)
+          _ -> liftEither (Left "surface: dup capability must have codomain [a, a]")
+      (leftOuts, diag2) <- dupOutputs dupOp p1 ty diag1 (n - 1)
+      let diag3 = diag2 { dIn = filter (/= p1) (dIn diag2) }
+      pure (leftOuts ++ [p2], diag3)
+
+instantiateStructuralOp :: StructuralOp -> TypeExpr -> Either Text Diagram
+instantiateStructuralOp op ty =
+  case op of
+    SOGen tt gen ->
+      instantiateUnaryGen tt gen ty
+    SOFromImpl mkDiag ->
+      mkDiag ty
+
+attachUnaryDiagram :: PortId -> Diagram -> Diagram -> Either Text ([PortId], Diagram)
+attachUnaryDiagram source host op = do
+  if dMode op /= dMode host
+    then Left "surface: structural capability has wrong mode"
+    else Right ()
+  if dTmCtx op /= dTmCtx host
+    then Left "surface: structural capability has incompatible term context"
+    else Right ()
+  case dIn op of
+    [_] -> Right ()
+    _ -> Left "surface: structural capability must be unary"
+  let opShift = shiftDiagram (dNextPort host) (dNextEdge host) op
+  merged <- unionDiagram host opShift
+  inShift <-
+    case dIn opShift of
+      [p] -> Right p
+      _ -> Left "surface: structural capability must remain unary after shift"
+  merged' <- mergePorts merged source inShift
+  pure (dOut opShift, merged')
+
+instantiateUnaryGen :: TypeTheory -> GenDecl -> TypeExpr -> Either Text Diagram
+instantiateUnaryGen tt gen ty = do
+  ensureStructuralGenAttrs gen
+  if not (null (gdTmVars gen))
+    then Left "surface: structural generator must not have term parameters"
+    else Right ()
+  if any isBinder (gdDom gen)
+    then Left "surface: structural generator must not have binder slots"
+    else Right ()
+  substTy <- case gdTyVars gen of
+    [v] -> Right (M.singleton v ty)
+    [] -> Right M.empty
+    _ -> Left "surface: structural generator must be unary polymorphic in exactly one type variable"
+  let subst = U.Subst { U.sTy = substTy, U.sTm = M.empty }
+  dom <- U.applySubstCtx tt subst (gdPlainDom gen)
+  cod <- U.applySubstCtx tt subst (gdCod gen)
+  genD (gdMode gen) dom cod (gdName gen)
+  where
+    isBinder sh =
+      case sh of
+        InPort _ -> False
+        InBinder _ -> True
 
 ensureStructuralGenAttrs :: GenDecl -> Either Text ()
 ensureStructuralGenAttrs gen =
@@ -938,10 +1054,10 @@ genDFromDecl mt mode env gen mArgs attrs bargs = do
 
 applySubstBinderSigTy :: ModeTheory -> Subst -> BinderSig -> Either Text BinderSig
 applySubstBinderSigTy mt subst bs = do
-  ixCtx' <- mapM (applySubstTy mt subst) (bsIxCtx bs)
+  tmCtx' <- mapM (applySubstTy mt subst) (bsTmCtx bs)
   dom' <- applySubstCtx mt subst (bsDom bs)
   cod' <- applySubstCtx mt subst (bsCod bs)
-  pure bs { bsIxCtx = ixCtx', bsDom = dom', bsCod = cod' }
+  pure bs { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
 
 checkBinderArgs
   :: ModeTheory
@@ -1073,7 +1189,7 @@ loopSurf sd =
         then Right ()
         else Left "loop: body first output type must match input type"
       outTys <- mapM (requirePortTy (sdDiag sd)) pOuts
-      let (outs, diag0) = allocPorts outTys (emptyDiagram (dMode (sdDiag sd)) (dIxCtx (sdDiag sd)))
+      let (outs, diag0) = allocPorts outTys (emptyDiagram (dMode (sdDiag sd)) (dTmCtx (sdDiag sd)))
       diag1 <- addEdgePayload (PFeedback (sdDiag sd)) [] outs diag0
       let diag2 = diag1 { dIn = [], dOut = outs }
       validateDiagram diag2

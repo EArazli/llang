@@ -1,0 +1,27 @@
+doctrine SchemaAdjunction where {
+  mode C;
+  mode L;
+
+  modality F : C -> L;
+  modality U : L -> C;
+
+  mod_eq U.F -> id@C;
+  mod_eq F.U -> id@L;
+
+  gen eta(a@C) : [a] -> [U(F(a))] @C;
+  gen eps(b@L) : [F(U(b))] -> [b] @L;
+
+  action F where {
+    gen eta -> eps
+  }
+
+  action U where {
+    gen eps -> eta
+  }
+
+  obligation triangleL(a@C) : [F(a)] -> [F(a)] @L =
+    map[F](eta{a}) ; eps{F(a)} == id[F(a)]
+
+  obligation triangleR(b@L) : [U(b)] -> [U(b)] @C =
+    eta{U(b)} ; map[U](eps{b}) == id[U(b)]
+}

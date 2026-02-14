@@ -14,8 +14,9 @@ import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
-import Strat.Poly.Diagram (Diagram, freeTyVarsDiagram, freeIxVarsDiagram)
+import Strat.Poly.Diagram (Diagram, freeTyVarsDiagram, freeTmVarsDiagram)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.TypeExpr (TmVar(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Surface (PolySurfaceDef(..))
@@ -87,11 +88,20 @@ compileSourceDiagram env targetName mMode mSurface uses exprText = do
   if S.null (freeTyVarsDiagram diagFinal)
     then Right ()
   else Left "unresolved type variables in diagram"
-  if S.null (freeIxVarsDiagram diagFinal)
+  let unresolvedTm = S.toList (freeTmVarsDiagram diagFinal)
+  if null unresolvedTm
     then Right ()
-  else Left "unresolved index variables in diagram"
+  else
+    let names = map tmvName unresolvedTm
+    in Left
+         ("unresolved term variables in diagram: "
+           <> mconcat (punctuate ", " names)
+           <> " (likely missing explicit term arguments)")
   pure (docFinal, diagFinal)
   where
+    punctuate _ [] = []
+    punctuate _ [x] = [x]
+    punctuate sep (x:xs) = x : map (sep <>) xs
     renderMismatch usesMismatch err =
       let label =
             if usesMismatch

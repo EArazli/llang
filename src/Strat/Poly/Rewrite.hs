@@ -4,7 +4,6 @@ module Strat.Poly.Rewrite
   , rewriteOnce
   , rewriteAll
   , rulesFromPolicy
-  , rulesFromDoctrine
   ) where
 
 import Data.Text (Text)
@@ -15,12 +14,11 @@ import Data.Monoid (Any(..), getAny)
 import Strat.Poly.Graph
 import Strat.Poly.Diagram
 import Strat.Poly.Match
-import Strat.Poly.TypeExpr (TyVar, IxVar, TypeExpr)
+import Strat.Poly.TypeExpr (TyVar, TmVar, TypeExpr)
 import Strat.Poly.Cell2
-import Strat.Poly.UnifyTy (emptySubst)
+import {-# SOURCE #-} Strat.Poly.UnifyTy (emptySubst)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
-import Strat.Poly.Doctrine (Doctrine(..))
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.Traversal (foldDiagram, traverseDiagram)
 
@@ -30,7 +28,7 @@ data RewriteRule = RewriteRule
   , rrLHS    :: Diagram
   , rrRHS    :: Diagram
   , rrTyVars :: [TyVar]
-  , rrIxVars :: [IxVar]
+  , rrTmVars :: [TmVar]
   } deriving (Eq, Show)
 
 rewriteOnce :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
@@ -87,6 +85,8 @@ rewriteOnceNested tt rules diag =
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
               canon <- renumberDiagram diag'
               pure (Just canon)
+        PTmMeta _ ->
+          go rest
         PGen gen attrs bargs -> do
           bargRes <- rewriteOnceBinderArgs bargs
           case bargRes of
@@ -161,6 +161,8 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
           let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
           renumberDiagram diag')
         innerRes
+    PTmMeta _ ->
+      Right []
     PGen gen attrs bargs -> do
       bargsRes <- rewriteAllBinderArgs tt cap rules bargs
       mapM
@@ -186,7 +188,7 @@ applyMatch :: TypeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagr
 applyMatch tt rule match host = do
   rejectSplice "rewrite host" host
   -- Normalize host boundary types before gluing so mergePorts compares
-  -- canonicalized types (e.g. after modality/index equations).
+  -- canonicalized types (e.g. after modality/term equations).
   hostNorm <- applySubstDiagram tt emptySubst host
   let lhs = rrLHS rule
   rhsSub <- applySubstDiagram tt (mTySubst match) (rrRHS rule)
@@ -236,8 +238,8 @@ expandSplices binderSub =
             case M.lookup x binderSub of
               Nothing -> Left "rewriteOnce: splice uses uncaptured binder meta"
               Just d -> Right d
-          if dIxCtx captured /= dIxCtx diag
-            then Left "rewriteOnce: splice index-context mismatch"
+          if dTmCtx captured /= dTmCtx diag
+            then Left "rewriteOnce: splice term-context mismatch"
             else Right ()
           domSplice <- mapM (requirePortType diag) (eIns edge)
           codSplice <- mapM (requirePortType diag) (eOuts edge)
@@ -293,9 +295,6 @@ deleteMatchedPorts diag ports portMap = foldl step (Right diag) ports
         Nothing -> Left "rewriteOnce: missing port mapping"
         Just hostPort -> deletePortIfDangling d hostPort
 
-rulesFromDoctrine :: Doctrine -> [RewriteRule]
-rulesFromDoctrine doc = rulesFromPolicy UseAllOriented (dCells2 doc)
-
 rulesFromPolicy :: RewritePolicy -> [Cell2] -> [RewriteRule]
 rulesFromPolicy policy cells = concatMap (rulesForCell policy) cells
 
@@ -322,7 +321,7 @@ rulesForCell policy cell =
         , rrLHS = lhs
         , rrRHS = rhs
         , rrTyVars = c2TyVars cell
-        , rrIxVars = c2IxVars cell
+        , rrTmVars = c2TmVars cell
         }
 
     oriented =
@@ -358,6 +357,6 @@ mkMatchConfig tt rule =
   MatchConfig
     { mcTheory = tt
     , mcTyFlex = S.fromList (rrTyVars rule)
-    , mcIxFlex = S.fromList (rrIxVars rule)
+    , mcTmFlex = S.fromList (rrTmVars rule)
     , mcAttrFlex = freeAttrVarsDiagram (rrLHS rule)
     }

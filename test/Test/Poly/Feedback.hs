@@ -62,12 +62,12 @@ mkDoctrine =
     { dName = "D"
     , dModes = mkModes [modeM]
     , dAcyclicModes = S.singleton modeM
-    , dIndexModes = S.empty
-    , dIxTheory = M.empty
     , dAttrSorts = M.empty
     , dTypes = M.fromList [(modeM, M.fromList [(TypeName "T", TypeSig [])])]
     , dGens = M.fromList [(modeM, M.fromList [(GenName "step", genStep)])]
     , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
     }
 
 
@@ -77,7 +77,7 @@ genStep =
     { gdName = GenName "step"
     , gdMode = modeM
     , gdTyVars = []
-    , gdIxVars = []
+    , gdTmVars = []
     , gdDom = [InPort tyT]
     , gdCod = [tyT, tyT]
     , gdAttrs = []

@@ -27,8 +27,6 @@ docDoctrine =
     { dName = "Doc"
     , dModes = singleMode docMode
     , dAcyclicModes = S.singleton docMode
-    , dIndexModes = S.empty
-    , dIxTheory = M.empty
     , dAttrSorts =
         M.fromList
           [ (strSort, AttrSortDecl strSort (Just LKString))
@@ -37,6 +35,8 @@ docDoctrine =
     , dTypes = M.singleton docMode (M.singleton (TypeName "Doc") (TypeSig []))
     , dGens = M.singleton docMode gens
     , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
     }
   where
     gens =
@@ -56,8 +56,6 @@ artifactDoctrine =
     { dName = "Artifact"
     , dModes = singleMode artifactMode
     , dAcyclicModes = S.singleton artifactMode
-    , dIndexModes = S.empty
-    , dIxTheory = M.empty
     , dAttrSorts =
         M.fromList
           [ (strSort, AttrSortDecl strSort (Just LKString))
@@ -73,6 +71,8 @@ artifactDoctrine =
           )
     , dGens = M.singleton artifactMode gens
     , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
     }
   where
     docTy = TCon (TypeRef artifactMode (TypeName "Doc")) []
@@ -118,7 +118,7 @@ simpleGen name dom cod attrs =
     { gdName = GenName name
     , gdMode = modeFromCtx cod
     , gdTyVars = []
-    , gdIxVars = []
+    , gdTmVars = []
     , gdDom = map InPort dom
     , gdCod = cod
     , gdAttrs = attrs

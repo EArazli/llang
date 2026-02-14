@@ -2,9 +2,6 @@ doctrine DualDiscipline where {
   mode Lin;
   mode Cart;
 
-  structure Lin = linear;
-  structure Cart = cartesian;
-
   type Num @Lin;
   type Num @Cart;
 

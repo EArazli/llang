@@ -49,12 +49,12 @@ mkDoctrine =
     { dName = "D"
     , dModes = mkModes [modeM]
     , dAcyclicModes = S.singleton modeM
-    , dIndexModes = S.empty
-    , dIxTheory = M.empty
     , dAttrSorts = M.empty
     , dTypes = M.fromList [(modeM, M.fromList [(TypeName "T", TypeSig [])])]
     , dGens = M.empty
     , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
     }
 
 

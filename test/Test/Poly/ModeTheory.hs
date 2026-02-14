@@ -9,11 +9,11 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
-import Strat.Frontend.Env (meDoctrines)
+import Strat.Frontend.Env (meDoctrines, meImplDefaults)
 import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
+import Strat.Poly.Doctrine (Doctrine(..), ModAction(..), ObligationDecl(..))
 import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 import Strat.Poly.Names (GenName(..))
 import Test.Poly.Helpers (mkModes)
@@ -25,10 +25,15 @@ tests =
     "Poly.ModeTheory"
     [ testCase "modality rewrite normalizes nested modality type" testNormalizeTypeExprByModEq
     , testCase "substitution re-normalizes modality type" testSubstReNormalizes
-    , testCase "adjunction auto-generates unit/counit generators" testAdjunctionGens
-    , testCase "structural dup with attributes is rejected directly" testDupAttrsRejected
-    , testCase "structural dup rejects binder slots" testDupBinderSlotRejected
-    , testCase "structural drop rejects binder slots" testDropBinderSlotRejected
+    , testCase "action declarations elaborate and validate" testActionElab
+    , testCase "map elaborates inner expression at modality source mode" testMapCrossModeElab
+    , testCase "for_gen obligations elaborate @gen and lifts" testForGenObligationElab
+    , testCase "@gen outside for_gen is rejected" testGenOutsideForGenRejected
+    , testCase "action coherence follows mod_eq" testActionModEqCoherence
+    , testCase "implements fails when schema obligations are not provable" testAdjObligationFail
+    , testCase "implements succeeds when schema obligations hold" testAdjObligationPass
+    , testCase "legacy adj keyword is rejected" testAdjunctionKeywordRejected
+    , testCase "legacy struct keyword is rejected" testStructureKeywordRejected
     ]
 
 testNormalizeTypeExprByModEq :: Assertion
@@ -59,103 +64,248 @@ testSubstReNormalizes = do
   got <- requireEither (applySubstTy tt subst (TMod spliceE (TVar xVar)))
   got @?= TVar aVar
 
-testAdjunctionGens :: Assertion
-testAdjunctionGens = do
+testActionElab :: Assertion
+testActionElab = do
   let src = T.unlines
-        [ "doctrine LNL where {"
-        , "  mode C;"
-        , "  mode L;"
-        , "  modality F : C -> L;"
-        , "  modality U : L -> C;"
-        , "  adjunction F dashv U;"
-        , "  type Nat @C;"
-        , "  type Nat @L;"
+        [ "doctrine Act where {"
+        , "  mode A;"
+        , "  mode B;"
+        , "  type X @A;"
+        , "  type Y @B;"
+        , "  modality F : A -> B;"
+        , "  gen g : [A.X] -> [A.X] @A;"
+        , "  gen h : [B.Y] -> [B.Y] @B;"
+        , "  action F where {"
+        , "    gen g -> h"
+        , "  }"
         , "}"
         ]
   env <- requireEither (parseRawFile src >>= elabRawFile)
   doc <-
-    case M.lookup "LNL" (meDoctrines env) of
-      Nothing -> assertFailure "missing doctrine LNL" >> fail "unreachable"
+    case M.lookup "Act" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine Act" >> fail "unreachable"
       Just d -> pure d
-  let modeC = ModeName "C"
-  let modeL = ModeName "L"
-  unitGen <-
-    case M.lookup modeC (dGens doc) >>= M.lookup (GenName "unit_F") of
-      Nothing -> assertFailure "missing unit_F in mode C" >> fail "unreachable"
-      Just g -> pure g
-  counitGen <-
-    case M.lookup modeL (dGens doc) >>= M.lookup (GenName "counit_F") of
-      Nothing -> assertFailure "missing counit_F in mode L" >> fail "unreachable"
-      Just g -> pure g
-  case gdTyVars unitGen of
-    [a] -> do
-      gdPlainDom unitGen @?= [TVar a]
-      let fExpr = ModExpr { meSrc = modeC, meTgt = modeL, mePath = [ModName "F"] }
-      let uExpr = ModExpr { meSrc = modeL, meTgt = modeC, mePath = [ModName "U"] }
-      cod <- requireEither (normalizeTypeExpr (dModes doc) (TMod uExpr (TMod fExpr (TVar a))))
-      gdCod unitGen @?= [cod]
-    _ -> assertFailure "unit_F should bind exactly one type variable"
-  case gdTyVars counitGen of
-    [b] -> do
-      gdCod counitGen @?= [TVar b]
-      let fExpr = ModExpr { meSrc = modeC, meTgt = modeL, mePath = [ModName "F"] }
-      let uExpr = ModExpr { meSrc = modeL, meTgt = modeC, mePath = [ModName "U"] }
-      dom <- requireEither (normalizeTypeExpr (dModes doc) (TMod fExpr (TMod uExpr (TVar b))))
-      gdPlainDom counitGen @?= [dom]
-    _ -> assertFailure "counit_F should bind exactly one type variable"
+  assertBool "expected modality action table to contain F" (M.member (ModName "F") (dActions doc))
+  case M.lookup (ModName "F") (dActions doc) >>= M.lookup (ModeName "A", GenName "g") . maGenMap of
+    Nothing -> assertFailure "missing action image for g under F"
+    Just _ -> pure ()
 
-testDupAttrsRejected :: Assertion
-testDupAttrsRejected = do
+testMapCrossModeElab :: Assertion
+testMapCrossModeElab = do
+  let src = T.unlines
+        [ "doctrine CrossMap where {"
+        , "  mode A;"
+        , "  mode B;"
+        , "  modality F : A -> B;"
+        , "  type X @A;"
+        , "  gen g(a@A) : [a] -> [a] @A;"
+        , "  gen h(a@A) : [F(a)] -> [F(a)] @B;"
+        , "  action F where {"
+        , "    gen g -> h"
+        , "  }"
+        , "  obligation map_obl(a@A) : [F(a)] -> [F(a)] @B ="
+        , "    map[F](g{a}) == h{a}"
+        , "}"
+        ]
+  _ <- requireEither (parseRawFile src >>= elabRawFile)
+  pure ()
+
+testForGenObligationElab :: Assertion
+testForGenObligationElab = do
+  let src = T.unlines
+        [ "doctrine ForGenLift where {"
+        , "  mode M;"
+        , "  type X @M;"
+        , "  gen op : [M.X] -> [M.X] @M;"
+        , "  gen f : [M.X, M.X] -> [M.X] @M;"
+        , "  obligation naturality for_gen @M ="
+        , "    @gen ; lift_cod(op) == lift_dom(op) ; @gen"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "ForGenLift" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine ForGenLift" >> fail "unreachable"
+      Just d -> pure d
+  let names = map obName (dObligations doc)
+  length names @?= 2
+  assertBool "expected per-generator obligation for op" ("naturality[op]" `elem` names)
+  assertBool "expected per-generator obligation for f" ("naturality[f]" `elem` names)
+
+testGenOutsideForGenRejected :: Assertion
+testGenOutsideForGenRejected = do
+  let src = T.unlines
+        [ "doctrine BadGenObl where {"
+        , "  mode M;"
+        , "  type X @M;"
+        , "  gen g : [M.X] -> [M.X] @M;"
+        , "  obligation bad : [M.X] -> [M.X] @M ="
+        , "    @gen == @gen"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      if "@gen" `T.isInfixOf` err
+        then pure ()
+        else assertFailure ("expected @gen error, got: " <> T.unpack err)
+    Right _ ->
+      assertFailure "expected obligation elaboration to reject @gen outside for_gen"
+
+testActionModEqCoherence :: Assertion
+testActionModEqCoherence = do
+  let src = T.unlines
+        [ "doctrine BadAction where {"
+        , "  mode A;"
+        , "  type X @A;"
+        , "  modality F : A -> A;"
+        , "  mod_eq F -> id@A;"
+        , "  gen g : [A.X] -> [A.X] @A;"
+        , "  gen h : [A.X] -> [A.X] @A;"
+        , "  action F where {"
+        , "    gen g -> h"
+        , "    gen h -> h"
+        , "  }"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      if "action coherence failed" `T.isInfixOf` err
+        then pure ()
+        else assertFailure ("expected action coherence error, got: " <> T.unpack err)
+    Right _ ->
+      assertFailure "expected doctrine elaboration to reject incoherent action under mod_eq"
+
+testAdjObligationFail :: Assertion
+testAdjObligationFail = do
+  let src = T.unlines
+        [ "doctrine AdjSchema where {"
+        , "  mode C;"
+        , "  mode L;"
+        , "  modality F : C -> L;"
+        , "  modality U : L -> C;"
+        , "  mod_eq U.F -> id@C;"
+        , "  mod_eq F.U -> id@L;"
+        , "  gen eta(a@C) : [a] -> [U(F(a))] @C;"
+        , "  gen eps(b@L) : [F(U(b))] -> [b] @L;"
+        , "  action F where {"
+        , "    gen eta -> eps"
+        , "  }"
+        , "  action U where {"
+        , "    gen eps -> eta"
+        , "  }"
+        , "  obligation triangleL(a@C) : [F(a)] -> [F(a)] @L ="
+        , "    map[F](eta{a}) ; eps{F(a)} == id[F(a)]"
+        , "  obligation triangleR(b@L) : [U(b)] -> [U(b)] @C ="
+        , "    eta{U(b)} ; map[U](eps{b}) == id[U(b)]"
+        , "}"
+        , "doctrine BadAdj where {"
+        , "  mode C;"
+        , "  mode L;"
+        , "  modality F : C -> L;"
+        , "  modality U : L -> C;"
+        , "  mod_eq U.F -> id@C;"
+        , "  mod_eq F.U -> id@L;"
+        , "  gen eta(a@C) : [a] -> [U(F(a))] @C;"
+        , "  gen eps(b@L) : [F(U(b))] -> [b] @L;"
+        , "}"
+        , "morphism badAdjInst : AdjSchema -> BadAdj where {"
+        , "  mode C -> C;"
+        , "  mode L -> L;"
+        , "  modality F -> F;"
+        , "  modality U -> U;"
+        , "  gen eta @C -> eta"
+        , "  gen eps @L -> eps"
+        , "  check none;"
+        , "}"
+        , "implements AdjSchema for BadAdj using badAdjInst;"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      if "implements obligation failed:" `T.isInfixOf` err
+        then pure ()
+        else assertFailure ("expected implements obligation failure, got: " <> T.unpack err)
+    Right _ ->
+      assertFailure "expected implements to fail on unsatisfied schema obligations"
+
+testAdjObligationPass :: Assertion
+testAdjObligationPass = do
+  let src = T.unlines
+        [ "doctrine AdjSchema where {"
+        , "  mode C;"
+        , "  mode L;"
+        , "  modality F : C -> L;"
+        , "  modality U : L -> C;"
+        , "  mod_eq U.F -> id@C;"
+        , "  mod_eq F.U -> id@L;"
+        , "  gen eta(a@C) : [a] -> [U(F(a))] @C;"
+        , "  gen eps(b@L) : [F(U(b))] -> [b] @L;"
+        , "  action F where {"
+        , "    gen eta -> eps"
+        , "  }"
+        , "  action U where {"
+        , "    gen eps -> eta"
+        , "  }"
+        , "  obligation triangleL(a@C) : [F(a)] -> [F(a)] @L ="
+        , "    map[F](eta{a}) ; eps{F(a)} == id[F(a)]"
+        , "  obligation triangleR(b@L) : [U(b)] -> [U(b)] @C ="
+        , "    eta{U(b)} ; map[U](eps{b}) == id[U(b)]"
+        , "}"
+        , "doctrine GoodAdj where {"
+        , "  mode C;"
+        , "  mode L;"
+        , "  modality F : C -> L;"
+        , "  modality U : L -> C;"
+        , "  mod_eq U.F -> id@C;"
+        , "  mod_eq F.U -> id@L;"
+        , "  gen eta(a@C) : [a] -> [U(F(a))] @C;"
+        , "  gen eps(b@L) : [F(U(b))] -> [b] @L;"
+        , "  rule computational triangleL -> (a@C) : [F(a)] -> [F(a)] @L ="
+        , "    eps{F(a)} ; eps{F(a)} == id[F(a)]"
+        , "  rule computational triangleR -> (b@L) : [U(b)] -> [U(b)] @C ="
+        , "    eta{U(b)} ; eta{U(b)} == id[U(b)]"
+        , "}"
+        , "morphism goodAdjInst : AdjSchema -> GoodAdj where {"
+        , "  mode C -> C;"
+        , "  mode L -> L;"
+        , "  modality F -> F;"
+        , "  modality U -> U;"
+        , "  gen eta @C -> eta"
+        , "  gen eps @L -> eps"
+        , "  check none;"
+        , "}"
+        , "implements AdjSchema for GoodAdj using goodAdjInst;"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  assertBool
+    "expected implements default instance recorded"
+    (M.member ("AdjSchema", "GoodAdj") (meImplDefaults env))
+
+testAdjunctionKeywordRejected :: Assertion
+testAdjunctionKeywordRejected = do
+  let src = T.unlines
+        [ "doctrine BadAdj where {"
+        , "  mode C;"
+        , "  mode L;"
+        , "  modality F : C -> L;"
+        , "  modality U : L -> C;"
+        , "  " <> "adju" <> "nction F dashv U;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected legacy adj keyword to be rejected"
+
+testStructureKeywordRejected :: Assertion
+testStructureKeywordRejected = do
   let src = T.unlines
         [ "doctrine BadStruct where {"
         , "  mode M;"
-        , "  structure M = cartesian;"
-        , "  attrsort Int = int;"
-        , "  type A @M;"
-        , "  gen dup (a@M) {n:Int} : [a] -> [a, a] @M;"
-        , "  gen drop (a@M) : [a] -> [] @M;"
+        , "  " <> "stru" <> "cture M = cartesian;"
         , "}"
         ]
   case parseRawFile src >>= elabRawFile of
-    Left err ->
-      assertBool "expected direct dup-attrs structural error" ("must not declare attributes" `T.isInfixOf` err)
-    Right _ -> assertFailure "expected doctrine validation failure"
-
-testDupBinderSlotRejected :: Assertion
-testDupBinderSlotRejected = do
-  let src = T.unlines
-        [ "doctrine BadStructBinderDup where {"
-        , "  mode M;"
-        , "  structure M = cartesian;"
-        , "  type A @M;"
-        , "  gen dup (a@M) : [a, binder {x:a} : [a]] -> [a, a] @M;"
-        , "  gen drop (a@M) : [a] -> [] @M;"
-        , "}"
-        ]
-  case parseRawFile src >>= elabRawFile of
-    Left err ->
-      assertBool
-        "expected dup shape rejection mentioning binder slots"
-        ("dup must have shape" `T.isInfixOf` err || "binder" `T.isInfixOf` err || "no binder slots" `T.isInfixOf` err)
-    Right _ -> assertFailure "expected doctrine validation failure"
-
-testDropBinderSlotRejected :: Assertion
-testDropBinderSlotRejected = do
-  let src = T.unlines
-        [ "doctrine BadStructBinderDrop where {"
-        , "  mode M;"
-        , "  structure M = cartesian;"
-        , "  type A @M;"
-        , "  gen dup (a@M) : [a] -> [a, a] @M;"
-        , "  gen drop (a@M) : [a, binder {x:a} : [a]] -> [] @M;"
-        , "}"
-        ]
-  case parseRawFile src >>= elabRawFile of
-    Left err ->
-      assertBool
-        "expected drop shape rejection mentioning binder slots"
-        ("drop must have shape" `T.isInfixOf` err || "binder" `T.isInfixOf` err || "no binder slots" `T.isInfixOf` err)
-    Right _ -> assertFailure "expected doctrine validation failure"
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected structure keyword to be rejected"
 
 buildStagingTheory :: ModeName -> ModeName -> Either T.Text ModeTheory
 buildStagingTheory rt ct = do

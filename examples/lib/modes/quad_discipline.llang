@@ -1,13 +1,10 @@
+import "../../../stdlib/struct.cartesian.llang";
+
 doctrine QuadDiscipline where {
   mode Lin;
   mode Aff;
   mode Rel;
   mode Cart;
-
-  structure Lin = linear;
-  structure Aff = affine;
-  structure Rel = relevant;
-  structure Cart = cartesian;
 
   type Base @Lin;
   type Base @Aff;
@@ -23,6 +20,8 @@ doctrine QuadDiscipline where {
   gen unit : [] -> [Aff.Base] @Aff;
   gen unit : [] -> [Rel.Base] @Rel;
   gen unit : [] -> [Cart.Base] @Cart;
+
+  gen swap(a@Cart, b@Cart) : [a, b] -> [b, a] @Cart;
 
   gen dup (a@Rel) : [a] -> [a, a] @Rel;
   gen dup (a@Cart) : [a] -> [a, a] @Cart;
@@ -42,6 +41,16 @@ doctrine QuadDiscipline where {
   rule structural counitR_cart = (a@Cart) : [a] -> [a] @Cart =
     dup ; (id[a] * drop) == id[a]
 }
+
+morphism cartInst : StructCartesian -> QuadDiscipline where {
+  mode M -> Cart;
+  gen swap @M -> swap
+  gen dup @M -> dup
+  gen drop @M -> drop
+  check none;
+}
+
+implements StructCartesian for QuadDiscipline using cartInst;
 
 surface QuadLin where {
   doctrine QuadDiscipline;

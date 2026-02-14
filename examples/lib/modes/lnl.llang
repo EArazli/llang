@@ -1,19 +1,30 @@
+import "../../../stdlib/struct.cartesian.llang";
+import "../../../stdlib/schema.adjunction.llang";
+
 doctrine LNL where {
   mode C;
   mode L;
 
-  structure C = cartesian;
-  structure L = linear;
-
   modality F : C -> L;
   modality U : L -> C;
-  adjunction F dashv U;
+  mod_eq U.F -> id@C;
+  mod_eq F.U -> id@L;
 
   type Nat @C;
   type Nat @L;
 
-  gen dup (a@C) : [a] -> [a, a] @C;
-  gen drop (a@C) : [a] -> [] @C;
+  gen unit_nat : [] -> [C.Nat] @C;
+  gen counit_nat : [] -> [L.Nat] @L;
+
+  gen swap(a@C, b@C) : [a, b] -> [b, a] @C;
+  gen dup(a@C) : [a] -> [a, a] @C;
+  gen drop(a@C) : [a] -> [] @C;
+
+  gen eta(a@C) : [a] -> [U(F(a))] @C;
+  gen eps(b@L) : [F(U(b))] -> [b] @L;
+
+  rule structural swap_invol = (a@C, b@C) : [a, b] -> [a, b] @C =
+    swap ; swap == id[a, b]
 
   rule structural coassoc = (a@C) : [a] -> [a, a, a] @C =
     dup ; (dup * id[a]) == dup ; (id[a] * dup)
@@ -23,11 +34,42 @@ doctrine LNL where {
 
   rule structural counitR = (a@C) : [a] -> [a] @C =
     dup ; (id[a] * drop) == id[a]
+
+  rule structural cocomm = (a@C) : [a] -> [a, a] @C =
+    dup ; swap == dup
+
+  rule computational triangleL -> (a@C) : [F(a)] -> [F(a)] @L =
+    eps{F(a)} ; eps{F(a)} == id[F(a)]
+
+  rule computational triangleR -> (b@L) : [U(b)] -> [U(b)] @C =
+    eta{U(b)} ; eta{U(b)} == id[U(b)]
 }
+
+morphism cartInst : StructCartesian -> LNL where {
+  mode M -> C;
+  gen swap @M -> swap
+  gen dup @M -> dup
+  gen drop @M -> drop
+  check none;
+}
+
+implements StructCartesian for LNL using cartInst;
+
+morphism adjInst : SchemaAdjunction -> LNL where {
+  mode C -> C;
+  mode L -> L;
+  modality F -> F;
+  modality U -> U;
+  gen eta @C -> eta
+  gen eps @L -> eps
+  check none;
+}
+
+implements SchemaAdjunction for LNL using adjInst;
 
 term unitNat where {
   doctrine LNL;
   mode C;
 }
 ---
-unit_F{C.Nat}
+unit_nat

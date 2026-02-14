@@ -3,6 +3,8 @@ module Strat.Poly.Doctrine
   ( InputShape(..)
   , BinderSig(..)
   , GenDecl(..)
+  , ModAction(..)
+  , ObligationDecl(..)
   , ParamSig(..)
   , TypeSig(..)
   , Doctrine(..)
@@ -11,7 +13,6 @@ module Strat.Poly.Doctrine
   , lookupTypeSig
   , checkType
   , validateDoctrine
-  , cartMode
   , modeIsAcyclic
   ) where
 
@@ -20,21 +21,29 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
+import qualified Data.Text as T
 import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
-import Strat.Poly.IndexTheory
 import Strat.Poly.TypeTheory
+  ( TypeTheory(..)
+  , TypeParamSig(..)
+  , TmFunSig(..)
+  , TmRule(..)
+  , defaultTmFuel
+  )
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (validateDiagram, diagramIsoMatchWithVars)
+import Strat.Poly.Graph (validateDiagram, Edge(..), EdgePayload(..), unPortId)
 import Strat.Poly.Cell2
-import Strat.Poly.UnifyTy
+import Strat.Poly.UnifyTy (unifyCtx)
+import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
+import Strat.Poly.TypeNormalize (termToDiagram, validateTermDiagram)
 
 
 data ParamSig
   = PS_Ty ModeName
-  | PS_Ix TypeExpr
+  | PS_Tm TypeExpr
   deriving (Eq, Ord, Show)
 
 newtype TypeSig = TypeSig
@@ -42,7 +51,7 @@ newtype TypeSig = TypeSig
   } deriving (Eq, Ord, Show)
 
 data BinderSig = BinderSig
-  { bsIxCtx :: [TypeExpr]
+  { bsTmCtx :: [TypeExpr]
   , bsDom :: Context
   , bsCod :: Context
   } deriving (Eq, Ord, Show)
@@ -56,10 +65,27 @@ data GenDecl = GenDecl
   { gdName :: GenName
   , gdMode :: ModeName
   , gdTyVars :: [TyVar]
-  , gdIxVars :: [IxVar]
+  , gdTmVars :: [TmVar]
   , gdDom :: [InputShape]
   , gdCod :: Context
   , gdAttrs :: [(AttrName, AttrSort)]
+  } deriving (Eq, Show)
+
+data ModAction = ModAction
+  { maMod :: ModName
+  , maGenMap :: M.Map (ModeName, GenName) Diagram
+  , maPolicy :: RewritePolicy
+  , maFuel :: Int
+  } deriving (Eq, Show)
+
+data ObligationDecl = ObligationDecl
+  { obName :: Text
+  , obTyVars :: [TyVar]
+  , obTmVars :: [TmVar]
+  , obLHS :: Diagram
+  , obRHS :: Diagram
+  , obPolicy :: RewritePolicy
+  , obFuel :: Int
   } deriving (Eq, Show)
 
 gdPlainDom :: GenDecl -> Context
@@ -72,35 +98,110 @@ data Doctrine = Doctrine
   { dName :: Text
   , dModes :: ModeTheory
   , dAcyclicModes :: S.Set ModeName
-  , dIndexModes :: S.Set ModeName
-  , dIxTheory :: M.Map ModeName IxTheory
   , dAttrSorts :: M.Map AttrSort AttrSortDecl
   , dTypes :: M.Map ModeName (M.Map TypeName TypeSig)
   , dGens :: M.Map ModeName (M.Map GenName GenDecl)
   , dCells2 :: [Cell2]
+  , dActions :: M.Map ModName ModAction
+  , dObligations :: [ObligationDecl]
   } deriving (Eq, Show)
-
-cartMode :: ModeName
-cartMode = ModeName "Cart"
 
 doctrineTypeTheory :: Doctrine -> TypeTheory
 doctrineTypeTheory doc =
+  let tmFuns = derivedTmFuns doc
+      tmRules = derivedTmRules doc tmFuns
+   in
   TypeTheory
     { ttModes = dModes doc
-    , ttIndex = dIxTheory doc
     , ttTypeParams =
         M.fromList
           [ (TypeRef mode tyName, map toTParam (tsParams sig))
           | (mode, typeTable) <- M.toList (dTypes doc)
           , (tyName, sig) <- M.toList typeTable
           ]
-    , ttIxFuel = defaultIxFuel
+    , ttTmFuns = tmFuns
+    , ttTmRules = tmRules
+    , ttTmFuel = defaultTmFuel
+    , ttTmPolicy = UseOnlyComputationalLR
     }
   where
     toTParam ps =
       case ps of
         PS_Ty m -> TPS_Ty m
-        PS_Ix sortTy -> TPS_Ix sortTy
+        PS_Tm sortTy -> TPS_Tm sortTy
+
+derivedTmFuns :: Doctrine -> M.Map ModeName (M.Map TmFunName TmFunSig)
+derivedTmFuns doc =
+  M.fromList
+    [ (mode, funs)
+    | (mode, table) <- M.toList (dGens doc)
+    , let funs =
+            M.fromList
+              [ (TmFunName gName, TmFunSig { tfsArgs = [ ty | InPort ty <- gdDom gd ], tfsRes = res })
+              | gd <- M.elems table
+              , let GenName gName = gdName gd
+              , null (gdTyVars gd)
+              , null (gdTmVars gd)
+              , null (gdAttrs gd)
+              , all isPort (gdDom gd)
+              , [res] <- [gdCod gd]
+              ]
+    , not (M.null funs)
+    ]
+  where
+    isPort sh =
+      case sh of
+        InPort _ -> True
+        InBinder _ -> False
+
+derivedTmRules :: Doctrine -> M.Map ModeName (M.Map TmFunName TmFunSig) -> M.Map ModeName [TmRule]
+derivedTmRules doc tmFuns =
+  M.fromListWith (<>)
+    [ (mode, [rule])
+    | cell <- dCells2 doc
+    , c2Class cell == Computational
+    , (lhs, rhs) <- oriented cell
+    , let mode = dMode lhs
+    , Just funs <- [M.lookup mode tmFuns]
+    , Just rule <- [cellPairToTmRule funs lhs rhs]
+    ]
+  where
+    oriented cell =
+      case c2Orient cell of
+        LR -> [(c2LHS cell, c2RHS cell)]
+        RL -> [(c2RHS cell, c2LHS cell)]
+        Bidirectional -> [(c2LHS cell, c2RHS cell), (c2RHS cell, c2LHS cell)]
+        Unoriented -> []
+
+cellPairToTmRule :: M.Map TmFunName TmFunSig -> Diagram -> Diagram -> Maybe TmRule
+cellPairToTmRule funs lhs rhs = do
+  vars <- mkInputVars lhs
+  ensureTermDiagram lhs
+  ensureTermDiagram rhs
+  ensureRuleFunSigs lhs
+  ensureRuleFunSigs rhs
+  pure TmRule { trVars = vars, trLHS = TermDiagram lhs, trRHS = TermDiagram rhs }
+  where
+    ensureTermDiagram d = either (const Nothing) (const (Just ())) (validateTermDiagram d)
+    ensureRuleFunSigs d = mapM_ checkEdge (IM.elems (dEdges d))
+    checkEdge edge =
+      case ePayload edge of
+        PGen (GenName gName) attrs bargs
+          | M.null attrs && null bargs -> do
+              sig <- M.lookup (TmFunName gName) funs
+              if length (tfsArgs sig) == length (eIns edge) && length (eOuts edge) == 1
+                then Just ()
+                else Nothing
+        PTmMeta _ -> Just ()
+        _ -> Nothing
+
+mkInputVars :: Diagram -> Maybe [TmVar]
+mkInputVars diag =
+  mapM mkOne (zip [0 :: Int ..] (dIn diag))
+  where
+    mkOne (i, pid) = do
+      sortTy <- IM.lookup (unPortId pid) (dPortTy diag)
+      pure TmVar { tmvName = "_x" <> T.pack (show i), tmvSort = sortTy, tmvScope = 0 }
 
 validateDoctrine :: Doctrine -> Either Text ()
 validateDoctrine doc = do
@@ -108,13 +209,12 @@ validateDoctrine doc = do
   if all (`M.member` mtModes (dModes doc)) (S.toList (dAcyclicModes doc))
     then Right ()
     else Left "validateDoctrine: acyclic mode references unknown mode"
-  checkIndexModes doc
-  mapM_ (checkIxTheoryTable doc) (M.toList (dIxTheory doc))
   mapM_ checkAttrSortDecl (M.toList (dAttrSorts doc))
   mapM_ (checkTypeTable doc) (M.toList (dTypes doc))
   mapM_ (checkGenTable doc) (M.toList (dGens doc))
   mapM_ (checkCell doc) (dCells2 doc)
-  checkStructuralByDiscipline doc
+  mapM_ (checkAction doc) (M.toList (dActions doc))
+  mapM_ checkObligation (dObligations doc)
   pure ()
 
 modeIsAcyclic :: Doctrine -> ModeName -> Bool
@@ -132,53 +232,6 @@ lookupTypeSig doc ref =
 checkModeTheory :: ModeTheory -> Either Text ()
 checkModeTheory = checkWellFormed
 
-checkIndexModes :: Doctrine -> Either Text ()
-checkIndexModes doc =
-  if all (`M.member` mtModes (dModes doc)) (S.toList (dIndexModes doc))
-    then Right ()
-    else Left "validateDoctrine: index_mode references unknown mode"
-
-checkIxTheoryTable :: Doctrine -> (ModeName, IxTheory) -> Either Text ()
-checkIxTheoryTable doc (mode, ixTheory) = do
-  if mode `S.member` dIndexModes doc
-    then Right ()
-    else Left "validateDoctrine: index theory declared for non-index mode"
-  if M.member mode (mtModes (dModes doc))
-    then Right ()
-    else Left "validateDoctrine: index theory mode does not exist"
-  mapM_ (checkIxFun mode) (M.toList (itFuns ixTheory))
-  mapM_ (checkIxRule mode ixTheory) (itRules ixTheory)
-  where
-    tt = doctrineTypeTheory doc
-
-    checkIxFun expectedMode (_fname, sig) = do
-      mapM_ ensureIndexSort (ifArgs sig)
-      ensureIndexSort (ifRes sig)
-      resSort <- normalizeTypeDeep tt (ifRes sig)
-      if typeMode resSort == expectedMode
-        then Right ()
-        else Left "validateDoctrine: index_fun result mode mismatch"
-
-    checkIxRule expectedMode theory rule = do
-      mapM_ (ensureIndexSort . ixvSort) (irVars rule)
-      lhsSort <- inferIxSortRule tt theory (M.fromList [(ixvName v, ixvSort v) | v <- irVars rule]) (irLHS rule)
-      rhsSort <- inferIxSortRule tt theory (M.fromList [(ixvName v, ixvSort v) | v <- irVars rule]) (irRHS rule)
-      lhsSort' <- normalizeTypeDeep tt lhsSort
-      rhsSort' <- normalizeTypeDeep tt rhsSort
-      if lhsSort' /= rhsSort'
-        then Left "validateDoctrine: index_rule lhs/rhs sort mismatch"
-        else Right ()
-      if typeMode lhsSort' == expectedMode
-        then Right ()
-        else Left "validateDoctrine: index_rule result mode mismatch"
-      checkIxTerm doc [] (irVars rule) [] lhsSort' (irLHS rule)
-      checkIxTerm doc [] (irVars rule) [] lhsSort' (irRHS rule)
-
-    ensureIndexSort sortTy =
-      if typeMode sortTy `S.member` dIndexModes doc
-        then checkType doc [] [] [] sortTy
-        else Left "validateDoctrine: index sort must live in an index_mode"
-
 checkTypeTable :: Doctrine -> (ModeName, M.Map TypeName TypeSig) -> Either Text ()
 checkTypeTable doc (mode, table)
   | M.member mode (mtModes (dModes doc)) = mapM_ checkSig (M.toList table)
@@ -191,11 +244,9 @@ checkTypeTable doc (mode, table)
           if M.member m (mtModes (dModes doc))
             then Right ()
             else Left "validateDoctrine: type signature uses unknown mode"
-        PS_Ix sortTy -> do
+        PS_Tm sortTy -> do
           checkType doc [] [] [] sortTy
-          if typeMode sortTy `S.member` dIndexModes doc
-            then Right ()
-            else Left "validateDoctrine: PS_Ix sort must be in an index mode"
+          Right ()
 
 checkGenTable :: Doctrine -> (ModeName, M.Map GenName GenDecl) -> Either Text ()
 checkGenTable doc (mode, gens)
@@ -207,33 +258,31 @@ checkGen doc mode gd
   | gdMode gd /= mode = Left "validateDoctrine: generator stored under wrong mode"
   | otherwise = do
       checkTyVarModes doc (gdTyVars gd)
-      checkIxVarModes doc (gdIxVars gd)
+      checkTmVarModes doc (gdTmVars gd)
       ensureDistinctTyVars ("validateDoctrine: duplicate generator tyvars in " <> renderGen (gdName gd)) (gdTyVars gd)
-      ensureDistinctIxVars ("validateDoctrine: duplicate generator ixvars in " <> renderGen (gdName gd)) (gdIxVars gd)
-      mapM_ (checkInputShape doc mode (gdTyVars gd) (gdIxVars gd)) (gdDom gd)
-      checkContext doc mode (gdTyVars gd) (gdIxVars gd) [] (gdCod gd)
+      ensureDistinctTmVars ("validateDoctrine: duplicate generator term vars in " <> renderGen (gdName gd)) (gdTmVars gd)
+      mapM_ (checkInputShape doc mode (gdTyVars gd) (gdTmVars gd)) (gdDom gd)
+      checkContext doc mode (gdTyVars gd) (gdTmVars gd) [] (gdCod gd)
       checkGenAttrs doc gd
 
-checkInputShape :: Doctrine -> ModeName -> [TyVar] -> [IxVar] -> InputShape -> Either Text ()
-checkInputShape doc expectedMode tyvars ixvars shape =
+checkInputShape :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> InputShape -> Either Text ()
+checkInputShape doc expectedMode tyvars tmvars shape =
   case shape of
-    InPort ty -> checkBoundaryType doc expectedMode tyvars ixvars [] ty
-    InBinder bs -> checkBinderSig doc expectedMode tyvars ixvars bs
+    InPort ty -> checkBoundaryType doc expectedMode tyvars tmvars [] ty
+    InBinder bs -> checkBinderSig doc expectedMode tyvars tmvars bs
 
-checkBinderSig :: Doctrine -> ModeName -> [TyVar] -> [IxVar] -> BinderSig -> Either Text ()
-checkBinderSig doc expectedMode tyvars ixvars bs = do
-  checkIxCtxTele (bsIxCtx bs)
-  checkContext doc expectedMode tyvars ixvars (bsIxCtx bs) (bsDom bs)
-  checkContext doc expectedMode tyvars ixvars (bsIxCtx bs) (bsCod bs)
+checkBinderSig :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> BinderSig -> Either Text ()
+checkBinderSig doc expectedMode tyvars tmvars bs = do
+  checkTmCtxTele (bsTmCtx bs)
+  checkContext doc expectedMode tyvars tmvars (bsTmCtx bs) (bsDom bs)
+  checkContext doc expectedMode tyvars tmvars (bsTmCtx bs) (bsCod bs)
   where
-    checkIxCtxTele ctx =
+    checkTmCtxTele ctx =
       mapM_ checkAt (zip [0 :: Int ..] ctx)
 
     checkAt (i, ty) = do
-      checkType doc tyvars ixvars (take i (bsIxCtx bs)) ty
-      if typeMode ty `S.member` dIndexModes doc
-        then Right ()
-        else Left "validateDoctrine: binder index context sort must be in an index mode"
+      checkType doc tyvars tmvars (take i (bsTmCtx bs)) ty
+      Right ()
 
 checkCell :: Doctrine -> Cell2 -> Either Text ()
 checkCell doc cell = do
@@ -248,37 +297,37 @@ checkCell doc cell = do
     then Left "validateDoctrine: empty LHS rules are disallowed (use an explicit marker generator if you need insertion)"
     else Right ()
   checkTyVarModes doc (c2TyVars cell)
-  checkIxVarModes doc (c2IxVars cell)
+  checkTmVarModes doc (c2TmVars cell)
   ensureDistinctTyVars ("validateDoctrine: duplicate cell tyvars in " <> c2Name cell) (c2TyVars cell)
-  ensureDistinctIxVars ("validateDoctrine: duplicate cell ixvars in " <> c2Name cell) (c2IxVars cell)
+  ensureDistinctTmVars ("validateDoctrine: duplicate cell term vars in " <> c2Name cell) (c2TmVars cell)
   if dMode (c2LHS cell) /= dMode (c2RHS cell)
     then Left "validateDoctrine: cell has mode mismatch"
-    else if dIxCtx (c2LHS cell) /= dIxCtx (c2RHS cell)
-      then Left "validateDoctrine: cell has index-context mismatch"
+    else if dTmCtx (c2LHS cell) /= dTmCtx (c2RHS cell)
+      then Left "validateDoctrine: cell has term-context mismatch"
     else do
       ctxL <- diagramDom (c2LHS cell)
       ctxR <- diagramDom (c2RHS cell)
       let tt = doctrineTypeTheory doc
       let tyFlexDom = S.unions (map freeTyVarsType (ctxL <> ctxR))
-      let ixFlexDom = S.unions (map freeIxVarsType (ctxL <> ctxR))
-      _ <- unifyCtx tt [] tyFlexDom ixFlexDom ctxL ctxR
+      let tmFlexDom = S.unions (map freeTmVarsType (ctxL <> ctxR))
+      _ <- unifyCtx tt [] tyFlexDom tmFlexDom ctxL ctxR
       codL <- diagramCod (c2LHS cell)
       codR <- diagramCod (c2RHS cell)
       let tyFlexCod = S.unions (map freeTyVarsType (codL <> codR))
-      let ixFlexCod = S.unions (map freeIxVarsType (codL <> codR))
-      _ <- unifyCtx tt [] tyFlexCod ixFlexCod codL codR
+      let tmFlexCod = S.unions (map freeTmVarsType (codL <> codR))
+      _ <- unifyCtx tt [] tyFlexCod tmFlexCod codL codR
       let lhsVars = freeTyVarsDiagram (c2LHS cell)
       let rhsVars = freeTyVarsDiagram (c2RHS cell)
       let declaredTy = S.fromList (c2TyVars cell)
       if S.isSubsetOf rhsVars (S.union lhsVars declaredTy)
         then Right ()
         else Left "validateDoctrine: RHS introduces fresh type variables"
-      let lhsIxVars = freeIxVarsDiagram (c2LHS cell)
-      let rhsIxVars = freeIxVarsDiagram (c2RHS cell)
-      let declaredIx = S.fromList (c2IxVars cell)
-      if S.isSubsetOf rhsIxVars (S.union lhsIxVars declaredIx)
+      let lhsTmVars = freeTmVarsDiagram (c2LHS cell)
+      let rhsTmVars = freeTmVarsDiagram (c2RHS cell)
+      let declaredTm = S.fromList (c2TmVars cell)
+      if S.isSubsetOf rhsTmVars (S.union lhsTmVars declaredTm)
         then Right ()
-        else Left "validateDoctrine: RHS introduces fresh index variables"
+        else Left "validateDoctrine: RHS introduces fresh term variables"
       let lhsAttrVars = freeAttrVarsDiagram (c2LHS cell)
       let rhsAttrVars = freeAttrVarsDiagram (c2RHS cell)
       if S.isSubsetOf rhsAttrVars lhsAttrVars
@@ -288,28 +337,28 @@ checkCell doc cell = do
       if S.isSubsetOf vars declaredTy
         then Right ()
         else Left "validateDoctrine: cell uses undeclared type variables"
-      let ixVars = S.union lhsIxVars rhsIxVars
-      if S.isSubsetOf ixVars declaredIx
+      let tmVars = S.union lhsTmVars rhsTmVars
+      if S.isSubsetOf tmVars declaredTm
         then Right ()
-        else Left "validateDoctrine: cell uses undeclared index variables"
+        else Left "validateDoctrine: cell uses undeclared term variables"
       let lhsCapturedMetas = binderArgMetaVarsDiagram (c2LHS cell)
       let rhsReferencedMetas = S.union (binderArgMetaVarsDiagram (c2RHS cell)) (spliceMetaVarsDiagram (c2RHS cell))
       if S.isSubsetOf rhsReferencedMetas lhsCapturedMetas
         then Right ()
         else Left "validateDoctrine: RHS references binder metas not captured by LHS binder arguments"
 
-checkContext :: Doctrine -> ModeName -> [TyVar] -> [IxVar] -> [TypeExpr] -> Context -> Either Text ()
-checkContext doc expectedMode tyvars ixvars ixCtx ctx = mapM_ (checkBoundaryType doc expectedMode tyvars ixvars ixCtx) ctx
+checkContext :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> [TypeExpr] -> Context -> Either Text ()
+checkContext doc expectedMode tyvars tmvars tmCtx ctx = mapM_ (checkBoundaryType doc expectedMode tyvars tmvars tmCtx) ctx
 
-checkBoundaryType :: Doctrine -> ModeName -> [TyVar] -> [IxVar] -> [TypeExpr] -> TypeExpr -> Either Text ()
-checkBoundaryType doc expectedMode tyvars ixvars ixCtx ty = do
-  checkType doc tyvars ixvars ixCtx ty
+checkBoundaryType :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> Either Text ()
+checkBoundaryType doc expectedMode tyvars tmvars tmCtx ty = do
+  checkType doc tyvars tmvars tmCtx ty
   if typeMode ty == expectedMode
     then Right ()
     else Left "validateDoctrine: generator boundary mode mismatch"
 
-checkType :: Doctrine -> [TyVar] -> [IxVar] -> [TypeExpr] -> TypeExpr -> Either Text ()
-checkType doc tyvars ixvars ixCtx ty =
+checkType :: Doctrine -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> Either Text ()
+checkType doc tyvars tmvars tmCtx ty =
   case ty of
     TVar v ->
       if v `elem` tyvars
@@ -325,63 +374,35 @@ checkType doc tyvars ixvars ixCtx ty =
         then Left "validateDoctrine: type constructor arity mismatch"
         else mapM_ (checkArg ref) (zip params args)
     TMod _ inner -> do
-      checkType doc tyvars ixvars ixCtx inner
+      checkType doc tyvars tmvars tmCtx inner
       _ <- normalizeTypeExpr (dModes doc) ty
       Right ()
   where
     checkArg _ (PS_Ty m, TAType argTy) = do
-      checkType doc tyvars ixvars ixCtx argTy
+      checkType doc tyvars tmvars tmCtx argTy
       if typeMode argTy == m
         then Right ()
         else Left "validateDoctrine: type constructor argument mode mismatch"
-    checkArg _ (PS_Ix sortTy, TAIndex ixTerm) = do
-      checkType doc tyvars ixvars ixCtx sortTy
-      checkIxTerm doc tyvars ixvars ixCtx sortTy ixTerm
+    checkArg _ (PS_Tm sortTy, TATm tmTerm) = do
+      checkType doc tyvars tmvars tmCtx sortTy
+      checkTmTerm doc tyvars tmvars tmCtx sortTy tmTerm
     checkArg _ _ = Left "validateDoctrine: type argument kind mismatch"
 
-checkIxTerm :: Doctrine -> [TyVar] -> [IxVar] -> [TypeExpr] -> TypeExpr -> IxTerm -> Either Text ()
-checkIxTerm doc tyvars ixvars ixCtx expectedSort tm =
-  case tm of
-    IXVar v -> do
-      if v `elem` ixvars
-        then Right ()
-        else Left "validateDoctrine: unknown index variable"
-      checkType doc tyvars ixvars ixCtx (ixvSort v)
-      sameSort <- sortDefEq (ixvSort v) expectedSort
-      if sameSort
-        then Right ()
-        else Left "validateDoctrine: index variable sort mismatch"
-    IXBound i ->
-      if i < length ixCtx
-        then do
-          sameSort <- sortDefEq (ixCtx !! i) expectedSort
-          if sameSort
-            then Right ()
-            else Left "validateDoctrine: IXBound sort mismatch"
-        else Left "validateDoctrine: IXBound out of scope"
-    IXFun fname args -> do
-      modeTheory <-
-        case M.lookup (typeMode expectedSort) (dIxTheory doc) of
-          Nothing -> Left "validateDoctrine: missing index theory for expected sort mode"
-          Just th -> Right th
-      sig <-
-        case M.lookup fname (itFuns modeTheory) of
-          Nothing -> Left "validateDoctrine: unknown index function"
-          Just s -> Right s
-      if length (ifArgs sig) /= length args
-        then Left "validateDoctrine: index function arity mismatch"
-        else mapM_ (uncurry (checkIxTerm doc tyvars ixvars ixCtx)) (zip (ifArgs sig) args)
-      sameSort <- sortDefEq (ifRes sig) expectedSort
-      if sameSort
-        then Right ()
-        else Left "validateDoctrine: index function result sort mismatch"
+checkTmTerm :: Doctrine -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> TermDiagram -> Either Text ()
+checkTmTerm doc tyvars tmvars tmCtx expectedSort tm =
+  do
+    mapM_ checkMetaVar (S.toList (freeTmVarsTerm tm))
+    _ <- termToDiagram tt tmCtx expectedSort tm
+    pure ()
   where
     tt = doctrineTypeTheory doc
 
-    sortDefEq lhs rhs = do
-      lhs' <- normalizeTypeDeep tt lhs
-      rhs' <- normalizeTypeDeep tt rhs
-      pure (lhs' == rhs')
+    checkMetaVar v = do
+      if any (sameTmVarId v) tmvars
+        then checkType doc tyvars tmvars tmCtx (tmvSort v)
+        else Left "validateDoctrine: unknown term variable"
+
+    sameTmVarId a b = tmvName a == tmvName b && tmvScope a == tmvScope b
 
 ensureDistinctTyVars :: Text -> [TyVar] -> Either Text ()
 ensureDistinctTyVars label vars =
@@ -391,9 +412,9 @@ ensureDistinctTyVars label vars =
         then Right ()
         else Left label
 
-ensureDistinctIxVars :: Text -> [IxVar] -> Either Text ()
-ensureDistinctIxVars label vars =
-  let names = map ixvName vars
+ensureDistinctTmVars :: Text -> [TmVar] -> Either Text ()
+ensureDistinctTmVars label vars =
+  let names = map tmvName vars
       set = S.fromList names
    in if S.size set == length names
         then Right ()
@@ -405,15 +426,13 @@ checkTyVarModes doc vars =
     then Right ()
     else Left "validateDoctrine: type variable has unknown mode"
 
-checkIxVarModes :: Doctrine -> [IxVar] -> Either Text ()
-checkIxVarModes doc vars =
+checkTmVarModes :: Doctrine -> [TmVar] -> Either Text ()
+checkTmVarModes doc vars =
   mapM_ checkOne vars
   where
     checkOne v = do
-      checkType doc [] vars [] (ixvSort v)
-      if typeMode (ixvSort v) `S.member` dIndexModes doc
-        then Right ()
-        else Left "validateDoctrine: index variable sort must be in an index mode"
+      checkType doc [] vars [] (tmvSort v)
+      Right ()
 
 checkAttrSortDecl :: (AttrSort, AttrSortDecl) -> Either Text ()
 checkAttrSortDecl (name, decl) =
@@ -431,6 +450,37 @@ checkGenAttrs doc gd = do
         then Right ()
         else Left ("validateDoctrine: unknown attribute sort in generator " <> renderGen (gdName gd))
 
+checkAction :: Doctrine -> (ModName, ModAction) -> Either Text ()
+checkAction doc (name, action) = do
+  if maMod action == name
+    then Right ()
+    else Left "validateDoctrine: action declaration name mismatch"
+  decl <-
+    case M.lookup name (mtDecls (dModes doc)) of
+      Nothing -> Left "validateDoctrine: action references unknown modality"
+      Just d -> Right d
+  let srcMode = mdSrc decl
+  let tgtMode = mdTgt decl
+  let srcGens = M.findWithDefault M.empty srcMode (dGens doc)
+  let checkGenImage g = do
+        img <-
+          case M.lookup (srcMode, g) (maGenMap action) of
+            Nothing -> Left "validateDoctrine: action is missing a generator image"
+            Just d -> Right d
+        if dMode img == tgtMode
+          then Right ()
+          else Left "validateDoctrine: action generator image has wrong mode"
+        validateDiagram img
+  mapM_ checkGenImage (M.keys srcGens)
+
+checkObligation :: ObligationDecl -> Either Text ()
+checkObligation obl = do
+  validateDiagram (obLHS obl)
+  validateDiagram (obRHS obl)
+  if dMode (obLHS obl) == dMode (obRHS obl) && dTmCtx (obLHS obl) == dTmCtx (obRHS obl)
+    then Right ()
+    else Left "validateDoctrine: obligation boundary mismatch"
+
 ensureDistinct :: Ord a => Text -> [a] -> Either Text ()
 ensureDistinct label xs =
   if length (L.nub xs) == length xs
@@ -439,150 +489,3 @@ ensureDistinct label xs =
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
-
-renderModeName :: ModeName -> Text
-renderModeName (ModeName t) = t
-
-checkStructuralByDiscipline :: Doctrine -> Either Text ()
-checkStructuralByDiscipline doc =
-  mapM_ checkOneMode (M.toList (mtModes (dModes doc)))
-  where
-    checkOneMode (mode, info) =
-      case miDiscipline info of
-        Linear -> Right ()
-        Affine -> do
-          _ <- requireDrop mode
-          Right ()
-        Relevant -> do
-          _ <- requireDup mode
-          requireCoassoc mode
-        Cartesian -> do
-          _ <- requireDup mode
-          _ <- requireDrop mode
-          requireCoassoc mode
-          requireCounitLeft mode
-          requireCounitRight mode
-
-    requireDup mode = do
-      dup <- requireNamedGen mode "dup"
-      ensureDupShape mode dup
-      Right dup
-
-    requireDrop mode = do
-      dropGen <- requireNamedGen mode "drop"
-      ensureDropShape mode dropGen
-      Right dropGen
-
-    requireNamedGen mode name =
-      case M.lookup mode (dGens doc) >>= M.lookup (GenName name) of
-        Nothing -> Left ("validateDoctrine: mode " <> renderModeName mode <> " requires generator " <> name)
-        Just gen -> Right gen
-
-    ensureDupShape mode gen =
-      if not (null (gdAttrs gen))
-        then Left ("dup in mode " <> renderModeName mode <> " must not declare attributes")
-        else
-          case (gdTyVars gen, gdDom gen, gdCod gen) of
-            ([v], [InPort (TVar v1)], [TVar v2, TVar v3])
-              | v == v1 && v == v2 && v == v3 -> Right ()
-            _ -> Left "validateDoctrine: dup must have shape (a@M) : [a] -> [a,a] (no binder slots)"
-
-    ensureDropShape mode gen =
-      if not (null (gdAttrs gen))
-        then Left ("drop in mode " <> renderModeName mode <> " must not declare attributes")
-        else
-          case (gdTyVars gen, gdDom gen, gdCod gen) of
-            ([v], [InPort (TVar v1)], []) | v == v1 -> Right ()
-            _ -> Left "validateDoctrine: drop must have shape (a@M) : [a] -> [] (no binder slots)"
-
-    requireCoassoc mode = do
-      (lhs, rhs) <- lawCoassoc mode
-      requireLaw "coassociativity" lhs rhs
-
-    requireCounitLeft mode = do
-      (lhs, rhs) <- lawCounitLeft mode
-      requireLaw "counit-left" lhs rhs
-
-    requireCounitRight mode = do
-      (lhs, rhs) <- lawCounitRight mode
-      requireLaw "counit-right" lhs rhs
-
-    requireLaw label expectedL expectedR =
-      case filter (cellSatisfies expectedL expectedR) (dCells2 doc) of
-        [] -> Left ("validateDoctrine: missing structural law " <> label)
-        _ -> Right ()
-
-    cellSatisfies expectedL expectedR cell =
-      let lhs = c2LHS cell
-          rhs = c2RHS cell
-       in (matches expectedL lhs && matches expectedR rhs)
-            || (matches expectedR lhs && matches expectedL rhs)
-
-    matches expected actual =
-      case
-        diagramIsoMatchWithVars
-          (doctrineTypeTheory doc)
-          (freeTyVarsDiagram expected)
-          (freeIxVarsDiagram expected)
-          S.empty
-          expected
-          actual
-        of
-        Right (_:_) -> True
-        _ -> False
-
-    lawCoassoc mode = do
-      a <- lawTyVar mode
-      dup <- genD mode [TVar a] [TVar a, TVar a] (GenName "dup")
-      ida <- pure (idD mode [TVar a])
-      lhsTail <- tensorD dup ida
-      rhsTail <- tensorD ida dup
-      lhs <- compD (doctrineTypeTheory doc) lhsTail dup
-      rhs <- compD (doctrineTypeTheory doc) rhsTail dup
-      Right (lhs, rhs)
-
-    lawCounitLeft mode = do
-      a <- lawTyVar mode
-      dup <- genD mode [TVar a] [TVar a, TVar a] (GenName "dup")
-      dropA <- genD mode [TVar a] [] (GenName "drop")
-      ida <- pure (idD mode [TVar a])
-      tailL <- tensorD dropA ida
-      lhs <- compD (doctrineTypeTheory doc) tailL dup
-      let rhs = idD mode [TVar a]
-      Right (lhs, rhs)
-
-    lawCounitRight mode = do
-      a <- lawTyVar mode
-      dup <- genD mode [TVar a] [TVar a, TVar a] (GenName "dup")
-      dropA <- genD mode [TVar a] [] (GenName "drop")
-      ida <- pure (idD mode [TVar a])
-      tailL <- tensorD ida dropA
-      lhs <- compD (doctrineTypeTheory doc) tailL dup
-      let rhs = idD mode [TVar a]
-      Right (lhs, rhs)
-
-    lawTyVar mode =
-      Right TyVar { tvName = "a", tvMode = mode }
-
-inferIxSortRule :: TypeTheory -> IxTheory -> M.Map Text TypeExpr -> IxTerm -> Either Text TypeExpr
-inferIxSortRule tt theory varSorts tm =
-  case tm of
-    IXVar v -> do
-      ty <-
-        case M.lookup (ixvName v) varSorts of
-          Nothing -> Left "validateDoctrine: index_rule uses undeclared index variable"
-          Just sortTy -> Right sortTy
-      varSort' <- normalizeTypeDeep tt (ixvSort v)
-      ty' <- normalizeTypeDeep tt ty
-      if varSort' == ty'
-        then Right ty
-        else Left "validateDoctrine: index_rule variable sort mismatch"
-    IXBound _ ->
-      Left "validateDoctrine: index_rule cannot use bound indices"
-    IXFun fname args ->
-      case M.lookup fname (itFuns theory) of
-        Nothing -> Left "validateDoctrine: index_rule references unknown index_fun"
-        Just sig -> do
-          if length (ifArgs sig) /= length args
-            then Left "validateDoctrine: index_rule function arity mismatch"
-            else Right (ifRes sig)

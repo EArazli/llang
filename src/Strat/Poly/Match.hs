@@ -13,9 +13,9 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.Attr (AttrSubst, AttrVar, unifyAttrFlex)
 import Strat.Poly.Graph
-import Strat.Poly.TypeExpr (IxVar, TyVar, TypeExpr)
+import Strat.Poly.TypeExpr (TmVar, TyVar, TypeExpr)
 import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.UnifyTy
+import {-# SOURCE #-} Strat.Poly.UnifyTy
   ( Subst
   , applySubstCtx
   , emptySubst
@@ -37,7 +37,7 @@ data Match = Match
 data MatchConfig = MatchConfig
   { mcTheory :: TypeTheory
   , mcTyFlex :: S.Set TyVar
-  , mcIxFlex :: S.Set IxVar
+  , mcTmFlex :: S.Set TmVar
   , mcAttrFlex :: S.Set AttrVar
   }
   deriving (Eq, Show)
@@ -51,9 +51,9 @@ findAllMatches :: MatchConfig -> Diagram -> Diagram -> Either Text [Match]
 findAllMatches cfg lhs host
   | dMode lhs /= dMode host = Right []
   | otherwise = do
-      lhsIxCtx <- applySubstCtx tt emptySubst (dIxCtx lhs)
-      hostIxCtx <- applySubstCtx tt emptySubst (dIxCtx host)
-      if lhsIxCtx /= hostIxCtx
+      lhsTmCtx <- applySubstCtx tt emptySubst (dTmCtx lhs)
+      hostTmCtx <- applySubstCtx tt emptySubst (dTmCtx host)
+      if lhsTmCtx /= hostTmCtx
         then Right []
         else do
           let lhsEdges = IM.elems (dEdges lhs)
@@ -65,13 +65,13 @@ findAllMatches cfg lhs host
   where
     tt = mcTheory cfg
     tyFlex = mcTyFlex cfg
-    ixFlex = mcIxFlex cfg
+    tmFlex = mcTmFlex cfg
     attrFlex = mcAttrFlex cfg
 
     go acc match adj allEdgeIds lhsEdges hostEdges =
       case pickNextEdge match adj allEdgeIds of
         Nothing ->
-          case completeBoundary tt tyFlex ixFlex lhs host match of
+          case completeBoundary tt tyFlex tmFlex lhs host match of
             Left _ -> Right acc
             Right match'
               | danglingOk lhs host match' -> Right (acc <> [match'])
@@ -83,7 +83,7 @@ findAllMatches cfg lhs host
 
     tryCandidates acc _ _ _ _ _ _ [] = Right acc
     tryCandidates acc match adj allEdgeIds lhsEdges hostEdges edge (cand : cands) =
-      case extendMatch tt tyFlex ixFlex attrFlex lhs host match edge cand of
+      case extendMatch tt tyFlex tmFlex attrFlex lhs host match edge cand of
         Left _ -> tryCandidates acc match adj allEdgeIds lhsEdges hostEdges edge cands
         Right matches -> do
           acc' <- foldl step (Right acc) matches
@@ -129,7 +129,7 @@ portsCompatible match pats hosts =
 extendMatch
   :: TypeTheory
   -> S.Set TyVar
-  -> S.Set IxVar
+  -> S.Set TmVar
   -> S.Set AttrVar
   -> Diagram
   -> Diagram
@@ -137,12 +137,12 @@ extendMatch
   -> Edge
   -> Edge
   -> Either Text [Match]
-extendMatch tt tyFlex ixFlex attrFlex lhs host match patEdge hostEdge
+extendMatch tt tyFlex tmFlex attrFlex lhs host match patEdge hostEdge
   | M.member (eId patEdge) (mEdgeMap match) = Right []
   | eId hostEdge `S.member` mUsedHostEdges match = Right []
   | otherwise = do
       let pairs = zip (eIns patEdge <> eOuts patEdge) (eIns hostEdge <> eOuts hostEdge)
-      substs <- payloadSubsts tt tyFlex ixFlex attrFlex match patEdge hostEdge
+      substs <- payloadSubsts tt tyFlex tmFlex attrFlex match patEdge hostEdge
       fmap concat (mapM (extendWithSubst pairs) substs)
   where
     extendWithSubst pairs (tySubst0, attrSubst0, binderSub0) =
@@ -180,9 +180,9 @@ extendMatch tt tyFlex ixFlex attrFlex lhs host match patEdge hostEdge
       hTy <- requirePortType host h
       unifyTyFlex
         tt
-        (dIxCtx lhs)
+        (dTmCtx lhs)
         tyFlex
-        ixFlex
+        tmFlex
         tySubst
         pTy
         hTy
@@ -190,13 +190,13 @@ extendMatch tt tyFlex ixFlex attrFlex lhs host match patEdge hostEdge
 payloadSubsts
   :: TypeTheory
   -> S.Set TyVar
-  -> S.Set IxVar
+  -> S.Set TmVar
   -> S.Set AttrVar
   -> Match
   -> Edge
   -> Edge
   -> Either Text [(Subst, AttrSubst, M.Map BinderMetaVar Diagram)]
-payloadSubsts tt tyFlex ixFlex attrFlex match patEdge hostEdge =
+payloadSubsts tt tyFlex tmFlex attrFlex match patEdge hostEdge =
   case (ePayload patEdge, ePayload hostEdge) of
     (PGen g1 attrs1 bargs1, PGen g2 attrs2 bargs2)
       | g1 /= g2
@@ -224,7 +224,7 @@ payloadSubsts tt tyFlex ixFlex attrFlex match patEdge hostEdge =
                 diagramIsoMatchWithVarsFrom
                   tt
                   tyFlex
-                  ixFlex
+                  tmFlex
                   attrFlex
                   tySubst0
                   attrSubst0
@@ -249,7 +249,7 @@ payloadSubsts tt tyFlex ixFlex attrFlex match patEdge hostEdge =
         diagramIsoMatchWithVarsFrom
           tt
           tyFlex
-          ixFlex
+          tmFlex
           attrFlex
           (mTySubst match)
           (mAttrSubst match)
@@ -262,7 +262,7 @@ payloadSubsts tt tyFlex ixFlex attrFlex match patEdge hostEdge =
         diagramIsoMatchWithVarsFrom
           tt
           tyFlex
-          ixFlex
+          tmFlex
           attrFlex
           (mTySubst match)
           (mAttrSubst match)
@@ -285,12 +285,12 @@ requirePortType diag pid =
 completeBoundary
   :: TypeTheory
   -> S.Set TyVar
-  -> S.Set IxVar
+  -> S.Set TmVar
   -> Diagram
   -> Diagram
   -> Match
   -> Either Text Match
-completeBoundary tt flexTy flexIx lhs host match =
+completeBoundary tt flexTy flexTm lhs host match =
   foldl step (Right match) (dIn lhs <> dOut lhs)
   where
     step acc p = do
@@ -314,9 +314,9 @@ completeBoundary tt flexTy flexIx lhs host match =
               case
                 unifyTyFlex
                   tt
-                  (dIxCtx lhs)
+                  (dTmCtx lhs)
                   flexTy
-                  flexIx
+                  flexTm
                   (mTySubst m)
                   pTy
                   hTy

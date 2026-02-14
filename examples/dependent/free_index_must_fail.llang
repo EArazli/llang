@@ -1,10 +1,9 @@
 doctrine FreeIndexMustFail where {
   mode M;
   mode I;
-  index_mode I;
 
   type Nat @I;
-  index_fun Z : Nat @I;
+  gen Z : [] -> [Nat] @I;
 
   type Vec(n : Nat) @M;
 

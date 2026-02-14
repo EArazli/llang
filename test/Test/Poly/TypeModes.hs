@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..), TypeArg(..))
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), VarDiscipline(..), emptyModeTheory)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), emptyModeTheory)
 import Strat.Poly.Doctrine (Doctrine(..), TypeSig(..), ParamSig(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
@@ -51,21 +51,21 @@ mkDoctrine tables =
     { dName = "D"
     , dModes = mkModes (S.fromList (map fst tables))
     , dAcyclicModes = S.empty
-      , dIndexModes = S.empty
-      , dIxTheory = M.empty
       , dAttrSorts = M.empty
     , dTypes = M.fromList [ (mode, M.fromList types) | (mode, types) <- tables ]
     , dGens = M.empty
     , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
     }
 
 mkModes :: S.Set ModeName -> ModeTheory
 mkModes modes =
   ModeTheory
-    (M.fromList [ (m, ModeInfo m Linear) | m <- S.toList modes ])
-    M.empty
-    []
-    []
+    { mtModes = M.fromList [ (m, ModeInfo m) | m <- S.toList modes ]
+    , mtDecls = M.empty
+    , mtEqns = []
+    }
 
 requireDoc :: Doctrine -> IO Doctrine
 requireDoc doc =

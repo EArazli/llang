@@ -39,12 +39,11 @@ import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 import Control.Monad (foldM)
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeExpr (TypeExpr, TyVar, IxVar, boundIxIndicesType, typeMode)
+import {-# SOURCE #-} Strat.Poly.TypeExpr (TypeExpr, TyVar, TmVar(..), boundTmIndicesType, typeMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.UnifyTy (Subst, emptySubst, unifyTyFlex, applySubstCtx)
+import {-# SOURCE #-} Strat.Poly.UnifyTy (Subst, emptySubst, unifyTyFlex, applySubstCtx)
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, unifyAttrFlex)
-import Strat.Poly.TypePretty (renderType)
-import Strat.Poly.TypeTheory (TypeTheory(..))
+import {-# SOURCE #-} Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Util.List (dedupe)
 
 
@@ -62,6 +61,7 @@ data EdgePayload
   | PBox BoxName Diagram
   | PFeedback Diagram
   | PSplice BinderMetaVar
+  | PTmMeta TmVar
   deriving (Eq, Ord, Show)
 
 data Edge = Edge
@@ -73,7 +73,7 @@ data Edge = Edge
 
 data Diagram = Diagram
   { dMode      :: ModeName
-  , dIxCtx     :: [TypeExpr]
+  , dTmCtx     :: [TypeExpr]
   , dIn        :: [PortId]
   , dOut       :: [PortId]
   , dPortTy    :: IM.IntMap TypeExpr
@@ -114,14 +114,14 @@ data IsoAlgo extra = IsoAlgo
       -> EdgePayload
       -> Either Text [extra]
   , iaPayloadShapeOk :: EdgePayload -> EdgePayload -> Bool
-  , iaIxCtxOk :: Diagram -> Diagram -> extra -> Bool
+  , iaTmCtxOk :: Diagram -> Diagram -> extra -> Bool
   }
 
 
 emptyDiagram :: ModeName -> [TypeExpr] -> Diagram
-emptyDiagram mode ixCtx = Diagram
+emptyDiagram mode tmCtx = Diagram
   { dMode = mode
-  , dIxCtx = ixCtx
+  , dTmCtx = tmCtx
   , dIn = []
   , dOut = []
   , dPortTy = IM.empty
@@ -311,8 +311,8 @@ validateDiagram diag = do
           if dMode inner /= dMode diag
             then Left "validateDiagram: box mode mismatch"
             else Right ()
-          if dIxCtx inner /= dIxCtx diag
-            then Left "validateDiagram: box index context mismatch"
+          if dTmCtx inner /= dTmCtx diag
+            then Left "validateDiagram: box term context mismatch"
             else Right ()
           validateDiagram inner
           domOuter <- mapM (requirePortType diag) (eIns edge)
@@ -326,8 +326,8 @@ validateDiagram diag = do
           if dMode inner /= dMode diag
             then Left "validateDiagram: feedback mode mismatch"
             else Right ()
-          if dIxCtx inner /= dIxCtx diag
-            then Left "validateDiagram: feedback index context mismatch"
+          if dTmCtx inner /= dTmCtx diag
+            then Left "validateDiagram: feedback term context mismatch"
             else Right ()
           validateDiagram inner
           innerDom <- mapM (requirePortType inner) (dIn inner)
@@ -348,6 +348,30 @@ validateDiagram diag = do
             _ ->
               Left "validateDiagram: feedback body must have one input and at least one output"
         PSplice _ -> Right ()
+        PTmMeta v -> do
+          outTy <-
+            case eOuts edge of
+              [pid] -> requirePortType diag pid
+              _ -> Left "validateDiagram: PTmMeta must have exactly one output"
+          if typeMode outTy == typeMode (tmvSort v)
+            then Right ()
+            else Left "validateDiagram: PTmMeta output mode mismatch"
+          if outTy == tmvSort v
+            then Right ()
+            else Left "validateDiagram: PTmMeta output sort mismatch"
+          let modeIns =
+                [ pid
+                | pid <- dIn diag
+                , Just ty <- [diagramPortType diag pid]
+                , typeMode ty == typeMode (tmvSort v)
+                ]
+          if tmvScope v > length modeIns
+            then Left "validateDiagram: PTmMeta scope exceeds available bound variables"
+            else Right ()
+          let expectedIns = take (tmvScope v) modeIns
+          if eIns edge == expectedIns
+            then Right ()
+            else Left "validateDiagram: PTmMeta inputs must be canonical scoped boundary prefix"
     checkBinderArg barg =
       case barg of
         BAConcrete inner -> validateDiagram inner
@@ -365,17 +389,17 @@ validateDiagram diag = do
     checkPortMode (k, ty) =
       if typeMode ty == dMode diag
         then
-          let bad = S.filter (>= length (dIxCtx diag)) (boundIxIndicesType ty)
+          let bad = S.filter (>= length (dTmCtx diag)) (boundTmIndicesType ty)
            in if S.null bad
                 then Right ()
-                else Left "validateDiagram: port type uses out-of-scope bound index"
+                else Left "validateDiagram: port type uses out-of-scope bound term variable"
         else
           Left
             ( "validateDiagram: port p" <> T.pack (show k)
                 <> " has type in wrong mode (diagram mode "
                 <> case dMode diag of ModeName name -> name
                 <> ", type "
-                <> renderType ty
+                <> T.pack (show ty)
                 <> ")"
             )
 
@@ -513,6 +537,7 @@ shiftDiagram portOff edgeOff diag =
           PBox name inner -> PBox name (shiftDiagram portOff edgeOff inner)
           PFeedback inner -> PFeedback (shiftDiagram portOff edgeOff inner)
           PSplice x -> PSplice x
+          PTmMeta v -> PTmMeta v
       shiftBinderArg barg =
         case barg of
           BAConcrete inner -> BAConcrete (shiftDiagram portOff edgeOff inner)
@@ -544,7 +569,7 @@ renumberDiagram diag = do
   dOut' <- mapM (requirePort portMap) (dOut diag)
   pure Diagram
     { dMode = dMode diag
-    , dIxCtx = dIxCtx diag
+    , dTmCtx = dTmCtx diag
     , dIn = dIn'
     , dOut = dOut'
     , dPortTy = dPortTy'
@@ -611,6 +636,7 @@ renumberDiagram diag = do
           inner' <- renumberDiagram inner
           Right (PFeedback inner')
         PSplice x -> Right (PSplice x)
+        PTmMeta v -> Right (PTmMeta v)
     mapBinderArg barg =
       case barg of
         BAConcrete inner -> BAConcrete <$> renumberDiagram inner
@@ -640,27 +666,27 @@ unionDisjointIntMap label left right =
 diagramIsoMatchWithVars
   :: TypeTheory
   -> S.Set TyVar
-  -> S.Set IxVar
+  -> S.Set TmVar
   -> S.Set AttrVar
   -> Diagram
   -> Diagram
   -> Either Text [(Subst, AttrSubst)]
-diagramIsoMatchWithVars tt tyFlex ixFlex attrFlex =
-  diagramIsoMatchWithVarsFrom tt tyFlex ixFlex attrFlex emptySubst M.empty
+diagramIsoMatchWithVars tt tyFlex tmFlex attrFlex =
+  diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex emptySubst M.empty
 
 diagramIsoMatchWithVarsFrom
   :: TypeTheory
   -> S.Set TyVar
-  -> S.Set IxVar
+  -> S.Set TmVar
   -> S.Set AttrVar
   -> Subst
   -> AttrSubst
   -> Diagram
   -> Diagram
   -> Either Text [(Subst, AttrSubst)]
-diagramIsoMatchWithVarsFrom tt tyFlex ixFlex attrFlex tySubst attrSubst left right = do
+diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst attrSubst left right = do
   let initExtra = IsoExtra tySubst attrSubst
-  xs <- diagramIsoWith (algoMatch tt tyFlex ixFlex attrFlex) initExtra left right
+  xs <- diagramIsoWith (algoMatch tt tyFlex tmFlex attrFlex) initExtra left right
   pure [ (ieTySubst ex, ieAttrSubst ex) | ex <- xs ]
 
 diagramIsoWith
@@ -671,7 +697,7 @@ diagramIsoWith
   -> Either Text [extra]
 diagramIsoWith algo extra0 left right
   | dMode left /= dMode right = Right []
-  | not (iaIxCtxOk algo left right extra0) = Right []
+  | not (iaTmCtxOk algo left right extra0) = Right []
   | length (dIn left) /= length (dIn right) = Right []
   | length (dOut left) /= length (dOut right) = Right []
   | IM.size (dPortTy left) /= IM.size (dPortTy right) = Right []
@@ -829,7 +855,7 @@ algoEq =
     { iaComparePorts = \_ _ _ ty1 ty2 -> Right [() | ty1 == ty2]
     , iaComparePayload = comparePayload
     , iaPayloadShapeOk = payloadShape
-    , iaIxCtxOk = \left right _ -> dIxCtx left == dIxCtx right
+    , iaTmCtxOk = \left right _ -> dTmCtx left == dTmCtx right
     }
   where
     comparePayload recurse _ p1 p2 =
@@ -847,6 +873,11 @@ algoEq =
           recurse () d1 d2
         (PSplice x, PSplice y)
           | x == y ->
+              Right [()]
+          | otherwise ->
+              Right []
+        (PTmMeta x, PTmMeta y)
+          | sameTmMetaId x y ->
               Right [()]
           | otherwise ->
               Right []
@@ -879,6 +910,7 @@ algoEq =
         (PBox _ _, PBox _ _) -> True
         (PFeedback _, PFeedback _) -> True
         (PSplice x, PSplice y) -> x == y
+        (PTmMeta x, PTmMeta y) -> sameTmMetaId x y
         _ -> False
 
     binderShape (BAConcrete _) (BAConcrete _) = True
@@ -888,31 +920,31 @@ algoEq =
 algoMatch
   :: TypeTheory
   -> S.Set TyVar
-  -> S.Set IxVar
+  -> S.Set TmVar
   -> S.Set AttrVar
   -> IsoAlgo IsoExtra
-algoMatch tt tyFlex ixFlex attrFlex =
+algoMatch tt tyFlex tmFlex attrFlex =
   IsoAlgo
     { iaComparePorts = comparePorts
     , iaComparePayload = comparePayload
     , iaPayloadShapeOk = payloadShape
-    , iaIxCtxOk = ixCtxOk
+    , iaTmCtxOk = tmCtxOk
     }
   where
-    ixCtxOk left right extra =
+    tmCtxOk left right extra =
       case
-        ( applySubstCtx tt (ieTySubst extra) (dIxCtx left)
-        , applySubstCtx tt (ieTySubst extra) (dIxCtx right)
+        ( applySubstCtx tt (ieTySubst extra) (dTmCtx left)
+        , applySubstCtx tt (ieTySubst extra) (dTmCtx right)
         )
         of
         (Right left', Right right') -> left' == right'
         _ -> False
 
     comparePorts left _ extra ty1 ty2 =
-      case applySubstCtx tt (ieTySubst extra) (dIxCtx left) of
+      case applySubstCtx tt (ieTySubst extra) (dTmCtx left) of
         Left _ -> Right []
-        Right ixCtx' ->
-          case unifyTyFlex tt ixCtx' tyFlex ixFlex (ieTySubst extra) ty1 ty2 of
+        Right tmCtx' ->
+          case unifyTyFlex tt tmCtx' tyFlex tmFlex (ieTySubst extra) ty1 ty2 of
             Left _ -> Right []
             Right tySubst' ->
               Right [extra { ieTySubst = tySubst' }]
@@ -960,6 +992,11 @@ algoMatch tt tyFlex ixFlex attrFlex =
               Right [extra]
           | otherwise ->
               Right []
+        (PTmMeta x, PTmMeta y)
+          | sameTmMetaId x y ->
+              Right [extra]
+          | otherwise ->
+              Right []
         _ ->
           Right []
 
@@ -973,8 +1010,12 @@ algoMatch tt tyFlex ixFlex attrFlex =
         (PBox _ _, PBox _ _) -> True
         (PFeedback _, PFeedback _) -> True
         (PSplice x, PSplice y) -> x == y
+        (PTmMeta x, PTmMeta y) -> sameTmMetaId x y
         _ -> False
 
     binderShape (BAConcrete _) (BAConcrete _) = True
     binderShape (BAMeta x) (BAMeta y) = x == y
     binderShape _ _ = False
+
+sameTmMetaId :: TmVar -> TmVar -> Bool
+sameTmMetaId a b = tmvName a == tmvName b && tmvScope a == tmvScope b

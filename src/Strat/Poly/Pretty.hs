@@ -22,7 +22,7 @@ renderDiagram diag = do
   pure $
     T.intercalate "\n"
       [ "mode: " <> renderMode (dMode diag')
-      , "ixctx: [" <> T.intercalate ", " (map renderType (dIxCtx diag')) <> "]"
+      , "tmctx: [" <> T.intercalate ", " (map renderType (dTmCtx diag')) <> "]"
       , "in: [" <> renderPorts diag' (dIn diag') <> "]"
       , "out: [" <> renderPorts diag' (dOut diag') <> "]"
       , "edges:"
@@ -83,6 +83,20 @@ renderEdges edges = do
                 <> renderEdgeId (eId e)
                 <> ": splice("
                 <> renderBinderMeta x
+                <> ") ["
+                <> renderPortList (eIns e)
+                <> "] -> ["
+                <> renderPortList (eOuts e)
+                <> "]"
+            )
+        PTmMeta v ->
+          Right
+            ( "  "
+                <> renderEdgeId (eId e)
+                <> ": tmmeta("
+                <> tmvName v
+                <> "#"
+                <> T.pack (show (tmvScope v))
                 <> ") ["
                 <> renderPortList (eIns e)
                 <> "] -> ["

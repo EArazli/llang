@@ -8,6 +8,7 @@ module Strat.Poly.Morphism
   , applyMorphismTy
   , applyMorphismBinderSig
   , applyMorphismDiagram
+  , instantiateGenImageBinders
   , checkMorphism
   ) where
 
@@ -27,19 +28,19 @@ import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
 import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.IndexTheory (IxTheory(..), IxFunSig(..), normalizeTypeDeep)
+import Strat.Poly.TypeNormalize (normalizeTypeDeep)
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), composeMod, normalizeModExpr)
-import Strat.Common.Rules (RuleClass(..), Orientation(..))
+import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.Traversal (traverseDiagram)
 
 unifyCtxCompat :: TypeTheory -> [TypeExpr] -> Context -> Context -> Either Text Subst
-unifyCtxCompat tt ixCtx ctxA ctxB =
+unifyCtxCompat tt tmCtx ctxA ctxB =
   let tyFlex = S.unions (map freeTyVarsType (ctxA <> ctxB))
-      ixFlex = S.unions (map freeIxVarsType (ctxA <> ctxB))
-   in unifyCtx tt ixCtx tyFlex ixFlex ctxA ctxB
+      tmFlex = S.unions (map freeTmVarsType (ctxA <> ctxB))
+   in unifyCtx tt tmCtx tyFlex tmFlex ctxA ctxB
 
 
 data Morphism = Morphism
@@ -52,7 +53,6 @@ data Morphism = Morphism
   , morAttrSortMap :: M.Map AttrSort AttrSort
   , morTypeMap :: M.Map TypeRef TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) GenImage
-  , morIxFunMap :: M.Map IxFunName IxFunName
   , morCheck :: MorphismCheck
   , morPolicy  :: RewritePolicy
   , morFuel    :: Int
@@ -71,7 +71,7 @@ data GenImage = GenImage
 
 data TemplateParam
   = TPType TyVar
-  | TPIx IxVar
+  | TPTm TmVar
   deriving (Eq, Ord, Show)
 
 data TypeTemplate = TypeTemplate
@@ -129,7 +129,7 @@ applyMorphismTy mor ty =
     mapArg arg =
       case arg of
         TAType t -> TAType <$> applyMorphismTy mor t
-        TAIndex ix -> TAIndex <$> applyMorphismIxTerm mor ix
+        TATm tmArg -> TATm <$> applyMorphismTmTerm mor tmArg
 
     instantiateTemplate tmpl args
       | length (ttParams tmpl) /= length args =
@@ -142,22 +142,33 @@ applyMorphismTy mor ty =
       case (param, arg) of
         (TPType v, TAType t) ->
           Right s { sTy = M.insert v t (sTy s) }
-        (TPIx v, TAIndex ix) ->
-          Right s { sIx = M.insert v ix (sIx s) }
+        (TPTm v, TATm tmArg) ->
+          Right s { sTm = M.insert v tmArg (sTm s) }
         _ ->
           Left "morphism: type template kind mismatch during instantiation"
 
-applyMorphismIxTerm :: Morphism -> IxTerm -> Either Text IxTerm
-applyMorphismIxTerm mor tm =
-  case tm of
-    IXVar v -> do
-      sort' <- applyMorphismTy mor (ixvSort v)
-      Right (IXVar v { ixvSort = sort' })
-    IXBound i -> Right (IXBound i)
-    IXFun f args -> do
-      args' <- mapM (applyMorphismIxTerm mor) args
-      let f' = M.findWithDefault f f (morIxFunMap mor)
-      Right (IXFun f' args')
+applyMorphismTmTerm :: Morphism -> TermDiagram -> Either Text TermDiagram
+applyMorphismTmTerm mor (TermDiagram tm) = do
+  mode' <- mapMode mor (dMode tm)
+  tmCtx' <- mapM (applyMorphismTy mor) (dTmCtx tm)
+  portTy' <- mapM (applyMorphismTy mor) (dPortTy tm)
+  edges' <- mapM mapEdge (dEdges tm)
+  pure
+    ( TermDiagram
+        tm
+          { dMode = mode'
+          , dTmCtx = tmCtx'
+          , dPortTy = portTy'
+          , dEdges = edges'
+          }
+    )
+  where
+    mapEdge edge =
+      case ePayload edge of
+        PTmMeta v -> do
+          sort' <- applyMorphismTy mor (tmvSort v)
+          pure edge { ePayload = PTmMeta v { tmvSort = sort' } }
+        _ -> pure edge
 
 mapModExpr :: Morphism -> ModExpr -> Either Text ModExpr
 mapModExpr mor me = do
@@ -182,9 +193,9 @@ applyMorphismDiagram mor diagSrc = do
   let srcTheory = doctrineTypeTheory (morSrc mor)
   let tgtTheory = doctrineTypeTheory (morTgt mor)
   modeTgt <- mapMode mor modeSrc
-  ixCtx <- mapM (applyMorphismTy mor) (dIxCtx diagSrc)
+  tmCtx <- mapM (applyMorphismTy mor) (dTmCtx diagSrc)
   portTy <- mapM (applyMorphismTy mor) (dPortTy diagSrc)
-  let diagTgt0 = diagSrc { dMode = modeTgt, dIxCtx = ixCtx, dPortTy = portTy }
+  let diagTgt0 = diagSrc { dMode = modeTgt, dTmCtx = tmCtx, dPortTy = portTy }
   let edgeIds = IM.keys (dEdges diagSrc)
   let step acc edgeKey = do
         diagTgt <- acc
@@ -224,6 +235,9 @@ applyMorphismDiagram mor diagSrc = do
                 updateEdgePayload diagTgt edgeKey (PFeedback inner')
               PSplice x ->
                 updateEdgePayload diagTgt edgeKey (PSplice x)
+              PTmMeta v -> do
+                sort' <- applyMorphismTy mor (tmvSort v)
+                updateEdgePayload diagTgt edgeKey (PTmMeta v { tmvSort = sort' })
   diagTgt <- foldl step (Right diagTgt0) edgeIds
   validateDiagram diagTgt
   pure diagTgt
@@ -251,17 +265,17 @@ applyMorphismDiagram mor diagSrc = do
 mapSubst :: Morphism -> Subst -> Either Text Subst
 mapSubst mor subst = do
   tyPairs <- mapM mapTyOne (M.toList (sTy subst))
-  ixPairs <- mapM mapIxOne (M.toList (sIx subst))
-  pure (Subst (M.fromList tyPairs) (M.fromList ixPairs))
+  tmPairs <- mapM mapTmOne (M.toList (sTm subst))
+  pure (Subst (M.fromList tyPairs) (M.fromList tmPairs))
   where
     mapTyOne (v, t) = do
       v' <- mapTyVar mor v
       t' <- applyMorphismTy mor t
       pure (v', t')
-    mapIxOne (v, t) = do
-      sort' <- applyMorphismTy mor (ixvSort v)
-      t' <- applyMorphismIxTerm mor t
-      pure (v { ixvSort = sort' }, t')
+    mapTmOne (v, t) = do
+      sort' <- applyMorphismTy mor (tmvSort v)
+      t' <- applyMorphismTmTerm mor t
+      pure (v { tmvSort = sort' }, t')
 
 applyMorphismBinderArg :: Morphism -> BinderArg -> Either Text BinderArg
 applyMorphismBinderArg mor barg =
@@ -271,17 +285,17 @@ applyMorphismBinderArg mor barg =
 
 applyMorphismBinderSig :: Morphism -> BinderSig -> Either Text BinderSig
 applyMorphismBinderSig mor sig = do
-  ixCtx' <- mapM (applyMorphismTy mor) (bsIxCtx sig)
+  tmCtx' <- mapM (applyMorphismTy mor) (bsTmCtx sig)
   dom' <- mapM (applyMorphismTy mor) (bsDom sig)
   cod' <- mapM (applyMorphismTy mor) (bsCod sig)
-  pure sig { bsIxCtx = ixCtx', bsDom = dom', bsCod = cod' }
+  pure sig { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
 
 applySubstBinderSigTT :: TypeTheory -> Subst -> BinderSig -> Either Text BinderSig
 applySubstBinderSigTT tt subst sig = do
-  ixCtx' <- applySubstCtx tt subst (bsIxCtx sig)
+  tmCtx' <- applySubstCtx tt subst (bsTmCtx sig)
   dom' <- applySubstCtx tt subst (bsDom sig)
   cod' <- applySubstCtx tt subst (bsCod sig)
-  pure sig { bsIxCtx = ixCtx', bsDom = dom', bsCod = cod' }
+  pure sig { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
 
 applySubstBinderSigsTT :: TypeTheory -> Subst -> M.Map BinderMetaVar BinderSig -> Either Text (M.Map BinderMetaVar BinderSig)
 applySubstBinderSigsTT tt subst =
@@ -302,10 +316,10 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
   expandSplicesLoop diag1
   where
     recurseDiagram diag = do
-      edges' <- traverse (recurseEdge diag) (dEdges diag)
+      edges' <- traverse recurseEdge (dEdges diag)
       pure diag { dEdges = edges' }
 
-    recurseEdge diag edge =
+    recurseEdge edge =
       case ePayload edge of
         PGen g attrs bargs -> do
           bargs' <- mapM recurseBinderArg bargs
@@ -318,6 +332,8 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
           pure edge { ePayload = PFeedback inner' }
         PSplice x ->
           pure edge { ePayload = PSplice x }
+        PTmMeta v ->
+          pure edge { ePayload = PTmMeta v }
       where
         recurseBinderArg barg =
           case barg of
@@ -393,11 +409,11 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
       if dMode d == dMode diag
         then Right ()
         else Left "applyMorphismDiagram: splice insertion mode mismatch"
-      ixCaptured <- applySubstCtx tt emptySubst (dIxCtx d)
-      ixHost <- applySubstCtx tt emptySubst (dIxCtx diag)
-      if ixCaptured == ixHost
+      tmCaptured <- applySubstCtx tt emptySubst (dTmCtx d)
+      tmHost <- applySubstCtx tt emptySubst (dTmCtx diag)
+      if tmCaptured == tmHost
         then Right ()
-        else Left "applyMorphismDiagram: splice insertion index-context mismatch"
+        else Left "applyMorphismDiagram: splice insertion term-context mismatch"
       if length (dIn d) == length (eIns edge) && length (dOut d) == length (eOuts edge)
         then Right ()
         else Left "applyMorphismDiagram: splice insertion boundary arity mismatch"
@@ -413,11 +429,11 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
       case M.lookup hole binderSigs of
         Nothing -> Right ()
         Just sig -> do
-          sigIx <- applySubstCtx tt emptySubst (bsIxCtx sig)
-          dIx <- applySubstCtx tt emptySubst (dIxCtx d)
-          if dIx == sigIx
+          sigTm <- applySubstCtx tt emptySubst (bsTmCtx sig)
+          dTm <- applySubstCtx tt emptySubst (dTmCtx d)
+          if dTm == sigTm
             then Right ()
-            else Left "applyMorphismDiagram: binder argument index-context mismatch"
+            else Left "applyMorphismDiagram: binder argument term-context mismatch"
           dDom <- diagramDom d
           dCod <- diagramCod d
           dDom' <- applySubstCtx tt emptySubst dDom
@@ -438,7 +454,6 @@ checkMorphism mor = do
   validateModeMap mor
   validateModMap mor
   validateAttrSortMap mor
-  validateIxFunMap mor
   validateTypeMap mor
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
   case morCheck mor of
@@ -594,15 +609,15 @@ validateTypeMap mor = do
       ensureDistinctTemplateParamNames tmplParams
       mapM_ (uncurry checkParam) (zip srcParams tmplParams)
       let tyVars = [ v | TPType v <- tmplParams ]
-      let ixVars = [ v | TPIx v <- tmplParams ]
-      checkType (morTgt mor) tyVars ixVars [] (ttBody tmpl)
+      let tmVars = [ v | TPTm v <- tmplParams ]
+      checkType (morTgt mor) tyVars tmVars [] (ttBody tmpl)
       mappedMode <- mapMode mor (trMode srcRef)
       if typeMode (ttBody tmpl) == mappedMode
         then Right ()
         else Left "checkMorphism: type template body mode mismatch"
 
     ensureDistinctTemplateParamNames params =
-      let names = [ tvName v | TPType v <- params ] <> [ ixvName v | TPIx v <- params ]
+      let names = [ tvName v | TPType v <- params ] <> [ tmvName v | TPTm v <- params ]
           set = S.fromList names
       in if S.size set == length names
           then Right ()
@@ -615,22 +630,19 @@ validateTypeMap mor = do
           if tvMode v == expectedMode
             then Right ()
             else Left "checkMorphism: type template type-parameter mode mismatch"
-        (PS_Ix srcSort, TPIx ixv) -> do
+        (PS_Tm srcSort, TPTm tmParam) -> do
           expectedMode <- mapMode mor (typeMode srcSort)
-          if typeMode (ixvSort ixv) == expectedMode
-            then
-              if expectedMode `S.member` dIndexModes (morTgt mor)
-                then do
-                  expectedSortTgt <- applyMorphismTy mor srcSort
-                  sortOk <- sortDefEq expectedSortTgt (ixvSort ixv)
-                  if sortOk
-                    then Right ()
-                    else Left "checkMorphism: type template index-parameter sort mismatch"
-                else Left "checkMorphism: type template index parameter sort is not in an index mode"
-            else Left "checkMorphism: type template index-parameter mode mismatch"
+          if typeMode (tmvSort tmParam) == expectedMode
+            then do
+              expectedSortTgt <- applyMorphismTy mor srcSort
+              sortOk <- sortDefEq expectedSortTgt (tmvSort tmParam)
+              if sortOk
+                then Right ()
+                else Left "checkMorphism: type template term-parameter sort mismatch"
+            else Left "checkMorphism: type template term-parameter mode mismatch"
         (PS_Ty _, _) ->
           Left "checkMorphism: type template kind mismatch"
-        (PS_Ix _, _) ->
+        (PS_Tm _, _) ->
           Left "checkMorphism: type template kind mismatch"
 
     sortDefEq lhs rhs = do
@@ -703,13 +715,18 @@ typeRefsInType ty =
     typeRefsInArg arg =
       case arg of
         TAType t -> typeRefsInType t
-        TAIndex ix -> typeRefsInIx ix
+        TATm tmArg -> typeRefsInTerm tmArg
 
-    typeRefsInIx ix =
-      case ix of
-        IXVar v -> typeRefsInType (ixvSort v)
-        IXBound _ -> S.empty
-        IXFun _ args -> S.unions (map typeRefsInIx args)
+    typeRefsInTerm (TermDiagram diag) =
+      S.unions
+        [ S.unions (map typeRefsInType (IM.elems (dPortTy diag)))
+        , S.unions (map typeRefsInType (dTmCtx diag))
+        , S.unions
+            [ typeRefsInType (tmvSort v)
+            | edge <- IM.elems (dEdges diag)
+            , PTmMeta v <- [ePayload edge]
+            ]
+        ]
 
 modeMapIsIdentity :: Morphism -> Bool
 modeMapIsIdentity mor =
@@ -740,10 +757,6 @@ attrSortMapIsIdentity mor =
         , gen <- M.elems table
         , (_, sortName) <- gdAttrs gen
         ]
-
-ixFunMapIsIdentity :: Morphism -> Bool
-ixFunMapIsIdentity mor =
-  all (\f -> M.findWithDefault f f (morIxFunMap mor) == f) (allIxFunNames (morSrc mor))
 
 checkGenMapping :: Morphism -> GenDecl -> Either Text ()
 checkGenMapping mor gen = do
@@ -812,7 +825,6 @@ inclusionFastPath mor
   | not (modeMapIsIdentity mor) = Right False
   | not (modMapIsIdentity mor) = Right False
   | not (attrSortMapIsIdentity mor) = Right False
-  | not (ixFunMapIsIdentity mor) = Right False
   | not (M.null (morTypeMap mor)) = Right False
   | otherwise = do
       okGens <- allM (genIsIdentity mor) (allGens (morSrc mor))
@@ -842,7 +854,7 @@ inclusionFastPath mor
 
 renamingFastPath :: Morphism -> [Cell2] -> Either Text Bool
 renamingFastPath mor srcCells = do
-  if not (modeMapIsIdentity mor) || not (modMapIsIdentity mor) || not (attrSortMapIsIdentity mor) || not (ixFunMapIsIdentity mor)
+  if not (modeMapIsIdentity mor) || not (modMapIsIdentity mor) || not (attrSortMapIsIdentity mor)
     then Right False
     else do
       let tgt = morTgt mor
@@ -906,49 +918,6 @@ renamingFastPath mor srcCells = do
               okR <- isoOrFalse rhsRen (c2RHS tgt)
               pure (okL && okR)
 
-validateIxFunMap :: Morphism -> Either Text ()
-validateIxFunMap mor = do
-  mapM_ checkOne (M.toList (morIxFunMap mor))
-  where
-    ttTgt = doctrineTypeTheory (morTgt mor)
-
-    checkOne (srcName, tgtName) = do
-      (srcMode, srcSig) <- resolveUniqueIxFun "source" (morSrc mor) srcName
-      (tgtMode, tgtSig) <- resolveUniqueIxFun "target" (morTgt mor) tgtName
-      srcMode' <- mapMode mor srcMode
-      if srcMode' == tgtMode
-        then Right ()
-        else Left ("checkMorphism: index function mode mismatch for " <> renderIxFunName srcName)
-      let srcArgs = ifArgs srcSig
-      let tgtArgs = ifArgs tgtSig
-      if length srcArgs == length tgtArgs
-        then Right ()
-        else Left ("checkMorphism: index function arity mismatch for " <> renderIxFunName srcName)
-      mapM_ (uncurry checkSortPreserved) (zip srcArgs tgtArgs)
-      checkSortPreserved (ifRes srcSig) (ifRes tgtSig)
-
-    checkSortPreserved srcSort tgtSort = do
-      srcMapped <- applyMorphismTy mor srcSort
-      srcNorm <- normalizeTypeDeep ttTgt srcMapped
-      tgtNorm <- normalizeTypeDeep ttTgt tgtSort
-      if srcNorm == tgtNorm
-        then Right ()
-        else Left "checkMorphism: index function sort mapping mismatch"
-
-    resolveUniqueIxFun side doc funName =
-      case
-        [ (mode, sig)
-        | (mode, ixTheory) <- M.toList (dIxTheory doc)
-        , (name, sig) <- M.toList (itFuns ixTheory)
-        , name == funName
-        ]
-      of
-        [] -> Left ("checkMorphism: unknown " <> side <> " index function " <> renderIxFunName funName)
-        [entry] -> Right entry
-        _ -> Left ("checkMorphism: ambiguous " <> side <> " index function " <> renderIxFunName funName)
-
-    renderIxFunName (IxFunName name) = name
-
 isoOrFalse :: Diagram -> Diagram -> Either Text Bool
 isoOrFalse d1 d2 =
   case diagramIsoEq d1 d2 of
@@ -999,8 +968,19 @@ buildTypeRenaming mor = do
       case arg of
         TAType (TVar v) ->
           findParamIndex params (\p -> case p of TPType v' -> v' == v; _ -> False)
-        TAIndex (IXVar v) ->
-          findParamIndex params (\p -> case p of TPIx v' -> v' == v; _ -> False)
+        TATm tm ->
+          case termMetaOnly tm of
+            Just v ->
+              findParamIndex params (\p -> case p of TPTm v' -> v' == v; _ -> False)
+            Nothing -> Nothing
+        _ -> Nothing
+
+    termMetaOnly (TermDiagram diag) =
+      case (IM.elems (dEdges diag), dIn diag, dOut diag) of
+        ([edge], [], [outBoundary]) ->
+          case (ePayload edge, eIns edge, eOuts edge) of
+            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just v
+            _ -> Nothing
         _ -> Nothing
 
     findParamIndex params p =
@@ -1075,7 +1055,7 @@ renameDiagram tyRen genRen diag =
   where
     onDiag d =
       pure d
-        { dIxCtx = map (renameTypeExpr tyRen) (dIxCtx d)
+        { dTmCtx = map (renameTypeExpr tyRen) (dTmCtx d)
         , dPortTy = IM.map (renameTypeExpr tyRen) (dPortTy d)
         }
 
@@ -1085,6 +1065,8 @@ renameDiagram tyRen genRen diag =
           PGen gen attrs bargs ->
             let gen' = M.findWithDefault gen (dMode diag, gen) genRen
             in PGen gen' attrs bargs
+          PTmMeta v ->
+            PTmMeta v { tmvSort = renameTypeExpr tyRen (tmvSort v) }
           _ -> payload
 
 renameTypeExpr :: M.Map TypeRef TypeRef -> TypeExpr -> TypeExpr
@@ -1100,13 +1082,21 @@ renameTypeExpr ren ty =
     renameArg arg =
       case arg of
         TAType t -> TAType (renameTypeExpr ren t)
-        TAIndex ix -> TAIndex (renameIx ix)
+        TATm tmArg -> TATm (renameTermDiagram tmArg)
 
-    renameIx ix =
-      case ix of
-        IXVar v -> IXVar v { ixvSort = renameTypeExpr ren (ixvSort v) }
-        IXBound i -> IXBound i
-        IXFun f args -> IXFun f (map renameIx args)
+    renameTermDiagram (TermDiagram diag) =
+      TermDiagram
+        diag
+          { dTmCtx = map (renameTypeExpr ren) (dTmCtx diag)
+          , dPortTy = IM.map (renameTypeExpr ren) (dPortTy diag)
+          , dEdges = IM.map renameEdge (dEdges diag)
+          }
+
+    renameEdge edge =
+      case ePayload edge of
+        PTmMeta v ->
+          edge { ePayload = PTmMeta v { tmvSort = renameTypeExpr ren (tmvSort v) } }
+        _ -> edge
 
 injective :: Ord a => [a] -> Bool
 injective xs =
@@ -1132,13 +1122,6 @@ allTypes doc =
   , (name, sig) <- M.toList table
   ]
 
-allIxFunNames :: Doctrine -> [IxFunName]
-allIxFunNames doc =
-  [ fname
-  | ixTheory <- M.elems (dIxTheory doc)
-  , fname <- M.keys (itFuns ixTheory)
-  ]
-
 lookupGenInMode :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGenInMode doc mode name =
   case M.lookup mode (dGens doc) >>= M.lookup name of
@@ -1149,9 +1132,9 @@ instantiateGen :: TypeTheory -> GenDecl -> Diagram -> Edge -> Either Text Subst
 instantiateGen tt gen diag edge = do
   dom <- mapM (requirePortType diag) (eIns edge)
   cod <- mapM (requirePortType diag) (eOuts edge)
-  s1 <- unifyCtxCompat tt (dIxCtx diag) (gdPlainDom gen) dom
+  s1 <- unifyCtxCompat tt (dTmCtx diag) (gdPlainDom gen) dom
   codExpected <- applySubstCtx tt s1 (gdCod gen)
-  s2 <- unifyCtxCompat tt (dIxCtx diag) codExpected cod
+  s2 <- unifyCtxCompat tt (dTmCtx diag) codExpected cod
   s0 <- composeSubst tt s2 s1
   if length binderSlots /= length bargs
     then Left "applyMorphismDiagram: source binder argument arity mismatch"
@@ -1173,18 +1156,18 @@ instantiateGen tt gen diag edge = do
           Right subst
         BAConcrete inner -> do
           slot0 <- applySubstBinderSigTT tt subst slot
-          slotIx <- applySubstCtx tt emptySubst (bsIxCtx slot0)
-          innerIx <- applySubstCtx tt emptySubst (dIxCtx inner)
-          if innerIx == slotIx
+          slotTm <- applySubstCtx tt emptySubst (bsTmCtx slot0)
+          innerTm <- applySubstCtx tt emptySubst (dTmCtx inner)
+          if innerTm == slotTm
             then Right ()
-            else Left "applyMorphismDiagram: binder argument index-context mismatch"
+            else Left "applyMorphismDiagram: binder argument term-context mismatch"
           domInner <- diagramDom inner
-          sDom <- unifyCtxCompat tt slotIx (bsDom slot0) domInner
+          sDom <- unifyCtxCompat tt slotTm (bsDom slot0) domInner
           subst1 <- composeSubst tt sDom subst
           slot1 <- applySubstBinderSigTT tt subst1 slot
-          slotIx1 <- applySubstCtx tt emptySubst (bsIxCtx slot1)
+          slotTm1 <- applySubstCtx tt emptySubst (bsTmCtx slot1)
           codInner <- diagramCod inner
-          sCod <- unifyCtxCompat tt slotIx1 (bsCod slot1) codInner
+          sCod <- unifyCtxCompat tt slotTm1 (bsCod slot1) codInner
           composeSubst tt sCod subst1
 
 instantiateAttrSubst :: Morphism -> GenDecl -> AttrMap -> Either Text AttrSubst

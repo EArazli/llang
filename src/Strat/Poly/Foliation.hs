@@ -123,6 +123,7 @@ foliate policy doc mode diag = do
               , stepOuts = eOuts edge
               }
         PSplice _ -> Left "foliate: splice is not allowed in runtime diagrams"
+        PTmMeta _ -> Left "foliate: term-meta nodes are not allowed in runtime diagrams"
 
     foliateBinder barg =
       case barg of

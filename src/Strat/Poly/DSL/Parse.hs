@@ -33,6 +33,7 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 polyDiagTerm :: Parser RawDiagExpr
 polyDiagTerm =
   polyMetaVarTerm
+    <|> polyMapTerm
     <|> try polyIdTerm
     <|> polySpliceTerm
     <|> polyLoopTerm
@@ -91,6 +92,17 @@ polyLoopTerm = do
   inner <- polyDiagExpr
   _ <- symbol "}"
   pure (RDLoop inner)
+
+polyMapTerm :: Parser RawDiagExpr
+polyMapTerm = do
+  _ <- symbol "map"
+  _ <- symbol "["
+  me <- rawModExpr
+  _ <- symbol "]"
+  _ <- symbol "("
+  inner <- polyDiagExpr
+  _ <- symbol ")"
+  pure (RDMap me inner)
 
 polyAttrArgs :: Parser [RawAttrArg]
 polyAttrArgs = do
@@ -151,33 +163,8 @@ binderMetaVar :: Parser Text
 binderMetaVar = lexeme (char '?' *> identRaw)
 
 polyTypeExpr :: Parser RawPolyTypeExpr
-polyTypeExpr = lexeme (try modApp <|> try bound <|> regular)
+polyTypeExpr = lexeme regular
   where
-    modApp = do
-      me <- rawModExprComplex
-      _ <- symbol "("
-      inner <- polyTypeExpr
-      _ <- symbol ")"
-      pure (RPTMod me inner)
-    bound = do
-      _ <- symbol "^"
-      idx <- fromIntegral <$> integer
-      pure (RPTBound idx)
-    rawModExprComplex =
-      try rawId <|> rawComp
-    rawId = do
-      _ <- symbol "id"
-      _ <- symbol "@"
-      mode <- ident
-      pure (RMId mode)
-    rawComp = do
-      first <- ident
-      _ <- symbol "."
-      second <- ident
-      _ <- symbol "."
-      third <- ident
-      rest <- many (symbol "." *> ident)
-      pure (RMComp (first : second : third : rest))
     regular = do
       name <- identRaw
       mQual <- optional (try (char '.' *> identRaw))
@@ -193,6 +180,17 @@ polyTypeExpr = lexeme (try modApp <|> try bound <|> regular)
               in pure (RPTCon ref args)
             Nothing ->
               pure (RPTVar name)
+
+rawModExpr :: Parser RawModExpr
+rawModExpr =
+  try rawId <|> rawComp
+  where
+    rawId = do
+      _ <- symbol "id"
+      _ <- symbol "@"
+      mode <- ident
+      pure (RMId mode)
+    rawComp = RMComp <$> (ident `sepBy1` symbol ".")
 
 -- Helpers
 

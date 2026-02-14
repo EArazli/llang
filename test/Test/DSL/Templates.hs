@@ -126,7 +126,7 @@ testInstantiateRun = do
   prOutput result @?=
     T.intercalate "\n"
       [ "mode: M"
-      , "ixctx: []"
+      , "tmctx: []"
       , "in: [p0:M.A]"
       , "out: [p1:M.A]"
       , "edges:"
