@@ -46,6 +46,8 @@ tests =
     , testCase "map elaborates inner expression at modality source mode" testMapCrossModeElab
     , testCase "for_gen obligations elaborate @gen and lifts" testForGenObligationElab
     , testCase "for_gen obligations expand over target generators during implements" testForGenImplementsQuantifiesTarget
+    , testCase "for_gen obligations map schema generator refs through morphism" testForGenSchemaRefsMapped
+    , testCase "for_gen rejects @gen under mode-changing map context" testForGenGenPlacementRejected
     , testCase "@gen outside for_gen is rejected" testGenOutsideForGenRejected
     , testCase "action coherence follows mod_eq" testActionModEqCoherence
     , testCase "implements fails when schema obligations are not provable" testAdjObligationFail
@@ -299,6 +301,55 @@ testForGenImplementsQuantifiesTarget = do
         else assertFailure ("expected for_gen target quantification failure, got: " <> T.unpack err)
     Right _ ->
       assertFailure "expected implements to fail on unsatisfied for_gen obligation for target generator"
+
+testForGenSchemaRefsMapped :: Assertion
+testForGenSchemaRefsMapped = do
+  let src = T.unlines
+        [ "doctrine FGSchemaMap where {"
+        , "  mode M;"
+        , "  type X @M;"
+        , "  gen drop(a@M) : [a] -> [] @M;"
+        , "  obligation mapped_drop for_gen @M ="
+        , "    @gen ; lift_cod(drop) == @gen ; lift_cod(drop)"
+        , "}"
+        , "doctrine FGTgtMap where {"
+        , "  mode M;"
+        , "  type X @M;"
+        , "  gen discard(a@M) : [a] -> [] @M;"
+        , "}"
+        , "morphism fgMapInst : FGSchemaMap -> FGTgtMap where {"
+        , "  mode M -> M;"
+        , "  gen drop @M -> discard"
+        , "  check none;"
+        , "}"
+        , "implements FGSchemaMap for FGTgtMap using fgMapInst;"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  assertBool
+    "expected mapped for_gen obligation to validate through morphism mapping"
+    (M.member ("FGSchemaMap", "FGTgtMap") (meImplDefaults env))
+
+testForGenGenPlacementRejected :: Assertion
+testForGenGenPlacementRejected = do
+  let src = T.unlines
+        [ "doctrine BadForGenPlacement where {"
+        , "  mode A;"
+        , "  mode B;"
+        , "  modality F : A -> B;"
+        , "  type X @A;"
+        , "  type Y @B;"
+        , "  gen g(b@B) : [b] -> [b] @B;"
+        , "  obligation bad for_gen @B ="
+        , "    map[F](@gen) == map[F](@gen)"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      if "obligation mode" `T.isInfixOf` err
+        then pure ()
+        else assertFailure ("expected @gen placement error, got: " <> T.unpack err)
+    Right _ ->
+      assertFailure "expected for_gen obligation to reject @gen in mode-changing map context"
 
 testGenOutsideForGenRejected :: Assertion
 testGenOutsideForGenRejected = do

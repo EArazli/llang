@@ -597,6 +597,8 @@ elabActionImage env doc tgtMode (genName, rhs) = do
 validateObligationExprMode :: Doctrine -> ModeName -> Bool -> RawOblExpr -> Either Text ()
 validateObligationExprMode doc mode allowGen = go mode
   where
+    rootMode = mode
+
     go expected expr =
       case expr of
         ROEDiag _ ->
@@ -607,17 +609,26 @@ validateObligationExprMode doc mode allowGen = go mode
             then go (meSrc me) inner
             else Left "obligation map: mapped diagram mode does not match surrounding expression mode"
         ROEGen ->
-          if allowGen
+          if allowGen && expected == rootMode
             then Right ()
-            else Left "obligation: @gen is only valid in for_gen obligations"
+            else
+              if allowGen
+                then Left "obligation: @gen is only valid at the obligation mode"
+                else Left "obligation: @gen is only valid in for_gen obligations"
         ROELiftDom _ ->
-          if allowGen
+          if allowGen && expected == rootMode
             then Right ()
-            else Left "obligation: lift_dom is only valid in for_gen obligations"
+            else
+              if allowGen
+                then Left "obligation: lift_dom is only valid at the obligation mode"
+                else Left "obligation: lift_dom is only valid in for_gen obligations"
         ROELiftCod _ ->
-          if allowGen
+          if allowGen && expected == rootMode
             then Right ()
-            else Left "obligation: lift_cod is only valid in for_gen obligations"
+            else
+              if allowGen
+                then Left "obligation: lift_cod is only valid at the obligation mode"
+                else Left "obligation: lift_cod is only valid in for_gen obligations"
         ROEComp a b ->
           go expected a >> go expected b
         ROETensor a b ->
@@ -695,8 +706,7 @@ evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars expr = do
   modeTgt <- applyMorphismMode morph mode
   case expr of
     ROEDiag rawDiag -> do
-      diagSrc0 <- elabObligationDiag env ifaceDoc mode [] tyVars tmVars rawDiag
-      diagSrc <- freshenDiagramTyVars (doctrineTypeTheory ifaceDoc) diagSrc0
+      diagSrc <- elabObligationDiag env ifaceDoc mode [] tyVars tmVars rawDiag
       diagTgt <- applyMorphismDiagram morph diagSrc
       if dMode diagTgt == modeTgt
         then Right diagTgt
@@ -743,8 +753,13 @@ evalObligationExprForGen
 evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag expr = do
   modeTgt <- applyMorphismMode morph mode
   case expr of
-    ROEDiag rawDiag ->
-      elabObligationDiag env tgtDoc modeTgt (dTmCtx genDiag) tyVars tmVars rawDiag
+    ROEDiag rawDiag -> do
+      diagSrc <- elabObligationDiag env ifaceDoc mode (dTmCtx genDiag) tyVars tmVars rawDiag
+      diagTgt0 <- applyMorphismDiagram morph diagSrc
+      diagTgt <- weakenDiagramTmCtxTo (dTmCtx genDiag) diagTgt0
+      if dMode diagTgt == modeTgt
+        then Right diagTgt
+        else Left "obligation: mapped diagram mode mismatch after morphism application"
     ROEMap rawMe innerExpr -> do
       me <- elabRawModExpr (dModes ifaceDoc) rawMe
       inner <- evalObligationExprForGen env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars genDiag innerExpr
@@ -758,9 +773,9 @@ evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag ex
         then Right genDiag
         else Left "obligation: @gen mode mismatch"
     ROELiftDom rawOp ->
-      evalLiftedForGen env tgtDoc modeTgt tyVars tmVars genDiag LiftOverDom rawOp
+      evalLiftedForGen env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverDom rawOp
     ROELiftCod rawOp ->
-      evalLiftedForGen env tgtDoc modeTgt tyVars tmVars genDiag LiftOverCod rawOp
+      evalLiftedForGen env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverCod rawOp
     ROEComp a b -> do
       d1 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
       d2 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
@@ -773,6 +788,9 @@ evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag ex
 evalLiftedForGen
   :: ModuleEnv
   -> Doctrine
+  -> Doctrine
+  -> Morphism
+  -> ModeName
   -> ModeName
   -> [TyVar]
   -> [TmVar]
@@ -780,16 +798,16 @@ evalLiftedForGen
   -> LiftBoundary
   -> RawDiagExpr
   -> Either Text Diagram
-evalLiftedForGen env doc mode tyVars tmVars genDiag liftSide rawOp = do
+evalLiftedForGen env ifaceDoc tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag liftSide rawOp = do
   ctx <- case liftSide of
     LiftOverDom -> diagramDom genDiag
     LiftOverCod -> diagramCod genDiag
   ops <- mapM (instantiateAt (dTmCtx genDiag)) ctx
   case ops of
-    [] -> Right (idDTm mode (dTmCtx genDiag) [])
+    [] -> Right (idDTm modeTgt (dTmCtx genDiag) [])
     (d0:rest) -> foldM tensorD d0 rest
   where
-    ttDoc = doctrineTypeTheory doc
+    ttDoc = doctrineTypeTheory tgtDoc
     rigidTy = S.fromList tyVars
     rigidTm = S.fromList tmVars
     sideLabel =
@@ -798,11 +816,16 @@ evalLiftedForGen env doc mode tyVars tmVars genDiag liftSide rawOp = do
         LiftOverCod -> "lift_cod"
 
     instantiateAt tmCtx argTy = do
-      op0 <- elabObligationDiag env doc mode tmCtx tyVars tmVars rawOp
-      dom0 <- diagramDom op0
-      cod0 <- diagramCod op0
+      opSrc <- elabObligationDiag env ifaceDoc modeSrc tmCtx tyVars tmVars rawOp
+      opTgt0 <- applyMorphismDiagram morph opSrc
+      opTgt <- weakenDiagramTmCtxTo (dTmCtx genDiag) opTgt0
+      if dMode opTgt == modeTgt
+        then Right ()
+        else Left "obligation: mapped diagram mode mismatch after morphism application"
+      dom0 <- diagramDom opTgt
+      cod0 <- diagramCod opTgt
       if length dom0 == 1 && length cod0 == 1
-        then unifyBoundary ttDoc rigidTy rigidTm [argTy] cod0 op0
+        then unifyBoundary ttDoc rigidTy rigidTm [argTy] cod0 opTgt
         else Left (sideLabel <> ": operator must be unary ([x] -> [y])")
 
 elabObligationDiag
@@ -819,30 +842,6 @@ elabObligationDiag env doc mode tmCtx tyVars tmVars rawDiag = do
   ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
   ensureAcyclicMode doc mode diag
   pure diag
-
-freshenDiagramTyVars :: TypeTheory -> Diagram -> Either Text Diagram
-freshenDiagramTyVars tt diag = do
-  let vars = S.toList (freeTyVarsDiagram diag)
-  if null vars
-    then Right diag
-    else do
-      let used0 = S.fromList [ (tvMode v, tvName v) | v <- vars ]
-      let (_, pairsRev) = foldl freshOne (used0, []) vars
-      let subst = U.emptySubst { U.sTy = M.fromList (reverse pairsRev) }
-      applySubstDiagram tt subst diag
-  where
-    freshOne (used, acc) v =
-      let name' = pickFresh used (tvMode v) ("obl_" <> tvName v) 0
-          v' = v { tvName = name' }
-          used' = S.insert (tvMode v', tvName v') used
-       in (used', (v, TVar v') : acc)
-
-    pickFresh used mode base n =
-      let suffix = if n == (0 :: Int) then "" else T.pack (show n)
-          candidate = base <> suffix
-       in if (mode, candidate) `S.member` used
-            then pickFresh used mode base (n + 1)
-            else candidate
 
 mkForGenDiag :: ModeName -> GenDecl -> Either Text Diagram
 mkForGenDiag mode gen = do

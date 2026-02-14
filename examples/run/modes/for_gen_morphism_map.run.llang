@@ -1,0 +1,38 @@
+doctrine ForGenSchemaMap where {
+  mode M;
+
+  type X @M;
+
+  gen drop(a@M) : [a] -> [] @M;
+
+  obligation mapped_drop for_gen @M =
+    @gen ; lift_cod(drop) == @gen ; lift_cod(drop)
+}
+
+doctrine ForGenTargetMap where {
+  mode M;
+
+  type X @M;
+
+  gen discard(a@M) : [a] -> [] @M;
+}
+
+morphism fgMapInst : ForGenSchemaMap -> ForGenTargetMap where {
+  mode M -> M;
+  gen drop @M -> discard
+  check none;
+}
+
+implements ForGenSchemaMap for ForGenTargetMap using fgMapInst;
+
+pipeline debug where {
+  extract diagram;
+}
+
+run sanity using debug where {
+  source doctrine ForGenTargetMap;
+  source mode M;
+}
+---
+discard{M.X}
+---

@@ -22,7 +22,7 @@ Quick index (non-exhaustive):
   - `ccc_surface/*` (STLC surface runs)
   - `implements_uses.run.llang`
 - `examples/run/modes/`
-  - `adjunction_real.run.llang`, `monad_instance.run.llang`
+  - `adjunction_real.run.llang`, `monad_instance.run.llang`, `for_gen_morphism_map.run.llang`
   - `lnl.counit.run.llang`, `lnl.unit.run.llang`
   - `staging.run.llang`, `staging_mode_map.run.llang`
 - `examples/run/pushout/`
