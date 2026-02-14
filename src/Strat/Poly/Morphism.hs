@@ -5,6 +5,8 @@ module Strat.Poly.Morphism
   , GenImage(..)
   , TemplateParam(..)
   , TypeTemplate(..)
+  , applyMorphismMode
+  , applyMorphismModExpr
   , applyMorphismTy
   , applyMorphismBinderSig
   , applyMorphismDiagram
@@ -41,6 +43,12 @@ unifyCtxCompat tt tmCtx ctxA ctxB =
   let tyFlex = S.unions (map freeTyVarsType (ctxA <> ctxB))
       tmFlex = S.unions (map freeTmVarsType (ctxA <> ctxB))
    in unifyCtx tt tmCtx tyFlex tmFlex ctxA ctxB
+
+unifyCtxFromPattern :: TypeTheory -> [TypeExpr] -> Context -> Context -> Either Text Subst
+unifyCtxFromPattern tt tmCtx pat host =
+  let tyFlex = S.unions (map freeTyVarsType pat)
+      tmFlex = S.unions (map freeTmVarsType pat)
+   in unifyCtx tt tmCtx tyFlex tmFlex pat host
 
 
 data Morphism = Morphism
@@ -84,6 +92,9 @@ mapMode mor mode =
   case M.lookup mode (morModeMap mor) of
     Nothing -> Left "morphism: missing mode mapping"
     Just mode' -> Right mode'
+
+applyMorphismMode :: Morphism -> ModeName -> Either Text ModeName
+applyMorphismMode = mapMode
 
 mapAttrSort :: Morphism -> AttrSort -> Either Text AttrSort
 mapAttrSort mor sortName =
@@ -148,27 +159,8 @@ applyMorphismTy mor ty =
           Left "morphism: type template kind mismatch during instantiation"
 
 applyMorphismTmTerm :: Morphism -> TermDiagram -> Either Text TermDiagram
-applyMorphismTmTerm mor (TermDiagram tm) = do
-  mode' <- mapMode mor (dMode tm)
-  tmCtx' <- mapM (applyMorphismTy mor) (dTmCtx tm)
-  portTy' <- mapM (applyMorphismTy mor) (dPortTy tm)
-  edges' <- mapM mapEdge (dEdges tm)
-  pure
-    ( TermDiagram
-        tm
-          { dMode = mode'
-          , dTmCtx = tmCtx'
-          , dPortTy = portTy'
-          , dEdges = edges'
-          }
-    )
-  where
-    mapEdge edge =
-      case ePayload edge of
-        PTmMeta v -> do
-          sort' <- applyMorphismTy mor (tmvSort v)
-          pure edge { ePayload = PTmMeta v { tmvSort = sort' } }
-        _ -> pure edge
+applyMorphismTmTerm mor (TermDiagram tm) =
+  TermDiagram <$> applyMorphismDiagram mor tm
 
 mapModExpr :: Morphism -> ModExpr -> Either Text ModExpr
 mapModExpr mor me = do
@@ -187,6 +179,9 @@ mapModExpr mor me = do
         Nothing -> Left "morphism: missing modality mapping"
         Just out -> Right out
     compose acc nxt = composeMod (dModes (morTgt mor)) acc nxt
+
+applyMorphismModExpr :: Morphism -> ModExpr -> Either Text ModExpr
+applyMorphismModExpr = mapModExpr
 
 applyMorphismDiagram :: Morphism -> Diagram -> Either Text Diagram
 applyMorphismDiagram mor diagSrc = do
@@ -226,7 +221,8 @@ applyMorphismDiagram mor diagSrc = do
                     if S.null remaining
                       then Right ()
                       else Left "applyMorphismDiagram: uninstantiated binder holes in generator image"
-                    spliceEdge diagTgt edgeKey instImage
+                    instImage' <- weakenDiagramTmCtxTo (dTmCtx diagTgt) instImage
+                    spliceEdge diagTgt edgeKey instImage'
               PBox name inner -> do
                 inner' <- applyMorphismDiagram mor inner
                 updateEdgePayload diagTgt edgeKey (PBox name inner')
@@ -1132,9 +1128,9 @@ instantiateGen :: TypeTheory -> GenDecl -> Diagram -> Edge -> Either Text Subst
 instantiateGen tt gen diag edge = do
   dom <- mapM (requirePortType diag) (eIns edge)
   cod <- mapM (requirePortType diag) (eOuts edge)
-  s1 <- unifyCtxCompat tt (dTmCtx diag) (gdPlainDom gen) dom
+  s1 <- unifyCtxFromPattern tt (dTmCtx diag) (gdPlainDom gen) dom
   codExpected <- applySubstCtx tt s1 (gdCod gen)
-  s2 <- unifyCtxCompat tt (dTmCtx diag) codExpected cod
+  s2 <- unifyCtxFromPattern tt (dTmCtx diag) codExpected cod
   s0 <- composeSubst tt s2 s1
   if length binderSlots /= length bargs
     then Left "applyMorphismDiagram: source binder argument arity mismatch"
@@ -1162,12 +1158,12 @@ instantiateGen tt gen diag edge = do
             then Right ()
             else Left "applyMorphismDiagram: binder argument term-context mismatch"
           domInner <- diagramDom inner
-          sDom <- unifyCtxCompat tt slotTm (bsDom slot0) domInner
+          sDom <- unifyCtxFromPattern tt slotTm (bsDom slot0) domInner
           subst1 <- composeSubst tt sDom subst
           slot1 <- applySubstBinderSigTT tt subst1 slot
           slotTm1 <- applySubstCtx tt emptySubst (bsTmCtx slot1)
           codInner <- diagramCod inner
-          sCod <- unifyCtxCompat tt slotTm1 (bsCod slot1) codInner
+          sCod <- unifyCtxFromPattern tt slotTm1 (bsCod slot1) codInner
           composeSubst tt sCod subst1
 
 instantiateAttrSubst :: Morphism -> GenDecl -> AttrMap -> Either Text AttrSubst

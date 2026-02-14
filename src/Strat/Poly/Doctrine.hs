@@ -36,6 +36,7 @@ import Strat.Poly.Attr
 import Strat.Poly.Diagram
 import Strat.Poly.Graph (validateDiagram, Edge(..), EdgePayload(..), unPortId)
 import Strat.Poly.Cell2
+import Strat.Poly.DSL.AST (RawOblExpr(..))
 import Strat.Poly.UnifyTy (unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.Poly.TypeNormalize (termToDiagram, validateTermDiagram)
@@ -80,10 +81,14 @@ data ModAction = ModAction
 
 data ObligationDecl = ObligationDecl
   { obName :: Text
+  , obMode :: ModeName
+  , obForGen :: Bool
   , obTyVars :: [TyVar]
   , obTmVars :: [TmVar]
-  , obLHS :: Diagram
-  , obRHS :: Diagram
+  , obDom :: Context
+  , obCod :: Context
+  , obLHSExpr :: RawOblExpr
+  , obRHSExpr :: RawOblExpr
   , obPolicy :: RewritePolicy
   , obFuel :: Int
   } deriving (Eq, Show)
@@ -214,7 +219,7 @@ validateDoctrine doc = do
   mapM_ (checkGenTable doc) (M.toList (dGens doc))
   mapM_ (checkCell doc) (dCells2 doc)
   mapM_ (checkAction doc) (M.toList (dActions doc))
-  mapM_ checkObligation (dObligations doc)
+  mapM_ (checkObligation doc) (dObligations doc)
   pure ()
 
 modeIsAcyclic :: Doctrine -> ModeName -> Bool
@@ -305,17 +310,18 @@ checkCell doc cell = do
     else if dTmCtx (c2LHS cell) /= dTmCtx (c2RHS cell)
       then Left "validateDoctrine: cell has term-context mismatch"
     else do
+      let tmCtx = dTmCtx (c2LHS cell)
       ctxL <- diagramDom (c2LHS cell)
       ctxR <- diagramDom (c2RHS cell)
       let tt = doctrineTypeTheory doc
       let tyFlexDom = S.unions (map freeTyVarsType (ctxL <> ctxR))
       let tmFlexDom = S.unions (map freeTmVarsType (ctxL <> ctxR))
-      _ <- unifyCtx tt [] tyFlexDom tmFlexDom ctxL ctxR
+      _ <- unifyCtx tt tmCtx tyFlexDom tmFlexDom ctxL ctxR
       codL <- diagramCod (c2LHS cell)
       codR <- diagramCod (c2RHS cell)
       let tyFlexCod = S.unions (map freeTyVarsType (codL <> codR))
       let tmFlexCod = S.unions (map freeTmVarsType (codL <> codR))
-      _ <- unifyCtx tt [] tyFlexCod tmFlexCod codL codR
+      _ <- unifyCtx tt tmCtx tyFlexCod tmFlexCod codL codR
       let lhsVars = freeTyVarsDiagram (c2LHS cell)
       let rhsVars = freeTyVarsDiagram (c2RHS cell)
       let declaredTy = S.fromList (c2TyVars cell)
@@ -473,13 +479,39 @@ checkAction doc (name, action) = do
         validateDiagram img
   mapM_ checkGenImage (M.keys srcGens)
 
-checkObligation :: ObligationDecl -> Either Text ()
-checkObligation obl = do
-  validateDiagram (obLHS obl)
-  validateDiagram (obRHS obl)
-  if dMode (obLHS obl) == dMode (obRHS obl) && dTmCtx (obLHS obl) == dTmCtx (obRHS obl)
-    then Right ()
-    else Left "validateDoctrine: obligation boundary mismatch"
+checkObligation :: Doctrine -> ObligationDecl -> Either Text ()
+checkObligation doc obl = do
+  ensureDistinctTyVars ("validateDoctrine: duplicate obligation tyvars in " <> obName obl) (obTyVars obl)
+  ensureDistinctTmVars ("validateDoctrine: duplicate obligation term vars in " <> obName obl) (obTmVars obl)
+  if obForGen obl
+    then do
+      if null (obTyVars obl) && null (obTmVars obl) && null (obDom obl) && null (obCod obl)
+        then Right ()
+        else Left "validateDoctrine: for_gen obligation must not declare vars or boundary signature"
+      ensureNoGenRefs False (obLHSExpr obl)
+      ensureNoGenRefs False (obRHSExpr obl)
+    else do
+      checkContext doc (obMode obl) (obTyVars obl) (obTmVars obl) [] (obDom obl)
+      checkContext doc (obMode obl) (obTyVars obl) (obTmVars obl) [] (obCod obl)
+      ensureNoGenRefs True (obLHSExpr obl)
+      ensureNoGenRefs True (obRHSExpr obl)
+  where
+    ensureNoGenRefs allow expr =
+      case expr of
+        ROEDiag _ -> Right ()
+        ROEMap _ inner -> ensureNoGenRefs allow inner
+        ROEGen ->
+          if allow
+            then Left "validateDoctrine: @gen is only allowed in for_gen obligations"
+            else Right ()
+        ROELiftDom _
+          | allow -> Left "validateDoctrine: lift_dom is only allowed in for_gen obligations"
+          | otherwise -> Right ()
+        ROELiftCod _
+          | allow -> Left "validateDoctrine: lift_cod is only allowed in for_gen obligations"
+          | otherwise -> Right ()
+        ROEComp a b -> ensureNoGenRefs allow a >> ensureNoGenRefs allow b
+        ROETensor a b -> ensureNoGenRefs allow a >> ensureNoGenRefs allow b
 
 ensureDistinct :: Ord a => Text -> [a] -> Either Text ()
 ensureDistinct label xs =

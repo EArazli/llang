@@ -17,6 +17,7 @@ module Strat.Poly.TypeExpr
   , freeTmVarsTerm
   , boundTmIndicesType
   , boundTmIndicesTerm
+  , resolveTmCtxIndex
   , tmCtxForMode
   , typeMode
   , normalizeTypeExpr
@@ -139,7 +140,7 @@ boundTmIndicesTerm (TermDiagram diag) =
     [ globalTm
     | (localPos, pid) <- zip [0 :: Int ..] (dIn diag)
     , inputIsUsed pid
-    , let globalTm = resolveGlobal localPos pid
+    , Just globalTm <- [resolveTmCtxIndex (dTmCtx diag) (dMode diag) localPos (getPortLabel diag pid)]
     ]
   where
     inputIsUsed pid =
@@ -148,27 +149,33 @@ boundTmIndicesTerm (TermDiagram diag) =
              Just (Just _) -> True
              _ -> False
 
-    resolveGlobal localPos pid =
-      case getPortLabel diag pid >>= decodeTmCtxLabel of
-        Just globalTm -> globalTm
-        Nothing ->
-          case drop localPos globals of
-            (globalTm:_) -> globalTm
-            [] -> localPos
-
+resolveTmCtxIndex :: [TypeExpr] -> ModeName -> Int -> Maybe Text -> Maybe Int
+resolveTmCtxIndex tmCtx mode localPos mLabel =
+  case mLabel >>= decodeTmCtxLabel of
+    Just globalTm
+      | globalTm >= 0
+      , globalTm < length tmCtx
+      , typeMode (tmCtx !! globalTm) == mode ->
+          Just globalTm
+    _ ->
+      case drop localPos globals of
+        (globalTm:_) -> Just globalTm
+        [] -> Nothing
+  where
     globals =
       [ i
-      | (i, ty) <- zip [0 :: Int ..] (dTmCtx diag)
-      , typeMode ty == dMode diag
+      | (i, ty) <- zip [0 :: Int ..] tmCtx
+      , typeMode ty == mode
       ]
 
-    decodeTmCtxLabel lbl =
-      case T.stripPrefix "tmctx:" lbl of
-        Nothing -> Nothing
-        Just raw ->
-          case reads (T.unpack raw) of
-            [(n, "")] -> Just n
-            _ -> Nothing
+decodeTmCtxLabel :: Text -> Maybe Int
+decodeTmCtxLabel lbl =
+  case T.stripPrefix "tmctx:" lbl of
+    Nothing -> Nothing
+    Just raw ->
+      case reads (T.unpack raw) of
+        [(n, "")] -> Just n
+        _ -> Nothing
 
 boundTmIndicesType :: TypeExpr -> S.Set Int
 boundTmIndicesType ty =

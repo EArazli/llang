@@ -1,0 +1,84 @@
+doctrine CartLaws where {
+  mode M;
+
+  gen dup(a@M) : [a] -> [a, a] @M;
+  gen drop(a@M) : [a] -> [] @M;
+
+  obligation coassoc(a@M) : [a] -> [a, a, a] @M =
+    dup{a} ; (dup{a} * id[a]) == dup{a} ; (id[a] * dup{a})
+}
+
+doctrine SurfaceTarget where {
+  mode M;
+  type A @M;
+
+  gen copy(a@M) : [a] -> [a, a] @M;
+  gen kill(a@M) : [a] -> [] @M;
+  gen f : [A, A] -> [A] @M;
+  gen unit : [] -> [A] @M;
+
+  rule structural coassoc_copy = (a@M) : [a] -> [a, a, a] @M =
+    copy ; (copy * id[a]) == copy ; (id[a] * copy)
+}
+
+morphism cartInst : CartLaws -> SurfaceTarget where {
+  mode M -> M;
+  gen dup @M -> copy
+  gen drop @M -> kill
+  check none;
+}
+
+implements CartLaws for SurfaceTarget using cartInst;
+
+surface Surf where {
+  doctrine SurfaceTarget;
+  mode M;
+
+  lexer {
+    keywords: term, in, out;
+    symbols: "(", ")", "{", "}", ":", ";", ",";
+  }
+
+  expr {
+    atom:
+      ident(name) "(" <expr> ")" => $1 ; #name
+    | ident(name) => $name
+    | "out" <expr> => $1
+    | "term" "{" <expr> "}" => $1
+    | "(" <expr> ")" => <expr>
+    ;
+    prefix:
+      "in" ident(name) ":" <type>(ty) ";" <expr> => <expr> bind in(name, ty, 1)
+    ;
+    infixr 10 "," => $1 * $2;
+  }
+}
+
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run implicit_dup using debug where {
+  source doctrine SurfaceTarget;
+  source mode M;
+  source surface Surf;
+}
+---
+term {
+  in x:A;
+  out f(x, x)
+}
+---
+
+run implicit_drop using debug where {
+  source doctrine SurfaceTarget;
+  source mode M;
+  source surface Surf;
+}
+---
+term {
+  in x:A;
+  out unit
+}
+---

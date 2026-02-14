@@ -45,8 +45,9 @@ validateActionSemantics doc = do
       mapM_ (checkOneRule modName action rules) srcRules
 
     checkOneRule modName action rules cell = do
-      lhs <- applyAction doc modName (c2LHS cell)
-      rhs <- applyAction doc modName (c2RHS cell)
+      cell' <- freshenRuleTyVars tt cell
+      lhs <- applyAction doc modName (c2LHS cell')
+      rhs <- applyAction doc modName (c2RHS cell')
       ok <- joinableWithin tt (maFuel action) rules lhs rhs
       if ok
         then Right ()
@@ -83,6 +84,37 @@ validateActionSemantics doc = do
               if all (== p) ps
                 then p
                 else UseStructuralAsBidirectional
+
+freshenRuleTyVars :: TypeTheory -> Cell2 -> Either Text Cell2
+freshenRuleTyVars tt cell = do
+  let vars = c2TyVars cell
+  if null vars
+    then Right cell
+    else do
+      let used0 =
+            S.fromList
+              [ (tvMode v, tvName v)
+              | v <- S.toList (S.union (freeTyVarsDiagram (c2LHS cell)) (freeTyVarsDiagram (c2RHS cell)))
+              ]
+      let (substMap, _used) = foldl freshOne (M.empty, used0) vars
+      let subst = emptySubst { sTy = substMap }
+      lhs <- applySubstDiagram tt subst (c2LHS cell)
+      rhs <- applySubstDiagram tt subst (c2RHS cell)
+      pure cell { c2LHS = lhs, c2RHS = rhs }
+  where
+    freshOne (acc, used) v =
+      let name' = pickFresh used (tvMode v) ("actchk_" <> tvName v) 0
+          v' = v { tvName = name' }
+          used' = S.insert (tvMode v', tvName v') used
+          acc' = M.insert v (TVar v') acc
+       in (acc', used')
+
+    pickFresh used mode base n =
+      let suffix = if n == (0 :: Int) then "" else T.pack (show n)
+          candidate = base <> suffix
+       in if (mode, candidate) `S.member` used
+            then pickFresh used mode base (n + 1)
+            else candidate
 
 maybeToList :: Maybe a -> [a]
 maybeToList mv =
@@ -123,7 +155,7 @@ applyAction doc mName diagSrc = do
     then Left "map: modality source mismatch"
     else pure ()
   let me = ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [mName] }
-  dTmCtx' <- mapM (mapType me) (dTmCtx diagSrc)
+  dTmCtx' <- mapM (mapTypeIfSource me) (dTmCtx diagSrc)
   dPortTy' <- mapM (mapType me) (dPortTy diagSrc)
   let diag0 = diagSrc { dMode = mdTgt decl, dTmCtx = dTmCtx', dPortTy = dPortTy' }
   let edgeKeys = IM.keys (dEdges diagSrc)
@@ -152,14 +184,16 @@ applyAction doc mName diagSrc = do
         PGen g attrs bargs -> do
           genDecl <- lookupSrcGen doc (dMode diagSrc) g
           mappedBargs <- mapM (mapBinderArg mName) bargs
-          img0 <-
+          img0raw <-
             case M.lookup (dMode diagSrc, g) (maGenMap action) of
               Nothing -> Left "map: missing generator image"
               Just d -> Right d
+          img0 <- freshenImageTyVars tt diagTgt img0raw
           (img1, subst) <- instantiateImage tt diagTgt edgeKey img0
           let img2 = applyAttrSubstDiagram (actionAttrSubst genDecl attrs) img1
           img3 <- instantiateMappedBinders tt me genDecl mappedBargs subst img2
-          spliceEdge diagTgt edgeKey img3
+          img4 <- weakenDiagramTmCtxTo (dTmCtx diagTgt) img3
+          spliceEdge diagTgt edgeKey img4
         PBox name inner -> do
           inner' <- applyAction doc mName inner
           updateEdgePayload diagTgt edgeKey (PBox name inner')
@@ -199,6 +233,29 @@ applyAction doc mName diagSrc = do
           dom <- mapM (mapType me) (bsDom sig)
           cod <- mapM (mapType me) (bsCod sig)
           pure sig { bsTmCtx = tmCtx, bsDom = dom, bsCod = cod }
+
+    freshenImageTyVars typeTheory host image = do
+      let vars = S.toList (freeTyVarsDiagram image)
+      if null vars
+        then Right image
+        else do
+          let used0 = S.fromList [ (tvMode v, tvName v) | v <- S.toList (freeTyVarsDiagram host) ]
+          let (_, pairsRev) = foldl freshOne (used0, []) vars
+          let subst = emptySubst { sTy = M.fromList (reverse pairsRev) }
+          applySubstDiagram typeTheory subst image
+      where
+        freshOne (used, acc) v =
+          let name' = pickFresh used (tvMode v) (tvName v <> "_img") 0
+              v' = v { tvName = name' }
+              used' = S.insert (tvMode v', tvName v') used
+           in (used', (v, TVar v') : acc)
+
+        pickFresh used mode base n =
+          let suffix = if n == (0 :: Int) then "" else T.pack (show n)
+              candidate = base <> suffix
+           in if (mode, candidate) `S.member` used
+                then pickFresh used mode base (n + 1)
+                else candidate
 
 genericGenDiagram :: GenDecl -> Either Text Diagram
 genericGenDiagram gd = do
@@ -255,10 +312,10 @@ instantiateImage tt diag edgeKey img = do
   codImg <- diagramCod img
   let flexTy = freeTyVarsDiagram img
   let flexTm = freeTmVarsDiagram img
-  sDom <- unifyCtx tt [] flexTy flexTm domImg domEdge
+  sDom <- unifyCtxDiagram tt diag flexTy flexTm domImg domEdge
   codImg1 <- applySubstCtx tt sDom codImg
   codEdge1 <- applySubstCtx tt sDom codEdge
-  sCod <- unifyCtx tt [] flexTy flexTm codImg1 codEdge1
+  sCod <- unifyCtxDiagram tt diag flexTy flexTm codImg1 codEdge1
   s <- composeSubst tt sCod sDom
   img' <- applySubstDiagram tt s img
   pure (img', s)

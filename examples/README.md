@@ -17,9 +17,14 @@ Quick index (non-exhaustive):
 - `examples/run/terms/`
   - `term_ref.run.llang`, `cart_monoid.term.run.llang`, `stlc_bool.term.run.llang`
 - `examples/run/surfaces/`
+  - `cartesian_end_to_end.run.llang`
   - `planar_monoid.ssa.run.llang`
   - `ccc_surface/*` (STLC surface runs)
   - `implements_uses.run.llang`
+- `examples/run/modes/`
+  - `adjunction_real.run.llang`, `monad_instance.run.llang`
+  - `lnl.counit.run.llang`, `lnl.unit.run.llang`
+  - `staging.run.llang`, `staging_mode_map.run.llang`
 - `examples/run/pushout/`
   - `pushout_basic.run.llang`
 - `examples/run/templates/` and `examples/run/effects/`

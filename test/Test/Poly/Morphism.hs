@@ -42,6 +42,8 @@ tests =
     , testCase "morphism rejects term-template sort mismatch in same mode" testTermTemplateSortMismatch
     , testCase "morphism type map instantiates term-templates" testTermTypeTemplateInstantiation
     , testCase "morphism rejects term-template parameter kind mismatch" testTermTemplateKindMismatch
+    , testCase "morphism maps structured term arguments inside types" testMorphismMapsStructuredTermArgs
+    , testCase "morphism weakens image term-context prefixes before splice" testMorphismWeakenImageTmCtx
     , testCase "morphism check all enforces computational equations" testMorphismCheckAllEnforcesComputational
     , testCase "morphism check structural ignores computational equations" testMorphismCheckStructuralIgnoresComputational
     , testCase "morphism check none skips structural equations" testMorphismCheckNoneSkipsStructural
@@ -1057,6 +1059,173 @@ testTermTemplateKindMismatch = do
       assertBool "expected template kind mismatch" ("kind mismatch" `T.isInfixOf` err)
     Right () ->
       assertFailure "expected morphism check to fail"
+
+testMorphismMapsStructuredTermArgs :: Assertion
+testMorphismMapsStructuredTermArgs = do
+  let modeM' = ModeName "M"
+  let modeI' = ModeName "I"
+  let natRef = TypeRef modeI' (TypeName "Nat")
+  let vecRef = TypeRef modeM' (TypeName "Vec")
+  let natTy = TCon natRef []
+  let succName = GenName "succ"
+  let dblName = GenName "dbl"
+  let succDecl =
+        GenDecl
+          { gdName = succName
+          , gdMode = modeI'
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = [InPort natTy]
+          , gdCod = [natTy]
+          , gdAttrs = []
+          }
+  let dblDecl = succDecl { gdName = dblName }
+  let srcDoc =
+        Doctrine
+          { dName = "SrcStructuredTm"
+          , dModes = mkModes [modeM', modeI']
+    , dAcyclicModes = S.empty
+          , dAttrSorts = M.empty
+          , dTypes =
+              M.fromList
+                [ (modeI', M.fromList [(TypeName "Nat", TypeSig [])])
+                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy])])
+                ]
+          , dGens = M.fromList [(modeI', M.fromList [(succName, succDecl)])]
+          , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
+          }
+  let tgtDoc =
+        Doctrine
+          { dName = "TgtStructuredTm"
+          , dModes = mkModes [modeM', modeI']
+    , dAcyclicModes = S.empty
+          , dAttrSorts = M.empty
+          , dTypes =
+              M.fromList
+                [ (modeI', M.fromList [(TypeName "Nat", TypeSig [])])
+                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy])])
+                ]
+          , dGens = M.fromList [(modeI', M.fromList [(dblName, dblDecl)])]
+          , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
+          }
+  src <- case validateDoctrine srcDoc of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right () -> pure srcDoc
+  tgt <- case validateDoctrine tgtDoc of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right () -> pure tgtDoc
+  dblImg <- case genD modeI' [natTy] [natTy] dblName of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right d -> pure d
+  let mor =
+        Morphism
+          { morName = "MapSuccToDbl"
+          , morSrc = src
+          , morTgt = tgt
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morAttrSortMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.fromList [((modeI', succName), plainImage dblImg)]
+          , morCheck = CheckNone
+          , morPolicy = UseAllOriented
+          , morFuel = 20
+          }
+  let ttSrc = doctrineTypeTheory src
+  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
+  tmSrc <- case termExprToDiagram ttSrc [] natTy (TMFun (TmFunName "succ") [TMVar nVar]) of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right tm -> pure tm
+  let tySrc = TCon vecRef [TATm tmSrc]
+  tyTgt <- case applyMorphismTy mor tySrc of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right ty -> pure ty
+  case tyTgt of
+    TCon ref [TATm tmOut] -> do
+      ref @?= vecRef
+      tmExpr <- case diagramToTermExpr (doctrineTypeTheory tgt) [] natTy tmOut of
+        Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+        Right e -> pure e
+      tmExpr @?= TMFun (TmFunName "dbl") [TMVar nVar]
+    _ ->
+      assertFailure "expected mapped Vec term argument"
+
+testMorphismWeakenImageTmCtx :: Assertion
+testMorphismWeakenImageTmCtx = do
+  let mode = ModeName "M"
+  let tyX = TCon (TypeRef mode (TypeName "X")) []
+  let srcName = GenName "g"
+  let tgtName = GenName "h"
+  let mkGen name =
+        GenDecl
+          { gdName = name
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = [InPort tyX]
+          , gdCod = [tyX]
+          , gdAttrs = []
+          }
+  let srcDoc =
+        Doctrine
+          { dName = "SrcWeakenMorph"
+          , dModes = mkModes [mode]
+          , dAcyclicModes = S.empty
+          , dAttrSorts = M.empty
+          , dTypes = M.singleton mode (M.singleton (TypeName "X") (TypeSig []))
+          , dGens = M.singleton mode (M.singleton srcName (mkGen srcName))
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          }
+  let tgtDoc =
+        Doctrine
+          { dName = "TgtWeakenMorph"
+          , dModes = mkModes [mode]
+          , dAcyclicModes = S.empty
+          , dAttrSorts = M.empty
+          , dTypes = M.singleton mode (M.singleton (TypeName "X") (TypeSig []))
+          , dGens = M.singleton mode (M.singleton tgtName (mkGen tgtName))
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          }
+  src <- case validateDoctrine srcDoc of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right () -> pure srcDoc
+  tgt <- case validateDoctrine tgtDoc of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right () -> pure tgtDoc
+  img <- case genD mode [tyX] [tyX] tgtName of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right d -> pure d
+  let mor =
+        Morphism
+          { morName = "WeakenMorph"
+          , morSrc = src
+          , morTgt = tgt
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morAttrSortMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.singleton (mode, srcName) (plainImage img)
+          , morCheck = CheckNone
+          , morPolicy = UseAllOriented
+          , morFuel = 20
+          }
+  srcDiag <- case genDTm mode [tyX] [tyX] [tyX] srcName of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right d -> pure d
+  mapped <- case applyMorphismDiagram mor srcDiag of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right d -> pure d
+  dTmCtx mapped @?= [tyX]
 
 modeM :: ModeName
 modeM = ModeName "M"

@@ -8,6 +8,7 @@ import Test.Tasty.HUnit
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Strat.Common.Rules (RewritePolicy(..))
 
@@ -26,6 +27,8 @@ import Strat.Poly.TypeExpr
   , TypeRef(..)
   , TmFunName(..)
   , TmVar(..)
+  , TermDiagram(..)
+  , boundTmIndicesTerm
   )
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
@@ -65,6 +68,7 @@ tests =
     "Poly.Dependent"
     [ testCase "term normalization from doctrine rules reduces add(S(Z),S(Z))" testDoctrineNormalizeTypeArg
     , testCase "term normalization reduces add(S(Z),S(Z))" testNormalizeTm
+    , testCase "mixed-mode unlabeled tmctx inputs resolve to global indices" testMixedModeTmCtxResolution
     , testCase "scoped term unification rejects escapes" testScopedTmUnify
     , testCase "dependent unification normalizes term arguments" testDependentUnify
     , testCase "bound term sort checks apply current substitution" testBoundSortUsesSubstitution
@@ -137,6 +141,37 @@ testNormalizeTm = do
   normExpr <- require (diagramToTermExpr tt [] natTy norm)
   wantExpr <- require (diagramToTermExpr tt [] natTy want)
   normExpr @?= wantExpr
+
+testMixedModeTmCtxResolution :: Assertion
+testMixedModeTmCtxResolution = do
+  let modeC = ModeName "C"
+  let modeI = ModeName "I"
+  let fooRef = TypeRef modeC (TypeName "Foo")
+  let natRef = TypeRef modeI (TypeName "Nat")
+  let fooTy = TCon fooRef []
+  let natTy = TCon natRef []
+  let tmCtx = [fooTy, natTy]
+  let tt =
+        TypeTheory
+          { ttModes = mkModes [modeC, modeI]
+          , ttTypeParams =
+              M.fromList
+                [ (fooRef, [])
+                , (natRef, [])
+                ]
+          , ttTmFuns = M.empty
+          , ttTmRules = M.empty
+          , ttTmFuel = defaultTmFuel
+          , ttTmPolicy = UseOnlyComputationalLR
+          }
+  tm <- require (termExprToDiagram tt tmCtx natTy (TMBound 1))
+  let unlabeledTm =
+        case tm of
+          TermDiagram diag ->
+            TermDiagram diag { dPortLabel = IM.map (const Nothing) (dPortLabel diag) }
+  boundTmIndicesTerm unlabeledTm @?= S.singleton 1
+  _ <- require (unifyTm tt tmCtx S.empty emptySubst natTy unlabeledTm unlabeledTm)
+  pure ()
 
 testScopedTmUnify :: Assertion
 testScopedTmUnify = do

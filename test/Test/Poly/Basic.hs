@@ -11,12 +11,12 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..), TypeArg(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..), TypeArg(..), TermDiagram(..))
 import Strat.Poly.UnifyTy (Subst(..), applySubstTy, normalizeSubst)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Names (BoxName(..))
 import Strat.Poly.Diagram
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
@@ -60,6 +60,7 @@ tests =
     , testCase "validateDoctrine rejects RHS fresh tyvars" testRejectRHSTyVars
     , testCase "validateDoctrine accepts RHS vars from LHS" testAcceptRHSTyVars
     , testCase "validateDoctrine rejects empty LHS rule" testRejectEmptyLHS
+    , testCase "validateDoctrine checks cell boundaries with diagram term-context" testCellBoundaryUsesDiagramTmCtx
     ]
 
 require :: Either Text a -> IO a
@@ -393,6 +394,52 @@ testRejectEmptyLHS = do
   case validateDoctrine doc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected empty LHS rule to be rejected"
+
+testCellBoundaryUsesDiagramTmCtx :: Assertion
+testCellBoundaryUsesDiagramTmCtx = do
+  let modeM = ModeName "M"
+  let modeI = ModeName "I"
+  let natRef = TypeRef modeI (TypeName "Nat")
+  let vecRef = TypeRef modeM (TypeName "Vec")
+  let natTy = TCon natRef []
+  let tmBound0 = TermDiagram (idDTm modeI [natTy] [natTy])
+  let vecBound = TCon vecRef [TATm tmBound0]
+  lhs <- require (genDTm modeM [natTy] [vecBound] [vecBound] (GenName "marker"))
+  rhs <- require (genDTm modeM [natTy] [vecBound] [vecBound] (GenName "marker"))
+  let cell =
+        Cell2
+          { c2Name = "tmctx_cell"
+          , c2Class = Structural
+          , c2Orient = Bidirectional
+          , c2TyVars = []
+          , c2TmVars = []
+          , c2LHS = lhs
+          , c2RHS = rhs
+          }
+  let doc =
+        Doctrine
+          { dName = "CellTmCtx"
+          , dModes = mkModes [modeM, modeI]
+          , dAcyclicModes = S.empty
+          , dTypes =
+              M.fromList
+                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
+                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy])])
+                ]
+          , dGens = M.empty
+          , dCells2 = [cell]
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  case validateDoctrine doc of
+    Left err -> assertFailure ("expected doctrine to validate with matching tmctx: " <> T.unpack err)
+    Right () -> pure ()
+  let badCell = cell { c2RHS = rhs { dTmCtx = [] } }
+  let badDoc = doc { dCells2 = [badCell] }
+  case validateDoctrine badDoc of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected doctrine to reject mismatched cell tmctx"
 
 buildIsoDiagram :: ModeName -> TypeExpr -> Either Text Diagram
 buildIsoDiagram mode a = do

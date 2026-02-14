@@ -1,0 +1,57 @@
+import "../../../stdlib/schema.adjunction.llang";
+
+doctrine AdjReal where {
+  mode C;
+  mode L;
+
+  modality F : C -> L;
+  modality U : L -> C;
+
+  mod_eq U.F -> id@C;
+  mod_eq F.U -> id@L;
+
+  type X @C;
+  type Y @L;
+
+  gen eta(a@C) : [a] -> [U(F(a))] @C;
+  gen eps(b@L) : [F(U(b))] -> [b] @L;
+
+  action F where {
+    gen eta -> eps
+  }
+
+  action U where {
+    gen eps -> eta
+  }
+
+  rule computational eta_id -> (a@C) : [a] -> [a] @C =
+    eta{a} ; eta{a} == id[a]
+
+  rule computational eps_id -> (b@L) : [b] -> [b] @L =
+    eps{b} ; eps{b} == id[b]
+}
+
+morphism adjInst : SchemaAdjunction -> AdjReal where {
+  mode C -> C;
+  mode L -> L;
+  modality F -> F;
+  modality U -> U;
+  gen eta @C -> eta
+  gen eps @L -> eps
+  check none;
+}
+
+implements SchemaAdjunction for AdjReal using adjInst;
+
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run triangle_left using debug where {
+  source doctrine AdjReal;
+  source mode L;
+}
+---
+id[F(C.X)]
+---

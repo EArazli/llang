@@ -3,6 +3,7 @@ module Strat.Poly.DSL.Elab
   ( elabPolyDoctrine
   , elabPolyMorphism
   , elabDiagExpr
+  , checkImplementsObligations
   , parsePolicy
   ) where
 
@@ -32,6 +33,8 @@ import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)
+import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.Normalize (joinableWithin)
 
 elabPolyMorphism :: ModuleEnv -> RawPolyMorphism -> Either Text Morphism
 elabPolyMorphism env raw = do
@@ -372,27 +375,40 @@ elabPolyItem env doc item =
           if null (rodVars decl) && null (rodDom decl) && null (rodCod decl)
             then pure ()
             else Left "obligation for_gen does not accept explicit vars or boundary signature"
-          let gens = M.elems (M.findWithDefault M.empty mode (dGens doc))
-          obls <- mapM (elabForGenObligation env doc decl mode) gens
-          pure doc { dObligations = dObligations doc <> obls }
+          validateObligationExprMode doc mode True (rodLHS decl)
+          validateObligationExprMode doc mode True (rodRHS decl)
+          let obl =
+                ObligationDecl
+                  { obName = rodName decl
+                  , obMode = mode
+                  , obForGen = True
+                  , obTyVars = []
+                  , obTmVars = []
+                  , obDom = []
+                  , obCod = []
+                  , obLHSExpr = rodLHS decl
+                  , obRHSExpr = rodRHS decl
+                  , obPolicy = UseStructuralAsBidirectional
+                  , obFuel = 50
+                  }
+          pure doc { dObligations = dObligations doc <> [obl] }
         else do
           (tyVars, tmVars, _sigParams) <- elabParamDecls doc mode (rodVars decl)
           dom <- elabContext doc mode tyVars tmVars M.empty (rodDom decl)
           cod <- elabContext doc mode tyVars tmVars M.empty (rodCod decl)
-          lhs <- elabObligationExpr env doc mode tyVars tmVars Nothing (rodLHS decl)
-          rhs <- elabObligationExpr env doc mode tyVars tmVars Nothing (rodRHS decl)
-          let rigidTy = S.fromList tyVars
-          let rigidTm = S.fromList tmVars
-          let tt = doctrineTypeTheory doc
-          lhs' <- unifyBoundary tt rigidTy rigidTm dom cod lhs
-          rhs' <- unifyBoundary tt rigidTy rigidTm dom cod rhs
+          validateObligationExprMode doc mode False (rodLHS decl)
+          validateObligationExprMode doc mode False (rodRHS decl)
           let obl =
                 ObligationDecl
                   { obName = rodName decl
+                  , obMode = mode
+                  , obForGen = False
                   , obTyVars = tyVars
                   , obTmVars = tmVars
-                  , obLHS = lhs'
-                  , obRHS = rhs'
+                  , obDom = dom
+                  , obCod = cod
+                  , obLHSExpr = rodLHS decl
+                  , obRHSExpr = rodRHS decl
                   , obPolicy = UseStructuralAsBidirectional
                   , obFuel = 50
                   }
@@ -578,102 +594,193 @@ elabActionImage env doc tgtMode (genName, rhs) = do
   d <- elabDiagExpr env doc tgtMode [] rhs
   pure (GenName genName, d)
 
-elabForGenObligation
-  :: ModuleEnv
-  -> Doctrine
-  -> RawObligationDecl
-  -> ModeName
-  -> GenDecl
-  -> Either Text ObligationDecl
-elabForGenObligation env doc decl mode gen = do
-  if gdMode gen == mode
-    then Right ()
-    else Left "obligation for_gen: internal generator mode mismatch"
-  genDiag <- mkForGenDiag mode gen
-  lhs0 <- elabObligationExpr env doc mode (gdTyVars gen) (gdTmVars gen) (Just genDiag) (rodLHS decl)
-  rhs0 <- elabObligationExpr env doc mode (gdTyVars gen) (gdTmVars gen) (Just genDiag) (rodRHS decl)
-  dom <- diagramDom genDiag
-  cod <- diagramCod genDiag
-  let rigidTy = S.fromList (gdTyVars gen)
-  let rigidTm = S.fromList (gdTmVars gen)
-  let tt = doctrineTypeTheory doc
-  lhs <- unifyBoundary tt rigidTy rigidTm dom cod lhs0
-  rhs <- unifyBoundary tt rigidTy rigidTm dom cod rhs0
-  pure
-    ObligationDecl
-      { obName = rodName decl <> "[" <> renderGenName (gdName gen) <> "]"
-      , obTyVars = gdTyVars gen
-      , obTmVars = gdTmVars gen
-      , obLHS = lhs
-      , obRHS = rhs
-      , obPolicy = UseStructuralAsBidirectional
-      , obFuel = 50
-      }
+validateObligationExprMode :: Doctrine -> ModeName -> Bool -> RawOblExpr -> Either Text ()
+validateObligationExprMode doc mode allowGen = go mode
   where
-    renderGenName (GenName n) = n
+    go expected expr =
+      case expr of
+        ROEDiag _ ->
+          Right ()
+        ROEMap rawMe inner -> do
+          me <- elabRawModExpr (dModes doc) rawMe
+          if meTgt me == expected
+            then go (meSrc me) inner
+            else Left "obligation map: mapped diagram mode does not match surrounding expression mode"
+        ROEGen ->
+          if allowGen
+            then Right ()
+            else Left "obligation: @gen is only valid in for_gen obligations"
+        ROELiftDom _ ->
+          if allowGen
+            then Right ()
+            else Left "obligation: lift_dom is only valid in for_gen obligations"
+        ROELiftCod _ ->
+          if allowGen
+            then Right ()
+            else Left "obligation: lift_cod is only valid in for_gen obligations"
+        ROEComp a b ->
+          go expected a >> go expected b
+        ROETensor a b ->
+          go expected a >> go expected b
 
-elabObligationExpr
+checkImplementsObligations :: ModuleEnv -> Doctrine -> Morphism -> Doctrine -> Either Text ()
+checkImplementsObligations env tgtDoc morph ifaceDoc =
+  mapM_ checkOne (dObligations ifaceDoc)
+  where
+    ttTgt = doctrineTypeTheory tgtDoc
+
+    checkOne obl
+      | obForGen obl = checkForGen obl
+      | otherwise = checkPlain obl
+
+    checkPlain obl = do
+      tyVarsTgt <- mapM (mapObligationTyVar morph) (obTyVars obl)
+      tmVarsTgt <- mapM (mapObligationTmVar morph) (obTmVars obl)
+      lhs0 <- evalObligationExprMapped env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obLHSExpr obl)
+      rhs0 <- evalObligationExprMapped env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obRHSExpr obl)
+      domTgt <- mapM (applyMorphismTy morph) (obDom obl)
+      codTgt <- mapM (applyMorphismTy morph) (obCod obl)
+      let rigidTy = S.fromList tyVarsTgt
+      let rigidTm = S.fromList tmVarsTgt
+      lhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt lhs0
+      rhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt rhs0
+      let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
+      ok <- joinableWithin ttTgt (obFuel obl) rules lhs rhs
+      if ok
+        then Right ()
+        else Left ("implements obligation failed: " <> obName obl)
+
+    checkForGen obl = do
+      modeTgt <- applyMorphismMode morph (obMode obl)
+      let gens = M.elems (M.findWithDefault M.empty modeTgt (dGens tgtDoc))
+      mapM_ (checkForGenOne modeTgt obl) gens
+
+    checkForGenOne modeTgt obl gen = do
+      genDiag <- mkForGenDiag modeTgt gen
+      lhs0 <- evalObligationExprForGen env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obLHSExpr obl)
+      rhs0 <- evalObligationExprForGen env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obRHSExpr obl)
+      dom <- diagramDom genDiag
+      cod <- diagramCod genDiag
+      let rigidTy = S.fromList (gdTyVars gen)
+      let rigidTm = S.fromList (gdTmVars gen)
+      lhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod lhs0
+      rhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod rhs0
+      let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
+      ok <- joinableWithin ttTgt (obFuel obl) rules lhs rhs
+      if ok
+        then Right ()
+        else Left ("implements obligation failed: " <> obName obl <> "[" <> renderGenName (gdName gen) <> "]")
+
+mapObligationTyVar :: Morphism -> TyVar -> Either Text TyVar
+mapObligationTyVar morph v = do
+  mode' <- applyMorphismMode morph (tvMode v)
+  pure v { tvMode = mode' }
+
+mapObligationTmVar :: Morphism -> TmVar -> Either Text TmVar
+mapObligationTmVar morph v = do
+  sort' <- applyMorphismTy morph (tmvSort v)
+  pure v { tmvSort = sort' }
+
+evalObligationExprMapped
   :: ModuleEnv
   -> Doctrine
+  -> Doctrine
+  -> Morphism
   -> ModeName
   -> [TyVar]
   -> [TmVar]
-  -> Maybe Diagram
   -> RawOblExpr
   -> Either Text Diagram
-elabObligationExpr env doc mode tyVars tmVars mGen expr =
+evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars expr = do
+  modeTgt <- applyMorphismMode morph mode
   case expr of
-    ROEDiag rawDiag ->
-      elabObligationDiag env doc mode tmCtx tyVars tmVars rawDiag
+    ROEDiag rawDiag -> do
+      diagSrc0 <- elabObligationDiag env ifaceDoc mode [] tyVars tmVars rawDiag
+      diagSrc <- freshenDiagramTyVars (doctrineTypeTheory ifaceDoc) diagSrc0
+      diagTgt <- applyMorphismDiagram morph diagSrc
+      if dMode diagTgt == modeTgt
+        then Right diagTgt
+        else Left "obligation: mapped diagram mode mismatch after morphism application"
     ROEMap rawMe innerExpr -> do
-      me <- elabRawModExpr (dModes doc) rawMe
-      inner <- elabObligationExpr env doc (meSrc me) tyVars tmVars mGen innerExpr
-      mapped <- applyModExpr doc me inner
-      if dMode mapped == mode
+      me <- elabRawModExpr (dModes ifaceDoc) rawMe
+      inner <- evalObligationExprMapped env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars innerExpr
+      meTgt <- applyMorphismModExpr morph me
+      mapped <- applyModExpr tgtDoc meTgt inner
+      if dMode mapped == modeTgt
         then Right mapped
         else Left "obligation map: mapped diagram mode does not match surrounding expression mode"
     ROEGen ->
-      case mGen of
-        Nothing -> Left "obligation: @gen is only valid in for_gen obligations"
-        Just g -> Right g
-    ROELiftDom rawOp ->
-      elabLiftedUnary env doc mode tyVars tmVars mGen LiftOverDom rawOp
-    ROELiftCod rawOp ->
-      elabLiftedUnary env doc mode tyVars tmVars mGen LiftOverCod rawOp
+      Left "obligation: @gen is only valid in for_gen obligations"
+    ROELiftDom _ ->
+      Left "obligation: lift_dom is only valid in for_gen obligations"
+    ROELiftCod _ ->
+      Left "obligation: lift_cod is only valid in for_gen obligations"
     ROEComp a b -> do
-      d1 <- elabObligationExpr env doc mode tyVars tmVars mGen a
-      d2 <- elabObligationExpr env doc mode tyVars tmVars mGen b
-      compD ttDoc d2 d1
+      d1 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars a
+      d2 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars b
+      compD (doctrineTypeTheory tgtDoc) d2 d1
     ROETensor a b -> do
-      d1 <- elabObligationExpr env doc mode tyVars tmVars mGen a
-      d2 <- elabObligationExpr env doc mode tyVars tmVars mGen b
+      d1 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars a
+      d2 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars b
       tensorD d1 d2
-  where
-    ttDoc = doctrineTypeTheory doc
-    tmCtx = maybe [] dTmCtx mGen
 
 data LiftBoundary
   = LiftOverDom
   | LiftOverCod
   deriving (Eq, Show)
 
-elabLiftedUnary
+evalObligationExprForGen
+  :: ModuleEnv
+  -> Doctrine
+  -> Doctrine
+  -> Morphism
+  -> ModeName
+  -> [TyVar]
+  -> [TmVar]
+  -> Diagram
+  -> RawOblExpr
+  -> Either Text Diagram
+evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag expr = do
+  modeTgt <- applyMorphismMode morph mode
+  case expr of
+    ROEDiag rawDiag ->
+      elabObligationDiag env tgtDoc modeTgt (dTmCtx genDiag) tyVars tmVars rawDiag
+    ROEMap rawMe innerExpr -> do
+      me <- elabRawModExpr (dModes ifaceDoc) rawMe
+      inner <- evalObligationExprForGen env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars genDiag innerExpr
+      meTgt <- applyMorphismModExpr morph me
+      mapped <- applyModExpr tgtDoc meTgt inner
+      if dMode mapped == modeTgt
+        then Right mapped
+        else Left "obligation map: mapped diagram mode does not match surrounding expression mode"
+    ROEGen ->
+      if dMode genDiag == modeTgt
+        then Right genDiag
+        else Left "obligation: @gen mode mismatch"
+    ROELiftDom rawOp ->
+      evalLiftedForGen env tgtDoc modeTgt tyVars tmVars genDiag LiftOverDom rawOp
+    ROELiftCod rawOp ->
+      evalLiftedForGen env tgtDoc modeTgt tyVars tmVars genDiag LiftOverCod rawOp
+    ROEComp a b -> do
+      d1 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+      d2 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
+      compD (doctrineTypeTheory tgtDoc) d2 d1
+    ROETensor a b -> do
+      d1 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+      d2 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
+      tensorD d1 d2
+
+evalLiftedForGen
   :: ModuleEnv
   -> Doctrine
   -> ModeName
   -> [TyVar]
   -> [TmVar]
-  -> Maybe Diagram
+  -> Diagram
   -> LiftBoundary
   -> RawDiagExpr
   -> Either Text Diagram
-elabLiftedUnary env doc mode tyVars tmVars mGen liftSide rawOp = do
-  genDiag <-
-    case mGen of
-      Nothing ->
-        Left "obligation: lift_dom/lift_cod is only valid in for_gen obligations"
-      Just g ->
-        Right g
+evalLiftedForGen env doc mode tyVars tmVars genDiag liftSide rawOp = do
   ctx <- case liftSide of
     LiftOverDom -> diagramDom genDiag
     LiftOverCod -> diagramCod genDiag
@@ -713,6 +820,30 @@ elabObligationDiag env doc mode tmCtx tyVars tmVars rawDiag = do
   ensureAcyclicMode doc mode diag
   pure diag
 
+freshenDiagramTyVars :: TypeTheory -> Diagram -> Either Text Diagram
+freshenDiagramTyVars tt diag = do
+  let vars = S.toList (freeTyVarsDiagram diag)
+  if null vars
+    then Right diag
+    else do
+      let used0 = S.fromList [ (tvMode v, tvName v) | v <- vars ]
+      let (_, pairsRev) = foldl freshOne (used0, []) vars
+      let subst = U.emptySubst { U.sTy = M.fromList (reverse pairsRev) }
+      applySubstDiagram tt subst diag
+  where
+    freshOne (used, acc) v =
+      let name' = pickFresh used (tvMode v) ("obl_" <> tvName v) 0
+          v' = v { tvName = name' }
+          used' = S.insert (tvMode v', tvName v') used
+       in (used', (v, TVar v') : acc)
+
+    pickFresh used mode base n =
+      let suffix = if n == (0 :: Int) then "" else T.pack (show n)
+          candidate = base <> suffix
+       in if (mode, candidate) `S.member` used
+            then pickFresh used mode base (n + 1)
+            else candidate
+
 mkForGenDiag :: ModeName -> GenDecl -> Either Text Diagram
 mkForGenDiag mode gen = do
   let dom = gdPlainDom gen
@@ -742,6 +873,9 @@ mkForGenDiag mode gen = do
       let (pid, diag1) = freshPort ty diag
           (pids, diag2) = allocPorts rest diag1
        in (pid : pids, diag2)
+
+renderGenName :: GenName -> Text
+renderGenName (GenName n) = n
 
 ensureMode :: Doctrine -> ModeName -> Either Text ()
 ensureMode doc mode =

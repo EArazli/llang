@@ -1,5 +1,4 @@
 import "../../../stdlib/struct.cartesian.llang";
-import "../../../stdlib/schema.adjunction.llang";
 
 doctrine LNL where {
   mode C;
@@ -54,18 +53,6 @@ morphism cartInst : StructCartesian -> LNL where {
 }
 
 implements StructCartesian for LNL using cartInst;
-
-morphism adjInst : SchemaAdjunction -> LNL where {
-  mode C -> C;
-  mode L -> L;
-  modality F -> F;
-  modality U -> U;
-  gen eta @C -> eta
-  gen eps @L -> eps
-  check none;
-}
-
-implements SchemaAdjunction for LNL using adjInst;
 
 term unitNat where {
   doctrine LNL;

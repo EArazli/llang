@@ -1,0 +1,43 @@
+import "../../../stdlib/schema.monad.llang";
+
+doctrine IdMonad where {
+  mode C;
+
+  modality T : C -> C;
+
+  type A @C;
+
+  gen ret(a@C) : [a] -> [T(a)] @C;
+  gen join(a@C) : [T(T(a))] -> [T(a)] @C;
+
+  action T where {
+    gen ret -> ret
+    gen join -> join
+  }
+
+  rule computational unit -> (a@C) : [T(a)] -> [T(a)] @C =
+    ret{T(a)} ; join{a} == id[T(a)]
+}
+
+morphism monadInst : SchemaMonad -> IdMonad where {
+  mode C -> C;
+  modality T -> T;
+  gen ret @C -> ret
+  gen join @C -> join
+  check none;
+}
+
+implements SchemaMonad for IdMonad using monadInst;
+
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run assoc_nf using debug where {
+  source doctrine IdMonad;
+  source mode C;
+}
+---
+map[T](join{C.A}) ; join{C.A}
+---

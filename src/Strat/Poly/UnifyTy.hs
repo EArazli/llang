@@ -6,6 +6,8 @@ module Strat.Poly.UnifyTy
   , unifyTyFlex
   , unifyTm
   , unifyCtx
+  , diagramTmCtx
+  , unifyCtxDiagram
   , applySubstTy
   , applySubstTm
   , applySubstCtx
@@ -19,7 +21,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import Control.Monad (foldM)
-import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModeTheory(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.TypeExpr
 import Strat.Poly.Graph
@@ -82,10 +84,55 @@ unifyTyFlex
   -> TypeExpr
   -> Either Text Subst
 unifyTyFlex tt tmCtx tyFlex tmFlex subst t1 t2 = do
-  t1' <- applySubstTy tt subst t1
-  t2' <- applySubstTy tt subst t2
+  t1' <- applySubstTy tt subst t1 >>= expandModSpine
+  t2' <- applySubstTy tt subst t2 >>= expandModSpine
   unifyWith subst t1' t2'
   where
+    expandModSpine ty =
+      case ty of
+        TVar _ -> Right ty
+        TCon ref args -> do
+          args' <- mapM expandArg args
+          Right (TCon ref args')
+        TMod me inner -> do
+          inner' <- expandModSpine inner
+          expandPath me inner'
+
+    expandArg arg =
+      case arg of
+        TAType ty -> TAType <$> expandModSpine ty
+        TATm tm -> Right (TATm tm)
+
+    expandPath me inner =
+      case mePath me of
+        [] ->
+          if meSrc me == meTgt me
+            then Right inner
+            else Left "unifyTyFlex: ill-typed empty modality path"
+        _ -> do
+          (cur, out) <- foldM step (meSrc me, inner) (mePath me)
+          if cur == meTgt me
+            then Right out
+            else Left "unifyTyFlex: ill-typed modality path"
+      where
+        step (cur, acc) name =
+          case M.lookup name (mtDecls (ttModes tt)) of
+            Nothing -> Left "unifyTyFlex: unknown modality in type"
+            Just decl ->
+              if mdSrc decl == cur
+                then
+                  Right
+                    ( mdTgt decl
+                    , TMod
+                        ModExpr
+                          { meSrc = mdSrc decl
+                          , meTgt = mdTgt decl
+                          , mePath = [name]
+                          }
+                        acc
+                    )
+                else Left "unifyTyFlex: ill-typed modality path"
+
     unifyWith s a b =
       case (a, b) of
         (TVar v, t) -> unifyTyVar s v t
@@ -161,6 +208,20 @@ unifyCtx tt tmCtx tyFlex tmFlex ctx1 ctx2
         (\s (a, b) -> unifyTyFlex tt tmCtx tyFlex tmFlex s a b)
         emptySubst
         (zip ctx1 ctx2)
+
+diagramTmCtx :: Diagram -> [TypeExpr]
+diagramTmCtx = dTmCtx
+
+unifyCtxDiagram
+  :: TypeTheory
+  -> Diagram
+  -> S.Set TyVar
+  -> S.Set TmVar
+  -> Context
+  -> Context
+  -> Either Text Subst
+unifyCtxDiagram tt diag tyFlex tmFlex =
+  unifyCtx tt (diagramTmCtx diag) tyFlex tmFlex
 
 unifyTm
   :: TypeTheory
@@ -442,22 +503,10 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
 
     inputGlobalMap diag =
       M.fromList
-        [ (pid, resolveGlobal pid local)
+        [ (pid, globalTm)
         | (local, pid) <- zip [0 :: Int ..] (dIn diag)
+        , Just globalTm <- [resolveTmCtxIndex tmCtx (dMode diag) local (getPortLabel diag pid)]
         ]
-      where
-        resolveGlobal pid local =
-          case getPortLabel diag pid >>= decodeTmCtxLabel of
-            Just globalTm -> globalTm
-            Nothing -> local
-
-    decodeTmCtxLabel lbl =
-      case T.stripPrefix "tmctx:" lbl of
-        Nothing -> Nothing
-        Just raw ->
-          case reads (T.unpack raw) of
-            [(n, "")] -> Just n
-            _ -> Nothing
 
 applySubstTy :: TypeTheory -> Subst -> TypeExpr -> Either Text TypeExpr
 applySubstTy tt subst ty = do

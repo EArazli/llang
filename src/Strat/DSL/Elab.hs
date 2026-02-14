@@ -19,15 +19,13 @@ import Strat.Pipeline
 import Strat.Poly.Attr
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
-import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, parsePolicy)
+import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, parsePolicy, checkImplementsObligations)
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
 import Strat.Poly.Doctrine
   ( Doctrine(..)
   , GenDecl(..)
   , InputShape(..)
   , TypeSig(..)
-  , ObligationDecl(..)
-  , doctrineTypeTheory
   , gdPlainDom
   )
 import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
@@ -43,8 +41,6 @@ import Strat.Poly.TypeExpr (TypeExpr(..), TypeRef(..), TypeName(..))
 import Strat.Poly.Names (GenName(..))
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePolyCoproduct)
-import Strat.Poly.Rewrite (rulesFromPolicy)
-import Strat.Poly.Normalize (joinableWithin)
 import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 
@@ -435,22 +431,8 @@ elabImplements env ifaceName tgtName morphName = do
       if PolyMorph.morTgt morph /= tgtDoc
         then Left "Morphism target does not match implements target"
         else do
-          checkObligations tgtDoc morph ifaceDoc
+          checkImplementsObligations env tgtDoc morph ifaceDoc
           Right ((ifaceName, tgtName), morphName)
-
-checkObligations :: Doctrine -> PolyMorph.Morphism -> Doctrine -> Either Text ()
-checkObligations tgtDoc morph ifaceDoc =
-  mapM_ checkOne (dObligations ifaceDoc)
-  where
-    tt = doctrineTypeTheory tgtDoc
-    checkOne obl = do
-      lhs <- PolyMorph.applyMorphismDiagram morph (obLHS obl)
-      rhs <- PolyMorph.applyMorphismDiagram morph (obRHS obl)
-      let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
-      ok <- joinableWithin tt (obFuel obl) rules lhs rhs
-      if ok
-        then Right ()
-        else Left ("implements obligation failed: " <> obName obl)
 
 
 elabRuns :: ModuleEnv -> [RawNamedRun] -> Either Text (M.Map Text Run)
