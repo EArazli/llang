@@ -1,0 +1,99 @@
+doctrine GradedMonad where {
+  mode G;
+  mode M;
+
+  -- Grade monoid: natural numbers with zero, successor, and addition
+  type Count @G;
+
+  gen zero : [] -> [Count] @G;
+  gen succ : [Count] -> [Count] @G;
+  gen add  : [Count, Count] -> [Count] @G;
+
+  -- add(zero, n) → n
+  rule computational add_zero -> : [Count] -> [Count] @G =
+    (zero * id[Count]) ; add == id[Count]
+
+  -- add(succ(m), n) → succ(add(m, n))
+  rule computational add_succ -> : [Count, Count] -> [Count] @G =
+    (succ * id[Count]) ; add == add ; succ
+
+
+  -- Computation types
+  type A @M;
+  type B @M;
+
+  -- T(g, a) — a computation producing `a` that costs `g` resources
+  type T(g : Count, a@M) @M;
+
+  -- Return: zero-cost
+  gen gret(a@M) : [a] -> [T(zero, a)] @M;
+
+  -- Bind: sequential composition adds grades
+  gen gbind(a@M, b@M, g1 : Count, g2 : Count) :
+    [T(g1, a), binder { x : a } : [T(g2, b)]] -> [T(add(g1, g2), b)] @M;
+
+  -- tick: costs one resource (succ(zero))
+  gen tick(a@M) : [a] -> [T(succ(zero), a)] @M;
+
+  -- free: costs nothing
+  gen free(a@M) : [a] -> [T(zero, a)] @M;
+
+  -- sink: consumes a graded computation, forgetting the grade
+  gen sink(a@M, g : Count) : [T(g, a)] -> [a] @M;
+
+  -- Grade-polymorphic combinators
+  -- expect2: accepts T(succ(succ(zero)), a) — cost exactly 2
+  gen expect2(a@M) : [T(succ(succ(zero)), a)] -> [a] @M;
+
+  -- expect1: accepts T(succ(zero), a) — cost exactly 1
+  gen expect1(a@M) : [T(succ(zero), a)] -> [a] @M;
+
+  -- Left unit: return then bind reduces to just the continuation
+  rule computational left_unit -> (a@M, b@M, g : Count) :
+    [a] -> [T(g, b)] @M =
+    gret{a} ; gbind{a, b, zero, g}[?Body]
+    ==
+    splice(?Body)
+}
+
+
+pipeline check where {
+  normalize { policy = "topmost"; fuel = 100; };
+  extract diagram;
+}
+
+
+-- TEST 1: tick ; bind[tick] has type T(add(succ(zero), succ(zero)), A)
+-- which normalizes to T(succ(succ(zero)), A), so expect2 accepts it.
+-- This demonstrates that grade arithmetic resolves at the type level.
+
+run two_ticks using check where {
+  source doctrine GradedMonad;
+  source mode M;
+}
+---
+tick{A} ; gbind{A, A, succ(zero), succ(zero)}[tick{A}] ; expect2{A}
+---
+
+
+-- TEST 2: free ; bind[tick] has type T(add(zero, succ(zero)), A)
+-- which normalizes to T(succ(zero), A) via add_zero, so expect1 accepts.
+
+run free_then_tick using check where {
+  source doctrine GradedMonad;
+  source mode M;
+}
+---
+free{A} ; gbind{A, A, zero, succ(zero)}[tick{A}] ; expect1{A}
+---
+
+
+-- TEST 3: left unit fires — gret ; bind[tick]  reduces to  tick.
+
+run left_unit using check where {
+  source doctrine GradedMonad;
+  source mode M;
+}
+---
+gret{A} ; gbind{A, A, zero, succ(zero)}[tick{A}]
+---
