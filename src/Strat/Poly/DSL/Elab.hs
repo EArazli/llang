@@ -823,10 +823,13 @@ evalLiftedForGen env ifaceDoc tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag
         then Right ()
         else Left "obligation: mapped diagram mode mismatch after morphism application"
       dom0 <- diagramDom opTgt
-      cod0 <- diagramCod opTgt
-      if length dom0 == 1 && length cod0 == 1
-        then unifyBoundary ttDoc rigidTy rigidTm [argTy] cod0 opTgt
-        else Left (sideLabel <> ": operator must be unary ([x] -> [y])")
+      if length dom0 /= 1
+        then Left (sideLabel <> ": operator must have exactly one input ([x] -> [...])")
+        else do
+          let flexTy = S.difference (freeTyVarsDiagram opTgt) rigidTy
+          let flexTm = S.difference (freeTmVarsDiagram opTgt) rigidTm
+          sDom <- U.unifyCtx ttDoc (dTmCtx opTgt) flexTy flexTm dom0 [argTy]
+          applySubstDiagram ttDoc sDom opTgt
 
 elabObligationDiag
   :: ModuleEnv

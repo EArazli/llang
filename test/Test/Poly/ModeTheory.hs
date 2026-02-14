@@ -47,6 +47,8 @@ tests =
     , testCase "for_gen obligations elaborate @gen and lifts" testForGenObligationElab
     , testCase "for_gen obligations expand over target generators during implements" testForGenImplementsQuantifiesTarget
     , testCase "for_gen obligations map schema generator refs through morphism" testForGenSchemaRefsMapped
+    , testCase "for_gen lift_cod instantiates polymorphic operators by domain" testForGenPolyLiftInstantiation
+    , testCase "for_gen lift operators allow codomain arity changes" testForGenLiftAllowsCodArityChange
     , testCase "for_gen rejects @gen under mode-changing map context" testForGenGenPlacementRejected
     , testCase "@gen outside for_gen is rejected" testGenOutsideForGenRejected
     , testCase "action coherence follows mod_eq" testActionModEqCoherence
@@ -308,18 +310,20 @@ testForGenSchemaRefsMapped = do
         [ "doctrine FGSchemaMap where {"
         , "  mode M;"
         , "  type X @M;"
-        , "  gen drop(a@M) : [a] -> [] @M;"
-        , "  obligation mapped_drop for_gen @M ="
-        , "    @gen ; lift_cod(drop) == @gen ; lift_cod(drop)"
+        , "  gen op(a@M) : [a] -> [a] @M;"
+        , "  obligation mapped_op for_gen @M ="
+        , "    @gen ; lift_cod(op) == @gen ; lift_cod(op)"
         , "}"
         , "doctrine FGTgtMap where {"
         , "  mode M;"
         , "  type X @M;"
         , "  gen discard(a@M) : [a] -> [] @M;"
+        , "  gen keep(a@M) : [a] -> [a] @M;"
+        , "  gen op2(a@M) : [a] -> [a] @M;"
         , "}"
         , "morphism fgMapInst : FGSchemaMap -> FGTgtMap where {"
         , "  mode M -> M;"
-        , "  gen drop @M -> discard"
+        , "  gen op @M -> op2"
         , "  check none;"
         , "}"
         , "implements FGSchemaMap for FGTgtMap using fgMapInst;"
@@ -328,6 +332,61 @@ testForGenSchemaRefsMapped = do
   assertBool
     "expected mapped for_gen obligation to validate through morphism mapping"
     (M.member ("FGSchemaMap", "FGTgtMap") (meImplDefaults env))
+
+testForGenPolyLiftInstantiation :: Assertion
+testForGenPolyLiftInstantiation = do
+  let src = T.unlines
+        [ "doctrine FGSchemaPolyLift where {"
+        , "  mode M;"
+        , "  type X @M;"
+        , "  gen op(a@M) : [a] -> [a] @M;"
+        , "  obligation refl for_gen @M ="
+        , "    @gen ; lift_cod(op) == @gen ; lift_cod(op)"
+        , "}"
+        , "doctrine FGTgtPolyLift where {"
+        , "  mode M;"
+        , "  type X @M;"
+        , "  gen keep : [M.X] -> [M.X] @M;"
+        , "  gen op2(a@M) : [a] -> [a] @M;"
+        , "}"
+        , "morphism inst : FGSchemaPolyLift -> FGTgtPolyLift where {"
+        , "  mode M -> M;"
+        , "  gen op @M -> op2"
+        , "  check none;"
+        , "}"
+        , "implements FGSchemaPolyLift for FGTgtPolyLift using inst;"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  assertBool
+    "expected for_gen lift_cod polymorphic operator instantiation to validate"
+    (M.member ("FGSchemaPolyLift", "FGTgtPolyLift") (meImplDefaults env))
+
+testForGenLiftAllowsCodArityChange :: Assertion
+testForGenLiftAllowsCodArityChange = do
+  let src = T.unlines
+        [ "doctrine FGSchemaDropLift where {"
+        , "  mode M;"
+        , "  type X @M;"
+        , "  gen drop(a@M) : [a] -> [] @M;"
+        , "  obligation erased for_gen @M ="
+        , "    lift_dom(drop) == lift_dom(drop)"
+        , "}"
+        , "doctrine FGTgtDropLift where {"
+        , "  mode M;"
+        , "  type X @M;"
+        , "  gen discard(a@M) : [a] -> [] @M;"
+        , "}"
+        , "morphism fgDropInst : FGSchemaDropLift -> FGTgtDropLift where {"
+        , "  mode M -> M;"
+        , "  gen drop @M -> discard"
+        , "  check none;"
+        , "}"
+        , "implements FGSchemaDropLift for FGTgtDropLift using fgDropInst;"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  assertBool
+    "expected lift_dom to accept operators with non-unary codomain arity"
+    (M.member ("FGSchemaDropLift", "FGTgtDropLift") (meImplDefaults env))
 
 testForGenGenPlacementRejected :: Assertion
 testForGenGenPlacementRejected = do

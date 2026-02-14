@@ -3,10 +3,10 @@ doctrine ForGenSchemaMap where {
 
   type X @M;
 
-  gen drop(a@M) : [a] -> [] @M;
+  gen op(a@M) : [a] -> [a] @M;
 
-  obligation mapped_drop for_gen @M =
-    @gen ; lift_cod(drop) == @gen ; lift_cod(drop)
+  obligation mapped_op for_gen @M =
+    @gen ; lift_cod(op) == @gen ; lift_cod(op)
 }
 
 doctrine ForGenTargetMap where {
@@ -15,11 +15,13 @@ doctrine ForGenTargetMap where {
   type X @M;
 
   gen discard(a@M) : [a] -> [] @M;
+  gen keep(a@M) : [a] -> [a] @M;
+  gen op2(a@M) : [a] -> [a] @M;
 }
 
 morphism fgMapInst : ForGenSchemaMap -> ForGenTargetMap where {
   mode M -> M;
-  gen drop @M -> discard
+  gen op @M -> op2
   check none;
 }
 
