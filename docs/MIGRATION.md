@@ -59,8 +59,8 @@ User-facing changes:
 User-facing changes:
 
 - New top-level `term <Name>` blocks compile a diagram and store its **normalized** form.
-  `term` supports the same configuration items as `run` (doctrine, mode, surface, uses,
-  apply, policy, fuel) but does **not** allow `model` or `show`.
+  `term` supports doctrine/mode/surface/uses/apply/policy/fuel configuration and compiles
+  directly (without run pipelines).
 - Diagram expressions accept `@<TermName>` to splice a named term into a diagram.
 
 ## Phase 5 — Coercion morphisms + implicit coercion paths
@@ -94,3 +94,11 @@ User-facing changes:
 
 - `data T (a@M) @M where { C : [...]; ... }` expands to a `type` declaration plus
   constructor `gen`s with codomain `[T(a,...)]`.
+
+## Phase 9 — Pipeline-based runs
+
+User-facing changes:
+
+- Runs are now `run <Name> using <Pipeline> where { source ... }` with explicit `pipeline` declarations.
+- `run_spec` has been removed.
+- Run-level `model` and `show ...` clauses have been removed.

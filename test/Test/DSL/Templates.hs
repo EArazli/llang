@@ -101,10 +101,13 @@ testInstantiateRun = do
         , "  }"
         , "}"
         , "doctrine Inst = instantiate Wrap(Base);"
-        , "run main where {"
-        , "  doctrine Inst;"
-        , "  mode M;"
-        , "  show normalized;"
+        , "pipeline p where {"
+        , "  normalize;"
+        , "  extract diagram;"
+        , "}"
+        , "run main using p where {"
+        , "  source doctrine Inst;"
+        , "  source mode M;"
         , "} ---"
         , "f"
         ]
@@ -122,8 +125,7 @@ testInstantiateRun = do
     Right r -> pure r
   prOutput result @?=
     T.intercalate "\n"
-      [ "normalized:"
-      , "mode: M"
+      [ "mode: M"
       , "ixctx: []"
       , "in: [p0:M.A]"
       , "out: [p1:M.A]"

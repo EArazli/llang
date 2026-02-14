@@ -12,8 +12,8 @@ The project implements a polygraph-based kernel and a DSL (“llang”) for desc
 2. **Diagrams**: open hypergraphs with ordered boundaries.
 3. **Rewriting**: deterministic, fuel‑bounded subdiagram rewriting (DPO‑style).
 4. **Morphisms**: structure‑preserving translations between doctrines, checked by normalization/joinability.
-5. **Surfaces and models**: diagram surfaces (`surface`) and evaluator models (`model`).
-6. **Runs**: diagram‑level normalization/evaluation pipelines (`run_spec` + `run`).
+5. **Surfaces**: diagram surfaces (`surface`) with elaboration into doctrine diagrams.
+6. **Pipelines and runs**: explicit phase pipelines (`pipeline`) and run entrypoints (`run`).
 
 ---
 
@@ -672,9 +672,10 @@ term <Name> where {
 <DiagExpr | SurfaceProgram>
 ```
 
-A `term` compiles a diagram using the same pipeline as `run`, but stores the **normalized**
-diagram under its name. `term` blocks do not allow `model` or `show` clauses. The stored term
-remembers its doctrine and mode and can be referenced via `@<TermName>`.
+A `term` compiles a diagram directly and stores the **normalized** diagram under its name.
+Compilation steps are: elaborate source diagram/surface, apply `uses` morphisms, apply explicit
+`apply` morphisms, coerce to the declared doctrine if needed, then normalize with `policy`/`fuel`.
+The stored term remembers its doctrine and mode and can be referenced via `@<TermName>`.
 
 ### 6.6 Surfaces
 
@@ -812,199 +813,70 @@ and `D != S`, elaboration runs elimination-only normalization:
 The elaboration API returns `(outputDoctrine, diagram)` where `outputDoctrine` is `S`
 when no base doctrine is requested, otherwise `D` after successful elimination.
 
-### 6.7 Models
+---
+
+## 7. Pipelines and runs
+
+Execution is split into named pipelines and run entrypoints.
+
+### 7.1 Pipelines
 
 ```
-model <Name> : <Doctrine> [using <BaseModel>] where {
-  backend = algebra;
-  backend = fold;
-  fold { ... };
-  default = symbolic;
-  op <GenName>(args...) = <expr>;
+pipeline <Name> where {
+  apply <Morphism>;
+  normalize { policy = "<Policy>"; fuel = <N>; };
+  extract foliate into <DerivedDoctrine> with {
+    policy = "stable_edge_id";
+    naming = "boundary_labels_first";
+    reserved = ["x", ...];
+  };
+  extract diagram;
+  extract Doc { stdout = <bool>; };
+  extract FileTree { root = "<path>"; };
 }
 ```
 
-`backend` is optional; default is `algebra`.
-`backend = fold_ssa` is accepted as a deprecated alias for `backend = fold`.
+Phases are executed in order. The implemented phases are:
 
-Models use the same expression language for generator clauses.
+- `apply <Morphism>`: apply a morphism to a diagram artifact. On SSA artifacts,
+  `<DerivedDoctrine>.forget` is also accepted.
+- `normalize`: normalize the current diagram artifact with policy/fuel
+  (defaults: `UseStructuralAsBidirectional`, fuel `50`).
+- `extract foliate into <DerivedDoctrine>`: convert a diagram to SSA for a declared
+  `derived doctrine ... = foliated ...`; optional policy block overrides the derived default.
+- `extract diagram`: pretty-print the current diagram/SSA artifact to text.
+- `extract Doc` / `extract FileTree`: run host-value extractors.
 
-#### Algebra backend (`backend = algebra`)
+Artifact-kind checks are strict per phase (for example, `normalize` requires a diagram,
+and extraction phases reject incompatible artifacts).
 
-This is the existing evaluator:
-
-- SCC-based value evaluation (acyclic concrete; cyclic symbolic `letrec`),
-- generator arguments are `[attrs..., wireInputs...]`,
-- `show value` requires no boundary inputs (`dIn = []`), but outputs may exist.
-
-For each `op Gen(args...)` clause, arguments are passed in this order:
-
-1. generator attributes (field declaration order),
-2. wire inputs (generator domain order).
-
-**Cycles are supported** using SCC‑based evaluation:
-
-- Acyclic components are evaluated concretely via the model clauses.
-- Cyclic components are evaluated symbolically with placeholders `$pN`, producing a
-  `letrec` wrapper in the output value:
-
-  ```
-  [letrec, [[ $p0, expr0 ], [ $p1, expr1 ], ...], body]
-  ```
-
-Generators (including `dup`, `drop`, and `swap`) are interpreted only via the model
-clauses or the model’s default behavior; no special built‑ins are assumed.
-Attribute variables evaluate to atoms rendered as `name:Sort`.
-
-#### Fold backend (`backend = fold`)
-
-`fold` renders the whole diagram to a single string (`[VString ...]`) using a
-user-specified `fold { ... }` block.
-
-Required hooks and signatures:
-
-- `prologue_closed()`
-- `epilogue_closed()`
-- `prologue_open(params, paramDecls)`
-- `epilogue_open()`
-- `bind0(stmt)`
-- `bind1(out, ty, expr)`
-- `bindN(outs, decls, expr)`
-- `return0()`
-- `return1(out, ty)`
-- `returnN(outs, decls)`
-
-All hooks must evaluate to string values.
-
-Optional fold settings:
-
-- `indent = "<text>";` (default `"  "`)
-- `reserved = ["..."];` (default `[]`)
-
-Naming is deterministic and target-agnostic:
-
-- base name comes from `dPortLabel` when present, else `pN`,
-- sanitize by replacing non-`[A-Za-z0-9_]` with `_`,
-- empty -> `pN`,
-- leading digit gets `_` prefix,
-- reserved names get `_` prefix,
-- global uniqueness is enforced on final names (including prefixes), with fixed
-  boundary names pre-reserved.
-
-Evaluation uses deterministic topological edge order and rejects cycles.
-
-Box behavior:
-
-- boundary input/output names are fixed to outer names,
-- non-boundary inner names are prefixed with deterministic `__b<edgeId>_`,
-- inner code is inlined directly (no hard-coded alias statements).
-
-Emission behavior:
-
-- closed diagrams use `prologue_closed`/`epilogue_closed`,
-- open diagrams use `prologue_open(params, paramDecls)`/`epilogue_open`,
-- codomain 0 uses `bind0(stmt)`,
-- codomain 1 uses `bind1(out, ty, expr)`,
-- codomain >1 uses `bindN(outs, decls, expr)`,
-- returns use `return0/1/N` (`""` means no emitted return line),
-- expressions for codomain >0 must be single-line.
-
-#### Model inheritance
-
-`model Child : D using Base where { ... }` merges local overrides with `Base`.
-
-- Base model must already be in scope.
-- Base and child doctrine names must match exactly.
-- Backend/default:
-  - child setting overrides if present,
-  - otherwise inherit base setting.
-- Fold spec:
-  - `indent`: child override if present; otherwise inherit base; else `"  "`,
-  - `reserved`: set union,
-  - hooks: inherited from base; child hook with same name overrides.
-- `op` clauses:
-  - inherited from base,
-  - child clause with same generator name overrides,
-  - otherwise child clause is appended.
-
----
-
-## 7. Runs
-
-Runs are configured through `run_spec` and `run`.
+### 7.2 Runs
 
 ```
-run_spec <Name> [using <Base>] where { <RunItems> }
-[--- <ExprText> ---]
-
-run <Name> [using <Spec>] [where { <RunItems> }]
-[--- <ExprText> ---]
-```
-
-`<RunItems>` are the same run configuration clauses (`doctrine`, `mode`, `surface`,
-`model`, `apply`, `uses`, `policy`, `fuel`, `show ...`).
-
-Resolution semantics:
-
-1. Resolve `run_spec` inheritance by following `using` recursively.
-2. Reject cycles with error `run_spec inheritance cycle: ...`.
-3. Merge parent -> child at each step.
-4. When a `run` uses a spec, merge resolved spec -> run body.
-
-Merge policy:
-
-- Singleton fields (`doctrine`, `mode`, `surface`, `model`, `policy`, `fuel`):
-  child overrides parent when present.
-- List fields (`uses`, `apply`, `show`):
-  concatenate in implemented order: parent list first, then child list.
-- Expression:
-  - use the run body if present;
-  - otherwise inherit the first available body from the resolved `run_spec` chain;
-  - if no body exists after merge, error `run: missing expression`.
-
-Execution pipeline for the effective run configuration:
-
-1. Parse either a diagram expression or a surface program.
-2. Determine source doctrine/mode for elaboration:
-   - If `surface` is present:
-     - source doctrine is `surface.doctrine`,
-     - source mode is `surface.mode`,
-     - a run `mode` clause is allowed only if it is exactly `surface.mode` (otherwise error).
-   - If `surface` is absent:
-     - source doctrine is the run doctrine,
-     - source mode is run `mode` (or inferred if the doctrine has exactly one mode).
-3. Elaborate in the source doctrine/mode (surface elaboration when `surface` is set, diagram elaboration otherwise).
-4. Apply `uses` morphisms and then `apply` morphisms in order.
-5. If needed, coerce to the run’s target doctrine along a unique shortest coercion path.
-6. Normalize (policy default: `UseStructuralAsBidirectional`).
-7. Optionally evaluate via the selected model:
-   - `backend = algebra`: requires closedness on inputs (`dIn = []`),
-   - `backend = fold`: open diagrams are allowed.
-8. Optionally check coherence and render its report.
-9. Print requested outputs.
-
-`show cat` is currently not supported.
-
-`show value` rendering prints a singleton string value directly (no `VString` wrapper).
-
-Example (shared expression via `run_spec`):
-
-```llang
-import "../../lib/codegen/arith_literals.llang";
-
-run_spec Base where {
-  doctrine Arith;
-  mode M;
-  surface ArithInfix;
-  show value;
+run <Name> using <Pipeline> where {
+  source doctrine <Doctrine>;
+  source mode <Mode>;        -- optional if the doctrine has exactly one mode
+  source surface <Surface>;  -- optional; when present, mode must match the surface mode
+  uses ["<Iface>", ...];     -- optional; expands via `implements` defaults
 }
 ---
-2 + 3 * 4
+<DiagExpr | SurfaceProgram>
 ---
-
-run eval using Base where { model Eval; }
-run rpn using Base where { model RPN; }
-run lisp using Base where { model Lisp; }
-run prefix using Base where { model Prefix; }
-run infix using Base where { model Infix; }
 ```
+
+`run` requires:
+
+- a pipeline name (`using <Pipeline>`),
+- a source doctrine (`source doctrine ...`),
+- an expression body (delimited by `---`).
+
+Execution semantics:
+
+1. Parse/elaborate source text:
+   - if `source surface` is absent, elaborate as a diagram in the source doctrine;
+   - if present, elaborate via the selected surface (and enforce mode compatibility).
+2. Resolve and apply `uses` interface defaults for `(iface, targetDoctrine)`.
+3. If needed, coerce to the run’s target doctrine along a unique shortest coercion path.
+4. Reject unresolved type/index variables.
+5. Execute pipeline phases in order.
+6. Render the final artifact output.
