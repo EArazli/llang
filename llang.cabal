@@ -140,6 +140,7 @@ library
       Strat.Poly.Names
       Strat.Poly.Normalize
       Strat.Poly.Pretty
+      Strat.Poly.Proof
       Strat.Poly.Pushout
       Strat.Poly.Rewrite
       Strat.Poly.Surface
@@ -154,6 +155,11 @@ library
   other-modules:
       Strat.DSL.Template
       Strat.Frontend.Compile
+      Strat.Poly.Term.Confluence
+      Strat.Poly.Term.Normalize
+      Strat.Poly.Term.RewriteCompile
+      Strat.Poly.Term.RewriteSystem
+      Strat.Poly.Term.Termination
       Strat.Poly.Traversal
       Strat.Poly.TypePretty
       Strat.Util.List

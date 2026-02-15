@@ -5,12 +5,10 @@ module Strat.Poly.TypeTheory
   , TmFunSig(..)
   , TmRule(..)
   , lookupTmFunSig
-  , defaultTmFuel
   , modeOnlyTypeTheory
   ) where
 
 import qualified Data.Map.Strict as M
-import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.ModeTheory (ModeName, ModeTheory)
 import Strat.Poly.TypeExpr
 
@@ -20,8 +18,6 @@ data TypeTheory = TypeTheory
   , ttTypeParams :: M.Map TypeRef [TypeParamSig]
   , ttTmFuns :: M.Map ModeName (M.Map TmFunName TmFunSig)
   , ttTmRules :: M.Map ModeName [TmRule]
-  , ttTmFuel :: Int
-  , ttTmPolicy :: RewritePolicy
   } deriving (Eq, Show)
 
 data TypeParamSig
@@ -40,9 +36,6 @@ data TmRule = TmRule
   , trRHS :: TermDiagram
   } deriving (Eq, Ord, Show)
 
-defaultTmFuel :: Int
-defaultTmFuel = 200
-
 modeOnlyTypeTheory :: ModeTheory -> TypeTheory
 modeOnlyTypeTheory mt =
   TypeTheory
@@ -50,8 +43,6 @@ modeOnlyTypeTheory mt =
     , ttTypeParams = M.empty
     , ttTmFuns = M.empty
     , ttTmRules = M.empty
-    , ttTmFuel = defaultTmFuel
-    , ttTmPolicy = UseOnlyComputationalLR
     }
 
 lookupTmFunSig :: TypeTheory -> ModeName -> TmFunName -> Maybe TmFunSig

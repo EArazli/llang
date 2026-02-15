@@ -61,7 +61,10 @@ requireCell name doc =
 assertCellReduces :: Doctrine -> Cell2 -> IO ()
 assertCellReduces doc cell = do
   let rules = rulesFromPolicy UseOnlyComputationalLR (dCells2 doc)
-  status <- case normalize (doctrineTypeTheory doc) 200 rules (c2LHS cell) of
+  tt <- case doctrineTypeTheory doc of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right tt -> pure tt
+  status <- case normalize tt 200 rules (c2LHS cell) of
     Left err -> assertFailure (T.unpack err)
     Right st -> pure st
   rhs <- case canonDiagramRaw (c2RHS cell) of

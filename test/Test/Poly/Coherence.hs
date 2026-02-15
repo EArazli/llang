@@ -19,6 +19,7 @@ import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Coherence (checkCoherence, ObligationResult(..))
 import Strat.Poly.CriticalPairs (CPMode(..))
 import Strat.Common.Rules (RewritePolicy(..), Orientation(..), RuleClass(..))
+import Strat.Poly.Proof (SearchBudget(..), SearchOutcome(..), defaultSearchBudget)
 
 
 tests :: TestTree
@@ -106,14 +107,14 @@ testCoherenceJoinable = do
   case validateDoctrine doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  res <- case checkCoherence CP_All UseAllOriented 3 doc of
+  res <- case checkCoherence CP_All UseAllOriented (budget 3) doc of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   assertBool "expected all obligations satisfied" (all hasWitness res)
   where
     hasWitness r = case orWitness r of
-      Nothing -> False
-      Just _ -> True
+      SearchProved _ -> True
+      SearchUndecided _ -> False
 
 testCoherenceFails :: Assertion
 testCoherenceFails = do
@@ -126,13 +127,16 @@ testCoherenceFails = do
         ]
   let doc = mkDoctrine cells
   case validateDoctrine doc of
-    Left err -> assertFailure (T.unpack err)
-    Right () -> pure ()
-  res <- case checkCoherence CP_All UseAllOriented 2 doc of
-    Left err -> assertFailure (T.unpack err)
-    Right r -> pure r
-  assertBool "expected at least one failure" (any isFailure res)
-  where
-    isFailure r = case orWitness r of
-      Nothing -> True
-      Just _ -> False
+    Left err ->
+      assertBool
+        ("expected confluence rejection, got: " <> T.unpack err)
+        ("confluence failed" `T.isInfixOf` err)
+    Right () ->
+      assertFailure "expected doctrine validation to reject non-confluent term rules"
+
+budget :: Int -> SearchBudget
+budget depth =
+  defaultSearchBudget
+    { sbMaxDepth = max 0 depth
+    , sbMaxStates = max 1 (100 * max 1 depth)
+    }

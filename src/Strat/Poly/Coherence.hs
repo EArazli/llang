@@ -12,9 +12,10 @@ import qualified Data.Text as T
 import qualified Data.List as L
 import qualified Data.IntMap.Strict as IM
 import Strat.Poly.CriticalPairs
-import Strat.Poly.Normalize (JoinWitness(..), joinableWithinWitness)
+import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Rewrite (rulesFromPolicy, RewriteRule)
 import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
+import Strat.Poly.Proof (JoinProof, SearchBudget, SearchOutcome(..), renderSearchLimit)
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Common.Rules (RewritePolicy)
 import Strat.Common.Rules (RuleClass(..))
@@ -32,15 +33,16 @@ data Obligation = Obligation
 
 data ObligationResult = ObligationResult
   { orObligation :: Obligation
-  , orWitness :: Maybe JoinWitness
+  , orWitness :: SearchOutcome JoinProof
   } deriving (Eq, Show)
 
-checkCoherence :: CPMode -> RewritePolicy -> Int -> Doctrine -> Either Text [ObligationResult]
-checkCoherence mode policy fuel doc = do
+checkCoherence :: CPMode -> RewritePolicy -> SearchBudget -> Doctrine -> Either Text [ObligationResult]
+checkCoherence mode policy budget doc = do
   cps <- criticalPairsForDoctrine mode policy doc
+  tt <- doctrineTypeTheory doc
   let obligations = concatMap (obligationsFor mode) cps
   let rules = rulesFromPolicy policy (dCells2 doc)
-  mapM (checkObligation (doctrineTypeTheory doc) fuel rules) obligations
+  mapM (checkObligation tt budget rules) obligations
 
 obligationsFor :: CPMode -> CriticalPairInfo -> [Obligation]
 obligationsFor mode info =
@@ -51,17 +53,17 @@ obligationsFor mode info =
     (Computational, Computational) ->
       if mode == CP_All then [Obligation NeedsJoin (cpiPair info)] else []
 
-checkObligation :: TypeTheory -> Int -> [RewriteRule] -> Obligation -> Either Text ObligationResult
-checkObligation tt fuel rules ob = do
-  mW <- joinableWithinWitness tt fuel rules (cpLeft (obCP ob)) (cpRight (obCP ob))
-  pure ObligationResult { orObligation = ob, orWitness = mW }
+checkObligation :: TypeTheory -> SearchBudget -> [RewriteRule] -> Obligation -> Either Text ObligationResult
+checkObligation tt budget rules ob = do
+  outcome <- autoJoinProof tt budget rules (cpLeft (obCP ob)) (cpRight (obCP ob))
+  pure ObligationResult { orObligation = ob, orWitness = outcome }
 
 renderCoherenceReport :: [ObligationResult] -> Either Text Text
 renderCoherenceReport results = do
   let total = length results
   let joins = length [() | r <- results, obKind (orObligation r) == NeedsJoin]
   let commutes = length [() | r <- results, obKind (orObligation r) == NeedsCommute]
-  let failures = [ r | r <- results, orWitness r == Nothing ]
+  let failures = [ r | r <- results, isUndecided r ]
   let failureCount = length failures
   let header =
         [ "coherence:"
@@ -77,6 +79,12 @@ sortFailures :: [ObligationResult] -> [ObligationResult]
 sortFailures =
   L.sortOn (\r -> IM.size (dEdges (cpOverlap (obCP (orObligation r)))))
 
+isUndecided :: ObligationResult -> Bool
+isUndecided result =
+  case orWitness result of
+    SearchProved _ -> False
+    SearchUndecided _ -> True
+
 renderFailures :: [ObligationResult] -> Either Text [Text]
 renderFailures failures =
   fmap concat (mapM renderFailure (zip [1 :: Int ..] failures))
@@ -89,7 +97,7 @@ renderFailures failures =
       rightTxt <- renderDiagram (cpRight cp)
       let header =
             [ ""
-            , "  failure " <> T.pack (show idx) <> ": " <> cpRule1 cp <> " vs " <> cpRule2 cp <> " (" <> T.pack (show (obKind ob)) <> ")"
+            , "  failure " <> T.pack (show idx) <> ": " <> cpRule1 cp <> " vs " <> cpRule2 cp <> " (" <> T.pack (show (obKind ob)) <> reasonSuffix (orWitness res) <> ")"
             , "  overlap:"
             , indent overlapTxt
             , "  left:"
@@ -98,6 +106,11 @@ renderFailures failures =
             , indent rightTxt
             ]
       pure header
+
+    reasonSuffix witness =
+      case witness of
+        SearchProved _ -> ""
+        SearchUndecided lim -> ", " <> renderSearchLimit lim
 
 indent :: Text -> Text
 indent txt =

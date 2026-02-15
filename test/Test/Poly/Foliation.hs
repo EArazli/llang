@@ -86,18 +86,20 @@ testIdentityBoundaryName = do
 
 mkDiag :: Doctrine -> Either Text Diagram
 mkDiag doc = do
+  tt <- doctrineTypeTheory doc
   a <- genD modeM [] [tyT] (GenName "a")
   b <- genD modeM [tyT] [tyT] (GenName "b")
   c <- genD modeM [tyT] [] (GenName "c")
-  ab <- compD (doctrineTypeTheory doc) b a
-  compD (doctrineTypeTheory doc) c ab
+  ab <- compD tt b a
+  compD tt c ab
 
 
 mkTwoStepDiag :: Doctrine -> Either Text Diagram
 mkTwoStepDiag doc = do
+  tt <- doctrineTypeTheory doc
   b1 <- genD modeM [tyT] [tyT] (GenName "b")
   b2 <- genD modeM [tyT] [tyT] (GenName "b")
-  compD (doctrineTypeTheory doc) b2 b1
+  compD tt b2 b1
 
 
 mkDoctrine :: Doctrine

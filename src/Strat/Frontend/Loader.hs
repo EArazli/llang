@@ -1,13 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Frontend.Loader
   ( loadModule
+  , loadModuleWithBudget
   ) where
 
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.AST (RawFile(..), RawDecl(..))
-import Strat.DSL.Elab (elabRawFileWithEnv)
+import Strat.DSL.Elab (elabRawFileWithEnvAndBudget)
 import Strat.Frontend.Env
 import Strat.Frontend.Prelude (preludeDoctrines)
+import Strat.Poly.Proof (SearchBudget, defaultSearchBudget)
 import Data.Text (Text)
 import qualified Data.Text.IO as TIO
 import qualified Data.Set as S
@@ -31,15 +33,18 @@ emptyState :: LoadState
 emptyState = LoadState S.empty M.empty
 
 loadModule :: FilePath -> IO (Either Text ModuleEnv)
-loadModule path = do
+loadModule = loadModuleWithBudget defaultSearchBudget
+
+loadModuleWithBudget :: SearchBudget -> FilePath -> IO (Either Text ModuleEnv)
+loadModuleWithBudget budget path = do
   absPath <- canonicalizePath path
-  result <- loadModuleWith emptyState absPath True
+  result <- loadModuleWith budget emptyState absPath True
   case result of
     Left err -> pure (Left err)
     Right (st, modMain) -> pure (envFromDeps st (lmDeps modMain))
 
-loadModuleWith :: LoadState -> FilePath -> Bool -> IO (Either Text (LoadState, LoadedModule))
-loadModuleWith st path isMain = do
+loadModuleWith :: SearchBudget -> LoadState -> FilePath -> Bool -> IO (Either Text (LoadState, LoadedModule))
+loadModuleWith budget st path isMain = do
   absPath <- canonicalizePath path
   case M.lookup absPath (lsLoaded st) of
     Just mod -> pure (Right (st, mod))
@@ -53,7 +58,7 @@ loadModuleWith st path isMain = do
             Right raw@(RawFile decls) -> do
               let imports = [p | DeclImport p <- decls]
               let stLoading = st { lsLoading = S.insert absPath (lsLoading st) }
-              resImports <- loadImports stLoading (takeDirectory absPath) imports
+              resImports <- loadImports budget stLoading (takeDirectory absPath) imports
               case resImports of
                 Left err -> pure (Left err)
                 Right (stAfter, importMods) ->
@@ -63,7 +68,7 @@ loadModuleWith st path isMain = do
                       case envFromDeps stAfter importDeps of
                         Left err -> pure (Left err)
                         Right envBase ->
-                          case elabRawFileWithEnv envBase raw of
+                          case elabRawFileWithEnvAndBudget budget envBase raw of
                             Left err -> pure (Left err)
                             Right envFull ->
                               let envLocal = diffEnv envFull envBase
@@ -78,15 +83,15 @@ loadModuleWith st path isMain = do
                                         }
                                   pure (Right (stFinal, modLocal))
 
-loadImports :: LoadState -> FilePath -> [FilePath] -> IO (Either Text (LoadState, [LoadedModule]))
-loadImports st _ [] = pure (Right (st, []))
-loadImports st base (p:ps) = do
+loadImports :: SearchBudget -> LoadState -> FilePath -> [FilePath] -> IO (Either Text (LoadState, [LoadedModule]))
+loadImports _ st _ [] = pure (Right (st, []))
+loadImports budget st base (p:ps) = do
   let nextPath = base </> p
-  loaded <- loadModuleWith st nextPath False
+  loaded <- loadModuleWith budget st nextPath False
   case loaded of
     Left err -> pure (Left err)
     Right (st1, mod1) -> do
-      rest <- loadImports st1 base ps
+      rest <- loadImports budget st1 base ps
       case rest of
         Left err -> pure (Left err)
         Right (st2, mods) -> pure (Right (st2, mod1 : mods))

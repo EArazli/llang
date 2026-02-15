@@ -17,24 +17,51 @@ Term normalization requires enough same-mode bound context for scoped reductions
 If a scoped term needs concrete context (for example it mentions non-meta structure), normalization fails with an explicit error.
 Pure metavariable terms may be preserved as-is when context is insufficient.
 
-## 3. Fuel-Bounded Reduction
+## 3. Definitional TRS Admissibility
 
-Type/term definitional equality is fuel-bounded (`ttTmFuel`).
-Normalization may fail with fuel exhaustion.
+Dependent definitional term normalization is fuel-free, but only for admissible term TRSs.
+Doctrine validation rejects term-rule sets when termination is not proven (SCT) or when
+critical pairs are not joinable after normalization.
 
 ## 4. Surface Structural Capabilities
 
 Surface duplication/drop are capability-based and resolved through default `implements` instances for the target doctrine.
 Any mapped source generator with the required polymorphic unary shape can provide `dup`/`drop`; there is no local-name fallback path.
 
-## 5. Term Rule Recontextualization
+## 5. Term Rule Compilation Shape
 
-During term-rule extraction/alignment (`termRulesForMode`), rule diagrams are recontextualized to the ambient
-`tmCtx` and revalidated with `validateDiagram` (not `validateTermGraph`).
-So the strict term boundary-prefix invariant is guaranteed for concrete normalized term diagrams, but not
-re-enforced at that intermediate aligned-rule representation.
+Term rewrite compilation requires function-headed left-hand sides and a first-order term fragment
+(no residual `TMVar` after abstraction to `TMBound`). Rules outside this fragment are rejected for
+definitional normalization.
 
 ## 6. Bound-Index Reporting Is Output-Reachable
 
 `boundTmIndicesTerm` reports bound indices reachable from term outputs.
 Disconnected dead subgraphs do not contribute to reported bound indices.
+
+## 7. TRS Cache Pending Import-Cycle Cleanup
+
+`normalizeTermDiagram` currently compiles per-mode TRSs on demand from `ttTmRules`.
+This is semantically correct but not the intended steady-state performance shape.
+As soon as current import-cycle pressure is resolved, add cached compiled TRSs (e.g. in `TypeTheory`
+or an equivalent cache keyed by doctrine+mode) so kernel normalization avoids repeated compilation.
+
+## 8. Conversion DefEq Strictness (Temporary)
+
+`termExprToDiagram` / `diagramToTermExpr` currently use structural sort checks at conversion boundaries,
+rather than performing additional definitional-equality normalization internally.
+This does not affect kernel Phase-1 correctness (the normalization path normalizes expected sorts first),
+but it is stricter for some non-kernel call sites.
+This is not expected to be resolved automatically by later phases; plan a dedicated follow-up
+alongside import-cycle cleanup to restore richer checked conversion wrappers for elaboration/diagnostics.
+
+## 9. Proof IO Surface Is Not Implemented Yet
+
+The DSL and CLI do not yet expose proof input/output workflows for equational checks.
+In particular, there is no `by ...` / `by auto` clause on obligations or morphism checks, and no
+proof artifact pipeline such as `--emit-proofs` / `--use-proofs`.
+
+## 10. Checker Proofs Are Not Persisted/Returned
+
+Morphism/action/implements checkers currently synthesize and verify proofs internally but do not
+return proof objects or persist them as artifacts for later replay.

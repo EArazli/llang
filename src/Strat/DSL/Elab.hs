@@ -2,6 +2,7 @@
 module Strat.DSL.Elab
   ( elabRawFile
   , elabRawFileWithEnv
+  , elabRawFileWithEnvAndBudget
   ) where
 
 import Control.Monad (foldM)
@@ -19,7 +20,13 @@ import Strat.Pipeline
 import Strat.Poly.Attr
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
-import Strat.Poly.DSL.Elab (elabPolyDoctrine, elabPolyMorphism, parsePolicy, checkImplementsObligations)
+import Strat.Poly.DSL.Elab
+  ( elabPolyDoctrineWithBudget
+  , elabPolyMorphismWithBudget
+  , parsePolicy
+  , checkImplementsObligationsWithBudget
+  , ImplementsCheckResult(..)
+  )
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
 import Strat.Poly.Doctrine
   ( Doctrine(..)
@@ -43,13 +50,17 @@ import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePolyCoproduct)
 import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
+import Strat.Poly.Proof (SearchBudget, defaultSearchBudget, renderSearchLimit)
 
 
 elabRawFile :: RawFile -> Either Text ModuleEnv
-elabRawFile = elabRawFileWithEnv emptyEnv
+elabRawFile = elabRawFileWithEnvAndBudget defaultSearchBudget emptyEnv
 
 elabRawFileWithEnv :: ModuleEnv -> RawFile -> Either Text ModuleEnv
-elabRawFileWithEnv baseEnv (RawFile decls) = do
+elabRawFileWithEnv = elabRawFileWithEnvAndBudget defaultSearchBudget
+
+elabRawFileWithEnvAndBudget :: SearchBudget -> ModuleEnv -> RawFile -> Either Text ModuleEnv
+elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
   (env, rawTerms, rawRuns) <- foldM step (baseEnv, [], []) decls
   envWithTerms <- elabTerms env rawTerms
   runs <- elabRuns envWithTerms rawRuns
@@ -59,7 +70,7 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
       case decl of
         DeclImport _ -> Right (env, rawTerms, rawRuns)
         DeclDoctrine raw -> do
-          env' <- insertDoctrine env raw
+          env' <- insertDoctrine budget env raw
           pure (env', rawTerms, rawRuns)
         DeclDoctrinePushout name leftMor rightMor -> do
           env' <- insertPushout env name leftMor rightMor
@@ -86,10 +97,10 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
           let env' = env { meTemplates = M.insert (rdtName tmpl) tmpl (meTemplates env) }
           pure (env', rawTerms, rawRuns)
         DeclDoctrineInstantiate inst -> do
-          env' <- elabDoctrineInstantiate env inst
+          env' <- elabDoctrineInstantiate budget env inst
           pure (env', rawTerms, rawRuns)
         DeclDoctrineEffects name base effects -> do
-          env' <- elabDoctrineEffects env name base effects
+          env' <- elabDoctrineEffects budget env name base effects
           pure (env', rawTerms, rawRuns)
         DeclDerivedDoctrine rawDerived -> do
           env' <- insertDerivedDoctrine env rawDerived
@@ -115,11 +126,11 @@ elabRawFileWithEnv baseEnv (RawFile decls) = do
         DeclMorphism morphDecl -> do
           let name = rpmName morphDecl
           ensureAbsent "morphism" name (meMorphisms env)
-          morph <- elabPolyMorphism env morphDecl
+          morph <- elabPolyMorphismWithBudget budget env morphDecl
           let env' = env { meMorphisms = M.insert name morph (meMorphisms env) }
           pure (env', rawTerms, rawRuns)
         DeclImplements iface tgt morphName -> do
-          (key, name) <- elabImplements env iface tgt morphName
+          (key, name) <- elabImplements budget env iface tgt morphName
           let defaults = M.findWithDefault [] key (meImplDefaults env)
           let defaults' = if name `elem` defaults then defaults else defaults <> [name]
           let env' = env { meImplDefaults = M.insert key defaults' (meImplDefaults env) }
@@ -137,11 +148,11 @@ ensureAbsent label name mp =
     else Right ()
 
 
-insertDoctrine :: ModuleEnv -> PolyAST.RawPolyDoctrine -> Either Text ModuleEnv
-insertDoctrine env raw = do
+insertDoctrine :: SearchBudget -> ModuleEnv -> PolyAST.RawPolyDoctrine -> Either Text ModuleEnv
+insertDoctrine budget env raw = do
   let name = rpdName raw
   ensureAbsent "doctrine" name (meDoctrines env)
-  doc <- elabPolyDoctrine env raw
+  doc <- elabPolyDoctrineWithBudget budget env raw
   env' <- case rpdExtends raw of
     Nothing -> Right env
     Just base -> do
@@ -177,11 +188,11 @@ insertPushoutWithMorphs env name f g = do
   pure env'
 
 
-elabDoctrineInstantiate :: ModuleEnv -> RawDoctrineInstantiate -> Either Text ModuleEnv
-elabDoctrineInstantiate env inst = do
+elabDoctrineInstantiate :: SearchBudget -> ModuleEnv -> RawDoctrineInstantiate -> Either Text ModuleEnv
+elabDoctrineInstantiate budget env inst = do
   tmpl <- lookupTemplate env (rdiTemplate inst)
   raw <- instantiateTemplate tmpl (rdiName inst) (rdiArgs inst)
-  insertDoctrine env raw
+  insertDoctrine budget env raw
 
 
 lookupTemplate :: ModuleEnv -> Text -> Either Text RawDoctrineTemplate
@@ -191,16 +202,16 @@ lookupTemplate env name =
     Just tmpl -> Right tmpl
 
 
-elabDoctrineEffects :: ModuleEnv -> Text -> Text -> [Text] -> Either Text ModuleEnv
-elabDoctrineEffects env name baseName effects = do
+elabDoctrineEffects :: SearchBudget -> ModuleEnv -> Text -> Text -> [Text] -> Either Text ModuleEnv
+elabDoctrineEffects budget env name baseName effects = do
   _ <- lookupDoctrine env baseName
   case effects of
     [] ->
-      insertDoctrine env (PolyAST.RawPolyDoctrine name (Just baseName) [])
+      insertDoctrine budget env (PolyAST.RawPolyDoctrine name (Just baseName) [])
     [e1] -> do
       baseDoc <- lookupDoctrine env baseName
       _ <- requireEffectFromBase env baseDoc e1
-      insertDoctrine env (PolyAST.RawPolyDoctrine name (Just e1) [])
+      insertDoctrine budget env (PolyAST.RawPolyDoctrine name (Just e1) [])
     _ -> do
       baseDoc <- lookupDoctrine env baseName
       morphs <- mapM (requireEffectFromBase env baseDoc) effects
@@ -208,7 +219,7 @@ elabDoctrineEffects env name baseName effects = do
       env1 <- insertPushoutWithMorphs env stepName1 (head morphs) (morphs !! 1)
       let rest = drop 2 morphs
       (envFinal, lastStep) <- foldM pushoutStep (env1, stepName1) (zip [2 ..] rest)
-      insertDoctrine envFinal (PolyAST.RawPolyDoctrine name (Just lastStep) [])
+      insertDoctrine budget envFinal (PolyAST.RawPolyDoctrine name (Just lastStep) [])
   where
     stepName k = name <> "__step" <> T.pack (show k)
 
@@ -341,7 +352,6 @@ buildDerivedForgetMorphism name srcDoc tgtDoc mode =
     , PolyMorph.morGenMap = M.empty
     , PolyMorph.morCheck = PolyMorph.CheckNone
     , PolyMorph.morPolicy = UseStructuralAsBidirectional
-    , PolyMorph.morFuel = 50
     }
 
 
@@ -420,8 +430,8 @@ lookupMorphism env name =
     Just mor -> Right mor
 
 
-elabImplements :: ModuleEnv -> Text -> Text -> Text -> Either Text ((Text, Text), Text)
-elabImplements env ifaceName tgtName morphName = do
+elabImplements :: SearchBudget -> ModuleEnv -> Text -> Text -> Text -> Either Text ((Text, Text), Text)
+elabImplements budget env ifaceName tgtName morphName = do
   ifaceDoc <- lookupDoctrine env ifaceName
   tgtDoc <- lookupDoctrine env tgtName
   morph <- lookupMorphism env morphName
@@ -431,7 +441,12 @@ elabImplements env ifaceName tgtName morphName = do
       if PolyMorph.morTgt morph /= tgtDoc
         then Left "Morphism target does not match implements target"
         else do
-          checkImplementsObligations env tgtDoc morph ifaceDoc
+          result <- checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc
+          case result of
+            ImplementsCheckProved ->
+              Right ()
+            ImplementsCheckUndecided label lim ->
+              Left ("implements obligation undecided: " <> label <> " (" <> renderSearchLimit lim <> ")")
           Right ((ifaceName, tgtName), morphName)
 
 
@@ -535,7 +550,6 @@ buildPolyFromBase baseName newName env newDoc = do
           , PolyMorph.morGenMap = genMap
           , PolyMorph.morCheck = PolyMorph.CheckAll
           , PolyMorph.morPolicy = UseStructuralAsBidirectional
-          , PolyMorph.morFuel = 50
           }
   case PolyMorph.checkMorphism mor of
     Left err -> Left ("generated morphism " <> morName <> " invalid: " <> err)

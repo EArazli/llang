@@ -10,7 +10,6 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
-import Strat.Common.Rules (RewritePolicy(..))
 
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
@@ -35,7 +34,6 @@ import Strat.Poly.TypeTheory
   , TypeParamSig(..)
   , TmFunSig(..)
   , TmRule(..)
-  , defaultTmFuel
   , modeOnlyTypeTheory
   )
 import Strat.Poly.TypeNormalize (normalizeTypeDeep, normalizeTermDiagram, validateTermDiagram)
@@ -69,6 +67,9 @@ tests =
     "Poly.Dependent"
     [ testCase "term normalization from doctrine rules reduces add(S(Z),S(Z))" testDoctrineNormalizeTypeArg
     , testCase "term normalization reduces add(S(Z),S(Z))" testNormalizeTm
+    , testCase "term normalization is idempotent" testNormalizeTmIdempotent
+    , testCase "doctrine rejects non-terminating term rewrite system" testRejectNonTerminatingTermTRS
+    , testCase "doctrine rejects non-confluent term rewrite system" testRejectNonConfluentTermTRS
     , testCase "mixed-mode unlabeled tmctx inputs resolve to global indices" testMixedModeTmCtxResolution
     , testCase "bound index survives canonization without labels" testBoundIndexSurvivesCanonization
     , testCase "validateTermDiagram rejects sparse boundaries" testValidateTermDiagramRejectsSparseBoundary
@@ -109,7 +110,7 @@ testDoctrineNormalizeTypeArg = do
     case M.lookup "DepNorm" (meDoctrines env) of
       Nothing -> assertFailure "missing doctrine DepNorm" >> fail "unreachable"
       Just d -> pure d
-  let tt = doctrineTypeTheory doc
+  tt <- require (doctrineTypeTheory doc)
   let modeM = ModeName "M"
   let modeI = ModeName "I"
   let aTy = TCon (TypeRef modeM (TypeName "A")) []
@@ -145,6 +146,62 @@ testNormalizeTm = do
   wantExpr <- require (diagramToTermExpr tt [] natTy want)
   normExpr @?= wantExpr
 
+testNormalizeTmIdempotent :: Assertion
+testNormalizeTmIdempotent = do
+  (tt, natTy, _modeM, _modeI) <- require mkNatTypeTheory
+  let z = TMFun (TmFunName "Z") []
+  let s x = TMFun (TmFunName "S") [x]
+  let add x y = TMFun (TmFunName "add") [x, y]
+  tm <- require (termExprToDiagram tt [] natTy (add (s z) (s z)))
+  n1 <- require (normalizeTermDiagram tt [] natTy tm)
+  n2 <- require (normalizeTermDiagram tt [] natTy n1)
+  e1 <- require (diagramToTermExpr tt [] natTy n1)
+  e2 <- require (diagramToTermExpr tt [] natTy n2)
+  e1 @?= e2
+
+testRejectNonTerminatingTermTRS :: Assertion
+testRejectNonTerminatingTermTRS = do
+  let src = T.unlines
+        [ "doctrine BadLoop where {"
+        , "  mode I;"
+        , "  type Nat @I;"
+        , "  gen f : [Nat] -> [Nat] @I;"
+        , "  rule computational loop -> : [Nat] -> [Nat] @I ="
+        , "    id[Nat] ; f == id[Nat] ; f"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected termination failure, got: " <> T.unpack err)
+        ("termination not proven" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected doctrine elaboration to reject non-terminating term TRS"
+
+testRejectNonConfluentTermTRS :: Assertion
+testRejectNonConfluentTermTRS = do
+  let src = T.unlines
+        [ "doctrine BadConfluence where {"
+        , "  mode I;"
+        , "  type Nat @I;"
+        , "  gen a : [] -> [Nat] @I;"
+        , "  gen b : [] -> [Nat] @I;"
+        , "  gen c : [] -> [Nat] @I;"
+        , "  gen f : [Nat] -> [Nat] @I;"
+        , "  rule computational r1 -> : [] -> [Nat] @I ="
+        , "    a ; f == b"
+        , "  rule computational r2 -> : [] -> [Nat] @I ="
+        , "    a ; f == c"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected confluence failure, got: " <> T.unpack err)
+        ("confluence failed" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected doctrine elaboration to reject non-confluent term TRS"
+
 testMixedModeTmCtxResolution :: Assertion
 testMixedModeTmCtxResolution = do
   let modeC = ModeName "C"
@@ -164,8 +221,6 @@ testMixedModeTmCtxResolution = do
                 ]
           , ttTmFuns = M.empty
           , ttTmRules = M.empty
-          , ttTmFuel = defaultTmFuel
-          , ttTmPolicy = UseOnlyComputationalLR
           }
   tm <- require (termExprToDiagram tt tmCtx natTy (TMBound 1))
   let unlabeledTm =
@@ -255,8 +310,6 @@ testBoundSortUsesSubstitution = do
           , ttTypeParams = M.fromList [(lenRef, [TPS_Ty modeM])]
           , ttTmFuns = M.empty
           , ttTmRules = M.empty
-          , ttTmFuel = defaultTmFuel
-          , ttTmPolicy = UseOnlyComputationalLR
           }
   bound0 <- require (termExprToDiagram tt [tmCtxSort] tmCtxSort (TMBound 0))
   case unifyTm tt [tmCtxSort] S.empty emptySubst expectedSort bound0 bound0 of
@@ -286,8 +339,6 @@ testMatchBoundSortUsesCurrentSubst = do
                 ]
           , ttTmFuns = M.empty
           , ttTmRules = M.empty
-          , ttTmFuel = defaultTmFuel
-          , ttTmPolicy = UseOnlyComputationalLR
           }
   bound0 <- require (termExprToDiagram tt [tmCtxSort] tmCtxSort (TMBound 0))
 
@@ -346,8 +397,6 @@ testMatchTmCtxCompatibility = do
           , ttTypeParams = M.empty
           , ttTmFuns = M.empty
           , ttTmRules = M.empty
-          , ttTmFuel = defaultTmFuel
-          , ttTmPolicy = UseOnlyComputationalLR
           }
   let lhs = (idD modeM [aTy]) { dTmCtx = [natTy] }
   let host = (idD modeM [aTy]) { dTmCtx = [boolTy] }
@@ -466,8 +515,6 @@ mkNatTypeTheory = do
           , ttTypeParams = M.empty
           , ttTmFuns = M.fromList [(modeI, funSigs)]
           , ttTmRules = M.empty
-          , ttTmFuel = defaultTmFuel
-          , ttTmPolicy = UseOnlyComputationalLR
           }
   r1L <- termExprToDiagram ttSig [] natTy (add z (TMVar vN))
   r1R <- termExprToDiagram ttSig [] natTy (TMVar vN)

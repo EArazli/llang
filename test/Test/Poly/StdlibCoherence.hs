@@ -16,6 +16,7 @@ import Strat.Poly.Coherence (checkCoherence)
 import Strat.Poly.CriticalPairs (CPMode(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.Doctrine (Doctrine)
+import Strat.Poly.Proof (SearchBudget(..), defaultSearchBudget)
 import Paths_llang (getDataFileName)
 
 
@@ -43,7 +44,7 @@ testStdlibCoherence = do
   env <- require =<< loadModule path
   assertBool "expected StructCartesian loaded" (M.member "StructCartesian" (meDoctrines env))
   doc <- lookupDoc "CartMonoid" (meDoctrines env)
-  res <- require (checkCoherence CP_StructuralVsComputational UseAllOriented 4 doc)
+  res <- require (checkCoherence CP_StructuralVsComputational UseAllOriented (budget 4) doc)
   assertBool "expected no obligations" (null res)
 
 
@@ -54,7 +55,7 @@ testCoherenceTimeout = do
   doc <- lookupDoc "CoherenceDemo" (meDoctrines env)
   let action =
         evaluate $
-          case checkCoherence CP_StructuralVsComputational UseAllOriented 2 doc of
+          case checkCoherence CP_StructuralVsComputational UseAllOriented (budget 2) doc of
             Left err -> Left err
             Right results -> Right (length results)
   timed <- timeout (2 * 1000 * 1000) action
@@ -62,3 +63,10 @@ testCoherenceTimeout = do
     Nothing -> assertFailure "coherence check timed out"
     Just (Left err) -> assertFailure (T.unpack err)
     Just (Right count) -> count @?= 1
+
+budget :: Int -> SearchBudget
+budget depth =
+  defaultSearchBudget
+    { sbMaxDepth = max 0 depth
+    , sbMaxStates = max 1 (100 * max 1 depth)
+    }

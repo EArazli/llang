@@ -167,25 +167,23 @@ mkInclusionMorph name src tgt tyVar =
         , morCheck = CheckAll
       , morAttrSortMap = M.empty
       , morPolicy = UseAllOriented
-      , morFuel = 10
       }
 
 testPushoutMergeOrient :: Assertion
 testPushoutMergeOrient = do
   let mode = ModeName "M"
-  base <- require (mkCellDoctrine mode "A" Computational LR)
-  left <- require (mkCellDoctrine mode "B" Computational LR)
-  right <- require (mkCellDoctrine mode "C" Computational RL)
+  base <- require (mkCellDoctrine mode "A" Structural LR)
+  left <- require (mkCellDoctrine mode "B" Structural LR)
+  right <- require (mkCellDoctrine mode "C" Structural RL)
   let morLeft = mkIdMorph "fLeft" base left
   let morRight = mkIdMorph "fRight" base right
-  res <- case computePolyPushout "P" morLeft morRight of
-    Left err -> assertFailure (T.unpack err)
-    Right r -> pure r
-  let cells = dCells2 (poDoctrine res)
-  case findCell "eq" cells of
-    Nothing -> assertFailure "expected merged cell"
-    Just cell ->
-      c2Orient cell @?= Bidirectional
+  case computePolyPushout "P" morLeft morRight of
+    Left err ->
+      assertBool
+        ("expected morphism-check rejection, got: " <> T.unpack err)
+        ("equation violation" `T.isInfixOf` err || "equation undecided" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected pushout to reject non-preserving glue morphism"
 
 testPushoutMergeClass :: Assertion
 testPushoutMergeClass = do
@@ -195,14 +193,13 @@ testPushoutMergeClass = do
   right <- require (mkCellDoctrine mode "C" Computational LR)
   let morLeft = mkIdMorph "fLeft" base left
   let morRight = mkIdMorph "fRight" base right
-  res <- case computePolyPushout "P" morLeft morRight of
-    Left err -> assertFailure (T.unpack err)
-    Right r -> pure r
-  let cells = dCells2 (poDoctrine res)
-  case findCell "eq" cells of
-    Nothing -> assertFailure "expected merged cell"
-    Just cell ->
-      c2Class cell @?= Structural
+  case computePolyPushout "P" morLeft morRight of
+    Left err ->
+      assertBool
+        ("expected morphism-check rejection, got: " <> T.unpack err)
+        ("equation violation" `T.isInfixOf` err || "equation undecided" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected pushout to reject non-preserving glue morphism"
 
 testPushoutNameConflict :: Assertion
 testPushoutNameConflict = do
@@ -219,16 +216,26 @@ testPushoutNameConflict = do
 mkCellDoctrine :: ModeName -> Text -> RuleClass -> Orientation -> Either Text Doctrine
 mkCellDoctrine mode name cls orient = do
   let aName = TypeName "A"
-  let gen = GenDecl
+  let genF = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
         , gdTmVars = []
-    , gdDom = map InPort [tcon mode "A" []]
+        , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
         }
-  lhs <- genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName gen)
+  let genG = GenDecl
+        { gdName = GenName "g"
+        , gdMode = mode
+        , gdTyVars = []
+        , gdTmVars = []
+        , gdDom = map InPort [tcon mode "A" []]
+        , gdCod = [tcon mode "A" []]
+        , gdAttrs = []
+        }
+  lhs <- genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName genF)
+  rhs <- genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName genG)
   let cell = Cell2
         { c2Name = "eq"
         , c2Class = cls
@@ -236,17 +243,17 @@ mkCellDoctrine mode name cls orient = do
         , c2TyVars = []
         , c2TmVars = []
         , c2LHS = lhs
-        , c2RHS = lhs
+        , c2RHS = rhs
         }
   let doc = Doctrine
         { dName = name
         , dModes = mkModes (S.singleton mode)
-    , dAcyclicModes = S.empty
+        , dAcyclicModes = S.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
-        , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
+        , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
         , dCells2 = [cell]
-      , dActions = M.empty
-      , dObligations = []
+        , dActions = M.empty
+        , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
@@ -270,11 +277,12 @@ mkCellDoctrineWithAlt mode name cls orient = do
         , gdMode = mode
         , gdTyVars = []
         , gdTmVars = []
-    , gdDom = map InPort [tcon mode "A" []]
+        , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
         }
   lhs <- genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName genG)
+  rhs <- genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName genF)
   let cell = Cell2
         { c2Name = "eq"
         , c2Class = cls
@@ -282,17 +290,17 @@ mkCellDoctrineWithAlt mode name cls orient = do
         , c2TyVars = []
         , c2TmVars = []
         , c2LHS = lhs
-        , c2RHS = lhs
+        , c2RHS = rhs
         }
   let doc = Doctrine
         { dName = name
         , dModes = mkModes (S.singleton mode)
-    , dAcyclicModes = S.empty
+        , dAcyclicModes = S.empty
         , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
         , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
         , dCells2 = [cell]
-      , dActions = M.empty
-      , dObligations = []
+        , dActions = M.empty
+        , dObligations = []
         , dAttrSorts = M.empty
         }
   case validateDoctrine doc of
@@ -302,10 +310,15 @@ mkCellDoctrineWithAlt mode name cls orient = do
 mkIdMorph :: Text -> Doctrine -> Doctrine -> Morphism
 mkIdMorph name src tgt =
   let mode = ModeName "M"
-      diag = case genD mode [tcon mode "A" []] [tcon mode "A" []] (GenName "f") of
-        Left _ -> error "mkIdMorph: genD failed"
-        Right d -> d
-      genMap = M.fromList [((mode, GenName "f"), plainImage diag)]
+      mkImage gName =
+        case genD mode [tcon mode "A" []] [tcon mode "A" []] gName of
+          Left _ -> error "mkIdMorph: genD failed"
+          Right d -> plainImage d
+      genMap =
+        M.fromList
+          [ ((mode, GenName "f"), mkImage (GenName "f"))
+          , ((mode, GenName "g"), mkImage (GenName "g"))
+          ]
   in Morphism
       { morName = name
       , morSrc = src
@@ -318,16 +331,7 @@ mkIdMorph name src tgt =
         , morCheck = CheckAll
       , morAttrSortMap = M.empty
       , morPolicy = UseAllOriented
-      , morFuel = 10
       }
-
-findCell :: Text -> [Cell2] -> Maybe Cell2
-findCell name = go
-  where
-    go [] = Nothing
-    go (c:cs)
-      | c2Name c == name = Just c
-      | otherwise = go cs
 
 testPushoutTypePermutationCommutes :: Assertion
 testPushoutTypePermutationCommutes = do
@@ -358,7 +362,6 @@ testPushoutTypePermutationCommutes = do
         , morCheck = CheckAll
         , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
-        , morFuel = 10
         }
   let morG = Morphism
         { morName = "g"
@@ -372,7 +375,6 @@ testPushoutTypePermutationCommutes = do
         , morCheck = CheckAll
         , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
-        , morFuel = 10
         }
   res <- case computePolyPushout "P" morF morG of
     Left err -> assertFailure (T.unpack err)
@@ -423,7 +425,6 @@ testPushoutRejectsModeMap = do
         , morCheck = CheckAll
         , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
-        , morFuel = 10
         }
   let morG = Morphism
         { morName = "g"
@@ -437,7 +438,6 @@ testPushoutRejectsModeMap = do
         , morCheck = CheckAll
         , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
-        , morFuel = 10
         }
   case computePolyPushout "P" morF morG of
     Left err ->
@@ -542,7 +542,6 @@ testPushoutTermTypeMaps = do
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
-          , morFuel = 10
           }
   let morG =
         Morphism
@@ -557,7 +556,6 @@ testPushoutTermTypeMaps = do
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
-          , morFuel = 10
           }
   case computePolyPushout "PIdx" morF morG of
     Left err -> assertFailure (T.unpack err)
@@ -688,7 +686,6 @@ testPushoutCellTmAlphaEq = do
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
-          , morFuel = 10
           }
   let morRight =
         Morphism
@@ -707,7 +704,6 @@ testPushoutCellTmAlphaEq = do
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
-          , morFuel = 10
           }
   res <- case computePolyPushout "PTmAlpha" morLeft morRight of
     Left err -> assertFailure (T.unpack err)
@@ -771,7 +767,6 @@ testPushoutInjectionPreservesBinderArgs = do
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
-          , morFuel = 10
           }
   let morLeft = mkIfaceIn "iface.left" left
   let morRight = mkIfaceIn "iface.right" right
@@ -871,7 +866,6 @@ testPushoutAcceptsRenamingWithBinders = do
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
-          , morFuel = 10
           }
   let morRight =
         Morphism
@@ -886,7 +880,6 @@ testPushoutAcceptsRenamingWithBinders = do
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
-          , morFuel = 10
           }
   case computePolyPushout "PRenameBinder" morLeft morRight of
     Left err -> assertFailure (T.unpack err)
@@ -934,7 +927,6 @@ mkModeEqMorph name src tgt varName =
         , morCheck = CheckAll
       , morAttrSortMap = M.empty
       , morPolicy = UseAllOriented
-      , morFuel = 10
       }
 
 mkModeEqDoctrine :: Text -> ModeTheory -> Text -> Bool -> Either Text Doctrine

@@ -107,7 +107,6 @@ testMonoidMorphism = do
         , morGenMap = M.fromList [((modeM, GenName "unit"), plainImage unitImg), ((modeM, GenName "mul"), plainImage mulImg)]
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
-        , morFuel = 20
         }
   case checkMorphism mor of
     Left err -> assertFailure (show err)
@@ -183,7 +182,6 @@ testTypeMapReorder = do
         , morGenMap = M.fromList [((mode, genName), plainImage img)]
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
-        , morFuel = 20
         }
   case checkMorphism mor of
     Left err -> assertFailure (show err)
@@ -258,7 +256,6 @@ testCrossModeMorphism = do
         , morGenMap = M.fromList [((modeC, GenName "f"), plainImage img)]
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
-        , morFuel = 20
         }
   case checkMorphism mor of
     Left err -> assertFailure (T.unpack err)
@@ -402,7 +399,6 @@ testModalityMapRewritesTypeModalities = do
         , morGenMap = M.fromList [((modeB, GenName "g"), plainImage imgG), ((modeB, GenName "gg"), plainImage imgGG)]
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
-        , morFuel = 20
         }
   case checkMorphism mor of
     Left err -> assertFailure (T.unpack err)
@@ -505,7 +501,6 @@ testMorphismInstantiationSubstFailure = do
           , morGenMap = M.fromList [((mode, GenName "f"), plainImage badImg)]
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
   case applyMorphismDiagram mor srcDiag of
     Left _ -> pure ()
@@ -561,7 +556,6 @@ testBinderIdentityMorphismPreservesBinders = do
           , morGenMap = M.fromList [((mode, lamName), GenImage img (M.fromList [(hole, slotSig)]))]
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
   case checkMorphism mor of
     Left err -> assertFailure (T.unpack err)
@@ -630,7 +624,6 @@ testMorphismSpliceRenamesToBinderMeta = do
           , morGenMap = M.fromList [((mode, gName), GenImage img (M.fromList [(b0, slotSig)]))]
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
   case checkMorphism mor of
     Left err -> assertFailure (T.unpack err)
@@ -693,7 +686,6 @@ testMorphismRejectsBadBinderHoleSignatures = do
           , morGenMap = M.fromList [((mode, lamName), GenImage img (M.fromList [(hole, wrongSig)]))]
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
   case checkMorphism mor of
     Left err ->
@@ -740,7 +732,6 @@ testTypeTemplateCycleRejected = do
           , morGenMap = M.empty
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
   case checkMorphism mor of
     Left err ->
@@ -817,7 +808,6 @@ testTermTemplateSortMismatch = do
           , morGenMap = M.empty
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
   case checkMorphism mor of
     Left err ->
@@ -907,15 +897,18 @@ testTermTypeTemplateInstantiation = do
   tgt <- case validateDoctrine tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
+  ttSrc <- case doctrineTypeTheory src of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right tt -> pure tt
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
   let aVar = TyVar { tvName = "a", tvMode = modeM' }
-  nSucc <- case termExprToDiagram (doctrineTypeTheory src) [] natTy (s (TMVar nVar)) of
+  nSucc <- case termExprToDiagram ttSrc [] natTy (s (TMVar nVar)) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
-  zTm <- case termExprToDiagram (doctrineTypeTheory src) [] natTy z of
+  zTm <- case termExprToDiagram ttSrc [] natTy z of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
-  szTm <- case termExprToDiagram (doctrineTypeTheory src) [] natTy (s z) of
+  szTm <- case termExprToDiagram ttSrc [] natTy (s z) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
   zImg <- case genD modeI' [] [natTy] (GenName "Z") of
@@ -948,7 +941,6 @@ testTermTypeTemplateInstantiation = do
                 ]
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
   case checkMorphism mor of
     Left err -> assertFailure (T.unpack err)
@@ -964,10 +956,10 @@ testTermTypeTemplateInstantiation = do
     [TCon ref [TATm gotTm, TAType gotA]] -> do
       ref @?= vec2Ref
       gotA @?= aTy'
-      gotExpr <- case diagramToTermExpr (doctrineTypeTheory src) [] natTy gotTm of
+      gotExpr <- case diagramToTermExpr ttSrc [] natTy gotTm of
         Left err -> assertFailure (T.unpack err) >> fail "unreachable"
         Right e -> pure e
-      wantExpr <- case diagramToTermExpr (doctrineTypeTheory src) [] natTy szTm of
+      wantExpr <- case diagramToTermExpr ttSrc [] natTy szTm of
         Left err -> assertFailure (T.unpack err) >> fail "unreachable"
         Right e -> pure e
       gotExpr @?= wantExpr
@@ -1052,7 +1044,6 @@ testTermTemplateKindMismatch = do
           , morGenMap = M.empty
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
   case checkMorphism mor of
     Left err ->
@@ -1134,9 +1125,13 @@ testMorphismMapsStructuredTermArgs = do
           , morGenMap = M.fromList [((modeI', succName), plainImage dblImg)]
           , morCheck = CheckNone
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
-  let ttSrc = doctrineTypeTheory src
+  ttSrc <- case doctrineTypeTheory src of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right tt -> pure tt
+  ttTgt <- case doctrineTypeTheory tgt of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right tt -> pure tt
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
   tmSrc <- case termExprToDiagram ttSrc [] natTy (TMFun (TmFunName "succ") [TMVar nVar]) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
@@ -1148,7 +1143,7 @@ testMorphismMapsStructuredTermArgs = do
   case tyTgt of
     TCon ref [TATm tmOut] -> do
       ref @?= vecRef
-      tmExpr <- case diagramToTermExpr (doctrineTypeTheory tgt) [] natTy tmOut of
+      tmExpr <- case diagramToTermExpr ttTgt [] natTy tmOut of
         Left err -> assertFailure (T.unpack err) >> fail "unreachable"
         Right e -> pure e
       tmExpr @?= TMFun (TmFunName "dbl") [TMVar nVar]
@@ -1217,7 +1212,6 @@ testMorphismWeakenImageTmCtx = do
           , morGenMap = M.singleton (mode, srcName) (plainImage img)
           , morCheck = CheckNone
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
   srcDiag <- case genDTm mode [tyX] [tyX] [tyX] srcName of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
@@ -1279,7 +1273,7 @@ mkMonoid = do
       , dAttrSorts = M.empty
         , dTypes = types
         , dGens = gens
-        , dCells2 = [assoc, unitL, unitR]
+        , dCells2 = [assoc { c2Class = Structural }, unitL, unitR]
       , dActions = M.empty
       , dObligations = []
         }
@@ -1330,7 +1324,7 @@ mkStringMonoid = do
       , dAttrSorts = M.empty
         , dTypes = types
         , dGens = gens
-        , dCells2 = [assoc, unitL, unitR]
+        , dCells2 = [assoc { c2Class = Structural }, unitL, unitR]
       , dActions = M.empty
       , dObligations = []
         }

@@ -165,7 +165,8 @@ runPhase env art phase =
       case art of
         ArtDiagram doc diag -> do
           let rules = rulesFromPolicy policy (dCells2 doc)
-          status <- normalize (doctrineTypeTheory doc) fuel rules diag
+          tt <- doctrineTypeTheory doc
+          status <- normalize tt fuel rules diag
           let diag' =
                 case status of
                   Finished d -> d
@@ -340,8 +341,8 @@ topologicalEdges diag =
 
 encodeSSAArtifact :: Doctrine -> SSA -> Either Text Diagram
 encodeSSAArtifact doc ssa = do
+  tt <- doctrineTypeTheory doc
   let mode = ssaMode ssa
-      tt = doctrineTypeTheory doc
       requireType0 tName = do
         _ <- lookupTypeSig doc (TypeRef mode (TypeName tName))
         pure (TCon (TypeRef mode (TypeName tName)) [])

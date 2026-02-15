@@ -181,7 +181,6 @@ mkStructEnv target = do
                 ]
           , morCheck = CheckNone
           , morPolicy = UseAllOriented
-          , morFuel = 20
           }
   pure
     emptyEnv

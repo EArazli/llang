@@ -5,8 +5,9 @@ module Strat.CLI
   , runCLI
   ) where
 
-import Strat.Frontend.Loader (loadModule)
+import Strat.Frontend.Loader (loadModuleWithBudget)
 import Strat.Frontend.Run (runWithEnv, selectRun, RunResult(..), Artifact(..))
+import Strat.Poly.Proof (SearchBudget(..), defaultSearchBudget)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -18,19 +19,48 @@ import System.FilePath (takeDirectory)
 data CLIOptions = CLIOptions
   { optFile :: FilePath
   , optRun  :: Maybe Text
+  , optSearchBudget :: SearchBudget
   }
   deriving (Eq, Show)
 
 parseArgs :: [String] -> Either Text CLIOptions
 parseArgs args =
   case args of
-    [file] -> Right (CLIOptions file Nothing)
-    [file, "--run", name] -> Right (CLIOptions file (Just (T.pack name)))
+    (file:rest) -> parseRest (CLIOptions file Nothing defaultSearchBudget) rest
     _ -> Left usage
+  where
+    parseRest opts rest =
+      case rest of
+        [] -> Right opts
+        "--run" : name : xs ->
+          case optRun opts of
+            Just _ -> Left "duplicate --run flag"
+            Nothing -> parseRest opts { optRun = Just (T.pack name) } xs
+        "--max-depth" : nTxt : xs -> do
+          n <- parseInt "--max-depth" nTxt
+          if n < 0
+            then Left "--max-depth must be >= 0"
+            else parseRest opts { optSearchBudget = (optSearchBudget opts) { sbMaxDepth = n } } xs
+        "--max-states" : nTxt : xs -> do
+          n <- parseInt "--max-states" nTxt
+          if n <= 0
+            then Left "--max-states must be > 0"
+            else parseRest opts { optSearchBudget = (optSearchBudget opts) { sbMaxStates = n } } xs
+        "--timeout-ms" : nTxt : xs -> do
+          n <- parseInt "--timeout-ms" nTxt
+          if n < 0
+            then Left "--timeout-ms must be >= 0"
+            else parseRest opts { optSearchBudget = (optSearchBudget opts) { sbTimeoutMs = n } } xs
+        _ -> Left usage
+
+    parseInt flag raw =
+      case reads raw of
+        [(n, "")] -> Right n
+        _ -> Left (T.pack flag <> ": expected integer, got `" <> T.pack raw <> "`")
 
 runCLI :: CLIOptions -> IO (Either Text Text)
 runCLI opts = do
-  envResult <- loadModule (optFile opts)
+  envResult <- loadModuleWithBudget (optSearchBudget opts) (optFile opts)
   case envResult of
     Left err -> pure (Left err)
     Right env ->
@@ -57,6 +87,7 @@ writeExtractedFiles art =
 usage :: Text
 usage =
   T.unlines
-    [ "Usage: llang-exe FILE [--run NAME]"
+    [ "Usage: llang-exe FILE [--run NAME] [--max-depth N] [--max-states N] [--timeout-ms N]"
     , "Run a named run in FILE (default: main or the only run)."
+    , "Search-budget flags tune auto-proof search during module elaboration/checking."
     ]

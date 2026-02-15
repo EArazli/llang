@@ -9,6 +9,7 @@ module Strat.Poly.Doctrine
   , TypeSig(..)
   , Doctrine(..)
   , gdPlainDom
+  , mkTypeTheory
   , doctrineTypeTheory
   , lookupTypeSig
   , checkType
@@ -29,7 +30,6 @@ import Strat.Poly.TypeTheory
   , TypeParamSig(..)
   , TmFunSig(..)
   , TmRule(..)
-  , defaultTmFuel
   )
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
@@ -40,6 +40,9 @@ import Strat.Poly.DSL.AST (RawOblExpr(..))
 import Strat.Poly.UnifyTy (unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.Poly.TypeNormalize (termToDiagram, validateTermDiagram)
+import Strat.Poly.Term.RewriteCompile (compileAllTermRules)
+import Strat.Poly.Term.Termination (checkTerminatingSCT)
+import Strat.Poly.Term.Confluence (checkConfluent)
 
 
 data ParamSig
@@ -76,7 +79,6 @@ data ModAction = ModAction
   { maMod :: ModName
   , maGenMap :: M.Map (ModeName, GenName) Diagram
   , maPolicy :: RewritePolicy
-  , maFuel :: Int
   } deriving (Eq, Show)
 
 data ObligationDecl = ObligationDecl
@@ -90,7 +92,6 @@ data ObligationDecl = ObligationDecl
   , obLHSExpr :: RawOblExpr
   , obRHSExpr :: RawOblExpr
   , obPolicy :: RewritePolicy
-  , obFuel :: Int
   } deriving (Eq, Show)
 
 gdPlainDom :: GenDecl -> Context
@@ -111,24 +112,33 @@ data Doctrine = Doctrine
   , dObligations :: [ObligationDecl]
   } deriving (Eq, Show)
 
-doctrineTypeTheory :: Doctrine -> TypeTheory
-doctrineTypeTheory doc =
+doctrineTypeTheory :: Doctrine -> Either Text TypeTheory
+doctrineTypeTheory = mkTypeTheory
+
+mkTypeTheory :: Doctrine -> Either Text TypeTheory
+mkTypeTheory doc = do
+  let tt0 = doctrineTypeTheoryBase doc
+  trs <- compileAllTermRules tt0
+  mapM_ checkTerminatingSCT (M.elems trs)
+  mapM_ checkConfluent (M.elems trs)
+  pure tt0
+
+doctrineTypeTheoryBase :: Doctrine -> TypeTheory
+doctrineTypeTheoryBase doc =
   let tmFuns = derivedTmFuns doc
       tmRules = derivedTmRules doc tmFuns
    in
-  TypeTheory
-    { ttModes = dModes doc
-    , ttTypeParams =
-        M.fromList
-          [ (TypeRef mode tyName, map toTParam (tsParams sig))
-          | (mode, typeTable) <- M.toList (dTypes doc)
-          , (tyName, sig) <- M.toList typeTable
-          ]
-    , ttTmFuns = tmFuns
-    , ttTmRules = tmRules
-    , ttTmFuel = defaultTmFuel
-    , ttTmPolicy = UseOnlyComputationalLR
-    }
+    TypeTheory
+      { ttModes = dModes doc
+      , ttTypeParams =
+          M.fromList
+            [ (TypeRef mode tyName, map toTParam (tsParams sig))
+            | (mode, typeTable) <- M.toList (dTypes doc)
+            , (tyName, sig) <- M.toList typeTable
+            ]
+      , ttTmFuns = tmFuns
+      , ttTmRules = tmRules
+      }
   where
     toTParam ps =
       case ps of
@@ -217,12 +227,13 @@ validateDoctrine doc = do
   if all (`M.member` mtModes (dModes doc)) (S.toList (dAcyclicModes doc))
     then Right ()
     else Left "validateDoctrine: acyclic mode references unknown mode"
+  tt <- mkTypeTheory doc
   mapM_ checkAttrSortDecl (M.toList (dAttrSorts doc))
-  mapM_ (checkTypeTable doc) (M.toList (dTypes doc))
-  mapM_ (checkGenTable doc) (M.toList (dGens doc))
-  mapM_ (checkCell doc) (dCells2 doc)
+  mapM_ (checkTypeTable doc tt) (M.toList (dTypes doc))
+  mapM_ (checkGenTable doc tt) (M.toList (dGens doc))
+  mapM_ (checkCell doc tt) (dCells2 doc)
   mapM_ (checkAction doc) (M.toList (dActions doc))
-  mapM_ (checkObligation doc) (dObligations doc)
+  mapM_ (checkObligation doc tt) (dObligations doc)
   pure ()
 
 modeIsAcyclic :: Doctrine -> ModeName -> Bool
@@ -240,8 +251,8 @@ lookupTypeSig doc ref =
 checkModeTheory :: ModeTheory -> Either Text ()
 checkModeTheory = checkWellFormed
 
-checkTypeTable :: Doctrine -> (ModeName, M.Map TypeName TypeSig) -> Either Text ()
-checkTypeTable doc (mode, table)
+checkTypeTable :: Doctrine -> TypeTheory -> (ModeName, M.Map TypeName TypeSig) -> Either Text ()
+checkTypeTable doc tt (mode, table)
   | M.member mode (mtModes (dModes doc)) = mapM_ checkSig (M.toList table)
   | otherwise = Left "validateDoctrine: types for unknown mode"
   where
@@ -253,47 +264,47 @@ checkTypeTable doc (mode, table)
             then Right ()
             else Left "validateDoctrine: type signature uses unknown mode"
         PS_Tm sortTy -> do
-          checkType doc [] [] [] sortTy
+          checkType doc tt [] [] [] sortTy
           Right ()
 
-checkGenTable :: Doctrine -> (ModeName, M.Map GenName GenDecl) -> Either Text ()
-checkGenTable doc (mode, gens)
-  | M.member mode (mtModes (dModes doc)) = mapM_ (checkGen doc mode) (M.elems gens)
+checkGenTable :: Doctrine -> TypeTheory -> (ModeName, M.Map GenName GenDecl) -> Either Text ()
+checkGenTable doc tt (mode, gens)
+  | M.member mode (mtModes (dModes doc)) = mapM_ (checkGen doc tt mode) (M.elems gens)
   | otherwise = Left "validateDoctrine: generators for unknown mode"
 
-checkGen :: Doctrine -> ModeName -> GenDecl -> Either Text ()
-checkGen doc mode gd
+checkGen :: Doctrine -> TypeTheory -> ModeName -> GenDecl -> Either Text ()
+checkGen doc tt mode gd
   | gdMode gd /= mode = Left "validateDoctrine: generator stored under wrong mode"
   | otherwise = do
       checkTyVarModes doc (gdTyVars gd)
-      checkTmVarModes doc (gdTmVars gd)
+      checkTmVarModes doc tt (gdTmVars gd)
       ensureDistinctTyVars ("validateDoctrine: duplicate generator tyvars in " <> renderGen (gdName gd)) (gdTyVars gd)
       ensureDistinctTmVars ("validateDoctrine: duplicate generator term vars in " <> renderGen (gdName gd)) (gdTmVars gd)
-      mapM_ (checkInputShape doc mode (gdTyVars gd) (gdTmVars gd)) (gdDom gd)
-      checkContext doc mode (gdTyVars gd) (gdTmVars gd) [] (gdCod gd)
+      mapM_ (checkInputShape doc tt mode (gdTyVars gd) (gdTmVars gd)) (gdDom gd)
+      checkContext doc tt mode (gdTyVars gd) (gdTmVars gd) [] (gdCod gd)
       checkGenAttrs doc gd
 
-checkInputShape :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> InputShape -> Either Text ()
-checkInputShape doc expectedMode tyvars tmvars shape =
+checkInputShape :: Doctrine -> TypeTheory -> ModeName -> [TyVar] -> [TmVar] -> InputShape -> Either Text ()
+checkInputShape doc tt expectedMode tyvars tmvars shape =
   case shape of
-    InPort ty -> checkBoundaryType doc expectedMode tyvars tmvars [] ty
-    InBinder bs -> checkBinderSig doc expectedMode tyvars tmvars bs
+    InPort ty -> checkBoundaryType doc tt expectedMode tyvars tmvars [] ty
+    InBinder bs -> checkBinderSig doc tt expectedMode tyvars tmvars bs
 
-checkBinderSig :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> BinderSig -> Either Text ()
-checkBinderSig doc expectedMode tyvars tmvars bs = do
+checkBinderSig :: Doctrine -> TypeTheory -> ModeName -> [TyVar] -> [TmVar] -> BinderSig -> Either Text ()
+checkBinderSig doc tt expectedMode tyvars tmvars bs = do
   checkTmCtxTele (bsTmCtx bs)
-  checkContext doc expectedMode tyvars tmvars (bsTmCtx bs) (bsDom bs)
-  checkContext doc expectedMode tyvars tmvars (bsTmCtx bs) (bsCod bs)
+  checkContext doc tt expectedMode tyvars tmvars (bsTmCtx bs) (bsDom bs)
+  checkContext doc tt expectedMode tyvars tmvars (bsTmCtx bs) (bsCod bs)
   where
     checkTmCtxTele ctx =
       mapM_ checkAt (zip [0 :: Int ..] ctx)
 
     checkAt (i, ty) = do
-      checkType doc tyvars tmvars (take i (bsTmCtx bs)) ty
+      checkType doc tt tyvars tmvars (take i (bsTmCtx bs)) ty
       Right ()
 
-checkCell :: Doctrine -> Cell2 -> Either Text ()
-checkCell doc cell = do
+checkCell :: Doctrine -> TypeTheory -> Cell2 -> Either Text ()
+checkCell doc tt cell = do
   validateDiagram (c2LHS cell)
   validateDiagram (c2RHS cell)
   ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (c2LHS cell))
@@ -305,7 +316,7 @@ checkCell doc cell = do
     then Left "validateDoctrine: empty LHS rules are disallowed (use an explicit marker generator if you need insertion)"
     else Right ()
   checkTyVarModes doc (c2TyVars cell)
-  checkTmVarModes doc (c2TmVars cell)
+  checkTmVarModes doc tt (c2TmVars cell)
   ensureDistinctTyVars ("validateDoctrine: duplicate cell tyvars in " <> c2Name cell) (c2TyVars cell)
   ensureDistinctTmVars ("validateDoctrine: duplicate cell term vars in " <> c2Name cell) (c2TmVars cell)
   if dMode (c2LHS cell) /= dMode (c2RHS cell)
@@ -316,7 +327,6 @@ checkCell doc cell = do
       let tmCtx = dTmCtx (c2LHS cell)
       ctxL <- diagramDom (c2LHS cell)
       ctxR <- diagramDom (c2RHS cell)
-      let tt = doctrineTypeTheory doc
       let tyFlexDom = S.unions (map freeTyVarsType (ctxL <> ctxR))
       let tmFlexDom = S.unions (map freeTmVarsType (ctxL <> ctxR))
       _ <- unifyCtx tt tmCtx tyFlexDom tmFlexDom ctxL ctxR
@@ -356,18 +366,18 @@ checkCell doc cell = do
         then Right ()
         else Left "validateDoctrine: RHS references binder metas not captured by LHS binder arguments"
 
-checkContext :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> [TypeExpr] -> Context -> Either Text ()
-checkContext doc expectedMode tyvars tmvars tmCtx ctx = mapM_ (checkBoundaryType doc expectedMode tyvars tmvars tmCtx) ctx
+checkContext :: Doctrine -> TypeTheory -> ModeName -> [TyVar] -> [TmVar] -> [TypeExpr] -> Context -> Either Text ()
+checkContext doc tt expectedMode tyvars tmvars tmCtx ctx = mapM_ (checkBoundaryType doc tt expectedMode tyvars tmvars tmCtx) ctx
 
-checkBoundaryType :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> Either Text ()
-checkBoundaryType doc expectedMode tyvars tmvars tmCtx ty = do
-  checkType doc tyvars tmvars tmCtx ty
+checkBoundaryType :: Doctrine -> TypeTheory -> ModeName -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> Either Text ()
+checkBoundaryType doc tt expectedMode tyvars tmvars tmCtx ty = do
+  checkType doc tt tyvars tmvars tmCtx ty
   if typeMode ty == expectedMode
     then Right ()
     else Left "validateDoctrine: generator boundary mode mismatch"
 
-checkType :: Doctrine -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> Either Text ()
-checkType doc tyvars tmvars tmCtx ty =
+checkType :: Doctrine -> TypeTheory -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> Either Text ()
+checkType doc tt tyvars tmvars tmCtx ty =
   case ty of
     TVar v ->
       if v `elem` tyvars
@@ -383,32 +393,30 @@ checkType doc tyvars tmvars tmCtx ty =
         then Left "validateDoctrine: type constructor arity mismatch"
         else mapM_ (checkArg ref) (zip params args)
     TMod _ inner -> do
-      checkType doc tyvars tmvars tmCtx inner
+      checkType doc tt tyvars tmvars tmCtx inner
       _ <- normalizeTypeExpr (dModes doc) ty
       Right ()
   where
     checkArg _ (PS_Ty m, TAType argTy) = do
-      checkType doc tyvars tmvars tmCtx argTy
+      checkType doc tt tyvars tmvars tmCtx argTy
       if typeMode argTy == m
         then Right ()
         else Left "validateDoctrine: type constructor argument mode mismatch"
     checkArg _ (PS_Tm sortTy, TATm tmTerm) = do
-      checkType doc tyvars tmvars tmCtx sortTy
-      checkTmTerm doc tyvars tmvars tmCtx sortTy tmTerm
+      checkType doc tt tyvars tmvars tmCtx sortTy
+      checkTmTerm doc tt tyvars tmvars tmCtx sortTy tmTerm
     checkArg _ _ = Left "validateDoctrine: type argument kind mismatch"
 
-checkTmTerm :: Doctrine -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> TermDiagram -> Either Text ()
-checkTmTerm doc tyvars tmvars tmCtx expectedSort tm =
+checkTmTerm :: Doctrine -> TypeTheory -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> TermDiagram -> Either Text ()
+checkTmTerm doc tt tyvars tmvars tmCtx expectedSort tm =
   do
     mapM_ checkMetaVar (S.toList (freeTmVarsTerm tm))
     _ <- termToDiagram tt tmCtx expectedSort tm
     pure ()
   where
-    tt = doctrineTypeTheory doc
-
     checkMetaVar v = do
       if any (sameTmVarId v) tmvars
-        then checkType doc tyvars tmvars tmCtx (tmvSort v)
+        then checkType doc tt tyvars tmvars tmCtx (tmvSort v)
         else Left "validateDoctrine: unknown term variable"
 
     sameTmVarId a b = tmvName a == tmvName b && tmvScope a == tmvScope b
@@ -435,12 +443,12 @@ checkTyVarModes doc vars =
     then Right ()
     else Left "validateDoctrine: type variable has unknown mode"
 
-checkTmVarModes :: Doctrine -> [TmVar] -> Either Text ()
-checkTmVarModes doc vars =
+checkTmVarModes :: Doctrine -> TypeTheory -> [TmVar] -> Either Text ()
+checkTmVarModes doc tt vars =
   mapM_ checkOne vars
   where
     checkOne v = do
-      checkType doc [] vars [] (tmvSort v)
+      checkType doc tt [] vars [] (tmvSort v)
       Right ()
 
 checkAttrSortDecl :: (AttrSort, AttrSortDecl) -> Either Text ()
@@ -482,8 +490,8 @@ checkAction doc (name, action) = do
         validateDiagram img
   mapM_ checkGenImage (M.keys srcGens)
 
-checkObligation :: Doctrine -> ObligationDecl -> Either Text ()
-checkObligation doc obl = do
+checkObligation :: Doctrine -> TypeTheory -> ObligationDecl -> Either Text ()
+checkObligation doc tt obl = do
   ensureDistinctTyVars ("validateDoctrine: duplicate obligation tyvars in " <> obName obl) (obTyVars obl)
   ensureDistinctTmVars ("validateDoctrine: duplicate obligation term vars in " <> obName obl) (obTmVars obl)
   if obForGen obl
@@ -494,8 +502,8 @@ checkObligation doc obl = do
       ensureNoGenRefs False (obLHSExpr obl)
       ensureNoGenRefs False (obRHSExpr obl)
     else do
-      checkContext doc (obMode obl) (obTyVars obl) (obTmVars obl) [] (obDom obl)
-      checkContext doc (obMode obl) (obTyVars obl) (obTmVars obl) [] (obCod obl)
+      checkContext doc tt (obMode obl) (obTyVars obl) (obTmVars obl) [] (obDom obl)
+      checkContext doc tt (obMode obl) (obTyVars obl) (obTmVars obl) [] (obCod obl)
       ensureNoGenRefs True (obLHSExpr obl)
       ensureNoGenRefs True (obRHSExpr obl)
   where

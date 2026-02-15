@@ -2,6 +2,9 @@
 module Strat.Poly.ModAction
   ( applyModExpr
   , applyAction
+  , ActionSemanticsResult(..)
+  , validateActionSemanticsWithBudgetResult
+  , validateActionSemanticsWithBudget
   , validateActionSemantics
   ) where
 
@@ -20,21 +23,51 @@ import Strat.Poly.Graph
 import Strat.Poly.Diagram
 import Strat.Poly.Morphism (instantiateGenImageBinders)
 import Strat.Poly.ModeTheory
-import Strat.Poly.Normalize (joinableWithin)
+import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Proof
+  ( SearchBudget
+  , SearchLimit
+  , SearchOutcome(..)
+  , defaultSearchBudget
+  , renderSearchLimit
+  , checkJoinProof
+  )
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.TypeExpr
 import Strat.Poly.UnifyTy
 import Strat.Poly.TypeTheory
 
-validateActionSemantics :: Doctrine -> Either Text ()
-validateActionSemantics doc = do
-  mapM_ checkRulePreservation (M.toList (dActions doc))
-  mapM_ checkModEqn (mtEqns (dModes doc))
-  where
-    tt = doctrineTypeTheory doc
+data ActionSemanticsResult
+  = ActionSemanticsProved
+  | ActionSemanticsUndecided Text SearchLimit
+  deriving (Eq, Show)
 
-    checkRulePreservation (modName, action) = do
+validateActionSemanticsWithBudgetResult :: SearchBudget -> Doctrine -> Either Text ActionSemanticsResult
+validateActionSemanticsWithBudgetResult budget doc = do
+  tt <- doctrineTypeTheory doc
+  actionResult <- checkActions tt (M.toList (dActions doc))
+  case actionResult of
+    ActionSemanticsUndecided{} ->
+      Right actionResult
+    ActionSemanticsProved ->
+      checkEqns tt (mtEqns (dModes doc))
+  where
+    checkActions _ [] = Right ActionSemanticsProved
+    checkActions tt (decl:rest) = do
+      result <- checkRulePreservation tt decl
+      case result of
+        ActionSemanticsUndecided{} -> Right result
+        ActionSemanticsProved -> checkActions tt rest
+
+    checkEqns _ [] = Right ActionSemanticsProved
+    checkEqns tt (eqn:rest) = do
+      result <- checkModEqn tt eqn
+      case result of
+        ActionSemanticsUndecided{} -> Right result
+        ActionSemanticsProved -> checkEqns tt rest
+
+    checkRulePreservation tt (modName, action) = do
       decl <-
         case M.lookup modName (mtDecls (dModes doc)) of
           Nothing -> Left "validateDoctrine: action references unknown modality"
@@ -42,18 +75,32 @@ validateActionSemantics doc = do
       let srcMode = mdSrc decl
       let srcRules = [ c | c <- dCells2 doc, dMode (c2LHS c) == srcMode ]
       let rules = rulesFromPolicy (maPolicy action) (dCells2 doc)
-      mapM_ (checkOneRule modName action rules) srcRules
+      checkRules tt modName rules srcRules
 
-    checkOneRule modName action rules cell = do
+    checkRules _ _ _ [] = Right ActionSemanticsProved
+    checkRules tt modName rules (cell:rest) = do
+      result <- checkOneRule tt modName rules cell
+      case result of
+        ActionSemanticsUndecided{} -> Right result
+        ActionSemanticsProved -> checkRules tt modName rules rest
+
+    checkOneRule tt modName rules cell = do
       cell' <- freshenRuleTyVars tt cell
       lhs <- applyAction doc modName (c2LHS cell')
       rhs <- applyAction doc modName (c2RHS cell')
-      ok <- joinableWithin tt (maFuel action) rules lhs rhs
-      if ok
-        then Right ()
-        else Left ("validateDoctrine: action does not preserve rule " <> c2Name cell)
+      proof <- autoJoinProof tt budget rules lhs rhs
+      case proof of
+        SearchUndecided lim ->
+          Right
+            ( ActionSemanticsUndecided
+                ("rule " <> c2Name cell)
+                lim
+            )
+        SearchProved witness -> do
+          checkJoinProof tt rules witness
+          Right ActionSemanticsProved
 
-    checkModEqn eqn = do
+    checkModEqn tt eqn = do
       let lhs = meLHS eqn
       let rhs = meRHS eqn
       let mods = mePath lhs <> mePath rhs
@@ -61,20 +108,33 @@ validateActionSemantics doc = do
         then do
           let srcMode = meSrc lhs
           let gens = M.elems (M.findWithDefault M.empty srcMode (dGens doc))
-          let fuel = maximum (50 : [ maFuel action | m <- mods, action <- maybeToList (M.lookup m (dActions doc)) ])
           let policy = choosePolicy mods
           let rules = rulesFromPolicy policy (dCells2 doc)
-          mapM_ (checkOneGen lhs rhs fuel rules) gens
-        else Right ()
+          checkGens tt lhs rhs rules gens
+        else Right ActionSemanticsProved
 
-    checkOneGen lhs rhs fuel rules gd = do
+    checkGens _ _ _ _ [] = Right ActionSemanticsProved
+    checkGens tt lhs rhs rules (gd:rest) = do
+      result <- checkOneGen tt lhs rhs rules gd
+      case result of
+        ActionSemanticsUndecided{} -> Right result
+        ActionSemanticsProved -> checkGens tt lhs rhs rules rest
+
+    checkOneGen tt lhs rhs rules gd = do
       gDiag <- genericGenDiagram gd
       lhsMapped <- applyModExpr doc lhs gDiag
       rhsMapped <- applyModExpr doc rhs gDiag
-      ok <- joinableWithin tt fuel rules lhsMapped rhsMapped
-      if ok
-        then Right ()
-        else Left ("validateDoctrine: action coherence failed for modality equation on generator " <> renderGenName (gdName gd))
+      proof <- autoJoinProof tt budget rules lhsMapped rhsMapped
+      case proof of
+        SearchUndecided lim ->
+          Right
+            ( ActionSemanticsUndecided
+                ("generator " <> renderGenName (gdName gd))
+                lim
+            )
+        SearchProved witness -> do
+          checkJoinProof tt rules witness
+          Right ActionSemanticsProved
 
     choosePolicy mods =
       let policies = [ maPolicy action | m <- mods, action <- maybeToList (M.lookup m (dActions doc)) ]
@@ -84,6 +144,24 @@ validateActionSemantics doc = do
               if all (== p) ps
                 then p
                 else UseStructuralAsBidirectional
+
+validateActionSemantics :: Doctrine -> Either Text ()
+validateActionSemantics = validateActionSemanticsWithBudget defaultSearchBudget
+
+validateActionSemanticsWithBudget :: SearchBudget -> Doctrine -> Either Text ()
+validateActionSemanticsWithBudget budget doc = do
+  result <- validateActionSemanticsWithBudgetResult budget doc
+  case result of
+    ActionSemanticsProved ->
+      Right ()
+    ActionSemanticsUndecided label lim ->
+      Left
+        ( "validateDoctrine: action semantics undecided for "
+            <> label
+            <> " ("
+            <> renderSearchLimit lim
+            <> ")"
+        )
 
 freshenRuleTyVars :: TypeTheory -> Cell2 -> Either Text Cell2
 freshenRuleTyVars tt cell = do
@@ -154,17 +232,16 @@ applyAction doc mName diagSrc = do
   if dMode diagSrc /= mdSrc decl
     then Left "map: modality source mismatch"
     else pure ()
+  tt <- doctrineTypeTheory doc
   let me = ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [mName] }
   dTmCtx' <- mapM (mapTypeIfSource me) (dTmCtx diagSrc)
   dPortTy' <- mapM (mapType me) (dPortTy diagSrc)
   let diag0 = diagSrc { dMode = mdTgt decl, dTmCtx = dTmCtx', dPortTy = dPortTy' }
   let edgeKeys = IM.keys (dEdges diagSrc)
-  diag1 <- foldM (step action me) diag0 edgeKeys
+  diag1 <- foldM (step tt action me) diag0 edgeKeys
   validateDiagram diag1
   pure diag1
   where
-    tt = doctrineTypeTheory doc
-
     mapType me ty = do
       if typeMode ty /= meSrc me
         then Left "map: type mode does not match action source"
@@ -175,7 +252,7 @@ applyAction doc mName diagSrc = do
         then mapType me ty
         else pure ty
 
-    step action me diagTgt edgeKey = do
+    step tt action me diagTgt edgeKey = do
       edgeSrc <-
         case IM.lookup edgeKey (dEdges diagSrc) of
           Nothing -> Left "map: missing source edge"

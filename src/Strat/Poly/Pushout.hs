@@ -133,7 +133,6 @@ computePolyCoproduct name a b = do
         , morGenMap = M.empty
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
-        , morFuel = 50
         }
   let morB = Morphism
         { morName = "coproduct.inr0"
@@ -147,7 +146,6 @@ computePolyCoproduct name a b = do
         , morGenMap = M.empty
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
-        , morFuel = 50
         }
   computePolyPushout name morA morB
 
@@ -970,7 +968,6 @@ buildGlue name src tgt = do
     , morGenMap = genMap
     , morCheck = CheckAll
     , morPolicy = UseOnlyComputationalLR
-    , morFuel = 10
     }
 
 buildInj
@@ -998,7 +995,6 @@ buildInj name src tgt attrRen tyRen permRen genRen = do
     , morGenMap = genMap
     , morCheck = CheckAll
     , morPolicy = UseOnlyComputationalLR
-    , morFuel = 10
     }
 
 buildAttrSortMap :: Doctrine -> AttrSortRenameMap -> Either Text (M.Map AttrSort AttrSort)
@@ -1010,20 +1006,21 @@ buildAttrSortMap doc renames =
       in Right (M.insert srcSort tgtSort mp)
 
 buildTypeMap :: Doctrine -> TypeRenameMap -> TypePermMap -> Either Text (M.Map TypeRef TypeTemplate)
-buildTypeMap doc renames permRen =
-  foldM add M.empty (allTypes doc)
+buildTypeMap doc renames permRen = do
+  tt <- doctrineTypeTheory doc
+  foldM (add tt) M.empty (allTypes doc)
   where
-    add mp (ref, sig) = do
+    add tt mp (ref, sig) = do
       let ref' = M.findWithDefault ref ref renames
       let mPerm = M.lookup ref permRen
       if ref' == ref && mPerm == Nothing
         then Right mp
         else do
-          tmpl <- renameTemplate ref' mPerm (tsParams sig)
+          tmpl <- renameTemplate tt ref' mPerm (tsParams sig)
           Right (M.insert ref tmpl mp)
-    renameTemplate tgtRef mPerm params = do
+    renameTemplate tt tgtRef mPerm params = do
       tmplParams <- mapM mkParam (zip [0 :: Int ..] params)
-      args0 <- mapM toArg tmplParams
+      args0 <- mapM (toArg tt) tmplParams
       args <- case mPerm of
         Nothing -> Right args0
         Just perm -> applyPerm perm args0
@@ -1037,11 +1034,11 @@ buildTypeMap doc renames permRen =
           sortTy' <- renameTypeExpr renames permRen sortTy
           Right (TPTm TmVar { tmvName = "i" <> T.pack (show i), tmvSort = sortTy', tmvScope = 0 })
 
-    toArg param =
+    toArg tt param =
       case param of
         TPType v -> Right (TAType (TVar v))
         TPTm v -> do
-          tm <- termExprToDiagram (doctrineTypeTheory doc) [] (tmvSort v) (TMVar v)
+          tm <- termExprToDiagram tt [] (tmvSort v) (TMVar v)
           Right (TATm tm)
 
 buildGenMap

@@ -119,6 +119,7 @@ resolveBaseDoctrine menv docS surf =
 
 eliminateToBase :: Doctrine -> Doctrine -> ModeName -> Diagram -> Either Text Diagram
 eliminateToBase docS docB mode diag0 = do
+  tt <- doctrineTypeTheory docS
   let gensS = genSetForMode docS mode
   let gensB = genSetForMode docB mode
   let sigma = S.difference gensS gensB
@@ -129,7 +130,7 @@ eliminateToBase docS docB mode diag0 = do
         , surfaceMeasure sigma (rrLHS rr) > surfaceMeasure sigma (rrRHS rr)
         ]
   let fuel = surfaceMeasure sigma diag0
-  status <- normalize (doctrineTypeTheory docS) fuel rulesElim diag0
+  status <- normalize tt fuel rulesElim diag0
   let diagNorm =
         case status of
           Finished d -> d
@@ -473,11 +474,13 @@ resolveImplOp targetMode matchesShape implMorphs =
 
 instantiateImplUnaryGen :: Doctrine -> PolyMorph.Morphism -> GenDecl -> TypeExpr -> Either Text Diagram
 instantiateImplUnaryGen iface mor g ty = do
+  ifaceTT <- doctrineTypeTheory iface
+  tgtTT <- doctrineTypeTheory (PolyMorph.morTgt mor)
   srcVar <-
     case gdTyVars g of
       [v] -> Right v
       _ -> Left "surface: structural schema generator must be unary polymorphic"
-  dSchema <- instantiateUnaryGen (doctrineTypeTheory iface) g (Ty.TVar srcVar)
+  dSchema <- instantiateUnaryGen ifaceTT g (Ty.TVar srcVar)
   dMapped <- PolyMorph.applyMorphismDiagram mor dSchema
   tgtMode <-
     case M.lookup (tvMode srcVar) (PolyMorph.morModeMap mor) of
@@ -485,7 +488,7 @@ instantiateImplUnaryGen iface mor g ty = do
       Just m -> Right m
   let tgtVar = srcVar { tvMode = tgtMode }
   applySubstDiagram
-    (doctrineTypeTheory (PolyMorph.morTgt mor))
+    tgtTT
     (U.Subst { U.sTy = M.singleton tgtVar ty, U.sTm = M.empty })
     dMapped
 

@@ -46,7 +46,8 @@ compileDiagramArtifact env targetName mMode mSurface uses morphs policy fuel exp
           Right ok -> Right ok
           Left err -> Left ("morphism chain did not reach target doctrine; " <> err)
   let rules = rulesFromPolicy policy (dCells2 docFinal)
-  status <- normalize (doctrineTypeTheory docFinal) fuel rules diagFinal
+  tt <- doctrineTypeTheory docFinal
+  status <- normalize tt fuel rules diagFinal
   let norm =
         case status of
           Finished d -> d

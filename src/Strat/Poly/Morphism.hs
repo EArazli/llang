@@ -2,6 +2,7 @@
 module Strat.Poly.Morphism
   ( Morphism(..)
   , MorphismCheck(..)
+  , MorphismCheckResult(..)
   , GenImage(..)
   , TemplateParam(..)
   , TypeTemplate(..)
@@ -11,6 +12,8 @@ module Strat.Poly.Morphism
   , applyMorphismBinderSig
   , applyMorphismDiagram
   , instantiateGenImageBinders
+  , checkMorphismResultWithBudget
+  , checkMorphismWithBudget
   , checkMorphism
   ) where
 
@@ -33,7 +36,15 @@ import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.TypeNormalize (normalizeTypeDeep)
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
-import Strat.Poly.Normalize (normalize, joinableWithin, NormalizationStatus(..))
+import Strat.Poly.Normalize (autoJoinProof)
+import Strat.Poly.Proof
+  ( SearchBudget
+  , SearchLimit
+  , SearchOutcome(..)
+  , defaultSearchBudget
+  , renderSearchLimit
+  , checkJoinProof
+  )
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), composeMod, normalizeModExpr)
 import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.Traversal (traverseDiagram)
@@ -63,7 +74,6 @@ data Morphism = Morphism
   , morGenMap  :: M.Map (ModeName, GenName) GenImage
   , morCheck :: MorphismCheck
   , morPolicy  :: RewritePolicy
-  , morFuel    :: Int
   } deriving (Eq, Show)
 
 data MorphismCheck
@@ -71,6 +81,11 @@ data MorphismCheck
   | CheckStructural
   | CheckNone
   deriving (Eq, Ord, Show)
+
+data MorphismCheckResult
+  = MorphismCheckProved
+  | MorphismCheckUndecided Text SearchLimit
+  deriving (Eq, Show)
 
 data GenImage = GenImage
   { giDiagram :: Diagram
@@ -146,8 +161,9 @@ applyMorphismTy mor ty =
       | length (ttParams tmpl) /= length args =
           Left "morphism: type template arity mismatch during instantiation"
       | otherwise = do
+          ttTgt <- doctrineTypeTheory (morTgt mor)
           subst <- foldM addParam emptySubst (zip (ttParams tmpl) args)
-          applySubstTy (doctrineTypeTheory (morTgt mor)) subst (ttBody tmpl)
+          applySubstTy ttTgt subst (ttBody tmpl)
 
     addParam s (param, arg) =
       case (param, arg) of
@@ -185,8 +201,8 @@ applyMorphismModExpr = mapModExpr
 
 applyMorphismDiagram :: Morphism -> Diagram -> Either Text Diagram
 applyMorphismDiagram mor diagSrc = do
-  let srcTheory = doctrineTypeTheory (morSrc mor)
-  let tgtTheory = doctrineTypeTheory (morTgt mor)
+  srcTheory <- doctrineTypeTheory (morSrc mor)
+  tgtTheory <- doctrineTypeTheory (morTgt mor)
   modeTgt <- mapMode mor modeSrc
   tmCtx <- mapM (applyMorphismTy mor) (dTmCtx diagSrc)
   portTy <- mapM (applyMorphismTy mor) (dPortTy diagSrc)
@@ -449,15 +465,15 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
 
     renderMeta (BinderMetaVar name) = "?" <> name
 
-checkMorphism :: Morphism -> Either Text ()
-checkMorphism mor = do
+checkMorphismResultWithBudget :: SearchBudget -> Morphism -> Either Text MorphismCheckResult
+checkMorphismResultWithBudget budget mor = do
   validateModeMap mor
   validateModMap mor
   validateAttrSortMap mor
   validateTypeMap mor
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
   case morCheck mor of
-    CheckNone -> Right ()
+    CheckNone -> Right MorphismCheckProved
     _ -> do
       let srcCells =
             case morCheck mor of
@@ -465,13 +481,30 @@ checkMorphism mor = do
               CheckStructural -> filter ((== Structural) . c2Class) (dCells2 (morSrc mor))
       fastOk <- inclusionFastPath mor
       if fastOk
-        then Right ()
+        then Right MorphismCheckProved
         else do
           renameOk <- renamingFastPath mor srcCells
           if renameOk
-            then Right ()
-            else mapM_ (checkCell mor) srcCells
-      pure ()
+            then Right MorphismCheckProved
+            else checkCells budget mor srcCells
+
+checkMorphismWithBudget :: SearchBudget -> Morphism -> Either Text ()
+checkMorphismWithBudget budget mor = do
+  result <- checkMorphismResultWithBudget budget mor
+  case result of
+    MorphismCheckProved ->
+      Right ()
+    MorphismCheckUndecided cellName lim ->
+      Left
+        ( "checkMorphism: equation undecided for "
+            <> cellName
+            <> " ("
+            <> renderSearchLimit lim
+            <> ")"
+        )
+
+checkMorphism :: Morphism -> Either Text ()
+checkMorphism = checkMorphismWithBudget defaultSearchBudget
 
 validateModeMap :: Morphism -> Either Text ()
 validateModeMap mor = do
@@ -591,12 +624,11 @@ validateAttrSortMap mor = do
 
 validateTypeMap :: Morphism -> Either Text ()
 validateTypeMap mor = do
+  ttTgt <- doctrineTypeTheory (morTgt mor)
   ensureAcyclicTypeTemplates mor
-  mapM_ checkEntry (M.toList (morTypeMap mor))
+  mapM_ (checkEntry ttTgt) (M.toList (morTypeMap mor))
   where
-    ttTgt = doctrineTypeTheory (morTgt mor)
-
-    checkEntry (srcRef, tmpl) = do
+    checkEntry ttTgt (srcRef, tmpl) = do
       srcSig <-
         case lookupTypeSig (morSrc mor) srcRef of
           Left _ -> Left "checkMorphism: unknown source type in type map"
@@ -607,10 +639,10 @@ validateTypeMap mor = do
         then Left "checkMorphism: type template arity mismatch"
         else Right ()
       ensureDistinctTemplateParamNames tmplParams
-      mapM_ (uncurry checkParam) (zip srcParams tmplParams)
+      mapM_ (uncurry (checkParam ttTgt)) (zip srcParams tmplParams)
       let tyVars = [ v | TPType v <- tmplParams ]
       let tmVars = [ v | TPTm v <- tmplParams ]
-      checkType (morTgt mor) tyVars tmVars [] (ttBody tmpl)
+      checkType (morTgt mor) ttTgt tyVars tmVars [] (ttBody tmpl)
       mappedMode <- mapMode mor (trMode srcRef)
       if typeMode (ttBody tmpl) == mappedMode
         then Right ()
@@ -623,7 +655,7 @@ validateTypeMap mor = do
           then Right ()
           else Left "checkMorphism: duplicate type template parameter name"
 
-    checkParam srcParam tmplParam =
+    checkParam ttTgt srcParam tmplParam =
       case (srcParam, tmplParam) of
         (PS_Ty srcMode, TPType v) -> do
           expectedMode <- mapMode mor srcMode
@@ -635,7 +667,7 @@ validateTypeMap mor = do
           if typeMode (tmvSort tmParam) == expectedMode
             then do
               expectedSortTgt <- applyMorphismTy mor srcSort
-              sortOk <- sortDefEq expectedSortTgt (tmvSort tmParam)
+              sortOk <- sortDefEq ttTgt expectedSortTgt (tmvSort tmParam)
               if sortOk
                 then Right ()
                 else Left "checkMorphism: type template term-parameter sort mismatch"
@@ -645,7 +677,7 @@ validateTypeMap mor = do
         (PS_Tm _, _) ->
           Left "checkMorphism: type template kind mismatch"
 
-    sortDefEq lhs rhs = do
+    sortDefEq ttTgt lhs rhs = do
       lhs' <- normalizeTypeDeep ttTgt lhs
       rhs' <- normalizeTypeDeep ttTgt rhs
       pure (lhs' == rhs')
@@ -760,7 +792,7 @@ attrSortMapIsIdentity mor =
 
 checkGenMapping :: Morphism -> GenDecl -> Either Text ()
 checkGenMapping mor gen = do
-  let ttTgt = doctrineTypeTheory (morTgt mor)
+  ttTgt <- doctrineTypeTheory (morTgt mor)
   let modeSrc = gdMode gen
   modeTgt <- mapMode mor modeSrc
   dom <- mapM (applyMorphismTy mor) (gdPlainDom gen)
@@ -796,27 +828,29 @@ checkGenMapping mor gen = do
         else Left "checkMorphism: generator mapping uses undeclared binder metas"
       pure ()
 
-checkCell :: Morphism -> Cell2 -> Either Text ()
-checkCell mor cell = do
+checkCells :: SearchBudget -> Morphism -> [Cell2] -> Either Text MorphismCheckResult
+checkCells _ _ [] = Right MorphismCheckProved
+checkCells budget mor (cell:rest) = do
+  result <- checkCell budget mor cell
+  case result of
+    MorphismCheckProved ->
+      checkCells budget mor rest
+    MorphismCheckUndecided{} ->
+      Right result
+
+checkCell :: SearchBudget -> Morphism -> Cell2 -> Either Text MorphismCheckResult
+checkCell budget mor cell = do
   lhs <- applyMorphismDiagram mor (c2LHS cell)
   rhs <- applyMorphismDiagram mor (c2RHS cell)
-  let tt = doctrineTypeTheory (morTgt mor)
+  tt <- doctrineTypeTheory (morTgt mor)
   let rules = rulesFromPolicy (morPolicy mor) (dCells2 (morTgt mor))
-  let fuel = morFuel mor
-  statusL <- normalize tt fuel rules lhs
-  statusR <- normalize tt fuel rules rhs
-  case (statusL, statusR) of
-    (Finished l, Finished r) ->
-      do
-        ok <- diagramIsoEq l r
-        if ok
-          then Right ()
-          else Left "checkMorphism: equation violation (normal forms differ)"
-    _ -> do
-      ok <- joinableWithin tt fuel rules lhs rhs
-      if ok
-        then Right ()
-        else Left "checkMorphism: equation undecided or violated"
+  proof <- autoJoinProof tt budget rules lhs rhs
+  case proof of
+    SearchUndecided lim ->
+      Right (MorphismCheckUndecided (c2Name cell) lim)
+    SearchProved witness -> do
+      checkJoinProof tt rules witness
+      Right MorphismCheckProved
 
 inclusionFastPath :: Morphism -> Either Text Bool
 inclusionFastPath mor

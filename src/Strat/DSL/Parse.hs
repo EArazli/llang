@@ -742,7 +742,9 @@ data MorphismItem
   | MorphismCoercion
   | MorphismCheck Text
   | MorphismPolicy Text
-  | MorphismFuel Int
+  | MorphismMaxDepth Int
+  | MorphismMaxStates Int
+  | MorphismTimeoutMs Int
 
 morphismBlock :: Parser [MorphismItem]
 morphismBlock = do
@@ -761,7 +763,9 @@ morphismItem =
     <|> morphismCoercionItem
     <|> morphismCheck
     <|> morphismPolicy
-    <|> morphismFuel
+    <|> morphismMaxDepth
+    <|> morphismMaxStates
+    <|> morphismTimeoutMs
 
 morphismModeMap :: Parser MorphismItem
 morphismModeMap = do
@@ -835,12 +839,26 @@ morphismCheck = do
   optionalSemi
   pure (MorphismCheck name)
 
-morphismFuel :: Parser MorphismItem
-morphismFuel = do
-  _ <- symbol "fuel"
+morphismMaxDepth :: Parser MorphismItem
+morphismMaxDepth = do
+  _ <- symbol "max_depth"
   n <- fromIntegral <$> integer
   optionalSemi
-  pure (MorphismFuel n)
+  pure (MorphismMaxDepth n)
+
+morphismMaxStates :: Parser MorphismItem
+morphismMaxStates = do
+  _ <- symbol "max_states"
+  n <- fromIntegral <$> integer
+  optionalSemi
+  pure (MorphismMaxStates n)
+
+morphismTimeoutMs :: Parser MorphismItem
+morphismTimeoutMs = do
+  _ <- symbol "timeout_ms"
+  n <- fromIntegral <$> integer
+  optionalSemi
+  pure (MorphismTimeoutMs n)
 
 buildPolyMorphism :: Text -> Text -> Text -> [MorphismItem] -> Either Text RawPolyMorphism
 buildPolyMorphism name src tgt items =
@@ -857,7 +875,9 @@ buildPolyMorphism name src tgt items =
           <> [ RPMCoercion | MorphismCoercion <- items ]
     , rpmCheck = firstJust [ c | MorphismCheck c <- items ]
     , rpmPolicy = firstJust [ p | MorphismPolicy p <- items ]
-    , rpmFuel = firstJust [ f | MorphismFuel f <- items ]
+    , rpmMaxDepth = firstJust [ d | MorphismMaxDepth d <- items ]
+    , rpmMaxStates = firstJust [ s | MorphismMaxStates s <- items ]
+    , rpmTimeoutMs = firstJust [ t | MorphismTimeoutMs t <- items ]
     }
   where
     firstJust [] = Nothing

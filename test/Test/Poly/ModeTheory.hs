@@ -161,11 +161,11 @@ testApplyActionUsesDiagramTmCtx = do
           , dCells2 = []
           , dActions =
               M.fromList
-                [ (modF, ModAction { maMod = modF, maGenMap = M.fromList [((modeC, genName), image)], maPolicy = UseOnlyComputationalLR, maFuel = 50 })
+                [ (modF, ModAction { maMod = modF, maGenMap = M.fromList [((modeC, genName), image)], maPolicy = UseOnlyComputationalLR})
                 ]
           , dObligations = []
           }
-  let tt = doctrineTypeTheory doc
+  tt <- requireEither (doctrineTypeTheory doc)
   srcDiag <- requireEither (genDTm modeC tmCtx [vecBound] [vecBound] genName)
   mapped <- requireEither (applyAction doc modF srcDiag)
   dTmCtx mapped @?= tmCtx
@@ -218,7 +218,6 @@ testApplyActionWeakenImageTmCtx = do
                   { maMod = modF
                   , maGenMap = M.singleton (modeM, genG) img
                   , maPolicy = UseOnlyComputationalLR
-                  , maFuel = 50
                   }
           , dObligations = []
           }
@@ -299,6 +298,7 @@ testForGenImplementsQuantifiesTarget = do
   case parseRawFile src >>= elabRawFile of
     Left err ->
       if "implements obligation failed: all_id[bad]" `T.isInfixOf` err
+          || "implements obligation undecided: all_id[bad]" `T.isInfixOf` err
         then pure ()
         else assertFailure ("expected for_gen target quantification failure, got: " <> T.unpack err)
     Right _ ->
@@ -448,6 +448,8 @@ testActionModEqCoherence = do
   case parseRawFile src >>= elabRawFile of
     Left err ->
       if "action coherence failed" `T.isInfixOf` err
+          || "action coherence undecided" `T.isInfixOf` err
+          || "action semantics undecided" `T.isInfixOf` err
         then pure ()
         else assertFailure ("expected action coherence error, got: " <> T.unpack err)
     Right _ ->
@@ -500,6 +502,7 @@ testAdjObligationFail = do
   case parseRawFile src >>= elabRawFile of
     Left err ->
       if "implements obligation failed:" `T.isInfixOf` err
+          || "implements obligation undecided:" `T.isInfixOf` err
         then pure ()
         else assertFailure ("expected implements obligation failure, got: " <> T.unpack err)
     Right _ ->

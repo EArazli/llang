@@ -25,5 +25,5 @@ morphism MonoidToString : Monoid -> StringMonoid where {
   gen unit @M -> empty
   gen mul @M -> append
   policy UseAllOriented;
-  fuel 20;
+  max_depth 20;
 }

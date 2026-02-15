@@ -1,8 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.DSL.Elab
   ( elabPolyDoctrine
+  , elabPolyDoctrineWithBudget
   , elabPolyMorphism
+  , elabPolyMorphismWithBudget
   , elabDiagExpr
+  , ImplementsCheckResult(..)
+  , checkImplementsObligationsWithBudget
   , checkImplementsObligations
   , parsePolicy
   ) where
@@ -27,24 +31,35 @@ import Strat.Poly.TypeTheory (TypeTheory, TmFunSig(..))
 import Strat.Poly.TypeNormalize (normalizeTypeDeep)
 import Strat.Poly.Attr
 import Strat.Poly.Morphism
-import Strat.Poly.ModAction (applyModExpr, validateActionSemantics)
+import Strat.Poly.ModAction (applyModExpr, validateActionSemanticsWithBudget)
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)
 import Strat.Poly.Rewrite (rulesFromPolicy)
-import Strat.Poly.Normalize (joinableWithin)
+import Strat.Poly.Normalize (autoJoinProof)
+import Strat.Poly.Proof
+  ( SearchBudget(..)
+  , SearchLimit
+  , SearchOutcome(..)
+  , defaultSearchBudget
+  , renderSearchLimit
+  , checkJoinProof
+  )
 
 elabPolyMorphism :: ModuleEnv -> RawPolyMorphism -> Either Text Morphism
-elabPolyMorphism env raw = do
+elabPolyMorphism = elabPolyMorphismWithBudget defaultSearchBudget
+
+elabPolyMorphismWithBudget :: SearchBudget -> ModuleEnv -> RawPolyMorphism -> Either Text Morphism
+elabPolyMorphismWithBudget budgetDefault env raw = do
   src <- lookupPolyDoctrine env (rpmSrc raw)
   tgt <- lookupPolyDoctrine env (rpmTgt raw)
   let checkName = maybe "all" id (rpmCheck raw)
   checkMode <- parseMorphismCheck checkName
   let policyName = maybe "UseStructuralAsBidirectional" id (rpmPolicy raw)
   policy <- parsePolicy policyName
-  let fuel = maybe 50 id (rpmFuel raw)
+  let budget = morphismBudget budgetDefault raw
   let coercionFlags = [() | RPMCoercion <- rpmItems raw]
   when (length coercionFlags > 1) (Left "morphism: duplicate coercion flag")
   modeMap <- buildModeMap src tgt [ m | RPMMode m <- rpmItems raw ]
@@ -63,7 +78,6 @@ elabPolyMorphism env raw = do
         , morGenMap = M.empty
         , morCheck = checkMode
         , morPolicy = policy
-        , morFuel = fuel
         }
   genMap <- foldM (addGenMap src tgt modeMap mor0) M.empty [ g | RPMGen g <- rpmItems raw ]
   ensureAllGenMapped src genMap
@@ -79,9 +93,8 @@ elabPolyMorphism env raw = do
         , morGenMap = genMap
         , morCheck = checkMode
         , morPolicy = policy
-        , morFuel = fuel
         }
-  case checkMorphism mor of
+  case checkMorphismWithBudget budget mor of
     Left err -> Left ("morphism " <> rpmName raw <> ": " <> err)
     Right () -> Right mor
   where
@@ -235,7 +248,7 @@ elabPolyMorphism env raw = do
       codTgt <- mapM (applyMorphismTy mor0) codSrc
       let rigidTy = S.fromList tyVarsTgt
       let rigidTm = S.fromList tmVarsTgt
-      let ttTgt = doctrineTypeTheory tgt
+      ttTgt <- doctrineTypeTheory tgt
       diag <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt diag0
       let freeTy = freeTyVarsDiagram diag
       let allowedTy = S.fromList tyVarsTgt
@@ -293,8 +306,22 @@ parseMorphismCheck name =
             <> " (expected: all | structural | none)"
         )
 
+morphismBudget :: SearchBudget -> RawPolyMorphism -> SearchBudget
+morphismBudget budgetDefault raw =
+  let depth = max 0 (maybe (sbMaxDepth budgetDefault) id (rpmMaxDepth raw))
+      states = max 1 (maybe (sbMaxStates budgetDefault) id (rpmMaxStates raw))
+      timeoutMs = max 0 (maybe (sbTimeoutMs budgetDefault) id (rpmTimeoutMs raw))
+   in budgetDefault
+        { sbMaxDepth = depth
+        , sbMaxStates = states
+        , sbTimeoutMs = timeoutMs
+        }
+
 elabPolyDoctrine :: ModuleEnv -> RawPolyDoctrine -> Either Text Doctrine
-elabPolyDoctrine env raw = do
+elabPolyDoctrine = elabPolyDoctrineWithBudget defaultSearchBudget
+
+elabPolyDoctrineWithBudget :: SearchBudget -> ModuleEnv -> RawPolyDoctrine -> Either Text Doctrine
+elabPolyDoctrineWithBudget budget env raw = do
   base <- case rpdExtends raw of
     Nothing -> Right Nothing
     Just name ->
@@ -304,7 +331,7 @@ elabPolyDoctrine env raw = do
   let start = seedDoctrine (rpdName raw) base
   doc <- foldM (elabPolyItem env) start (rpdItems raw)
   validateDoctrine doc
-  validateActionSemantics doc
+  validateActionSemanticsWithBudget budget doc
   pure doc
 
 seedDoctrine :: Text -> Maybe Doctrine -> Doctrine
@@ -362,7 +389,6 @@ elabPolyItem env doc item =
               { maMod = modName
               , maGenMap = M.fromList [ ((srcMode, g), d) | (g, d) <- imgs ]
               , maPolicy = UseStructuralAsBidirectional
-              , maFuel = 50
               }
       if M.member modName (dActions doc)
         then Left "duplicate action declaration"
@@ -389,7 +415,6 @@ elabPolyItem env doc item =
                   , obLHSExpr = rodLHS decl
                   , obRHSExpr = rodRHS decl
                   , obPolicy = UseStructuralAsBidirectional
-                  , obFuel = 50
                   }
           pure doc { dObligations = dObligations doc <> [obl] }
         else do
@@ -410,7 +435,6 @@ elabPolyItem env doc item =
                   , obLHSExpr = rodLHS decl
                   , obRHSExpr = rodRHS decl
                   , obPolicy = UseStructuralAsBidirectional
-                  , obFuel = 50
                   }
           pure doc { dObligations = dObligations doc <> [obl] }
     RPAttrSort decl -> do
@@ -486,7 +510,7 @@ elabPolyItem env doc item =
       rhs <- withRule (elabRuleRHS env doc mode ruleTyVars ruleTmVars binderSigs (rprRHS decl))
       let rigidTy = S.fromList ruleTyVars
       let rigidTm = S.fromList ruleTmVars
-      let tt = doctrineTypeTheory doc
+      tt <- doctrineTypeTheory doc
       lhs' <- unifyBoundary tt rigidTy rigidTm dom cod lhs
       rhs' <- unifyBoundary tt rigidTy rigidTm dom cod rhs
       let free = S.union (freeTyVarsDiagram lhs') (freeTyVarsDiagram rhs')
@@ -634,17 +658,28 @@ validateObligationExprMode doc mode allowGen = go mode
         ROETensor a b ->
           go expected a >> go expected b
 
-checkImplementsObligations :: ModuleEnv -> Doctrine -> Morphism -> Doctrine -> Either Text ()
-checkImplementsObligations env tgtDoc morph ifaceDoc =
-  mapM_ checkOne (dObligations ifaceDoc)
+data ImplementsCheckResult
+  = ImplementsCheckProved
+  | ImplementsCheckUndecided Text SearchLimit
+  deriving (Eq, Show)
+
+checkImplementsObligationsWithBudget :: SearchBudget -> ModuleEnv -> Doctrine -> Morphism -> Doctrine -> Either Text ImplementsCheckResult
+checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
+  ttTgt <- doctrineTypeTheory tgtDoc
+  checkObligations ttTgt (dObligations ifaceDoc)
   where
-    ttTgt = doctrineTypeTheory tgtDoc
+    checkObligations _ [] = Right ImplementsCheckProved
+    checkObligations ttTgt (obl:rest) = do
+      result <- checkOne ttTgt obl
+      case result of
+        ImplementsCheckUndecided{} -> Right result
+        ImplementsCheckProved -> checkObligations ttTgt rest
 
-    checkOne obl
-      | obForGen obl = checkForGen obl
-      | otherwise = checkPlain obl
+    checkOne ttTgt obl
+      | obForGen obl = checkForGen ttTgt obl
+      | otherwise = checkPlain ttTgt obl
 
-    checkPlain obl = do
+    checkPlain ttTgt obl = do
       tyVarsTgt <- mapM (mapObligationTyVar morph) (obTyVars obl)
       tmVarsTgt <- mapM (mapObligationTmVar morph) (obTmVars obl)
       lhs0 <- evalObligationExprMapped env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obLHSExpr obl)
@@ -656,17 +691,27 @@ checkImplementsObligations env tgtDoc morph ifaceDoc =
       lhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt lhs0
       rhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt rhs0
       let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
-      ok <- joinableWithin ttTgt (obFuel obl) rules lhs rhs
-      if ok
-        then Right ()
-        else Left ("implements obligation failed: " <> obName obl)
+      proof <- autoJoinProof ttTgt budget rules lhs rhs
+      case proof of
+        SearchUndecided lim ->
+          Right (ImplementsCheckUndecided (obName obl) lim)
+        SearchProved witness -> do
+          checkJoinProof ttTgt rules witness
+          Right ImplementsCheckProved
 
-    checkForGen obl = do
+    checkForGen ttTgt obl = do
       modeTgt <- applyMorphismMode morph (obMode obl)
       let gens = M.elems (M.findWithDefault M.empty modeTgt (dGens tgtDoc))
-      mapM_ (checkForGenOne modeTgt obl) gens
+      checkForGens ttTgt modeTgt obl gens
 
-    checkForGenOne modeTgt obl gen = do
+    checkForGens _ _ _ [] = Right ImplementsCheckProved
+    checkForGens ttTgt modeTgt obl (gen:rest) = do
+      result <- checkForGenOne ttTgt modeTgt obl gen
+      case result of
+        ImplementsCheckUndecided{} -> Right result
+        ImplementsCheckProved -> checkForGens ttTgt modeTgt obl rest
+
+    checkForGenOne ttTgt modeTgt obl gen = do
       genDiag <- mkForGenDiag modeTgt gen
       lhs0 <- evalObligationExprForGen env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obLHSExpr obl)
       rhs0 <- evalObligationExprForGen env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obRHSExpr obl)
@@ -677,10 +722,28 @@ checkImplementsObligations env tgtDoc morph ifaceDoc =
       lhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod lhs0
       rhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod rhs0
       let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
-      ok <- joinableWithin ttTgt (obFuel obl) rules lhs rhs
-      if ok
-        then Right ()
-        else Left ("implements obligation failed: " <> obName obl <> "[" <> renderGenName (gdName gen) <> "]")
+      proof <- autoJoinProof ttTgt budget rules lhs rhs
+      case proof of
+        SearchUndecided lim ->
+          Right (ImplementsCheckUndecided (obName obl <> "[" <> renderGenName (gdName gen) <> "]") lim)
+        SearchProved witness -> do
+          checkJoinProof ttTgt rules witness
+          Right ImplementsCheckProved
+
+checkImplementsObligations :: ModuleEnv -> Doctrine -> Morphism -> Doctrine -> Either Text ()
+checkImplementsObligations env tgtDoc morph ifaceDoc = do
+  result <- checkImplementsObligationsWithBudget defaultSearchBudget env tgtDoc morph ifaceDoc
+  case result of
+    ImplementsCheckProved ->
+      Right ()
+    ImplementsCheckUndecided label lim ->
+      Left
+        ( "implements obligation undecided: "
+            <> label
+            <> " ("
+            <> renderSearchLimit lim
+            <> ")"
+        )
 
 mapObligationTyVar :: Morphism -> TyVar -> Either Text TyVar
 mapObligationTyVar morph v = do
@@ -728,7 +791,8 @@ evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars expr = do
     ROEComp a b -> do
       d1 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars a
       d2 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars b
-      compD (doctrineTypeTheory tgtDoc) d2 d1
+      ttTgt <- doctrineTypeTheory tgtDoc
+      compD ttTgt d2 d1
     ROETensor a b -> do
       d1 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars a
       d2 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars b
@@ -779,7 +843,8 @@ evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag ex
     ROEComp a b -> do
       d1 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
       d2 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
-      compD (doctrineTypeTheory tgtDoc) d2 d1
+      ttTgt <- doctrineTypeTheory tgtDoc
+      compD ttTgt d2 d1
     ROETensor a b -> do
       d1 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
       d2 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
@@ -799,15 +864,15 @@ evalLiftedForGen
   -> RawDiagExpr
   -> Either Text Diagram
 evalLiftedForGen env ifaceDoc tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag liftSide rawOp = do
+  ttDoc <- doctrineTypeTheory tgtDoc
   ctx <- case liftSide of
     LiftOverDom -> diagramDom genDiag
     LiftOverCod -> diagramCod genDiag
-  ops <- mapM (instantiateAt (dTmCtx genDiag)) ctx
+  ops <- mapM (instantiateAt ttDoc (dTmCtx genDiag)) ctx
   case ops of
     [] -> Right (idDTm modeTgt (dTmCtx genDiag) [])
     (d0:rest) -> foldM tensorD d0 rest
   where
-    ttDoc = doctrineTypeTheory tgtDoc
     rigidTy = S.fromList tyVars
     rigidTm = S.fromList tmVars
     sideLabel =
@@ -815,7 +880,7 @@ evalLiftedForGen env ifaceDoc tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag
         LiftOverDom -> "lift_dom"
         LiftOverCod -> "lift_cod"
 
-    instantiateAt tmCtx argTy = do
+    instantiateAt ttDoc tmCtx argTy = do
       opSrc <- elabObligationDiag env ifaceDoc modeSrc tmCtx tyVars tmVars rawOp
       opTgt0 <- applyMorphismDiagram morph opSrc
       opTgt <- weakenDiagramTmCtxTo (dTmCtx genDiag) opTgt0
@@ -1081,13 +1146,12 @@ elabTmTerm
   -> Either Text TermDiagram
 elabTmTerm doc _tyVars tmVars tmBound mExpected raw =
   do
+    ttDoc <- doctrineTypeTheory doc
     (expr, inferredSort) <- elabExpr mExpected raw
     let expectedSort = maybe inferredSort id mExpected
     tmCtx <- mkTmCtx
     termExprToDiagram ttDoc tmCtx expectedSort expr
   where
-    ttDoc = doctrineTypeTheory doc
-
     elabExpr mExp tmRaw =
       case tmRaw of
         RPTMod _ _ -> Left "term arguments do not support modality application"
@@ -1283,14 +1347,14 @@ elabDiagExprWithFresh
   -> Bool
   -> RawDiagExpr
   -> Fresh (Diagram, M.Map BinderMetaVar BinderSig)
-elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice expr =
-  build tmCtx binderSigs0 expr
+elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice expr = do
+  ttDoc <- liftEither (doctrineTypeTheory doc)
+  build ttDoc tmCtx binderSigs0 expr
   where
     rigidTy = S.fromList tyVars
     rigidTm = S.fromList tmVars
-    ttDoc = doctrineTypeTheory doc
 
-    build curTmCtx binderSigs e =
+    build ttDoc curTmCtx binderSigs e =
       case e of
         RDId ctx -> do
           ctx' <- liftEither (elabContext doc mode tyVars tmVars M.empty ctx)
@@ -1305,9 +1369,9 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           tyRename <- freshTySubst (gdTyVars gen)
           tmRename <- freshTmSubst ttDoc curTmCtx (gdTmVars gen)
           let renameSubst = U.Subst { U.sTy = tyRename, U.sTm = tmRename }
-          dom0 <- applySubstCtxDoc renameSubst (gdPlainDom gen)
-          cod0 <- applySubstCtxDoc renameSubst (gdCod gen)
-          binderSlots0 <- mapM (applySubstBinderSig renameSubst) [ bs | InBinder bs <- gdDom gen ]
+          dom0 <- applySubstCtxDoc ttDoc renameSubst (gdPlainDom gen)
+          cod0 <- applySubstCtxDoc ttDoc renameSubst (gdCod gen)
+          binderSlots0 <- mapM (applySubstBinderSig ttDoc renameSubst) [ bs | InBinder bs <- gdDom gen ]
           (dom, cod, binderSlots) <-
             case mArgs of
               Nothing -> pure (dom0, cod0, binderSlots0)
@@ -1324,18 +1388,18 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                       False -> liftEither (Left "generator type argument mode mismatch")
                       True -> pure ()
                     freshTmVars <- liftEither (extractFreshTmVars (gdTmVars gen) tmRename)
-                    tmArgs <- mapM (uncurry (elabTmArg curTmCtx)) (zip freshTmVars tmRawArgs)
+                    tmArgs <- mapM (uncurry (elabTmArg ttDoc curTmCtx)) (zip freshTmVars tmRawArgs)
                     let argSubst =
                           U.Subst
                             { U.sTy = M.fromList (zip freshTyVars tyArgs)
                             , U.sTm = M.fromList (zip freshTmVars tmArgs)
                             }
-                    dom1 <- applySubstCtxDoc argSubst dom0
-                    cod1 <- applySubstCtxDoc argSubst cod0
-                    binderSlots1 <- mapM (applySubstBinderSig argSubst) binderSlots0
+                    dom1 <- applySubstCtxDoc ttDoc argSubst dom0
+                    cod1 <- applySubstCtxDoc ttDoc argSubst cod0
+                    binderSlots1 <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
                     pure (dom1, cod1, binderSlots1)
           attrs <- liftEither (elabGenAttrs doc gen mAttrArgs)
-          (binderArgs, binderSigs') <- elaborateBinderArgs binderSigs binderSlots mBinderArgs
+          (binderArgs, binderSigs') <- elaborateBinderArgs ttDoc binderSigs binderSlots mBinderArgs
           diag <- liftEither (mkGenDiag curTmCtx (gdName gen) attrs binderArgs dom cod)
           pure (diag, binderSigs')
         RDTermRef name -> do
@@ -1371,7 +1435,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
               pure (diag, binderSigs)
             else liftEither (Left "splice is only allowed in rule RHS")
         RDBox name innerExpr -> do
-          (inner, binderSigs') <- build curTmCtx binderSigs innerExpr
+          (inner, binderSigs') <- build ttDoc curTmCtx binderSigs innerExpr
           dom <- liftEither (diagramDom inner)
           cod <- liftEither (diagramCod inner)
           let (ins, diag0) = allocPorts dom (emptyDiagram mode curTmCtx)
@@ -1381,7 +1445,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           liftEither (validateDiagram diag3)
           pure (diag3, binderSigs')
         RDLoop innerExpr -> do
-          (inner, binderSigs') <- build curTmCtx binderSigs innerExpr
+          (inner, binderSigs') <- build ttDoc curTmCtx binderSigs innerExpr
           case (dIn inner, dOut inner) of
             ([pIn], pState:pOuts) -> do
               stateInTy <- liftEither (lookupPortTy inner pIn)
@@ -1415,17 +1479,17 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
             then pure (mapped, binderSigs')
             else liftEither (Left "map: mapped diagram mode does not match surrounding expression mode")
         RDComp a b -> do
-          (d1, binderSigs1) <- build curTmCtx binderSigs a
-          (d2, binderSigs2) <- build curTmCtx binderSigs1 b
+          (d1, binderSigs1) <- build ttDoc curTmCtx binderSigs a
+          (d2, binderSigs2) <- build ttDoc curTmCtx binderSigs1 b
           dComp <- liftEither (compD ttDoc d2 d1)
           pure (dComp, binderSigs2)
         RDTensor a b -> do
-          (d1, binderSigs1) <- build curTmCtx binderSigs a
-          (d2, binderSigs2) <- build curTmCtx binderSigs1 b
+          (d1, binderSigs1) <- build ttDoc curTmCtx binderSigs a
+          (d2, binderSigs2) <- build ttDoc curTmCtx binderSigs1 b
           dTen <- liftEither (tensorD d1 d2)
           pure (dTen, binderSigs2)
 
-    elaborateBinderArgs binderSigs binderSlots mBinderArgs =
+    elaborateBinderArgs ttDoc binderSigs binderSlots mBinderArgs =
       case (binderSlots, mBinderArgs) of
         ([], Nothing) -> pure ([], binderSigs)
         ([], Just []) -> pure ([], binderSigs)
@@ -1454,10 +1518,10 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
               diagArg' <- liftEither (unifyBoundary ttDoc rigidTy rigidTm (bsDom slot) (bsCod slot) diagArg)
               domArg <- liftEither (diagramDom diagArg')
               codArg <- liftEither (diagramCod diagArg')
-              domArg' <- canonicalCtx domArg
-              codArg' <- canonicalCtx codArg
-              slotDom' <- canonicalCtx (bsDom slot)
-              slotCod' <- canonicalCtx (bsCod slot)
+              domArg' <- canonicalCtx ttDoc domArg
+              codArg' <- canonicalCtx ttDoc codArg
+              slotDom' <- canonicalCtx ttDoc (bsDom slot)
+              slotCod' <- canonicalCtx ttDoc (bsCod slot)
               if domArg' == slotDom' && codArg' == slotCod'
                 then pure (acc <> [BAConcrete diagArg'], bsMap)
                 else liftEither (Left "binder argument boundary mismatch")
@@ -1480,7 +1544,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                       | slot' == slot -> pure (acc <> [BAMeta key], bsMap)
                       | otherwise -> liftEither (Left "binder meta used with inconsistent signature")
 
-    elabTmArg curTmCtx v rawArg =
+    elabTmArg ttDoc curTmCtx v rawArg =
       case elabTmTerm doc tyVars tmVars M.empty (Just (tmvSort v)) rawArg of
         Right tm -> pure tm
         Left err ->
@@ -1534,14 +1598,14 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
         Nothing -> Left "loop: internal missing port type"
         Just ty -> Right ty
 
-    canonicalCtx ctx = liftEither (mapM (U.applySubstTy ttDoc U.emptySubst) ctx)
+    canonicalCtx ttDoc ctx = liftEither (mapM (U.applySubstTy ttDoc U.emptySubst) ctx)
 
-    applySubstCtxDoc subst ctx = liftEither (U.applySubstCtx ttDoc subst ctx)
+    applySubstCtxDoc ttDoc subst ctx = liftEither (U.applySubstCtx ttDoc subst ctx)
 
-    applySubstBinderSig subst bs = do
-      tmCtx' <- applySubstCtxDoc subst (bsTmCtx bs)
-      dom' <- applySubstCtxDoc subst (bsDom bs)
-      cod' <- applySubstCtxDoc subst (bsCod bs)
+    applySubstBinderSig ttDoc subst bs = do
+      tmCtx' <- applySubstCtxDoc ttDoc subst (bsTmCtx bs)
+      dom' <- applySubstCtxDoc ttDoc subst (bsDom bs)
+      cod' <- applySubstCtxDoc ttDoc subst (bsCod bs)
       pure bs { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
 
     allocPorts [] diag = ([], diag)

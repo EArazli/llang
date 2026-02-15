@@ -3,6 +3,8 @@ module Strat.Poly.Rewrite
   ( RewriteRule(..)
   , rewriteOnce
   , rewriteAll
+  , applyMatch
+  , mkMatchConfig
   , rulesFromPolicy
   ) where
 

@@ -77,8 +77,9 @@ data PartialIso = PartialIso
   } deriving (Eq, Show)
 
 criticalPairsForDoctrine :: CPMode -> RewritePolicy -> Doctrine -> Either Text [CriticalPairInfo]
-criticalPairsForDoctrine mode policy doc =
-  criticalPairsForRulesTT (doctrineTypeTheory doc) mode (rulesWithClass policy (dCells2 doc))
+criticalPairsForDoctrine mode policy doc = do
+  tt <- doctrineTypeTheory doc
+  criticalPairsForRulesTT tt mode (rulesWithClass policy (dCells2 doc))
 
 criticalPairsForRules :: ModeTheory -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
 criticalPairsForRules mt mode rules =

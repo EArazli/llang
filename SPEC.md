@@ -38,11 +38,15 @@ required boundary-prefix inputs; this payload is internal-only and not surface s
 ### 2.2 Definitional Equality
 
 Type normalization and term-argument normalization are performed by `normalizeTypeDeep`.
-For `TATm`, normalization uses the diagram rewrite engine in the term mode:
+For `TATm`, normalization uses compiled first-order term rewriting in the term mode:
 
-- rewrite rules come from `TypeTheory.ttTmRules`
-- reduction is fuel bounded by `TypeTheory.ttTmFuel`
-- policy is controlled by `TypeTheory.ttTmPolicy` (default computational orientation)
+- rewrite rules come from computational `Cell2` equations (`ttTmRules`) compiled to TRSs
+- normalization is fuel-free (`normalizeTermExpr` on `TermExpr`)
+- doctrines are rejected if term TRSs fail:
+  - SCT-based termination check
+  - critical-pair confluence check (by normalization to normal forms)
+
+Definitional term equality is equality of normalized term expressions (then deterministically re-embedded as `TermDiagram`).
 
 ## 3. Doctrine Layer
 
@@ -115,7 +119,22 @@ A schema is an ordinary doctrine used as an interface.
 
 `implements IFace for Target using m` checks source/target compatibility and then checks each obligation from `IFace` after translating both sides through morphism `m`.
 
-Obligation success criterion is joinability under its policy/fuel.
+Obligation success is proof-carrying:
+
+- a checker accepts an equality when it has a `JoinProof` and replay/verification succeeds
+- automated search (`auto`) may try to synthesize a `JoinProof` within a tooling budget
+- if automation fails to find a proof, result is `undecided` (not “false”)
+
+## 6.1 Proof-Carrying Equality Checking
+
+For morphism law checking, action semantics, obligation discharge, and coherence obligations:
+
+- automation can search for join proofs
+- kernel/checker code validates proofs by replaying certified rewrite steps and checking join endpoints
+- “unknown within budget” is reported as undecided, not as a semantic counterexample
+
+Budgets are tooling-level search parameters (`SearchBudget`), not doctrine/morphism/obligation data.
+`sbTimeoutMs` is interpreted as a real wall-clock timeout for auto-proof search.
 
 ## 7. DSL Summary
 
@@ -135,6 +154,16 @@ Removed legacy items:
 
 Morphisms map modes/modalities/types/generators and transport diagrams.
 Pushout/coproduct construction remains available and merges doctrine content with compatibility checks.
+
+Morphism equation checking uses proof search over join proofs with tooling budgets.
+DSL morphism blocks may set optional:
+
+- `max_depth`
+- `max_states`
+- `timeout_ms`
+
+If search cannot produce a proof within budget, the result is reported as `undecided`
+with a concrete limit reason.
 
 ## 9. Surface Elaboration
 
