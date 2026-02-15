@@ -21,8 +21,8 @@ import Strat.Poly.Attr
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.DSL.Elab
-  ( elabPolyDoctrineWithBudget
-  , elabPolyMorphismWithBudget
+  ( elabPolyDoctrineWithBudgetResult
+  , elabPolyMorphismWithBudgetResult
   , parsePolicy
   , checkImplementsObligationsWithBudget
   , ImplementsCheckResult(..)
@@ -126,14 +126,22 @@ elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
         DeclMorphism morphDecl -> do
           let name = rpmName morphDecl
           ensureAbsent "morphism" name (meMorphisms env)
-          morph <- elabPolyMorphismWithBudget budget env morphDecl
-          let env' = env { meMorphisms = M.insert name morph (meMorphisms env) }
+          (morph, morphCheck) <- elabPolyMorphismWithBudgetResult budget env morphDecl
+          let proofCount =
+                case morphCheck of
+                  PolyMorph.MorphismCheckProved proofs -> length proofs
+                  PolyMorph.MorphismCheckUndecided _ _ -> 0
+          let env' =
+                addMorphismProofCount proofCount
+                  (env { meMorphisms = M.insert name morph (meMorphisms env) })
           pure (env', rawTerms, rawRuns)
         DeclImplements iface tgt morphName -> do
-          (key, name) <- elabImplements budget env iface tgt morphName
+          ((key, name), proofCount) <- elabImplements budget env iface tgt morphName
           let defaults = M.findWithDefault [] key (meImplDefaults env)
           let defaults' = if name `elem` defaults then defaults else defaults <> [name]
-          let env' = env { meImplDefaults = M.insert key defaults' (meImplDefaults env) }
+          let env' =
+                addImplementsProofCount proofCount
+                  (env { meImplDefaults = M.insert key defaults' (meImplDefaults env) })
           pure (env', rawTerms, rawRuns)
         DeclRun rawRun ->
           pure (env, rawTerms, rawRuns <> [rawRun])
@@ -147,18 +155,50 @@ ensureAbsent label name mp =
     then Left ("Duplicate " <> label <> " name: " <> name)
     else Right ()
 
+addMorphismProofCount :: Int -> ModuleEnv -> ModuleEnv
+addMorphismProofCount n env =
+  env
+    { meProofStats =
+        (meProofStats env)
+          { psMorphismProofs = psMorphismProofs (meProofStats env) + max 0 n
+          }
+    }
+
+addActionProofCount :: Int -> ModuleEnv -> ModuleEnv
+addActionProofCount n env =
+  env
+    { meProofStats =
+        (meProofStats env)
+          { psActionProofs = psActionProofs (meProofStats env) + max 0 n
+          }
+    }
+
+addImplementsProofCount :: Int -> ModuleEnv -> ModuleEnv
+addImplementsProofCount n env =
+  env
+    { meProofStats =
+        (meProofStats env)
+          { psImplementsProofs = psImplementsProofs (meProofStats env) + max 0 n
+          }
+    }
+
 
 insertDoctrine :: SearchBudget -> ModuleEnv -> PolyAST.RawPolyDoctrine -> Either Text ModuleEnv
 insertDoctrine budget env raw = do
   let name = rpdName raw
   ensureAbsent "doctrine" name (meDoctrines env)
-  doc <- elabPolyDoctrineWithBudget budget env raw
+  (doc, actionProofs) <- elabPolyDoctrineWithBudgetResult budget env raw
   env' <- case rpdExtends raw of
     Nothing -> Right env
     Just base -> do
-      mor <- buildPolyFromBase base name env doc
-      pure env { meMorphisms = M.insert (PolyMorph.morName mor) mor (meMorphisms env) }
-  let env'' = env' { meDoctrines = M.insert name doc (meDoctrines env') }
+      (mor, morphProofs) <- buildPolyFromBase budget base name env doc
+      pure
+        ( addMorphismProofCount morphProofs
+            (env { meMorphisms = M.insert (PolyMorph.morName mor) mor (meMorphisms env) })
+        )
+  let env'' =
+        addActionProofCount actionProofs
+          (env' { meDoctrines = M.insert name doc (meDoctrines env') })
   pure env''
 
 
@@ -430,7 +470,7 @@ lookupMorphism env name =
     Just mor -> Right mor
 
 
-elabImplements :: SearchBudget -> ModuleEnv -> Text -> Text -> Text -> Either Text ((Text, Text), Text)
+elabImplements :: SearchBudget -> ModuleEnv -> Text -> Text -> Text -> Either Text (((Text, Text), Text), Int)
 elabImplements budget env ifaceName tgtName morphName = do
   ifaceDoc <- lookupDoctrine env ifaceName
   tgtDoc <- lookupDoctrine env tgtName
@@ -442,12 +482,13 @@ elabImplements budget env ifaceName tgtName morphName = do
         then Left "Morphism target does not match implements target"
         else do
           result <- checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc
-          case result of
-            ImplementsCheckProved ->
-              Right ()
-            ImplementsCheckUndecided label lim ->
-              Left ("implements obligation undecided: " <> label <> " (" <> renderSearchLimit lim <> ")")
-          Right ((ifaceName, tgtName), morphName)
+          proofCount <-
+            case result of
+              ImplementsCheckProved proofs ->
+                Right (length proofs)
+              ImplementsCheckUndecided label lim ->
+                Left ("implements obligation undecided: " <> label <> " (" <> renderSearchLimit lim <> ")")
+          Right (((ifaceName, tgtName), morphName), proofCount)
 
 
 elabRuns :: ModuleEnv -> [RawNamedRun] -> Either Text (M.Map Text Run)
@@ -532,8 +573,8 @@ elabTerm env raw = do
       }
 
 
-buildPolyFromBase :: Text -> Text -> ModuleEnv -> Doctrine -> Either Text PolyMorph.Morphism
-buildPolyFromBase baseName newName env newDoc = do
+buildPolyFromBase :: SearchBudget -> Text -> Text -> ModuleEnv -> Doctrine -> Either Text (PolyMorph.Morphism, Int)
+buildPolyFromBase budget baseName newName env newDoc = do
   baseDoc <- lookupDoctrine env baseName
   ensureAbsent "morphism" morName (meMorphisms env)
   genMap <- fmap M.fromList (mapM genImage (allGens baseDoc))
@@ -551,9 +592,23 @@ buildPolyFromBase baseName newName env newDoc = do
           , PolyMorph.morCheck = PolyMorph.CheckAll
           , PolyMorph.morPolicy = UseStructuralAsBidirectional
           }
-  case PolyMorph.checkMorphism mor of
-    Left err -> Left ("generated morphism " <> morName <> " invalid: " <> err)
-    Right () -> Right mor
+  case PolyMorph.checkMorphismResultWithBudget budget mor of
+    Left err ->
+      Left ("generated morphism " <> morName <> " invalid: " <> err)
+    Right checkResult ->
+      case checkResult of
+        PolyMorph.MorphismCheckProved proofs ->
+          Right (mor, length proofs)
+        PolyMorph.MorphismCheckUndecided cellName lim ->
+          Left
+            ( "generated morphism "
+                <> morName
+                <> " invalid: checkMorphism: equation undecided for "
+                <> cellName
+                <> " ("
+                <> renderSearchLimit lim
+                <> ")"
+            )
   where
     morName = newName <> ".fromBase"
 

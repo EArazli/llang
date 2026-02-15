@@ -126,6 +126,7 @@ library
       Strat.Poly.Coherence
       Strat.Poly.CriticalPairs
       Strat.Poly.Diagram
+      Strat.Poly.DiagramIso
       Strat.Poly.Doctrine
       Strat.Poly.DSL.AST
       Strat.Poly.DSL.Elab
@@ -147,6 +148,11 @@ library
       Strat.Poly.Surface.Elab
       Strat.Poly.Surface.Parse
       Strat.Poly.Surface.Spec
+      Strat.Poly.Syntax
+      Strat.Poly.Term.AST
+      Strat.Poly.Term.Normalize
+      Strat.Poly.Term.RewriteCompile
+      Strat.Poly.Term.RewriteSystem
       Strat.Poly.TermExpr
       Strat.Poly.TypeExpr
       Strat.Poly.TypeNormalize
@@ -156,9 +162,6 @@ library
       Strat.DSL.Template
       Strat.Frontend.Compile
       Strat.Poly.Term.Confluence
-      Strat.Poly.Term.Normalize
-      Strat.Poly.Term.RewriteCompile
-      Strat.Poly.Term.RewriteSystem
       Strat.Poly.Term.Termination
       Strat.Poly.Traversal
       Strat.Poly.TypePretty
@@ -221,6 +224,7 @@ test-suite llang-test
       Test.Poly.Feedback
       Test.Poly.ModeTheory
       Test.Poly.Surface
+      Test.Poly.TermNormalize
       Test.Poly.TypeModes
       Test.Value.Doc
       Test.Frontend.Pipeline

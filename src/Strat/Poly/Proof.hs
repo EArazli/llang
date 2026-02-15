@@ -13,13 +13,17 @@ module Strat.Poly.Proof
   , checkRewriteStep
   , checkRewritePath
   , checkJoinProof
+  , encodeJoinProof
+  , decodeJoinProof
   ) where
 
 import Control.Monad (foldM)
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import Strat.Poly.Diagram (Diagram(..))
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), canonDiagramRaw, diagramIsoEq)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), canonDiagramRaw)
+import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Match (Match, findAllMatches)
 import Strat.Poly.Rewrite (RewriteRule(..), applyMatch, mkMatchConfig)
 import Strat.Poly.TypeTheory (TypeTheory)
@@ -174,6 +178,13 @@ checkJoinProof tt rules proof = do
   if ok
     then Right ()
     else Left "checkJoinProof: endpoints are not isomorphic"
+
+encodeJoinProof :: JoinProof -> Text
+encodeJoinProof = T.pack . show
+
+decodeJoinProof :: Text -> Either Text JoinProof
+decodeJoinProof _ =
+  Left "decodeJoinProof: parsing is not implemented yet"
 
 flipRule :: RewriteRule -> RewriteRule
 flipRule rule =

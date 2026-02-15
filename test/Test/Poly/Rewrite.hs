@@ -11,6 +11,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
+import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
 import Strat.Poly.Rewrite

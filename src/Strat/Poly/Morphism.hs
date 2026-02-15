@@ -28,17 +28,19 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Cell2
 import Strat.Poly.Graph
+import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Diagram
 import Strat.Poly.Names
 import Strat.Poly.TypeExpr
-import Strat.Poly.UnifyTy
+import Strat.Poly.UnifyTy hiding (applySubstDiagram)
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.TypeNormalize (normalizeTypeDeep)
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Proof
-  ( SearchBudget
+  ( JoinProof
+  , SearchBudget
   , SearchLimit
   , SearchOutcome(..)
   , defaultSearchBudget
@@ -83,7 +85,7 @@ data MorphismCheck
   deriving (Eq, Ord, Show)
 
 data MorphismCheckResult
-  = MorphismCheckProved
+  = MorphismCheckProved [(Text, JoinProof)]
   | MorphismCheckUndecided Text SearchLimit
   deriving (Eq, Show)
 
@@ -473,7 +475,7 @@ checkMorphismResultWithBudget budget mor = do
   validateTypeMap mor
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
   case morCheck mor of
-    CheckNone -> Right MorphismCheckProved
+    CheckNone -> Right (MorphismCheckProved [])
     _ -> do
       let srcCells =
             case morCheck mor of
@@ -481,18 +483,18 @@ checkMorphismResultWithBudget budget mor = do
               CheckStructural -> filter ((== Structural) . c2Class) (dCells2 (morSrc mor))
       fastOk <- inclusionFastPath mor
       if fastOk
-        then Right MorphismCheckProved
+        then Right (MorphismCheckProved [])
         else do
           renameOk <- renamingFastPath mor srcCells
           if renameOk
-            then Right MorphismCheckProved
+            then Right (MorphismCheckProved [])
             else checkCells budget mor srcCells
 
 checkMorphismWithBudget :: SearchBudget -> Morphism -> Either Text ()
 checkMorphismWithBudget budget mor = do
   result <- checkMorphismResultWithBudget budget mor
   case result of
-    MorphismCheckProved ->
+    MorphismCheckProved _ ->
       Right ()
     MorphismCheckUndecided cellName lim ->
       Left
@@ -829,12 +831,17 @@ checkGenMapping mor gen = do
       pure ()
 
 checkCells :: SearchBudget -> Morphism -> [Cell2] -> Either Text MorphismCheckResult
-checkCells _ _ [] = Right MorphismCheckProved
+checkCells _ _ [] = Right (MorphismCheckProved [])
 checkCells budget mor (cell:rest) = do
   result <- checkCell budget mor cell
   case result of
-    MorphismCheckProved ->
-      checkCells budget mor rest
+    MorphismCheckProved proofs -> do
+      restResult <- checkCells budget mor rest
+      case restResult of
+        MorphismCheckProved restProofs ->
+          Right (MorphismCheckProved (proofs <> restProofs))
+        MorphismCheckUndecided{} ->
+          Right restResult
     MorphismCheckUndecided{} ->
       Right result
 
@@ -850,7 +857,7 @@ checkCell budget mor cell = do
       Right (MorphismCheckUndecided (c2Name cell) lim)
     SearchProved witness -> do
       checkJoinProof tt rules witness
-      Right MorphismCheckProved
+      Right (MorphismCheckProved [(c2Name cell, witness)])
 
 inclusionFastPath :: Morphism -> Either Text Bool
 inclusionFastPath mor

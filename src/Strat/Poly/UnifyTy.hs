@@ -10,6 +10,7 @@ module Strat.Poly.UnifyTy
   , unifyCtxDiagram
   , applySubstTy
   , applySubstTm
+  , applySubstDiagram
   , applySubstCtx
   , normalizeSubst
   , composeSubst
@@ -33,13 +34,13 @@ import Strat.Poly.Graph
   , unPortId
   , unEdgeId
   )
-import qualified Strat.Poly.Diagram as Diag
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
   , TypeParamSig(..)
   , TmFunSig(..)
   , lookupTmFunSig
   )
+import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.TypeNormalize
   ( normalizeTypeDeep
   , normalizeTypeDeepWithCtx
@@ -570,12 +571,27 @@ applySubstTm :: TypeTheory -> Subst -> TypeExpr -> TermDiagram -> Either Text Te
 applySubstTm tt subst expectedSort tm =
   applySubstTmInCtx tt (dTmCtx (unTerm tm)) subst expectedSort tm
 
+applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
+applySubstDiagram tt subst =
+  traverseDiagram onDiag onPayload pure
+  where
+    onDiag d = do
+      dPortTy' <- IM.traverseWithKey (\_ ty -> applySubstTy tt subst ty) (dPortTy d)
+      dTmCtx' <- mapM (applySubstTy tt subst) (dTmCtx d)
+      pure d { dTmCtx = dTmCtx', dPortTy = dPortTy' }
+    onPayload payload =
+      case payload of
+        PTmMeta v -> do
+          sort' <- applySubstTy tt subst (tmvSort v)
+          pure (PTmMeta v { tmvSort = sort' })
+        _ -> pure payload
+
 applySubstTmInCtx :: TypeTheory -> [TypeExpr] -> Subst -> TypeExpr -> TermDiagram -> Either Text TermDiagram
 applySubstTmInCtx tt tmCtx subst expectedSort tm = do
   tmCtx' <- applySubstCtx tt subst tmCtx
   expectedSort0 <- applySubstTy tt subst expectedSort
   expectedSort' <- normalizeTypeDeepWithCtx tt tmCtx' expectedSort0
-  tmGraph <- Diag.applySubstDiagram tt subst (unTerm tm)
+  tmGraph <- applySubstDiagram tt subst (unTerm tm)
   let tmSub = TermDiagram tmGraph
   expr <- diagramToTermExpr tt tmCtx' expectedSort' tmSub
   (tmCtxOut, expr') <- goTm S.empty tmCtx' expectedSort' expr
@@ -676,7 +692,7 @@ applySubstTmMaybeNormalize tt subst expectedSort tm =
 
 applySubstTmNoNormalize :: TypeTheory -> Subst -> TypeExpr -> TermDiagram -> Either Text TermDiagram
 applySubstTmNoNormalize tt subst expectedSort tm = do
-  tmGraph <- Diag.applySubstDiagram tt subst (unTerm tm)
+  tmGraph <- applySubstDiagram tt subst (unTerm tm)
   let tmSub = TermDiagram tmGraph
   let tmCtx = dTmCtx (unTerm tmSub)
   expectedSort0 <- applySubstTy tt subst expectedSort

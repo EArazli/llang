@@ -37,6 +37,7 @@ import Strat.Poly.TypeTheory
   , modeOnlyTypeTheory
   )
 import Strat.Poly.TypeNormalize (normalizeTypeDeep, normalizeTermDiagram, validateTermDiagram)
+import qualified Strat.Poly.TypeNormalize as TN
 import Strat.Poly.UnifyTy (unifyTm, unifyTyFlex, emptySubst, sTm)
 import Strat.Poly.Match (MatchConfig(..), findAllMatches)
 import Strat.Poly.Graph
@@ -45,19 +46,19 @@ import Strat.Poly.Graph
   , BinderArg(..)
   , EdgePayload(..)
   , canonDiagramRaw
-  , diagramIsoMatchWithVars
   , dIn
   , dOut
   , emptyDiagram
   , freshPort
   , addEdgePayload
   , validateDiagram
-  , diagramIsoEq
   )
+import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVars)
 import Strat.Poly.Diagram (idD, genDTm, compD, freeTmVarsDiagram)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Rewrite (RewriteRule(..), rewriteOnce)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr, diagramGraphToTermExpr)
+import Strat.Poly.Term.RewriteCompile (compileAllTermRules)
 import Test.Poly.Helpers (mkModes)
 
 
@@ -80,6 +81,7 @@ tests =
     , testCase "dependent composition respects definitional term equality" testDependentCompDefEq
     , testCase "matching requires term-context compatibility" testMatchTmCtxCompatibility
     , testCase "iso matching drops candidates when dependent substitution fails" testIsoMatchDropsSubstFailure
+    , testCase "checked term conversion accepts definitional sort equality" testCheckedTermConversionDefEq
     , testCase "binder metas + splice rewrite" testBinderMetaSplice
     , testCase "explicit binder term args can reference bound term vars" testExplicitBinderTermArg
     ]
@@ -221,6 +223,7 @@ testMixedModeTmCtxResolution = do
                 ]
           , ttTmFuns = M.empty
           , ttTmRules = M.empty
+          , ttTmTRS = M.empty
           }
   tm <- require (termExprToDiagram tt tmCtx natTy (TMBound 1))
   let unlabeledTm =
@@ -310,6 +313,7 @@ testBoundSortUsesSubstitution = do
           , ttTypeParams = M.fromList [(lenRef, [TPS_Ty modeM])]
           , ttTmFuns = M.empty
           , ttTmRules = M.empty
+          , ttTmTRS = M.empty
           }
   bound0 <- require (termExprToDiagram tt [tmCtxSort] tmCtxSort (TMBound 0))
   case unifyTm tt [tmCtxSort] S.empty emptySubst expectedSort bound0 bound0 of
@@ -339,6 +343,7 @@ testMatchBoundSortUsesCurrentSubst = do
                 ]
           , ttTmFuns = M.empty
           , ttTmRules = M.empty
+          , ttTmTRS = M.empty
           }
   bound0 <- require (termExprToDiagram tt [tmCtxSort] tmCtxSort (TMBound 0))
 
@@ -397,6 +402,7 @@ testMatchTmCtxCompatibility = do
           , ttTypeParams = M.empty
           , ttTmFuns = M.empty
           , ttTmRules = M.empty
+          , ttTmTRS = M.empty
           }
   let lhs = (idD modeM [aTy]) { dTmCtx = [natTy] }
   let host = (idD modeM [aTy]) { dTmCtx = [boolTy] }
@@ -418,6 +424,24 @@ testIsoMatchDropsSubstFailure = do
   rhs <- require (mkWrapWithBinder mode goodTy inner)
   matches <- require (diagramIsoMatchWithVars tt S.empty S.empty S.empty lhs rhs)
   assertBool "expected no matches when binder substitution normalization fails" (null matches)
+
+testCheckedTermConversionDefEq :: Assertion
+testCheckedTermConversionDefEq = do
+  (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
+  let vecRef = TypeRef modeM (TypeName "Vec")
+  let tt = tt0 { ttTypeParams = M.fromList [(vecRef, [TPS_Tm natTy])] }
+  let z = TMFun (TmFunName "Z") []
+  let add x y = TMFun (TmFunName "add") [x, y]
+  tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
+  tmZ <- require (termExprToDiagram tt [] natTy z)
+  let sortAdd = TCon vecRef [TATm tmAdd]
+  let sortZ = TCon vecRef [TATm tmZ]
+  let xVar = TmVar { tmvName = "x", tmvSort = sortAdd, tmvScope = 0 }
+  case termExprToDiagram tt [] sortZ (TMVar xVar) of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected unchecked conversion to reject structural sort mismatch"
+  _ <- require (TN.termExprToDiagramChecked tt [] sortZ (TMVar xVar))
+  pure ()
 
 testBinderMetaSplice :: Assertion
 testBinderMetaSplice = do
@@ -515,6 +539,7 @@ mkNatTypeTheory = do
           , ttTypeParams = M.empty
           , ttTmFuns = M.fromList [(modeI, funSigs)]
           , ttTmRules = M.empty
+          , ttTmTRS = M.empty
           }
   r1L <- termExprToDiagram ttSig [] natTy (add z (TMVar vN))
   r1R <- termExprToDiagram ttSig [] natTy (TMVar vN)
@@ -527,5 +552,7 @@ mkNatTypeTheory = do
         , TmRule { trVars = [vM, vN], trLHS = r2L, trRHS = r2R }
         , TmRule { trVars = [vN], trLHS = r3L, trRHS = r3R }
         ]
-  let tt = ttSig { ttTmRules = M.fromList [(modeI, rules)] }
+  let tt1 = ttSig { ttTmRules = M.fromList [(modeI, rules)] }
+  trs <- compileAllTermRules tt1
+  let tt = tt1 { ttTmTRS = trs }
   pure (tt, natTy, modeM, modeI)

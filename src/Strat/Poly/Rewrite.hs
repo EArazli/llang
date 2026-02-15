@@ -18,7 +18,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.Match
 import Strat.Poly.TypeExpr (TyVar, TmVar, TypeExpr)
 import Strat.Poly.Cell2
-import {-# SOURCE #-} Strat.Poly.UnifyTy (emptySubst)
+import Strat.Poly.UnifyTy (emptySubst)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
 import Strat.Poly.TypeTheory (TypeTheory)

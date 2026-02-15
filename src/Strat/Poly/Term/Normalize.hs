@@ -3,8 +3,8 @@ module Strat.Poly.Term.Normalize
   ) where
 
 import qualified Data.Map.Strict as M
-import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.Term.RewriteSystem (TRS(..), TRule(..), TermSubst, applyTermSubst, matchPattern, rootKey)
+import Strat.Poly.Term.AST (TermExpr(..))
+import Strat.Poly.Term.RewriteSystem (TRS(..), TRule(..), TermSubst, applyTermSubstOnce, matchPattern, rootKey)
 
 
 normalizeTermExpr :: TRS -> TermExpr -> TermExpr
@@ -52,7 +52,7 @@ normalizeTermExpr trs tm = fst (normalizeWithMemo M.empty tm)
 rewriteByRule :: TRule -> TermExpr -> Maybe TermExpr
 rewriteByRule rule term = do
   subst <- matchPattern (trLHS rule) term
-  pure (applySubstClosed subst (trRHS rule))
+  pure (applySubstOnce subst (trRHS rule))
 
-applySubstClosed :: TermSubst -> TermExpr -> TermExpr
-applySubstClosed subst = applyTermSubst subst
+applySubstOnce :: TermSubst -> TermExpr -> TermExpr
+applySubstOnce subst = applyTermSubstOnce subst

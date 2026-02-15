@@ -1,6 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Frontend.Env
   ( ModuleEnv(..)
+  , ProofStats(..)
+  , emptyProofStats
+  , addProofStats
+  , subProofStats
+  , proofStatsTotal
   , TermDef(..)
   , emptyEnv
   , mergeEnv
@@ -16,6 +21,42 @@ import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Morphism (Morphism)
 import Strat.Poly.Surface (PolySurfaceDef)
 import Strat.Util.List (dedupe)
+
+
+data ProofStats = ProofStats
+  { psMorphismProofs :: Int
+  , psActionProofs :: Int
+  , psImplementsProofs :: Int
+  }
+  deriving (Eq, Show)
+
+emptyProofStats :: ProofStats
+emptyProofStats =
+  ProofStats
+    { psMorphismProofs = 0
+    , psActionProofs = 0
+    , psImplementsProofs = 0
+    }
+
+addProofStats :: ProofStats -> ProofStats -> ProofStats
+addProofStats a b =
+  ProofStats
+    { psMorphismProofs = psMorphismProofs a + psMorphismProofs b
+    , psActionProofs = psActionProofs a + psActionProofs b
+    , psImplementsProofs = psImplementsProofs a + psImplementsProofs b
+    }
+
+subProofStats :: ProofStats -> ProofStats -> ProofStats
+subProofStats a b =
+  ProofStats
+    { psMorphismProofs = max 0 (psMorphismProofs a - psMorphismProofs b)
+    , psActionProofs = max 0 (psActionProofs a - psActionProofs b)
+    , psImplementsProofs = max 0 (psImplementsProofs a - psImplementsProofs b)
+    }
+
+proofStatsTotal :: ProofStats -> Int
+proofStatsTotal ps =
+  psMorphismProofs ps + psActionProofs ps + psImplementsProofs ps
 
 
 data TermDef = TermDef
@@ -35,6 +76,7 @@ data ModuleEnv = ModuleEnv
   , meRuns :: M.Map Text Run
   , meTerms :: M.Map Text TermDef
   , meTemplates :: M.Map Text RawDoctrineTemplate
+  , meProofStats :: ProofStats
   }
   deriving (Eq, Show)
 
@@ -51,6 +93,7 @@ emptyEnv =
     , meRuns = M.empty
     , meTerms = M.empty
     , meTemplates = M.empty
+    , meProofStats = emptyProofStats
     }
 
 
@@ -76,6 +119,7 @@ mergeEnv a b = do
       , meRuns = runs
       , meTerms = terms
       , meTemplates = templates
+      , meProofStats = addProofStats (meProofStats a) (meProofStats b)
       }
   where
     mergeMap label f = mergeNamed label id (f a) (f b)

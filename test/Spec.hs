@@ -12,6 +12,7 @@ import qualified Test.Poly.Coherence as PolyCoherence
 import qualified Test.Poly.CCC as PolyCCC
 import qualified Test.Poly.ModeTheory as PolyModeTheory
 import qualified Test.Poly.Surface as PolySurface
+import qualified Test.Poly.TermNormalize as PolyTermNormalize
 import qualified Test.Poly.TypeModes as PolyTypeModes
 import qualified Test.Poly.DataMacro as PolyDataMacro
 import qualified Test.Poly.Dependent as PolyDependent
@@ -38,6 +39,7 @@ main =
       , PolyCCC.tests
       , PolyModeTheory.tests
       , PolySurface.tests
+      , PolyTermNormalize.tests
       , PolyTypeModes.tests
       , PolyDataMacro.tests
       , PolyDependent.tests

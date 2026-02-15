@@ -15,8 +15,6 @@ import Strat.Poly.Graph
   ( Diagram(..)
   , PortId(..)
   , EdgePayload(..)
-  , diagramIsoEq
-  , diagramIsoEqSlow
   , emptyDiagram
   , freshPort
   , addEdgePayload
@@ -24,6 +22,7 @@ import Strat.Poly.Graph
   , canonDiagramRaw
   , validateDiagram
   )
+import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoEqSlow)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeRef(..), TypeName(..))

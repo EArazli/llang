@@ -23,7 +23,8 @@ import Strat.Poly.Surface.Parse (parseSurfaceSpec)
 import Strat.Poly.Surface (PolySurfaceDef, elabPolySurfaceDecl)
 import Strat.Poly.Surface.Elab (elabSurfaceExpr)
 import Strat.Poly.Diagram (idD, genD, diagramDom, diagramCod)
-import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..), diagramIsoEq)
+import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..))
+import Strat.Poly.DiagramIso (diagramIsoEq)
 import Test.Poly.Helpers (mkModes)
 
 

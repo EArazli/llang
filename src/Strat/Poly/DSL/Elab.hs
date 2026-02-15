@@ -2,8 +2,10 @@
 module Strat.Poly.DSL.Elab
   ( elabPolyDoctrine
   , elabPolyDoctrineWithBudget
+  , elabPolyDoctrineWithBudgetResult
   , elabPolyMorphism
   , elabPolyMorphismWithBudget
+  , elabPolyMorphismWithBudgetResult
   , elabDiagExpr
   , ImplementsCheckResult(..)
   , checkImplementsObligationsWithBudget
@@ -28,19 +30,20 @@ import Strat.Poly.Names
 import Strat.Poly.TypeExpr
 import qualified Strat.Poly.UnifyTy as U
 import Strat.Poly.TypeTheory (TypeTheory, TmFunSig(..))
-import Strat.Poly.TypeNormalize (normalizeTypeDeep)
+import Strat.Poly.TypeNormalize (normalizeTypeDeep, termExprToDiagramChecked)
 import Strat.Poly.Attr
 import Strat.Poly.Morphism
-import Strat.Poly.ModAction (applyModExpr, validateActionSemanticsWithBudget)
+import Strat.Poly.ModAction (ActionSemanticsResult(..), applyModExpr, validateActionSemanticsWithBudgetResult)
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
-import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)
+import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Proof
-  ( SearchBudget(..)
+  ( JoinProof
+  , SearchBudget(..)
   , SearchLimit
   , SearchOutcome(..)
   , defaultSearchBudget
@@ -49,10 +52,14 @@ import Strat.Poly.Proof
   )
 
 elabPolyMorphism :: ModuleEnv -> RawPolyMorphism -> Either Text Morphism
-elabPolyMorphism = elabPolyMorphismWithBudget defaultSearchBudget
+elabPolyMorphism env raw = fst <$> elabPolyMorphismWithBudgetResult defaultSearchBudget env raw
 
 elabPolyMorphismWithBudget :: SearchBudget -> ModuleEnv -> RawPolyMorphism -> Either Text Morphism
-elabPolyMorphismWithBudget budgetDefault env raw = do
+elabPolyMorphismWithBudget budget env raw =
+  fst <$> elabPolyMorphismWithBudgetResult budget env raw
+
+elabPolyMorphismWithBudgetResult :: SearchBudget -> ModuleEnv -> RawPolyMorphism -> Either Text (Morphism, MorphismCheckResult)
+elabPolyMorphismWithBudgetResult budgetDefault env raw = do
   src <- lookupPolyDoctrine env (rpmSrc raw)
   tgt <- lookupPolyDoctrine env (rpmTgt raw)
   let checkName = maybe "all" id (rpmCheck raw)
@@ -94,9 +101,23 @@ elabPolyMorphismWithBudget budgetDefault env raw = do
         , morCheck = checkMode
         , morPolicy = policy
         }
-  case checkMorphismWithBudget budget mor of
-    Left err -> Left ("morphism " <> rpmName raw <> ": " <> err)
-    Right () -> Right mor
+  case checkMorphismResultWithBudget budget mor of
+    Left err ->
+      Left ("morphism " <> rpmName raw <> ": " <> err)
+    Right result ->
+      case result of
+        MorphismCheckProved _ ->
+          Right (mor, result)
+        MorphismCheckUndecided cellName lim ->
+          Left
+            ( "morphism "
+                <> rpmName raw
+                <> ": checkMorphism: equation undecided for "
+                <> cellName
+                <> " ("
+                <> renderSearchLimit lim
+                <> ")"
+            )
   where
     lookupPolyDoctrine env' name =
       case M.lookup name (meDoctrines env') of
@@ -318,10 +339,14 @@ morphismBudget budgetDefault raw =
         }
 
 elabPolyDoctrine :: ModuleEnv -> RawPolyDoctrine -> Either Text Doctrine
-elabPolyDoctrine = elabPolyDoctrineWithBudget defaultSearchBudget
+elabPolyDoctrine env raw = fst <$> elabPolyDoctrineWithBudgetResult defaultSearchBudget env raw
 
 elabPolyDoctrineWithBudget :: SearchBudget -> ModuleEnv -> RawPolyDoctrine -> Either Text Doctrine
-elabPolyDoctrineWithBudget budget env raw = do
+elabPolyDoctrineWithBudget budget env raw =
+  fst <$> elabPolyDoctrineWithBudgetResult budget env raw
+
+elabPolyDoctrineWithBudgetResult :: SearchBudget -> ModuleEnv -> RawPolyDoctrine -> Either Text (Doctrine, Int)
+elabPolyDoctrineWithBudgetResult budget env raw = do
   base <- case rpdExtends raw of
     Nothing -> Right Nothing
     Just name ->
@@ -331,8 +356,18 @@ elabPolyDoctrineWithBudget budget env raw = do
   let start = seedDoctrine (rpdName raw) base
   doc <- foldM (elabPolyItem env) start (rpdItems raw)
   validateDoctrine doc
-  validateActionSemanticsWithBudget budget doc
-  pure doc
+  result <- validateActionSemanticsWithBudgetResult budget doc
+  case result of
+    ActionSemanticsProved proofs ->
+      pure (doc, length proofs)
+    ActionSemanticsUndecided label lim ->
+      Left
+        ( "validateDoctrine: action semantics undecided for "
+            <> label
+            <> " ("
+            <> renderSearchLimit lim
+            <> ")"
+        )
 
 seedDoctrine :: Text -> Maybe Doctrine -> Doctrine
 seedDoctrine name base =
@@ -659,7 +694,7 @@ validateObligationExprMode doc mode allowGen = go mode
           go expected a >> go expected b
 
 data ImplementsCheckResult
-  = ImplementsCheckProved
+  = ImplementsCheckProved [(Text, JoinProof)]
   | ImplementsCheckUndecided Text SearchLimit
   deriving (Eq, Show)
 
@@ -668,12 +703,17 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
   ttTgt <- doctrineTypeTheory tgtDoc
   checkObligations ttTgt (dObligations ifaceDoc)
   where
-    checkObligations _ [] = Right ImplementsCheckProved
+    checkObligations _ [] = Right (ImplementsCheckProved [])
     checkObligations ttTgt (obl:rest) = do
       result <- checkOne ttTgt obl
       case result of
         ImplementsCheckUndecided{} -> Right result
-        ImplementsCheckProved -> checkObligations ttTgt rest
+        ImplementsCheckProved proofs -> do
+          restResult <- checkObligations ttTgt rest
+          case restResult of
+            ImplementsCheckUndecided{} -> Right restResult
+            ImplementsCheckProved restProofs ->
+              Right (ImplementsCheckProved (proofs <> restProofs))
 
     checkOne ttTgt obl
       | obForGen obl = checkForGen ttTgt obl
@@ -697,19 +737,24 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
           Right (ImplementsCheckUndecided (obName obl) lim)
         SearchProved witness -> do
           checkJoinProof ttTgt rules witness
-          Right ImplementsCheckProved
+          Right (ImplementsCheckProved [(obName obl, witness)])
 
     checkForGen ttTgt obl = do
       modeTgt <- applyMorphismMode morph (obMode obl)
       let gens = M.elems (M.findWithDefault M.empty modeTgt (dGens tgtDoc))
       checkForGens ttTgt modeTgt obl gens
 
-    checkForGens _ _ _ [] = Right ImplementsCheckProved
+    checkForGens _ _ _ [] = Right (ImplementsCheckProved [])
     checkForGens ttTgt modeTgt obl (gen:rest) = do
       result <- checkForGenOne ttTgt modeTgt obl gen
       case result of
         ImplementsCheckUndecided{} -> Right result
-        ImplementsCheckProved -> checkForGens ttTgt modeTgt obl rest
+        ImplementsCheckProved proofs -> do
+          restResult <- checkForGens ttTgt modeTgt obl rest
+          case restResult of
+            ImplementsCheckUndecided{} -> Right restResult
+            ImplementsCheckProved restProofs ->
+              Right (ImplementsCheckProved (proofs <> restProofs))
 
     checkForGenOne ttTgt modeTgt obl gen = do
       genDiag <- mkForGenDiag modeTgt gen
@@ -728,13 +773,13 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
           Right (ImplementsCheckUndecided (obName obl <> "[" <> renderGenName (gdName gen) <> "]") lim)
         SearchProved witness -> do
           checkJoinProof ttTgt rules witness
-          Right ImplementsCheckProved
+          Right (ImplementsCheckProved [(obName obl <> "[" <> renderGenName (gdName gen) <> "]", witness)])
 
 checkImplementsObligations :: ModuleEnv -> Doctrine -> Morphism -> Doctrine -> Either Text ()
 checkImplementsObligations env tgtDoc morph ifaceDoc = do
   result <- checkImplementsObligationsWithBudget defaultSearchBudget env tgtDoc morph ifaceDoc
   case result of
-    ImplementsCheckProved ->
+    ImplementsCheckProved _ ->
       Right ()
     ImplementsCheckUndecided label lim ->
       Left
@@ -1150,7 +1195,7 @@ elabTmTerm doc _tyVars tmVars tmBound mExpected raw =
     (expr, inferredSort) <- elabExpr mExpected raw
     let expectedSort = maybe inferredSort id mExpected
     tmCtx <- mkTmCtx
-    termExprToDiagram ttDoc tmCtx expectedSort expr
+    termExprToDiagramChecked ttDoc tmCtx expectedSort expr
   where
     elabExpr mExp tmRaw =
       case tmRaw of
@@ -1552,7 +1597,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
             RPTVar name ->
               case implicitBoundCandidate curTmCtx (tmvSort v) of
                 Right (Just idx) ->
-                  case termExprToDiagram ttDoc curTmCtx (tmvSort v) (TMBound idx) of
+                  case termExprToDiagramChecked ttDoc curTmCtx (tmvSort v) (TMBound idx) of
                     Right tm -> pure tm
                     Left msg -> liftEither (Left ("explicit term argument `" <> name <> "`: " <> msg))
                 Right Nothing -> liftEither (Left err)
@@ -1926,7 +1971,7 @@ freshTmVar ttDoc tmCtx v = do
   n <- freshInt
   let name = tmvName v <> T.pack ("#" <> show n)
   let fresh = TmVar { tmvName = name, tmvSort = tmvSort v, tmvScope = max (tmvScope v) (length tmCtx) }
-  tm <- liftEither (termExprToDiagram ttDoc tmCtx (tmvSort fresh) (TMVar fresh))
+  tm <- liftEither (termExprToDiagramChecked ttDoc tmCtx (tmvSort fresh) (TMVar fresh))
   pure (v, tm)
 
 freshInt :: Fresh Int

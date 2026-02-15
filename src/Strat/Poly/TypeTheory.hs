@@ -10,6 +10,7 @@ module Strat.Poly.TypeTheory
 
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName, ModeTheory)
+import Strat.Poly.Term.RewriteSystem (TRS)
 import Strat.Poly.TypeExpr
 
 
@@ -18,6 +19,7 @@ data TypeTheory = TypeTheory
   , ttTypeParams :: M.Map TypeRef [TypeParamSig]
   , ttTmFuns :: M.Map ModeName (M.Map TmFunName TmFunSig)
   , ttTmRules :: M.Map ModeName [TmRule]
+  , ttTmTRS :: M.Map ModeName TRS
   } deriving (Eq, Show)
 
 data TypeParamSig
@@ -43,6 +45,7 @@ modeOnlyTypeTheory mt =
     , ttTypeParams = M.empty
     , ttTmFuns = M.empty
     , ttTmRules = M.empty
+    , ttTmTRS = M.empty
     }
 
 lookupTmFunSig :: TypeTheory -> ModeName -> TmFunName -> Maybe TmFunSig

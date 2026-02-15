@@ -120,6 +120,7 @@ diffEnv full base = ModuleEnv
   , meRuns = M.difference (meRuns full) (meRuns base)
   , meTerms = M.difference (meTerms full) (meTerms base)
   , meTemplates = M.difference (meTemplates full) (meTemplates base)
+  , meProofStats = subProofStats (meProofStats full) (meProofStats base)
   }
 
 diffImplDefaults :: M.Map (Text, Text) [Text] -> M.Map (Text, Text) [Text] -> M.Map (Text, Text) [Text]

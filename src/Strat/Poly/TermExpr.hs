@@ -1,9 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.TermExpr
   ( TermExpr(..)
+  , TermConvEnv(..)
+  , termExprToDiagramWith
   , termExprToDiagram
   , termExprToDiagramUnchecked
+  , diagramToTermExprWith
   , diagramToTermExpr
+  , diagramGraphToTermExprWith
   , diagramGraphToTermExpr
   , diagramGraphToTermExprUnchecked
   , validateTermGraph
@@ -21,6 +25,14 @@ import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Strat.Poly.Term.AST
+  ( TermExpr(..)
+  , freeTmVarsExpr
+  , boundGlobalsExpr
+  , maxTmScopeExpr
+  , isPureMetaExpr
+  , sameTmMetaId
+  )
 import Strat.Poly.Graph
   ( Diagram(..)
   , Edge(..)
@@ -50,12 +62,10 @@ import Strat.Poly.TypeTheory
   , lookupTmFunSig
   )
 
-
-data TermExpr
-  = TMVar TmVar
-  | TMBound Int
-  | TMFun TmFunName [TermExpr]
-  deriving (Eq, Ord, Show)
+data TermConvEnv = TermConvEnv
+  { tcLookupSig :: ModeName -> TmFunName -> Maybe TmFunSig
+  , tcSortEq :: [TypeExpr] -> TypeExpr -> TypeExpr -> Either Text Bool
+  }
 
 termExprToDiagram
   :: TypeTheory
@@ -63,7 +73,8 @@ termExprToDiagram
   -> TypeExpr
   -> TermExpr
   -> Either Text TermDiagram
-termExprToDiagram = termExprToDiagramUnchecked
+termExprToDiagram tt =
+  termExprToDiagramWith (uncheckedConvEnv tt)
 
 termExprToDiagramUnchecked
   :: TypeTheory
@@ -71,7 +82,16 @@ termExprToDiagramUnchecked
   -> TypeExpr
   -> TermExpr
   -> Either Text TermDiagram
-termExprToDiagramUnchecked tt tmCtx expectedSort tm = do
+termExprToDiagramUnchecked tt =
+  termExprToDiagramWith (uncheckedConvEnv tt)
+
+termExprToDiagramWith
+  :: TermConvEnv
+  -> [TypeExpr]
+  -> TypeExpr
+  -> TermExpr
+  -> Either Text TermDiagram
+termExprToDiagramWith convEnv tmCtx expectedSort tm = do
   let mode = typeMode expectedSort
   let modeInputsAll = modeCtx tmCtx mode
   needed <- requiredModePrefixLen tmCtx mode tm
@@ -89,9 +109,7 @@ termExprToDiagramUnchecked tt tmCtx expectedSort tm = do
       case currentTm of
         TMVar v -> do
           let vSort = tmvSort v
-          if vSort == currentSort
-            then Right ()
-            else Left "termExprToDiagramUnchecked: metavariable sort mismatch"
+          ensureSortEq "termExprToDiagramUnchecked: metavariable sort mismatch" vSort currentSort
           if tmvScope v <= length modeInputsAll
             then Right ()
             else Left "termExprToDiagramUnchecked: metavariable scope exceeds mode-local context"
@@ -103,11 +121,11 @@ termExprToDiagramUnchecked tt tmCtx expectedSort tm = do
           case lookupBound modeInputs inPorts i of
             Nothing -> Left "termExprToDiagramUnchecked: bound term variable out of scope or wrong mode"
             Just (pid, sortTy) ->
-              if sortTy == currentSort
-                then pure (pid, diag)
-                else Left "termExprToDiagramUnchecked: bound term variable sort mismatch"
+              do
+                ensureSortEq "termExprToDiagramUnchecked: bound term variable sort mismatch" sortTy currentSort
+                pure (pid, diag)
         TMFun f args -> do
-          sig <- requireFunSigUnchecked tt currentSort f args
+          sig <- requireFunSig convEnv tmCtx currentSort f args
           (argPorts, d1) <- foldM step ([], diag) (zip (tfsArgs sig) args)
           let (outPort, d2) = freshPort currentSort d1
           let TmFunName fname = f
@@ -124,14 +142,29 @@ termExprToDiagramUnchecked tt tmCtx expectedSort tm = do
         step d ((globalTm, _), pid) =
           setPortLabel pid ("tmctx:" <> T.pack (show globalTm)) d
 
+    ensureSortEq err lhs rhs = do
+      ok <- tcSortEq convEnv tmCtx lhs rhs
+      if ok
+        then Right ()
+        else Left err
+
+diagramToTermExprWith
+  :: TermConvEnv
+  -> [TypeExpr]
+  -> TypeExpr
+  -> TermDiagram
+  -> Either Text TermExpr
+diagramToTermExprWith convEnv tmCtx expectedSort (TermDiagram diag) =
+  diagramGraphToTermExprWith convEnv tmCtx expectedSort diag
+
 diagramToTermExpr
   :: TypeTheory
   -> [TypeExpr]
   -> TypeExpr
   -> TermDiagram
   -> Either Text TermExpr
-diagramToTermExpr tt tmCtx expectedSort (TermDiagram diag) =
-  diagramGraphToTermExpr tt tmCtx expectedSort diag
+diagramToTermExpr tt =
+  diagramToTermExprWith (uncheckedConvEnv tt)
 
 diagramGraphToTermExpr
   :: TypeTheory
@@ -139,7 +172,16 @@ diagramGraphToTermExpr
   -> TypeExpr
   -> Diagram
   -> Either Text TermExpr
-diagramGraphToTermExpr _tt tmCtx expectedSort diag = do
+diagramGraphToTermExpr tt =
+  diagramGraphToTermExprWith (uncheckedConvEnv tt)
+
+diagramGraphToTermExprWith
+  :: TermConvEnv
+  -> [TypeExpr]
+  -> TypeExpr
+  -> Diagram
+  -> Either Text TermExpr
+diagramGraphToTermExprWith convEnv tmCtx expectedSort diag = do
   validateTermGraph diag
   let mode = typeMode expectedSort
   if dMode diag == mode
@@ -152,7 +194,8 @@ diagramGraphToTermExpr _tt tmCtx expectedSort diag = do
         case diagramPortType diag outPort of
           Nothing -> Left "diagramToTermExpr: missing output port type"
           Just ty -> Right ty
-      if outTy == expectedSort
+      outOk <- tcSortEq convEnv tmCtx outTy expectedSort
+      if outOk
         then Right ()
         else Left "diagramToTermExpr: output sort mismatch"
       diagramGraphToTermExprUnchecked diag
@@ -174,7 +217,8 @@ diagramGraphToTermExpr _tt tmCtx expectedSort diag = do
         case diagramPortType diag pid of
           Nothing -> Left "diagramToTermExpr: missing boundary input sort"
           Just ty -> Right ty
-      if actualTy == expectedTy
+      ok <- tcSortEq convEnv tmCtx actualTy expectedTy
+      if ok
         then Right ()
         else Left "diagramToTermExpr: boundary input sort mismatch"
 
@@ -222,37 +266,6 @@ diagramGraphToTermExprUnchecked diag = do
                     else Left "diagramToTermExprUnchecked: PTmMeta inputs do not match canonical scope prefix"
                 _ ->
                   Left "diagramToTermExprUnchecked: non-term payload in term diagram"
-freeTmVarsExpr :: TermExpr -> S.Set TmVar
-freeTmVarsExpr tm =
-  case tm of
-    TMVar v -> S.singleton v
-    TMBound _ -> S.empty
-    TMFun _ args -> S.unions (map freeTmVarsExpr args)
-
-boundGlobalsExpr :: TermExpr -> S.Set Int
-boundGlobalsExpr tm =
-  case tm of
-    TMVar _ -> S.empty
-    TMBound i -> S.singleton i
-    TMFun _ args -> S.unions (map boundGlobalsExpr args)
-
-maxTmScopeExpr :: TermExpr -> Int
-maxTmScopeExpr tm =
-  case tm of
-    TMVar v -> tmvScope v
-    TMBound _ -> 0
-    TMFun _ args -> maximum (0 : map maxTmScopeExpr args)
-
-isPureMetaExpr :: TermExpr -> Bool
-isPureMetaExpr tm =
-  case tm of
-    TMVar _ -> True
-    TMBound _ -> False
-    TMFun _ _ -> False
-
-sameTmMetaId :: TmVar -> TmVar -> Bool
-sameTmMetaId a b = tmvName a == tmvName b && tmvScope a == tmvScope b
-
 validateTermGraph :: Diagram -> Either Text ()
 validateTermGraph diag = do
   validateDiagram diag
@@ -355,16 +368,24 @@ saturateUnusedPrefixInputs diag =
                   addEdgePayload PInternalDrop [pid] [] d
             _ -> Right d
 
-requireFunSigUnchecked :: TypeTheory -> TypeExpr -> TmFunName -> [TermExpr] -> Either Text TmFunSig
-requireFunSigUnchecked tt sortTy f args = do
+uncheckedConvEnv :: TypeTheory -> TermConvEnv
+uncheckedConvEnv tt =
+  TermConvEnv
+    { tcLookupSig = \mode f -> lookupTmFunSig tt mode f
+    , tcSortEq = \_ a b -> Right (a == b)
+    }
+
+requireFunSig :: TermConvEnv -> [TypeExpr] -> TypeExpr -> TmFunName -> [TermExpr] -> Either Text TmFunSig
+requireFunSig convEnv tmCtx sortTy f args = do
   sig <-
-    case lookupTmFunSig tt (typeMode sortTy) f of
+    case tcLookupSig convEnv (typeMode sortTy) f of
       Nothing -> Left "termExprToDiagramUnchecked: unknown term function"
       Just s -> Right s
   if length (tfsArgs sig) /= length args
     then Left "termExprToDiagramUnchecked: term function arity mismatch"
     else Right ()
-  if tfsRes sig == sortTy
+  ok <- tcSortEq convEnv tmCtx (tfsRes sig) sortTy
+  if ok
     then Right sig
     else Left "termExprToDiagramUnchecked: term function result sort mismatch"
 

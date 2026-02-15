@@ -39,29 +39,9 @@ definitional normalization.
 `boundTmIndicesTerm` reports bound indices reachable from term outputs.
 Disconnected dead subgraphs do not contribute to reported bound indices.
 
-## 7. TRS Cache Pending Import-Cycle Cleanup
-
-`normalizeTermDiagram` currently compiles per-mode TRSs on demand from `ttTmRules`.
-This is semantically correct but not the intended steady-state performance shape.
-As soon as current import-cycle pressure is resolved, add cached compiled TRSs (e.g. in `TypeTheory`
-or an equivalent cache keyed by doctrine+mode) so kernel normalization avoids repeated compilation.
-
-## 8. Conversion DefEq Strictness (Temporary)
-
-`termExprToDiagram` / `diagramToTermExpr` currently use structural sort checks at conversion boundaries,
-rather than performing additional definitional-equality normalization internally.
-This does not affect kernel Phase-1 correctness (the normalization path normalizes expected sorts first),
-but it is stricter for some non-kernel call sites.
-This is not expected to be resolved automatically by later phases; plan a dedicated follow-up
-alongside import-cycle cleanup to restore richer checked conversion wrappers for elaboration/diagnostics.
-
-## 9. Proof IO Surface Is Not Implemented Yet
+## 7. Proof IO Surface Is Not Implemented Yet
 
 The DSL and CLI do not yet expose proof input/output workflows for equational checks.
 In particular, there is no `by ...` / `by auto` clause on obligations or morphism checks, and no
 proof artifact pipeline such as `--emit-proofs` / `--use-proofs`.
-
-## 10. Checker Proofs Are Not Persisted/Returned
-
-Morphism/action/implements checkers currently synthesize and verify proofs internally but do not
-return proof objects or persist them as artifacts for later replay.
+`encodeJoinProof` exists as scaffolding, but `decodeJoinProof` is still a placeholder.

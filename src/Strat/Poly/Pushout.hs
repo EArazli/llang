@@ -21,10 +21,12 @@ import Strat.Poly.TypeExpr
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs, diagramDom, diagramCod)
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), canonDiagramRaw, diagramPortIds, diagramIsoEq)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), canonDiagramRaw, diagramPortIds)
+import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Traversal (traverseDiagram)
-import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)
+import Strat.Poly.TermExpr (TermExpr(..))
+import Strat.Poly.TypeNormalize (termExprToDiagramChecked)
 
 
 data PolyPushoutResult = PolyPushoutResult
@@ -1038,7 +1040,7 @@ buildTypeMap doc renames permRen = do
       case param of
         TPType v -> Right (TAType (TVar v))
         TPTm v -> do
-          tm <- termExprToDiagram tt [] (tmvSort v) (TMVar v)
+          tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMVar v)
           Right (TATm tm)
 
 buildGenMap

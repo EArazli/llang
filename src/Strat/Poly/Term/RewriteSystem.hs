@@ -5,7 +5,8 @@ module Strat.Poly.Term.RewriteSystem
   , TermSubst
   , mkTRS
   , rootKey
-  , applyTermSubst
+  , applyTermSubstClosed
+  , applyTermSubstOnce
   , renameBoundVars
   , maxBoundVarIndex
   , boundVarSet
@@ -20,7 +21,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TermExpr (TermExpr(..))
+import Strat.Poly.Term.AST (TermExpr(..))
 import Strat.Poly.TypeExpr (TmFunName(..))
 
 
@@ -55,8 +56,8 @@ rootKey tm =
     TMFun (TmFunName f) _ -> Just (GenName f)
     _ -> Nothing
 
-applyTermSubst :: TermSubst -> TermExpr -> TermExpr
-applyTermSubst subst = go S.empty
+applyTermSubstClosed :: TermSubst -> TermExpr -> TermExpr
+applyTermSubstClosed subst = go S.empty
   where
     go seen tm =
       case tm of
@@ -69,6 +70,18 @@ applyTermSubst subst = go S.empty
                 else go (S.insert i seen) t
         TMVar _ -> tm
         TMFun f args -> TMFun f (map (go seen) args)
+
+applyTermSubstOnce :: TermSubst -> TermExpr -> TermExpr
+applyTermSubstOnce subst = go
+  where
+    go tm =
+      case tm of
+        TMBound i ->
+          case M.lookup i subst of
+            Nothing -> TMBound i
+            Just t -> t
+        TMVar _ -> tm
+        TMFun f args -> TMFun f (map go args)
 
 renameBoundVars :: Int -> TermExpr -> TermExpr
 renameBoundVars off tm =
@@ -104,7 +117,7 @@ matchPattern pat tm = go M.empty pat tm
     go subst patTm tgtTm =
       case patTm of
         TMBound i ->
-          let tgt = applyTermSubst subst tgtTm
+          let tgt = tgtTm
            in case M.lookup i subst of
                 Nothing -> Just (M.insert i tgt subst)
                 Just t ->
@@ -132,8 +145,8 @@ unifyTerms lhs rhs = go M.empty [(lhs, rhs)]
   where
     go subst [] = Just subst
     go subst ((a, b):rest) =
-      let a' = applyTermSubst subst a
-          b' = applyTermSubst subst b
+      let a' = applyTermSubstClosed subst a
+          b' = applyTermSubstClosed subst b
        in if a' == b'
             then go subst rest
             else
@@ -147,7 +160,7 @@ unifyTerms lhs rhs = go M.empty [(lhs, rhs)]
                 _ -> Nothing
 
     bindVar i t subst rest =
-      let t' = applyTermSubst subst t
+      let t' = applyTermSubstClosed subst t
        in if t' == TMBound i
             then go subst rest
             else
@@ -155,6 +168,6 @@ unifyTerms lhs rhs = go M.empty [(lhs, rhs)]
                 then Nothing
                 else
                   let one = M.singleton i t'
-                      subst' = M.insert i t' (M.map (applyTermSubst one) subst)
-                      rest' = map (\(x, y) -> (applyTermSubst one x, applyTermSubst one y)) rest
+                      subst' = M.insert i t' (M.map (applyTermSubstClosed one) subst)
+                      rest' = map (\(x, y) -> (applyTermSubstClosed one x, applyTermSubstClosed one y)) rest
                    in go subst' rest'

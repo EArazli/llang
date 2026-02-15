@@ -13,9 +13,10 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.Attr (AttrSubst, AttrVar, unifyAttrFlex)
 import Strat.Poly.Graph
+import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVarsFrom)
 import Strat.Poly.TypeExpr (TmVar, TyVar, TypeExpr)
 import Strat.Poly.TypeTheory (TypeTheory)
-import {-# SOURCE #-} Strat.Poly.UnifyTy
+import Strat.Poly.UnifyTy
   ( Subst
   , applySubstCtx
   , emptySubst

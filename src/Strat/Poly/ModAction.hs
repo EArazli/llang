@@ -26,7 +26,8 @@ import Strat.Poly.ModeTheory
 import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Proof
-  ( SearchBudget
+  ( JoinProof
+  , SearchBudget
   , SearchLimit
   , SearchOutcome(..)
   , defaultSearchBudget
@@ -35,11 +36,11 @@ import Strat.Poly.Proof
   )
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.TypeExpr
-import Strat.Poly.UnifyTy
+import Strat.Poly.UnifyTy hiding (applySubstDiagram)
 import Strat.Poly.TypeTheory
 
 data ActionSemanticsResult
-  = ActionSemanticsProved
+  = ActionSemanticsProved [(Text, JoinProof)]
   | ActionSemanticsUndecided Text SearchLimit
   deriving (Eq, Show)
 
@@ -50,22 +51,37 @@ validateActionSemanticsWithBudgetResult budget doc = do
   case actionResult of
     ActionSemanticsUndecided{} ->
       Right actionResult
-    ActionSemanticsProved ->
-      checkEqns tt (mtEqns (dModes doc))
+    ActionSemanticsProved actionProofs -> do
+      eqnResult <- checkEqns tt (mtEqns (dModes doc))
+      case eqnResult of
+        ActionSemanticsUndecided{} ->
+          Right eqnResult
+        ActionSemanticsProved eqnProofs ->
+          Right (ActionSemanticsProved (actionProofs <> eqnProofs))
   where
-    checkActions _ [] = Right ActionSemanticsProved
+    checkActions _ [] = Right (ActionSemanticsProved [])
     checkActions tt (decl:rest) = do
       result <- checkRulePreservation tt decl
       case result of
         ActionSemanticsUndecided{} -> Right result
-        ActionSemanticsProved -> checkActions tt rest
+        ActionSemanticsProved proofs -> do
+          restResult <- checkActions tt rest
+          case restResult of
+            ActionSemanticsUndecided{} -> Right restResult
+            ActionSemanticsProved restProofs ->
+              Right (ActionSemanticsProved (proofs <> restProofs))
 
-    checkEqns _ [] = Right ActionSemanticsProved
+    checkEqns _ [] = Right (ActionSemanticsProved [])
     checkEqns tt (eqn:rest) = do
       result <- checkModEqn tt eqn
       case result of
         ActionSemanticsUndecided{} -> Right result
-        ActionSemanticsProved -> checkEqns tt rest
+        ActionSemanticsProved proofs -> do
+          restResult <- checkEqns tt rest
+          case restResult of
+            ActionSemanticsUndecided{} -> Right restResult
+            ActionSemanticsProved restProofs ->
+              Right (ActionSemanticsProved (proofs <> restProofs))
 
     checkRulePreservation tt (modName, action) = do
       decl <-
@@ -77,12 +93,17 @@ validateActionSemanticsWithBudgetResult budget doc = do
       let rules = rulesFromPolicy (maPolicy action) (dCells2 doc)
       checkRules tt modName rules srcRules
 
-    checkRules _ _ _ [] = Right ActionSemanticsProved
+    checkRules _ _ _ [] = Right (ActionSemanticsProved [])
     checkRules tt modName rules (cell:rest) = do
       result <- checkOneRule tt modName rules cell
       case result of
         ActionSemanticsUndecided{} -> Right result
-        ActionSemanticsProved -> checkRules tt modName rules rest
+        ActionSemanticsProved proofs -> do
+          restResult <- checkRules tt modName rules rest
+          case restResult of
+            ActionSemanticsUndecided{} -> Right restResult
+            ActionSemanticsProved restProofs ->
+              Right (ActionSemanticsProved (proofs <> restProofs))
 
     checkOneRule tt modName rules cell = do
       cell' <- freshenRuleTyVars tt cell
@@ -98,7 +119,7 @@ validateActionSemanticsWithBudgetResult budget doc = do
             )
         SearchProved witness -> do
           checkJoinProof tt rules witness
-          Right ActionSemanticsProved
+          Right (ActionSemanticsProved [("rule " <> c2Name cell, witness)])
 
     checkModEqn tt eqn = do
       let lhs = meLHS eqn
@@ -111,14 +132,19 @@ validateActionSemanticsWithBudgetResult budget doc = do
           let policy = choosePolicy mods
           let rules = rulesFromPolicy policy (dCells2 doc)
           checkGens tt lhs rhs rules gens
-        else Right ActionSemanticsProved
+        else Right (ActionSemanticsProved [])
 
-    checkGens _ _ _ _ [] = Right ActionSemanticsProved
+    checkGens _ _ _ _ [] = Right (ActionSemanticsProved [])
     checkGens tt lhs rhs rules (gd:rest) = do
       result <- checkOneGen tt lhs rhs rules gd
       case result of
         ActionSemanticsUndecided{} -> Right result
-        ActionSemanticsProved -> checkGens tt lhs rhs rules rest
+        ActionSemanticsProved proofs -> do
+          restResult <- checkGens tt lhs rhs rules rest
+          case restResult of
+            ActionSemanticsUndecided{} -> Right restResult
+            ActionSemanticsProved restProofs ->
+              Right (ActionSemanticsProved (proofs <> restProofs))
 
     checkOneGen tt lhs rhs rules gd = do
       gDiag <- genericGenDiagram gd
@@ -134,7 +160,7 @@ validateActionSemanticsWithBudgetResult budget doc = do
             )
         SearchProved witness -> do
           checkJoinProof tt rules witness
-          Right ActionSemanticsProved
+          Right (ActionSemanticsProved [("generator " <> renderGenName (gdName gd), witness)])
 
     choosePolicy mods =
       let policies = [ maPolicy action | m <- mods, action <- maybeToList (M.lookup m (dActions doc)) ]
@@ -152,7 +178,7 @@ validateActionSemanticsWithBudget :: SearchBudget -> Doctrine -> Either Text ()
 validateActionSemanticsWithBudget budget doc = do
   result <- validateActionSemanticsWithBudgetResult budget doc
   case result of
-    ActionSemanticsProved ->
+    ActionSemanticsProved _ ->
       Right ()
     ActionSemanticsUndecided label lim ->
       Left

@@ -18,7 +18,8 @@ import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram)
 import Strat.Poly.Pushout (computePolyPushout, PolyPushoutResult(..))
-import Strat.Poly.Graph (diagramIsoEq, Diagram(..), BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..), emptyDiagram, freshPort, addEdgePayload)
+import Strat.Poly.Graph (Diagram(..), BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..), emptyDiagram, freshPort, addEdgePayload)
+import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Common.Rules (RuleClass(..), Orientation(..), RewritePolicy(..))
 
 

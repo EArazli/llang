@@ -6,6 +6,7 @@ module Strat.CLI
   ) where
 
 import Strat.Frontend.Loader (loadModuleWithBudget)
+import Strat.Frontend.Env (ModuleEnv(..), ProofStats(..), proofStatsTotal)
 import Strat.Frontend.Run (runWithEnv, selectRun, RunResult(..), Artifact(..))
 import Strat.Poly.Proof (SearchBudget(..), defaultSearchBudget)
 import Data.Text (Text)
@@ -14,6 +15,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as M
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
+import System.IO (stderr)
 
 
 data CLIOptions = CLIOptions
@@ -70,6 +72,7 @@ runCLI opts = do
           case runWithEnv env spec of
             Left err -> pure (Left err)
             Right res -> do
+              TIO.hPutStrLn stderr (renderProofSummary (meProofStats env))
               writeExtractedFiles (prArtifact res)
               pure (Right (prOutput res))
 
@@ -91,3 +94,18 @@ usage =
     , "Run a named run in FILE (default: main or the only run)."
     , "Search-budget flags tune auto-proof search during module elaboration/checking."
     ]
+
+renderProofSummary :: ProofStats -> Text
+renderProofSummary stats =
+  "proof-summary: total="
+    <> tshow (proofStatsTotal stats)
+    <> " (morphism="
+    <> tshow (psMorphismProofs stats)
+    <> ", action="
+    <> tshow (psActionProofs stats)
+    <> ", implements="
+    <> tshow (psImplementsProofs stats)
+    <> ")"
+
+tshow :: Show a => a -> Text
+tshow = T.pack . show

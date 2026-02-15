@@ -28,44 +28,22 @@ import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName, ModExpr(..), ModeTheory, composeMod, normalizeModExpr)
-import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..), unPortId, unEdgeId)
-
-
-newtype TypeName = TypeName Text deriving (Eq, Ord, Show)
-
-data TypeRef = TypeRef
-  { trMode :: ModeName
-  , trName :: TypeName
-  } deriving (Eq, Ord, Show)
-
-data TyVar = TyVar
-  { tvName :: Text
-  , tvMode :: ModeName
-  } deriving (Eq, Ord, Show)
-
-newtype TmFunName = TmFunName Text deriving (Eq, Ord, Show)
-
-data TmVar = TmVar
-  { tmvName :: Text
-  , tmvSort :: TypeExpr
-  , tmvScope :: Int
-  } deriving (Eq, Ord, Show)
-
-newtype TermDiagram = TermDiagram { unTerm :: Diagram }
-  deriving (Eq, Ord, Show)
-
-data TypeArg
-  = TAType TypeExpr
-  | TATm TermDiagram
-  deriving (Eq, Ord, Show)
-
-data TypeExpr
-  = TVar TyVar
-  | TCon TypeRef [TypeArg]
-  | TMod ModExpr TypeExpr
-  deriving (Eq, Ord, Show)
-
-type Context = [TypeExpr]
+import Strat.Poly.Syntax
+  ( TyVar(..)
+  , TypeName(..)
+  , TypeRef(..)
+  , TmFunName(..)
+  , TmVar(..)
+  , TermDiagram(..)
+  , TypeArg(..)
+  , TypeExpr(..)
+  , Context
+  , Diagram(..)
+  , Edge(..)
+  , EdgePayload(..)
+  , unPortId
+  , unEdgeId
+  )
 
 mapTermDiagram :: (TermDiagram -> TermDiagram) -> TermDiagram -> TermDiagram
 mapTermDiagram f tm = f tm

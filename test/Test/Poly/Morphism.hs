@@ -17,7 +17,8 @@ import Strat.Poly.ModeTheory
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), diagramIsoEq, emptyDiagram, freshPort, addEdgePayload)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), emptyDiagram, freshPort, addEdgePayload)
+import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Cell2
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism

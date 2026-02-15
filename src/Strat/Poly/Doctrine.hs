@@ -121,7 +121,7 @@ mkTypeTheory doc = do
   trs <- compileAllTermRules tt0
   mapM_ checkTerminatingSCT (M.elems trs)
   mapM_ checkConfluent (M.elems trs)
-  pure tt0
+  pure tt0 { ttTmTRS = trs }
 
 doctrineTypeTheoryBase :: Doctrine -> TypeTheory
 doctrineTypeTheoryBase doc =
@@ -138,6 +138,7 @@ doctrineTypeTheoryBase doc =
             ]
       , ttTmFuns = tmFuns
       , ttTmRules = tmRules
+      , ttTmTRS = M.empty
       }
   where
     toTParam ps =

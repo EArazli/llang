@@ -13,7 +13,7 @@ import Strat.Poly.ModeTheory (ModeName, ModeTheory(..))
 import qualified Strat.Poly.TypeTheory as TT
 import Strat.Poly.TypeExpr (TmVar(..), unTerm)
 import Strat.Poly.TermExpr (TermExpr(..), diagramGraphToTermExprUnchecked, sameTmMetaId)
-import Strat.Poly.Term.RewriteSystem (TRS, TRule(..), mkTRS)
+import Strat.Poly.Term.RewriteSystem (TRS, TRule(..), mkTRS, boundVarSet)
 
 
 compileTermRules :: TT.TypeTheory -> ModeName -> Either Text TRS
@@ -33,6 +33,7 @@ compileTermRules tt mode = do
       ensureFirstOrder "lhs" lhs
       ensureFirstOrder "rhs" rhs
       ensureLHSShape lhs
+      ensureRHSVarsSubsetLHS i lhs rhs
       pure
         TRule
           { trName = "tmrule." <> T.pack (show i)
@@ -83,3 +84,19 @@ ensureLHSShape lhs =
   case lhs of
     TMFun _ _ -> Right ()
     _ -> Left "compileTermRules: left-hand side must be a function application"
+
+ensureRHSVarsSubsetLHS :: Int -> TermExpr -> TermExpr -> Either Text ()
+ensureRHSVarsSubsetLHS ruleIx lhs rhs =
+  let lhsVars = boundVarSet lhs
+      rhsVars = boundVarSet rhs
+      bad = S.toList (S.difference rhsVars lhsVars)
+   in if null bad
+        then Right ()
+        else
+          Left
+            ( "compileTermRules: rhs introduces fresh variables in rule tmrule."
+                <> T.pack (show ruleIx)
+                <> " (indices: "
+                <> T.intercalate ", " (map (T.pack . show) bad)
+                <> ")"
+            )

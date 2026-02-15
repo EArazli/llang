@@ -10,7 +10,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.List as L
 import Strat.Poly.TypeExpr (TmFunName(..))
-import Strat.Poly.TermExpr (TermExpr(..))
+import Strat.Poly.Term.AST (TermExpr(..))
 import Strat.Poly.Term.RewriteSystem (TRS(..), TRule(..))
 
 

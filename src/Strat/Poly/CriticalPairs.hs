@@ -16,6 +16,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import Data.Functor.Identity (runIdentity)
 import Strat.Poly.Graph
+import qualified Strat.Poly.DiagramIso as DiagramIso
 import qualified Strat.Poly.Diagram as Diag
 import Strat.Poly.Diagram
 import Strat.Poly.Match (Match(..))
@@ -363,7 +364,7 @@ payloadSubsts tt tyFlex tmFlex attrFlex tySubst attrSubst p1 p2 =
                 (map (\(tySub', attrSub') -> (tySub', attrSub')))
                 ( mapLeft
                     fatalSubstError
-                    (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst0 attrSubst0 d1 d2)
+                    (DiagramIso.diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst0 attrSubst0 d1 d2)
                 )
             (BAMeta x, BAMeta y) ->
               if x == y then Right [(tySubst0, attrSubst0)] else Right []
@@ -371,11 +372,11 @@ payloadSubsts tt tyFlex tmFlex attrFlex tySubst attrSubst p1 p2 =
     (PBox _ d1, PBox _ d2) -> do
       mapLeft
         fatalSubstError
-        (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst attrSubst d1 d2)
+        (DiagramIso.diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst attrSubst d1 d2)
     (PFeedback d1, PFeedback d2) ->
       mapLeft
         fatalSubstError
-        (Strat.Poly.Graph.diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst attrSubst d1 d2)
+        (DiagramIso.diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst attrSubst d1 d2)
     (PSplice x, PSplice y) | x == y -> Right [(tySubst, attrSubst)]
     (PTmMeta x, PTmMeta y)
       | tmvName x == tmvName y && tmvScope x == tmvScope y -> Right [(tySubst, attrSubst)]
@@ -663,7 +664,7 @@ dedupCriticalPairs pairs = go [] pairs
               if okSwap then isoEqOrFalse (cpRight a) (cpLeft b) else Right False
 
     isoEqOrFalse x y =
-      case diagramIsoEq x y of
+      case DiagramIso.diagramIsoEq x y of
         Left _ -> Right False
         Right ok -> Right ok
 

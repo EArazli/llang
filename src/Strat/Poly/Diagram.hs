@@ -35,13 +35,13 @@ import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.TypeExpr (Context, TypeExpr, TyVar, TmVar(..), freeTyVarsType, freeTmVarsType)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
-import {-# SOURCE #-} Strat.Poly.UnifyTy
+import Strat.Poly.UnifyTy
   ( Subst
   , emptySubst
   , applySubstCtx
   , unifyCtx
-  , applySubstTy
   )
+import qualified Strat.Poly.UnifyTy as U (applySubstDiagram)
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.Traversal (foldDiagram, traverseDiagram)
 
@@ -158,19 +158,7 @@ diagramCod diag = mapM (lookupPort "diagramCod") (dOut diag)
         Just ty -> Right ty
 
 applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
-applySubstDiagram tt subst =
-  traverseDiagram onDiag onPayload pure
-  where
-    onDiag d = do
-      dPortTy' <- IM.traverseWithKey (\_ ty -> applySubstTy tt subst ty) (dPortTy d)
-      dTmCtx' <- mapM (applySubstTy tt subst) (dTmCtx d)
-      pure d { dTmCtx = dTmCtx', dPortTy = dPortTy' }
-    onPayload payload =
-      case payload of
-        PTmMeta v -> do
-          sort' <- applySubstTy tt subst (tmvSort v)
-          pure (PTmMeta v { tmvSort = sort' })
-        _ -> pure payload
+applySubstDiagram = U.applySubstDiagram
 
 freeTyVarsDiagram :: Diagram -> S.Set TyVar
 freeTyVarsDiagram =

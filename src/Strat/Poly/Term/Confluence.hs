@@ -7,12 +7,12 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.List as L
-import Strat.Poly.TermExpr (TermExpr(..))
+import Strat.Poly.Term.AST (TermExpr(..))
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
 import Strat.Poly.Term.RewriteSystem
   ( TRS(..)
   , TRule(..)
-  , applyTermSubst
+  , applyTermSubstClosed
   , maxBoundVarIndex
   , renameBoundVars
   , unifyTerms
@@ -72,9 +72,9 @@ criticalPairs trs =
       , not (isTrivialSelfOverlap outer inner pos)
       , Just subterm <- [subtermAt pos (trLHS inner)]
       , Just subst <- [unifyTerms (trLHS outer) subterm]
-      , let lhsInnerSub = applyTermSubst subst (trLHS inner)
-      , let rhsInnerSub = applyTermSubst subst (trRHS inner)
-      , let rhsOuter = applyTermSubst subst (trRHS outer)
+      , let lhsInnerSub = applyTermSubstClosed subst (trLHS inner)
+      , let rhsInnerSub = applyTermSubstClosed subst (trRHS inner)
+      , let rhsOuter = applyTermSubstClosed subst (trRHS outer)
       ]
 
 renameRuleApart :: TRule -> TRule -> TRule

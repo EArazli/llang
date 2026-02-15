@@ -31,10 +31,10 @@ import Strat.Poly.Graph
   , addEdgePayload
   , validateDiagram
   , unionDisjointIntMap
-  , diagramIsoEq
   , unPortId
   , unEdgeId
   )
+import Strat.Poly.DiagramIso (diagramIsoEq)
 import Test.Poly.Helpers (mkModes)
 
 

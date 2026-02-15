@@ -3,12 +3,15 @@ module Strat.Poly.TypeNormalize
   ( normalizeTypeDeep
   , normalizeTypeDeepWithCtx
   , normalizeTermDiagram
+  , termExprToDiagramChecked
+  , diagramToTermExprChecked
   , termToDiagram
   , diagramToTerm
   , validateTermDiagram
   ) where
 
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Strat.Poly.Graph
   ( Diagram(..)
@@ -25,14 +28,17 @@ import Strat.Poly.TypeExpr
 import Strat.Poly.TypeTheory
   ( TypeParamSig(..)
   , TypeTheory(..)
+  , lookupTmFunSig
   )
 import Strat.Poly.TermExpr
-  ( diagramGraphToTermExprUnchecked
-  , termExprToDiagramUnchecked
+  ( TermExpr
+  , TermConvEnv(..)
+  , diagramToTermExprWith
+  , diagramGraphToTermExprUnchecked
+  , termExprToDiagramWith
   , validateTermGraph
   )
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
-import Strat.Poly.Term.RewriteCompile (compileTermRules)
 import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
 
 
@@ -106,18 +112,37 @@ normalizeTermDiagram
   -> TermDiagram
   -> Either Text TermDiagram
 normalizeTermDiagram tt tmCtx expectedSort term = do
-  expectedSort' <- normalizeTypeDeepWithCtx tt tmCtx expectedSort
-  src <- termToDiagram tt tmCtx expectedSort' term
-  trs <- termTRSForMode tt (typeMode expectedSort')
-  expr0 <- diagramGraphToTermExprUnchecked src
+  expectedSort' <- wrap "normalize-sort" (normalizeTypeDeepWithCtx tt tmCtx expectedSort)
+  src <- wrap "term-to-diagram" (termToDiagram tt tmCtx expectedSort' term)
+  trs <- wrap "trs-lookup" (termTRSForMode tt (typeMode expectedSort'))
+  expr0 <- wrap "diagram-to-termexpr" (diagramGraphToTermExprUnchecked src)
   let expr = normalizeTermExpr trs expr0
-  out <- termExprToDiagramUnchecked tt tmCtx expectedSort' expr
+  out <- wrap "termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' expr)
   let outGraph = unTerm out
-  validateTermGraph outGraph
-  ensureOutputSort tt tmCtx expectedSort' outGraph
+  wrap "validate-output-graph" (validateTermGraph outGraph)
+  wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' outGraph)
   -- Normalize output graph layout by a deterministic structural roundtrip.
-  exprCanon <- diagramGraphToTermExprUnchecked outGraph
-  termExprToDiagramUnchecked tt tmCtx expectedSort' exprCanon
+  exprCanon <- wrap "roundtrip-diagram-to-termexpr" (diagramGraphToTermExprUnchecked outGraph)
+  wrap "roundtrip-termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' exprCanon)
+  where
+    wrap stage =
+      mapLeft
+        ( \err ->
+            "normalizeTermDiagram[mode="
+              <> renderMode (typeMode expectedSort)
+              <> ", expectedSort="
+              <> T.pack (show expectedSort)
+              <> ", tmCtxSize="
+              <> T.pack (show (length tmCtx))
+              <> ", inArity="
+              <> T.pack (show (length (dIn (unTerm term))))
+              <> ", outArity="
+              <> T.pack (show (length (dOut (unTerm term))))
+              <> ", stage="
+              <> stage
+              <> "]: "
+              <> err
+        )
 
 termToDiagram
   :: TypeTheory
@@ -126,14 +151,50 @@ termToDiagram
   -> TermDiagram
   -> Either Text Diagram
 termToDiagram tt tmCtx expectedSort (TermDiagram term0) = do
-  expectedSort' <- normalizeTypeDeepWithCtx tt tmCtx expectedSort
+  expectedSort' <- wrap "normalize-sort" (normalizeTypeDeepWithCtx tt tmCtx expectedSort)
   let term = term0 { dTmCtx = tmCtx }
-  validateTermGraph term
+  wrap "validate-term-graph" (validateTermGraph term)
   if dMode term == typeMode expectedSort'
     then Right ()
-    else Left "termToDiagram: mode mismatch"
-  ensureOutputSort tt tmCtx expectedSort' term
+    else wrapFail "mode-mismatch" "term mode differs from expected sort mode"
+  wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' term)
   pure term
+  where
+    wrap stage =
+      mapLeft
+        ( \err ->
+            "termToDiagram[mode="
+              <> renderMode (typeMode expectedSort)
+              <> ", expectedSort="
+              <> T.pack (show expectedSort)
+              <> ", tmCtxSize="
+              <> T.pack (show (length tmCtx))
+              <> ", inArity="
+              <> T.pack (show (length (dIn term0)))
+              <> ", outArity="
+              <> T.pack (show (length (dOut term0)))
+              <> ", stage="
+              <> stage
+              <> "]: "
+              <> err
+        )
+    wrapFail stage msg =
+      Left
+        ( "termToDiagram[mode="
+            <> renderMode (typeMode expectedSort)
+            <> ", expectedSort="
+            <> T.pack (show expectedSort)
+            <> ", tmCtxSize="
+            <> T.pack (show (length tmCtx))
+            <> ", inArity="
+            <> T.pack (show (length (dIn term0)))
+            <> ", outArity="
+            <> T.pack (show (length (dOut term0)))
+            <> ", stage="
+            <> stage
+            <> "]: "
+            <> msg
+        )
 
 diagramToTerm
   :: TypeTheory
@@ -174,6 +235,44 @@ requireSingleOut term =
 
 termTRSForMode :: TypeTheory -> ModeName -> Either Text TRS
 termTRSForMode tt mode =
-  case M.lookup mode (ttTmRules tt) of
+  case M.lookup mode (ttTmTRS tt) of
     Nothing -> Right (mkTRS mode [])
-    Just _ -> compileTermRules tt mode
+    Just trs -> Right trs
+
+termExprToDiagramChecked
+  :: TypeTheory
+  -> [TypeExpr]
+  -> TypeExpr
+  -> TermExpr
+  -> Either Text TermDiagram
+termExprToDiagramChecked tt tmCtx expectedSort tm =
+  termExprToDiagramWith (checkedConvEnv tt) tmCtx expectedSort tm
+
+diagramToTermExprChecked
+  :: TypeTheory
+  -> [TypeExpr]
+  -> TypeExpr
+  -> TermDiagram
+  -> Either Text TermExpr
+diagramToTermExprChecked tt tmCtx expectedSort tm =
+  diagramToTermExprWith (checkedConvEnv tt) tmCtx expectedSort tm
+
+checkedConvEnv :: TypeTheory -> TermConvEnv
+checkedConvEnv tt =
+  TermConvEnv
+    { tcLookupSig = \mode f -> lookupTmFunSig tt mode f
+    , tcSortEq = \tmCtx tyA tyB -> do
+        tyA' <- normalizeTypeDeepWithCtx tt tmCtx tyA
+        tyB' <- normalizeTypeDeepWithCtx tt tmCtx tyB
+        pure (tyA' == tyB')
+    }
+
+renderMode :: ModeName -> Text
+renderMode mode =
+  T.pack (show mode)
+
+mapLeft :: (e -> f) -> Either e a -> Either f a
+mapLeft f mv =
+  case mv of
+    Left err -> Left (f err)
+    Right v -> Right v
