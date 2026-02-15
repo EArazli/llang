@@ -378,6 +378,7 @@ payloadSubsts tt tyFlex tmFlex attrFlex tySubst attrSubst p1 p2 =
     (PSplice x, PSplice y) | x == y -> Right [(tySubst, attrSubst)]
     (PTmMeta x, PTmMeta y)
       | tmvName x == tmvName y && tmvScope x == tmvScope y -> Right [(tySubst, attrSubst)]
+    (PInternalDrop, PInternalDrop) -> Right [(tySubst, attrSubst)]
     _ -> Right []
 
 edgeCompatible :: Edge -> Edge -> Bool
@@ -395,6 +396,7 @@ payloadCompatible p1 p2 =
     (PFeedback _, PFeedback _) -> True
     (PSplice x, PSplice y) -> x == y
     (PTmMeta x, PTmMeta y) -> tmvName x == tmvName y && tmvScope x == tmvScope y
+    (PInternalDrop, PInternalDrop) -> True
     _ -> False
 
 sortEdges :: [Edge] -> [Edge]

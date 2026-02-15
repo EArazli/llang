@@ -4,6 +4,7 @@ module Strat.Poly.TermExpr
   , termExprToDiagram
   , diagramToTermExpr
   , diagramGraphToTermExpr
+  , validateTermGraph
   , freeTmVarsExpr
   , boundGlobalsExpr
   , maxTmScopeExpr
@@ -11,7 +12,7 @@ module Strat.Poly.TermExpr
   , sameTmMetaId
   ) where
 
-import Control.Monad (foldM)
+import Control.Monad (foldM, forM, when)
 import Data.List (elemIndex)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -31,7 +32,6 @@ import Strat.Poly.Graph
   , unPortId
   , unEdgeId
   , setPortLabel
-  , getPortLabel
   )
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName(..))
@@ -66,16 +66,14 @@ termExprToDiagram tt tmCtx expectedSort tm = do
   expectedSort' <- normalizeTypeDeepWithCtx tt tmCtx expectedSort
   let mode = typeMode expectedSort'
   let modeInputsAll = modeCtx tmCtx mode
-  let modeInputs = selectModeInputs modeInputsAll tm
-  let neededScope = maxTmScopeExpr tm
-  if neededScope <= length modeInputsAll
-    then Right ()
-    else Left "termExprToDiagram: metavariable scope exceeds mode-local context"
+  needed <- requiredModePrefixLen tmCtx mode tm
+  let modeInputs = take needed modeInputsAll
   let (inPorts, d0) = allocPorts (map snd modeInputs) (emptyDiagram mode tmCtx)
   d1 <- annotateInputs modeInputs inPorts d0
   let base = d1 { dIn = inPorts, dOut = [] }
   (root, d2) <- go modeInputs modeInputsAll inPorts base expectedSort' tm
-  let out = d2 { dOut = [root] }
+  let withOut = d2 { dOut = [root] }
+  out <- saturateUnusedPrefixInputs withOut
   validateTermGraph out
   pure (TermDiagram out)
   where
@@ -144,6 +142,7 @@ diagramGraphToTermExpr tt tmCtx expectedSort diag = do
   if dMode diag == mode
     then Right ()
     else Left "diagramToTermExpr: mode mismatch"
+  validateBoundaryMapping
   case dOut diag of
     [outPort] -> do
       outTy <-
@@ -154,14 +153,32 @@ diagramGraphToTermExpr tt tmCtx expectedSort diag = do
       if same
         then Right ()
         else Left "diagramToTermExpr: output sort mismatch"
-      termAt S.empty modeInputs inMap outPort
+      termAt S.empty inMap outPort
     _ -> Left "diagramToTermExpr: term diagram must have exactly one output"
   where
-    modeInputs = modeCtx tmCtx (typeMode expectedSort)
-    localToGlobal = map (resolveInputGlobal modeInputs) (dIn diag)
+    modeInputs = modeCtx tmCtx (dMode diag)
+    nIn = length (dIn diag)
+    localToGlobal = map fst (take nIn modeInputs)
     inMap = M.fromList (zip (dIn diag) [0 :: Int ..])
+    validateBoundaryMapping = do
+      if nIn <= length modeInputs
+        then Right ()
+        else Left "diagramToTermExpr: boundary input prefix exceeds mode-local context"
+      mapM_ checkBoundaryType (zip [0 :: Int ..] (dIn diag))
+    checkBoundaryType (localPos, pid) = do
+      expectedTy <-
+        case nth modeInputs localPos of
+          Nothing -> Left "diagramToTermExpr: missing expected boundary input sort"
+          Just (_, ty) -> Right ty
+      actualTy <-
+        case diagramPortType diag pid of
+          Nothing -> Left "diagramToTermExpr: missing boundary input sort"
+          Just ty -> Right ty
+      if actualTy == expectedTy
+        then Right ()
+        else Left "diagramToTermExpr: boundary input sort mismatch"
 
-    termAt seen modeInputs0 inMap0 pid =
+    termAt seen inMap0 pid =
       case M.lookup pid inMap0 of
         Just local ->
           case nth localToGlobal local of
@@ -181,7 +198,7 @@ diagramGraphToTermExpr tt tmCtx expectedSort diag = do
               case ePayload producer of
                 PGen (GenName gName) attrs bargs
                   | M.null attrs && null bargs -> do
-                      args <- mapM (termAt (S.insert pid seen) modeInputs0 inMap0) (eIns producer)
+                      args <- mapM (termAt (S.insert pid seen) inMap0) (eIns producer)
                       Right (TMFun (TmFunName gName) args)
                   | otherwise ->
                       Left "diagramToTermExpr: generator term node must not carry attrs or binder args"
@@ -191,26 +208,6 @@ diagramGraphToTermExpr tt tmCtx expectedSort diag = do
                     else Left "diagramToTermExpr: PTmMeta inputs do not match canonical scope prefix"
                 _ ->
                   Left "diagramToTermExpr: non-term payload in term diagram"
-
-    resolveInputGlobal modeInputs0 pid =
-      case getPortLabel diag pid >>= decodeLabel of
-        Just globalTm -> globalTm
-        Nothing ->
-          case elemIndex pid (dIn diag) of
-            Just local ->
-              case nth modeInputs0 local of
-                Just (globalTm, _) -> globalTm
-                Nothing -> local
-            Nothing -> 0
-
-    decodeLabel lbl =
-      case T.stripPrefix "tmctx:" lbl of
-        Nothing -> Nothing
-        Just raw ->
-          case reads (T.unpack raw) of
-            [(n, "")] -> Just n
-            _ -> Nothing
-
 freeTmVarsExpr :: TermExpr -> S.Set TmVar
 freeTmVarsExpr tm =
   case tm of
@@ -248,9 +245,28 @@ validateTermGraph diag = do
   case dOut diag of
     [_] -> Right ()
     _ -> Left "validateTermDiagram: term diagram must have exactly one output"
+  let modeInputs0 = modeCtx (dTmCtx diag) (dMode diag)
+  let nIn = length (dIn diag)
+  if nIn <= length modeInputs0
+    then Right ()
+    else Left "validateTermDiagram: boundary input prefix exceeds mode-local context"
+  mapM_ (checkBoundaryType modeInputs0) (zip [0 :: Int ..] (dIn diag))
   mapM_ checkEdge (IM.elems (dEdges diag))
   pure ()
   where
+    checkBoundaryType modeInputs0 (localPos, pid) = do
+      expectedTy <-
+        case nth modeInputs0 localPos of
+          Nothing -> Left "validateTermDiagram: missing expected boundary input sort"
+          Just (_, ty) -> Right ty
+      actualTy <-
+        case diagramPortType diag pid of
+          Nothing -> Left "validateTermDiagram: missing boundary input sort"
+          Just ty -> Right ty
+      if actualTy == expectedTy
+        then Right ()
+        else Left "validateTermDiagram: boundary input sort mismatch"
+
     checkEdge edge =
       case ePayload edge of
         PGen _ attrs bargs ->
@@ -258,7 +274,8 @@ validateTermGraph diag = do
             then Right ()
             else Left "validateTermDiagram: term generator nodes cannot have attrs or binder args"
         PTmMeta _ -> Right ()
-        _ -> Left "validateTermDiagram: only PGen/PTmMeta are allowed in term diagrams"
+        PInternalDrop -> Right ()
+        _ -> Left "validateTermDiagram: only PGen/PTmMeta/PInternalDrop are allowed in term diagrams"
 
 modeCtx :: [TypeExpr] -> ModeName -> [(Int, TypeExpr)]
 modeCtx tele mode =
@@ -267,16 +284,35 @@ modeCtx tele mode =
   , typeMode ty == mode
   ]
 
-selectModeInputs :: [(Int, TypeExpr)] -> TermExpr -> [(Int, TypeExpr)]
-selectModeInputs modeInputs tm =
-  [ entry
-  | entry@(globalTm, _) <- modeInputs
-  , globalTm `S.member` wanted
-  ]
-  where
-    wanted = S.union prefixWanted boundWanted
-    prefixWanted = S.fromList (map fst (take (maxTmScopeExpr tm) modeInputs))
-    boundWanted = boundGlobalsExpr tm
+requiredModePrefixLen :: [TypeExpr] -> ModeName -> TermExpr -> Either Text Int
+requiredModePrefixLen tmCtx mode tm = do
+  let modeInputsAll = modeCtx tmCtx mode
+  let globals = map fst modeInputsAll
+  let neededScope = maxTmScopeExpr tm
+  let boundGlobals = S.toList (boundGlobalsExpr tm)
+  boundPositions <-
+    forM
+      boundGlobals
+      ( \globalTm ->
+          case elemIndex globalTm globals of
+            Nothing ->
+              Left
+                ( "termExprToDiagram: bound variable index "
+                    <> T.pack (show globalTm)
+                    <> " not in mode-local context (wrong mode or out of scope)"
+                )
+            Just localPos ->
+              Right localPos
+      )
+  let neededBound =
+        case boundPositions of
+          [] -> 0
+          _ -> 1 + maximum boundPositions
+  let needed = max neededScope neededBound
+  when
+    (needed > length modeInputsAll)
+    (Left "termExprToDiagram: required prefix exceeds available bound vars of this mode")
+  pure needed
 
 lookupBound :: [(Int, TypeExpr)] -> [PortId] -> Int -> Maybe (PortId, TypeExpr)
 lookupBound modeInputs inPorts idx = do
@@ -291,6 +327,19 @@ allocPorts (ty:rest) diag =
   let (pid, diag1) = freshPort ty diag
       (restPorts, diag2) = allocPorts rest diag1
    in (pid : restPorts, diag2)
+
+saturateUnusedPrefixInputs :: Diagram -> Either Text Diagram
+saturateUnusedPrefixInputs diag =
+  foldM ensureConsumed diag (dIn diag)
+  where
+    ensureConsumed d pid =
+      let isBoundaryOutput = pid `elem` dOut d
+       in case IM.lookup (unPortId pid) (dCons d) of
+            Just Nothing
+              | isBoundaryOutput -> Right d
+              | otherwise ->
+                  addEdgePayload PInternalDrop [pid] [] d
+            _ -> Right d
 
 sortsDefEq :: TypeTheory -> [TypeExpr] -> TypeExpr -> TypeExpr -> Either Text Bool
 sortsDefEq tt tmCtx lhs rhs = do

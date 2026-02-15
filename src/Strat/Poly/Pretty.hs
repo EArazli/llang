@@ -103,6 +103,16 @@ renderEdges edges = do
                 <> renderPortList (eOuts e)
                 <> "]"
             )
+        PInternalDrop ->
+          Right
+            ( "  "
+                <> renderEdgeId (eId e)
+                <> ": internal_drop ["
+                <> renderPortList (eIns e)
+                <> "] -> ["
+                <> renderPortList (eOuts e)
+                <> "]"
+            )
     renderPortList = T.intercalate ", " . map renderPortId
 
     renderBinderArgs [] = Right ""

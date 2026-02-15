@@ -115,6 +115,7 @@ payloadCompatible p h =
     (PBox _ _, PBox _ _) -> True
     (PFeedback _, PFeedback _) -> True
     (PSplice x, PSplice y) -> x == y
+    (PInternalDrop, PInternalDrop) -> True
     _ -> False
 
 portsCompatible :: Match -> [PortId] -> [PortId] -> Bool
@@ -273,6 +274,9 @@ payloadSubsts tt tyFlex tmFlex attrFlex match patEdge hostEdge =
     (PSplice x, PSplice y)
       | x == y -> Right [(mTySubst match, mAttrSubst match, mBinderSub match)]
       | otherwise -> Right []
+
+    (PInternalDrop, PInternalDrop) ->
+      Right [(mTySubst match, mAttrSubst match, mBinderSub match)]
 
     _ -> Right []
 

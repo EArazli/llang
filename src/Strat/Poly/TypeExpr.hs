@@ -24,11 +24,11 @@ module Strat.Poly.TypeExpr
   ) where
 
 import Data.Text (Text)
-import qualified Data.Text as T
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName, ModExpr(..), ModeTheory, composeMod, normalizeModExpr)
-import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..), getPortLabel, unPortId)
+import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..), unPortId, unEdgeId)
 
 
 newtype TypeName = TypeName Text deriving (Eq, Ord, Show)
@@ -138,44 +138,43 @@ boundTmIndicesTerm :: TermDiagram -> S.Set Int
 boundTmIndicesTerm (TermDiagram diag) =
   S.fromList
     [ globalTm
-    | (localPos, pid) <- zip [0 :: Int ..] (dIn diag)
-    , inputIsUsed pid
-    , Just globalTm <- [resolveTmCtxIndex (dTmCtx diag) (dMode diag) localPos (getPortLabel diag pid)]
+    | localPos <- S.toList usedLocals
+    , Just globalTm <- [resolveTmCtxIndex (dTmCtx diag) (dMode diag) localPos]
     ]
   where
-    inputIsUsed pid =
-      pid `elem` dOut diag
-        || case IM.lookup (unPortId pid) (dCons diag) of
-             Just (Just _) -> True
-             _ -> False
+    inputLocals = M.fromList (zip (dIn diag) [0 :: Int ..])
+    usedLocals = collect S.empty S.empty (dOut diag)
 
-resolveTmCtxIndex :: [TypeExpr] -> ModeName -> Int -> Maybe Text -> Maybe Int
-resolveTmCtxIndex tmCtx mode localPos mLabel =
-  case mLabel >>= decodeTmCtxLabel of
-    Just globalTm
-      | globalTm >= 0
-      , globalTm < length tmCtx
-      , typeMode (tmCtx !! globalTm) == mode ->
-          Just globalTm
-    _ ->
-      case drop localPos globals of
-        (globalTm:_) -> Just globalTm
-        [] -> Nothing
+    collect _seen locals [] = locals
+    collect seen locals (pid:rest)
+      | pid `S.member` seen = collect seen locals rest
+      | otherwise =
+          let seen' = S.insert pid seen
+           in case M.lookup pid inputLocals of
+                Just localPos ->
+                  collect seen' (S.insert localPos locals) rest
+                Nothing ->
+                  case IM.lookup (unPortId pid) (dProd diag) of
+                    Just (Just eid) ->
+                      case IM.lookup (unEdgeId eid) (dEdges diag) of
+                        Just edge ->
+                          collect seen' locals (eIns edge <> rest)
+                        Nothing ->
+                          collect seen' locals rest
+                    _ ->
+                      collect seen' locals rest
+
+resolveTmCtxIndex :: [TypeExpr] -> ModeName -> Int -> Maybe Int
+resolveTmCtxIndex tmCtx mode localPos =
+  case drop localPos globals of
+    (globalTm:_) -> Just globalTm
+    [] -> Nothing
   where
     globals =
       [ i
       | (i, ty) <- zip [0 :: Int ..] tmCtx
       , typeMode ty == mode
       ]
-
-decodeTmCtxLabel :: Text -> Maybe Int
-decodeTmCtxLabel lbl =
-  case T.stripPrefix "tmctx:" lbl of
-    Nothing -> Nothing
-    Just raw ->
-      case reads (T.unpack raw) of
-        [(n, "")] -> Just n
-        _ -> Nothing
 
 boundTmIndicesType :: TypeExpr -> S.Set Int
 boundTmIndicesType ty =

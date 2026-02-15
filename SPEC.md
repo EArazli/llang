@@ -31,6 +31,8 @@ newtype TermDiagram = TermDiagram { unTerm :: Diagram }
 
 Dependent parameters are declared with `PS_Tm sort` in type signatures.
 Inside term diagrams, term metavariables are represented with graph payload `PTmMeta TmVar`.
+The kernel may also insert `PInternalDrop` nodes in term diagrams to consume unused
+required boundary-prefix inputs; this payload is internal-only and not surface syntax.
 `dTmCtx` is the bound-term telescope for the diagram.
 
 ### 2.2 Definitional Equality
@@ -68,6 +70,7 @@ A `Diagram` is a typed port graph with edge payloads:
 - `PFeedback`
 - `PSplice`
 - `PTmMeta`
+- `PInternalDrop` (kernel-internal, non-surface payload)
 
 Matching and rewriting are structural and mode-aware.
 
@@ -84,6 +87,7 @@ Structural diagram isomorphism (`diagramIsoEq`) uses:
   - `PFeedback`: inner diagram
   - `PSplice`: binder metavariable
   - `PTmMeta`: metavariable identity by `(name, scope)`
+  - `PInternalDrop`: exact constructor match
 
 ### 4.2 Canonical Form
 

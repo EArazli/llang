@@ -38,7 +38,7 @@ import Strat.Poly.TypeTheory
   , defaultTmFuel
   , modeOnlyTypeTheory
   )
-import Strat.Poly.TypeNormalize (normalizeTypeDeep, normalizeTermDiagram)
+import Strat.Poly.TypeNormalize (normalizeTypeDeep, normalizeTermDiagram, validateTermDiagram)
 import Strat.Poly.UnifyTy (unifyTm, unifyTyFlex, emptySubst, sTm)
 import Strat.Poly.Match (MatchConfig(..), findAllMatches)
 import Strat.Poly.Graph
@@ -46,6 +46,7 @@ import Strat.Poly.Graph
   , BinderMetaVar(..)
   , BinderArg(..)
   , EdgePayload(..)
+  , canonDiagramRaw
   , diagramIsoMatchWithVars
   , dIn
   , dOut
@@ -58,7 +59,7 @@ import Strat.Poly.Graph
 import Strat.Poly.Diagram (idD, genDTm, compD, freeTmVarsDiagram)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Rewrite (RewriteRule(..), rewriteOnce)
-import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
+import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr, diagramGraphToTermExpr)
 import Test.Poly.Helpers (mkModes)
 
 
@@ -69,6 +70,8 @@ tests =
     [ testCase "term normalization from doctrine rules reduces add(S(Z),S(Z))" testDoctrineNormalizeTypeArg
     , testCase "term normalization reduces add(S(Z),S(Z))" testNormalizeTm
     , testCase "mixed-mode unlabeled tmctx inputs resolve to global indices" testMixedModeTmCtxResolution
+    , testCase "bound index survives canonization without labels" testBoundIndexSurvivesCanonization
+    , testCase "validateTermDiagram rejects sparse boundaries" testValidateTermDiagramRejectsSparseBoundary
     , testCase "scoped term unification rejects escapes" testScopedTmUnify
     , testCase "dependent unification normalizes term arguments" testDependentUnify
     , testCase "bound term sort checks apply current substitution" testBoundSortUsesSubstitution
@@ -172,6 +175,32 @@ testMixedModeTmCtxResolution = do
   boundTmIndicesTerm unlabeledTm @?= S.singleton 1
   _ <- require (unifyTm tt tmCtx S.empty emptySubst natTy unlabeledTm unlabeledTm)
   pure ()
+
+testBoundIndexSurvivesCanonization :: Assertion
+testBoundIndexSurvivesCanonization = do
+  (tt, natTy, _modeM, _modeI) <- require mkNatTypeTheory
+  let tmCtx = [natTy, natTy]
+  let tm = TMBound 1
+  term <- require (termExprToDiagram tt tmCtx natTy tm)
+  let diag = unTerm term
+  diagCanon <- require (canonDiagramRaw diag)
+  let unlabeled = diagCanon { dPortLabel = IM.map (const Nothing) (dPortLabel diagCanon) }
+  boundTmIndicesTerm (TermDiagram unlabeled) @?= S.singleton 1
+  decoded <- require (diagramGraphToTermExpr tt tmCtx natTy unlabeled)
+  decoded @?= tm
+
+testValidateTermDiagramRejectsSparseBoundary :: Assertion
+testValidateTermDiagramRejectsSparseBoundary = do
+  let modeI = ModeName "I"
+  let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
+  let boolTy = TCon (TypeRef modeI (TypeName "Bool")) []
+  let tmCtx = [natTy, boolTy]
+  let (pBool, d0) = freshPort boolTy (emptyDiagram modeI tmCtx)
+  let sparse = d0 { dIn = [pBool], dOut = [pBool] }
+  _ <- require (validateDiagram sparse)
+  case validateTermDiagram sparse of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected sparse boundary term diagram to fail validation"
 
 testScopedTmUnify :: Assertion
 testScopedTmUnify = do

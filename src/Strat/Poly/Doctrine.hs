@@ -179,8 +179,11 @@ derivedTmRules doc tmFuns =
         Unoriented -> []
 
 cellPairToTmRule :: M.Map TmFunName TmFunSig -> Diagram -> Diagram -> Maybe TmRule
-cellPairToTmRule funs lhs rhs = do
-  vars <- mkInputVars lhs
+cellPairToTmRule funs lhs0 rhs0 = do
+  vars <- mkInputVars lhs0
+  let varCtx = map tmvSort vars
+  let lhs = lhs0 { dTmCtx = varCtx }
+  let rhs = rhs0 { dTmCtx = varCtx }
   ensureTermDiagram lhs
   ensureTermDiagram rhs
   ensureRuleFunSigs lhs

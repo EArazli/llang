@@ -10,14 +10,11 @@ module Strat.Poly.TypeNormalize
 
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.Diagram (freeTyVarsDiagram)
 import Strat.Poly.Graph
   ( Diagram(..)
-  , Edge(..)
-  , EdgePayload(..)
   , PortId
   , diagramPortType
   , validateDiagram
@@ -42,6 +39,7 @@ import Strat.Poly.TermExpr
   ( TermExpr(..)
   , diagramGraphToTermExpr
   , termExprToDiagram
+  , validateTermGraph
   , sameTmMetaId
   )
 
@@ -165,24 +163,6 @@ diagramToTerm tt tmCtx expectedSort term0 = do
 validateTermDiagram :: Diagram -> Either Text ()
 validateTermDiagram = validateTermGraph
 
-validateTermGraph :: Diagram -> Either Text ()
-validateTermGraph diag = do
-  validateDiagram diag
-  case dOut diag of
-    [_] -> Right ()
-    _ -> Left "validateTermDiagram: term diagram must have exactly one output"
-  mapM_ checkEdge (IM.elems (dEdges diag))
-  pure ()
-  where
-    checkEdge edge =
-      case ePayload edge of
-        PGen _ attrs bargs ->
-          if M.null attrs && null bargs
-            then Right ()
-            else Left "validateTermDiagram: term generator nodes cannot have attrs or binder args"
-        PTmMeta _ -> Right ()
-        _ -> Left "validateTermDiagram: only PGen/PTmMeta are allowed in term diagrams"
-
 termRulesForMode :: TypeTheory -> [TypeExpr] -> ModeName -> Either Text [RewriteRule]
 termRulesForMode tt tmCtx mode =
   mapM toRewriteRule (zip [0 :: Int ..] tmRules)
@@ -215,7 +195,7 @@ termRulesForMode tt tmCtx mode =
 
     alignCtx d = do
       let d' = d { dTmCtx = tmCtx }
-      validateTermGraph d'
+      validateDiagram d'
       if dMode d' == mode
         then Right d'
         else Left "termRulesForMode: rule term mode mismatch"

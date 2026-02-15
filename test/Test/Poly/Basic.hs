@@ -46,6 +46,8 @@ tests =
     , testCase "compD rejects boundary mismatch" testCompMismatch
     , testCase "tensorD rejects mode mismatch" testTensorModeMismatch
     , testCase "validateDiagram detects stale incidence" testValidateStaleIncidence
+    , testCase "validateDiagram detects edge key/id mismatch" testValidateEdgeKeyIdMismatch
+    , testCase "validateDiagram detects invalid next ids" testValidateInvalidNextIds
     , testCase "validateDiagram detects missing output boundary" testValidateMissingOutputBoundary
     , testCase "validateDiagram detects unused input" testValidateUnusedInput
     , testCase "validateDiagram detects duplicate outputs" testValidateDuplicateOutputs
@@ -126,6 +128,40 @@ testValidateStaleIncidence = do
   case validateDiagram bad of
     Left _ -> pure ()
     Right _ -> assertFailure "expected validation failure for stale incidence"
+
+testValidateEdgeKeyIdMismatch :: Assertion
+testValidateEdgeKeyIdMismatch = do
+  let mode = ModeName "Cart"
+  let a = tcon mode "A" []
+  diag <- case genD mode [a] [a] (GenName "f") of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  case IM.toList (dEdges diag) of
+    [(_, edge0)] -> do
+      let edge1 = edge0 { eId = EdgeId 1 }
+      let bad =
+            diag
+              { dEdges = IM.fromList [(0, edge1), (1, edge1)]
+              , dProd = IM.map (fmap (const (EdgeId 1))) (dProd diag)
+              , dCons = IM.map (fmap (const (EdgeId 1))) (dCons diag)
+              , dNextEdge = 2
+              }
+      case validateDiagram bad of
+        Left _ -> pure ()
+        Right _ -> assertFailure "expected validation failure for edge key/id mismatch"
+    _ -> assertFailure "unexpected edge shape"
+
+testValidateInvalidNextIds :: Assertion
+testValidateInvalidNextIds = do
+  let mode = ModeName "Cart"
+  let a = tcon mode "A" []
+  diag <- case genD mode [a] [a] (GenName "f") of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  let bad = diag { dNextPort = 1, dNextEdge = 0 }
+  case validateDiagram bad of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected validation failure for invalid next ids"
 
 testValidateMissingOutputBoundary :: Assertion
 testValidateMissingOutputBoundary = do

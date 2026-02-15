@@ -234,6 +234,8 @@ applyMorphismDiagram mor diagSrc = do
               PTmMeta v -> do
                 sort' <- applyMorphismTy mor (tmvSort v)
                 updateEdgePayload diagTgt edgeKey (PTmMeta v { tmvSort = sort' })
+              PInternalDrop ->
+                updateEdgePayload diagTgt edgeKey PInternalDrop
   diagTgt <- foldl step (Right diagTgt0) edgeIds
   validateDiagram diagTgt
   pure diagTgt
@@ -330,6 +332,8 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
           pure edge { ePayload = PSplice x }
         PTmMeta v ->
           pure edge { ePayload = PTmMeta v }
+        PInternalDrop ->
+          pure edge { ePayload = PInternalDrop }
       where
         recurseBinderArg barg =
           case barg of

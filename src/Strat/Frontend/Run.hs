@@ -529,6 +529,7 @@ evalArtifactDiagram diag = do
         PFeedback _ -> Left "extract value: feedback is not supported"
         PSplice _ -> Left "extract value: splice is not supported"
         PTmMeta _ -> Left "extract value: term-meta nodes are not supported"
+        PInternalDrop -> Left "extract value: internal drop nodes are not supported"
 
 
 data RuntimeValue

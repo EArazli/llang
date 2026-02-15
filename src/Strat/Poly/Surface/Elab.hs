@@ -166,6 +166,7 @@ gensInDiagram diag =
         PFeedback inner -> gensInDiagram inner
         PSplice _ -> S.empty
         PTmMeta _ -> S.empty
+        PInternalDrop -> S.empty
 
     binderGens barg =
       case barg of
@@ -185,6 +186,7 @@ surfaceMeasure sigma diag =
         PFeedback inner -> surfaceMeasure sigma inner
         PSplice _ -> 0
         PTmMeta _ -> 0
+        PInternalDrop -> 0
 
     binderMeasure barg =
       case barg of

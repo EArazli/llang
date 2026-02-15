@@ -87,6 +87,8 @@ rewriteOnceNested tt rules diag =
               pure (Just canon)
         PTmMeta _ ->
           go rest
+        PInternalDrop ->
+          go rest
         PGen gen attrs bargs -> do
           bargRes <- rewriteOnceBinderArgs bargs
           case bargRes of
@@ -162,6 +164,8 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
           canonDiagramRaw diag')
         innerRes
     PTmMeta _ ->
+      Right []
+    PInternalDrop ->
       Right []
     PGen gen attrs bargs -> do
       bargsRes <- rewriteAllBinderArgs tt cap rules bargs

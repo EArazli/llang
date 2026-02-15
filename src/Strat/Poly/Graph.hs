@@ -70,6 +70,7 @@ data EdgePayload
   | PFeedback Diagram
   | PSplice BinderMetaVar
   | PTmMeta TmVar
+  | PInternalDrop
   deriving (Eq, Ord, Show)
 
 data Edge = Edge
@@ -236,6 +237,8 @@ ensureFreeProducer diag pid =
 validateDiagram :: Diagram -> Either Text ()
 validateDiagram diag = do
   ensureKeysets
+  ensureEdgeIdKeyAgreement
+  ensureNextIdBounds
   ensureBoundaryUnique "inputs" (dIn diag)
   ensureBoundaryUnique "outputs" (dOut diag)
   mapM_ (ensurePortExists diag) (dIn diag)
@@ -256,6 +259,28 @@ validateDiagram diag = do
       if IM.keysSet left == IM.keysSet right
         then Right ()
         else Left ("validateDiagram: " <> label <> " keysets mismatch")
+    ensureEdgeIdKeyAgreement =
+      mapM_ checkEdgeEntry (IM.toList (dEdges diag))
+      where
+        checkEdgeEntry (k, edge) =
+          if k == unEdgeId (eId edge)
+            then Right ()
+            else Left "validateDiagram: edge map key does not match edge id"
+    ensureNextIdBounds = do
+      ensureNextBound "dNextPort" (dNextPort diag) (IM.keys (dPortTy diag))
+      ensureNextBound "dNextEdge" (dNextEdge diag) (IM.keys (dEdges diag))
+      where
+        ensureNextBound label nextId keys =
+          case keys of
+            [] ->
+              if nextId >= 0
+                then Right ()
+                else Left ("validateDiagram: " <> label <> " must be nonnegative")
+            _ ->
+              let maxKey = maximum keys
+               in if nextId > maxKey
+                    then Right ()
+                    else Left ("validateDiagram: " <> label <> " must be greater than all existing ids")
     ensureBoundaryUnique label ports =
       let s = S.fromList ports
       in if S.size s == length ports
@@ -383,6 +408,10 @@ validateDiagram diag = do
           if eIns edge == expectedIns
             then Right ()
             else Left "validateDiagram: PTmMeta inputs must be canonical scoped boundary prefix"
+        PInternalDrop ->
+          case (eIns edge, eOuts edge) of
+            ([_], []) -> Right ()
+            _ -> Left "validateDiagram: PInternalDrop must have exactly one input and no outputs"
     checkBinderArg barg =
       case barg of
         BAConcrete inner -> validateDiagram inner
@@ -549,6 +578,7 @@ shiftDiagram portOff edgeOff diag =
           PFeedback inner -> PFeedback (shiftDiagram portOff edgeOff inner)
           PSplice x -> PSplice x
           PTmMeta v -> PTmMeta v
+          PInternalDrop -> PInternalDrop
       shiftBinderArg barg =
         case barg of
           BAConcrete inner -> BAConcrete (shiftDiagram portOff edgeOff inner)
@@ -648,6 +678,7 @@ reindexDiagramForDisplay diag = do
           Right (PFeedback inner')
         PSplice x -> Right (PSplice x)
         PTmMeta v -> Right (PTmMeta v)
+        PInternalDrop -> Right PInternalDrop
     mapBinderArg barg =
       case barg of
         BAConcrete inner -> BAConcrete <$> reindexDiagramForDisplay inner
@@ -681,6 +712,7 @@ data PayloadKey
   | PKFeedback ByteString
   | PKSplice BinderMetaVar
   | PKTmMeta Text Int
+  | PKInternalDrop
   deriving (Eq, Ord, Show)
 
 data ColorKey
@@ -731,6 +763,8 @@ canonPayload payload =
       Right (PSplice x)
     PTmMeta v ->
       Right (PTmMeta v)
+    PInternalDrop ->
+      Right PInternalDrop
   where
     canonBinderArg barg =
       case barg of
@@ -834,6 +868,8 @@ colorKeyFor diag v =
           Right (PKSplice x)
         PTmMeta tmv ->
           Right (PKTmMeta (tmvName tmv) (tmvScope tmv))
+        PInternalDrop ->
+          Right PKInternalDrop
 
     binderArgKey barg =
       case barg of
@@ -1337,6 +1373,8 @@ algoEq =
               Right [()]
           | otherwise ->
               Right []
+        (PInternalDrop, PInternalDrop) ->
+          Right [()]
         _ ->
           Right []
       where
@@ -1367,6 +1405,7 @@ algoEq =
         (PFeedback _, PFeedback _) -> True
         (PSplice x, PSplice y) -> x == y
         (PTmMeta x, PTmMeta y) -> sameTmMetaId x y
+        (PInternalDrop, PInternalDrop) -> True
         _ -> False
 
     binderShape (BAConcrete _) (BAConcrete _) = True
@@ -1453,6 +1492,8 @@ algoMatch tt tyFlex tmFlex attrFlex =
               Right [extra]
           | otherwise ->
               Right []
+        (PInternalDrop, PInternalDrop) ->
+          Right [extra]
         _ ->
           Right []
 
@@ -1467,6 +1508,7 @@ algoMatch tt tyFlex tmFlex attrFlex =
         (PFeedback _, PFeedback _) -> True
         (PSplice x, PSplice y) -> x == y
         (PTmMeta x, PTmMeta y) -> sameTmMetaId x y
+        (PInternalDrop, PInternalDrop) -> True
         _ -> False
 
     binderShape (BAConcrete _) (BAConcrete _) = True

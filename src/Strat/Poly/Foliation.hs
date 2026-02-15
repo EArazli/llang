@@ -124,6 +124,7 @@ foliate policy doc mode diag = do
               }
         PSplice _ -> Left "foliate: splice is not allowed in runtime diagrams"
         PTmMeta _ -> Left "foliate: term-meta nodes are not allowed in runtime diagrams"
+        PInternalDrop -> Left "foliate: internal drop nodes are not allowed in runtime diagrams"
 
     foliateBinder barg =
       case barg of

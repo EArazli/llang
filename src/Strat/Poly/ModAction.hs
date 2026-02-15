@@ -205,6 +205,8 @@ applyAction doc mName diagSrc = do
         PTmMeta v -> do
           sort' <- mapTypeIfSource me (tmvSort v)
           updateEdgePayload diagTgt edgeKey (PTmMeta v { tmvSort = sort' })
+        PInternalDrop ->
+          updateEdgePayload diagTgt edgeKey PInternalDrop
 
     mapBinderArg modName barg =
       case barg of

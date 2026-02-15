@@ -30,7 +30,6 @@ import Strat.Poly.Graph
   , EdgePayload(..)
   , PortId(..)
   , diagramPortType
-  , getPortLabel
   , unPortId
   , unEdgeId
   )
@@ -505,7 +504,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
       M.fromList
         [ (pid, globalTm)
         | (local, pid) <- zip [0 :: Int ..] (dIn diag)
-        , Just globalTm <- [resolveTmCtxIndex tmCtx (dMode diag) local (getPortLabel diag pid)]
+        , Just globalTm <- [resolveTmCtxIndex tmCtx (dMode diag) local]
         ]
 
 applySubstTy :: TypeTheory -> Subst -> TypeExpr -> Either Text TypeExpr

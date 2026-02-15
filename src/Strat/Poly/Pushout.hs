@@ -908,6 +908,8 @@ normalizeDiagramModes mt diag = do
         PTmMeta v -> do
           sort' <- normalizeTypeModes (tmvSort v)
           pure edge { ePayload = PTmMeta v { tmvSort = sort' } }
+        PInternalDrop ->
+          pure edge { ePayload = PInternalDrop }
 
     normalizeBinderArg barg =
       case barg of
