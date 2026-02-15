@@ -31,6 +31,7 @@ import Strat.Poly.Graph
   , EdgePayload(..)
   , PortId(..)
   , diagramPortType
+  , weakenDiagramTmCtxTo
   , unPortId
   , unEdgeId
   )
@@ -591,7 +592,8 @@ applySubstTmInCtx tt tmCtx subst expectedSort tm = do
   tmCtx' <- applySubstCtx tt subst tmCtx
   expectedSort0 <- applySubstTy tt subst expectedSort
   expectedSort' <- normalizeTypeDeepWithCtx tt tmCtx' expectedSort0
-  tmGraph <- applySubstDiagram tt subst (unTerm tm)
+  tmGraph0 <- applySubstDiagram tt subst (unTerm tm)
+  tmGraph <- weakenDiagramTmCtxTo tmCtx' tmGraph0
   let tmSub = TermDiagram tmGraph
   expr <- diagramToTermExpr tt tmCtx' expectedSort' tmSub
   (tmCtxOut, expr') <- goTm S.empty tmCtx' expectedSort' expr
@@ -796,7 +798,7 @@ occursTyVar v ty =
     occursArg arg =
       case arg of
         TAType innerTy -> occursTyVar v innerTy
-        TATm tmArg -> any (occursTyVar v . tmvSort) (S.toList (freeTmVarsTerm tmArg))
+        TATm tmArg -> v `S.member` freeTyVarsTerm tmArg
 
 occursTmVarExpr :: TmVar -> TermExpr -> Bool
 occursTmVarExpr v tm =

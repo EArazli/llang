@@ -51,6 +51,8 @@ tests =
     , testCase "validateDiagram detects missing output boundary" testValidateMissingOutputBoundary
     , testCase "validateDiagram detects unused input" testValidateUnusedInput
     , testCase "validateDiagram detects duplicate outputs" testValidateDuplicateOutputs
+    , testCase "validateDiagram rejects boundary input with producer" testValidateBoundaryInputProduced
+    , testCase "validateDiagram rejects boundary output with consumer" testValidateBoundaryOutputConsumed
     , testCase "diagram iso equality ignores ids" testDiagramIsoEq
     , testCase "unionDisjointIntMap rejects collisions" testUnionDisjoint
     , testCase "applySubstTy chases substitutions" testApplySubstChase
@@ -196,6 +198,32 @@ testValidateDuplicateOutputs = do
       case validateDiagram bad of
         Left _ -> pure ()
         Right _ -> assertFailure "expected validation failure for duplicate outputs"
+    _ -> assertFailure "unexpected boundary shape"
+
+testValidateBoundaryInputProduced :: Assertion
+testValidateBoundaryInputProduced = do
+  let mode = ModeName "Cart"
+  let a = tcon mode "A" []
+  let diag = idD mode [a]
+  case dIn diag of
+    [p] -> do
+      bad <- require (addEdgePayload (PGen (GenName "producer") M.empty []) [] [p] diag)
+      case validateDiagram bad of
+        Left _ -> pure ()
+        Right _ -> assertFailure "expected validation failure for boundary input with producer"
+    _ -> assertFailure "unexpected boundary shape"
+
+testValidateBoundaryOutputConsumed :: Assertion
+testValidateBoundaryOutputConsumed = do
+  let mode = ModeName "Cart"
+  let a = tcon mode "A" []
+  let diag = idD mode [a]
+  case dOut diag of
+    [p] -> do
+      bad <- require (addEdgePayload (PGen (GenName "consumer") M.empty []) [p] [] diag)
+      case validateDiagram bad of
+        Left _ -> pure ()
+        Right _ -> assertFailure "expected validation failure for boundary output with consumer"
     _ -> assertFailure "unexpected boundary shape"
 
 testDiagramIsoEq :: Assertion

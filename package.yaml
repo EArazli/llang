@@ -180,6 +180,7 @@ tests:
     - Test.Poly.ModeTheory
     - Test.Poly.Surface
     - Test.Poly.TermNormalize
+    - Test.Poly.UnifyTy
     - Test.Poly.TypeModes
     - Test.Value.Doc
     - Test.Frontend.Pipeline

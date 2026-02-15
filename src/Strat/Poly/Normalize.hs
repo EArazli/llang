@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Normalize
   ( NormalizationStatus(..)
@@ -9,8 +8,6 @@ module Strat.Poly.Normalize
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
-import GHC.Clock (getMonotonicTimeNSec)
-import System.IO.Unsafe (unsafePerformIO)
 import Strat.Poly.Diagram (Diagram(..))
 import Strat.Poly.Graph
   ( CanonDiagram(..)
@@ -65,45 +62,19 @@ autoJoinProof tt budget rules d1 d2
   | sbTimeoutMs budget < 0 = Right (SearchUndecided LimitTimeout)
   | otherwise = do
       let cap = max 1 (min 100 (sbMaxStates budget))
-      let deadlineNs = timeoutDeadlineNs (sbTimeoutMs budget)
-      if timedOut deadlineNs 0
-        then Right (SearchUndecided LimitTimeout)
-        else do
-          reach1 <- reachableWithParents tt rules budget deadlineNs cap d1
-          reach2 <- reachableWithParents tt rules budget deadlineNs cap d2
-          let nodes1 = rrNodes reach1
-          let nodes2 = rrNodes reach2
-          meet <- findMeet nodes1 nodes2
-          case meet of
-            Nothing -> Right (SearchUndecided (combineLimits (rrStop reach1) (rrStop reach2)))
-            Just (i1, i2) -> do
-              let leftPath = pathFrom nodes1 i1
-              let rightPath = pathFrom nodes2 i2
-              let proof = JoinProof { jpLeft = leftPath, jpRight = rightPath }
-              checkJoinProof tt rules proof
-              Right (SearchProved proof)
-
-timeoutDeadlineNs :: Int -> Maybe Integer
-timeoutDeadlineNs timeoutMs
-  | timeoutMs <= 0 = Nothing
-  | otherwise =
-      let nowNs = monotonicNowNs timeoutMs
-          spanNs = toInteger timeoutMs * 1000000
-       in Just (nowNs + spanNs)
-
-timedOut :: Maybe Integer -> Int -> Bool
-timedOut mDeadline salt =
-  case mDeadline of
-    Nothing -> False
-    Just deadlineNs -> monotonicNowNs salt >= deadlineNs
-
--- This keeps search APIs pure while enforcing real wall-clock timeout semantics.
--- The salt argument prevents accidental sharing/CSE of calls at optimization time.
-monotonicNowNs :: Int -> Integer
-monotonicNowNs !salt =
-  let !_ = salt
-   in unsafePerformIO (toInteger <$> getMonotonicTimeNSec)
-{-# NOINLINE monotonicNowNs #-}
+      reach1 <- reachableWithParents tt rules budget cap d1
+      reach2 <- reachableWithParents tt rules budget cap d2
+      let nodes1 = rrNodes reach1
+      let nodes2 = rrNodes reach2
+      meet <- findMeet nodes1 nodes2
+      case meet of
+        Nothing -> Right (SearchUndecided (combineLimits (rrStop reach1) (rrStop reach2)))
+        Just (i1, i2) -> do
+          let leftPath = pathFrom nodes1 i1
+          let rightPath = pathFrom nodes2 i2
+          let proof = JoinProof { jpLeft = leftPath, jpRight = rightPath }
+          checkJoinProof tt rules proof
+          Right (SearchProved proof)
 
 data Node = Node
   { nodeCanon :: CanonDiagram
@@ -127,36 +98,33 @@ data ReachResult = ReachResult
 nodeDiag :: Node -> Diagram
 nodeDiag = unCanon . nodeCanon
 
-reachableWithParents :: TypeTheory -> [RewriteRule] -> SearchBudget -> Maybe Integer -> Int -> Diagram -> Either Text ReachResult
-reachableWithParents tt rules budget deadlineNs cap start = do
+reachableWithParents :: TypeTheory -> [RewriteRule] -> SearchBudget -> Int -> Diagram -> Either Text ReachResult
+reachableWithParents tt rules budget cap start = do
   startCanon <- canonDiagram start
   let startNode = Node startCanon Nothing Nothing 0
-  go [startNode] (M.singleton startCanon 0) [0] 0 False
+  go [startNode] (M.singleton startCanon 0) [0] False
   where
-    go nodes _ [] _ hitDepth =
+    go nodes _ [] hitDepth =
       Right
         ReachResult
           { rrNodes = nodes
           , rrStop = if hitDepth then ReachDepthLimit else ReachComplete
           }
-    go nodes _ _ _ _
+    go nodes _ _ _
       | length nodes >= sbMaxStates budget =
           Right ReachResult { rrNodes = nodes, rrStop = ReachStateLimit }
-    go nodes _ _ !ticks _
-      | timedOut deadlineNs ticks =
-          Right ReachResult { rrNodes = nodes, rrStop = ReachTimeoutLimit }
-    go nodes seen (idx:rest) !ticks hitDepth =
+    go nodes seen (idx:rest) hitDepth =
       case indexMaybe nodes idx of
         Nothing ->
-          go nodes seen rest (ticks + 1) hitDepth
+          go nodes seen rest hitDepth
         Just node ->
           if nodeDepth node >= sbMaxDepth budget
-            then go nodes seen rest (ticks + 1) True
+            then go nodes seen rest True
             else do
               next0 <- rewriteAllWithProof tt cap rules (nodeDiag node)
               next <- mapM canonPair next0
               (nodes', seen', newIdxs) <- foldl (insertIfNew idx (nodeDepth node + 1)) (Right (nodes, seen, [])) next
-              go nodes' seen' (rest <> newIdxs) (ticks + 1) hitDepth
+              go nodes' seen' (rest <> newIdxs) hitDepth
 
     canonPair (step, diag) = do
       canon <- canonDiagram diag

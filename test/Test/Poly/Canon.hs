@@ -26,6 +26,7 @@ import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoEqSlow)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeRef(..), TypeName(..))
+import Strat.Poly.Attr (AttrTerm(..), AttrLit(..))
 
 
 tests :: TestTree
@@ -36,6 +37,7 @@ tests =
     , testProperty "agreement with slow isomorphism on small diagrams" propCanonAgreesSlow
     , testCase "regression: display reindex is not canonical" testDisplayReindexNotCanonical
     , testCase "symmetry stress: canonicalization is deterministic" testSymmetryStress
+    , testCase "canonicalization is stable under attr-value-only symmetry" testCanonRespectsAttrValues
     ]
 
 propCanonIdempotent :: Property
@@ -92,6 +94,25 @@ testSymmetryStress = do
         assertEqual "all symmetric variants should share one canonical form" baseCanon canon
     )
     variants
+
+testCanonRespectsAttrValues :: Assertion
+testCanonRespectsAttrValues = do
+  d1 <- require (mkAttrOrderDiagram [0, 1])
+  d2 <- require (mkAttrOrderDiagram [1, 0])
+  c1 <- require (canonDiagramRaw d1)
+  c2 <- require (canonDiagramRaw d2)
+  assertEqual "canon should be invariant under insertion order when attrs differ only by value" c1 c2
+
+mkAttrOrderDiagram :: [Int] -> Either Text Diagram
+mkAttrOrderDiagram values =
+  foldM addOne (emptyDiagram testMode []) values
+  where
+    addOne diag v =
+      addEdgePayload
+        (PGen (GenName "g") (M.fromList [("k", ATLit (ALInt v))]) [])
+        []
+        []
+        diag
 
 genDiagramPair :: Gen (Diagram, Diagram)
 genDiagramPair = do

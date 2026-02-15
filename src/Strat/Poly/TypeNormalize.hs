@@ -17,6 +17,7 @@ import Strat.Poly.Graph
   ( Diagram(..)
   , PortId
   , diagramPortType
+  , weakenDiagramTmCtxTo
   )
 import Strat.Poly.ModeTheory (ModeName, composeMod, normalizeModExpr, meSrc, mePath)
 import Strat.Poly.TypeExpr
@@ -152,7 +153,7 @@ termToDiagram
   -> Either Text Diagram
 termToDiagram tt tmCtx expectedSort (TermDiagram term0) = do
   expectedSort' <- wrap "normalize-sort" (normalizeTypeDeepWithCtx tt tmCtx expectedSort)
-  let term = term0 { dTmCtx = tmCtx }
+  term <- wrap "weaken-tmctx" (weakenDiagramTmCtxTo tmCtx term0)
   wrap "validate-term-graph" (validateTermGraph term)
   if dMode term == typeMode expectedSort'
     then Right ()

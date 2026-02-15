@@ -28,7 +28,6 @@ import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import qualified Data.List as L
 import Data.Functor.Identity (runIdentity)
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
@@ -78,12 +77,6 @@ genDWithAttrsTm mode tmCtx dom cod gen attrs = do
 
 genDWithAttrs :: ModeName -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
 genDWithAttrs mode = genDWithAttrsTm mode []
-
-weakenDiagramTmCtxTo :: [TypeExpr] -> Diagram -> Either Text Diagram
-weakenDiagramTmCtxTo tmCtxHost diag =
-  if dTmCtx diag `L.isPrefixOf` tmCtxHost
-    then Right diag { dTmCtx = tmCtxHost }
-    else Left "weakenDiagramTmCtxTo: image term-context is not a prefix of host term-context"
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t

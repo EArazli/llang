@@ -28,6 +28,7 @@ module Strat.Poly.Graph
   , diagramPortType
   , getPortLabel
   , setPortLabel
+  , weakenDiagramTmCtxTo
   , diagramPortIds
   , unionDisjointIntMap
   ) where
@@ -59,7 +60,7 @@ import Strat.Poly.Syntax
   )
 import Strat.Poly.TypeExpr (boundTmIndicesType, typeMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.Attr (AttrMap)
+import Strat.Poly.Attr (AttrTerm)
 import Strat.Util.List (dedupe)
 
 
@@ -99,6 +100,12 @@ setPortLabel pid name diag =
           { dPortLabel = IM.insert (unPortId pid) (Just name) (dPortLabel diag)
           }
     else Left "setPortLabel: port does not exist"
+
+weakenDiagramTmCtxTo :: [TypeExpr] -> Diagram -> Either Text Diagram
+weakenDiagramTmCtxTo tmCtxHost diag =
+  if dTmCtx diag `L.isPrefixOf` tmCtxHost
+    then Right diag { dTmCtx = tmCtxHost }
+    else Left "weakenDiagramTmCtxTo: image term-context is not a prefix of host term-context"
 
 freshPort :: TypeExpr -> Diagram -> (PortId, Diagram)
 freshPort ty diag =
@@ -634,7 +641,7 @@ data BinderArgKey
   deriving (Eq, Ord, Show)
 
 data PayloadKey
-  = PKGen GenName AttrMap [BinderArgKey]
+  = PKGen GenName [(Text, AttrTerm)] [BinderArgKey]
   | PKBox ByteString
   | PKFeedback ByteString
   | PKSplice BinderMetaVar
@@ -786,7 +793,7 @@ colorKeyFor diag v =
       case payload of
         PGen g attrs bargs -> do
           bargs' <- mapM binderArgKey bargs
-          pure (PKGen g attrs bargs')
+          pure (PKGen g (M.toList attrs) bargs')
         PBox _ inner ->
           Right (PKBox (BS8.pack (show inner)))
         PFeedback inner ->

@@ -38,10 +38,3 @@ definitional normalization.
 
 `boundTmIndicesTerm` reports bound indices reachable from term outputs.
 Disconnected dead subgraphs do not contribute to reported bound indices.
-
-## 7. Proof IO Surface Is Not Implemented Yet
-
-The DSL and CLI do not yet expose proof input/output workflows for equational checks.
-In particular, there is no `by ...` / `by auto` clause on obligations or morphism checks, and no
-proof artifact pipeline such as `--emit-proofs` / `--use-proofs`.
-`encodeJoinProof` exists as scaffolding, but `decodeJoinProof` is still a placeholder.
