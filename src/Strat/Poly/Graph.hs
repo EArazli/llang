@@ -5,7 +5,6 @@ module Strat.Poly.Graph
   , unPortId
   , unEdgeId
   , CanonDiagram(..)
-  , PortLabelPolicy(..)
   , BinderMetaVar(..)
   , BinderArg(..)
   , EdgePayload(..)
@@ -23,7 +22,6 @@ module Strat.Poly.Graph
   , deletePortsIfDangling
   , reindexDiagramForDisplay
   , canonDiagram
-  , canonDiagramWithPolicy
   , canonDiagramRaw
   , canonKey
   , diagramIsoEq
@@ -96,11 +94,6 @@ data Diagram = Diagram
   } deriving (Eq, Ord, Show)
 
 newtype CanonDiagram = CanonDiagram { unCanon :: Diagram }
-  deriving (Eq, Ord, Show)
-
-data PortLabelPolicy
-  = IncludePortLabels
-  | IgnorePortLabels
   deriving (Eq, Ord, Show)
 
 data IsoState extra = IsoState
@@ -700,49 +693,39 @@ data ColorKey
   deriving (Eq, Ord, Show)
 
 canonDiagram :: Diagram -> Either Text CanonDiagram
-canonDiagram = canonDiagramWithPolicy IgnorePortLabels
-
-canonDiagramWithPolicy :: PortLabelPolicy -> Diagram -> Either Text CanonDiagram
-canonDiagramWithPolicy policy diag =
-  CanonDiagram <$> canonDiagramRawWithPolicy policy diag
+canonDiagram diag =
+  CanonDiagram <$> canonDiagramRaw diag
 
 canonDiagramRaw :: Diagram -> Either Text Diagram
-canonDiagramRaw = canonDiagramRawWithPolicy IgnorePortLabels
-
-canonKey :: CanonDiagram -> ByteString
-canonKey (CanonDiagram diag) = BS8.pack (show diag)
-
-canonDiagramRawWithPolicy :: PortLabelPolicy -> Diagram -> Either Text Diagram
-canonDiagramRawWithPolicy policy diag = do
+canonDiagramRaw diag = do
   validateDiagram diag
-  diagRec <- canonizeChildren policy diag
-  canon <- canonizeOuter policy diagRec
+  diagRec <- canonizeChildren diag
+  canon <- canonizeOuter diagRec
   validateDiagram canon
   pure canon
   where
-    canonizeChildren policy' d = do
+    canonizeChildren d = do
       edges' <- mapM canonEdge (IM.toAscList (dEdges d))
       pure d { dEdges = IM.fromAscList edges' }
       where
         canonEdge (k, edge) = do
-          payload' <- canonPayload policy' (ePayload edge)
+          payload' <- canonPayload (ePayload edge)
           pure (k, edge { ePayload = payload' })
 
-canonPayload :: PortLabelPolicy -> EdgePayload -> Either Text EdgePayload
-canonPayload policy payload =
+canonKey :: CanonDiagram -> ByteString
+canonKey (CanonDiagram diag) = BS8.pack (show diag)
+
+canonPayload :: EdgePayload -> Either Text EdgePayload
+canonPayload payload =
   case payload of
     PGen g attrs bargs -> do
       bargs' <- mapM canonBinderArg bargs
       pure (PGen g attrs bargs')
-    PBox name inner -> do
-      inner' <- canonDiagramRawWithPolicy policy inner
-      let name' =
-            case policy of
-              IgnorePortLabels -> BoxName ""
-              IncludePortLabels -> name
-      pure (PBox name' inner')
+    PBox _ inner -> do
+      inner' <- canonDiagramRaw inner
+      pure (PBox (BoxName "") inner')
     PFeedback inner -> do
-      inner' <- canonDiagramRawWithPolicy policy inner
+      inner' <- canonDiagramRaw inner
       pure (PFeedback inner')
     PSplice x ->
       Right (PSplice x)
@@ -752,12 +735,12 @@ canonPayload policy payload =
     canonBinderArg barg =
       case barg of
         BAConcrete inner ->
-          BAConcrete <$> canonDiagramRawWithPolicy policy inner
+          BAConcrete <$> canonDiagramRaw inner
         BAMeta x ->
           Right (BAMeta x)
 
-canonizeOuter :: PortLabelPolicy -> Diagram -> Either Text Diagram
-canonizeOuter policy diag = do
+canonizeOuter :: Diagram -> Either Text Diagram
+canonizeOuter diag = do
   let ports = map PortId (IM.keys (dPortTy diag))
   let edges = L.sortOn (unEdgeId . eId) (IM.elems (dEdges diag))
   let edgeIds = map eId edges
@@ -772,7 +755,7 @@ canonizeOuter policy diag = do
               | e <- edges
               ]
   let vertexIx = M.fromList (zip vertices [0 :: Int ..])
-  colorKeys <- mapM (colorKeyFor policy diag) vertices
+  colorKeys <- mapM (colorKeyFor diag) vertices
   colorIds <- colorClassIds colorKeys
   graphEdges <- encodeGraphEdges diag edges vertexIx
   let n = length vertices
@@ -795,7 +778,7 @@ canonizeOuter policy diag = do
       edgeIds
   let portOrder = map snd (L.sortOn fst portRanked)
   let edgeOrder = map snd (L.sortOn fst edgeRanked)
-  rebuildCanonicalDiagram policy diag portOrder edgeOrder
+  rebuildCanonicalDiagram diag portOrder edgeOrder
   where
     colorClassIds keys =
       let classes = S.toAscList (S.fromList keys)
@@ -813,8 +796,8 @@ canonizeOuter policy diag = do
         Nothing -> Left "canonDiagram: canonical label missing"
         Just rank -> Right rank
 
-colorKeyFor :: PortLabelPolicy -> Diagram -> CanonVertex -> Either Text ColorKey
-colorKeyFor policy diag v =
+colorKeyFor :: Diagram -> CanonVertex -> Either Text ColorKey
+colorKeyFor diag v =
   case v of
     VBoundIn i ->
       Right (CKBoundIn i)
@@ -829,14 +812,7 @@ colorKeyFor policy diag v =
         case IM.lookup (unPortId pid) (dPortTy diag) of
           Nothing -> Left "canonDiagram: missing port type"
           Just t -> Right t
-      mLabel <-
-        case policy of
-          IgnorePortLabels -> Right Nothing
-          IncludePortLabels ->
-            case IM.lookup (unPortId pid) (dPortLabel diag) of
-              Nothing -> Left "canonDiagram: missing port label"
-              Just lbl -> Right lbl
-      Right (CKPort ty mLabel)
+      Right (CKPort ty Nothing)
     VEdge eid -> do
       edge <-
         case IM.lookup (unEdgeId eid) (dEdges diag) of
@@ -1047,8 +1023,8 @@ refinePartition adj part =
         Nothing -> 0
         Just nbrs -> IS.size (IS.intersection nbrs cellSet)
 
-rebuildCanonicalDiagram :: PortLabelPolicy -> Diagram -> [PortId] -> [EdgeId] -> Either Text Diagram
-rebuildCanonicalDiagram policy diag portOrder edgeOrder = do
+rebuildCanonicalDiagram :: Diagram -> [PortId] -> [EdgeId] -> Either Text Diagram
+rebuildCanonicalDiagram diag portOrder edgeOrder = do
   let portMap = M.fromList (zip portOrder [ PortId i | i <- [0 :: Int .. length portOrder - 1] ])
   let edgeMap = M.fromList (zip edgeOrder [ EdgeId i | i <- [0 :: Int .. length edgeOrder - 1] ])
   dPortTy' <-
@@ -1060,19 +1036,7 @@ rebuildCanonicalDiagram policy diag portOrder edgeOrder = do
             pure (unPortId newPid, ty)
         )
         portOrder
-  dPortLabel' <-
-    case policy of
-      IgnorePortLabels ->
-        Right (IM.fromList [ (unPortId pid, Nothing) | pid <- M.elems portMap ])
-      IncludePortLabels ->
-        fmap IM.fromList $
-          mapM
-            ( \oldPid -> do
-                newPid <- requirePortMap portMap oldPid
-                lbl <- requirePortLabel oldPid
-                pure (unPortId newPid, lbl)
-            )
-            portOrder
+  let dPortLabel' = IM.fromList [ (unPortId pid, Nothing) | pid <- M.elems portMap ]
   dIn' <- mapM (requirePortMap portMap) (dIn diag)
   dOut' <- mapM (requirePortMap portMap) (dOut diag)
   edges' <- mapM (rebuildEdge portMap edgeMap) edgeOrder
@@ -1108,11 +1072,6 @@ rebuildCanonicalDiagram policy diag portOrder edgeOrder = do
       case IM.lookup (unPortId pid) (dPortTy diag) of
         Nothing -> Left "canonDiagram: missing source port type"
         Just ty -> Right ty
-
-    requirePortLabel pid =
-      case IM.lookup (unPortId pid) (dPortLabel diag) of
-        Nothing -> Left "canonDiagram: missing source port label"
-        Just lbl -> Right lbl
 
     requireEdge eid =
       case IM.lookup (unEdgeId eid) (dEdges diag) of
