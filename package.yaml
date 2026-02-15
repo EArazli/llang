@@ -105,6 +105,7 @@ description:         Please see the README on GitHub at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
+- bytestring
 - containers
 - directory
 - filepath
@@ -159,6 +160,7 @@ tests:
     - QuickCheck
     - tasty-quickcheck
     other-modules:
+    - Test.Poly.Canon
     - Test.Poly.Basic
     - Test.Poly.DiagramUnion
     - Test.Poly.Rewrite

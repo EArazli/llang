@@ -71,6 +71,32 @@ A `Diagram` is a typed port graph with edge payloads:
 
 Matching and rewriting are structural and mode-aware.
 
+### 4.1 Isomorphism
+
+Structural diagram isomorphism (`diagramIsoEq`) uses:
+
+- fixed boundary positions (`dIn` index-to-index, `dOut` index-to-index)
+- syntactic port-type equality
+- ordered incidence lists (`eIns`, `eOuts`) preserved positionally
+- payload-structural equality:
+  - `PGen`: generator name, attrs, binder args
+  - `PBox`: inner diagram only (box name is annotation)
+  - `PFeedback`: inner diagram
+  - `PSplice`: binder metavariable
+  - `PTmMeta`: metavariable identity by `(name, scope)`
+
+### 4.2 Canonical Form
+
+Canonicalization reduces a diagram to a colored graph encoding:
+
+- vertices for boundary positions, ports, edges, and ordered input/output slots
+- edges for boundary attachments and slot incidence
+- colors enforcing boundary index, slot index/direction, port type, and edge payload shape
+
+Canonical labeling picks a deterministic representative and rebuilds the diagram with canonical `PortId`/`EdgeId` assignment. Canonization is recursive through payload-contained diagrams (`PBox`, `PFeedback`, `BAConcrete`).
+
+Port labels are currently treated as metadata for structural isomorphism/canonization by default (ignored as equality keys), while still being stored on diagrams.
+
 ## 5. Modalities
 
 `mod_eq` gives oriented modality-expression equations.

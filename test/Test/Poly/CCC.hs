@@ -15,7 +15,7 @@ import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Rewrite (rulesFromPolicy)
-import Strat.Poly.Graph (diagramIsoEq, renumberDiagram)
+import Strat.Poly.Graph (diagramIsoEq, canonDiagramRaw)
 import Strat.Poly.Diagram (Diagram)
 import Strat.Common.Rules (RewritePolicy(..))
 
@@ -64,7 +64,7 @@ assertCellReduces doc cell = do
   status <- case normalize (doctrineTypeTheory doc) 200 rules (c2LHS cell) of
     Left err -> assertFailure (T.unpack err)
     Right st -> pure st
-  rhs <- case renumberDiagram (c2RHS cell) of
+  rhs <- case canonDiagramRaw (c2RHS cell) of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   case status of

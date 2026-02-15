@@ -21,7 +21,7 @@ import Strat.Poly.TypeExpr
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs, diagramDom, diagramCod)
-import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), renumberDiagram, diagramPortIds, diagramIsoEq)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), canonDiagramRaw, diagramPortIds, diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)
@@ -301,7 +301,7 @@ singleGenName mor srcGen image0 = do
   if giBinderSigs image0 == expectedBinderSigs
     then Right ()
     else Left "poly pushout requires generator mappings to preserve binder-hole signatures"
-  canon <- renumberDiagram (giDiagram image0)
+  canon <- canonDiagramRaw (giDiagram image0)
   case IM.elems (dEdges canon) of
     [edge] -> do
       let boundary = dIn canon <> dOut canon

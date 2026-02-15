@@ -56,7 +56,7 @@ rewriteOnceTop tt rules diag = go rules
           case applyMatch tt r m diag of
             Left _ -> tryMatches ms
             Right d -> do
-              canon <- renumberDiagram d
+              canon <- canonDiagramRaw d
               pure (Just canon)
 
 rewriteOnceNested :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
@@ -74,7 +74,7 @@ rewriteOnceNested tt rules diag =
             Just inner' -> do
               let edge' = edge { ePayload = PBox name inner' }
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-              canon <- renumberDiagram diag'
+              canon <- canonDiagramRaw diag'
               pure (Just canon)
         PFeedback inner -> do
           innerRes <- rewriteOnce tt rules inner
@@ -83,7 +83,7 @@ rewriteOnceNested tt rules diag =
             Just inner' -> do
               let edge' = edge { ePayload = PFeedback inner' }
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-              canon <- renumberDiagram diag'
+              canon <- canonDiagramRaw diag'
               pure (Just canon)
         PTmMeta _ ->
           go rest
@@ -94,7 +94,7 @@ rewriteOnceNested tt rules diag =
             Just bargs' -> do
               let edge' = edge { ePayload = PGen gen attrs bargs' }
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-              canon <- renumberDiagram diag'
+              canon <- canonDiagramRaw diag'
               pure (Just canon)
 
     rewriteOnceBinderArgs [] = Right Nothing
@@ -125,7 +125,7 @@ rewriteAll tt cap rules diag = do
             else do
               matches <- findAllMatches (mkMatchConfig tt' r) (rrLHS r) diag'
               applied <- foldl collect (Right []) matches
-              canon <- mapM renumberDiagram applied
+              canon <- mapM canonDiagramRaw applied
               go (acc <> canon) rs
           where
             collect acc m =
@@ -151,7 +151,7 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
         (\d -> do
           let edge' = edge { ePayload = PBox name d }
           let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-          renumberDiagram diag')
+          canonDiagramRaw diag')
         innerRes
     PFeedback inner -> do
       innerRes <- rewriteAll tt cap rules inner
@@ -159,7 +159,7 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
         (\d -> do
           let edge' = edge { ePayload = PFeedback d }
           let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-          renumberDiagram diag')
+          canonDiagramRaw diag')
         innerRes
     PTmMeta _ ->
       Right []
@@ -169,7 +169,7 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
         (\bargs' -> do
           let edge' = edge { ePayload = PGen gen attrs bargs' }
           let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-          renumberDiagram diag')
+          canonDiagramRaw diag')
         bargsRes
 
 rewriteAllBinderArgs :: TypeTheory -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [[BinderArg]]

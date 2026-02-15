@@ -2,6 +2,7 @@ module Main (main) where
 
 import Test.Tasty
 import qualified Test.Poly.Basic as PolyBasic
+import qualified Test.Poly.Canon as PolyCanon
 import qualified Test.Poly.DiagramUnion as PolyDiagramUnion
 import qualified Test.Poly.Rewrite as PolyRewrite
 import qualified Test.Poly.CriticalPairs as PolyCriticalPairs
@@ -27,6 +28,7 @@ main =
     testGroup
       "All"
       [ PolyBasic.tests
+      , PolyCanon.tests
       , PolyDiagramUnion.tests
       , PolyRewrite.tests
       , PolyCriticalPairs.tests

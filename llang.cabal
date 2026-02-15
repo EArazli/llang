@@ -132,6 +132,7 @@ library
       Strat.Poly.DSL.Parse
       Strat.Poly.Foliation
       Strat.Poly.Graph
+      Strat.Poly.GraphCanon
       Strat.Poly.Match
       Strat.Poly.ModAction
       Strat.Poly.ModeTheory
@@ -161,6 +162,7 @@ library
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       base >=4.7 && <5
+    , bytestring
     , containers
     , directory
     , filepath
@@ -181,6 +183,7 @@ executable llang-exe
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
+    , bytestring
     , containers
     , directory
     , filepath
@@ -195,6 +198,7 @@ test-suite llang-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      Test.Poly.Canon
       Test.Poly.Basic
       Test.Poly.DiagramUnion
       Test.Poly.Rewrite
@@ -224,6 +228,7 @@ test-suite llang-test
   build-depends:
       QuickCheck
     , base >=4.7 && <5
+    , bytestring
     , containers
     , directory
     , filepath

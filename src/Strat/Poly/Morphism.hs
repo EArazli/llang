@@ -804,9 +804,7 @@ checkCell mor cell = do
   case (statusL, statusR) of
     (Finished l, Finished r) ->
       do
-        l' <- renumberDiagram l
-        r' <- renumberDiagram r
-        ok <- diagramIsoEq l' r'
+        ok <- diagramIsoEq l r
         if ok
           then Right ()
           else Left "checkMorphism: equation violation (normal forms differ)"
@@ -1014,7 +1012,7 @@ singleGenNameMaybe srcGen image0 =
   if giBinderSigs image0 /= expectedBinderSigs
     then Nothing
     else
-      case renumberDiagram (giDiagram image0) of
+      case canonDiagramRaw (giDiagram image0) of
         Left _ -> Nothing
         Right canon ->
           case IM.elems (dEdges canon) of

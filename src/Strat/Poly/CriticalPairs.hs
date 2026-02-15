@@ -130,9 +130,9 @@ criticalPairsForPair tt r1 r2 = do
         then do
           left <- applyRuleAtMatch tt rule1 match1 host
           right <- applyRuleAtMatch tt rule2 match2 host
-          overlap' <- renumberDiagram host
-          left' <- renumberDiagram left
-          right' <- renumberDiagram right
+          overlap' <- canonDiagramRaw host
+          left' <- canonDiagramRaw left
+          right' <- canonDiagramRaw right
           let cp = CriticalPair
                 { cpRule1 = riLabel r1Info
                 , cpRule2 = riLabel r2Info

@@ -13,7 +13,7 @@ import Strat.Pipeline (defaultFoliationPolicy)
 import Strat.Poly.Foliation (foliate)
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (mergePorts)
+import Strat.Poly.Graph (EdgePayload(..), addEdgePayload, emptyDiagram, freshPort)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.TypeExpr
@@ -31,14 +31,14 @@ tests =
 testRejectCycle :: Assertion
 testRejectCycle = do
   let doc = mkDoctrine
-  base <- require (genD modeM [tyT] [tyT] (GenName "f"))
-  let [pIn] = dIn base
-  let [pOut] = dOut base
-  merged <- require (mergePorts base pOut pIn)
-  let cyc = merged { dIn = [], dOut = [] }
+  let (p0, d0) = freshPort tyT (emptyDiagram modeM [])
+  let (p1, d1) = freshPort tyT d0
+  d2 <- require (addEdgePayload (PGen (GenName "f") M.empty []) [p0] [p1] d1)
+  d3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [p1] [p0] d2)
+  let cyc = d3 { dIn = [], dOut = [] }
   case foliate defaultFoliationPolicy doc modeM cyc of
     Left err ->
-      assertBool "expected acyclic-cycle error" ("cyclic" `T.isInfixOf` T.toLower err)
+      assertBool ("expected acyclic-cycle error, got: " <> T.unpack err) ("cyclic" `T.isInfixOf` T.toLower err)
     Right _ ->
       assertFailure "expected foliation to reject cycle"
 

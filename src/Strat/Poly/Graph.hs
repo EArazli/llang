@@ -4,6 +4,8 @@ module Strat.Poly.Graph
   , EdgeId(..)
   , unPortId
   , unEdgeId
+  , CanonDiagram(..)
+  , PortLabelPolicy(..)
   , BinderMetaVar(..)
   , BinderArg(..)
   , EdgePayload(..)
@@ -19,8 +21,13 @@ module Strat.Poly.Graph
   , deleteEdgeKeepPorts
   , deletePortIfDangling
   , deletePortsIfDangling
-  , renumberDiagram
+  , reindexDiagramForDisplay
+  , canonDiagram
+  , canonDiagramWithPolicy
+  , canonDiagramRaw
+  , canonKey
   , diagramIsoEq
+  , diagramIsoEqSlow
   , diagramIsoMatchWithVars
   , diagramIsoMatchWithVarsFrom
   , shiftDiagram
@@ -33,11 +40,14 @@ module Strat.Poly.Graph
 
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as BS8
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 import Control.Monad (foldM)
+import qualified Data.List as L
 import Strat.Poly.ModeTheory (ModeName(..))
 import {-# SOURCE #-} Strat.Poly.TypeExpr (TypeExpr, TyVar, TmVar(..), boundTmIndicesType, typeMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
@@ -84,6 +94,14 @@ data Diagram = Diagram
   , dNextPort  :: Int
   , dNextEdge  :: Int
   } deriving (Eq, Ord, Show)
+
+newtype CanonDiagram = CanonDiagram { unCanon :: Diagram }
+  deriving (Eq, Ord, Show)
+
+data PortLabelPolicy
+  = IncludePortLabels
+  | IgnorePortLabels
+  deriving (Eq, Ord, Show)
 
 data IsoState extra = IsoState
   { isoPortMap :: M.Map PortId PortId
@@ -556,8 +574,8 @@ shiftDiagram portOff edgeOff diag =
       , dNextEdge = dNextEdge diag + edgeOff
       }
 
-renumberDiagram :: Diagram -> Either Text Diagram
-renumberDiagram diag = do
+reindexDiagramForDisplay :: Diagram -> Either Text Diagram
+reindexDiagramForDisplay diag = do
   let (portMap, nextPort) = assignPorts diag
   let edgeMap = assignEdges diag
   dPortTy' <- buildPortMap portMap (dPortTy diag)
@@ -630,28 +648,507 @@ renumberDiagram diag = do
           bargs' <- mapM mapBinderArg bargs
           Right (PGen g attrs bargs')
         PBox name inner -> do
-          inner' <- renumberDiagram inner
+          inner' <- reindexDiagramForDisplay inner
           Right (PBox name inner')
         PFeedback inner -> do
-          inner' <- renumberDiagram inner
+          inner' <- reindexDiagramForDisplay inner
           Right (PFeedback inner')
         PSplice x -> Right (PSplice x)
         PTmMeta v -> Right (PTmMeta v)
     mapBinderArg barg =
       case barg of
-        BAConcrete inner -> BAConcrete <$> renumberDiagram inner
+        BAConcrete inner -> BAConcrete <$> reindexDiagramForDisplay inner
         BAMeta x -> Right (BAMeta x)
     requirePort mp pid =
       case M.lookup pid mp of
-        Nothing -> Left "renumberDiagram: missing port mapping"
+        Nothing -> Left "reindexDiagramForDisplay: missing port mapping"
         Just v -> Right v
     requireEdge mp eid =
       case M.lookup eid mp of
-        Nothing -> Left "renumberDiagram: missing edge mapping"
+        Nothing -> Left "reindexDiagramForDisplay: missing edge mapping"
         Just v -> Right v
 
+data CanonVertex
+  = VPort PortId
+  | VEdge EdgeId
+  | VSlotIn EdgeId Int
+  | VSlotOut EdgeId Int
+  | VBoundIn Int
+  | VBoundOut Int
+  deriving (Eq, Ord, Show)
+
+data BinderArgKey
+  = BKConcrete ByteString
+  | BKMeta BinderMetaVar
+  deriving (Eq, Ord, Show)
+
+data PayloadKey
+  = PKGen GenName AttrMap [BinderArgKey]
+  | PKBox ByteString
+  | PKFeedback ByteString
+  | PKSplice BinderMetaVar
+  | PKTmMeta Text Int
+  deriving (Eq, Ord, Show)
+
+data ColorKey
+  = CKBoundIn Int
+  | CKBoundOut Int
+  | CKSlotIn Int
+  | CKSlotOut Int
+  | CKPort TypeExpr (Maybe Text)
+  | CKEdge PayloadKey Int Int
+  deriving (Eq, Ord, Show)
+
+canonDiagram :: Diagram -> Either Text CanonDiagram
+canonDiagram = canonDiagramWithPolicy IgnorePortLabels
+
+canonDiagramWithPolicy :: PortLabelPolicy -> Diagram -> Either Text CanonDiagram
+canonDiagramWithPolicy policy diag =
+  CanonDiagram <$> canonDiagramRawWithPolicy policy diag
+
+canonDiagramRaw :: Diagram -> Either Text Diagram
+canonDiagramRaw = canonDiagramRawWithPolicy IgnorePortLabels
+
+canonKey :: CanonDiagram -> ByteString
+canonKey (CanonDiagram diag) = BS8.pack (show diag)
+
+canonDiagramRawWithPolicy :: PortLabelPolicy -> Diagram -> Either Text Diagram
+canonDiagramRawWithPolicy policy diag = do
+  validateDiagram diag
+  diagRec <- canonizeChildren policy diag
+  canon <- canonizeOuter policy diagRec
+  validateDiagram canon
+  pure canon
+  where
+    canonizeChildren policy' d = do
+      edges' <- mapM canonEdge (IM.toAscList (dEdges d))
+      pure d { dEdges = IM.fromAscList edges' }
+      where
+        canonEdge (k, edge) = do
+          payload' <- canonPayload policy' (ePayload edge)
+          pure (k, edge { ePayload = payload' })
+
+canonPayload :: PortLabelPolicy -> EdgePayload -> Either Text EdgePayload
+canonPayload policy payload =
+  case payload of
+    PGen g attrs bargs -> do
+      bargs' <- mapM canonBinderArg bargs
+      pure (PGen g attrs bargs')
+    PBox name inner -> do
+      inner' <- canonDiagramRawWithPolicy policy inner
+      let name' =
+            case policy of
+              IgnorePortLabels -> BoxName ""
+              IncludePortLabels -> name
+      pure (PBox name' inner')
+    PFeedback inner -> do
+      inner' <- canonDiagramRawWithPolicy policy inner
+      pure (PFeedback inner')
+    PSplice x ->
+      Right (PSplice x)
+    PTmMeta v ->
+      Right (PTmMeta v)
+  where
+    canonBinderArg barg =
+      case barg of
+        BAConcrete inner ->
+          BAConcrete <$> canonDiagramRawWithPolicy policy inner
+        BAMeta x ->
+          Right (BAMeta x)
+
+canonizeOuter :: PortLabelPolicy -> Diagram -> Either Text Diagram
+canonizeOuter policy diag = do
+  let ports = map PortId (IM.keys (dPortTy diag))
+  let edges = L.sortOn (unEdgeId . eId) (IM.elems (dEdges diag))
+  let edgeIds = map eId edges
+  let vertices =
+        [ VBoundIn i | i <- [0 .. length (dIn diag) - 1] ]
+          <> [ VBoundOut j | j <- [0 .. length (dOut diag) - 1] ]
+          <> [ VPort p | p <- ports ]
+          <> [ VEdge eid | eid <- edgeIds ]
+          <> concat
+              [ [ VSlotIn (eId e) i | i <- [0 .. length (eIns e) - 1] ]
+                  <> [ VSlotOut (eId e) j | j <- [0 .. length (eOuts e) - 1] ]
+              | e <- edges
+              ]
+  let vertexIx = M.fromList (zip vertices [0 :: Int ..])
+  colorKeys <- mapM (colorKeyFor policy diag) vertices
+  colorIds <- colorClassIds colorKeys
+  graphEdges <- encodeGraphEdges diag edges vertexIx
+  let n = length vertices
+  let adj = buildAdjacency n graphEdges
+  let perm = canonicalPermutation n adj colorIds
+  let canonLabelByVertexIx = IM.fromList [ (oldIx, newIx) | (newIx, oldIx) <- zip [0 :: Int ..] perm ]
+  portRanked <-
+    mapM
+      ( \pid -> do
+          rank <- vertexRank (VPort pid) vertexIx canonLabelByVertexIx
+          pure (rank, pid)
+      )
+      ports
+  edgeRanked <-
+    mapM
+      ( \eid -> do
+          rank <- vertexRank (VEdge eid) vertexIx canonLabelByVertexIx
+          pure (rank, eid)
+      )
+      edgeIds
+  let portOrder = map snd (L.sortOn fst portRanked)
+  let edgeOrder = map snd (L.sortOn fst edgeRanked)
+  rebuildCanonicalDiagram policy diag portOrder edgeOrder
+  where
+    colorClassIds keys =
+      let classes = S.toAscList (S.fromList keys)
+          classMap = M.fromList (zip classes [0 :: Int ..])
+       in mapM
+            (\k -> maybe (Left "canonDiagram: missing color class") Right (M.lookup k classMap))
+            keys
+
+    vertexRank v ixMap rankMap = do
+      ix <-
+        case M.lookup v ixMap of
+          Nothing -> Left "canonDiagram: vertex index missing"
+          Just i -> Right i
+      case IM.lookup ix rankMap of
+        Nothing -> Left "canonDiagram: canonical label missing"
+        Just rank -> Right rank
+
+colorKeyFor :: PortLabelPolicy -> Diagram -> CanonVertex -> Either Text ColorKey
+colorKeyFor policy diag v =
+  case v of
+    VBoundIn i ->
+      Right (CKBoundIn i)
+    VBoundOut j ->
+      Right (CKBoundOut j)
+    VSlotIn _ i ->
+      Right (CKSlotIn i)
+    VSlotOut _ j ->
+      Right (CKSlotOut j)
+    VPort pid -> do
+      ty <-
+        case IM.lookup (unPortId pid) (dPortTy diag) of
+          Nothing -> Left "canonDiagram: missing port type"
+          Just t -> Right t
+      mLabel <-
+        case policy of
+          IgnorePortLabels -> Right Nothing
+          IncludePortLabels ->
+            case IM.lookup (unPortId pid) (dPortLabel diag) of
+              Nothing -> Left "canonDiagram: missing port label"
+              Just lbl -> Right lbl
+      Right (CKPort ty mLabel)
+    VEdge eid -> do
+      edge <-
+        case IM.lookup (unEdgeId eid) (dEdges diag) of
+          Nothing -> Left "canonDiagram: missing edge"
+          Just e -> Right e
+      payloadKey <- edgePayloadKey (ePayload edge)
+      Right (CKEdge payloadKey (length (eIns edge)) (length (eOuts edge)))
+  where
+    edgePayloadKey payload =
+      case payload of
+        PGen g attrs bargs -> do
+          bargs' <- mapM binderArgKey bargs
+          pure (PKGen g attrs bargs')
+        PBox _ inner ->
+          Right (PKBox (BS8.pack (show inner)))
+        PFeedback inner ->
+          Right (PKFeedback (BS8.pack (show inner)))
+        PSplice x ->
+          Right (PKSplice x)
+        PTmMeta tmv ->
+          Right (PKTmMeta (tmvName tmv) (tmvScope tmv))
+
+    binderArgKey barg =
+      case barg of
+        BAConcrete inner ->
+          Right (BKConcrete (BS8.pack (show inner)))
+        BAMeta x ->
+          Right (BKMeta x)
+
+encodeGraphEdges
+  :: Diagram
+  -> [Edge]
+  -> M.Map CanonVertex Int
+  -> Either Text [(Int, Int)]
+encodeGraphEdges diag edges vertexIx = do
+  pairs <- fmap concat (mapM edgePairs edges)
+  let boundaryPairs =
+        [ (VBoundIn i, VPort pid)
+        | (i, pid) <- zip [0 :: Int ..] (dIn diag)
+        ]
+          <> [ (VBoundOut j, VPort pid)
+             | (j, pid) <- zip [0 :: Int ..] (dOut diag)
+             ]
+  mapM toIxPair (boundaryPairs <> pairs)
+  where
+    edgePairs edge =
+      let eid = eId edge
+          insPairs =
+            concat
+              [ [ (VEdge eid, VSlotIn eid i)
+                , (VSlotIn eid i, VPort pid)
+                ]
+              | (i, pid) <- zip [0 :: Int ..] (eIns edge)
+              ]
+          outsPairs =
+            concat
+              [ [ (VEdge eid, VSlotOut eid j)
+                , (VSlotOut eid j, VPort pid)
+                ]
+              | (j, pid) <- zip [0 :: Int ..] (eOuts edge)
+              ]
+       in Right (insPairs <> outsPairs)
+    toIxPair (v1, v2) = do
+      i1 <-
+        case M.lookup v1 vertexIx of
+          Nothing -> Left "canonDiagram: missing vertex in encoding"
+          Just i -> Right i
+      i2 <-
+        case M.lookup v2 vertexIx of
+          Nothing -> Left "canonDiagram: missing vertex in encoding"
+          Just i -> Right i
+      Right (i1, i2)
+
+buildAdjacency :: Int -> [(Int, Int)] -> IM.IntMap IS.IntSet
+buildAdjacency n pairs =
+  foldl addEdge initial uniquePairs
+  where
+    initial = IM.fromList [ (i, IS.empty) | i <- [0 .. n - 1] ]
+    uniquePairs =
+      S.toList $
+        S.fromList
+          [ if u < v then (u, v) else (v, u)
+          | (u, v) <- pairs
+          , u /= v
+          ]
+    addEdge mp (u, v) =
+      IM.insertWith IS.union u (IS.singleton v)
+        (IM.insertWith IS.union v (IS.singleton u) mp)
+
+canonicalPermutation :: Int -> IM.IntMap IS.IntSet -> [Int] -> [Int]
+canonicalPermutation n adj colors =
+  case search (refinePartition adj initialPartition) Nothing of
+    Nothing -> [0 .. n - 1]
+    Just candidate -> ccPerm candidate
+  where
+    initialPartition =
+      map L.sort
+        [ vs
+        | (_, vs) <- M.toAscList (M.fromListWith (<>) [ (c, [v]) | (v, c) <- zip [0 :: Int ..] colors ])
+        ]
+
+    search part best0 =
+      let part' = refinePartition adj part
+       in if all ((== 1) . length) part'
+            then
+              case mapM onlyVertex part' of
+                Nothing -> best0
+                Just perm ->
+                  let code = canonicalCode perm
+                      candidate = CanonCandidate code perm
+                   in Just (pickBetter best0 candidate)
+            else
+              case pickCell part' of
+                Nothing -> best0
+                Just (idx, cell) ->
+                  foldl
+                    (\bestAcc v -> search (individualize part' idx v) bestAcc)
+                    best0
+                    cell
+
+    canonicalCode perm =
+      concat
+        [ [vertexColor v]
+            <> [ if adjacent v (perm !! j) then 1 else 0
+               | j <- [i + 1 .. n - 1]
+               ]
+        | (i, v) <- zip [0 :: Int ..] perm
+        ]
+
+    vertexColor v =
+      case drop v colors of
+        (c:_) -> c
+        [] -> 0
+
+    adjacent u v =
+      case IM.lookup u adj of
+        Nothing -> False
+        Just nbrs -> IS.member v nbrs
+
+    onlyVertex cell =
+      case cell of
+        [v] -> Just v
+        _ -> Nothing
+
+data CanonCandidate = CanonCandidate
+  { ccCode :: [Int]
+  , ccPerm :: [Int]
+  }
+
+pickBetter :: Maybe CanonCandidate -> CanonCandidate -> CanonCandidate
+pickBetter existing candidate =
+  case existing of
+    Nothing -> candidate
+    Just old ->
+      if ccCode candidate < ccCode old
+        then candidate
+        else old
+
+pickCell :: [[Int]] -> Maybe (Int, [Int])
+pickCell cells =
+  case
+    [ (length cell, idx, cell)
+    | (idx, cell) <- zip [0 :: Int ..] cells
+    , length cell > 1
+    ]
+    of
+      [] -> Nothing
+      xs ->
+        case L.sortOn (\(len, idx, _) -> (len, idx)) xs of
+          [] -> Nothing
+          (_, idx, cell) : _ -> Just (idx, cell)
+
+individualize :: [[Int]] -> Int -> Int -> [[Int]]
+individualize cells idx v =
+  let before = take idx cells
+      cell =
+        case drop idx cells of
+          (x:_) -> x
+          [] -> []
+      after =
+        case drop (idx + 1) cells of
+          xs -> xs
+      rest = filter (/= v) cell
+   in before <> [[v], rest] <> after
+
+refinePartition :: IM.IntMap IS.IntSet -> [[Int]] -> [[Int]]
+refinePartition adj part =
+  let refined = refineOnce part
+   in if refined == part
+        then part
+        else refinePartition adj refined
+  where
+    refineOnce cells =
+      let cellSets = map IS.fromList cells
+          signature v =
+            [ countNeighbors v cset
+            | cset <- cellSets
+            ]
+          splitCell cell =
+            map L.sort
+              [ vs
+              | (_, vs) <- M.toAscList (M.fromListWith (<>) [ (signature v, [v]) | v <- cell ])
+              ]
+       in concatMap splitCell cells
+
+    countNeighbors v cellSet =
+      case IM.lookup v adj of
+        Nothing -> 0
+        Just nbrs -> IS.size (IS.intersection nbrs cellSet)
+
+rebuildCanonicalDiagram :: PortLabelPolicy -> Diagram -> [PortId] -> [EdgeId] -> Either Text Diagram
+rebuildCanonicalDiagram policy diag portOrder edgeOrder = do
+  let portMap = M.fromList (zip portOrder [ PortId i | i <- [0 :: Int .. length portOrder - 1] ])
+  let edgeMap = M.fromList (zip edgeOrder [ EdgeId i | i <- [0 :: Int .. length edgeOrder - 1] ])
+  dPortTy' <-
+    fmap IM.fromList $
+      mapM
+        ( \oldPid -> do
+            newPid <- requirePortMap portMap oldPid
+            ty <- requirePortType oldPid
+            pure (unPortId newPid, ty)
+        )
+        portOrder
+  dPortLabel' <-
+    case policy of
+      IgnorePortLabels ->
+        Right (IM.fromList [ (unPortId pid, Nothing) | pid <- M.elems portMap ])
+      IncludePortLabels ->
+        fmap IM.fromList $
+          mapM
+            ( \oldPid -> do
+                newPid <- requirePortMap portMap oldPid
+                lbl <- requirePortLabel oldPid
+                pure (unPortId newPid, lbl)
+            )
+            portOrder
+  dIn' <- mapM (requirePortMap portMap) (dIn diag)
+  dOut' <- mapM (requirePortMap portMap) (dOut diag)
+  edges' <- mapM (rebuildEdge portMap edgeMap) edgeOrder
+  let dEdges' = IM.fromList [ (unEdgeId (eId edge), edge) | edge <- edges' ]
+  dProd' <- buildIncidence "producer" eOuts edges' dPortTy'
+  dCons' <- buildIncidence "consumer" eIns edges' dPortTy'
+  pure
+    Diagram
+      { dMode = dMode diag
+      , dTmCtx = dTmCtx diag
+      , dIn = dIn'
+      , dOut = dOut'
+      , dPortTy = dPortTy'
+      , dPortLabel = dPortLabel'
+      , dProd = dProd'
+      , dCons = dCons'
+      , dEdges = dEdges'
+      , dNextPort = length portOrder
+      , dNextEdge = length edgeOrder
+      }
+  where
+    requirePortMap mp pid =
+      case M.lookup pid mp of
+        Nothing -> Left "canonDiagram: missing port mapping"
+        Just pid' -> Right pid'
+
+    requireEdgeMap mp eid =
+      case M.lookup eid mp of
+        Nothing -> Left "canonDiagram: missing edge mapping"
+        Just eid' -> Right eid'
+
+    requirePortType pid =
+      case IM.lookup (unPortId pid) (dPortTy diag) of
+        Nothing -> Left "canonDiagram: missing source port type"
+        Just ty -> Right ty
+
+    requirePortLabel pid =
+      case IM.lookup (unPortId pid) (dPortLabel diag) of
+        Nothing -> Left "canonDiagram: missing source port label"
+        Just lbl -> Right lbl
+
+    requireEdge eid =
+      case IM.lookup (unEdgeId eid) (dEdges diag) of
+        Nothing -> Left "canonDiagram: missing source edge"
+        Just edge -> Right edge
+
+    rebuildEdge portMap edgeMap oldEid = do
+      oldEdge <- requireEdge oldEid
+      newEid <- requireEdgeMap edgeMap oldEid
+      ins' <- mapM (requirePortMap portMap) (eIns oldEdge)
+      outs' <- mapM (requirePortMap portMap) (eOuts oldEdge)
+      pure oldEdge { eId = newEid, eIns = ins', eOuts = outs' }
+
+    buildIncidence label select edges portTy =
+      foldM insertEdge initial edges
+      where
+        initial = IM.fromList [ (k, Nothing) | k <- IM.keys portTy ]
+        insertEdge mp edge = foldM (insertPort (eId edge)) mp (select edge)
+        insertPort eid mp pid =
+          let k = unPortId pid
+           in case IM.lookup k mp of
+                Nothing ->
+                  Left ("canonDiagram: missing " <> label <> " incidence slot")
+                Just Nothing ->
+                  Right (IM.insert k (Just eid) mp)
+                Just (Just _) ->
+                  Left ("canonDiagram: duplicate " <> label <> " incidence")
+
 diagramIsoEq :: Diagram -> Diagram -> Either Text Bool
-diagramIsoEq left right =
+diagramIsoEq left right = do
+  left' <- canonDiagram left
+  right' <- canonDiagram right
+  pure (left' == right')
+
+diagramIsoEqSlow :: Diagram -> Diagram -> Either Text Bool
+diagramIsoEqSlow left right =
   fmap (not . null) (diagramIsoWith algoEq () left right)
 
 unionDisjointIntMap :: Text -> IM.IntMap a -> IM.IntMap a -> Either Text (IM.IntMap a)

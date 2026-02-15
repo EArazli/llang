@@ -23,7 +23,7 @@ import Strat.Poly.Graph
   , BinderArg(..)
   , Diagram(..)
   , getPortLabel
-  , renumberDiagram
+  , canonDiagramRaw
   )
 import Strat.Poly.Names (GenName, BoxName)
 import Strat.Poly.Attr (AttrMap)
@@ -274,4 +274,4 @@ forgetSSA = ssaOriginal
 
 
 canonicalizeDiagram :: Diagram -> Either Text Diagram
-canonicalizeDiagram = renumberDiagram
+canonicalizeDiagram = canonDiagramRaw

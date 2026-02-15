@@ -17,7 +17,7 @@ import Strat.Poly.TypePretty (renderMode, renderType)
 
 renderDiagram :: Diagram -> Either Text Text
 renderDiagram diag = do
-  diag' <- renumberDiagram diag
+  diag' <- reindexDiagramForDisplay diag
   edgesTxt <- renderEdges (IM.elems (dEdges diag'))
   pure $
     T.intercalate "\n"

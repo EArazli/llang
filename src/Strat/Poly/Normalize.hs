@@ -8,8 +8,10 @@ module Strat.Poly.Normalize
   ) where
 
 import Data.Text (Text)
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Strat.Poly.Diagram (Diagram)
-import Strat.Poly.Graph (renumberDiagram, diagramIsoEq)
+import Strat.Poly.Graph (CanonDiagram(..), canonDiagram, canonDiagramRaw)
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.Rewrite (RewriteRule, rewriteOnce, rewriteAll)
 
@@ -26,31 +28,30 @@ data JoinWitness = JoinWitness
   } deriving (Eq, Show)
 
 normalize :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
-normalize tt fuel rules diag
-  | fuel <= 0 = do
-      canon <- renumberDiagram diag
-      Right (OutOfFuel canon)
-  | otherwise = do
-      canon <- renumberDiagram diag
-      step <- rewriteOnce tt rules canon
-      case step of
-        Nothing -> do
-          canon' <- renumberDiagram diag
-          Right (Finished canon')
-        Just diag' -> do
-          canon' <- renumberDiagram diag'
-          normalize tt (fuel - 1) rules canon'
+normalize tt fuel rules diag = do
+  start <- canonDiagramRaw diag
+  go fuel start
+  where
+    go remaining current
+      | remaining <= 0 =
+          Right (OutOfFuel current)
+      | otherwise = do
+          step <- rewriteOnce tt rules current
+          case step of
+            Nothing ->
+              Right (Finished current)
+            Just next -> do
+              nextCanon <- canonDiagramRaw next
+              go (remaining - 1) nextCanon
 
 joinableWithin :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Diagram -> Either Text Bool
 joinableWithin tt fuel rules d1 d2
   | fuel < 0 = Right False
   | otherwise = do
       let cap = 50
-      d1' <- renumberDiagram d1
-      d2' <- renumberDiagram d2
-      reach1 <- reachable tt rules cap fuel d1'
-      reach2 <- reachable tt rules cap fuel d2'
-      anyIso reach1 reach2
+      reach1 <- reachableSet tt rules cap fuel d1
+      reach2 <- reachableSet tt rules cap fuel d2
+      pure (not (S.null (S.intersection reach1 reach2)))
 
 joinableWithinWitness :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Diagram -> Either Text (Maybe JoinWitness)
 joinableWithinWitness tt fuel rules d1 d2
@@ -69,61 +70,55 @@ joinableWithinWitness tt fuel rules d1 d2
           Right (Just JoinWitness { jwMeet = meetDiag, jwLeft = path1, jwRight = path2 })
 
 data Node = Node
-  { nodeDiag :: Diagram
+  { nodeCanon :: CanonDiagram
   , nodeParent :: Maybe Int
   , nodeDepth :: Int
   } deriving (Eq, Show)
 
+nodeDiag :: Node -> Diagram
+nodeDiag = unCanon . nodeCanon
+
 reachableWithParents :: TypeTheory -> [RewriteRule] -> Int -> Int -> Diagram -> Either Text [Node]
 reachableWithParents tt rules cap fuel start = do
-  start' <- renumberDiagram start
-  go [Node start' Nothing 0] [0]
+  startCanon <- canonDiagram start
+  let startNode = Node startCanon Nothing 0
+  go [startNode] (M.singleton startCanon 0) [0]
   where
-    go nodes [] = Right nodes
-    go nodes (idx:rest) =
+    go nodes _ [] = Right nodes
+    go nodes seen (idx:rest) =
       case indexMaybe nodes idx of
         Nothing -> Right nodes
         Just node ->
           if nodeDepth node >= fuel
-            then go nodes rest
+            then go nodes seen rest
             else do
               next0 <- rewriteAll tt cap rules (nodeDiag node)
-              next <- mapM renumberDiagram next0
-              (nodes', newIdxs) <- foldl (insertIfNew idx (nodeDepth node + 1)) (Right (nodes, [])) next
-              go nodes' (rest <> newIdxs)
+              next <- mapM canonDiagram next0
+              (nodes', seen', newIdxs) <- foldl (insertIfNew idx (nodeDepth node + 1)) (Right (nodes, seen, [])) next
+              go nodes' seen' (rest <> newIdxs)
 
-    insertIfNew parent depth acc diag = do
-      (nodes, newIdxs) <- acc
-      present <- isIsoNode diag nodes
-      if present
-        then Right (nodes, newIdxs)
-        else do
+    insertIfNew parent depth acc canon = do
+      (nodes, seen, newIdxs) <- acc
+      case M.lookup canon seen of
+        Just _ ->
+          Right (nodes, seen, newIdxs)
+        Nothing -> do
           let idx = length nodes
-          Right (nodes <> [Node diag (Just parent) depth], newIdxs <> [idx])
-
-isIsoNode :: Diagram -> [Node] -> Either Text Bool
-isIsoNode _ [] = Right False
-isIsoNode d (n:ns) = do
-  eq <- isoEqOrFalse d (nodeDiag n)
-  if eq then Right True else isIsoNode d ns
+          let node = Node canon (Just parent) depth
+          Right (nodes <> [node], M.insert canon idx seen, newIdxs <> [idx])
 
 findMeet :: [Node] -> [Node] -> Either Text (Maybe (Int, Int))
 findMeet nodes1 nodes2 = go 0
   where
-    go i =
-      if i >= length nodes1
-        then Right Nothing
-        else do
-          let d1 = nodeDiag (nodes1 !! i)
-          j <- findIsoIndex d1 nodes2 0
-          case j of
-            Nothing -> go (i + 1)
-            Just idx -> Right (Just (i, idx))
+    ix2 = M.fromList [ (nodeCanon n, i) | (i, n) <- zip [0 :: Int ..] nodes2 ]
 
-    findIsoIndex _ [] _ = Right Nothing
-    findIsoIndex d (n:ns) j = do
-      eq <- isoEqOrFalse d (nodeDiag n)
-      if eq then Right (Just j) else findIsoIndex d ns (j + 1)
+    go i =
+          if i >= length nodes1
+            then Right Nothing
+            else
+              case M.lookup (nodeCanon (nodes1 !! i)) ix2 of
+                Nothing -> go (i + 1)
+                Just j -> Right (Just (i, j))
 
 pathFrom :: [Node] -> Int -> [Diagram]
 pathFrom nodes idx = go idx []
@@ -133,9 +128,31 @@ pathFrom nodes idx = go idx []
         Nothing -> acc
         Just node ->
           let acc' = nodeDiag node : acc
-          in case nodeParent node of
-            Nothing -> acc'
-            Just p -> go p acc'
+           in case nodeParent node of
+                Nothing -> acc'
+                Just p -> go p acc'
+
+reachableSet :: TypeTheory -> [RewriteRule] -> Int -> Int -> Diagram -> Either Text (S.Set CanonDiagram)
+reachableSet tt rules cap fuel start = do
+  startCanon <- canonDiagram start
+  go (S.singleton startCanon) [(startCanon, 0)]
+  where
+    go seen [] = Right seen
+    go seen ((diag, depth):queue)
+      | depth >= fuel = go seen queue
+      | otherwise = do
+          next0 <- rewriteAll tt cap rules (unCanon diag)
+          next <- mapM canonDiagram next0
+          let nextSet = S.fromList next
+          let unseen = S.difference nextSet seen
+          let seen' = S.union seen unseen
+          let queue' =
+                queue
+                  <> [ (c, depth + 1)
+                     | c <- next
+                     , c `S.member` unseen
+                     ]
+          go seen' queue'
 
 indexMaybe :: [a] -> Int -> Maybe a
 indexMaybe xs i
@@ -144,43 +161,3 @@ indexMaybe xs i
       case drop i xs of
         (y:_) -> Just y
         [] -> Nothing
-
-reachable :: TypeTheory -> [RewriteRule] -> Int -> Int -> Diagram -> Either Text [Diagram]
-reachable tt rules cap fuel start =
-  do
-    start' <- renumberDiagram start
-    go [start'] [(start', 0)]
-  where
-    go seen [] = Right seen
-    go seen ((d,depth):queue)
-      | depth >= fuel = go seen queue
-      | otherwise = do
-          next0 <- rewriteAll tt cap rules d
-          next <- mapM renumberDiagram next0
-          (seen', new) <- foldl insertIfNew (Right (seen, [])) next
-          let queue' = queue <> [(x, depth + 1) | x <- new]
-          go seen' queue'
-    insertIfNew acc diag = do
-      (seenAcc, newAcc) <- acc
-      present <- isIsoMember diag seenAcc
-      if present
-        then Right (seenAcc, newAcc)
-        else Right (seenAcc <> [diag], newAcc <> [diag])
-
-anyIso :: [Diagram] -> [Diagram] -> Either Text Bool
-anyIso [] _ = Right False
-anyIso (x:xs) ys = do
-  hit <- isIsoMember x ys
-  if hit then Right True else anyIso xs ys
-
-isIsoMember :: Diagram -> [Diagram] -> Either Text Bool
-isIsoMember _ [] = Right False
-isIsoMember d (x:xs) = do
-  eq <- isoEqOrFalse d x
-  if eq then Right True else isIsoMember d xs
-
-isoEqOrFalse :: Diagram -> Diagram -> Either Text Bool
-isoEqOrFalse a b =
-  case diagramIsoEq a b of
-    Left _ -> Right False
-    Right ok -> Right ok
