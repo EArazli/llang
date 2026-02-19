@@ -10,16 +10,31 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
-import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModEqn(..), ModeTheory(..), ModeInfo(..), mtModes, mtDecls)
+import qualified Strat.Poly.DSL.AST as PolyAST
+import Strat.Poly.ModeTheory
+  ( ModeName(..)
+  , ModName(..)
+  , ModExpr(..)
+  , ModDecl(..)
+  , ModEqn(..)
+  , ModTransformName(..)
+  , ModTransformDecl(..)
+  , ModeTheory(..)
+  , ModeInfo(..)
+  , mtModes
+  , mtDecls
+  )
 import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), TypeArg(..), TmVar(..), TermDiagram(..), typeMode)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD, idD)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), gdPlainDom, validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), ObligationDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), gdPlainDom, validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram)
-import Strat.Poly.Pushout (computePolyPushout, PolyPushoutResult(..))
+import Strat.Poly.Pushout (computePolyPushout, computePolyPushoutPreferRight, computePolyCoproduct, PolyPushoutResult(..))
 import Strat.Poly.Graph (Diagram(..), BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..), emptyDiagram, freshPort, addEdgePayload)
 import Strat.Poly.DiagramIso (diagramIsoEq)
+import Strat.Poly.DSL.Elab (checkImplementsObligations)
+import Strat.Frontend.Env (emptyEnv)
 import Strat.Common.Rules (RuleClass(..), Orientation(..), RewritePolicy(..))
 
 
@@ -35,9 +50,13 @@ tests =
     , testCase "pushout rejects non-identity mode maps" testPushoutRejectsModeMap
     , testCase "pushout handles alpha-renaming with mode equations" testPushoutAlphaRenameWithModeEq
     , testCase "pushout supports term-parameterized type maps" testPushoutTermTypeMaps
+    , testCase "pushout permutes mixed type/term parameters and renames term sorts" testPushoutTypePermutationSortRename
     , testCase "pushout merges cells alpha-equivalent over term vars" testPushoutCellTmAlphaEq
     , testCase "pushout injection morphism preserves concrete binder arguments" testPushoutInjectionPreservesBinderArgs
     , testCase "pushout accepts renaming morphisms with binder signatures in target doctrine" testPushoutAcceptsRenamingWithBinders
+    , testCase "coproduct keeps obligations elaboratable after disjoint type renaming" testCoproductObligationRenameElaborates
+    , testCase "coproduct renames colliding modality transforms" testCoproductTransformCollisionRenames
+    , testCase "apply pushout accepts implementation morphisms with non-CheckAll checks" testApplyPushoutAcceptsNonCheckAllGlue
     ]
 
 require :: Either Text a -> IO a
@@ -87,6 +106,7 @@ mkModes modes =
     { mtModes = M.fromList [ (m, ModeInfo m) | m <- S.toList modes ]
     , mtDecls = M.empty
     , mtEqns = []
+    , mtTransforms = M.empty
     }
 
 
@@ -562,6 +582,345 @@ testPushoutTermTypeMaps = do
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()
 
+testPushoutTypePermutationSortRename :: Assertion
+testPushoutTypePermutationSortRename = do
+  let modeM = ModeName "M"
+  let modeI = ModeName "I"
+  let natRef = TypeRef modeI (TypeName "Nat")
+  let natLRef = TypeRef modeI (TypeName "NatL")
+  let vecRef = TypeRef modeM (TypeName "Vec")
+  let vec2Ref = TypeRef modeM (TypeName "Vec2")
+  let natTy = TCon natRef []
+  let natLTy = TCon natLRef []
+  let src =
+        Doctrine
+          { dName = "SrcIdxSwap"
+          , dModes = mkModes (S.fromList [modeM, modeI])
+          , dAcyclicModes = S.empty
+          , dTypes =
+              M.fromList
+                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
+                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM])])
+                ]
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let left =
+        Doctrine
+          { dName = "LeftIdxSwap"
+          , dModes = mkModes (S.fromList [modeM, modeI])
+          , dAcyclicModes = S.empty
+          , dTypes =
+              M.fromList
+                [ (modeI, M.fromList [(TypeName "NatL", TypeSig [])])
+                , (modeM, M.fromList [(TypeName "Vec2", TypeSig [PS_Ty modeM, PS_Tm natLTy])])
+                ]
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let right = src { dName = "RightIdxSwap" }
+  case validateDoctrine src of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine left of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine right of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  let nVar = TmVar { tmvName = "n", tmvSort = natLTy, tmvScope = 0 }
+  let aVar = TyVar { tvName = "a", tvMode = modeM }
+  let morF =
+        Morphism
+          { morName = "fIdxSwap"
+          , morSrc = src
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap =
+              M.fromList
+                [ (natRef, TypeTemplate [] natLTy)
+                , ( vecRef
+                  , TypeTemplate
+                      [TPTm nVar, TPType aVar]
+                      (TCon vec2Ref [TAType (TVar aVar), TATm (tmMeta nVar)])
+                  )
+                ]
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let morG =
+        Morphism
+          { morName = "gIdxSwap"
+          , morSrc = src
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  res <- case computePolyPushout "PIdxSwap" morF morG of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> pure out
+  let modeTypes = M.findWithDefault M.empty modeM (dTypes (poDoctrine res))
+  sig <- case M.lookup (TypeName "Vec") modeTypes of
+    Nothing -> assertFailure "expected merged Vec type in pushout result" >> error "unreachable"
+    Just out -> pure out
+  tsParams sig @?= [PS_Tm natTy, PS_Ty modeM]
+
+testCoproductObligationRenameElaborates :: Assertion
+testCoproductObligationRenameElaborates = do
+  let mode = ModeName "M"
+  let natRef = TypeRef mode (TypeName "Nat")
+  let natTy = TCon natRef []
+  let rawExpr = PolyAST.ROEDiag (PolyAST.RDId [PolyAST.RPTVar "Nat"])
+  let obl =
+        ObligationDecl
+          { obName = "nat_refl"
+          , obMode = mode
+          , obForGen = False
+          , obTyVars = []
+          , obTmVars = []
+          , obDom = [natTy]
+          , obCod = [natTy]
+          , obLHSExpr = rawExpr
+          , obRHSExpr = rawExpr
+          , obPolicy = UseAllOriented
+          }
+  let docA =
+        Doctrine
+          { dName = "DocA"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "Nat", TypeSig [])])]
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = [obl]
+          , dAttrSorts = M.empty
+          }
+  let docB =
+        Doctrine
+          { dName = "DocB"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  case validateDoctrine docA of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine docB of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  out <- case computePolyCoproduct "POblRen" docA docB of
+    Left err -> assertFailure (T.unpack err)
+    Right res -> pure (poDoctrine res)
+  let idMorph =
+        Morphism
+          { morName = "POblRen.id"
+          , morSrc = out
+          , morTgt = out
+          , morIsCoercion = True
+          , morModeMap = identityModeMap out
+          , morModMap = identityModMap out
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckNone
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  case checkImplementsObligations emptyEnv out idMorph out of
+    Left err -> assertFailure ("expected renamed obligation to elaborate and check: " <> T.unpack err)
+    Right () -> pure ()
+
+testCoproductTransformCollisionRenames :: Assertion
+testCoproductTransformCollisionRenames = do
+  let mode = ModeName "M"
+  let aVar = tvar mode "a"
+  let witness =
+        GenDecl
+          { gdName = GenName "w"
+          , gdMode = mode
+          , gdTyVars = [aVar]
+          , gdTmVars = []
+          , gdDom = [InPort (TVar aVar)]
+          , gdCod = [TVar aVar]
+          , gdAttrs = []
+          }
+  let idMod = ModExpr { meSrc = mode, meTgt = mode, mePath = [] }
+  let etaDecl =
+        ModTransformDecl
+          { mtdName = ModTransformName "eta"
+          , mtdFrom = idMod
+          , mtdTo = idMod
+          , mtdWitness = GenName "w"
+          }
+  let mt =
+        (mkModes (S.singleton mode))
+          { mtTransforms = M.singleton (ModTransformName "eta") etaDecl
+          }
+  let mkDoc name =
+        Doctrine
+          { dName = name
+          , dModes = mt
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.singleton mode (M.singleton (GenName "w") witness)
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let docA = mkDoc "LeftTr"
+  let docB = mkDoc "RightTr"
+  case validateDoctrine docA of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine docB of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  res <- case computePolyCoproduct "PTrCollide" docA docB of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> pure out
+  let transforms = mtTransforms (dModes (poDoctrine res))
+  M.size transforms @?= 2
+  assertBool "expected eta transform name to be renamed in coproduct" (M.notMember (ModTransformName "eta") transforms)
+  let witnesses = map mtdWitness (M.elems transforms)
+  assertBool "expected transformed witnesses to be distinct after coproduct renaming" (S.size (S.fromList witnesses) == 2)
+
+testApplyPushoutAcceptsNonCheckAllGlue :: Assertion
+testApplyPushoutAcceptsNonCheckAllGlue = do
+  let mode = ModeName "M"
+  let aTy = tcon mode "A" []
+  let genSrc =
+        GenDecl
+          { gdName = GenName "f"
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = [InPort aTy]
+          , gdCod = [aTy]
+          , gdAttrs = []
+          }
+  lhs <- require (genD mode [aTy] [aTy] (GenName "f"))
+  let srcCell =
+        Cell2
+          { c2Name = "eq"
+          , c2Class = Structural
+          , c2Orient = LR
+          , c2TyVars = []
+          , c2TmVars = []
+          , c2LHS = lhs
+          , c2RHS = idD mode [aTy]
+          }
+  let src =
+        Doctrine
+          { dName = "SchemaApply"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dGens = M.fromList [(mode, M.fromList [(GenName "f", genSrc)])]
+          , dCells2 = [srcCell]
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let body =
+        Doctrine
+          { dName = "BodyApply"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dGens = M.fromList [(mode, M.fromList [(GenName "f", genSrc)])]
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let genTgt =
+        GenDecl
+          { gdName = GenName "g"
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = [InPort aTy]
+          , gdCod = [aTy]
+          , gdAttrs = []
+          }
+  let target =
+        Doctrine
+          { dName = "TargetApply"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dGens = M.fromList [(mode, M.fromList [(GenName "g", genTgt)])]
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  case validateDoctrine src of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine body of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine target of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  imgF <- require (genD mode [aTy] [aTy] (GenName "f"))
+  imgG <- require (genD mode [aTy] [aTy] (GenName "g"))
+  let incl =
+        Morphism
+          { morName = "inclApply"
+          , morSrc = src
+          , morTgt = body
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.fromList [((mode, GenName "f"), plainImage imgF)]
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let impl =
+        Morphism
+          { morName = "implApply"
+          , morSrc = src
+          , morTgt = target
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.fromList [((mode, GenName "f"), plainImage imgG)]
+          , morCheck = CheckStructural
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  res <- case computePolyPushoutPreferRight "PApply" "FunctorF" incl impl of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> pure out
+  morCheck (poGlue res) @?= CheckStructural
+
 testPushoutCellTmAlphaEq :: Assertion
 testPushoutCellTmAlphaEq = do
   let modeM = ModeName "M"
@@ -900,6 +1259,7 @@ mkModeEqTheory mode modF modU =
             (ModExpr { meSrc = mode, meTgt = mode, mePath = [modF, modU] })
             (ModExpr { meSrc = mode, meTgt = mode, mePath = [] })
         ]
+    , mtTransforms = M.empty
     }
 
 mkModeEqMorph :: Text -> Doctrine -> Doctrine -> Text -> Morphism

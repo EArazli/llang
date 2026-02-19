@@ -2,15 +2,18 @@
 module Strat.Poly.ModeTheory
   ( ModeName(..)
   , ModName(..)
+  , ModTransformName(..)
   , ModeInfo(..)
   , ModExpr(..)
   , ModDecl(..)
   , ModEqn(..)
+  , ModTransformDecl(..)
   , ModeTheory(..)
   , emptyModeTheory
   , addMode
   , addModDecl
   , addModEqn
+  , addModTransformDecl
   , composeMod
   , normalizeModExpr
   , checkWellFormed
@@ -19,10 +22,12 @@ module Strat.Poly.ModeTheory
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import Data.Map.Strict (Map)
+import Strat.Poly.Names (GenName)
 
 
 newtype ModeName = ModeName Text deriving (Eq, Ord, Show)
 newtype ModName = ModName Text deriving (Eq, Ord, Show)
+newtype ModTransformName = ModTransformName Text deriving (Eq, Ord, Show)
 
 data ModeInfo = ModeInfo
   { miName :: ModeName
@@ -48,16 +53,24 @@ data ModEqn = ModEqn
   , meRHS :: ModExpr
   } deriving (Eq, Show)
 
+data ModTransformDecl = ModTransformDecl
+  { mtdName :: ModTransformName
+  , mtdFrom :: ModExpr
+  , mtdTo :: ModExpr
+  , mtdWitness :: GenName
+  } deriving (Eq, Show)
+
 data ModeTheory = ModeTheory
   { mtModes :: Map ModeName ModeInfo
   , mtDecls :: Map ModName ModDecl
   , mtEqns :: [ModEqn]
+  , mtTransforms :: Map ModTransformName ModTransformDecl
   }
   deriving (Eq, Show)
 
 
 emptyModeTheory :: ModeTheory
-emptyModeTheory = ModeTheory M.empty M.empty []
+emptyModeTheory = ModeTheory M.empty M.empty [] M.empty
 
 addMode :: ModeName -> ModeTheory -> Either Text ModeTheory
 addMode name mt
@@ -78,6 +91,17 @@ addModEqn :: ModEqn -> ModeTheory -> Either Text ModeTheory
 addModEqn eqn mt = do
   validateModEqn mt eqn
   Right mt { mtEqns = mtEqns mt <> [eqn] }
+
+addModTransformDecl :: ModTransformDecl -> ModeTheory -> Either Text ModeTheory
+addModTransformDecl decl mt = do
+  validateModExpr mt (mtdFrom decl)
+  validateModExpr mt (mtdTo decl)
+  if meSrc (mtdFrom decl) == meSrc (mtdTo decl) && meTgt (mtdFrom decl) == meTgt (mtdTo decl)
+    then Right ()
+    else Left "mode theory: modality transform source/target mismatch"
+  if M.member (mtdName decl) (mtTransforms mt)
+    then Left "duplicate modality transform name"
+    else Right mt { mtTransforms = M.insert (mtdName decl) decl (mtTransforms mt) }
 
 composeMod :: ModeTheory -> ModExpr -> ModExpr -> Either Text ModExpr
 composeMod _ f g
@@ -105,10 +129,19 @@ checkWellFormed mt = do
     else Right ()
   mapM_ checkDecl (M.elems (mtDecls mt))
   mapM_ (validateModEqn mt) (mtEqns mt)
+  mapM_ (validateModTransformDecl mt) (M.elems (mtTransforms mt))
   where
     checkDecl decl
       | M.member (mdSrc decl) (mtModes mt) && M.member (mdTgt decl) (mtModes mt) = Right ()
       | otherwise = Left "modality declaration uses unknown mode"
+
+validateModTransformDecl :: ModeTheory -> ModTransformDecl -> Either Text ()
+validateModTransformDecl mt decl = do
+  validateModExpr mt (mtdFrom decl)
+  validateModExpr mt (mtdTo decl)
+  if meSrc (mtdFrom decl) == meSrc (mtdTo decl) && meTgt (mtdFrom decl) == meTgt (mtdTo decl)
+    then Right ()
+    else Left "mode theory: modality transform source/target mismatch"
 
 validateModExpr :: ModeTheory -> ModExpr -> Either Text ()
 validateModExpr mt me = do

@@ -10,7 +10,7 @@ import qualified Data.Text as T
 
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
-import Strat.Frontend.Env (ModuleEnv(..))
+import Strat.Frontend.Env (ModuleEnv(..), DoctrineFunctorDef(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
@@ -24,6 +24,7 @@ tests =
     [ testCase "apply preserves target names and maps body references via impl" testApplyPreservesTargetNames
     , testCase "apply collision renaming keeps target name and prefixes body collision" testApplyCollisionRename
     , testCase "apply without using resolves unique morphism and rejects non-unique" testApplyUsingResolution
+    , testCase "functor body gets deterministic internal doctrine name" testFunctorBodyInternalName
     ]
 
 
@@ -149,6 +150,24 @@ testApplyUsingResolution = do
   assertBool "expected non-unique morphism error" ("non-unique" `T.isInfixOf` err)
   assertBool "expected impl1 listed as candidate" ("impl1" `T.isInfixOf` err)
   assertBool "expected impl2 listed as candidate" ("impl2" `T.isInfixOf` err)
+
+testFunctorBodyInternalName :: Assertion
+testFunctorBodyInternalName = do
+  let src =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M;"
+          , "  type X @M;"
+          , "}"
+          , "doctrine_functor F(L : S) where {"
+          , "  gen flip : [X] -> [X] @M;"
+          , "}"
+          ]
+  env <- expectElab src
+  functorDef <- case M.lookup "F" (meFunctors env) of
+    Nothing -> assertFailure "missing doctrine_functor F" >> error "unreachable"
+    Just def -> pure def
+  dName (dfBody functorDef) @?= "F.__body"
 
 
 expectElab :: T.Text -> IO ModuleEnv

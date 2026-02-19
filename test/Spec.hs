@@ -11,6 +11,7 @@ import qualified Test.Poly.Pushout as PolyPushout
 import qualified Test.Poly.Coherence as PolyCoherence
 import qualified Test.Poly.CCC as PolyCCC
 import qualified Test.Poly.ModeTheory as PolyModeTheory
+import qualified Test.Poly.ModeTransforms as PolyModeTransforms
 import qualified Test.Poly.Surface as PolySurface
 import qualified Test.Poly.TermNormalize as PolyTermNormalize
 import qualified Test.Poly.UnifyTy as PolyUnifyTy
@@ -40,6 +41,7 @@ main =
       , PolyCoherence.tests
       , PolyCCC.tests
       , PolyModeTheory.tests
+      , PolyModeTransforms.tests
       , PolySurface.tests
       , PolyTermNormalize.tests
       , PolyUnifyTy.tests

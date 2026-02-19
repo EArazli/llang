@@ -18,6 +18,7 @@ mkModes modes =
     { mtModes = M.fromList [ (m, ModeInfo { miName = m }) | m <- modes ]
     , mtDecls = M.empty
     , mtEqns = []
+    , mtTransforms = M.empty
     }
 
 mkModesFromSet :: S.Set ModeName -> ModeTheory

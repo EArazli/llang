@@ -6,7 +6,7 @@ This document describes the current kernel and DSL surface used by this reposito
 
 A doctrine is the kernel object:
 
-- modes and modalities (`mode`, `modality`, `mod_eq`)
+- modes and modalities (`mode`, `modality`, `mod_eq`, `mod_transform`)
 - types and generators
 - rewrite cells (`computational` and `structural`)
 - modality actions (`action`)
@@ -109,6 +109,18 @@ Port labels are currently treated as metadata for structural isomorphism/canoniz
 
 `mod_eq` gives oriented modality-expression equations.
 
+`mod_transform t : mu => nu [witness g];` adds a directed 2-cell witness between modality
+expressions. It does not contribute to definitional equality and does not rewrite `ModExpr`.
+
+Current witness constraints:
+
+- if `witness` is omitted, it defaults to the transform name
+- witness generator mode must be the target mode of `mu`/`nu`
+- witness generator must have exactly one type variable `A` in the source mode of `mu`/`nu`
+- witness generator must have no term variables and no attributes
+- witness generator boundary must be exactly one input and one output with type
+  `mu(A) -> nu(A)` after normalization
+
 `action <ModName> where { gen g -> <diag> }` defines the functorial map on generator edges.
 
 `map[<ModExpr>](<DiagExpr>)` elaborates by applying declared actions along the composed modality expression.
@@ -140,9 +152,21 @@ Budgets are tooling-level search parameters (`SearchBudget`), not doctrine/morph
 
 Doctrine items:
 
-- `mode`, `modality`, `mod_eq`
+- `mode`, `modality`, `mod_eq`, `mod_transform`
 - `action`, `obligation`
 - `attrsort`, `type`, `data`, `gen`, `rule`
+
+Top-level functor/apply items:
+
+- `doctrine_functor F(L : Schema) where { ... }`
+- `doctrine New = apply F to Target using impl;`
+- `doctrine New = apply F to Target;` (only when `Schema -> Target` morphism is unique)
+
+Current implementation note:
+
+- the functor parameter name (for example `L`) is parsed/stored but not yet used for qualification
+- functor bodies currently must preserve the schema mode-theory 1-category (same modes/modalities/`mod_eq`)
+- this should be genuinely fixed only if functors must define or modify mode-theory structure during normal use, since that requires generalized apply/pushout mode-mapping semantics
 
 Removed legacy items:
 
@@ -154,6 +178,26 @@ Removed legacy items:
 
 Morphisms map modes/modalities/types/generators and transport diagrams.
 Pushout/coproduct construction remains available and merges doctrine content with compatibility checks.
+`apply` computes a right-biased pushout where target names are preserved and only colliding
+functor-body declarations are prefixed/freshened.
+
+Collision renaming during `apply` covers:
+
+- attr sorts
+- types
+- generators
+- cells
+- obligations (by `obName`)
+- `mod_transform` names
+
+Schema-side names are reserved for cells/obligations/`mod_transform`s: if target and body both
+reuse a schema name with different meaning, merge fails instead of auto-renaming the schema-named item.
+
+`apply` also inserts coercion morphisms:
+
+- `New.inl : Body -> New`
+- `New.inr : Target -> New`
+- `New.glue : Schema -> New`
 
 Morphism equation checking uses proof search over join proofs with tooling budgets.
 DSL morphism blocks may set optional:

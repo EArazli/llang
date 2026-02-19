@@ -239,7 +239,7 @@ elabDoctrineFunctor budget env raw = do
   schemaDoc <- lookupDoctrine env (rdfSchema raw)
   let rawBody =
         PolyAST.RawPolyDoctrine
-          { PolyAST.rpdName = "<internal>"
+          { PolyAST.rpdName = rdfName raw <> ".__body"
           , PolyAST.rpdExtends = Just (rdfSchema raw)
           , PolyAST.rpdItems = rdfBodyItems raw
           }

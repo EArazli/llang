@@ -89,6 +89,7 @@ mkModes modes =
     { mtModes = M.fromList [ (m, ModeInfo m) | m <- S.toList modes ]
     , mtDecls = M.empty
     , mtEqns = []
+    , mtTransforms = M.empty
     }
 
 testCoherenceJoinable :: Assertion

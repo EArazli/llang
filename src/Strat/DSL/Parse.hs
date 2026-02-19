@@ -232,6 +232,7 @@ polyItem =
   polyModeDecl
     <|> polyModalityDecl
     <|> polyModEqDecl
+    <|> polyModTransformDecl
     <|> polyActionDecl
     <|> polyObligationDecl
     <|> polyAttrSortDecl
@@ -267,6 +268,26 @@ polyModEqDecl = do
   rhs <- rawModExpr
   optionalSemi
   pure (PolyAST.RPModEq (PolyAST.RawModEqDecl lhs rhs))
+
+polyModTransformDecl :: Parser PolyAST.RawPolyItem
+polyModTransformDecl = do
+  _ <- symbol "mod_transform"
+  name <- ident
+  _ <- symbol ":"
+  fromMe <- rawModExpr
+  _ <- symbol "=>"
+  toMe <- rawModExpr
+  mWitness <- optional (symbol "witness" *> ident)
+  _ <- symbol ";"
+  pure
+    ( PolyAST.RPModTransform
+        PolyAST.RawModTransformDecl
+          { PolyAST.rmtName = name
+          , PolyAST.rmtFrom = fromMe
+          , PolyAST.rmtTo = toMe
+          , PolyAST.rmtWitness = mWitness
+          }
+    )
 
 polyActionDecl :: Parser PolyAST.RawPolyItem
 polyActionDecl = do

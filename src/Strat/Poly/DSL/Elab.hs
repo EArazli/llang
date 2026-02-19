@@ -18,7 +18,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import Control.Monad (foldM, when)
 import Strat.DSL.AST (RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..), RawPolyModalityMap(..), RawPolyAttrSortMap(..))
 import Strat.Poly.DSL.AST
@@ -410,6 +410,8 @@ elabPolyItem env doc item =
       rhs <- elabRawModExpr (dModes doc) (rmeRHS decl)
       mt' <- addModEqn (ModEqn lhs rhs) (dModes doc)
       pure doc { dModes = mt' }
+    RPModTransform decl ->
+      elabModTransformDecl doc decl
     RPAction decl -> do
       let modName = ModName (radModName decl)
       modDecl <-
@@ -573,6 +575,65 @@ elabPolyItem env doc item =
           case action of
             Left err -> Left ("rule " <> rprName decl <> ": " <> err)
             Right x -> Right x
+
+elabModTransformDecl :: Doctrine -> RawModTransformDecl -> Either Text Doctrine
+elabModTransformDecl doc decl = do
+  fromMe <- elabRawModExpr (dModes doc) (rmtFrom decl)
+  toMe <- elabRawModExpr (dModes doc) (rmtTo decl)
+  if meSrc fromMe == meSrc toMe && meTgt fromMe == meTgt toMe
+    then Right ()
+    else Left "mod_transform: source/target mismatch between transform sides"
+  let witnessText = fromMaybe (rmtName decl) (rmtWitness decl)
+  let witness = GenName witnessText
+  let witnessMode = meTgt fromMe
+  witnessGen <- lookupGen doc witnessMode witness
+  checkModTransformWitness doc fromMe toMe witnessGen
+  let transformDecl =
+        ModTransformDecl
+          { mtdName = ModTransformName (rmtName decl)
+          , mtdFrom = fromMe
+          , mtdTo = toMe
+          , mtdWitness = witness
+          }
+  mt' <- addModTransformDecl transformDecl (dModes doc)
+  pure doc { dModes = mt' }
+
+checkModTransformWitness :: Doctrine -> ModExpr -> ModExpr -> GenDecl -> Either Text ()
+checkModTransformWitness doc fromMe toMe witness = do
+  let witnessMode = meTgt fromMe
+  if gdMode witness == witnessMode
+    then Right ()
+    else Left "mod_transform: witness generator is declared in the wrong mode"
+  tyVar <-
+    case gdTyVars witness of
+      [v] -> Right v
+      _ -> Left "mod_transform: witness generator must have exactly one type variable"
+  if tvMode tyVar == meSrc fromMe
+    then Right ()
+    else Left "mod_transform: witness type variable must live in transform source mode"
+  if null (gdTmVars witness)
+    then Right ()
+    else Left "mod_transform: witness generator must not have term variables"
+  if null (gdAttrs witness)
+    then Right ()
+    else Left "mod_transform: witness generator must not have attributes"
+  domTy <-
+    case gdDom witness of
+      [InPort ty] -> Right ty
+      _ -> Left "mod_transform: witness generator domain must be exactly one input port"
+  codTy <-
+    case gdCod witness of
+      [ty] -> Right ty
+      _ -> Left "mod_transform: witness generator codomain must be exactly one output port"
+  let expectedDom = TMod fromMe (TVar tyVar)
+  let expectedCod = TMod toMe (TVar tyVar)
+  domNorm <- normalizeTypeExpr (dModes doc) domTy
+  codNorm <- normalizeTypeExpr (dModes doc) codTy
+  expectedDomNorm <- normalizeTypeExpr (dModes doc) expectedDom
+  expectedCodNorm <- normalizeTypeExpr (dModes doc) expectedCod
+  if domNorm == expectedDomNorm && codNorm == expectedCodNorm
+    then Right ()
+    else Left "mod_transform: witness generator must have type [mu(A)] -> [nu(A)] for the declared transform"
 
 ensureDistinct :: Text -> [Text] -> Either Text ()
 ensureDistinct label names =

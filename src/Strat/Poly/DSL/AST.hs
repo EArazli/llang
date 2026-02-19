@@ -5,6 +5,7 @@ module Strat.Poly.DSL.AST
   , RawModExpr(..)
   , RawModalityDecl(..)
   , RawModEqDecl(..)
+  , RawModTransformDecl(..)
   , RawActionDecl(..)
   , RawObligationDecl(..)
   , RawOblExpr(..)
@@ -42,6 +43,7 @@ data RawPolyItem
   = RPMode RawModeDecl
   | RPModality RawModalityDecl
   | RPModEq RawModEqDecl
+  | RPModTransform RawModTransformDecl
   | RPAction RawActionDecl
   | RPObligation RawObligationDecl
   | RPAttrSort RawAttrSortDecl
@@ -70,6 +72,13 @@ data RawModalityDecl = RawModalityDecl
 data RawModEqDecl = RawModEqDecl
   { rmeLHS :: RawModExpr
   , rmeRHS :: RawModExpr
+  } deriving (Eq, Show)
+
+data RawModTransformDecl = RawModTransformDecl
+  { rmtName :: Text
+  , rmtFrom :: RawModExpr
+  , rmtTo :: RawModExpr
+  , rmtWitness :: Maybe Text
   } deriving (Eq, Show)
 
 data RawActionDecl = RawActionDecl

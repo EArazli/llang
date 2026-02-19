@@ -18,7 +18,15 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..))
+import Strat.Poly.ModeTheory
+  ( ModeName(..)
+  , ModeTheory(..)
+  , ModName(..)
+  , ModDecl(..)
+  , ModExpr(..)
+  , ModTransformName(..)
+  , ModTransformDecl(..)
+  )
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
@@ -42,6 +50,10 @@ data PolyPushoutResult = PolyPushoutResult
 type TypeRenameMap = M.Map TypeRef TypeRef
 type TypePermMap = M.Map TypeRef [Int]
 type AttrSortRenameMap = M.Map AttrSort AttrSort
+type GenRenameMap = M.Map (ModeName, GenName) GenName
+type CellRenameMap = M.Map (ModeName, Text) Text
+type OblRenameMap = M.Map Text Text
+type TransformRenameMap = M.Map ModTransformName ModTransformName
 
 computePolyPushout :: Text -> Morphism -> Morphism -> Either Text PolyPushoutResult
 computePolyPushout name f g = do
@@ -81,8 +93,12 @@ computePolyPushout name f g = do
   let renameGensC = M.union renameGensC0 (disjointGenRenames prefixC (morSrc f) renameGensC0 (morTgt g))
   let renameCellsB = disjointCellRenames prefixB (morSrc f) (morTgt f)
   let renameCellsC = disjointCellRenames prefixC (morSrc f) (morTgt g)
-  b' <- renameDoctrine renameAttrSortsB renameTypesB permTypesB0 renameGensB renameCellsB (morTgt f)
-  c' <- renameDoctrine renameAttrSortsC renameTypesC permTypesC0 renameGensC renameCellsC (morTgt g)
+  let renameOblsB = disjointObligationRenames prefixB (morSrc f) (morTgt f)
+  let renameOblsC = disjointObligationRenames prefixC (morSrc f) (morTgt g)
+  let renameTransformsB = disjointTransformRenames prefixB (morSrc f) (morTgt f)
+  let renameTransformsC = disjointTransformRenames prefixC (morSrc f) (morTgt g)
+  b' <- renameDoctrine renameAttrSortsB renameTypesB permTypesB0 renameGensB renameCellsB renameOblsB renameTransformsB (morTgt f)
+  c' <- renameDoctrine renameAttrSortsC renameTypesC permTypesC0 renameGensC renameCellsC renameOblsC renameTransformsC (morTgt g)
   merged <- mergeDoctrineList mt [morSrc f, b', c']
   let pres = merged { dName = name }
   glue <- buildGlue name (morSrc f) pres
@@ -155,7 +171,9 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
         M.union interfaceGenRen
           (collisionGenRenames prefix interfaceGenRen target body)
   let renameCells = collisionCellRenames prefix src target body
-  body' <- renameDoctrine renameAttrSorts renameTypes interfacePermRen renameGens renameCells body
+  let renameObls = collisionObligationRenames prefix src target body
+  let renameTransforms = collisionTransformRenames prefix src target body
+  body' <- renameDoctrine renameAttrSorts renameTypes interfacePermRen renameGens renameCells renameObls renameTransforms body
   merged <- mergeDoctrine mt target body'
   let pres = merged { dName = newName }
   inr <- buildInj (newName <> ".inr") target pres M.empty M.empty M.empty M.empty
@@ -166,7 +184,6 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
           , morTgt = pres
           , morIsCoercion = True
           }
-  checkGenerated "glue" glue
   checkGenerated "inl" inl
   checkGenerated "inr" inr
   pure PolyPushoutResult { poDoctrine = pres, poInl = inl, poInr = inr, poGlue = glue }
@@ -192,9 +209,10 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
 computePolyCoproduct :: Text -> Doctrine -> Doctrine -> Either Text PolyPushoutResult
 computePolyCoproduct name a b = do
   ensureSameModes a b
+  let mtBase = (dModes a) { mtTransforms = M.empty }
   let empty = Doctrine
         { dName = "Empty"
-        , dModes = dModes a
+        , dModes = mtBase
         , dAcyclicModes = S.empty
         , dAttrSorts = M.empty
         , dTypes = M.empty
@@ -234,9 +252,15 @@ computePolyCoproduct name a b = do
 
 ensureSameModes :: Doctrine -> Doctrine -> Either Text ()
 ensureSameModes a b =
-  if dModes a == dModes b
+  if sameModeTheory1Cat (dModes a) (dModes b)
     then Right ()
     else Left "poly pushout requires identical mode theories"
+
+sameModeTheory1Cat :: ModeTheory -> ModeTheory -> Bool
+sameModeTheory1Cat a b =
+  mtModes a == mtModes b
+    && mtDecls a == mtDecls b
+    && mtEqns a == mtEqns b
 
 identityModeMap :: Doctrine -> M.Map ModeName ModeName
 identityModeMap doc =
@@ -471,7 +495,7 @@ disjointAttrSortRenames prefix src interfaceRen tgt =
           let (name', used') = freshAttrSortName prefix name used
           in (used', M.insert name name' mp)
 
-disjointGenRenames :: Text -> Doctrine -> M.Map (ModeName, GenName) GenName -> Doctrine -> M.Map (ModeName, GenName) GenName
+disjointGenRenames :: Text -> Doctrine -> GenRenameMap -> Doctrine -> GenRenameMap
 disjointGenRenames prefix src interfaceRen tgt =
   foldl add M.empty (M.toList (dGens tgt))
   where
@@ -489,7 +513,7 @@ disjointGenRenames prefix src interfaceRen tgt =
           let (name', used') = freshGenName prefix name used
           in (used', M.insert key name' mp)
 
-disjointCellRenames :: Text -> Doctrine -> Doctrine -> M.Map (ModeName, Text) Text
+disjointCellRenames :: Text -> Doctrine -> Doctrine -> CellRenameMap
 disjointCellRenames prefix src tgt =
   snd (foldl step (srcNames, M.empty) (dCells2 tgt))
   where
@@ -504,6 +528,31 @@ disjointCellRenames prefix src tgt =
           let (name', used') = freshCellName prefix name used
               usedByMode' = M.insert mode used' usedByMode
           in (usedByMode', M.insert (mode, name) name' mp)
+
+disjointObligationRenames :: Text -> Doctrine -> Doctrine -> OblRenameMap
+disjointObligationRenames prefix src tgt =
+  snd (foldl step (srcNames, M.empty) (dObligations tgt))
+  where
+    srcNames = S.fromList (map obName (dObligations src))
+    step (used, mp) obl =
+      let name = obName obl
+      in if name `S.member` used
+        then (used, mp)
+        else
+          let (name', used') = freshCellName prefix name used
+          in (used', M.insert name name' mp)
+
+disjointTransformRenames :: Text -> Doctrine -> Doctrine -> TransformRenameMap
+disjointTransformRenames prefix src tgt =
+  snd (foldl step (srcNames, M.empty) (M.keys (mtTransforms (dModes tgt))))
+  where
+    srcNames = S.fromList (M.keys (mtTransforms (dModes src)))
+    step (used, mp) name =
+      if name `S.member` used
+        then (used, mp)
+        else
+          let (name', used') = freshTransformName prefix name used
+          in (used', M.insert name name' mp)
 
 mkInterfaceAttrSortRenameMap :: AttrSortRenameMap -> AttrSortRenameMap -> Either Text AttrSortRenameMap
 mkInterfaceAttrSortRenameMap leftMap rightMap =
@@ -701,6 +750,41 @@ collisionCellRenames prefix src target body =
               let usedByMode' = M.insert mode (S.insert name used) usedByMode
               in (renAcc, usedByMode')
 
+collisionObligationRenames :: Text -> Doctrine -> Doctrine -> Doctrine -> OblRenameMap
+collisionObligationRenames prefix src target body =
+  fst (foldl step (M.empty, used0) (dObligations body))
+  where
+    interfaceNames = S.fromList (map obName (dObligations src))
+    used0 = S.fromList (map obName (dObligations target))
+    step (renAcc, used) obl =
+      let name = obName obl
+          isInterface = name `S.member` interfaceNames
+      in if isInterface
+        then (renAcc, S.insert name used)
+        else
+          if name `S.member` used
+            then
+              let (fresh, used') = freshCellName prefix name used
+              in (M.insert name fresh renAcc, used')
+            else (renAcc, S.insert name used)
+
+collisionTransformRenames :: Text -> Doctrine -> Doctrine -> Doctrine -> TransformRenameMap
+collisionTransformRenames prefix src target body =
+  fst (foldl step (M.empty, used0) (M.keys (mtTransforms (dModes body))))
+  where
+    interfaceNames = S.fromList (M.keys (mtTransforms (dModes src)))
+    used0 = S.fromList (M.keys (mtTransforms (dModes target)))
+    step (renAcc, used) name =
+      let isInterface = name `S.member` interfaceNames
+      in if isInterface
+        then (renAcc, S.insert name used)
+        else
+          if name `S.member` used
+            then
+              let (fresh, used') = freshTransformName prefix name used
+              in (M.insert name fresh renAcc, used')
+            else (renAcc, S.insert name used)
+
 namesByMode :: (Ord a) => [(ModeName, a)] -> M.Map ModeName (S.Set a)
 namesByMode pairs =
   foldl add M.empty pairs
@@ -736,6 +820,12 @@ freshCellName prefix base used =
       candidate = baseName
   in freshen candidate (\n -> baseName <> "_" <> T.pack (show n)) used
 
+freshTransformName :: Text -> ModTransformName -> S.Set ModTransformName -> (ModTransformName, S.Set ModTransformName)
+freshTransformName prefix (ModTransformName base) used =
+  let baseName = prefix <> "_" <> base
+      candidate = ModTransformName baseName
+  in freshen candidate (\n -> ModTransformName (baseName <> "_" <> T.pack (show n))) used
+
 freshen :: (Ord a) => a -> (Int -> a) -> S.Set a -> (a, S.Set a)
 freshen candidate mk used =
   if candidate `S.member` used
@@ -752,11 +842,14 @@ renameDoctrine
   :: AttrSortRenameMap
   -> TypeRenameMap
   -> TypePermMap
-  -> M.Map (ModeName, GenName) GenName
-  -> M.Map (ModeName, Text) Text
+  -> GenRenameMap
+  -> CellRenameMap
+  -> OblRenameMap
+  -> TransformRenameMap
   -> Doctrine
   -> Either Text Doctrine
-renameDoctrine attrRen tyRen permRen genRen cellRen doc = do
+renameDoctrine attrRen tyRen permRen genRen cellRen oblRen transformRen doc = do
+  modes' <- renameModeTransforms transformRen (dModes doc)
   attrSorts' <- renameAttrSorts attrRen (dAttrSorts doc)
   types' <- M.traverseWithKey renameTypeTable (dTypes doc)
   gens' <- M.traverseWithKey renameGenTable (dGens doc)
@@ -765,7 +858,8 @@ renameDoctrine attrRen tyRen permRen genRen cellRen doc = do
   obligations' <- mapM renameObligation (dObligations doc)
   pure
     doc
-      { dAttrSorts = attrSorts'
+      { dModes = modes'
+      , dAttrSorts = attrSorts'
       , dTypes = types'
       , dGens = gens'
       , dCells2 = cells'
@@ -774,6 +868,21 @@ renameDoctrine attrRen tyRen permRen genRen cellRen doc = do
       }
   where
     mt = dModes doc
+
+    renameModeTransforms transRen mt0 = do
+      transforms' <- foldM addTransform M.empty (M.toList (mtTransforms mt0))
+      Right mt0 { mtTransforms = transforms' }
+      where
+        addTransform acc (name, decl) = do
+          let name' = M.findWithDefault name name transRen
+          let mode = meTgt (mtdFrom decl)
+          let witness' = M.findWithDefault (mtdWitness decl) (mode, mtdWitness decl) genRen
+          let decl' = decl { mtdName = name', mtdWitness = witness' }
+          case M.lookup name' acc of
+            Nothing -> Right (M.insert name' decl' acc)
+            Just existing
+              | existing == decl' -> Right acc
+              | otherwise -> Left "poly pushout: modality transform name collision"
 
     renameAttrSorts ren table =
       foldl add (Right M.empty) (M.elems table)
@@ -792,12 +901,19 @@ renameDoctrine attrRen tyRen permRen genRen cellRen doc = do
         add acc (name, sig) = do
           mp <- acc
           let ref = TypeRef mode name
+          sig1 <- renameTypeSig tyRen permRen sig
+          sig2 <-
+            case M.lookup ref permRen of
+              Nothing -> Right sig1
+              Just perm -> do
+                params <- applyPerm perm (tsParams sig1)
+                Right sig1 { tsParams = params }
           let ref' = M.findWithDefault ref ref tyRen
           if trMode ref' /= mode
             then Left "poly pushout: type rename mode mismatch"
             else case M.lookup (trName ref') mp of
-              Nothing -> Right (M.insert (trName ref') sig mp)
-              Just existing | existing == sig -> Right mp
+              Nothing -> Right (M.insert (trName ref') sig2 mp)
+              Just existing | existing == sig2 -> Right mp
               _ -> Left "poly pushout: type name collision"
     renameGenTable mode table =
       foldl add (Right M.empty) (M.elems table)
@@ -832,102 +948,222 @@ renameDoctrine attrRen tyRen permRen genRen cellRen doc = do
               | otherwise -> Left "poly pushout: modality action generator collision"
 
     renameObligation obl = do
+      let name' = M.findWithDefault (obName obl) (obName obl) oblRen
+      let tyVarNames = S.fromList (map tvName (obTyVars obl))
+      let tmVarNames = S.fromList (map tmvName (obTmVars obl))
       dom' <- mapM (renameTypeExpr tyRen permRen) (obDom obl)
       cod' <- mapM (renameTypeExpr tyRen permRen) (obCod obl)
-      lhs' <- renameOblExpr (obMode obl) (obLHSExpr obl)
-      rhs' <- renameOblExpr (obMode obl) (obRHSExpr obl)
+      lhs' <- renameOblExpr tyVarNames tmVarNames (obMode obl) (obLHSExpr obl)
+      rhs' <- renameOblExpr tyVarNames tmVarNames (obMode obl) (obRHSExpr obl)
       pure
         obl
-          { obDom = dom'
+          { obName = name'
+          , obDom = dom'
           , obCod = cod'
           , obLHSExpr = lhs'
           , obRHSExpr = rhs'
           }
 
-    renameOblExpr mode expr =
+    renameOblExpr tyVarNames tmVarNames mode expr =
       case expr of
         PolyAST.ROEDiag d ->
-          PolyAST.ROEDiag <$> renameRawDiagExpr mode d
+          PolyAST.ROEDiag <$> renameRawDiagExpr tyVarNames tmVarNames mode d
         PolyAST.ROEMap me inner -> do
           (innerMode, _outerMode) <- rawModExprEndpoints mode me
-          inner' <- renameOblExpr innerMode inner
+          inner' <- renameOblExpr tyVarNames tmVarNames innerMode inner
           pure (PolyAST.ROEMap me inner')
         PolyAST.ROEGen ->
           Right PolyAST.ROEGen
         PolyAST.ROELiftDom d ->
-          PolyAST.ROELiftDom <$> renameRawDiagExpr mode d
+          PolyAST.ROELiftDom <$> renameRawDiagExpr tyVarNames tmVarNames mode d
         PolyAST.ROELiftCod d ->
-          PolyAST.ROELiftCod <$> renameRawDiagExpr mode d
+          PolyAST.ROELiftCod <$> renameRawDiagExpr tyVarNames tmVarNames mode d
         PolyAST.ROEComp a b ->
-          PolyAST.ROEComp <$> renameOblExpr mode a <*> renameOblExpr mode b
+          PolyAST.ROEComp <$> renameOblExpr tyVarNames tmVarNames mode a <*> renameOblExpr tyVarNames tmVarNames mode b
         PolyAST.ROETensor a b ->
-          PolyAST.ROETensor <$> renameOblExpr mode a <*> renameOblExpr mode b
+          PolyAST.ROETensor <$> renameOblExpr tyVarNames tmVarNames mode a <*> renameOblExpr tyVarNames tmVarNames mode b
 
-    renameRawDiagExpr mode expr =
+    renameRawDiagExpr tyVarNames tmVarNames mode expr =
       case expr of
         PolyAST.RDId ctx ->
-          PolyAST.RDId <$> mapM (renameRawTypeExpr mode) ctx
+          PolyAST.RDId <$> mapM (renameRawTypeAsType tyVarNames tmVarNames mode) ctx
         PolyAST.RDMetaVar name ->
           Right (PolyAST.RDMetaVar name)
         PolyAST.RDGen name mTyArgs mAttrArgs mBinderArgs -> do
           let genName = GenName name
           let genName' = M.findWithDefault genName (mode, genName) genRen
-          mTyArgs' <- mapM (mapM (renameRawTypeExpr mode)) mTyArgs
-          mBinderArgs' <- mapM (mapM (renameRawBinderArg mode)) mBinderArgs
+          mTyArgs' <- renameRawGenArgs tyVarNames tmVarNames mode genName mTyArgs
+          mBinderArgs' <- mapM (mapM (renameRawBinderArg tyVarNames tmVarNames mode)) mBinderArgs
           pure (PolyAST.RDGen (renderGenName genName') mTyArgs' mAttrArgs mBinderArgs')
         PolyAST.RDTermRef name ->
           Right (PolyAST.RDTermRef name)
         PolyAST.RDSplice name ->
           Right (PolyAST.RDSplice name)
         PolyAST.RDBox name inner ->
-          PolyAST.RDBox name <$> renameRawDiagExpr mode inner
+          PolyAST.RDBox name <$> renameRawDiagExpr tyVarNames tmVarNames mode inner
         PolyAST.RDLoop inner ->
-          PolyAST.RDLoop <$> renameRawDiagExpr mode inner
+          PolyAST.RDLoop <$> renameRawDiagExpr tyVarNames tmVarNames mode inner
         PolyAST.RDMap me inner -> do
           (innerMode, _outerMode) <- rawModExprEndpoints mode me
-          inner' <- renameRawDiagExpr innerMode inner
+          inner' <- renameRawDiagExpr tyVarNames tmVarNames innerMode inner
           pure (PolyAST.RDMap me inner')
         PolyAST.RDComp a b ->
-          PolyAST.RDComp <$> renameRawDiagExpr mode a <*> renameRawDiagExpr mode b
+          PolyAST.RDComp <$> renameRawDiagExpr tyVarNames tmVarNames mode a <*> renameRawDiagExpr tyVarNames tmVarNames mode b
         PolyAST.RDTensor a b ->
-          PolyAST.RDTensor <$> renameRawDiagExpr mode a <*> renameRawDiagExpr mode b
+          PolyAST.RDTensor <$> renameRawDiagExpr tyVarNames tmVarNames mode a <*> renameRawDiagExpr tyVarNames tmVarNames mode b
 
-    renameRawBinderArg mode barg =
+    renameRawBinderArg tyVarNames tmVarNames mode barg =
       case barg of
         PolyAST.RBAExpr d ->
-          PolyAST.RBAExpr <$> renameRawDiagExpr mode d
+          PolyAST.RBAExpr <$> renameRawDiagExpr tyVarNames tmVarNames mode d
         PolyAST.RBAMeta name ->
           Right (PolyAST.RBAMeta name)
 
-    renameRawTypeExpr mode ty =
+    renameRawTypeAsType tyVarNames tmVarNames mode ty =
       case ty of
         PolyAST.RPTVar name ->
-          Right (PolyAST.RPTVar name)
-        PolyAST.RPTCon ref args -> do
-          let refMode = maybe mode ModeName (PolyAST.rtrMode ref)
-          let typedRef = TypeRef refMode (TypeName (PolyAST.rtrName ref))
-          args' <- mapM (renameRawTypeExpr mode) args
-          let typedRef' = M.findWithDefault typedRef typedRef tyRen
-          args'' <-
-            case M.lookup typedRef permRen of
-              Nothing -> Right args'
-              Just perm -> applyPerm perm args'
-          let refModeTxt =
-                case PolyAST.rtrMode ref of
-                  Nothing -> Nothing
-                  Just _ -> Just (renderModeName (trMode typedRef'))
-          pure
-            ( PolyAST.RPTCon
-                PolyAST.RawTypeRef
-                  { PolyAST.rtrMode = refModeTxt
-                  , PolyAST.rtrName = renderTypeName (trName typedRef')
-                  }
-                args''
-            )
+          if name `S.member` tyVarNames
+            then Right (PolyAST.RPTVar name)
+            else do
+              ref <- resolveRawTypeRefAsType (PolyAST.RawTypeRef Nothing name)
+              let ref' = M.findWithDefault ref ref tyRen
+              pure (mkQualifiedRawTypeCon ref' [])
+        PolyAST.RPTCon ref args ->
+          case asModalityCall ref args of
+            Just (rawMe, innerRaw) -> do
+              (srcMode, _tgtMode) <- rawModExprEndpoints mode rawMe
+              inner' <- renameRawTypeAsType tyVarNames tmVarNames srcMode innerRaw
+              pure (PolyAST.RPTCon ref [inner'])
+            Nothing -> do
+              ref0 <- resolveRawTypeRefAsType ref
+              sig <- lookupTypeSig doc ref0
+              if length (tsParams sig) /= length args
+                then Left "poly pushout: obligation raw type arity mismatch"
+                else do
+                  args0 <- mapM (renameOneArg tyVarNames tmVarNames) (zip (tsParams sig) args)
+                  let args1 =
+                        case M.lookup ref0 permRen of
+                          Nothing -> Right args0
+                          Just perm -> applyPerm perm args0
+                  args2 <- args1
+                  let ref' = M.findWithDefault ref0 ref0 tyRen
+                  pure (mkQualifiedRawTypeCon ref' args2)
         PolyAST.RPTMod me inner -> do
           (innerMode, _outerMode) <- rawModExprEndpoints mode me
-          inner' <- renameRawTypeExpr innerMode inner
+          inner' <- renameRawTypeAsType tyVarNames tmVarNames innerMode inner
           pure (PolyAST.RPTMod me inner')
+
+    renameRawTypeAsTmTerm tmVarNames mode ty =
+      case ty of
+        PolyAST.RPTVar name ->
+          if name `S.member` tmVarNames
+            then Right (PolyAST.RPTVar name)
+            else do
+              let name' = renameTmFunLike mode name
+              Right (PolyAST.RPTVar name')
+        PolyAST.RPTCon ref args -> do
+          args' <- mapM (renameRawTypeAsTmTerm tmVarNames mode) args
+          let name' = renameTmFunLike mode (PolyAST.rtrName ref)
+          pure
+            ( PolyAST.RPTCon
+                ref
+                  { PolyAST.rtrName = name'
+                  }
+                args'
+            )
+        PolyAST.RPTMod _ _ ->
+          Left "poly pushout: modality application is invalid in term-argument context"
+
+    renameRawGenArgs tyVarNames tmVarNames mode genName mArgs =
+      case mArgs of
+        Nothing -> Right Nothing
+        Just args -> do
+          genDecl <- lookupGenDecl mode genName
+          let paramKinds =
+                map Left (gdTyVars genDecl)
+                  <> map Right (gdTmVars genDecl)
+          if length args > length paramKinds
+            then Left "poly pushout: obligation raw generator argument mismatch"
+            else do
+              args' <- mapM (renameGenArg tyVarNames tmVarNames mode) (zip args (take (length args) paramKinds))
+              Right (Just args')
+
+    renameGenArg tyVarNames tmVarNames mode (arg, kind) =
+      case kind of
+        Left _ ->
+          renameRawTypeAsType tyVarNames tmVarNames mode arg
+        Right tmv ->
+          renameRawTypeAsTmTerm tmVarNames (typeMode (tmvSort tmv)) arg
+
+    renameOneArg tyVarNames tmVarNames (param, arg) =
+      case param of
+        PS_Ty mode ->
+          renameRawTypeAsType tyVarNames tmVarNames mode arg
+        PS_Tm sortTy ->
+          renameRawTypeAsTmTerm tmVarNames (typeMode sortTy) arg
+
+    lookupGenDecl mode genName =
+      case M.lookup mode (dGens doc) >>= M.lookup genName of
+        Nothing -> Left "poly pushout: obligation raw diagram references unknown generator"
+        Just gd -> Right gd
+
+    resolveRawTypeRefAsType rawRef =
+      case PolyAST.rtrMode rawRef of
+        Just modeTxt -> do
+          let mode = ModeName modeTxt
+          let tname = TypeName (PolyAST.rtrName rawRef)
+          case M.lookup mode (dTypes doc) >>= M.lookup tname of
+            Nothing -> Left "poly pushout: obligation raw type references unknown qualified type"
+            Just _ -> Right (TypeRef mode tname)
+        Nothing -> do
+          let tname = TypeName (PolyAST.rtrName rawRef)
+          let modes =
+                [ mode
+                | (mode, table) <- M.toList (dTypes doc)
+                , M.member tname table
+                ]
+          case modes of
+            [] -> Left "poly pushout: obligation raw type references unknown type"
+            [mode] -> Right (TypeRef mode tname)
+            _ -> Left "poly pushout: obligation raw type is ambiguous (use Mode.Type)"
+
+    asModalityCall rawRef args =
+      case (PolyAST.rtrMode rawRef, PolyAST.rtrName rawRef, args) of
+        (Nothing, name, [inner]) ->
+          if hasModality name
+            then Just (PolyAST.RMComp [name], inner)
+            else Nothing
+        (Just modeTok, name, [inner]) ->
+          if hasQualifiedType modeTok name
+            then Nothing
+            else
+              if hasModality modeTok && hasModality name
+                then Just (PolyAST.RMComp [modeTok, name], inner)
+                else Nothing
+        _ -> Nothing
+
+    hasModality tok =
+      M.member (ModName tok) (mtDecls mt)
+
+    hasQualifiedType modeTok tyTok =
+      let mode = ModeName modeTok
+          tname = TypeName tyTok
+      in case M.lookup mode (dTypes doc) of
+        Nothing -> False
+        Just table -> M.member tname table
+
+    renameTmFunLike mode name =
+      let genName = GenName name
+          genName' = M.findWithDefault genName (mode, genName) genRen
+      in renderGenName genName'
+
+    mkQualifiedRawTypeCon ref args =
+      PolyAST.RPTCon
+        PolyAST.RawTypeRef
+          { PolyAST.rtrMode = Just (renderModeName (trMode ref))
+          , PolyAST.rtrName = renderTypeName (trName ref)
+          }
+        args
 
     rawModExprEndpoints fallbackMode me =
       case me of
@@ -1020,6 +1256,16 @@ renameBinderSig ren permRen sig = do
   cod' <- mapM (renameTypeExpr ren permRen) (bsCod sig)
   pure sig { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
 
+renameTypeSig :: TypeRenameMap -> TypePermMap -> TypeSig -> Either Text TypeSig
+renameTypeSig ren permRen sig = do
+  params' <- mapM renameParam (tsParams sig)
+  pure sig { tsParams = params' }
+  where
+    renameParam param =
+      case param of
+        PS_Ty mode -> Right (PS_Ty mode)
+        PS_Tm sortTy -> PS_Tm <$> renameTypeExpr ren permRen sortTy
+
 renameTypeExpr :: TypeRenameMap -> TypePermMap -> TypeExpr -> Either Text TypeExpr
 renameTypeExpr ren permRen ty =
   case ty of
@@ -1083,9 +1329,10 @@ mergeDoctrineList mt (d:ds) = foldl merge (Right d) ds
 
 mergeDoctrine :: ModeTheory -> Doctrine -> Doctrine -> Either Text Doctrine
 mergeDoctrine mt a b = do
-  if dModes a /= dModes b
+  if not (sameModeTheory1Cat (dModes a) (dModes b))
     then Left "poly pushout: mode mismatch"
     else do
+      modeTheory <- mergeModeTheory (dModes a) (dModes b)
       attrSorts <- mergeAttrSorts (dAttrSorts a) (dAttrSorts b)
       types <- mergeTypeTables (dTypes a) (dTypes b)
       gens <- mergeGenTables (dGens a) (dGens b)
@@ -1094,7 +1341,8 @@ mergeDoctrine mt a b = do
       obligations <- mergeObligations (dObligations a) (dObligations b)
       let merged =
             a
-              { dAcyclicModes = S.union (dAcyclicModes a) (dAcyclicModes b)
+              { dModes = modeTheory
+              , dAcyclicModes = S.union (dAcyclicModes a) (dAcyclicModes b)
               , dAttrSorts = attrSorts
               , dTypes = types
               , dGens = gens
@@ -1168,6 +1416,18 @@ mergeDoctrine mt a b = do
             (existing:_)
               | existing == obl -> Right obs
               | otherwise -> Left "poly pushout: obligation conflict"
+
+    mergeModeTheory left right =
+      foldl addTransform (Right left) (M.toList (mtTransforms right))
+      where
+        addTransform acc (name, decl) = do
+          mtAcc <- acc
+          case M.lookup name (mtTransforms mtAcc) of
+            Nothing ->
+              Right mtAcc { mtTransforms = M.insert name decl (mtTransforms mtAcc) }
+            Just existing
+              | existing == decl -> Right mtAcc
+              | otherwise -> Left "poly pushout: modality transform conflict"
 
 mergeCells :: ModeTheory -> [Cell2] -> [Cell2] -> Either Text [Cell2]
 mergeCells mt left right =

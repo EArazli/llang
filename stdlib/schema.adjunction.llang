@@ -11,6 +11,9 @@ doctrine SchemaAdjunction where {
   gen eta(a@C) : [a] -> [U(F(a))] @C;
   gen eps(b@L) : [F(U(b))] -> [b] @L;
 
+  mod_transform eta : id@C => U.F;
+  mod_transform eps : F.U => id@L;
+
   obligation triangleL(a@C) : [F(a)] -> [F(a)] @L =
     map[F](eta{a}) ; eps{F(a)} == id[F(a)]
 

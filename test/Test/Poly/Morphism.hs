@@ -303,6 +303,7 @@ testModalityMapRewritesTypeModalities = do
                 , (modH, ModDecl modH modeB modeB)
                 ]
           , mtEqns = []
+          , mtTransforms = M.empty
           }
   let modeTheoryTgt =
         ModeTheory
@@ -317,6 +318,7 @@ testModalityMapRewritesTypeModalities = do
                 , (modK, ModDecl modK modeD modeD)
                 ]
           , mtEqns = []
+          , mtTransforms = M.empty
           }
   let genGSrc =
         GenDecl
