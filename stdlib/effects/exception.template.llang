@@ -1,6 +1,8 @@
-doctrine_template Exception(BaseDoc, E) where {
-  doctrine Exception extends BaseDoc where {
-    type E @M;
-    gen raise : [E] -> [] @M;
-  }
+doctrine ExceptionSchema where {
+  mode M;
+  type E @M;
+}
+
+doctrine_functor Exception(L : ExceptionSchema) where {
+  gen raise : [E] -> [] @M;
 }

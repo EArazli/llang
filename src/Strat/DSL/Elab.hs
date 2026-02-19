@@ -11,9 +11,9 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
+import Data.List (sort)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
-import Strat.DSL.Template (instantiateTemplate)
 import Strat.Frontend.Env
 import Strat.Frontend.Compile (compileDiagramArtifact)
 import Strat.Pipeline
@@ -27,6 +27,7 @@ import Strat.Poly.DSL.Elab
   , checkImplementsObligationsWithBudget
   , ImplementsCheckResult(..)
   )
+import Strat.Poly.Kernel (TypeExpr(..), TypeRef(..), TypeName(..))
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
 import Strat.Poly.Doctrine
   ( Doctrine(..)
@@ -44,10 +45,15 @@ import Strat.Poly.ModeTheory
   , emptyModeTheory
   , addMode
   )
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeRef(..), TypeName(..))
 import Strat.Poly.Names (GenName(..))
 import qualified Strat.Poly.Morphism as PolyMorph
-import Strat.Poly.Pushout (PolyPushoutResult(..), computePolyPushout, computePolyCoproduct)
+import Strat.Poly.Pushout
+  ( PolyPushoutResult(..)
+  , computePolyPushout
+  , computePolyPushoutPreferRight
+  , computePolyCoproduct
+  , mkInclusionMorphism
+  )
 import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 import Strat.Poly.Proof (SearchBudget, defaultSearchBudget, renderSearchLimit)
@@ -92,12 +98,11 @@ elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
                           (M.insert (PolyMorph.morName inr) inr (meMorphisms env)))
                   }
           pure (env', rawTerms, rawRuns)
-        DeclDoctrineTemplate tmpl -> do
-          ensureAbsent "doctrine_template" (rdtName tmpl) (meTemplates env)
-          let env' = env { meTemplates = M.insert (rdtName tmpl) tmpl (meTemplates env) }
+        DeclDoctrineFunctor functorDecl -> do
+          env' <- elabDoctrineFunctor budget env functorDecl
           pure (env', rawTerms, rawRuns)
-        DeclDoctrineInstantiate inst -> do
-          env' <- elabDoctrineInstantiate budget env inst
+        DeclDoctrineApply applyDecl -> do
+          env' <- elabDoctrineApply env applyDecl
           pure (env', rawTerms, rawRuns)
         DeclDoctrineEffects name base effects -> do
           env' <- elabDoctrineEffects budget env name base effects
@@ -228,18 +233,114 @@ insertPushoutWithMorphs env name f g = do
   pure env'
 
 
-elabDoctrineInstantiate :: SearchBudget -> ModuleEnv -> RawDoctrineInstantiate -> Either Text ModuleEnv
-elabDoctrineInstantiate budget env inst = do
-  tmpl <- lookupTemplate env (rdiTemplate inst)
-  raw <- instantiateTemplate tmpl (rdiName inst) (rdiArgs inst)
-  insertDoctrine budget env raw
+elabDoctrineFunctor :: SearchBudget -> ModuleEnv -> RawDoctrineFunctor -> Either Text ModuleEnv
+elabDoctrineFunctor budget env raw = do
+  ensureAbsent "doctrine_functor" (rdfName raw) (meFunctors env)
+  schemaDoc <- lookupDoctrine env (rdfSchema raw)
+  let rawBody =
+        PolyAST.RawPolyDoctrine
+          { PolyAST.rpdName = "<internal>"
+          , PolyAST.rpdExtends = Just (rdfSchema raw)
+          , PolyAST.rpdItems = rdfBodyItems raw
+          }
+  (bodyDoc, actionProofs) <- elabPolyDoctrineWithBudgetResult budget env rawBody
+  incl <- mkInclusionMorphism (rdfName raw <> ".incl") schemaDoc bodyDoc
+  let def =
+        DoctrineFunctorDef
+          { dfName = rdfName raw
+          , dfSchema = rdfSchema raw
+          , dfBody = bodyDoc
+          , dfIncl = incl
+          }
+  pure
+    ( addActionProofCount actionProofs
+        (env { meFunctors = M.insert (rdfName raw) def (meFunctors env) })
+    )
 
 
-lookupTemplate :: ModuleEnv -> Text -> Either Text RawDoctrineTemplate
-lookupTemplate env name =
-  case M.lookup name (meTemplates env) of
-    Nothing -> Left ("Unknown doctrine_template: " <> name)
-    Just tmpl -> Right tmpl
+elabDoctrineApply :: ModuleEnv -> RawDoctrineApply -> Either Text ModuleEnv
+elabDoctrineApply env raw = do
+  ensureAbsent "doctrine" (rdaName raw) (meDoctrines env)
+  functorDef <- lookupFunctor env (rdaFunctor raw)
+  targetDoc <- lookupDoctrine env (rdaTarget raw)
+  implMorph <- resolveApplyMorphism env functorDef targetDoc (rdaUsingMorph raw)
+  PolyPushoutResult doc inl inr glue <-
+    computePolyPushoutPreferRight (rdaName raw) (dfName functorDef) (dfIncl functorDef) implMorph
+  ensureAbsent "morphism" (PolyMorph.morName inl) (meMorphisms env)
+  ensureAbsent "morphism" (PolyMorph.morName inr) (meMorphisms env)
+  ensureAbsent "morphism" (PolyMorph.morName glue) (meMorphisms env)
+  pure
+    env
+      { meDoctrines = M.insert (rdaName raw) doc (meDoctrines env)
+      , meMorphisms =
+          M.insert (PolyMorph.morName glue) glue
+            (M.insert (PolyMorph.morName inl) inl
+              (M.insert (PolyMorph.morName inr) inr (meMorphisms env)))
+      }
+
+
+lookupFunctor :: ModuleEnv -> Text -> Either Text DoctrineFunctorDef
+lookupFunctor env name =
+  case M.lookup name (meFunctors env) of
+    Nothing -> Left ("Unknown doctrine_functor: " <> name)
+    Just def -> Right def
+
+
+resolveApplyMorphism :: ModuleEnv -> DoctrineFunctorDef -> Doctrine -> Maybe Text -> Either Text PolyMorph.Morphism
+resolveApplyMorphism env functorDef targetDoc mUsing =
+  case mUsing of
+    Just morphName -> do
+      mor <- lookupMorphism env morphName
+      if dName (PolyMorph.morSrc mor) /= dfSchema functorDef
+        then
+          Left
+            ( "apply: morphism "
+                <> morphName
+                <> " has source "
+                <> dName (PolyMorph.morSrc mor)
+                <> " but expected "
+                <> dfSchema functorDef
+            )
+        else
+          if dName (PolyMorph.morTgt mor) /= dName targetDoc
+            then
+              Left
+                ( "apply: morphism "
+                    <> morphName
+                    <> " has target "
+                    <> dName (PolyMorph.morTgt mor)
+                    <> " but expected "
+                    <> dName targetDoc
+                )
+            else Right mor
+    Nothing ->
+      case candidates of
+        [] ->
+          Left
+            ( "apply: no schema->target morphism found from "
+                <> dfSchema functorDef
+                <> " to "
+                <> dName targetDoc
+                <> "; provide an explicit `using` morphism"
+            )
+        [(_, mor)] ->
+          Right mor
+        _ ->
+          Left
+            ( "apply: non-unique schema->target morphism from "
+                <> dfSchema functorDef
+                <> " to "
+                <> dName targetDoc
+                <> "; candidates: "
+                <> T.intercalate ", " (sort (map fst candidates))
+            )
+  where
+    candidates =
+      [ (name, mor)
+      | (name, mor) <- M.toList (meMorphisms env)
+      , dName (PolyMorph.morSrc mor) == dfSchema functorDef
+      , dName (PolyMorph.morTgt mor) == dName targetDoc
+      ]
 
 
 elabDoctrineEffects :: SearchBudget -> ModuleEnv -> Text -> Text -> [Text] -> Either Text ModuleEnv

@@ -2,7 +2,9 @@
 module Strat.Poly.Pushout
   ( PolyPushoutResult(..)
   , computePolyPushout
+  , computePolyPushoutPreferRight
   , computePolyCoproduct
+  , mkInclusionMorphism
   ) where
 
 import Data.Text (Text)
@@ -16,7 +18,7 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName, ModDecl(..), ModExpr(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..))
 import Strat.Poly.TypeExpr
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
@@ -27,6 +29,7 @@ import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.TypeNormalize (termExprToDiagramChecked)
+import qualified Strat.Poly.DSL.AST as PolyAST
 
 
 data PolyPushoutResult = PolyPushoutResult
@@ -107,6 +110,84 @@ computePolyPushout name f g = do
       in if okModes && okMods
         then Right ()
         else Left "pushout requires mode-preserving morphisms"
+
+mkInclusionMorphism :: Text -> Doctrine -> Doctrine -> Either Text Morphism
+mkInclusionMorphism name src tgt = do
+  ensureSameModes src tgt
+  mor <- buildInj name src tgt M.empty M.empty M.empty M.empty
+  checkGenerated "inclusion" mor
+  pure mor
+
+computePolyPushoutPreferRight :: Text -> Text -> Morphism -> Morphism -> Either Text PolyPushoutResult
+computePolyPushoutPreferRight newName leftPrefix incl impl = do
+  ensureSameSource
+  ensureIdentityModeMap incl
+  ensureIdentityModeMap impl
+  ensureSameModes (morSrc incl) (morTgt incl)
+  ensureSameModes (morSrc impl) (morTgt impl)
+  let src = morSrc incl
+  let body = morTgt incl
+  let target = morTgt impl
+  let mt = dModes src
+  attrMapIncl <- requireAttrSortRenameMap incl
+  attrMapImpl <- requireAttrSortRenameMap impl
+  (typeMapIncl, permMapIncl) <- requireTypeRenameMap incl
+  (typeMapImpl, permMapImpl) <- requireTypeRenameMap impl
+  genMapIncl <- requireGenRenameMap incl
+  genMapImpl <- requireGenRenameMap impl
+  ensureInjective "attrsort" (M.elems attrMapIncl)
+  ensureInjective "attrsort" (M.elems attrMapImpl)
+  ensureInjective "type" (M.elems typeMapIncl)
+  ensureInjective "type" (M.elems typeMapImpl)
+  ensureInjective "gen" (M.elems genMapIncl)
+  ensureInjective "gen" (M.elems genMapImpl)
+  interfaceAttrRen <- mkInterfaceAttrSortRenameMap attrMapIncl attrMapImpl
+  (interfaceTypeRen, interfacePermRen) <- mkInterfaceTypeRenameMap src typeMapIncl permMapIncl typeMapImpl permMapImpl
+  interfaceGenRen <- mkInterfaceGenRenameMap genMapIncl genMapImpl
+  let prefix = sanitizePrefix leftPrefix
+  let renameAttrSorts =
+        M.union interfaceAttrRen
+          (collisionAttrSortRenames prefix interfaceAttrRen target body)
+  let renameTypes =
+        M.union interfaceTypeRen
+          (collisionTypeRenames prefix interfaceTypeRen target body)
+  let renameGens =
+        M.union interfaceGenRen
+          (collisionGenRenames prefix interfaceGenRen target body)
+  let renameCells = collisionCellRenames prefix src target body
+  body' <- renameDoctrine renameAttrSorts renameTypes interfacePermRen renameGens renameCells body
+  merged <- mergeDoctrine mt target body'
+  let pres = merged { dName = newName }
+  inr <- buildInj (newName <> ".inr") target pres M.empty M.empty M.empty M.empty
+  inl <- buildInj (newName <> ".inl") body pres renameAttrSorts renameTypes interfacePermRen renameGens
+  let glue =
+        impl
+          { morName = newName <> ".glue"
+          , morTgt = pres
+          , morIsCoercion = True
+          }
+  checkGenerated "glue" glue
+  checkGenerated "inl" inl
+  checkGenerated "inr" inr
+  pure PolyPushoutResult { poDoctrine = pres, poInl = inl, poInr = inr, poGlue = glue }
+  where
+    ensureSameSource =
+      if morSrc incl == morSrc impl
+        then Right ()
+        else Left "poly apply pushout requires morphisms with the same source"
+    ensureIdentityModeMap mor =
+      let modes = M.keys (mtModes (dModes (morSrc mor)))
+          mods = M.toList (mtDecls (dModes (morSrc mor)))
+          okModes = all (\m -> M.lookup m (morModeMap mor) == Just m) modes
+          okMods =
+            all
+              (\(name, decl) ->
+                M.lookup name (morModMap mor)
+                  == Just (ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [name] }))
+              mods
+      in if okModes && okMods
+        then Right ()
+        else Left "apply pushout requires mode-preserving morphisms"
 
 computePolyCoproduct :: Text -> Doctrine -> Doctrine -> Either Text PolyPushoutResult
 computePolyCoproduct name a b = do
@@ -260,7 +341,10 @@ requireAttrSortRenameMap mor = do
   let tgtSorts = dAttrSorts (morTgt mor)
   let mapOne srcSort =
         case M.lookup srcSort (morAttrSortMap mor) of
-          Nothing -> Left "poly pushout requires explicit attrsort mappings"
+          Nothing ->
+            if M.member srcSort tgtSorts
+              then Right (srcSort, srcSort)
+              else Left "poly pushout: target attrsort missing for implicit identity mapping"
           Just tgtSort ->
             if M.member tgtSort tgtSorts
               then Right (srcSort, tgtSort)
@@ -421,6 +505,202 @@ disjointCellRenames prefix src tgt =
               usedByMode' = M.insert mode used' usedByMode
           in (usedByMode', M.insert (mode, name) name' mp)
 
+mkInterfaceAttrSortRenameMap :: AttrSortRenameMap -> AttrSortRenameMap -> Either Text AttrSortRenameMap
+mkInterfaceAttrSortRenameMap leftMap rightMap =
+  foldM add M.empty (M.toList leftMap)
+  where
+    add acc (srcSort, imgLeft) = do
+      imgRight <-
+        case M.lookup srcSort rightMap of
+          Nothing -> Left "apply pushout: missing interface attrsort mapping on right morphism"
+          Just out -> Right out
+      case M.lookup imgLeft acc of
+        Nothing -> Right (M.insert imgLeft imgRight acc)
+        Just existing
+          | existing == imgRight -> Right acc
+          | otherwise -> Left "apply pushout: inconsistent attrsort interface images"
+
+mkInterfaceTypeRenameMap
+  :: Doctrine
+  -> TypeRenameMap
+  -> TypePermMap
+  -> TypeRenameMap
+  -> TypePermMap
+  -> Either Text (TypeRenameMap, TypePermMap)
+mkInterfaceTypeRenameMap src leftMap leftPerm rightMap rightPerm = do
+  foldM add (M.empty, M.empty) (allTypes src)
+  where
+    add (renAcc, permAcc) (srcRef, sig) = do
+      imgLeft <-
+        case M.lookup srcRef leftMap of
+          Nothing -> Left "apply pushout: missing interface type mapping on left morphism"
+          Just out -> Right out
+      imgRight <-
+        case M.lookup srcRef rightMap of
+          Nothing -> Left "apply pushout: missing interface type mapping on right morphism"
+          Just out -> Right out
+      renAcc' <-
+        case M.lookup imgLeft renAcc of
+          Nothing -> Right (M.insert imgLeft imgRight renAcc)
+          Just existing
+            | existing == imgRight -> Right renAcc
+            | otherwise -> Left "apply pushout: inconsistent type interface images"
+      let arity = length (tsParams sig)
+      invLeft <- normalizeInvPerm arity (M.lookup imgLeft leftPerm)
+      invRight <- normalizeInvPerm arity (M.lookup imgRight rightPerm)
+      rightPermFwd <- invertPermutation arity invRight
+      let perm = [ invLeft !! i | i <- rightPermFwd ]
+      let ident = [0 .. arity - 1]
+      permAcc' <-
+        if perm == ident
+          then Right permAcc
+          else
+            case M.lookup imgLeft permAcc of
+              Nothing -> Right (M.insert imgLeft perm permAcc)
+              Just existing
+                | existing == perm -> Right permAcc
+                | otherwise -> Left "apply pushout: inconsistent type interface permutations"
+      pure (renAcc', permAcc')
+
+    normalizeInvPerm n mPerm =
+      case mPerm of
+        Nothing -> Right [0 .. n - 1]
+        Just perm -> do
+          if length perm == n
+            then Right perm
+            else Left "apply pushout: interface permutation arity mismatch"
+
+mkInterfaceGenRenameMap
+  :: M.Map (ModeName, GenName) GenName
+  -> M.Map (ModeName, GenName) GenName
+  -> Either Text (M.Map (ModeName, GenName) GenName)
+mkInterfaceGenRenameMap leftMap rightMap =
+  foldM add M.empty (M.toList leftMap)
+  where
+    add acc (srcKey, imgLeft) = do
+      imgRight <-
+        case M.lookup srcKey rightMap of
+          Nothing -> Left "apply pushout: missing interface generator mapping on right morphism"
+          Just out -> Right out
+      let outKey = (fst srcKey, imgLeft)
+      case M.lookup outKey acc of
+        Nothing -> Right (M.insert outKey imgRight acc)
+        Just existing
+          | existing == imgRight -> Right acc
+          | otherwise -> Left "apply pushout: inconsistent generator interface images"
+
+collisionTypeRenames :: Text -> TypeRenameMap -> Doctrine -> Doctrine -> TypeRenameMap
+collisionTypeRenames prefix interfaceRen target body =
+  foldl addByMode M.empty (M.toList (dTypes body))
+  where
+    targetNames =
+      namesByMode
+        [ (mode, name)
+        | (mode, table) <- M.toList (dTypes target)
+        , name <- M.keys table
+        ]
+    interfaceTargets =
+      namesByMode
+        [ (trMode ref, trName ref)
+        | ref <- M.elems interfaceRen
+        ]
+    addByMode acc (mode, table) =
+      let used0 = S.union (M.findWithDefault S.empty mode targetNames) (M.findWithDefault S.empty mode interfaceTargets)
+          (renMode, _used) = foldl (step mode) (M.empty, used0) (M.keys table)
+      in M.union acc renMode
+    step mode (renAcc, used) name =
+      let key = TypeRef mode name
+      in if M.member key interfaceRen
+        then (renAcc, used)
+        else
+          if name `S.member` used
+            then
+              let (fresh, used') = freshTypeName prefix name used
+              in (M.insert key (TypeRef mode fresh) renAcc, used')
+            else (renAcc, S.insert name used)
+
+collisionAttrSortRenames :: Text -> AttrSortRenameMap -> Doctrine -> Doctrine -> AttrSortRenameMap
+collisionAttrSortRenames prefix interfaceRen target body =
+  fst (foldl step (M.empty, used0) (M.keys (dAttrSorts body)))
+  where
+    used0 = S.union (S.fromList (M.keys (dAttrSorts target))) (S.fromList (M.elems interfaceRen))
+    step (renAcc, used) name =
+      if M.member name interfaceRen
+        then (renAcc, used)
+        else
+          if name `S.member` used
+            then
+              let (fresh, used') = freshAttrSortName prefix name used
+              in (M.insert name fresh renAcc, used')
+            else (renAcc, S.insert name used)
+
+collisionGenRenames
+  :: Text
+  -> M.Map (ModeName, GenName) GenName
+  -> Doctrine
+  -> Doctrine
+  -> M.Map (ModeName, GenName) GenName
+collisionGenRenames prefix interfaceRen target body =
+  foldl addByMode M.empty (M.toList (dGens body))
+  where
+    targetNames =
+      namesByMode
+        [ (mode, gdName gen)
+        | (mode, table) <- M.toList (dGens target)
+        , gen <- M.elems table
+        ]
+    interfaceTargets =
+      namesByMode
+        [ (mode, name)
+        | ((mode, _), name) <- M.toList interfaceRen
+        ]
+    addByMode acc (mode, table) =
+      let used0 = S.union (M.findWithDefault S.empty mode targetNames) (M.findWithDefault S.empty mode interfaceTargets)
+          names = map gdName (M.elems table)
+          (renMode, _used) = foldl (step mode) (M.empty, used0) names
+      in M.union acc renMode
+    step mode (renAcc, used) name =
+      let key = (mode, name)
+      in if M.member key interfaceRen
+        then (renAcc, used)
+        else
+          if name `S.member` used
+            then
+              let (fresh, used') = freshGenName prefix name used
+              in (M.insert key fresh renAcc, used')
+            else (renAcc, S.insert name used)
+
+collisionCellRenames :: Text -> Doctrine -> Doctrine -> Doctrine -> M.Map (ModeName, Text) Text
+collisionCellRenames prefix src target body =
+  fst (foldl step (M.empty, used0) (dCells2 body))
+  where
+    srcNames =
+      namesByMode
+        [ (dMode (c2LHS cell), c2Name cell)
+        | cell <- dCells2 src
+        ]
+    used0 =
+      namesByMode
+        [ (dMode (c2LHS cell), c2Name cell)
+        | cell <- dCells2 target
+        ]
+    step (renAcc, usedByMode) cell =
+      let mode = dMode (c2LHS cell)
+          name = c2Name cell
+          used = M.findWithDefault S.empty mode usedByMode
+          isInterface = name `S.member` M.findWithDefault S.empty mode srcNames
+      in if isInterface
+        then (renAcc, M.insert mode (S.insert name used) usedByMode)
+        else
+          if name `S.member` used
+            then
+              let (fresh, used') = freshCellName prefix name used
+                  usedByMode' = M.insert mode used' usedByMode
+              in (M.insert (mode, name) fresh renAcc, usedByMode')
+            else
+              let usedByMode' = M.insert mode (S.insert name used) usedByMode
+              in (renAcc, usedByMode')
+
 namesByMode :: (Ord a) => [(ModeName, a)] -> M.Map ModeName (S.Set a)
 namesByMode pairs =
   foldl add M.empty pairs
@@ -481,8 +761,20 @@ renameDoctrine attrRen tyRen permRen genRen cellRen doc = do
   types' <- M.traverseWithKey renameTypeTable (dTypes doc)
   gens' <- M.traverseWithKey renameGenTable (dGens doc)
   cells' <- mapM (renameCell attrRen tyRen permRen genRen cellRen) (dCells2 doc)
-  pure doc { dAttrSorts = attrSorts', dTypes = types', dGens = gens', dCells2 = cells' }
+  actions' <- M.traverseWithKey renameAction (dActions doc)
+  obligations' <- mapM renameObligation (dObligations doc)
+  pure
+    doc
+      { dAttrSorts = attrSorts'
+      , dTypes = types'
+      , dGens = gens'
+      , dCells2 = cells'
+      , dActions = actions'
+      , dObligations = obligations'
+      }
   where
+    mt = dModes doc
+
     renameAttrSorts ren table =
       foldl add (Right M.empty) (M.elems table)
       where
@@ -521,6 +813,150 @@ renameDoctrine attrRen tyRen permRen genRen cellRen doc = do
             Nothing -> Right (M.insert name' gen' mp)
             Just existing | existing == gen' -> Right mp
             _ -> Left "poly pushout: generator name collision"
+
+    renameAction _modName action = do
+      genMap' <- renameActionGenMap (maGenMap action)
+      pure action { maGenMap = genMap' }
+
+    renameActionGenMap table =
+      foldl add (Right M.empty) (M.toList table)
+      where
+        add acc ((mode, genName), diag) = do
+          mp <- acc
+          let genName' = M.findWithDefault genName (mode, genName) genRen
+          diag' <- renameDiagram attrRen tyRen permRen genRen diag
+          case M.lookup (mode, genName') mp of
+            Nothing -> Right (M.insert (mode, genName') diag' mp)
+            Just existing
+              | existing == diag' -> Right mp
+              | otherwise -> Left "poly pushout: modality action generator collision"
+
+    renameObligation obl = do
+      dom' <- mapM (renameTypeExpr tyRen permRen) (obDom obl)
+      cod' <- mapM (renameTypeExpr tyRen permRen) (obCod obl)
+      lhs' <- renameOblExpr (obMode obl) (obLHSExpr obl)
+      rhs' <- renameOblExpr (obMode obl) (obRHSExpr obl)
+      pure
+        obl
+          { obDom = dom'
+          , obCod = cod'
+          , obLHSExpr = lhs'
+          , obRHSExpr = rhs'
+          }
+
+    renameOblExpr mode expr =
+      case expr of
+        PolyAST.ROEDiag d ->
+          PolyAST.ROEDiag <$> renameRawDiagExpr mode d
+        PolyAST.ROEMap me inner -> do
+          (innerMode, _outerMode) <- rawModExprEndpoints mode me
+          inner' <- renameOblExpr innerMode inner
+          pure (PolyAST.ROEMap me inner')
+        PolyAST.ROEGen ->
+          Right PolyAST.ROEGen
+        PolyAST.ROELiftDom d ->
+          PolyAST.ROELiftDom <$> renameRawDiagExpr mode d
+        PolyAST.ROELiftCod d ->
+          PolyAST.ROELiftCod <$> renameRawDiagExpr mode d
+        PolyAST.ROEComp a b ->
+          PolyAST.ROEComp <$> renameOblExpr mode a <*> renameOblExpr mode b
+        PolyAST.ROETensor a b ->
+          PolyAST.ROETensor <$> renameOblExpr mode a <*> renameOblExpr mode b
+
+    renameRawDiagExpr mode expr =
+      case expr of
+        PolyAST.RDId ctx ->
+          PolyAST.RDId <$> mapM (renameRawTypeExpr mode) ctx
+        PolyAST.RDMetaVar name ->
+          Right (PolyAST.RDMetaVar name)
+        PolyAST.RDGen name mTyArgs mAttrArgs mBinderArgs -> do
+          let genName = GenName name
+          let genName' = M.findWithDefault genName (mode, genName) genRen
+          mTyArgs' <- mapM (mapM (renameRawTypeExpr mode)) mTyArgs
+          mBinderArgs' <- mapM (mapM (renameRawBinderArg mode)) mBinderArgs
+          pure (PolyAST.RDGen (renderGenName genName') mTyArgs' mAttrArgs mBinderArgs')
+        PolyAST.RDTermRef name ->
+          Right (PolyAST.RDTermRef name)
+        PolyAST.RDSplice name ->
+          Right (PolyAST.RDSplice name)
+        PolyAST.RDBox name inner ->
+          PolyAST.RDBox name <$> renameRawDiagExpr mode inner
+        PolyAST.RDLoop inner ->
+          PolyAST.RDLoop <$> renameRawDiagExpr mode inner
+        PolyAST.RDMap me inner -> do
+          (innerMode, _outerMode) <- rawModExprEndpoints mode me
+          inner' <- renameRawDiagExpr innerMode inner
+          pure (PolyAST.RDMap me inner')
+        PolyAST.RDComp a b ->
+          PolyAST.RDComp <$> renameRawDiagExpr mode a <*> renameRawDiagExpr mode b
+        PolyAST.RDTensor a b ->
+          PolyAST.RDTensor <$> renameRawDiagExpr mode a <*> renameRawDiagExpr mode b
+
+    renameRawBinderArg mode barg =
+      case barg of
+        PolyAST.RBAExpr d ->
+          PolyAST.RBAExpr <$> renameRawDiagExpr mode d
+        PolyAST.RBAMeta name ->
+          Right (PolyAST.RBAMeta name)
+
+    renameRawTypeExpr mode ty =
+      case ty of
+        PolyAST.RPTVar name ->
+          Right (PolyAST.RPTVar name)
+        PolyAST.RPTCon ref args -> do
+          let refMode = maybe mode ModeName (PolyAST.rtrMode ref)
+          let typedRef = TypeRef refMode (TypeName (PolyAST.rtrName ref))
+          args' <- mapM (renameRawTypeExpr mode) args
+          let typedRef' = M.findWithDefault typedRef typedRef tyRen
+          args'' <-
+            case M.lookup typedRef permRen of
+              Nothing -> Right args'
+              Just perm -> applyPerm perm args'
+          let refModeTxt =
+                case PolyAST.rtrMode ref of
+                  Nothing -> Nothing
+                  Just _ -> Just (renderModeName (trMode typedRef'))
+          pure
+            ( PolyAST.RPTCon
+                PolyAST.RawTypeRef
+                  { PolyAST.rtrMode = refModeTxt
+                  , PolyAST.rtrName = renderTypeName (trName typedRef')
+                  }
+                args''
+            )
+        PolyAST.RPTMod me inner -> do
+          (innerMode, _outerMode) <- rawModExprEndpoints mode me
+          inner' <- renameRawTypeExpr innerMode inner
+          pure (PolyAST.RPTMod me inner')
+
+    rawModExprEndpoints fallbackMode me =
+      case me of
+        PolyAST.RMId modeNameTxt ->
+          let modeName = ModeName modeNameTxt
+          in if M.member modeName (mtModes mt)
+            then Right (modeName, modeName)
+            else Left "poly pushout: obligation raw modality references unknown mode"
+        PolyAST.RMComp [] ->
+          Right (fallbackMode, fallbackMode)
+        PolyAST.RMComp (tok:toks) -> do
+          firstDecl <- lookupRawMod tok
+          (_cur, out) <- foldM step (mdSrc firstDecl, mdTgt firstDecl) toks
+          pure (mdSrc firstDecl, out)
+          where
+            step (_curIn, curOut) tok' = do
+              decl <- lookupRawMod tok'
+              if mdSrc decl == curOut
+                then Right (curOut, mdTgt decl)
+                else Left "poly pushout: obligation raw modality composition type mismatch"
+
+    lookupRawMod tok =
+      case M.lookup (ModName tok) (mtDecls mt) of
+        Nothing -> Left "poly pushout: obligation raw modality references unknown modality"
+        Just decl -> Right decl
+
+    renderModeName (ModeName t) = t
+    renderTypeName (TypeName t) = t
+    renderGenName (GenName t) = t
 
 renameCell
   :: AttrSortRenameMap
@@ -654,12 +1090,17 @@ mergeDoctrine mt a b = do
       types <- mergeTypeTables (dTypes a) (dTypes b)
       gens <- mergeGenTables (dGens a) (dGens b)
       cells <- mergeCells mt (dCells2 a) (dCells2 b)
+      actions <- mergeActions (dActions a) (dActions b)
+      obligations <- mergeObligations (dObligations a) (dObligations b)
       let merged =
             a
-              { dAttrSorts = attrSorts
+              { dAcyclicModes = S.union (dAcyclicModes a) (dAcyclicModes b)
+              , dAttrSorts = attrSorts
               , dTypes = types
               , dGens = gens
               , dCells2 = cells
+              , dActions = actions
+              , dObligations = obligations
               }
       validateDoctrine merged
       pure merged
@@ -705,6 +1146,28 @@ mergeDoctrine mt a b = do
             Nothing -> Right (M.insert (gdName gen) gen mp)
             Just g | genDeclAlphaEq g gen -> Right mp
             _ -> Left "poly pushout: generator conflict"
+
+    mergeActions left right =
+      foldl add (Right left) (M.toList right)
+      where
+        add acc (modName, act) = do
+          mp <- acc
+          case M.lookup modName mp of
+            Nothing -> Right (M.insert modName act mp)
+            Just existing
+              | existing == act -> Right mp
+              | otherwise -> Left "poly pushout: modality action conflict"
+
+    mergeObligations left right =
+      foldl add (Right left) right
+      where
+        add acc obl = do
+          obs <- acc
+          case filter (\x -> obName x == obName obl) obs of
+            [] -> Right (obs <> [obl])
+            (existing:_)
+              | existing == obl -> Right obs
+              | otherwise -> Left "poly pushout: obligation conflict"
 
 mergeCells :: ModeTheory -> [Cell2] -> [Cell2] -> Either Text [Cell2]
 mergeCells mt left right =

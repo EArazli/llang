@@ -20,12 +20,12 @@ import Strat.Frontend.Env
 import Strat.Frontend.Compile (compileSourceDiagram)
 import Strat.Pipeline
 import Strat.Poly.Doctrine
+import Strat.Poly.Kernel (TypeExpr(..), TypeRef(..), TypeName(..))
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Attr
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeRef(..), TypeName(..))
 import qualified Strat.Poly.Morphism as Morph
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Poly.Foliation (SSA(..), SSAStep(..), foliate, forgetSSA)

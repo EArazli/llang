@@ -1,6 +1,8 @@
-doctrine_template Writer(BaseDoc, W) where {
-  doctrine Writer extends BaseDoc where {
-    type W @M;
-    gen tell : [W] -> [] @M;
-  }
+doctrine WriterSchema where {
+  mode M;
+  type W @M;
+}
+
+doctrine_functor Writer(L : WriterSchema) where {
+  gen tell : [W] -> [] @M;
 }

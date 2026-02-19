@@ -1,8 +1,6 @@
 import "../../lib/effects/combined.llang";
 
 doctrine Handled extends Base where {
-  type Err @M;
-  type Log @M;
   gen handleRaise : [Err] -> [] @M;
   gen handleTell : [Log] -> [] @M;
 }
@@ -10,8 +8,6 @@ doctrine Handled extends Base where {
 morphism Handle : Combined -> Handled where {
   coercion;
   gen id @M -> id
-  type ExnE_inl_Err @M -> Err @M;
-  type WriterW_inr_Log @M -> Log @M;
   gen ExnE_inl_raise @M -> handleRaise
   gen WriterW_inr_tell @M -> handleTell
 }

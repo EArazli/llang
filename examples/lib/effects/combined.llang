@@ -4,11 +4,35 @@ import "../../../stdlib/effects/writer.template.llang"
 doctrine Base where {
   mode M;
   type Unit @M;
+  type Err @M;
+  type Log @M;
   gen id : [Unit] -> [Unit] @M;
 }
 
-doctrine ExnE = instantiate Exception(Base, Err);
-doctrine WriterW = instantiate Writer(Base, Log);
+morphism chooseErr : ExceptionSchema -> Base where {
+  mode M -> M;
+  type E @M -> Err @M;
+}
+
+morphism chooseLog : WriterSchema -> Base where {
+  mode M -> M;
+  type W @M -> Log @M;
+}
+
+doctrine ExnE = apply Exception to Base using chooseErr;
+doctrine WriterW = apply Writer to Base using chooseLog;
+
+morphism ExnE.fromBase : Base -> ExnE where {
+  coercion;
+  mode M -> M;
+  gen id @M -> id
+}
+
+morphism WriterW.fromBase : Base -> WriterW where {
+  coercion;
+  mode M -> M;
+  gen id @M -> id
+}
 
 doctrine Combined = effects Base { ExnE, WriterW };
 

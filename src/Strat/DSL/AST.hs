@@ -11,8 +11,8 @@ module Strat.DSL.AST
   , RawDerivedDoctrine(..)
   , RawRun(..)
   , RawNamedRun(..)
-  , RawDoctrineTemplate(..)
-  , RawDoctrineInstantiate(..)
+  , RawDoctrineFunctor(..)
+  , RawDoctrineApply(..)
   , RawTerm(..)
   , RawNamedTerm(..)
   , RawPolyMorphism(..)
@@ -39,8 +39,8 @@ data RawDecl
       , rdeBase :: Text
       , rdeEffects :: [Text]
       }
-  | DeclDoctrineTemplate RawDoctrineTemplate
-  | DeclDoctrineInstantiate RawDoctrineInstantiate
+  | DeclDoctrineFunctor RawDoctrineFunctor
+  | DeclDoctrineApply RawDoctrineApply
   | DeclDerivedDoctrine RawDerivedDoctrine
   | DeclSurface Text SurfaceSpec
   | DeclPipeline RawPipeline
@@ -111,16 +111,18 @@ data RawNamedRun = RawNamedRun
   , rnrRun :: RawRun
   } deriving (Eq, Show)
 
-data RawDoctrineTemplate = RawDoctrineTemplate
-  { rdtName :: Text
-  , rdtParams :: [Text]
-  , rdtBody :: PolyAST.RawPolyDoctrine
+data RawDoctrineFunctor = RawDoctrineFunctor
+  { rdfName :: Text
+  , rdfParam :: Text
+  , rdfSchema :: Text
+  , rdfBodyItems :: [PolyAST.RawPolyItem]
   } deriving (Eq, Show)
 
-data RawDoctrineInstantiate = RawDoctrineInstantiate
-  { rdiName :: Text
-  , rdiTemplate :: Text
-  , rdiArgs :: [Text]
+data RawDoctrineApply = RawDoctrineApply
+  { rdaName :: Text
+  , rdaFunctor :: Text
+  , rdaTarget :: Text
+  , rdaUsingMorph :: Maybe Text
   } deriving (Eq, Show)
 
 data RawTerm = RawTerm

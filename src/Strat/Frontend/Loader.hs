@@ -119,7 +119,7 @@ diffEnv full base = ModuleEnv
   , meImplDefaults = diffImplDefaults (meImplDefaults full) (meImplDefaults base)
   , meRuns = M.difference (meRuns full) (meRuns base)
   , meTerms = M.difference (meTerms full) (meTerms base)
-  , meTemplates = M.difference (meTemplates full) (meTemplates base)
+  , meFunctors = M.difference (meFunctors full) (meFunctors base)
   , meProofStats = subProofStats (meProofStats full) (meProofStats base)
   }
 

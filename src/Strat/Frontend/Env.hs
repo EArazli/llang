@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Frontend.Env
   ( ModuleEnv(..)
+  , DoctrineFunctorDef(..)
   , ProofStats(..)
   , emptyProofStats
   , addProofStats
@@ -13,10 +14,9 @@ module Strat.Frontend.Env
 
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
-import Strat.DSL.AST (RawDoctrineTemplate)
 import Strat.Pipeline (Pipeline, Run, DerivedDoctrine)
+import Strat.Poly.Kernel (Doctrine)
 import Strat.Poly.Diagram (Diagram)
-import Strat.Poly.Doctrine (Doctrine)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Morphism (Morphism)
 import Strat.Poly.Surface (PolySurfaceDef)
@@ -65,6 +65,13 @@ data TermDef = TermDef
   , tdDiagram :: Diagram
   } deriving (Eq, Show)
 
+data DoctrineFunctorDef = DoctrineFunctorDef
+  { dfName :: Text
+  , dfSchema :: Text
+  , dfBody :: Doctrine
+  , dfIncl :: Morphism
+  } deriving (Eq, Show)
+
 
 data ModuleEnv = ModuleEnv
   { meDoctrines :: M.Map Text Doctrine
@@ -75,7 +82,7 @@ data ModuleEnv = ModuleEnv
   , meImplDefaults :: M.Map (Text, Text) [Text]
   , meRuns :: M.Map Text Run
   , meTerms :: M.Map Text TermDef
-  , meTemplates :: M.Map Text RawDoctrineTemplate
+  , meFunctors :: M.Map Text DoctrineFunctorDef
   , meProofStats :: ProofStats
   }
   deriving (Eq, Show)
@@ -92,7 +99,7 @@ emptyEnv =
     , meImplDefaults = M.empty
     , meRuns = M.empty
     , meTerms = M.empty
-    , meTemplates = M.empty
+    , meFunctors = M.empty
     , meProofStats = emptyProofStats
     }
 
@@ -107,7 +114,7 @@ mergeEnv a b = do
   let impls = mergeImplDefaults (meImplDefaults a) (meImplDefaults b)
   runs <- mergeMap "run" meRuns
   terms <- mergeMap "term" meTerms
-  templates <- mergeMap "doctrine_template" meTemplates
+  functors <- mergeMap "doctrine_functor" meFunctors
   pure
     ModuleEnv
       { meDoctrines = docs
@@ -118,7 +125,7 @@ mergeEnv a b = do
       , meImplDefaults = impls
       , meRuns = runs
       , meTerms = terms
-      , meTemplates = templates
+      , meFunctors = functors
       , meProofStats = addProofStats (meProofStats a) (meProofStats b)
       }
   where

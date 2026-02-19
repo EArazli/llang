@@ -159,8 +159,8 @@ library
       Strat.Poly.TypeTheory
       Strat.Poly.UnifyTy
   other-modules:
-      Strat.DSL.Template
       Strat.Frontend.Compile
+      Strat.Poly.Kernel
       Strat.Poly.Term.Confluence
       Strat.Poly.Term.Termination
       Strat.Poly.Traversal
@@ -227,6 +227,7 @@ test-suite llang-test
       Test.Poly.TermNormalize
       Test.Poly.UnifyTy
       Test.Poly.TypeModes
+      Test.DSL.Functors
       Test.Value.Doc
       Test.Frontend.Pipeline
       Test.Frontend.ExampleCodegen

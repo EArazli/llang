@@ -1,14 +1,28 @@
 doctrine Base where {
   mode M;
+  type Nat @M;
+  type Bool @M;
 }
 
-doctrine_template State(BaseDoc, S) where {
-  doctrine State extends BaseDoc where {
-    type S @M;
-    gen get : [] -> [S] @M;
-    gen put : [S] -> [] @M;
-  }
+doctrine StateSchema where {
+  mode M;
+  type S @M;
 }
 
-doctrine StateNat = instantiate State(Base, Nat);
-doctrine StateBool = instantiate State(Base, Bool);
+morphism chooseNat : StateSchema -> Base where {
+  mode M -> M;
+  type S @M -> Nat @M;
+}
+
+morphism chooseBool : StateSchema -> Base where {
+  mode M -> M;
+  type S @M -> Bool @M;
+}
+
+doctrine_functor State(L : StateSchema) where {
+  gen get : [] -> [S] @M;
+  gen put : [S] -> [] @M;
+}
+
+doctrine StateNat = apply State to Base using chooseNat;
+doctrine StateBool = apply State to Base using chooseBool;

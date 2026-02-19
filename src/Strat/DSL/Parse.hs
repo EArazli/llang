@@ -36,7 +36,7 @@ rawFile = do
 decl :: Parser RawDecl
 decl =
   importDecl
-    <|> doctrineTemplateDecl
+    <|> doctrineFunctorDecl
     <|> doctrineDecl
     <|> derivedDoctrineDecl
     <|> morphismDecl
@@ -53,32 +53,33 @@ importDecl = do
   optionalSemi
   pure (DeclImport (T.unpack path))
 
-doctrineTemplateDecl :: Parser RawDecl
-doctrineTemplateDecl = do
-  _ <- symbol "doctrine_template"
+doctrineFunctorDecl :: Parser RawDecl
+doctrineFunctorDecl = do
+  _ <- symbol "doctrine_functor"
   name <- ident
-  params <- option [] (symbol "(" *> ident `sepBy` symbol "," <* symbol ")")
+  _ <- symbol "("
+  param <- ident
+  _ <- symbol ":"
+  schema <- ident
+  _ <- symbol ")"
   _ <- symbol "where"
-  body <- templateBody
+  items <- polyBlock
   optionalSemi
-  pure (DeclDoctrineTemplate (RawDoctrineTemplate name params body))
-  where
-    templateBody = do
-      _ <- symbol "{"
-      _ <- symbol "doctrine"
-      innerName <- ident
-      mExt <- optional (symbol "extends" *> ident)
-      _ <- symbol "where"
-      items <- polyBlock
-      optionalSemi
-      _ <- symbol "}"
-      pure (PolyAST.RawPolyDoctrine innerName mExt items)
+  pure
+    ( DeclDoctrineFunctor
+        RawDoctrineFunctor
+          { rdfName = name
+          , rdfParam = param
+          , rdfSchema = schema
+          , rdfBodyItems = items
+          }
+    )
 
 doctrineDecl :: Parser RawDecl
 doctrineDecl = do
   _ <- symbol "doctrine"
   name <- ident
-  (effectsDecl name <|> pushoutDecl name <|> coproductDecl name <|> instantiateDecl name <|> whereDecl name)
+  (effectsDecl name <|> pushoutDecl name <|> coproductDecl name <|> applyDecl name <|> whereDecl name)
   where
     whereDecl docName = do
       mExt <- optional (symbol "extends" *> ident)
@@ -109,13 +110,23 @@ doctrineDecl = do
       _ <- symbol "}"
       optionalSemi
       pure (DeclDoctrineEffects docName baseDoc effects)
-    instantiateDecl docName = try $ do
+    applyDecl docName = try $ do
       _ <- symbol "="
-      _ <- symbol "instantiate"
-      tmpl <- ident
-      args <- symbol "(" *> ident `sepBy` symbol "," <* symbol ")"
+      _ <- symbol "apply"
+      functorName <- ident
+      _ <- symbol "to"
+      target <- ident
+      usingMorph <- optional (symbol "using" *> qualifiedIdent)
       optionalSemi
-      pure (DeclDoctrineInstantiate (RawDoctrineInstantiate docName tmpl args))
+      pure
+        ( DeclDoctrineApply
+            RawDoctrineApply
+              { rdaName = docName
+              , rdaFunctor = functorName
+              , rdaTarget = target
+              , rdaUsingMorph = usingMorph
+              }
+        )
 
 surfaceDecl :: Parser RawDecl
 surfaceDecl = do

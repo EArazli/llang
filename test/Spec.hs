@@ -20,6 +20,7 @@ import qualified Test.Poly.Dependent as PolyDependent
 import qualified Test.Poly.Foliation as PolyFoliation
 import qualified Test.Poly.Acyclic as PolyAcyclic
 import qualified Test.Poly.Feedback as PolyFeedback
+import qualified Test.DSL.Functors as DSLFunctors
 import qualified Test.Value.Doc as ValueDoc
 import qualified Test.Frontend.Pipeline as FrontendPipeline
 import qualified Test.Frontend.ExampleCodegen as FrontendExampleCodegen
@@ -48,6 +49,7 @@ main =
       , PolyFoliation.tests
       , PolyAcyclic.tests
       , PolyFeedback.tests
+      , DSLFunctors.tests
       , ValueDoc.tests
       , FrontendPipeline.tests
       , FrontendExampleCodegen.tests
