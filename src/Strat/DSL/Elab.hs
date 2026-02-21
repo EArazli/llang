@@ -511,10 +511,17 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     validateApplyCoverage paramName mor = do
       let srcDoc = PolyMorph.morSrc mor
       let tgtDoc = PolyMorph.morTgt mor
-      let missingTypes = [ srcRef | (srcRef, _) <- allTypeDecls srcDoc, needsTypeMapping srcRef tgtDoc mor ]
+      let typeIssues =
+            [ (srcRef, issue)
+            | (srcRef, srcSig) <- allTypeDecls srcDoc
+            , Just issue <- [typeMappingIssue srcRef srcSig tgtDoc mor]
+            ]
+      let missingTypes = [ srcRef | (srcRef, isMissing) <- typeIssues, isMissing ]
+      let incompatibleTypes = [ srcRef | (srcRef, isMissing) <- typeIssues, not isMissing ]
+      let allBadTypes = missingTypes <> incompatibleTypes
       let missingGens = [ srcKey | srcKey <- allGenKeys srcDoc, M.notMember srcKey (PolyMorph.morGenMap mor) ]
       let missingAttrSorts = [ srcSort | srcSort <- M.keys (dAttrSorts srcDoc), needsAttrMapping srcSort tgtDoc mor ]
-      if null missingTypes && null missingGens && null missingAttrSorts
+      if null allBadTypes && null missingGens && null missingAttrSorts
         then Right ()
         else
           Left
@@ -522,25 +529,30 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
                 <> paramName
                 <> " via morphism "
                 <> PolyMorph.morName mor
-                <> " is missing required mappings: "
-                <> renderMissing "type" (map renderTypeRef missingTypes)
+                <> " is missing/incompatible required mappings: "
+                <> renderMissing "type" (map renderTypeRef allBadTypes)
+                <> "; "
+                <> renderMissing "type_incompatible" (map renderTypeRef incompatibleTypes)
                 <> "; "
                 <> renderMissing "gen" (map renderGenKey missingGens)
                 <> "; "
                 <> renderMissing "attr_sort" (map renderAttrSort missingAttrSorts)
             )
 
-    needsTypeMapping srcRef tgtDoc mor =
+    typeMappingIssue srcRef srcSig tgtDoc mor =
       case M.lookup srcRef (PolyMorph.morTypeMap mor) of
-        Just _ -> False
+        Just _ -> Nothing
         Nothing ->
           case PolyMorph.applyMorphismMode mor (trMode srcRef) of
-            Left _ -> True
+            Left _ -> Just True
             Right tgtMode ->
               let tgtRef = srcRef { trMode = tgtMode }
               in case lookupTypeSig tgtDoc tgtRef of
-                  Left _ -> True
-                  Right _ -> False
+                  Left _ -> Just True
+                  Right tgtSig ->
+                    if length (tsParams srcSig) == length (tsParams tgtSig)
+                      then Nothing
+                      else Just False
 
     needsAttrMapping srcSort tgtDoc mor =
       case M.lookup srcSort (PolyMorph.morAttrSortMap mor) of
@@ -762,21 +774,33 @@ mergeModeTables label left right =
 
 mergeCellsWithAlphaRename :: [Cell2] -> [Cell2] -> Either Text [Cell2]
 mergeCellsWithAlphaRename left right = do
-  (out, _) <- foldM step (left, S.fromList (map c2Name left)) right
+  (out, _) <- foldM step (left, used0) right
   Right out
   where
-    step (acc, used) cell =
-      let name = c2Name cell
+    used0 =
+      foldl addUsed M.empty left
+
+    addUsed mp cell =
+      let mode = dMode (c2LHS cell)
+          used = M.findWithDefault S.empty mode mp
+      in M.insert mode (S.insert (c2Name cell) used) mp
+
+    step (acc, usedByMode) cell =
+      let mode = dMode (c2LHS cell)
+          name = c2Name cell
+          used = M.findWithDefault S.empty mode usedByMode
       in if name `S.member` used
         then
-          case [ c | c <- acc, c2Name c == name, c == cell ] of
-            (_:_) -> Right (acc, used)
+          case [ c | c <- acc, dMode (c2LHS c) == mode, c2Name c == name, c == cell ] of
+            (_:_) -> Right (acc, usedByMode)
             [] ->
               let (fresh, used') = freshTextName name used
                   cell' = cell { c2Name = fresh }
-              in Right (acc <> [cell'], used')
+                  usedByMode' = M.insert mode used' usedByMode
+              in Right (acc <> [cell'], usedByMode')
         else
-          Right (acc <> [cell], S.insert name used)
+          let usedByMode' = M.insert mode (S.insert name used) usedByMode
+          in Right (acc <> [cell], usedByMode')
 
 mergeObligationsWithRename :: [ObligationDecl] -> [ObligationDecl] -> Either Text [ObligationDecl]
 mergeObligationsWithRename left right = do

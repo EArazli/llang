@@ -26,6 +26,7 @@ tests =
     , testCase "apply collision renaming keeps target name and prefixes body collision" testApplyCollisionRename
     , testCase "multi-parameter apply requires exact mapping keys" testApplyMappingCoverage
     , testCase "apply fills implicit identity type maps from implementation morphisms" testApplyImplicitIdentityTypeMap
+    , testCase "apply implicit identity type maps require matching arity" testApplyImplicitIdentityTypeMapArity
     , testCase "apply checks generator targets after mode mapping" testApplyGeneratorModeMapping
     , testCase "apply reports missing type/attr mappings per parameter" testApplyMissingMappingDiagnostics
     , testCase "apply reports missing gen mappings per parameter" testApplyMissingGenMappingDiagnostics
@@ -174,6 +175,30 @@ testApplyImplicitIdentityTypeMap = do
     Just g -> pure g
   gdPlainDom keepGen @?= [ty]
   gdCod keepGen @?= [ty]
+
+testApplyImplicitIdentityTypeMapArity :: Assertion
+testApplyImplicitIdentityTypeMapArity = do
+  let src =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M;"
+          , "  type X(a@M) @M;"
+          , "}"
+          , "doctrine T where {"
+          , "  mode M;"
+          , "  type X @M;"
+          , "}"
+          , "morphism impl : S -> T where {"
+          , "  mode M -> M;"
+          , "}"
+          , "doctrine_functor F(A : S) where {"
+          , "}"
+          , "doctrine App = apply F to T using { A = impl; };"
+          ]
+  err <- expectElabFailure src
+  assertBool "expected apply coverage diagnostics" ("missing/incompatible required mappings" `T.isInfixOf` err)
+  assertBool "expected arity-incompatible type to require explicit mapping" ("type=[M.X]" `T.isInfixOf` err)
+  assertBool "expected explicit incompatible-type diagnostics" ("type_incompatible=[M.X]" `T.isInfixOf` err)
 
 testApplyGeneratorModeMapping :: Assertion
 testApplyGeneratorModeMapping = do

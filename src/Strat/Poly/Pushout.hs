@@ -92,24 +92,27 @@ computePolyPushout name f g = do
   ensureGenClassCompat src genRep
   renameAttrSortsB0 <- imageToRepresentative "attrsort" attrSortMapF attrRep
   renameAttrSortsC0 <- imageToRepresentative "attrsort" attrSortMapG attrRep
-  renameTypesB0 <- imageToRepresentative "type" typeMapF typeRep
-  renameTypesC0 <- imageToRepresentative "type" typeMapG typeRep
+  typeCanon <- canonicalTypeNamesFromRight typeRep typeMapG
+  renameTypesB0 <- imageTypesToCanonicalNames "type" typeMapF typeRep typeCanon
+  renameTypesC0 <- imageTypesToCanonicalNames "type" typeMapG typeRep typeCanon
   let permTypesB0 = permMapF
   let permTypesC0 = permMapG
   renameGensBWithModes <- imageToRepresentative "generator" genImgMapF genRep
   renameGensCWithModes <- imageToRepresentative "generator" genImgMapG genRep
+  interfaceCellsB <- interfaceCellKeys f
+  interfaceCellsC <- interfaceCellKeys g
   let renameGensB0 = M.map snd renameGensBWithModes
   let renameGensC0 = M.map snd renameGensCWithModes
   let prefixB = sanitizePrefix (dName (morTgt f)) <> "_inl"
   let prefixC = sanitizePrefix (dName (morTgt g)) <> "_inr"
   let renameAttrSortsB = M.union renameAttrSortsB0 (disjointAttrSortRenames prefixB src renameAttrSortsB0 (morTgt f))
   let renameAttrSortsC = M.union renameAttrSortsC0 (disjointAttrSortRenames prefixC src renameAttrSortsC0 (morTgt g))
-  let renameTypesB = M.union renameTypesB0 (disjointTypeRenames prefixB src renameTypesB0 (morTgt f))
-  let renameTypesC = M.union renameTypesC0 (disjointTypeRenames prefixC src renameTypesC0 (morTgt g))
-  let renameGensB = M.union renameGensB0 (disjointGenRenames prefixB src renameGensB0 (morTgt f))
-  let renameGensC = M.union renameGensC0 (disjointGenRenames prefixC src renameGensC0 (morTgt g))
-  let renameCellsB = disjointCellRenames prefixB src (morTgt f)
-  let renameCellsC = disjointCellRenames prefixC src (morTgt g)
+  let renameTypesB = M.union renameTypesB0 (disjointTypeRenames (mpoInlModeRen modePushout) prefixB renameTypesB0 (morTgt f))
+  let renameTypesC = M.union renameTypesC0 (disjointTypeRenames (mpoInrModeRen modePushout) prefixC renameTypesC0 (morTgt g))
+  let renameGensB = M.union renameGensB0 (disjointGenRenames (mpoInlModeRen modePushout) prefixB renameGensB0 (morTgt f))
+  let renameGensC = M.union renameGensC0 (disjointGenRenames (mpoInrModeRen modePushout) prefixC renameGensC0 (morTgt g))
+  let renameCellsB = disjointCellRenames (mpoInlModeRen modePushout) prefixB interfaceCellsB (morTgt f)
+  let renameCellsC = disjointCellRenames (mpoInrModeRen modePushout) prefixC interfaceCellsC (morTgt g)
   let renameOblsB = disjointObligationRenames prefixB src (morTgt f)
   let renameOblsC = disjointObligationRenames prefixC src (morTgt g)
   let renameTransformsB = disjointTransformRenames prefixB src (morTgt f)
@@ -842,6 +845,58 @@ imageToRepresentative label srcToImg reps =
           | otherwise ->
               Left ("poly pushout: incompatible merged " <> label <> " images")
 
+canonicalTypeNamesFromRight
+  :: M.Map TypeRef TypeRef
+  -> M.Map TypeRef TypeRef
+  -> Either Text (M.Map TypeRef TypeName)
+canonicalTypeNamesFromRight reps rightMap =
+  foldM add M.empty (S.toList (S.fromList (M.elems reps)))
+  where
+    add acc repSrc = do
+      imgRight <-
+        case M.lookup repSrc rightMap of
+          Nothing -> Left "poly pushout: missing right image for type representative"
+          Just out -> Right out
+      let canon = trName imgRight
+      case M.lookup repSrc acc of
+        Nothing -> Right (M.insert repSrc canon acc)
+        Just existing
+          | existing == canon -> Right acc
+          | otherwise -> Left "poly pushout: inconsistent canonical type representative"
+
+imageTypesToCanonicalNames
+  :: Text
+  -> M.Map TypeRef TypeRef
+  -> M.Map TypeRef TypeRef
+  -> M.Map TypeRef TypeName
+  -> Either Text TypeRenameMap
+imageTypesToCanonicalNames label srcToImg reps canonNames =
+  foldM add M.empty (M.toList srcToImg)
+  where
+    add acc (srcRef, imgRef) = do
+      repSrc <-
+        case M.lookup srcRef reps of
+          Nothing -> Left ("poly pushout: missing class representative for " <> label)
+          Just out -> Right out
+      canonName <-
+        case M.lookup repSrc canonNames of
+          Nothing -> Left ("poly pushout: missing canonical " <> label <> " name")
+          Just out -> Right out
+      let imgRef' = imgRef { trName = canonName }
+      case M.lookup imgRef acc of
+        Nothing -> Right (M.insert imgRef imgRef' acc)
+        Just existing
+          | existing == imgRef' -> Right acc
+          | otherwise -> Left ("poly pushout: incompatible merged " <> label <> " images")
+
+interfaceCellKeys :: Morphism -> Either Text (S.Set (ModeName, Text))
+interfaceCellKeys mor =
+  fmap S.fromList (mapM toKey (dCells2 (morSrc mor)))
+  where
+    toKey cell = do
+      tgtMode <- applyMorphismMode mor (dMode (c2LHS cell))
+      Right (tgtMode, c2Name cell)
+
 generatorImageKeys
   :: Morphism
   -> M.Map (ModeName, GenName) GenName
@@ -919,24 +974,35 @@ ensureGenClassCompat src reps =
         then Right ()
         else Left "poly pushout: incompatible merged generator signatures"
 
-disjointTypeRenames :: Text -> Doctrine -> TypeRenameMap -> Doctrine -> TypeRenameMap
-disjointTypeRenames prefix src interfaceRen tgt =
-  foldl add M.empty (M.toList (dTypes tgt))
+disjointTypeRenames :: M.Map ModeName ModeName -> Text -> TypeRenameMap -> Doctrine -> TypeRenameMap
+disjointTypeRenames modeRen prefix interfaceRen tgt =
+  fst (foldl step (M.empty, used0) refs)
   where
-    srcNames = namesByMode [ (trMode ref, trName ref) | (ref, _) <- allTypes src ]
-    add acc (mode, table) =
-      let reserved = M.findWithDefault S.empty mode srcNames
-          names = M.keys table
-          (_, mp) = foldl (step mode) (reserved, M.empty) names
-      in M.union acc mp
-    step mode (used, mp) name =
-      let key = TypeRef mode name
-      in if M.member key interfaceRen
-        then (used, mp)
-        else
-          let (name', used') = freshTypeName prefix name used
-              key' = TypeRef mode name'
-          in (used', M.insert key key' mp)
+    interfaceNamesByFinalMode =
+      namesByMode
+        [ (renameModeName modeRen (trMode ref), trName ref)
+        | ref <- M.elems interfaceRen
+        ]
+    used0 = interfaceNamesByFinalMode
+    refs =
+      [ TypeRef mode name
+      | (mode, table) <- M.toList (dTypes tgt)
+      , name <- M.keys table
+      ]
+    step (renAcc, usedByFinalMode) srcRef =
+      let modeSrc = trMode srcRef
+          modeFinal = renameModeName modeRen modeSrc
+          nameSrc = trName srcRef
+          used = M.findWithDefault S.empty modeFinal usedByFinalMode
+      in case M.lookup srcRef interfaceRen of
+          Just tgtRef ->
+            let usedByFinalMode' = M.insert modeFinal (S.insert (trName tgtRef) used) usedByFinalMode
+            in (renAcc, usedByFinalMode')
+          Nothing ->
+            let (fresh, used') = freshTypeName prefix nameSrc used
+                renAcc' = M.insert srcRef (TypeRef modeSrc fresh) renAcc
+                usedByFinalMode' = M.insert modeFinal used' usedByFinalMode
+            in (renAcc', usedByFinalMode')
 
 disjointAttrSortRenames :: Text -> Doctrine -> AttrSortRenameMap -> Doctrine -> AttrSortRenameMap
 disjointAttrSortRenames prefix src interfaceRen tgt =
@@ -952,39 +1018,57 @@ disjointAttrSortRenames prefix src interfaceRen tgt =
           let (name', used') = freshAttrSortName prefix name used
           in (used', M.insert name name' mp)
 
-disjointGenRenames :: Text -> Doctrine -> GenRenameMap -> Doctrine -> GenRenameMap
-disjointGenRenames prefix src interfaceRen tgt =
-  foldl add M.empty (M.toList (dGens tgt))
+disjointGenRenames :: M.Map ModeName ModeName -> Text -> GenRenameMap -> Doctrine -> GenRenameMap
+disjointGenRenames modeRen prefix interfaceRen tgt =
+  fst (foldl step (M.empty, used0) keys)
   where
-    srcNames = namesByMode [ (mode, gdName gen) | (mode, gen) <- allGens src ]
-    add acc (mode, table) =
-      let reserved = M.findWithDefault S.empty mode srcNames
-          names = map gdName (M.elems table)
-          (_, mp) = foldl (step mode) (reserved, M.empty) names
-      in M.union acc mp
-    step mode (used, mp) name =
-      let key = (mode, name)
-      in if M.member key interfaceRen
-        then (used, mp)
-        else
-          let (name', used') = freshGenName prefix name used
-          in (used', M.insert key name' mp)
+    interfaceNamesByFinalMode =
+      namesByMode
+        [ (renameModeName modeRen mode, name)
+        | ((mode, _), name) <- M.toList interfaceRen
+        ]
+    used0 = interfaceNamesByFinalMode
+    keys =
+      [ (mode, gdName gen)
+      | (mode, table) <- M.toList (dGens tgt)
+      , gen <- M.elems table
+      ]
+    step (renAcc, usedByFinalMode) srcKey@(modeSrc, nameSrc) =
+      let modeFinal = renameModeName modeRen modeSrc
+          used = M.findWithDefault S.empty modeFinal usedByFinalMode
+      in case M.lookup srcKey interfaceRen of
+          Just tgtName ->
+            let usedByFinalMode' = M.insert modeFinal (S.insert tgtName used) usedByFinalMode
+            in (renAcc, usedByFinalMode')
+          Nothing ->
+            let (fresh, used') = freshGenName prefix nameSrc used
+                renAcc' = M.insert srcKey fresh renAcc
+                usedByFinalMode' = M.insert modeFinal used' usedByFinalMode
+            in (renAcc', usedByFinalMode')
 
-disjointCellRenames :: Text -> Doctrine -> Doctrine -> CellRenameMap
-disjointCellRenames prefix src tgt =
-  snd (foldl step (srcNames, M.empty) (dCells2 tgt))
+disjointCellRenames :: M.Map ModeName ModeName -> Text -> S.Set (ModeName, Text) -> Doctrine -> CellRenameMap
+disjointCellRenames modeRen prefix interfaceKeys tgt =
+  fst (foldl step (M.empty, used0) (dCells2 tgt))
   where
-    srcNames = namesByMode [ (dMode (c2LHS cell), c2Name cell) | cell <- dCells2 src ]
-    step (usedByMode, mp) cell =
-      let mode = dMode (c2LHS cell)
+    interfaceNamesByFinalMode =
+      namesByMode
+        [ (renameModeName modeRen mode, name)
+        | (mode, name) <- S.toList interfaceKeys
+        ]
+    used0 = interfaceNamesByFinalMode
+    step (renAcc, usedByFinalMode) cell =
+      let mode0 = dMode (c2LHS cell)
+          modeFinal = renameModeName modeRen mode0
           name = c2Name cell
-          used = M.findWithDefault S.empty mode usedByMode
-      in if name `S.member` used
-        then (usedByMode, mp)
+          used = M.findWithDefault S.empty modeFinal usedByFinalMode
+          isInterface = S.member (mode0, name) interfaceKeys
+      in if isInterface
+        then (renAcc, M.insert modeFinal (S.insert name used) usedByFinalMode)
         else
-          let (name', used') = freshCellName prefix name used
-              usedByMode' = M.insert mode used' usedByMode
-          in (usedByMode', M.insert (mode, name) name' mp)
+          let (fresh, used') = freshCellName prefix name used
+              renAcc' = M.insert (mode0, name) fresh renAcc
+              usedByFinalMode' = M.insert modeFinal used' usedByFinalMode
+          in (renAcc', usedByFinalMode')
 
 disjointObligationRenames :: Text -> Doctrine -> Doctrine -> OblRenameMap
 disjointObligationRenames prefix src tgt =
@@ -1211,20 +1295,21 @@ collisionCellRenames modeRen prefix src target body =
         | cell <- dCells2 target
         ]
     step (renAcc, usedByMode) cell =
-      let mode = renameModeName modeRen (dMode (c2LHS cell))
+      let mode0 = dMode (c2LHS cell)
+          modeFinal = renameModeName modeRen mode0
           name = c2Name cell
-          used = M.findWithDefault S.empty mode usedByMode
-          isInterface = name `S.member` M.findWithDefault S.empty mode srcNames
+          used = M.findWithDefault S.empty modeFinal usedByMode
+          isInterface = name `S.member` M.findWithDefault S.empty modeFinal srcNames
       in if isInterface
-        then (renAcc, M.insert mode (S.insert name used) usedByMode)
+        then (renAcc, M.insert modeFinal (S.insert name used) usedByMode)
         else
           if name `S.member` used
             then
               let (fresh, used') = freshCellName prefix name used
-                  usedByMode' = M.insert mode used' usedByMode
-              in (M.insert (mode, name) fresh renAcc, usedByMode')
+                  usedByMode' = M.insert modeFinal used' usedByMode
+              in (M.insert (mode0, name) fresh renAcc, usedByMode')
             else
-              let usedByMode' = M.insert mode (S.insert name used) usedByMode
+              let usedByMode' = M.insert modeFinal (S.insert name used) usedByMode
               in (renAcc, usedByMode')
 
 collisionObligationRenames :: Text -> Doctrine -> Doctrine -> Doctrine -> OblRenameMap
@@ -1759,8 +1844,7 @@ renameCell
   -> Either Text Cell2
 renameCell modeRen modRen attrRen tyRen permRen genRen cellRen cell = do
   let mode = dMode (c2LHS cell)
-  let mode' = renameModeName modeRen mode
-  let name' = M.findWithDefault (c2Name cell) (mode', c2Name cell) cellRen
+  let name' = M.findWithDefault (c2Name cell) (mode, c2Name cell) cellRen
   lhs' <- renameDiagram modeRen modRen attrRen tyRen permRen genRen (c2LHS cell)
   rhs' <- renameDiagram modeRen modRen attrRen tyRen permRen genRen (c2RHS cell)
   pure cell
@@ -2026,6 +2110,8 @@ mergeCells :: ModeTheory -> [Cell2] -> [Cell2] -> Either Text [Cell2]
 mergeCells mt left right =
   foldl insertCell (Right []) (left <> right)
   where
+    cellScopedKey c = (dMode (c2LHS c), c2Name c)
+
     insertCell acc cell = do
       cells <- acc
       case findNameCollision cell cells of
@@ -2047,7 +2133,7 @@ mergeCells mt left right =
         (c:_) -> Right (Just c)
 
     findNameCollision cell cells =
-      case filter (\c -> c2Name c == c2Name cell) cells of
+      case filter (\c -> cellScopedKey c == cellScopedKey cell) cells of
         (c:_) -> Just c
         [] -> Nothing
 
@@ -2057,7 +2143,8 @@ mergeCells mt left right =
         Right ok -> ok
 
     replaceCell target newCell cells =
-      let (before, after) = break (\c -> c2Name c == c2Name target) cells
+      let targetKey = cellScopedKey target
+          (before, after) = break (\c -> cellScopedKey c == targetKey) cells
       in case after of
           [] -> cells
           (_:rest) -> before <> [newCell] <> rest
