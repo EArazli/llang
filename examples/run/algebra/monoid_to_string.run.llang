@@ -1,0 +1,15 @@
+import "../../lib/algebra/monoid_to_string.llang";
+
+pipeline main where {
+  normalize;
+  apply MonoidToString;
+  extract diagram;
+}
+
+run main using main where {
+  source doctrine Monoid;
+  source mode M;
+}
+---
+(unit * unit) ; mul
+---

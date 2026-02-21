@@ -20,10 +20,7 @@ extra-source-files:
     CHANGELOG.md
     examples/README.md
 data-files:
-    examples/dependent/free_index_must_fail.llang
-    examples/dependent/implicit_binder_index.llang
-    examples/dependent/lambda_beta.llang
-    examples/dependent/vec.llang
+    examples/lib/dependent/vec.llang
     examples/lib/algebra/box_match.llang
     examples/lib/algebra/cart_monoid.llang
     examples/lib/algebra/cat.llang
@@ -64,16 +61,21 @@ data-files:
     examples/run/algebra/cat.run.llang
     examples/run/algebra/ccc.run.llang
     examples/run/algebra/coherence_demo.run.llang
+    examples/run/algebra/loop_demo.run.llang
     examples/run/algebra/mode_map_demo.run.llang
-    examples/run/algebra/monoid.run.llang
-    examples/run/algebra/morphism_term.llang
-    examples/run/algebra/no_dup_error.run.llang
+    examples/run/algebra/monoid_to_string.run.llang
+    examples/run/algebra/morphism_term.run.llang
     examples/run/algebra/peano.run.llang
     examples/run/algebra/planar_monoid.run.llang
     examples/run/algebra/ski.run.llang
+    examples/run/algebra/subdiagram_match.run.llang
     examples/run/codegen/simple_codegen.run.llang
     examples/run/codegen/logic_full_adder_codegen.run.llang
+    examples/run/codegen/minifun/concat2.run.llang
     examples/run/data/list.run.llang
+    examples/run/dependent/graded_monad.run.llang
+    examples/run/dependent/implicit_binder_index.run.llang
+    examples/run/dependent/lambda_beta.run.llang
     examples/run/doc/hello_doc.run.llang
     examples/run/effects/combined_with_handler.run.llang
     examples/run/foliation/basic_foliate.run.llang
@@ -86,6 +88,9 @@ data-files:
     examples/run/modes/staging.run.llang
     examples/run/modes/staging_mode_map.run.llang
     examples/run/modes/uf_cancel.run.llang
+    examples/run/pushout/comm_monoid.run.llang
+    examples/run/pushout/nat_bool.run.llang
+    examples/run/pushout/nat_bool_plus.run.llang
     examples/run/pushout/pushout_basic.run.llang
     examples/run/surfaces/implements_uses.run.llang
     examples/run/surfaces/planar_monoid.ssa.run.llang
@@ -94,6 +99,12 @@ data-files:
     examples/run/terms/cart_monoid.term.run.llang
     examples/run/terms/stlc_bool.term.run.llang
     examples/run/terms/term_ref.run.llang
+    examples/run/xfail/README.md
+    examples/run/xfail/algebra/no_dup_error.fail.run.llang
+    examples/run/xfail/dependent/free_index_must_fail.fail.run.llang
+    examples/run/xfail/modes/dual_discipline_term_surface.fail.run.llang
+    examples/run/xfail/modes/quad_discipline_surface.fail.run.llang
+    examples/run/xfail/pushout/pushout_extend_confluence.fail.run.llang
     stdlib/bool.llang
     stdlib/data/list.llang
     stdlib/effects/exception.template.llang
@@ -233,6 +244,7 @@ test-suite llang-test
       Test.Value.Doc
       Test.Frontend.Pipeline
       Test.Frontend.ExampleCodegen
+      Test.Frontend.ExamplesSmoke
       Paths_llang
   autogen-modules:
       Paths_llang

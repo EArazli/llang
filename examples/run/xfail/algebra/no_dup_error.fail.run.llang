@@ -1,4 +1,4 @@
-import "../../lib/algebra/cat.llang";
+import "../../../lib/algebra/cart_monoid.llang";
 
 pipeline main where {
   normalize;
@@ -6,9 +6,8 @@ pipeline main where {
 }
 
 run main using main where {
-  source doctrine Cat;
-  source mode M;
+  source doctrine CartMonoid;
 }
 ---
-f ; g ; h
+mul ; mul
 ---

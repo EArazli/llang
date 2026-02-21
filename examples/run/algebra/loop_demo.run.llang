@@ -1,4 +1,4 @@
-import "../../lib/algebra/cat.llang";
+import "../../lib/algebra/loop_demo.llang";
 
 pipeline main where {
   normalize;
@@ -6,9 +6,9 @@ pipeline main where {
 }
 
 run main using main where {
-  source doctrine Cat;
+  source doctrine LoopDemo;
   source mode M;
 }
 ---
-f ; g ; h
+loop { dup ; (f * id[A]) }
 ---

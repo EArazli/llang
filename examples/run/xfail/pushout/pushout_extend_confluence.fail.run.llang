@@ -1,4 +1,4 @@
-import "../../lib/algebra/cat.llang";
+import "../../../lib/pushout/pushout_extend.llang";
 
 pipeline main where {
   normalize;
@@ -6,9 +6,9 @@ pipeline main where {
 }
 
 run main using main where {
-  source doctrine Cat;
+  source doctrine BothPlus;
   source mode M;
 }
 ---
-f ; g ; h
+BoolExt_inl_g
 ---

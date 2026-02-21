@@ -17,23 +17,6 @@ diag {
 }
 ---
 
-pipeline legacy_lin_dup where {
-  normalize;
-  extract diagram;
-}
-
-run lin_dup using legacy_lin_dup where {
-  source doctrine DualDiscipline;
-  source mode Lin;
-  source surface DupTermLin;
-}
----
-diag {
-  in x:Lin.Num;
-  out sink(x, x)
-}
----
-
 pipeline legacy_cart_drop where {
   normalize;
   extract diagram;
@@ -47,23 +30,6 @@ run cart_drop using legacy_cart_drop where {
 ---
 diag {
   in x:Cart.Num;
-  out one
-}
----
-
-pipeline legacy_lin_drop where {
-  normalize;
-  extract diagram;
-}
-
-run lin_drop using legacy_lin_drop where {
-  source doctrine DualDiscipline;
-  source mode Lin;
-  source surface DupTermLin;
-}
----
-diag {
-  in x:Lin.Num;
   out one
 }
 ---

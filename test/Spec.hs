@@ -25,6 +25,7 @@ import qualified Test.DSL.Functors as DSLFunctors
 import qualified Test.Value.Doc as ValueDoc
 import qualified Test.Frontend.Pipeline as FrontendPipeline
 import qualified Test.Frontend.ExampleCodegen as FrontendExampleCodegen
+import qualified Test.Frontend.ExamplesSmoke as FrontendExamplesSmoke
 
 main :: IO ()
 main =
@@ -55,4 +56,5 @@ main =
       , ValueDoc.tests
       , FrontendPipeline.tests
       , FrontendExampleCodegen.tests
+      , FrontendExamplesSmoke.tests
       ]

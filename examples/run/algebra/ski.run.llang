@@ -1,11 +1,11 @@
 import "../../lib/algebra/ski.llang";
 
-pipeline legacy_main where {
+pipeline main where {
   normalize;
   extract diagram;
 }
 
-run main using legacy_main where {
+run main using main where {
   source doctrine SKI;
   source mode M;
 }

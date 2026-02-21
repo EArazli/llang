@@ -1,11 +1,11 @@
 import "../../lib/modes/staging.llang";
 
-pipeline legacy_main where {
+pipeline main where {
   normalize;
   extract diagram;
 }
 
-run main using legacy_main where {
+run main using main where {
   source doctrine Staging;
   source mode RT;
 }

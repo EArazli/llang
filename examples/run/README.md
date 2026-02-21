@@ -1,7 +1,10 @@
 Runnable examples
 
-All files under `examples/run/**` are runnable entrypoints. They may import shared
+Files under `examples/run/**` are runnable entrypoints. They may import shared
 modules from `examples/lib/**`.
+
+`examples/run/xfail/**` are runnable but intentionally fail with checker/surface
+errors.
 
 From the repo root, run any example with:
 

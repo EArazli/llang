@@ -1,11 +1,11 @@
 import "../../lib/modes/uf_cancel.llang";
 
-pipeline legacy_main where {
+pipeline main where {
   normalize;
   extract diagram;
 }
 
-run main using legacy_main where {
+run main using main where {
   source doctrine UFCancel;
   source mode A;
 }

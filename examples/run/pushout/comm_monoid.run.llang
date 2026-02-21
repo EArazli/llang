@@ -1,0 +1,22 @@
+import "../../lib/pushout/comm_monoid.llang";
+
+pipeline main where {
+  normalize;
+  extract diagram;
+}
+
+run main using main where {
+  source doctrine CommMonoid;
+  source mode M;
+}
+---
+(Monoid_inl_e * Monoid_inl_e) ; m
+---
+
+run comm_swap using main where {
+  source doctrine CommMonoid;
+  source mode M;
+}
+---
+swap{Obj, Obj} ; m
+---

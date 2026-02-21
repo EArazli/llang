@@ -12,12 +12,12 @@ doctrine ImplicitBinderIndex where {
   gen wrap : [binder { tm n : Nat } : [Vec(n)]] -> [Out] @M;
 }
 
-pipeline legacy_main where {
+pipeline main where {
   normalize;
   extract diagram;
 }
 
-run main using legacy_main where {
+run main using main where {
   source doctrine ImplicitBinderIndex;
   source mode M;
 }

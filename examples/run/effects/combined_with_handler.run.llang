@@ -20,12 +20,12 @@ term CombinedProg where {
 WriterW_inr_tell * ExnE_inl_raise
 ---
 
-pipeline legacy_main where {
+pipeline main where {
   normalize;
   extract diagram;
 }
 
-run main using legacy_main where {
+run main using main where {
   source doctrine Handled;
   source mode M;
 }

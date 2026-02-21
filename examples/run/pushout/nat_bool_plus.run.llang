@@ -1,4 +1,4 @@
-import "../../lib/dependent/vec.llang";
+import "../../lib/pushout/nat_bool_plus.llang";
 
 pipeline debug where {
   normalize { policy = "topmost"; fuel = 50; };
@@ -6,8 +6,9 @@ pipeline debug where {
 }
 
 run main using debug where {
-  source doctrine VecDependent;
+  source doctrine NatBoolPlus;
   source mode M;
 }
 ---
-mk22{A} ; expect22{A}
+Nat_inl_Z ; Nat_inl_S ; isZero
+---

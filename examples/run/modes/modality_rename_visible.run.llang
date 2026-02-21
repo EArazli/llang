@@ -1,12 +1,12 @@
 import "../../lib/modes/staging_mode_map.llang";
 
-pipeline legacy_main where {
+pipeline main where {
   normalize;
   apply StageToStage2;
   extract diagram;
 }
 
-run main using legacy_main where {
+run main using main where {
   source doctrine Staging;
   source surface StageExprCT;
 }

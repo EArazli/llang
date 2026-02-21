@@ -1,0 +1,36 @@
+import "../../../lib/codegen/minifun/minifun.surface.llang";
+
+morphism emitJS : ConsoleExpr -> Doc where {
+  mode M -> Doc;
+  type Str @M -> Doc @Doc;
+  type Unit @M -> Doc @Doc;
+
+  gen readLine @M -> text(s = "nextLine()")
+
+  gen concat @M ->
+    (((text(s = "(") * id[Doc]) ; cat) * id[Doc]) ;
+    (((id[Doc] * text(s = " + ")) ; cat) * id[Doc]) ;
+    cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen printLine @M ->
+    (text(s = "print(") * id[Doc]) ;
+    cat ;
+    (id[Doc] * text(s = ")")) ;
+    cat
+}
+
+pipeline compile_doc where {
+  normalize { policy = "topmost"; fuel = 50; };
+  apply emitJS;
+  extract Doc { stdout = true; };
+}
+
+run main using compile_doc where {
+  source doctrine ConsoleExpr;
+  source mode M;
+  source surface MiniFun;
+}
+---
+printLine(concat(readLine, readLine))
+---

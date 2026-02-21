@@ -1,5 +1,8 @@
 import "../../../stdlib/struct.cartesian.llang";
 
+-- Minimal CCC fragment kept for tiny eval-focused examples.
+-- For a fuller CCC/STLC-oriented axiomatization, see:
+--   examples/lib/surfaces/ccc_surface/ccc.llang
 doctrine CCC extends StructCartesian where {
   type A @M;
   type B @M;

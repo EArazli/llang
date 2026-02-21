@@ -4,12 +4,12 @@ doctrine ListWithA extends ListData where {
   type A @M;
 }
 
-pipeline legacy_main where {
+pipeline main where {
   normalize;
   extract diagram;
 }
 
-run main using legacy_main where {
+run main using main where {
   source doctrine ListWithA;
   source mode M;
 }
