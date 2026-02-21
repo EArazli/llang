@@ -2,6 +2,7 @@
 module Strat.Frontend.Env
   ( ModuleEnv(..)
   , DoctrineFunctorDef(..)
+  , FunctorParamDef(..)
   , ProofStats(..)
   , emptyProofStats
   , addProofStats
@@ -65,9 +66,15 @@ data TermDef = TermDef
   , tdDiagram :: Diagram
   } deriving (Eq, Show)
 
+data FunctorParamDef = FunctorParamDef
+  { fpdName :: Text
+  , fpdSchemaName :: Text
+  } deriving (Eq, Show)
+
 data DoctrineFunctorDef = DoctrineFunctorDef
   { dfName :: Text
-  , dfSchema :: Text
+  , dfParams :: [FunctorParamDef]
+  , dfIface :: Doctrine
   , dfBody :: Doctrine
   , dfIncl :: Morphism
   } deriving (Eq, Show)

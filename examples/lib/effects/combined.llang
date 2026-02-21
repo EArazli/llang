@@ -19,8 +19,8 @@ morphism chooseLog : WriterSchema -> Base where {
   type W @M -> Log @M;
 }
 
-doctrine ExnE = apply Exception to Base using chooseErr;
-doctrine WriterW = apply Writer to Base using chooseLog;
+doctrine ExnE = apply Exception to Base using { L = chooseErr; };
+doctrine WriterW = apply Writer to Base using { L = chooseLog; };
 
 morphism ExnE.fromBase : Base -> ExnE where {
   coercion;

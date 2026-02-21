@@ -20,9 +20,9 @@ morphism chooseBool : StateSchema -> Base where {
 }
 
 doctrine_functor State(L : StateSchema) where {
-  gen get : [] -> [S] @M;
-  gen put : [S] -> [] @M;
+  gen get : [] -> [L::M.L::S] @L::M;
+  gen put : [L::M.L::S] -> [] @L::M;
 }
 
-doctrine StateNat = apply State to Base using chooseNat;
-doctrine StateBool = apply State to Base using chooseBool;
+doctrine StateNat = apply State to Base using { L = chooseNat; };
+doctrine StateBool = apply State to Base using { L = chooseBool; };

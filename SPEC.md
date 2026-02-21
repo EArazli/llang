@@ -158,15 +158,14 @@ Doctrine items:
 
 Top-level functor/apply items:
 
-- `doctrine_functor F(L : Schema) where { ... }`
-- `doctrine New = apply F to Target using impl;`
-- `doctrine New = apply F to Target;` (only when `Schema -> Target` morphism is unique)
+- `doctrine_functor F(A : SA, B : SB, ...) where { ... }`
+- `doctrine New = apply F to Target using { A = implA; B = implB; ... };`
 
-Current implementation note:
+Functor namespace/use rules:
 
-- the functor parameter name (for example `L`) is parsed/stored but not yet used for qualification
-- functor bodies currently must preserve the schema mode-theory 1-category (same modes/modalities/`mod_eq`)
-- this should be genuinely fixed only if functors must define or modify mode-theory structure during normal use, since that requires generalized apply/pushout mode-mapping semantics
+- parameter-provided names must be referenced as `Param::Name` inside functor bodies
+- parameter mapping keys in `using { ... }` must exactly match the functor parameter set
+- parameter schemas are signature-only: modes/modalities/`mod_eq`, attrsort/type/gen/data declarations only
 
 Removed legacy items:
 
@@ -178,11 +177,14 @@ Removed legacy items:
 
 Morphisms map modes/modalities/types/generators and transport diagrams.
 Pushout/coproduct construction remains available and merges doctrine content with compatibility checks.
-`apply` computes a right-biased pushout where target names are preserved and only colliding
+`apply` computes a right-biased pushout where target names are preserved and colliding
 functor-body declarations are prefixed/freshened.
+The collision prefix is derived from the functor name (for example `F_...`).
 
 Collision renaming during `apply` covers:
 
+- modes
+- modalities
 - attr sorts
 - types
 - generators
@@ -190,14 +192,15 @@ Collision renaming during `apply` covers:
 - obligations (by `obName`)
 - `mod_transform` names
 
-Schema-side names are reserved for cells/obligations/`mod_transform`s: if target and body both
-reuse a schema name with different meaning, merge fails instead of auto-renaming the schema-named item.
+Mode-theory compatibility is checked via morphism law preservation:
+
+- each source `mod_eq` must remain equal after morphism mapping/normalization in the target mode theory
 
 `apply` also inserts coercion morphisms:
 
 - `New.inl : Body -> New`
 - `New.inr : Target -> New`
-- `New.glue : Schema -> New`
+- `New.glue_<Param> : SchemaParam -> New`
 
 Morphism equation checking uses proof search over join proofs with tooling budgets.
 DSL morphism blocks may set optional:

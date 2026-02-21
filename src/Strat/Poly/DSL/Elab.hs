@@ -3,6 +3,7 @@ module Strat.Poly.DSL.Elab
   ( elabPolyDoctrine
   , elabPolyDoctrineWithBudget
   , elabPolyDoctrineWithBudgetResult
+  , elabPolyDoctrineFromBaseWithBudgetResult
   , elabPolyMorphism
   , elabPolyMorphismWithBudget
   , elabPolyMorphismWithBudgetResult
@@ -354,6 +355,29 @@ elabPolyDoctrineWithBudgetResult budget env raw = do
         Nothing -> Left ("Unknown doctrine: " <> name)
         Just doc -> Right (Just doc)
   let start = seedDoctrine (rpdName raw) base
+  doc <- foldM (elabPolyItem env) start (rpdItems raw)
+  validateDoctrine doc
+  result <- validateActionSemanticsWithBudgetResult budget doc
+  case result of
+    ActionSemanticsProved proofs ->
+      pure (doc, length proofs)
+    ActionSemanticsUndecided label lim ->
+      Left
+        ( "validateDoctrine: action semantics undecided for "
+            <> label
+            <> " ("
+            <> renderSearchLimit lim
+            <> ")"
+        )
+
+elabPolyDoctrineFromBaseWithBudgetResult
+  :: SearchBudget
+  -> ModuleEnv
+  -> Doctrine
+  -> RawPolyDoctrine
+  -> Either Text (Doctrine, Int)
+elabPolyDoctrineFromBaseWithBudgetResult budget env baseDoc raw = do
+  let start = seedDoctrine (rpdName raw) (Just baseDoc)
   doc <- foldM (elabPolyItem env) start (rpdItems raw)
   validateDoctrine doc
   result <- validateActionSemanticsWithBudgetResult budget doc

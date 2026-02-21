@@ -23,8 +23,12 @@ tests =
     "DSL.Functors"
     [ testCase "apply preserves target names and maps body references via impl" testApplyPreservesTargetNames
     , testCase "apply collision renaming keeps target name and prefixes body collision" testApplyCollisionRename
-    , testCase "apply without using resolves unique morphism and rejects non-unique" testApplyUsingResolution
-    , testCase "functor body gets deterministic internal doctrine name" testFunctorBodyInternalName
+    , testCase "multi-parameter apply requires exact mapping keys" testApplyMappingCoverage
+    , testCase "zero-parameter functors are rejected" testZeroParameterFunctorRejected
+    , testCase "functor body requires parameter namespaces" testNamespaceEnforcement
+    , testCase "functor body may extend mode theory" testModeTheoryExtensionAllowed
+    , testCase "morphism checking enforces mod_eq preservation" testModEqPreservation
+    , testCase "functor body and iface get deterministic internal doctrine names" testFunctorInternalNames
     ]
 
 
@@ -45,9 +49,9 @@ testApplyPreservesTargetNames = do
           , "  type X @M -> Box @M;"
           , "}"
           , "doctrine_functor F(L : S) where {"
-          , "  gen flip : [X] -> [X] @M;"
+          , "  gen flip : [L::M.L::X] -> [L::M.L::X] @L::M;"
           , "}"
-          , "doctrine R = apply F to L using impl;"
+          , "doctrine R = apply F to L using { L = impl; };"
           ]
   env <- expectElab src
   doc <- expectDoctrine env "R"
@@ -84,9 +88,9 @@ testApplyCollisionRename = do
           , "  type X @M -> Box @M;"
           , "}"
           , "doctrine_functor F(L : S) where {"
-          , "  gen get : [] -> [X] @M;"
+          , "  gen get : [L::M.L::X] -> [L::M.L::X] @L::M;"
           , "}"
-          , "doctrine R = apply F to L using impl;"
+          , "doctrine R = apply F to L using { L = impl; };"
           ]
   env <- expectElab src
   doc <- expectDoctrine env "R"
@@ -99,60 +103,54 @@ testApplyCollisionRename = do
   assertBool "expected functor-collision rename F_get*" (not (null renamed))
 
 
-testApplyUsingResolution :: Assertion
-testApplyUsingResolution = do
-  let srcUnique =
+testApplyMappingCoverage :: Assertion
+testApplyMappingCoverage = do
+  let srcMissing =
         T.unlines
-          [ "doctrine S where {"
-          , "  mode M;"
-          , "  type X @M;"
+          [ "doctrine SA where { mode M; type A @M; }"
+          , "doctrine SB where { mode M; type B @M; }"
+          , "doctrine T where { mode M; type TA @M; type TB @M; }"
+          , "morphism implA : SA -> T where { mode M -> M; type A @M -> TA @M; }"
+          , "morphism implB : SB -> T where { mode M -> M; type B @M -> TB @M; }"
+          , "doctrine_functor F(A : SA, B : SB) where {"
+          , "  gen a : [A::M.A::A] -> [A::M.A::A] @A::M;"
+          , "  gen b : [B::M.B::B] -> [B::M.B::B] @B::M;"
           , "}"
-          , "doctrine L where {"
-          , "  mode M;"
-          , "  type Box @M;"
-          , "}"
-          , "morphism impl : S -> L where {"
-          , "  mode M -> M;"
-          , "  type X @M -> Box @M;"
-          , "}"
-          , "doctrine_functor F(L : S) where {"
-          , "  gen flip : [X] -> [X] @M;"
-          , "}"
-          , "doctrine R = apply F to L;"
+          , "doctrine R = apply F to T using { A = implA; };"
           ]
-  envUnique <- expectElab srcUnique
-  _ <- expectDoctrine envUnique "R"
+  errMissing <- expectElabFailure srcMissing
+  assertBool "expected missing key B" ("missing: B" `T.isInfixOf` errMissing)
 
-  let srcAmbiguous =
+  let srcExtra =
         T.unlines
-          [ "doctrine S where {"
-          , "  mode M;"
-          , "  type X @M;"
+          [ "doctrine SA where { mode M; type A @M; }"
+          , "doctrine SB where { mode M; type B @M; }"
+          , "doctrine T where { mode M; type TA @M; type TB @M; }"
+          , "morphism implA : SA -> T where { mode M -> M; type A @M -> TA @M; }"
+          , "morphism implB : SB -> T where { mode M -> M; type B @M -> TB @M; }"
+          , "doctrine_functor F(A : SA, B : SB) where {"
+          , "  gen a : [A::M.A::A] -> [A::M.A::A] @A::M;"
+          , "  gen b : [B::M.B::B] -> [B::M.B::B] @B::M;"
           , "}"
-          , "doctrine L where {"
-          , "  mode M;"
-          , "  type Box @M;"
-          , "}"
-          , "morphism impl1 : S -> L where {"
-          , "  mode M -> M;"
-          , "  type X @M -> Box @M;"
-          , "}"
-          , "morphism impl2 : S -> L where {"
-          , "  mode M -> M;"
-          , "  type X @M -> Box @M;"
-          , "}"
-          , "doctrine_functor F(L : S) where {"
-          , "  gen flip : [X] -> [X] @M;"
-          , "}"
-          , "doctrine R = apply F to L;"
+          , "doctrine R = apply F to T using { A = implA; B = implB; C = implA; };"
           ]
-  err <- expectElabFailure srcAmbiguous
-  assertBool "expected non-unique morphism error" ("non-unique" `T.isInfixOf` err)
-  assertBool "expected impl1 listed as candidate" ("impl1" `T.isInfixOf` err)
-  assertBool "expected impl2 listed as candidate" ("impl2" `T.isInfixOf` err)
+  errExtra <- expectElabFailure srcExtra
+  assertBool "expected extra key C" ("extra: C" `T.isInfixOf` errExtra)
 
-testFunctorBodyInternalName :: Assertion
-testFunctorBodyInternalName = do
+testZeroParameterFunctorRejected :: Assertion
+testZeroParameterFunctorRejected = do
+  let src =
+        T.unlines
+          [ "doctrine_functor F() where {"
+          , "}"
+          ]
+  case parseRawFile src of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected parser to reject zero-parameter doctrine_functor"
+
+
+testNamespaceEnforcement :: Assertion
+testNamespaceEnforcement = do
   let src =
         T.unlines
           [ "doctrine S where {"
@@ -160,7 +158,84 @@ testFunctorBodyInternalName = do
           , "  type X @M;"
           , "}"
           , "doctrine_functor F(L : S) where {"
-          , "  gen flip : [X] -> [X] @M;"
+          , "  gen bad : [L::M.X] -> [L::M.X] @L::M;"
+          , "}"
+          ]
+  err <- expectElabFailure src
+  assertBool "expected unknown type due missing namespace" ("unknown type" `T.isInfixOf` err)
+
+
+testModeTheoryExtensionAllowed :: Assertion
+testModeTheoryExtensionAllowed = do
+  let src =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M;"
+          , "  modality mu : M -> M;"
+          , "  type X @M;"
+          , "}"
+          , "doctrine T where {"
+          , "  mode N;"
+          , "  modality nu : N -> N;"
+          , "  type Y @N;"
+          , "}"
+          , "morphism impl : S -> T where {"
+          , "  mode M -> N;"
+          , "  modality mu -> nu;"
+          , "  type X @M -> Y @N;"
+          , "}"
+          , "doctrine_functor F(L : S) where {"
+          , "  mode K;"
+          , "  modality up : L::M -> K;"
+          , "  type Z @K;"
+          , "}"
+          , "doctrine R = apply F to T using { L = impl; };"
+          ]
+  env <- expectElab src
+  doc <- expectDoctrine env "R"
+  assertBool "expected pushed mode N" (M.member (ModeName "N") (dTypes doc))
+  assertBool "expected new body mode K" (M.member (ModeName "K") (dTypes doc))
+
+
+testModEqPreservation :: Assertion
+testModEqPreservation = do
+  let src =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M;"
+          , "  modality mu : M -> M;"
+          , "  mod_eq mu . mu -> mu;"
+          , "  type X @M;"
+          , "  gen g : [M.X] -> [M.X] @M;"
+          , "}"
+          , "doctrine T where {"
+          , "  mode M;"
+          , "  modality a : M -> M;"
+          , "  modality b : M -> M;"
+          , "  type X @M;"
+          , "  gen g : [M.X] -> [M.X] @M;"
+          , "}"
+          , "morphism bad : S -> T where {"
+          , "  mode M -> M;"
+          , "  modality mu -> a . b;"
+          , "  type X @M -> X @M;"
+          , "  gen g @M -> g"
+          , "}"
+          ]
+  err <- expectElabFailure src
+  assertBool "expected mod_eq preservation error" ("mod_eq" `T.isInfixOf` err)
+
+
+testFunctorInternalNames :: Assertion
+testFunctorInternalNames = do
+  let src =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M;"
+          , "  type X @M;"
+          , "}"
+          , "doctrine_functor F(L : S) where {"
+          , "  gen flip : [L::M.L::X] -> [L::M.L::X] @L::M;"
           , "}"
           ]
   env <- expectElab src
@@ -168,6 +243,7 @@ testFunctorBodyInternalName = do
     Nothing -> assertFailure "missing doctrine_functor F" >> error "unreachable"
     Just def -> pure def
   dName (dfBody functorDef) @?= "F.__body"
+  dName (dfIface functorDef) @?= "F.__iface"
 
 
 expectElab :: T.Text -> IO ModuleEnv

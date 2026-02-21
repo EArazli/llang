@@ -166,8 +166,8 @@ polyTypeExpr :: Parser RawPolyTypeExpr
 polyTypeExpr = lexeme regular
   where
     regular = do
-      name <- identRaw
-      mQual <- optional (try (char '.' *> identRaw))
+      name <- scopedIdentRaw
+      mQual <- optional (try (char '.' *> scopedIdentRaw))
       mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
       case mQual of
         Just qualName ->
@@ -210,7 +210,13 @@ parens :: Parser a -> Parser a
 parens p = symbol "(" *> p <* symbol ")"
 
 ident :: Parser Text
-ident = lexeme identRaw
+ident = scopedIdent
+
+scopedIdent :: Parser Text
+scopedIdent = lexeme scopedIdentRaw
+
+scopedIdentRaw :: Parser Text
+scopedIdentRaw = T.intercalate "::" <$> sepBy1 identRaw (string "::")
 
 identRaw :: Parser Text
 identRaw = T.pack <$> ((:) <$> letterChar <*> many identChar)

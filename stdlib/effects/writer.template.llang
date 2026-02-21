@@ -4,5 +4,5 @@ doctrine WriterSchema where {
 }
 
 doctrine_functor Writer(L : WriterSchema) where {
-  gen tell : [W] -> [] @M;
+  gen tell : [L::M.L::W] -> [] @L::M;
 }

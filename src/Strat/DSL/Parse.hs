@@ -10,6 +10,8 @@ import Strat.Poly.Surface.Parse (surfaceSpecBlock)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Maybe (fromMaybe)
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Functor (($>))
 import Data.Void (Void)
 import Text.Megaparsec
@@ -56,24 +58,28 @@ importDecl = do
 doctrineFunctorDecl :: Parser RawDecl
 doctrineFunctorDecl = do
   _ <- symbol "doctrine_functor"
-  name <- ident
+  name <- scopedIdent
   _ <- symbol "("
-  param <- ident
-  _ <- symbol ":"
-  schema <- ident
+  params <- functorParam `sepBy1` symbol ","
   _ <- symbol ")"
   _ <- symbol "where"
   items <- polyBlock
   optionalSemi
+  let bodyName = name <> ".__body"
   pure
     ( DeclDoctrineFunctor
         RawDoctrineFunctor
           { rdfName = name
-          , rdfParam = param
-          , rdfSchema = schema
-          , rdfBodyItems = items
+          , rdfParams = params
+          , rdfBody = PolyAST.RawPolyDoctrine bodyName Nothing items
           }
     )
+  where
+    functorParam = do
+      paramName <- plainIdent
+      _ <- symbol ":"
+      schemaName <- scopedIdent
+      pure (RawFunctorParam paramName schemaName)
 
 doctrineDecl :: Parser RawDecl
 doctrineDecl = do
@@ -82,7 +88,7 @@ doctrineDecl = do
   (effectsDecl name <|> pushoutDecl name <|> coproductDecl name <|> applyDecl name <|> whereDecl name)
   where
     whereDecl docName = do
-      mExt <- optional (symbol "extends" *> ident)
+      mExt <- optional (symbol "extends" *> scopedIdent)
       _ <- symbol "where"
       items <- polyBlock
       optionalSemi
@@ -104,19 +110,19 @@ doctrineDecl = do
     effectsDecl docName = try $ do
       _ <- symbol "="
       _ <- symbol "effects"
-      baseDoc <- ident
+      baseDoc <- scopedIdent
       _ <- symbol "{"
-      effects <- ident `sepBy` symbol ","
+      effects <- scopedIdent `sepBy` symbol ","
       _ <- symbol "}"
       optionalSemi
       pure (DeclDoctrineEffects docName baseDoc effects)
     applyDecl docName = try $ do
       _ <- symbol "="
       _ <- symbol "apply"
-      functorName <- ident
+      functorName <- scopedIdent
       _ <- symbol "to"
-      target <- ident
-      usingMorph <- optional (symbol "using" *> qualifiedIdent)
+      target <- scopedIdent
+      usingMap <- symbol "using" *> applyUsingBlock
       optionalSemi
       pure
         ( DeclDoctrineApply
@@ -124,14 +130,31 @@ doctrineDecl = do
               { rdaName = docName
               , rdaFunctor = functorName
               , rdaTarget = target
-              , rdaUsingMorph = usingMorph
+              , rdaUsing = usingMap
               }
         )
+    applyUsingBlock = do
+      _ <- symbol "{"
+      entries <- many applyUsingEntry
+      _ <- symbol "}"
+      ensureUniqueEntries entries
+    applyUsingEntry = do
+      paramName <- plainIdent
+      _ <- symbol "="
+      morphName <- qualifiedIdent
+      _ <- symbol ";"
+      pure (paramName, morphName)
+    ensureUniqueEntries entries = go S.empty M.empty entries
+      where
+        go _ mp [] = pure mp
+        go seen mp ((k, v):rest)
+          | k `S.member` seen = fail ("duplicate apply mapping key: " <> T.unpack k)
+          | otherwise = go (S.insert k seen) (M.insert k v mp) rest
 
 surfaceDecl :: Parser RawDecl
 surfaceDecl = do
   _ <- symbol "surface"
-  name <- ident
+  name <- scopedIdent
   _ <- symbol "where"
   spec <- surfaceSpecBlock
   optionalSemi
@@ -141,12 +164,12 @@ derivedDoctrineDecl :: Parser RawDecl
 derivedDoctrineDecl = do
   _ <- symbol "derived"
   _ <- symbol "doctrine"
-  name <- ident
+  name <- scopedIdent
   _ <- symbol "="
   _ <- symbol "foliated"
-  base <- ident
+  base <- scopedIdent
   _ <- symbol "mode"
-  modeName <- ident
+  modeName <- scopedIdent
   opts <- option (RawFoliationOpts Nothing Nothing []) (symbol "with" *> foliationOptsBlock)
   optionalSemi
   pure (DeclDerivedDoctrine (RawDerivedDoctrine name base modeName opts))
@@ -154,7 +177,7 @@ derivedDoctrineDecl = do
 pipelineDecl :: Parser RawDecl
 pipelineDecl = do
   _ <- symbol "pipeline"
-  name <- ident
+  name <- scopedIdent
   _ <- symbol "where"
   phases <- pipelineBlock
   optionalSemi
@@ -165,9 +188,9 @@ morphismDecl = do
   _ <- symbol "morphism"
   name <- qualifiedIdent
   _ <- symbol ":"
-  src <- ident
+  src <- scopedIdent
   _ <- symbol "->"
-  tgt <- ident
+  tgt <- scopedIdent
   _ <- symbol "where"
   items <- morphismBlock
   optionalSemi
@@ -178,9 +201,9 @@ morphismDecl = do
 implementsDecl :: Parser RawDecl
 implementsDecl = do
   _ <- symbol "implements"
-  iface <- ident
+  iface <- scopedIdent
   _ <- symbol "for"
-  tgt <- ident
+  tgt <- scopedIdent
   _ <- symbol "using"
   name <- qualifiedIdent
   optionalSemi
@@ -189,8 +212,8 @@ implementsDecl = do
 runDecl :: Parser RawDecl
 runDecl = do
   _ <- symbol "run"
-  name <- ident
-  using <- symbol "using" *> ident
+  name <- scopedIdent
+  using <- symbol "using" *> scopedIdent
   items <- symbol "where" *> runBlock
   mExprText <- optional (try runBody)
   optionalSemi
@@ -199,7 +222,7 @@ runDecl = do
 termDecl :: Parser RawDecl
 termDecl = do
   _ <- symbol "term"
-  name <- ident
+  name <- scopedIdent
   items <- option [] (symbol "where" *> termBlock)
   exprText <- runBody
   pure (DeclTerm (RawNamedTerm name (buildTerm items exprText)))
@@ -561,8 +584,8 @@ polyTypeExpr :: Parser PolyAST.RawPolyTypeExpr
 polyTypeExpr = lexeme regular
   where
     regular = do
-      name <- identRaw
-      mQual <- optional (try (char '.' *> identRaw))
+      name <- scopedIdentRaw
+      mQual <- optional (try (char '.' *> scopedIdentRaw))
       mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
       case mQual of
         Just qualName ->
@@ -1270,12 +1293,21 @@ qualifiedIdent = lexeme qualifiedIdentRaw
 
 qualifiedIdentRaw :: Parser Text
 qualifiedIdentRaw = do
-  first <- identRaw
-  rest <- many (char '.' *> identRaw)
+  first <- scopedIdentRaw
+  rest <- many (char '.' *> scopedIdentRaw)
   pure (T.intercalate "." (first : rest))
 
+plainIdent :: Parser Text
+plainIdent = lexeme identRaw
+
+scopedIdent :: Parser Text
+scopedIdent = lexeme scopedIdentRaw
+
+scopedIdentRaw :: Parser Text
+scopedIdentRaw = T.intercalate "::" <$> sepBy1 identRaw (string "::")
+
 ident :: Parser Text
-ident = lexeme identRaw
+ident = scopedIdent
 
 identRaw :: Parser Text
 identRaw = T.pack <$> ((:) <$> letterChar <*> many identChar)

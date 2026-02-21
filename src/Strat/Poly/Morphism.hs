@@ -47,7 +47,7 @@ import Strat.Poly.Proof
   , renderSearchLimit
   , checkJoinProof
   )
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), composeMod, normalizeModExpr)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), ModEqn(..), composeMod, normalizeModExpr)
 import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.Traversal (traverseDiagram)
 
@@ -471,6 +471,7 @@ checkMorphismResultWithBudget :: SearchBudget -> Morphism -> Either Text Morphis
 checkMorphismResultWithBudget budget mor = do
   validateModeMap mor
   validateModMap mor
+  validateModEqPreservation mor
   validateAttrSortMap mor
   validateTypeMap mor
   mapM_ (checkGenMapping mor) (allGens (morSrc mor))
@@ -543,6 +544,44 @@ validateModMap mor = do
         then Left ("checkMorphism: modality mapping mode mismatch for " <> renderModName name)
         else checkModExprWellTyped (dModes (morTgt mor)) image
     renderModName (ModName name) = name
+
+validateModEqPreservation :: Morphism -> Either Text ()
+validateModEqPreservation mor =
+  mapM_ checkOne (mtEqns (dModes (morSrc mor)))
+  where
+    tgtMt = dModes (morTgt mor)
+    checkOne eqn = do
+      lhsMapped <- applyMorphismModExpr mor (meLHS eqn)
+      rhsMapped <- applyMorphismModExpr mor (meRHS eqn)
+      let lhsNorm = normalizeModExpr tgtMt lhsMapped
+      let rhsNorm = normalizeModExpr tgtMt rhsMapped
+      if lhsNorm == rhsNorm
+        then Right ()
+        else
+          Left
+            ( "checkMorphism: source mod_eq is not preserved: "
+                <> renderEqn eqn
+                <> "; mapped: "
+                <> renderModExpr lhsMapped
+                <> " -> "
+                <> renderModExpr rhsMapped
+                <> "; normalized: "
+                <> renderModExpr lhsNorm
+                <> " vs "
+                <> renderModExpr rhsNorm
+            )
+    renderEqn eqn = renderModExpr (meLHS eqn) <> " -> " <> renderModExpr (meRHS eqn)
+    renderModExpr me =
+      case mePath me of
+        [] -> "id@" <> renderMode (meSrc me)
+        path ->
+          T.intercalate "." (map renderMod path)
+            <> " : "
+            <> renderMode (meSrc me)
+            <> " -> "
+            <> renderMode (meTgt me)
+    renderMode (ModeName name) = name
+    renderMod (ModName name) = name
 
 checkModExprWellTyped :: ModeTheory -> ModExpr -> Either Text ()
 checkModExprWellTyped mt me = do

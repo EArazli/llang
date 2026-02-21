@@ -47,13 +47,14 @@ tests =
     , testCase "pushout merges cell orientations" testPushoutMergeOrient
     , testCase "pushout merges cell classes" testPushoutMergeClass
     , testCase "pushout rejects name conflict with different bodies" testPushoutNameConflict
-    , testCase "pushout rejects non-identity mode maps" testPushoutRejectsModeMap
+    , testCase "pushout accepts non-identity mode maps" testPushoutAcceptsModeMap
     , testCase "pushout handles alpha-renaming with mode equations" testPushoutAlphaRenameWithModeEq
     , testCase "pushout supports term-parameterized type maps" testPushoutTermTypeMaps
     , testCase "pushout permutes mixed type/term parameters and renames term sorts" testPushoutTypePermutationSortRename
     , testCase "pushout merges cells alpha-equivalent over term vars" testPushoutCellTmAlphaEq
     , testCase "pushout injection morphism preserves concrete binder arguments" testPushoutInjectionPreservesBinderArgs
     , testCase "pushout accepts renaming morphisms with binder signatures in target doctrine" testPushoutAcceptsRenamingWithBinders
+    , testCase "coproduct merges distinct mode theories" testCoproductMergesDistinctModeTheories
     , testCase "coproduct keeps obligations elaboratable after disjoint type renaming" testCoproductObligationRenameElaborates
     , testCase "coproduct renames colliding modality transforms" testCoproductTransformCollisionRenames
     , testCase "apply pushout accepts implementation morphisms with non-CheckAll checks" testApplyPushoutAcceptsNonCheckAllGlue
@@ -415,8 +416,8 @@ testPushoutTypePermutationCommutes = do
     Right ok -> pure ok
   assertBool "expected pushout type permutation to commute" iso
 
-testPushoutRejectsModeMap :: Assertion
-testPushoutRejectsModeMap = do
+testPushoutAcceptsModeMap :: Assertion
+testPushoutAcceptsModeMap = do
   let modeM = ModeName "M"
   let modeN = ModeName "N"
   let modes = mkModes (S.fromList [modeM, modeN])
@@ -460,10 +461,12 @@ testPushoutRejectsModeMap = do
         , morAttrSortMap = M.empty
         , morPolicy = UseAllOriented
         }
-  case computePolyPushout "P" morF morG of
-    Left err ->
-      assertBool "expected mode map rejection" ("mode-preserving" `T.isInfixOf` err)
-    Right _ -> assertFailure "expected pushout to reject non-identity mode map"
+  res <- case computePolyPushout "P" morF morG of
+    Left err -> assertFailure (T.unpack err) >> error "unreachable"
+    Right out -> pure out
+  case validateDoctrine (poDoctrine res) of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
 
 testPushoutAlphaRenameWithModeEq :: Assertion
 testPushoutAlphaRenameWithModeEq = do
@@ -681,6 +684,47 @@ testPushoutTypePermutationSortRename = do
     Just out -> pure out
   tsParams sig @?= [PS_Tm natTy, PS_Ty modeM]
 
+testCoproductMergesDistinctModeTheories :: Assertion
+testCoproductMergesDistinctModeTheories = do
+  let modeM = ModeName "M"
+  let modeN = ModeName "N"
+  let docA =
+        Doctrine
+          { dName = "CopA"
+          , dModes = mkModes (S.singleton modeM)
+          , dAcyclicModes = S.empty
+          , dTypes = M.fromList [(modeM, M.fromList [(TypeName "A", TypeSig [])])]
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let docB =
+        Doctrine
+          { dName = "CopB"
+          , dModes = mkModes (S.singleton modeN)
+          , dAcyclicModes = S.empty
+          , dTypes = M.fromList [(modeN, M.fromList [(TypeName "B", TypeSig [])])]
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  case validateDoctrine docA of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine docB of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  res <- case computePolyCoproduct "PCopDistinct" docA docB of
+    Left err -> assertFailure (T.unpack err)
+    Right out -> pure out
+  let outDoc = poDoctrine res
+  assertBool "expected left mode in coproduct result" (M.member modeM (dTypes outDoc))
+  assertBool "expected right mode in coproduct result" (M.member modeN (dTypes outDoc))
+
 testCoproductObligationRenameElaborates :: Assertion
 testCoproductObligationRenameElaborates = do
   let mode = ModeName "M"
@@ -802,9 +846,8 @@ testCoproductTransformCollisionRenames = do
     Right out -> pure out
   let transforms = mtTransforms (dModes (poDoctrine res))
   M.size transforms @?= 2
-  assertBool "expected eta transform name to be renamed in coproduct" (M.notMember (ModTransformName "eta") transforms)
-  let witnesses = map mtdWitness (M.elems transforms)
-  assertBool "expected transformed witnesses to be distinct after coproduct renaming" (S.size (S.fromList witnesses) == 2)
+  assertBool "expected right eta transform name to be preserved in coproduct" (M.member (ModTransformName "eta") transforms)
+  assertBool "expected one additional renamed transform" (S.size (S.delete (ModTransformName "eta") (M.keysSet transforms)) == 1)
 
 testApplyPushoutAcceptsNonCheckAllGlue :: Assertion
 testApplyPushoutAcceptsNonCheckAllGlue = do

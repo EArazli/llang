@@ -11,7 +11,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
-import Data.List (sort)
+import Data.Map.Strict (Map)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
 import Strat.Frontend.Env
@@ -22,25 +22,34 @@ import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.DSL.Elab
   ( elabPolyDoctrineWithBudgetResult
+  , elabPolyDoctrineFromBaseWithBudgetResult
   , elabPolyMorphismWithBudgetResult
   , parsePolicy
   , checkImplementsObligationsWithBudget
   , ImplementsCheckResult(..)
   )
-import Strat.Poly.Kernel (TypeExpr(..), TypeRef(..), TypeName(..))
+import Strat.Poly.TypeExpr (TypeExpr(..), TypeArg(..), TypeRef(..), TypeName(..), TyVar(..), TmVar(..), TermDiagram(..))
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
 import Strat.Poly.Doctrine
   ( Doctrine(..)
+  , BinderSig(..)
   , GenDecl(..)
   , InputShape(..)
+  , ParamSig(..)
   , TypeSig(..)
   , gdPlainDom
+  , validateDoctrine
   )
 import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
 import Strat.Poly.ModeTheory
   ( ModeTheory(..)
+  , ModeInfo(..)
   , ModDecl(..)
+  , ModEqn(..)
+  , ModName(..)
   , ModExpr(..)
+  , ModTransformName(..)
+  , ModTransformDecl(..)
   , ModeName(..)
   , emptyModeTheory
   , addMode
@@ -236,19 +245,23 @@ insertPushoutWithMorphs env name f g = do
 elabDoctrineFunctor :: SearchBudget -> ModuleEnv -> RawDoctrineFunctor -> Either Text ModuleEnv
 elabDoctrineFunctor budget env raw = do
   ensureAbsent "doctrine_functor" (rdfName raw) (meFunctors env)
-  schemaDoc <- lookupDoctrine env (rdfSchema raw)
+  ensureDistinctFunctorParams (rdfParams raw)
+  paramsWithSchemas <- mapM lookupParamSchema (rdfParams raw)
+  mapM_ (\(_, _, schemaDoc) -> validateFunctorSchema schemaDoc) paramsWithSchemas
+  renamedSchemas <- mapM namespaceParamSchema paramsWithSchemas
+  ifaceDoc <- mergeIfaceDoctrines (rdfName raw <> ".__iface") renamedSchemas
   let rawBody =
-        PolyAST.RawPolyDoctrine
+        (rdfBody raw)
           { PolyAST.rpdName = rdfName raw <> ".__body"
-          , PolyAST.rpdExtends = Just (rdfSchema raw)
-          , PolyAST.rpdItems = rdfBodyItems raw
+          , PolyAST.rpdExtends = Nothing
           }
-  (bodyDoc, actionProofs) <- elabPolyDoctrineWithBudgetResult budget env rawBody
-  incl <- mkInclusionMorphism (rdfName raw <> ".incl") schemaDoc bodyDoc
+  (bodyDoc, actionProofs) <- elabPolyDoctrineFromBaseWithBudgetResult budget env ifaceDoc rawBody
+  incl <- mkInclusionMorphism (rdfName raw <> ".incl") ifaceDoc bodyDoc
   let def =
         DoctrineFunctorDef
           { dfName = rdfName raw
-          , dfSchema = rdfSchema raw
+          , dfParams = [ FunctorParamDef p s | (p, s, _) <- paramsWithSchemas ]
+          , dfIface = ifaceDoc
           , dfBody = bodyDoc
           , dfIncl = incl
           }
@@ -256,6 +269,13 @@ elabDoctrineFunctor budget env raw = do
     ( addActionProofCount actionProofs
         (env { meFunctors = M.insert (rdfName raw) def (meFunctors env) })
     )
+  where
+    lookupParamSchema param = do
+      schemaDoc <- lookupDoctrine env (rfpSchema param)
+      pure (rfpName param, rfpSchema param, schemaDoc)
+    namespaceParamSchema (paramName, schemaName, schemaDoc) = do
+      doc <- namespaceDoctrineWithParam paramName schemaDoc
+      pure (FunctorParamDef paramName schemaName, doc)
 
 
 elabDoctrineApply :: ModuleEnv -> RawDoctrineApply -> Either Text ModuleEnv
@@ -263,19 +283,26 @@ elabDoctrineApply env raw = do
   ensureAbsent "doctrine" (rdaName raw) (meDoctrines env)
   functorDef <- lookupFunctor env (rdaFunctor raw)
   targetDoc <- lookupDoctrine env (rdaTarget raw)
-  implMorph <- resolveApplyMorphism env functorDef targetDoc (rdaUsingMorph raw)
-  PolyPushoutResult doc inl inr glue <-
-    computePolyPushoutPreferRight (rdaName raw) (dfName functorDef) (dfIncl functorDef) implMorph
+  implMorphs <- resolveApplyMorphisms env functorDef targetDoc (rdaUsing raw)
+  implIface <- buildIfaceImplMorphism raw functorDef targetDoc implMorphs
+  PolyPushoutResult doc inl inr _glueIface <-
+    computePolyPushoutPreferRight (rdaName raw) (dfName functorDef) (dfIncl functorDef) implIface
+  let glueMorphs =
+        [ toGlueMorph (rdaName raw) paramName doc mor
+        | (paramName, mor) <- implMorphs
+        ]
   ensureAbsent "morphism" (PolyMorph.morName inl) (meMorphisms env)
   ensureAbsent "morphism" (PolyMorph.morName inr) (meMorphisms env)
-  ensureAbsent "morphism" (PolyMorph.morName glue) (meMorphisms env)
+  mapM_ (\m -> ensureAbsent "morphism" (PolyMorph.morName m) (meMorphisms env)) glueMorphs
+  let morphisms' =
+        foldr
+          (\m acc -> M.insert (PolyMorph.morName m) m acc)
+          (M.insert (PolyMorph.morName inr) inr (M.insert (PolyMorph.morName inl) inl (meMorphisms env)))
+          glueMorphs
   pure
     env
       { meDoctrines = M.insert (rdaName raw) doc (meDoctrines env)
-      , meMorphisms =
-          M.insert (PolyMorph.morName glue) glue
-            (M.insert (PolyMorph.morName inl) inl
-              (M.insert (PolyMorph.morName inr) inr (meMorphisms env)))
+      , meMorphisms = morphisms'
       }
 
 
@@ -285,13 +312,24 @@ lookupFunctor env name =
     Nothing -> Left ("Unknown doctrine_functor: " <> name)
     Just def -> Right def
 
-
-resolveApplyMorphism :: ModuleEnv -> DoctrineFunctorDef -> Doctrine -> Maybe Text -> Either Text PolyMorph.Morphism
-resolveApplyMorphism env functorDef targetDoc mUsing =
-  case mUsing of
-    Just morphName -> do
+resolveApplyMorphisms
+  :: ModuleEnv
+  -> DoctrineFunctorDef
+  -> Doctrine
+  -> Map Text Text
+  -> Either Text [(Text, PolyMorph.Morphism)]
+resolveApplyMorphisms env functorDef targetDoc usingMap = do
+  requireExactParamMap (dfParams functorDef) usingMap
+  mapM resolveOne (dfParams functorDef)
+  where
+    resolveOne p = do
+      morphName <-
+        case M.lookup (fpdName p) usingMap of
+          Nothing ->
+            Left ("apply: missing mapping for parameter " <> fpdName p)
+          Just n -> Right n
       mor <- lookupMorphism env morphName
-      if dName (PolyMorph.morSrc mor) /= dfSchema functorDef
+      if dName (PolyMorph.morSrc mor) /= fpdSchemaName p
         then
           Left
             ( "apply: morphism "
@@ -299,7 +337,9 @@ resolveApplyMorphism env functorDef targetDoc mUsing =
                 <> " has source "
                 <> dName (PolyMorph.morSrc mor)
                 <> " but expected "
-                <> dfSchema functorDef
+                <> fpdSchemaName p
+                <> " for parameter "
+                <> fpdName p
             )
         else
           if dName (PolyMorph.morTgt mor) /= dName targetDoc
@@ -312,35 +352,427 @@ resolveApplyMorphism env functorDef targetDoc mUsing =
                     <> " but expected "
                     <> dName targetDoc
                 )
-            else Right mor
-    Nothing ->
-      case candidates of
-        [] ->
-          Left
-            ( "apply: no schema->target morphism found from "
-                <> dfSchema functorDef
-                <> " to "
-                <> dName targetDoc
-                <> "; provide an explicit `using` morphism"
-            )
-        [(_, mor)] ->
-          Right mor
-        _ ->
-          Left
-            ( "apply: non-unique schema->target morphism from "
-                <> dfSchema functorDef
-                <> " to "
-                <> dName targetDoc
-                <> "; candidates: "
-                <> T.intercalate ", " (sort (map fst candidates))
-            )
+            else Right (fpdName p, mor)
+
+requireExactParamMap :: [FunctorParamDef] -> Map Text Text -> Either Text ()
+requireExactParamMap params usingMap = do
+  let expected = S.fromList (map fpdName params)
+  let actual = S.fromList (M.keys usingMap)
+  let missing = S.toList (S.difference expected actual)
+  let extra = S.toList (S.difference actual expected)
+  case (missing, extra) of
+    ([], []) -> Right ()
+    _ ->
+      Left
+        ( "apply: `using` mapping keys must exactly match functor parameters; missing: "
+            <> renderList missing
+            <> "; extra: "
+            <> renderList extra
+        )
   where
-    candidates =
-      [ (name, mor)
-      | (name, mor) <- M.toList (meMorphisms env)
-      , dName (PolyMorph.morSrc mor) == dfSchema functorDef
-      , dName (PolyMorph.morTgt mor) == dName targetDoc
-      ]
+    renderList [] = "(none)"
+    renderList xs = T.intercalate ", " xs
+
+buildIfaceImplMorphism
+  :: RawDoctrineApply
+  -> DoctrineFunctorDef
+  -> Doctrine
+  -> [(Text, PolyMorph.Morphism)]
+  -> Either Text PolyMorph.Morphism
+buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
+  modeMap <- mergeDisjoint "mode" [liftModeMap p (PolyMorph.morModeMap mor) | (p, mor) <- implMorphs]
+  modMap <- mergeDisjoint "modality" [liftModMap p (PolyMorph.morModMap mor) | (p, mor) <- implMorphs]
+  attrMap <- mergeDisjoint "attrsort" [liftAttrMap p (PolyMorph.morAttrSortMap mor) | (p, mor) <- implMorphs]
+  typeMap <- mergeDisjoint "type" [liftTypeMap p (PolyMorph.morTypeMap mor) | (p, mor) <- implMorphs]
+  genMap <- mergeDisjoint "generator" [liftGenMap p (PolyMorph.morGenMap mor) | (p, mor) <- implMorphs]
+  pure
+    PolyMorph.Morphism
+      { PolyMorph.morName = rdaName raw <> ".__impl_iface"
+      , PolyMorph.morSrc = dfIface functorDef
+      , PolyMorph.morTgt = targetDoc
+      , PolyMorph.morIsCoercion = False
+      , PolyMorph.morModeMap = modeMap
+      , PolyMorph.morModMap = modMap
+      , PolyMorph.morAttrSortMap = attrMap
+      , PolyMorph.morTypeMap = typeMap
+      , PolyMorph.morGenMap = genMap
+      , PolyMorph.morCheck = PolyMorph.CheckAll
+      , PolyMorph.morPolicy = UseAllOriented
+      }
+  where
+    prefixText p txt = p <> "::" <> txt
+    prefixMode p (ModeName n) = ModeName (prefixText p n)
+    prefixMod p (ModName n) = ModName (prefixText p n)
+    prefixTypeRef p ref =
+      ref
+        { trMode = prefixMode p (trMode ref)
+        , trName = TypeName (prefixText p (renderTypeName (trName ref)))
+        }
+    renderTypeName (TypeName t) = t
+    prefixAttr p (AttrSort s) = AttrSort (prefixText p s)
+    prefixGen p (mode, gen) = (prefixMode p mode, GenName (prefixText p (renderGenName gen)))
+    renderGenName (GenName g) = g
+
+    liftModeMap p mp =
+      M.fromList
+        [ (prefixMode p srcMode, tgtMode)
+        | (srcMode, tgtMode) <- M.toList mp
+        ]
+    liftModMap p mp =
+      M.fromList
+        [ (prefixMod p srcMod, tgtExpr)
+        | (srcMod, tgtExpr) <- M.toList mp
+        ]
+    liftAttrMap p mp =
+      M.fromList
+        [ (prefixAttr p srcSort, tgtSort)
+        | (srcSort, tgtSort) <- M.toList mp
+        ]
+    liftTypeMap p mp =
+      M.fromList
+        [ (prefixTypeRef p srcRef, tmpl)
+        | (srcRef, tmpl) <- M.toList mp
+        ]
+    liftGenMap p mp =
+      M.fromList
+        [ (prefixGen p srcKey, img)
+        | (srcKey, img) <- M.toList mp
+        ]
+
+toGlueMorph :: Text -> Text -> Doctrine -> PolyMorph.Morphism -> PolyMorph.Morphism
+toGlueMorph resultName paramName pres mor =
+  mor
+    { PolyMorph.morName = resultName <> ".glue_" <> paramName
+    , PolyMorph.morTgt = pres
+    , PolyMorph.morIsCoercion = True
+    , PolyMorph.morPolicy = UseStructuralAsBidirectional
+    }
+
+mergeDisjoint :: (Ord k) => Text -> [Map k v] -> Either Text (Map k v)
+mergeDisjoint label = foldM step M.empty
+  where
+    step acc mp =
+      case [() | k <- M.keys mp, M.member k acc] of
+        [] -> Right (M.union acc mp)
+        (_:_) -> Left ("apply: duplicate lifted " <> label <> " mapping key")
+
+ensureDistinctFunctorParams :: [RawFunctorParam] -> Either Text ()
+ensureDistinctFunctorParams params =
+  go S.empty params
+  where
+    go _ [] = Right ()
+    go seen (p:rest)
+      | rfpName p `S.member` seen = Left ("doctrine_functor: duplicate parameter name " <> rfpName p)
+      | otherwise = go (S.insert (rfpName p) seen) rest
+
+validateFunctorSchema :: Doctrine -> Either Text ()
+validateFunctorSchema schema = do
+  case forbidden of
+    [] -> Right ()
+    _ ->
+      Left
+        ( "doctrine_functor: schema "
+            <> dName schema
+            <> " must be signature-only; forbidden items: "
+            <> T.intercalate ", " forbidden
+        )
+  where
+    forbidden =
+      concat
+        [ [ "actions" | not (M.null (dActions schema)) ]
+        , [ "obligations" | not (null (dObligations schema)) ]
+        , [ "mod_transforms" | not (M.null (mtTransforms (dModes schema))) ]
+        , [ "cells/rules" | not (null (dCells2 schema)) ]
+        ]
+
+namespaceDoctrineWithParam :: Text -> Doctrine -> Either Text Doctrine
+namespaceDoctrineWithParam param doc = do
+  modeTheory' <- renameModeTheory modeRenMap modRenMap (dModes doc)
+  types' <- renameTypeTables (dTypes doc)
+  gens' <- traverse (traverse (renameGenDecl modeRenMap modRenMap typeRenMap sortRenMap genRenMap)) (dGens doc)
+  let attrSorts' =
+        M.fromList
+          [ (renameSort (asName decl), decl { asName = renameSort (asName decl) })
+          | decl <- M.elems (dAttrSorts doc)
+          ]
+  let acyclic' =
+        S.fromList
+          [ renameMode mode
+          | mode <- S.toList (dAcyclicModes doc)
+          ]
+  pure
+    doc
+      { dName = prefix (dName doc)
+      , dModes = modeTheory'
+      , dAcyclicModes = acyclic'
+      , dAttrSorts = attrSorts'
+      , dTypes = renameOuterModeMap modeRenMap types'
+      , dGens = renameOuterModeMap modeRenMap gens'
+      }
+  where
+    prefix t = param <> "::" <> t
+    modeRenMap = M.fromList [ (m, renameMode m) | m <- M.keys (mtModes (dModes doc)) ]
+    modRenMap = M.fromList [ (m, renameMod m) | m <- M.keys (mtDecls (dModes doc)) ]
+    sortRenMap = M.fromList [ (s, renameSort s) | s <- M.keys (dAttrSorts doc) ]
+    typeRenMap =
+      M.fromList
+        [ (TypeRef mode tname, renameTypeRef (TypeRef mode tname))
+        | (mode, table) <- M.toList (dTypes doc)
+        , tname <- M.keys table
+        ]
+    genRenMap =
+      M.fromList
+        [ ((mode, gdName gd), renameGenName (gdName gd))
+        | (mode, table) <- M.toList (dGens doc)
+        , gd <- M.elems table
+        ]
+    renameOuterModeMap ren mp =
+      M.fromList [ (M.findWithDefault mode mode ren, table) | (mode, table) <- M.toList mp ]
+    renameMode (ModeName t) = ModeName (prefix t)
+    renameMod (ModName t) = ModName (prefix t)
+    renameSort (AttrSort t) = AttrSort (prefix t)
+    renameTypeName (TypeName t) = TypeName (prefix t)
+    renameTypeRef ref =
+      TypeRef
+        { trMode = renameMode (trMode ref)
+        , trName = renameTypeName (trName ref)
+        }
+    renameGenName (GenName t) = GenName (prefix t)
+
+    renameTypeTables tables =
+      foldM addType M.empty
+        [ (mode, tname, sig)
+        | (mode, table) <- M.toList tables
+        , (tname, sig) <- M.toList table
+        ]
+      where
+        addType acc (mode, tname, sig) = do
+          sig' <- renameTypeSig modeRenMap modRenMap typeRenMap sig
+          let mode' = M.findWithDefault mode mode modeRenMap
+          let tname' = renameTypeName tname
+          let table0 = M.findWithDefault M.empty mode' acc
+          let table' = M.insert tname' sig' table0
+          Right (M.insert mode' table' acc)
+
+mergeIfaceDoctrines :: Text -> [(FunctorParamDef, Doctrine)] -> Either Text Doctrine
+mergeIfaceDoctrines name params =
+  case map snd params of
+    [] -> Left "doctrine_functor: at least one parameter is required"
+    (firstDoc:rest) -> do
+      merged <- foldM mergeIface firstDoc rest
+      let out = merged { dName = name }
+      validateDoctrine out
+      pure out
+
+mergeIface :: Doctrine -> Doctrine -> Either Text Doctrine
+mergeIface left right = do
+  modes <- unionByEq "mode" (mtModes (dModes left)) (mtModes (dModes right))
+  decls <- unionByEq "modality" (mtDecls (dModes left)) (mtDecls (dModes right))
+  transforms <- unionByEq "mod_transform" (mtTransforms (dModes left)) (mtTransforms (dModes right))
+  attrSorts <- unionByEq "attrsort" (dAttrSorts left) (dAttrSorts right)
+  types <- mergeModeTables "type" (dTypes left) (dTypes right)
+  gens <- mergeModeTables "generator" (dGens left) (dGens right)
+  cells <- mergeListDisjoint "cells/rules" (dCells2 left) (dCells2 right)
+  actions <- unionByEq "action" (dActions left) (dActions right)
+  obligations <- mergeListDisjoint "obligations" (dObligations left) (dObligations right)
+  pure
+    left
+      { dModes =
+          (dModes left)
+            { mtModes = modes
+            , mtDecls = decls
+            , mtEqns = mtEqns (dModes left) <> mtEqns (dModes right)
+            , mtTransforms = transforms
+            }
+      , dAcyclicModes = S.union (dAcyclicModes left) (dAcyclicModes right)
+      , dAttrSorts = attrSorts
+      , dTypes = types
+      , dGens = gens
+      , dCells2 = cells
+      , dActions = actions
+      , dObligations = obligations
+      }
+
+unionByEq :: (Ord k, Eq v) => Text -> Map k v -> Map k v -> Either Text (Map k v)
+unionByEq label left right =
+  foldM step left (M.toList right)
+  where
+    step mp (k, v) =
+      case M.lookup k mp of
+        Nothing -> Right (M.insert k v mp)
+        Just existing
+          | existing == v -> Right mp
+          | otherwise -> Left ("doctrine_functor interface merge: conflicting " <> label)
+
+mergeModeTables :: (Ord a, Eq b) => Text -> Map ModeName (Map a b) -> Map ModeName (Map a b) -> Either Text (Map ModeName (Map a b))
+mergeModeTables label left right =
+  foldM step left (M.toList right)
+  where
+    step mp (mode, table) =
+      case M.lookup mode mp of
+        Nothing -> Right (M.insert mode table mp)
+        Just table0 -> do
+          merged <- unionByEq label table0 table
+          Right (M.insert mode merged mp)
+
+mergeListDisjoint :: (Eq a) => Text -> [a] -> [a] -> Either Text [a]
+mergeListDisjoint _ left right = Right (left <> right)
+
+renameModeTheory
+  :: Map ModeName ModeName
+  -> Map ModName ModName
+  -> ModeTheory
+  -> Either Text ModeTheory
+renameModeTheory modeRen modRen mt =
+  Right
+    ModeTheory
+      { mtModes =
+          M.fromList
+            [ (mode', info { miName = mode' })
+            | (mode, info) <- M.toList (mtModes mt)
+            , let mode' = M.findWithDefault mode mode modeRen
+            ]
+      , mtDecls =
+          M.fromList
+            [ (name', decl { mdName = name', mdSrc = renMode (mdSrc decl), mdTgt = renMode (mdTgt decl) })
+            | (name, decl) <- M.toList (mtDecls mt)
+            , let name' = renMod name
+            ]
+      , mtEqns =
+          [ ModEqn
+              { meLHS = renExpr (meLHS eqn)
+              , meRHS = renExpr (meRHS eqn)
+              }
+          | eqn <- mtEqns mt
+          ]
+      , mtTransforms =
+          M.fromList
+            [ (renTransform name, decl { mtdName = renTransform name, mtdFrom = renExpr (mtdFrom decl), mtdTo = renExpr (mtdTo decl) })
+            | (name, decl) <- M.toList (mtTransforms mt)
+            ]
+      }
+  where
+    renMode mode = M.findWithDefault mode mode modeRen
+    renMod name = M.findWithDefault name name modRen
+    renTransform (ModTransformName t) = ModTransformName t
+    renExpr me =
+      me
+        { meSrc = renMode (meSrc me)
+        , meTgt = renMode (meTgt me)
+        , mePath = map renMod (mePath me)
+        }
+
+renameTypeSig
+  :: Map ModeName ModeName
+  -> Map ModName ModName
+  -> Map TypeRef TypeRef
+  -> TypeSig
+  -> Either Text TypeSig
+renameTypeSig modeRen modRen typeRen sig =
+  TypeSig <$> mapM renParam (tsParams sig)
+  where
+    renParam p =
+      case p of
+        PS_Ty mode -> Right (PS_Ty (M.findWithDefault mode mode modeRen))
+        PS_Tm ty -> PS_Tm <$> renameTypeExpr modeRen modRen typeRen ty
+
+renameGenDecl
+  :: Map ModeName ModeName
+  -> Map ModName ModName
+  -> Map TypeRef TypeRef
+  -> Map AttrSort AttrSort
+  -> Map (ModeName, GenName) GenName
+  -> GenDecl
+  -> Either Text GenDecl
+renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
+  let mode0 = gdMode gen
+  tyVars' <- mapM renTyVar (gdTyVars gen)
+  tmVars' <- mapM renTmVar (gdTmVars gen)
+  dom' <- mapM renInput (gdDom gen)
+  cod' <- mapM (renameTypeExpr modeRen modRen typeRen) (gdCod gen)
+  let attrs' = [ (field, M.findWithDefault sortName sortName sortRen) | (field, sortName) <- gdAttrs gen ]
+  let genName' = M.findWithDefault (gdName gen) (mode0, gdName gen) genRen
+  pure
+    gen
+      { gdName = genName'
+      , gdMode = M.findWithDefault mode0 mode0 modeRen
+      , gdTyVars = tyVars'
+      , gdTmVars = tmVars'
+      , gdDom = dom'
+      , gdCod = cod'
+      , gdAttrs = attrs'
+      }
+  where
+    renTyVar tv = Right tv { tvMode = M.findWithDefault (tvMode tv) (tvMode tv) modeRen }
+    renTmVar tm = do
+      sort' <- renameTypeExpr modeRen modRen typeRen (tmvSort tm)
+      Right tm { tmvSort = sort' }
+    renInput shape =
+      case shape of
+        InPort ty -> InPort <$> renameTypeExpr modeRen modRen typeRen ty
+        InBinder bs -> do
+          tmCtx' <- mapM (renameTypeExpr modeRen modRen typeRen) (bsTmCtx bs)
+          dom' <- mapM (renameTypeExpr modeRen modRen typeRen) (bsDom bs)
+          cod' <- mapM (renameTypeExpr modeRen modRen typeRen) (bsCod bs)
+          Right (InBinder bs { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' })
+
+renameTypeExpr
+  :: Map ModeName ModeName
+  -> Map ModName ModName
+  -> Map TypeRef TypeRef
+  -> TypeExpr
+  -> Either Text TypeExpr
+renameTypeExpr modeRen modRen typeRen ty =
+  case ty of
+    TVar tv ->
+      Right (TVar tv { tvMode = M.findWithDefault (tvMode tv) (tvMode tv) modeRen })
+    TMod me inner -> do
+      inner' <- renameTypeExpr modeRen modRen typeRen inner
+      pure
+        ( TMod
+            me
+              { meSrc = M.findWithDefault (meSrc me) (meSrc me) modeRen
+              , meTgt = M.findWithDefault (meTgt me) (meTgt me) modeRen
+              , mePath = map (\m -> M.findWithDefault m m modRen) (mePath me)
+              }
+            inner'
+        )
+    TCon ref args -> do
+      args' <- mapM renArg args
+      let ref' = M.findWithDefault ref ref typeRen
+      pure (TCon ref' args')
+  where
+    renArg arg =
+      case arg of
+        TAType t -> TAType <$> renameTypeExpr modeRen modRen typeRen t
+        TATm tm -> TATm <$> renameTermDiagram modeRen modRen typeRen tm
+
+renameTermDiagram
+  :: Map ModeName ModeName
+  -> Map ModName ModName
+  -> Map TypeRef TypeRef
+  -> TermDiagram
+  -> Either Text TermDiagram
+renameTermDiagram modeRen modRen typeRen (TermDiagram diag) = do
+  tmCtx' <- mapM (renameTypeExpr modeRen modRen typeRen) (dTmCtx diag)
+  portTy' <- mapM (renameTypeExpr modeRen modRen typeRen) (dPortTy diag)
+  edges' <- mapM renEdge (dEdges diag)
+  pure
+    ( TermDiagram
+        diag
+          { dMode = M.findWithDefault (dMode diag) (dMode diag) modeRen
+          , dTmCtx = tmCtx'
+          , dPortTy = portTy'
+          , dEdges = edges'
+          }
+    )
+  where
+    renEdge edge =
+      case ePayload edge of
+        PTmMeta tm -> do
+          sort' <- renameTypeExpr modeRen modRen typeRen (tmvSort tm)
+          pure edge { ePayload = PTmMeta tm { tmvSort = sort' } }
+        _ -> pure edge
 
 
 elabDoctrineEffects :: SearchBudget -> ModuleEnv -> Text -> Text -> [Text] -> Either Text ModuleEnv

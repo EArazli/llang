@@ -12,6 +12,7 @@ module Strat.DSL.AST
   , RawRun(..)
   , RawNamedRun(..)
   , RawDoctrineFunctor(..)
+  , RawFunctorParam(..)
   , RawDoctrineApply(..)
   , RawTerm(..)
   , RawNamedTerm(..)
@@ -25,6 +26,7 @@ module Strat.DSL.AST
   ) where
 
 import Data.Text (Text)
+import Data.Map.Strict (Map)
 import Strat.Poly.Surface.Spec (SurfaceSpec)
 import qualified Strat.Poly.DSL.AST as PolyAST
 
@@ -111,18 +113,22 @@ data RawNamedRun = RawNamedRun
   , rnrRun :: RawRun
   } deriving (Eq, Show)
 
+data RawFunctorParam = RawFunctorParam
+  { rfpName :: Text
+  , rfpSchema :: Text
+  } deriving (Eq, Show)
+
 data RawDoctrineFunctor = RawDoctrineFunctor
   { rdfName :: Text
-  , rdfParam :: Text
-  , rdfSchema :: Text
-  , rdfBodyItems :: [PolyAST.RawPolyItem]
+  , rdfParams :: [RawFunctorParam]
+  , rdfBody :: PolyAST.RawPolyDoctrine
   } deriving (Eq, Show)
 
 data RawDoctrineApply = RawDoctrineApply
   { rdaName :: Text
   , rdaFunctor :: Text
   , rdaTarget :: Text
-  , rdaUsingMorph :: Maybe Text
+  , rdaUsing :: Map Text Text
   } deriving (Eq, Show)
 
 data RawTerm = RawTerm

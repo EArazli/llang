@@ -4,5 +4,5 @@ doctrine ExceptionSchema where {
 }
 
 doctrine_functor Exception(L : ExceptionSchema) where {
-  gen raise : [E] -> [] @M;
+  gen raise : [L::M.L::E] -> [] @L::M;
 }
