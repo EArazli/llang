@@ -34,6 +34,7 @@ data-files:
 - examples/lib/modes/lnl.counit.term.llang
 - examples/lib/modes/lnl.llang
 - examples/lib/modes/quad_discipline.llang
+- examples/lib/modes/struct_caps.llang
 - examples/lib/modes/staging.llang
 - examples/lib/modes/staging_mode_map.llang
 - examples/lib/modes/uf_cancel.llang

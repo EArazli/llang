@@ -35,13 +35,16 @@ import Strat.Poly.Doctrine
   , BinderSig(..)
   , GenDecl(..)
   , InputShape(..)
+  , ObligationDecl(..)
   , ParamSig(..)
   , TypeSig(..)
   , doctrineTypeTheory
   , gdPlainDom
+  , lookupTypeSig
   , validateDoctrine
   )
 import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
+import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.ModeTheory
   ( ModeTheory(..)
   , ModeInfo(..)
@@ -383,6 +386,7 @@ buildIfaceImplMorphism
   -> [(Text, PolyMorph.Morphism)]
   -> Either Text PolyMorph.Morphism
 buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
+  mapM_ (uncurry validateApplyCoverage) implMorphs
   modeMap <- mergeDisjoint "mode" [liftModeMap p (PolyMorph.morModeMap mor) | (p, mor) <- implMorphs]
   modMap <- mergeDisjoint "modality" [liftModMap p (PolyMorph.morModMap mor) | (p, mor) <- implMorphs]
   attrMaps <- mapM (uncurry liftCompletedAttrMap) implMorphs
@@ -503,6 +507,62 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
       | (mode, table) <- M.toList (dTypes doc)
       , (typeName, sig) <- M.toList table
       ]
+
+    validateApplyCoverage paramName mor = do
+      let srcDoc = PolyMorph.morSrc mor
+      let tgtDoc = PolyMorph.morTgt mor
+      let missingTypes = [ srcRef | (srcRef, _) <- allTypeDecls srcDoc, needsTypeMapping srcRef tgtDoc mor ]
+      let missingGens = [ srcKey | srcKey <- allGenKeys srcDoc, M.notMember srcKey (PolyMorph.morGenMap mor) ]
+      let missingAttrSorts = [ srcSort | srcSort <- M.keys (dAttrSorts srcDoc), needsAttrMapping srcSort tgtDoc mor ]
+      if null missingTypes && null missingGens && null missingAttrSorts
+        then Right ()
+        else
+          Left
+            ( "apply: parameter "
+                <> paramName
+                <> " via morphism "
+                <> PolyMorph.morName mor
+                <> " is missing required mappings: "
+                <> renderMissing "type" (map renderTypeRef missingTypes)
+                <> "; "
+                <> renderMissing "gen" (map renderGenKey missingGens)
+                <> "; "
+                <> renderMissing "attr_sort" (map renderAttrSort missingAttrSorts)
+            )
+
+    needsTypeMapping srcRef tgtDoc mor =
+      case M.lookup srcRef (PolyMorph.morTypeMap mor) of
+        Just _ -> False
+        Nothing ->
+          case PolyMorph.applyMorphismMode mor (trMode srcRef) of
+            Left _ -> True
+            Right tgtMode ->
+              let tgtRef = srcRef { trMode = tgtMode }
+              in case lookupTypeSig tgtDoc tgtRef of
+                  Left _ -> True
+                  Right _ -> False
+
+    needsAttrMapping srcSort tgtDoc mor =
+      case M.lookup srcSort (PolyMorph.morAttrSortMap mor) of
+        Just _ -> False
+        Nothing -> M.notMember srcSort (dAttrSorts tgtDoc)
+
+    allGenKeys doc =
+      [ (mode, gdName genDecl)
+      | (mode, table) <- M.toList (dGens doc)
+      , genDecl <- M.elems table
+      ]
+
+    renderMissing label vals =
+      label <> "=" <> renderList vals
+
+    renderList [] = "(none)"
+    renderList vals = "[" <> T.intercalate ", " vals <> "]"
+
+    renderModeName (ModeName n) = n
+    renderTypeRef ref = renderModeName (trMode ref) <> "." <> renderTypeName (trName ref)
+    renderAttrSort (AttrSort s) = s
+    renderGenKey (mode, GenName genName) = renderModeName mode <> "." <> genName
 
 toGlueMorph :: Text -> Text -> Doctrine -> PolyMorph.Morphism -> PolyMorph.Morphism
 toGlueMorph resultName paramName pres mor =
@@ -657,9 +717,9 @@ mergeIface left right = do
   attrSorts <- unionByEq "attrsort" (dAttrSorts left) (dAttrSorts right)
   types <- mergeModeTables "type" (dTypes left) (dTypes right)
   gens <- mergeModeTables "generator" (dGens left) (dGens right)
-  cells <- mergeListDisjoint "cells/rules" (dCells2 left) (dCells2 right)
+  cells <- mergeCellsWithAlphaRename (dCells2 left) (dCells2 right)
   actions <- unionByEq "action" (dActions left) (dActions right)
-  obligations <- mergeListDisjoint "obligations" (dObligations left) (dObligations right)
+  obligations <- mergeObligationsWithRename (dObligations left) (dObligations right)
   pure
     left
       { dModes =
@@ -700,8 +760,53 @@ mergeModeTables label left right =
           merged <- unionByEq label table0 table
           Right (M.insert mode merged mp)
 
-mergeListDisjoint :: (Eq a) => Text -> [a] -> [a] -> Either Text [a]
-mergeListDisjoint _ left right = Right (left <> right)
+mergeCellsWithAlphaRename :: [Cell2] -> [Cell2] -> Either Text [Cell2]
+mergeCellsWithAlphaRename left right = do
+  (out, _) <- foldM step (left, S.fromList (map c2Name left)) right
+  Right out
+  where
+    step (acc, used) cell =
+      let name = c2Name cell
+      in if name `S.member` used
+        then
+          case [ c | c <- acc, c2Name c == name, c == cell ] of
+            (_:_) -> Right (acc, used)
+            [] ->
+              let (fresh, used') = freshTextName name used
+                  cell' = cell { c2Name = fresh }
+              in Right (acc <> [cell'], used')
+        else
+          Right (acc <> [cell], S.insert name used)
+
+mergeObligationsWithRename :: [ObligationDecl] -> [ObligationDecl] -> Either Text [ObligationDecl]
+mergeObligationsWithRename left right = do
+  (out, _) <- foldM step (left, S.fromList (map obName left)) right
+  Right out
+  where
+    step (acc, used) obl =
+      let name = obName obl
+      in if name `S.member` used
+        then
+          case [ o | o <- acc, obName o == name, o == obl ] of
+            (_:_) -> Right (acc, used)
+            [] ->
+              let (fresh, used') = freshTextName name used
+                  obl' = obl { obName = fresh }
+              in Right (acc <> [obl'], used')
+        else
+          Right (acc <> [obl], S.insert name used)
+
+freshTextName :: Text -> S.Set Text -> (Text, S.Set Text)
+freshTextName base used =
+  if base `S.member` used
+    then go (1 :: Int)
+    else (base, S.insert base used)
+  where
+    go n =
+      let candidate = base <> "_" <> T.pack (show n)
+      in if candidate `S.member` used
+        then go (n + 1)
+        else (candidate, S.insert candidate used)
 
 renameModeTheory
   :: Map ModeName ModeName

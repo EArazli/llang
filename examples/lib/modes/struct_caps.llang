@@ -1,0 +1,9 @@
+doctrine HasDup where {
+  mode M;
+  gen dup(a@M) : [a] -> [a, a] @M;
+}
+
+doctrine HasDrop where {
+  mode M;
+  gen drop(a@M) : [a] -> [] @M;
+}

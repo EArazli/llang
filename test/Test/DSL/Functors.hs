@@ -9,12 +9,13 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 
 import Strat.DSL.Parse (parseRawFile)
-import Strat.DSL.Elab (elabRawFile)
+import Strat.DSL.Elab (elabRawFile, elabRawFileWithEnv)
 import Strat.Frontend.Env (ModuleEnv(..), DoctrineFunctorDef(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
+import qualified Strat.Poly.Morphism as PolyMorph
 
 
 tests :: TestTree
@@ -26,6 +27,8 @@ tests =
     , testCase "multi-parameter apply requires exact mapping keys" testApplyMappingCoverage
     , testCase "apply fills implicit identity type maps from implementation morphisms" testApplyImplicitIdentityTypeMap
     , testCase "apply checks generator targets after mode mapping" testApplyGeneratorModeMapping
+    , testCase "apply reports missing type/attr mappings per parameter" testApplyMissingMappingDiagnostics
+    , testCase "apply reports missing gen mappings per parameter" testApplyMissingGenMappingDiagnostics
     , testCase "zero-parameter functors are rejected" testZeroParameterFunctorRejected
     , testCase "functor body requires parameter namespaces" testNamespaceEnforcement
     , testCase "functor body may extend mode theory" testModeTheoryExtensionAllowed
@@ -202,6 +205,70 @@ testApplyGeneratorModeMapping = do
     Just table -> pure table
   assertBool "expected target generator f to be preserved" (M.member (GenName "f") gens)
 
+testApplyMissingMappingDiagnostics :: Assertion
+testApplyMissingMappingDiagnostics = do
+  let src =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M;"
+          , "  attrsort Str = string;"
+          , "  type X @M;"
+          , "}"
+          , "doctrine T where {"
+          , "  mode M;"
+          , "}"
+          , "morphism impl : S -> T where {"
+          , "  mode M -> M;"
+          , "}"
+          , "doctrine_functor F(A : S) where {"
+          , "}"
+          , "doctrine App = apply F to T using { A = impl; };"
+          ]
+  err <- expectElabFailure src
+  assertBool "expected param name in diagnostics" ("parameter A" `T.isInfixOf` err)
+  assertBool "expected missing type in diagnostics" ("type=[M.X]" `T.isInfixOf` err)
+  assertBool "expected missing attr sort in diagnostics" ("attr_sort=[Str]" `T.isInfixOf` err)
+  assertBool "expected gen category in diagnostics" ("gen=(none)" `T.isInfixOf` err)
+
+testApplyMissingGenMappingDiagnostics :: Assertion
+testApplyMissingGenMappingDiagnostics = do
+  let setupSrc =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M;"
+          , "  type X @M;"
+          , "  gen f : [M.X] -> [M.X] @M;"
+          , "}"
+          , "doctrine T where {"
+          , "  mode M;"
+          , "  type X @M;"
+          , "  gen f : [M.X] -> [M.X] @M;"
+          , "}"
+          , "morphism impl : S -> T where {"
+          , "  mode M -> M;"
+          , "  gen f @M -> f"
+          , "}"
+          , "doctrine_functor F(A : S) where {"
+          , "}"
+          ]
+  env <- expectElab setupSrc
+  impl <- case M.lookup "impl" (meMorphisms env) of
+    Nothing -> assertFailure "missing morphism impl" >> error "unreachable"
+    Just m -> pure m
+  let implBad =
+        impl
+          { PolyMorph.morName = "impl_bad"
+          , PolyMorph.morGenMap = M.empty
+          }
+  let envBad =
+        env
+          { meMorphisms = M.insert "impl_bad" implBad (meMorphisms env)
+          }
+  let applySrc = "doctrine App = apply F to T using { A = impl_bad; };"
+  err <- expectElabFailureWithEnv envBad applySrc
+  assertBool "expected param name in diagnostics" ("parameter A" `T.isInfixOf` err)
+  assertBool "expected missing gen in diagnostics" ("gen=[M.f]" `T.isInfixOf` err)
+
 testZeroParameterFunctorRejected :: Assertion
 testZeroParameterFunctorRejected = do
   let src =
@@ -334,5 +401,14 @@ expectElabFailure src =
     Left err -> pure err
     Right raw ->
       case elabRawFile raw of
+        Left err -> pure err
+        Right _ -> assertFailure "expected elaboration failure" >> error "unreachable"
+
+expectElabFailureWithEnv :: ModuleEnv -> T.Text -> IO T.Text
+expectElabFailureWithEnv env src =
+  case parseRawFile src of
+    Left err -> pure err
+    Right raw ->
+      case elabRawFileWithEnv env raw of
         Left err -> pure err
         Right _ -> assertFailure "expected elaboration failure" >> error "unreachable"

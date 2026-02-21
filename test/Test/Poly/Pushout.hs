@@ -26,6 +26,7 @@ import Strat.Poly.ModeTheory
   )
 import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), TypeArg(..), TmVar(..), TermDiagram(..), typeMode)
 import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Attr (AttrSort(..), AttrSortDecl(..), AttrLitKind(..))
 import Strat.Poly.Diagram (genD, idD)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), ObligationDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), gdPlainDom, validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
@@ -48,6 +49,11 @@ tests =
     , testCase "pushout merges cell classes" testPushoutMergeClass
     , testCase "pushout rejects name conflict with different bodies" testPushoutNameConflict
     , testCase "pushout accepts non-identity mode maps" testPushoutAcceptsModeMap
+    , testCase "pushout allows compatible non-injective type maps" testPushoutNonInjectiveTypeCompatible
+    , testCase "pushout rejects incompatible non-injective attrsort maps" testPushoutNonInjectiveAttrSortIncompatible
+    , testCase "pushout allows compatible non-injective generator maps" testPushoutNonInjectiveGenCompatible
+    , testCase "pushout rejects incompatible non-injective generator maps" testPushoutNonInjectiveGenIncompatible
+    , testCase "pushout glue composes through right injection" testPushoutGlueComposesThroughInr
     , testCase "pushout generator injectivity is mode-aware" testPushoutGenInjectiveByMode
     , testCase "pushout default type rename follows mode map" testPushoutTypeRenameDefaultUsesModeMap
     , testCase "pushout handles alpha-renaming with mode equations" testPushoutAlphaRenameWithModeEq
@@ -60,6 +66,7 @@ tests =
     , testCase "coproduct keeps obligations elaboratable after disjoint type renaming" testCoproductObligationRenameElaborates
     , testCase "coproduct renames colliding modality transforms" testCoproductTransformCollisionRenames
     , testCase "apply pushout accepts implementation morphisms with non-CheckAll checks" testApplyPushoutAcceptsNonCheckAllGlue
+    , testCase "apply pushout type/gen collisions are resolved after mode collapse" testApplyPushoutTypeGenCollisionAfterModeRename
     , testCase "apply pushout renames colliding cells after mode renaming" testApplyPushoutCellCollisionAfterModeRename
     ]
 
@@ -470,6 +477,445 @@ testPushoutAcceptsModeMap = do
   case validateDoctrine (poDoctrine res) of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
+
+testPushoutNonInjectiveTypeCompatible :: Assertion
+testPushoutNonInjectiveTypeCompatible = do
+  let mode = ModeName "M"
+  let mkDoc name typeNames =
+        Doctrine
+          { dName = name
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton mode (M.fromList [ (TypeName n, TypeSig []) | n <- typeNames ])
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let src = mkDoc "SrcNI" ["X", "Y"]
+  let left = mkDoc "LeftNI" ["T"]
+  let right = mkDoc "RightNI" ["U", "V"]
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
+  let tmpl tgtName = TypeTemplate [] (TCon (TypeRef mode (TypeName tgtName)) [])
+  let morF =
+        Morphism
+          { morName = "fNI"
+          , morSrc = src
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap =
+              M.fromList
+                [ (TypeRef mode (TypeName "X"), tmpl "T")
+                , (TypeRef mode (TypeName "Y"), tmpl "T")
+                ]
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let morG =
+        Morphism
+          { morName = "gNI"
+          , morSrc = src
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap =
+              M.fromList
+                [ (TypeRef mode (TypeName "X"), tmpl "U")
+                , (TypeRef mode (TypeName "Y"), tmpl "V")
+                ]
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  res <- case computePolyPushout "PNIType" morF morG of
+    Left err -> assertFailure (T.unpack err) >> error "unreachable"
+    Right out -> pure out
+  let typesAtM = M.findWithDefault M.empty mode (dTypes (poDoctrine res))
+  M.size typesAtM @?= 1
+
+testPushoutNonInjectiveAttrSortIncompatible :: Assertion
+testPushoutNonInjectiveAttrSortIncompatible = do
+  let mode = ModeName "M"
+  let mkDoc name lit1 lit2 litTgt =
+        Doctrine
+          { dName = name
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts =
+              M.fromList
+                [ (AttrSort "S1", AttrSortDecl { asName = AttrSort "S1", asLitKind = lit1 })
+                , (AttrSort "S2", AttrSortDecl { asName = AttrSort "S2", asLitKind = lit2 })
+                , (AttrSort "T", AttrSortDecl { asName = AttrSort "T", asLitKind = litTgt })
+                ]
+          }
+  let src = mkDoc "SrcAttrNI" (Just LKInt) (Just LKBool) (Just LKInt)
+  let left =
+        Doctrine
+          { dName = "LeftAttrNI"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.singleton (AttrSort "T") (AttrSortDecl { asName = AttrSort "T", asLitKind = Just LKInt })
+          }
+  let right =
+        Doctrine
+          { dName = "RightAttrNI"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.singleton (AttrSort "U") (AttrSortDecl { asName = AttrSort "U", asLitKind = Just LKInt })
+          }
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
+  let morF =
+        Morphism
+          { morName = "fAttrNI"
+          , morSrc = src
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.fromList [(AttrSort "S1", AttrSort "T"), (AttrSort "S2", AttrSort "T"), (AttrSort "T", AttrSort "T")]
+          , morPolicy = UseAllOriented
+          }
+  let morG =
+        Morphism
+          { morName = "gAttrNI"
+          , morSrc = src
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.fromList [(AttrSort "S1", AttrSort "U"), (AttrSort "S2", AttrSort "U"), (AttrSort "T", AttrSort "U")]
+          , morPolicy = UseAllOriented
+          }
+  case computePolyPushout "PNIAttr" morF morG of
+    Left err ->
+      assertBool
+        ("expected incompatible merged attrsorts error, got: " <> T.unpack err)
+        ("incompatible merged attrsort" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected incompatible non-injective attrsort mappings to fail"
+
+testPushoutNonInjectiveGenCompatible :: Assertion
+testPushoutNonInjectiveGenCompatible = do
+  let mode = ModeName "M"
+  let mkNullary name =
+        GenDecl
+          { gdName = GenName name
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = []
+          , gdCod = []
+          , gdAttrs = []
+          }
+  let mkDoc name genNames =
+        Doctrine
+          { dName = name
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.singleton mode (M.fromList [ (GenName g, mkNullary g) | g <- genNames ])
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let src = mkDoc "SrcGenNI" ["g1", "g2"]
+  let left = mkDoc "LeftGenNI" ["h"]
+  let right = mkDoc "RightGenNI" ["u", "v"]
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
+  imgH <- require (genD mode [] [] (GenName "h"))
+  imgU <- require (genD mode [] [] (GenName "u"))
+  imgV <- require (genD mode [] [] (GenName "v"))
+  let morF =
+        Morphism
+          { morName = "fGenNI"
+          , morSrc = src
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap =
+              M.fromList
+                [ ((mode, GenName "g1"), plainImage imgH)
+                , ((mode, GenName "g2"), plainImage imgH)
+                ]
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let morG =
+        Morphism
+          { morName = "gGenNI"
+          , morSrc = src
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap =
+              M.fromList
+                [ ((mode, GenName "g1"), plainImage imgU)
+                , ((mode, GenName "g2"), plainImage imgV)
+                ]
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  res <- case computePolyPushout "PNIGen" morF morG of
+    Left err -> assertFailure (T.unpack err) >> error "unreachable"
+    Right out -> pure out
+  let gensAtM = M.findWithDefault M.empty mode (dGens (poDoctrine res))
+  M.size gensAtM @?= 1
+
+testPushoutNonInjectiveGenIncompatible :: Assertion
+testPushoutNonInjectiveGenIncompatible = do
+  let mode = ModeName "M"
+  let aTy = tcon mode "A" []
+  let gen1 =
+        GenDecl
+          { gdName = GenName "g1"
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = []
+          , gdCod = []
+          , gdAttrs = []
+          }
+  let gen2 =
+        GenDecl
+          { gdName = GenName "g2"
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = [InPort aTy]
+          , gdCod = []
+          , gdAttrs = []
+          }
+  let mkNullary name =
+        GenDecl
+          { gdName = GenName name
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = []
+          , gdCod = []
+          , gdAttrs = []
+          }
+  let src =
+        Doctrine
+          { dName = "SrcGenBadNI"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton mode (M.singleton (TypeName "A") (TypeSig []))
+          , dGens = M.singleton mode (M.fromList [(GenName "g1", gen1), (GenName "g2", gen2)])
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let left =
+        Doctrine
+          { dName = "LeftGenBadNI"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton mode (M.singleton (TypeName "A") (TypeSig []))
+          , dGens = M.singleton mode (M.singleton (GenName "h") (mkNullary "h"))
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let right =
+        Doctrine
+          { dName = "RightGenBadNI"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton mode (M.singleton (TypeName "A") (TypeSig []))
+          , dGens =
+              M.singleton
+                mode
+                ( M.fromList
+                    [ (GenName "u", mkNullary "u")
+                    , (GenName "v", mkNullary "v")
+                    ]
+                )
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
+  imgH <- require (genD mode [] [] (GenName "h"))
+  imgU <- require (genD mode [] [] (GenName "u"))
+  imgV <- require (genD mode [] [] (GenName "v"))
+  let morF =
+        Morphism
+          { morName = "fGenBadNI"
+          , morSrc = src
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap =
+              M.fromList
+                [ ((mode, GenName "g1"), plainImage imgH)
+                , ((mode, GenName "g2"), plainImage imgH)
+                ]
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let morG =
+        Morphism
+          { morName = "gGenBadNI"
+          , morSrc = src
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap =
+              M.fromList
+                [ ((mode, GenName "g1"), plainImage imgU)
+                , ((mode, GenName "g2"), plainImage imgV)
+                ]
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  case computePolyPushout "PNIGenBad" morF morG of
+    Left err ->
+      assertBool
+        ("expected incompatible merged generators error, got: " <> T.unpack err)
+        ("incompatible merged generator signatures" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected incompatible non-injective generator mappings to fail"
+
+testPushoutGlueComposesThroughInr :: Assertion
+testPushoutGlueComposesThroughInr = do
+  let mode = ModeName "M"
+  let xTy = tcon mode "X" []
+  let yTy = tcon mode "Y" []
+  let genF =
+        GenDecl
+          { gdName = GenName "f"
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = [InPort xTy]
+          , gdCod = [xTy]
+          , gdAttrs = []
+          }
+  let genH =
+        GenDecl
+          { gdName = GenName "h"
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = [InPort yTy]
+          , gdCod = [yTy]
+          , gdAttrs = []
+          }
+  let src =
+        Doctrine
+          { dName = "SrcGlueCompose"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton mode (M.singleton (TypeName "X") (TypeSig []))
+          , dGens = M.singleton mode (M.singleton (GenName "f") genF)
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let left = src { dName = "LeftGlueCompose" }
+  let right =
+        Doctrine
+          { dName = "RightGlueCompose"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton mode (M.singleton (TypeName "Y") (TypeSig []))
+          , dGens = M.singleton mode (M.singleton (GenName "h") genH)
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
+  imgF <- require (genD mode [xTy] [xTy] (GenName "f"))
+  imgH <- require (genD mode [yTy] [yTy] (GenName "h"))
+  let inl =
+        Morphism
+          { morName = "inlGlueCompose"
+          , morSrc = src
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.singleton (mode, GenName "f") (plainImage imgF)
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let rightType = TypeTemplate [] (TCon (TypeRef mode (TypeName "Y")) [])
+  let inrLeg =
+        Morphism
+          { morName = "inrGlueCompose"
+          , morSrc = src
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.singleton (TypeRef mode (TypeName "X")) rightType
+          , morGenMap = M.singleton (mode, GenName "f") (plainImage imgH)
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  res <- case computePolyPushout "PGlueCompose" inl inrLeg of
+    Left err -> assertFailure (T.unpack err) >> error "unreachable"
+    Right out -> pure out
+  diagSrc <- require (genD mode [xTy] [xTy] (GenName "f"))
+  diagTgt <- case applyMorphismDiagram (poGlue res) diagSrc of
+    Left err -> assertFailure ("expected composed glue to elaborate through inr: " <> T.unpack err) >> error "unreachable"
+    Right d -> pure d
+  case IM.elems (dEdges diagTgt) of
+    [edge] ->
+      case ePayload edge of
+        PGen gName _ _ -> gName @?= GenName "f"
+        _ -> assertFailure "expected generator payload after glue composition"
+    _ -> assertFailure "expected a single edge after glue composition"
 
 testPushoutGenInjectiveByMode :: Assertion
 testPushoutGenInjectiveByMode = do
@@ -1100,6 +1546,119 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
     Left err -> assertFailure (T.unpack err)
     Right out -> pure out
   morCheck (poGlue res) @?= CheckStructural
+
+testApplyPushoutTypeGenCollisionAfterModeRename :: Assertion
+testApplyPushoutTypeGenCollisionAfterModeRename = do
+  let modeI1 = ModeName "I1"
+  let modeI2 = ModeName "I2"
+  let modeL1 = ModeName "L1"
+  let modeL2 = ModeName "L2"
+  let modeM = ModeName "M"
+  let source =
+        Doctrine
+          { dName = "SrcTypeGenCollapse"
+          , dModes = mkModes (S.fromList [modeI1, modeI2])
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let cL2 = tcon modeL2 "C" []
+  let genL1 =
+        GenDecl
+          { gdName = GenName "g"
+          , gdMode = modeL1
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = []
+          , gdCod = []
+          , gdAttrs = []
+          }
+  let genL2 =
+        GenDecl
+          { gdName = GenName "g"
+          , gdMode = modeL2
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = [InPort cL2]
+          , gdCod = [cL2]
+          , gdAttrs = []
+          }
+  let body =
+        Doctrine
+          { dName = "BodyTypeGenCollapse"
+          , dModes = mkModes (S.fromList [modeL1, modeL2])
+          , dAcyclicModes = S.empty
+          , dTypes =
+              M.fromList
+                [ (modeL1, M.singleton (TypeName "B") (TypeSig []))
+                , (modeL2, M.fromList [(TypeName "B", TypeSig [PS_Ty modeL2]), (TypeName "C", TypeSig [])])
+                ]
+          , dGens =
+              M.fromList
+                [ (modeL1, M.singleton (GenName "g") genL1)
+                , (modeL2, M.singleton (GenName "g") genL2)
+                ]
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let target =
+        Doctrine
+          { dName = "TargetTypeGenCollapse"
+          , dModes = mkModes (S.singleton modeM)
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [source, body, target]
+  let incl =
+        Morphism
+          { morName = "inclTypeGenCollapse"
+          , morSrc = source
+          , morTgt = body
+          , morIsCoercion = False
+          , morModeMap = M.fromList [(modeI1, modeL1), (modeI2, modeL2)]
+          , morModMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let impl =
+        Morphism
+          { morName = "implTypeGenCollapse"
+          , morSrc = source
+          , morTgt = target
+          , morIsCoercion = False
+          , morModeMap = M.fromList [(modeI1, modeM), (modeI2, modeM)]
+          , morModMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  res <- case computePolyPushoutPreferRight "PTypeGenCollapse" "TypeGenFocus" incl impl of
+    Left err -> assertFailure (T.unpack err) >> error "unreachable"
+    Right out -> pure out
+  let modeTypes = M.findWithDefault M.empty modeM (dTypes (poDoctrine res))
+  assertBool "expected unrenamed type B to remain" (M.member (TypeName "B") modeTypes)
+  let renamedTypes = [ t | TypeName t <- M.keys modeTypes, "TypeGenFocus_B" `T.isPrefixOf` t ]
+  assertBool "expected renamed B after mode-collapse collision" (not (null renamedTypes))
+  let modeGens = M.findWithDefault M.empty modeM (dGens (poDoctrine res))
+  assertBool "expected unrenamed generator g to remain" (M.member (GenName "g") modeGens)
+  let renamedGens = [ g | GenName g <- M.keys modeGens, "TypeGenFocus_g" `T.isPrefixOf` g ]
+  assertBool "expected renamed g after mode-collapse collision" (not (null renamedGens))
 
 testApplyPushoutCellCollisionAfterModeRename :: Assertion
 testApplyPushoutCellCollisionAfterModeRename = do

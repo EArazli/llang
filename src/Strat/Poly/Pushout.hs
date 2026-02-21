@@ -71,6 +71,7 @@ data ModePushout = ModePushout
 computePolyPushout :: Text -> Morphism -> Morphism -> Either Text PolyPushoutResult
 computePolyPushout name f g = do
   ensureSameSource
+  let src = morSrc f
   modePushout <- pushoutModeTheoryPreferRight (sanitizePrefix name <> "_pushout") f g
   attrSortMapF <- requireAttrSortRenameMap f
   attrSortMapG <- requireAttrSortRenameMap g
@@ -78,34 +79,41 @@ computePolyPushout name f g = do
   (typeMapG, permMapG) <- requireTypeRenameMap g
   genMapF <- requireGenRenameMap f
   genMapG <- requireGenRenameMap g
-  ensureInjective "attrsort" (M.elems attrSortMapF)
-  ensureInjective "attrsort" (M.elems attrSortMapG)
-  ensureInjective "type" (M.elems typeMapF)
-  ensureInjective "type" (M.elems typeMapG)
-  ensureGenInjective f genMapF
-  ensureGenInjective g genMapG
-  let renameAttrSortsB0 = M.fromList [ (img, src) | (src, img) <- M.toList attrSortMapF ]
-  let renameAttrSortsC0 = M.fromList [ (img, src) | (src, img) <- M.toList attrSortMapG ]
-  let renameTypesB0 = M.fromList [ (img, src) | (src, img) <- M.toList typeMapF ]
-  let renameTypesC0 = M.fromList [ (img, src) | (src, img) <- M.toList typeMapG ]
+  let srcAttrSorts = M.keys (dAttrSorts src)
+  let srcTypeRefs = map fst (allTypes src)
+  let srcGenKeys = [ (mode, gdName genDecl) | (mode, genDecl) <- allGens src ]
+  attrRep <- classRepresentatives srcAttrSorts [groupByImage attrSortMapF, groupByImage attrSortMapG]
+  typeRep <- classRepresentatives srcTypeRefs [groupByImage typeMapF, groupByImage typeMapG]
+  genImgMapF <- generatorImageKeys f genMapF
+  genImgMapG <- generatorImageKeys g genMapG
+  genRep <- classRepresentatives srcGenKeys [groupByImage genImgMapF, groupByImage genImgMapG]
+  ensureAttrSortClassCompat src attrRep
+  ensureTypeClassCompat src typeRep
+  ensureGenClassCompat src genRep
+  renameAttrSortsB0 <- imageToRepresentative "attrsort" attrSortMapF attrRep
+  renameAttrSortsC0 <- imageToRepresentative "attrsort" attrSortMapG attrRep
+  renameTypesB0 <- imageToRepresentative "type" typeMapF typeRep
+  renameTypesC0 <- imageToRepresentative "type" typeMapG typeRep
   let permTypesB0 = permMapF
   let permTypesC0 = permMapG
-  let renameGensB0 = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList genMapF ]
-  let renameGensC0 = M.fromList [ ((m, img), src) | ((m, src), img) <- M.toList genMapG ]
+  renameGensBWithModes <- imageToRepresentative "generator" genImgMapF genRep
+  renameGensCWithModes <- imageToRepresentative "generator" genImgMapG genRep
+  let renameGensB0 = M.map snd renameGensBWithModes
+  let renameGensC0 = M.map snd renameGensCWithModes
   let prefixB = sanitizePrefix (dName (morTgt f)) <> "_inl"
   let prefixC = sanitizePrefix (dName (morTgt g)) <> "_inr"
-  let renameAttrSortsB = M.union renameAttrSortsB0 (disjointAttrSortRenames prefixB (morSrc f) renameAttrSortsB0 (morTgt f))
-  let renameAttrSortsC = M.union renameAttrSortsC0 (disjointAttrSortRenames prefixC (morSrc f) renameAttrSortsC0 (morTgt g))
-  let renameTypesB = M.union renameTypesB0 (disjointTypeRenames prefixB (morSrc f) renameTypesB0 (morTgt f))
-  let renameTypesC = M.union renameTypesC0 (disjointTypeRenames prefixC (morSrc f) renameTypesC0 (morTgt g))
-  let renameGensB = M.union renameGensB0 (disjointGenRenames prefixB (morSrc f) renameGensB0 (morTgt f))
-  let renameGensC = M.union renameGensC0 (disjointGenRenames prefixC (morSrc f) renameGensC0 (morTgt g))
-  let renameCellsB = disjointCellRenames prefixB (morSrc f) (morTgt f)
-  let renameCellsC = disjointCellRenames prefixC (morSrc f) (morTgt g)
-  let renameOblsB = disjointObligationRenames prefixB (morSrc f) (morTgt f)
-  let renameOblsC = disjointObligationRenames prefixC (morSrc f) (morTgt g)
-  let renameTransformsB = disjointTransformRenames prefixB (morSrc f) (morTgt f)
-  let renameTransformsC = disjointTransformRenames prefixC (morSrc f) (morTgt g)
+  let renameAttrSortsB = M.union renameAttrSortsB0 (disjointAttrSortRenames prefixB src renameAttrSortsB0 (morTgt f))
+  let renameAttrSortsC = M.union renameAttrSortsC0 (disjointAttrSortRenames prefixC src renameAttrSortsC0 (morTgt g))
+  let renameTypesB = M.union renameTypesB0 (disjointTypeRenames prefixB src renameTypesB0 (morTgt f))
+  let renameTypesC = M.union renameTypesC0 (disjointTypeRenames prefixC src renameTypesC0 (morTgt g))
+  let renameGensB = M.union renameGensB0 (disjointGenRenames prefixB src renameGensB0 (morTgt f))
+  let renameGensC = M.union renameGensC0 (disjointGenRenames prefixC src renameGensC0 (morTgt g))
+  let renameCellsB = disjointCellRenames prefixB src (morTgt f)
+  let renameCellsC = disjointCellRenames prefixC src (morTgt g)
+  let renameOblsB = disjointObligationRenames prefixB src (morTgt f)
+  let renameOblsC = disjointObligationRenames prefixC src (morTgt g)
+  let renameTransformsB = disjointTransformRenames prefixB src (morTgt f)
+  let renameTransformsC = disjointTransformRenames prefixC src (morTgt g)
   b' <-
     renameDoctrine
       (mpoInlModeRen modePushout)
@@ -134,12 +142,6 @@ computePolyPushout name f g = do
   let c'' = c' { dModes = mpoModeTheory modePushout }
   merged <- mergeDoctrineList (mpoModeTheory modePushout) [b'', c'']
   let pres = merged { dName = name }
-  let glue =
-        g
-          { morName = name <> ".glue"
-          , morTgt = pres
-          , morIsCoercion = True
-          }
   inl <-
     buildInj
       (name <> ".inl")
@@ -162,6 +164,8 @@ computePolyPushout name f g = do
       renameTypesC
       permTypesC0
       renameGensC
+  glue0 <- composeMorphisms (name <> ".glue") g inr
+  let glue = glue0 { morIsCoercion = True }
   checkGenerated "inl" inl
   checkGenerated "inr" inr
   pure PolyPushoutResult { poDoctrine = pres, poInl = inl, poInr = inr, poGlue = glue }
@@ -190,12 +194,6 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
   (typeMapImpl, permMapImpl) <- requireTypeRenameMap impl
   genMapIncl <- requireGenRenameMap incl
   genMapImpl <- requireGenRenameMap impl
-  ensureInjective "attrsort" (M.elems attrMapIncl)
-  ensureInjective "attrsort" (M.elems attrMapImpl)
-  ensureInjective "type" (M.elems typeMapIncl)
-  ensureInjective "type" (M.elems typeMapImpl)
-  ensureGenInjective incl genMapIncl
-  ensureGenInjective impl genMapImpl
   interfaceAttrRen <- mkInterfaceAttrSortRenameMap attrMapIncl attrMapImpl
   (interfaceTypeRen, interfacePermRen) <- mkInterfaceTypeRenameMap src typeMapIncl permMapIncl typeMapImpl permMapImpl
   interfaceGenRen <- mkInterfaceGenRenameMap genMapIncl genMapImpl
@@ -779,26 +777,147 @@ ensureGenExists doc mode name =
           )
     Just _ -> Right ()
 
-ensureInjective :: Ord a => Text -> [a] -> Either Text ()
-ensureInjective label images =
-  case firstDup images of
-    Nothing -> Right ()
-    Just _ -> Left ("poly pushout requires injective " <> label <> " mapping")
-  where
-    firstDup xs = go S.empty xs
-    go _ [] = Nothing
-    go seen (x:rest)
-      | x `S.member` seen = Just x
-      | otherwise = go (S.insert x seen) rest
+groupByImage :: (Ord src, Ord img) => M.Map src img -> M.Map img [src]
+groupByImage mp =
+  M.fromListWith (<>) [ (img, [src]) | (src, img) <- M.toList mp ]
 
-ensureGenInjective :: Morphism -> GenRenameMap -> Either Text ()
-ensureGenInjective mor genMap = do
-  images <- mapM mapped (M.toList genMap)
-  ensureInjective "gen" images
+classRepresentatives :: (Ord a) => [a] -> [M.Map b [a]] -> Either Text (M.Map a a)
+classRepresentatives items groupedMaps = do
+  let nodes = S.fromList items
+  let adj0 = M.fromSet (const S.empty) nodes
+  let groups = concatMap M.elems groupedMaps
+  let adj = foldl connectGroup adj0 groups
+  pure (buildRepMap nodes adj)
   where
-    mapped ((srcMode, _srcName), imgName) = do
+    connectGroup adj group =
+      case group of
+        [] -> adj
+        (x:rest) ->
+          foldl (\acc y -> connect x y acc) adj rest
+
+    connect x y adj =
+      let adj1 = M.insertWith S.union x (S.singleton y) adj
+      in M.insertWith S.union y (S.singleton x) adj1
+
+    buildRepMap nodes adj = go nodes M.empty
+      where
+        go remaining reps =
+          case S.lookupMin remaining of
+            Nothing -> reps
+            Just start ->
+              let component = dfs S.empty [start]
+                  rep = S.findMin component
+                  reps' = foldl (\mp node -> M.insert node rep mp) reps (S.toList component)
+                  remaining' = S.difference remaining component
+              in go remaining' reps'
+
+        dfs seen stack =
+          case stack of
+            [] -> seen
+            (x:xs)
+              | x `S.member` seen -> dfs seen xs
+              | otherwise ->
+                  let neighbors = S.toList (M.findWithDefault S.empty x adj)
+                  in dfs (S.insert x seen) (neighbors <> xs)
+
+imageToRepresentative
+  :: (Ord src, Ord img, Ord rep)
+  => Text
+  -> M.Map src img
+  -> M.Map src rep
+  -> Either Text (M.Map img rep)
+imageToRepresentative label srcToImg reps =
+  foldM add M.empty (M.toList srcToImg)
+  where
+    add acc (srcItem, imgItem) = do
+      rep <-
+        case M.lookup srcItem reps of
+          Nothing ->
+            Left ("poly pushout: missing class representative for " <> label)
+          Just r -> Right r
+      case M.lookup imgItem acc of
+        Nothing -> Right (M.insert imgItem rep acc)
+        Just existing
+          | existing == rep -> Right acc
+          | otherwise ->
+              Left ("poly pushout: incompatible merged " <> label <> " images")
+
+generatorImageKeys
+  :: Morphism
+  -> M.Map (ModeName, GenName) GenName
+  -> Either Text (M.Map (ModeName, GenName) (ModeName, GenName))
+generatorImageKeys mor genMap =
+  fmap M.fromList (mapM toKey (M.toList genMap))
+  where
+    toKey ((srcMode, srcName), imgName) = do
       tgtMode <- applyMorphismMode mor srcMode
-      Right (tgtMode, imgName)
+      Right ((srcMode, srcName), (tgtMode, imgName))
+
+ensureAttrSortClassCompat :: Doctrine -> M.Map AttrSort AttrSort -> Either Text ()
+ensureAttrSortClassCompat src reps =
+  mapM_ checkGroup (M.elems groups)
+  where
+    groups = M.fromListWith (<>) [ (rep, [srcSort]) | (srcSort, rep) <- M.toList reps ]
+    decls = dAttrSorts src
+    checkGroup members =
+      case members of
+        [] -> Right ()
+        (firstSort:rest) -> do
+          firstDecl <- lookupDecl firstSort
+          mapM_ (checkOne firstDecl) rest
+    lookupDecl sortName =
+      case M.lookup sortName decls of
+        Nothing -> Left "poly pushout: missing source attrsort declaration"
+        Just decl -> Right decl
+    checkOne firstDecl sortName = do
+      decl <- lookupDecl sortName
+      if decl == firstDecl
+        then Right ()
+        else Left "poly pushout: incompatible merged attrsort signatures"
+
+ensureTypeClassCompat :: Doctrine -> M.Map TypeRef TypeRef -> Either Text ()
+ensureTypeClassCompat src reps =
+  mapM_ checkGroup (M.elems groups)
+  where
+    groups = M.fromListWith (<>) [ (rep, [srcRef]) | (srcRef, rep) <- M.toList reps ]
+    sigByRef = M.fromList (allTypes src)
+    checkGroup members =
+      case members of
+        [] -> Right ()
+        (firstRef:rest) -> do
+          firstSig <- lookupSig firstRef
+          mapM_ (checkOne firstSig) rest
+    lookupSig ref =
+      case M.lookup ref sigByRef of
+        Nothing -> Left "poly pushout: missing source type signature"
+        Just sig -> Right sig
+    checkOne firstSig ref = do
+      sig <- lookupSig ref
+      if sig == firstSig
+        then Right ()
+        else Left "poly pushout: incompatible merged type signatures"
+
+ensureGenClassCompat :: Doctrine -> M.Map (ModeName, GenName) (ModeName, GenName) -> Either Text ()
+ensureGenClassCompat src reps =
+  mapM_ checkGroup (M.elems groups)
+  where
+    groups = M.fromListWith (<>) [ (rep, [srcKey]) | (srcKey, rep) <- M.toList reps ]
+    genByKey = M.fromList [ ((mode, gdName genDecl), genDecl) | (mode, genDecl) <- allGens src ]
+    checkGroup members =
+      case members of
+        [] -> Right ()
+        (firstKey:rest) -> do
+          firstGen <- lookupGenDecl firstKey
+          mapM_ (checkOne firstGen) rest
+    lookupGenDecl key =
+      case M.lookup key genByKey of
+        Nothing -> Left "poly pushout: missing source generator declaration"
+        Just genDecl -> Right genDecl
+    checkOne firstGen key = do
+      genDecl <- lookupGenDecl key
+      if genDeclAlphaEqIgnoringName firstGen genDecl
+        then Right ()
+        else Left "poly pushout: incompatible merged generator signatures"
 
 disjointTypeRenames :: Text -> Doctrine -> TypeRenameMap -> Doctrine -> TypeRenameMap
 disjointTypeRenames prefix src interfaceRen tgt =
@@ -978,34 +1097,44 @@ mkInterfaceGenRenameMap leftMap rightMap =
 
 collisionTypeRenames :: M.Map ModeName ModeName -> Text -> TypeRenameMap -> Doctrine -> Doctrine -> TypeRenameMap
 collisionTypeRenames modeRen prefix interfaceRen target body =
-  foldl addByMode M.empty (M.toList (dTypes body))
+  fst (foldl step (M.empty, used0) bodyRefs)
   where
-    targetNames =
+    targetNamesByFinalMode =
       namesByMode
         [ (mode, name)
         | (mode, table) <- M.toList (dTypes target)
         , name <- M.keys table
         ]
-    interfaceTargets =
+    interfaceTargetsByFinalMode =
       namesByMode
         [ (trMode ref, trName ref)
         | ref <- M.elems interfaceRen
         ]
-    addByMode acc (mode, table) =
-      let mode' = renameModeName modeRen mode
-          used0 = S.union (M.findWithDefault S.empty mode' targetNames) (M.findWithDefault S.empty mode' interfaceTargets)
-          (renMode, _used) = foldl (step mode) (M.empty, used0) (M.keys table)
-      in M.union acc renMode
-    step mode (renAcc, used) name =
-      let key = TypeRef mode name
-      in if M.member key interfaceRen
-        then (renAcc, used)
-        else
-          if name `S.member` used
-            then
-              let (fresh, used') = freshTypeName prefix name used
-              in (M.insert key (TypeRef mode fresh) renAcc, used')
-            else (renAcc, S.insert name used)
+    used0 = M.unionWith S.union targetNamesByFinalMode interfaceTargetsByFinalMode
+    bodyRefs =
+      [ TypeRef mode name
+      | (mode, table) <- M.toList (dTypes body)
+      , name <- M.keys table
+      ]
+    step (renAcc, usedByFinalMode) srcRef =
+      let modeSrc = trMode srcRef
+          nameSrc = trName srcRef
+          modeFinal = renameModeName modeRen modeSrc
+          used = M.findWithDefault S.empty modeFinal usedByFinalMode
+      in case M.lookup srcRef interfaceRen of
+          Just tgtRef ->
+            let used' = M.insert modeFinal (S.insert (trName tgtRef) used) usedByFinalMode
+            in (renAcc, used')
+          Nothing ->
+            if nameSrc `S.member` used
+              then
+                let (fresh, used') = freshTypeName prefix nameSrc used
+                    renAcc' = M.insert srcRef (TypeRef modeSrc fresh) renAcc
+                    usedByFinalMode' = M.insert modeFinal used' usedByFinalMode
+                in (renAcc', usedByFinalMode')
+              else
+                let usedByFinalMode' = M.insert modeFinal (S.insert nameSrc used) usedByFinalMode
+                in (renAcc, usedByFinalMode')
 
 collisionAttrSortRenames :: Text -> AttrSortRenameMap -> Doctrine -> Doctrine -> AttrSortRenameMap
 collisionAttrSortRenames prefix interfaceRen target body =
@@ -1030,35 +1159,42 @@ collisionGenRenames
   -> Doctrine
   -> M.Map (ModeName, GenName) GenName
 collisionGenRenames modeRen prefix interfaceRen target body =
-  foldl addByMode M.empty (M.toList (dGens body))
+  fst (foldl step (M.empty, used0) bodyKeys)
   where
-    targetNames =
+    targetNamesByFinalMode =
       namesByMode
         [ (mode, gdName gen)
         | (mode, table) <- M.toList (dGens target)
         , gen <- M.elems table
         ]
-    interfaceTargets =
+    interfaceTargetsByFinalMode =
       namesByMode
-        [ (mode, name)
+        [ (renameModeName modeRen mode, name)
         | ((mode, _), name) <- M.toList interfaceRen
         ]
-    addByMode acc (mode, table) =
-      let mode' = renameModeName modeRen mode
-          used0 = S.union (M.findWithDefault S.empty mode' targetNames) (M.findWithDefault S.empty mode' interfaceTargets)
-          names = map gdName (M.elems table)
-          (renMode, _used) = foldl (step mode) (M.empty, used0) names
-      in M.union acc renMode
-    step mode (renAcc, used) name =
-      let key = (mode, name)
-      in if M.member key interfaceRen
-        then (renAcc, used)
-        else
-          if name `S.member` used
-            then
-              let (fresh, used') = freshGenName prefix name used
-              in (M.insert key fresh renAcc, used')
-            else (renAcc, S.insert name used)
+    used0 = M.unionWith S.union targetNamesByFinalMode interfaceTargetsByFinalMode
+    bodyKeys =
+      [ (mode, gdName gen)
+      | (mode, table) <- M.toList (dGens body)
+      , gen <- M.elems table
+      ]
+    step (renAcc, usedByFinalMode) srcKey@(modeSrc, nameSrc) =
+      let modeFinal = renameModeName modeRen modeSrc
+          used = M.findWithDefault S.empty modeFinal usedByFinalMode
+      in case M.lookup srcKey interfaceRen of
+          Just tgtName ->
+            let usedByFinalMode' = M.insert modeFinal (S.insert tgtName used) usedByFinalMode
+            in (renAcc, usedByFinalMode')
+          Nothing ->
+            if nameSrc `S.member` used
+              then
+                let (fresh, used') = freshGenName prefix nameSrc used
+                    renAcc' = M.insert srcKey fresh renAcc
+                    usedByFinalMode' = M.insert modeFinal used' usedByFinalMode
+                in (renAcc', usedByFinalMode')
+              else
+                let usedByFinalMode' = M.insert modeFinal (S.insert nameSrc used) usedByFinalMode
+                in (renAcc, usedByFinalMode')
 
 collisionCellRenames :: M.Map ModeName ModeName -> Text -> Doctrine -> Doctrine -> Doctrine -> M.Map (ModeName, Text) Text
 collisionCellRenames modeRen prefix src target body =
@@ -2001,6 +2137,11 @@ genDeclAlphaEq g1 g2 =
             && dom2 == gdDom g1
             && cod2 == gdCod g1
 
+genDeclAlphaEqIgnoringName :: GenDecl -> GenDecl -> Bool
+genDeclAlphaEqIgnoringName g1 g2 =
+  let shared = GenName "__cmp__"
+  in genDeclAlphaEq (g1 { gdName = shared }) (g2 { gdName = shared })
+
 alphaRenameCellTo :: [TyVar] -> [TyVar] -> [TmVar] -> [TmVar] -> Cell2 -> Either Text Cell2
 alphaRenameCellTo fromTy toTy fromTm toTm cell
   | length fromTy /= length toTy = Left "poly pushout: alpha rename type arity mismatch"
@@ -2276,6 +2417,141 @@ buildGenMap src tgt modeRen modRen attrRen tyRen permRen genRen =
           let edge' = edge { ePayload = PGen genName attrs bargs }
           in Right diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
         _ -> Left "poly pushout: generated image is not a single generator edge"
+
+composeMorphisms :: Text -> Morphism -> Morphism -> Either Text Morphism
+composeMorphisms name first second = do
+  if morTgt first /= morSrc second
+    then Left "poly pushout: morphism composition boundary mismatch"
+    else Right ()
+  modeMap <- composeModeMap
+  modMap <- composeModMap
+  attrMap <- composeAttrSortMap
+  typeMap <- composeTypeMap
+  genMap <- composeGenMap
+  pure
+    Morphism
+      { morName = name
+      , morSrc = morSrc first
+      , morTgt = morTgt second
+      , morIsCoercion = morIsCoercion first && morIsCoercion second
+      , morModeMap = modeMap
+      , morModMap = modMap
+      , morAttrSortMap = attrMap
+      , morTypeMap = typeMap
+      , morGenMap = genMap
+      , morCheck = morCheck first
+      , morPolicy = morPolicy first
+      }
+  where
+    composeModeMap =
+      fmap M.fromList $
+        mapM oneMode (M.keys (mtModes (dModes (morSrc first))))
+      where
+        oneMode modeSrc = do
+          modeMid <- applyMorphismMode first modeSrc
+          modeTgt <- applyMorphismMode second modeMid
+          Right (modeSrc, modeTgt)
+
+    composeModMap =
+      fmap M.fromList $
+        mapM oneMod (M.keys (mtDecls (dModes (morSrc first))))
+      where
+        oneMod modName = do
+          meMid <-
+            case M.lookup modName (morModMap first) of
+              Nothing -> Left "poly pushout: missing modality image during morphism composition"
+              Just me -> Right me
+          meTgt <- applyMorphismModExpr second meMid
+          Right (modName, meTgt)
+
+    composeAttrSortMap =
+      fmap M.fromList $
+        mapM oneAttrSort (M.keys (dAttrSorts (morSrc first)))
+      where
+        oneAttrSort srcSort = do
+          midSort <-
+            case M.lookup srcSort (morAttrSortMap first) of
+              Nothing -> Left "poly pushout: missing attrsort image during morphism composition"
+              Just out -> Right out
+          tgtSort <-
+            case M.lookup midSort (morAttrSortMap second) of
+              Nothing -> Left "poly pushout: missing composed attrsort image during morphism composition"
+              Just out -> Right out
+          Right (srcSort, tgtSort)
+
+    composeTypeMap = do
+      ttSrc <- doctrineTypeTheory (morSrc first)
+      fmap M.fromList (mapM (oneType ttSrc) (allTypes (morSrc first)))
+      where
+        oneType ttSrc (srcRef, sig) = do
+          paramsSrc <- mapM (mkSourceParam sig) (zip [0 :: Int ..] (tsParams sig))
+          argsSrc <- mapM (sourceParamArg ttSrc) paramsSrc
+          let tySrc = TCon srcRef argsSrc
+          tyMid <- applyMorphismTy first tySrc
+          tyTgt <- applyMorphismTy second tyMid
+          paramsTgt <- mapM mapComposedParam paramsSrc
+          Right (srcRef, TypeTemplate paramsTgt tyTgt)
+
+        mkSourceParam _sig (i, param) =
+          case param of
+            PS_Ty mode ->
+              Right (TPType TyVar { tvName = "a" <> T.pack (show i), tvMode = mode })
+            PS_Tm sortTy ->
+              let tmVar =
+                    TmVar
+                      { tmvName = "t" <> T.pack (show i)
+                      , tmvSort = sortTy
+                      , tmvScope = 0
+                      }
+              in Right (TPTm tmVar)
+
+        sourceParamArg ttSrc param =
+          case param of
+            TPType v -> Right (TAType (TVar v))
+            TPTm v -> do
+              tm <- termExprToDiagramChecked ttSrc [] (tmvSort v) (TMVar v)
+              Right (TATm tm)
+
+        mapComposedParam param =
+          case param of
+            TPType v -> do
+              modeMid <- applyMorphismMode first (tvMode v)
+              modeTgt <- applyMorphismMode second modeMid
+              Right (TPType v { tvMode = modeTgt })
+            TPTm v -> do
+              sortMid <- applyMorphismTy first (tmvSort v)
+              sortTgt <- applyMorphismTy second sortMid
+              Right (TPTm v { tmvSort = sortTgt })
+
+    composeGenMap =
+      fmap M.fromList (mapM oneGen (M.toList (morGenMap first)))
+      where
+        oneGen (key, imageMid) = do
+          let imageMidRenamed = renameGenImageOuterHoles imageMid
+          diagTgt <- applyMorphismDiagram second (giDiagram imageMidRenamed)
+          binderSigsTgt <- mapM (applyMorphismBinderSig second) (giBinderSigs imageMidRenamed)
+          Right (key, GenImage diagTgt binderSigsTgt)
+
+    renameGenImageOuterHoles image =
+      let renHole (BinderMetaVar h) = BinderMetaVar ("compose_" <> h)
+          renBinderArg barg =
+            case barg of
+              BAConcrete inner -> BAConcrete (renDiagram inner)
+              BAMeta hole -> BAMeta (renHole hole)
+          renPayload payload =
+            case payload of
+              PGen g attrs bargs -> PGen g attrs (map renBinderArg bargs)
+              PBox nm inner -> PBox nm (renDiagram inner)
+              PFeedback inner -> PFeedback (renDiagram inner)
+              _ -> payload
+          renDiagram =
+            runIdentity . traverseDiagram pure (pure . renPayload) pure
+          holeSigs' =
+            M.fromList
+              [ (renHole hole, sig)
+              | (hole, sig) <- M.toList (giBinderSigs image)
+              ]
+      in image { giDiagram = renDiagram (giDiagram image), giBinderSigs = holeSigs' }
 
 checkGenerated :: Text -> Morphism -> Either Text ()
 checkGenerated label mor =

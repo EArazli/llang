@@ -1,4 +1,5 @@
 import "../../../stdlib/struct.cartesian.llang";
+import "./struct_caps.llang";
 
 doctrine QuadDiscipline where {
   mode Lin;
@@ -51,6 +52,22 @@ morphism cartInst : StructCartesian -> QuadDiscipline where {
 }
 
 implements StructCartesian for QuadDiscipline using cartInst;
+
+morphism relDupInst : HasDup -> QuadDiscipline where {
+  mode M -> Rel;
+  gen dup @M -> dup
+  check none;
+}
+
+implements HasDup for QuadDiscipline using relDupInst;
+
+morphism affDropInst : HasDrop -> QuadDiscipline where {
+  mode M -> Aff;
+  gen drop @M -> drop
+  check none;
+}
+
+implements HasDrop for QuadDiscipline using affDropInst;
 
 surface QuadLin where {
   doctrine QuadDiscipline;
