@@ -37,6 +37,7 @@ import Strat.Poly.Doctrine
   , InputShape(..)
   , ParamSig(..)
   , TypeSig(..)
+  , doctrineTypeTheory
   , gdPlainDom
   , validateDoctrine
   )
@@ -66,6 +67,8 @@ import Strat.Poly.Pushout
 import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 import Strat.Poly.Proof (SearchBudget, defaultSearchBudget, renderSearchLimit)
+import Strat.Poly.TermExpr (TermExpr(..))
+import Strat.Poly.TypeNormalize (termExprToDiagramChecked)
 
 
 elabRawFile :: RawFile -> Either Text ModuleEnv
@@ -382,8 +385,10 @@ buildIfaceImplMorphism
 buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
   modeMap <- mergeDisjoint "mode" [liftModeMap p (PolyMorph.morModeMap mor) | (p, mor) <- implMorphs]
   modMap <- mergeDisjoint "modality" [liftModMap p (PolyMorph.morModMap mor) | (p, mor) <- implMorphs]
-  attrMap <- mergeDisjoint "attrsort" [liftAttrMap p (PolyMorph.morAttrSortMap mor) | (p, mor) <- implMorphs]
-  typeMap <- mergeDisjoint "type" [liftTypeMap p (PolyMorph.morTypeMap mor) | (p, mor) <- implMorphs]
+  attrMaps <- mapM (uncurry liftCompletedAttrMap) implMorphs
+  attrMap <- mergeDisjoint "attrsort" attrMaps
+  typeMaps <- mapM (uncurry liftCompletedTypeMap) implMorphs
+  typeMap <- mergeDisjoint "type" typeMaps
   genMap <- mergeDisjoint "generator" [liftGenMap p (PolyMorph.morGenMap mor) | (p, mor) <- implMorphs]
   pure
     PolyMorph.Morphism
@@ -428,16 +433,76 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
         [ (prefixAttr p srcSort, tgtSort)
         | (srcSort, tgtSort) <- M.toList mp
         ]
+    liftCompletedAttrMap p mor = do
+      completed <- completeAttrMap mor
+      pure (liftAttrMap p completed)
     liftTypeMap p mp =
       M.fromList
         [ (prefixTypeRef p srcRef, tmpl)
         | (srcRef, tmpl) <- M.toList mp
         ]
+    liftCompletedTypeMap p mor = do
+      completed <- completeTypeMap mor
+      pure (liftTypeMap p completed)
     liftGenMap p mp =
       M.fromList
         [ (prefixGen p srcKey, img)
         | (srcKey, img) <- M.toList mp
         ]
+
+    completeAttrMap mor =
+      foldM add M.empty (M.keys (dAttrSorts (PolyMorph.morSrc mor)))
+      where
+        explicit = PolyMorph.morAttrSortMap mor
+        tgtSorts = dAttrSorts (PolyMorph.morTgt mor)
+        add mp srcSort =
+          case M.lookup srcSort explicit of
+            Just tgtSort -> Right (M.insert srcSort tgtSort mp)
+            Nothing ->
+              if M.member srcSort tgtSorts
+                then Right (M.insert srcSort srcSort mp)
+                else Left ("apply: morphism " <> PolyMorph.morName mor <> " missing attrsort mapping")
+
+    completeTypeMap mor = do
+      tt <- doctrineTypeTheory (PolyMorph.morTgt mor)
+      foldM (addType tt) M.empty (allTypeDecls (PolyMorph.morSrc mor))
+      where
+        explicit = PolyMorph.morTypeMap mor
+        addType tt mp (srcRef, sig) =
+          case M.lookup srcRef explicit of
+            Just tmpl -> Right (M.insert srcRef tmpl mp)
+            Nothing -> do
+              tmpl <- identityTemplate tt mor srcRef sig
+              Right (M.insert srcRef tmpl mp)
+
+    identityTemplate tt mor srcRef sig = do
+      tgtMode <- PolyMorph.applyMorphismMode mor (trMode srcRef)
+      let tgtRef = srcRef { trMode = tgtMode }
+      params <- mapM (mkParam mor) (zip [0 :: Int ..] (tsParams sig))
+      args <- mapM (paramArg tt) params
+      pure (PolyMorph.TypeTemplate params (TCon tgtRef args))
+
+    mkParam mor (i, param) =
+      case param of
+        PS_Ty srcMode -> do
+          tgtMode <- PolyMorph.applyMorphismMode mor srcMode
+          Right (PolyMorph.TPType TyVar { tvName = "a" <> T.pack (show i), tvMode = tgtMode })
+        PS_Tm srcSort -> do
+          tgtSort <- PolyMorph.applyMorphismTy mor srcSort
+          Right (PolyMorph.TPTm TmVar { tmvName = "t" <> T.pack (show i), tmvSort = tgtSort, tmvScope = 0 })
+
+    paramArg tt param =
+      case param of
+        PolyMorph.TPType v -> Right (TAType (TVar v))
+        PolyMorph.TPTm v -> do
+          tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMVar v)
+          Right (TATm tm)
+
+    allTypeDecls doc =
+      [ (TypeRef mode typeName, sig)
+      | (mode, table) <- M.toList (dTypes doc)
+      , (typeName, sig) <- M.toList table
+      ]
 
 toGlueMorph :: Text -> Text -> Doctrine -> PolyMorph.Morphism -> PolyMorph.Morphism
 toGlueMorph resultName paramName pres mor =
@@ -489,7 +554,7 @@ namespaceDoctrineWithParam :: Text -> Doctrine -> Either Text Doctrine
 namespaceDoctrineWithParam param doc = do
   modeTheory' <- renameModeTheory modeRenMap modRenMap (dModes doc)
   types' <- renameTypeTables (dTypes doc)
-  gens' <- traverse (traverse (renameGenDecl modeRenMap modRenMap typeRenMap sortRenMap genRenMap)) (dGens doc)
+  gens' <- renameGenTables (dGens doc)
   let attrSorts' =
         M.fromList
           [ (renameSort (asName decl), decl { asName = renameSort (asName decl) })
@@ -507,7 +572,7 @@ namespaceDoctrineWithParam param doc = do
       , dAcyclicModes = acyclic'
       , dAttrSorts = attrSorts'
       , dTypes = renameOuterModeMap modeRenMap types'
-      , dGens = renameOuterModeMap modeRenMap gens'
+      , dGens = gens'
       }
   where
     prefix t = param <> "::" <> t
@@ -553,6 +618,26 @@ namespaceDoctrineWithParam param doc = do
           let table0 = M.findWithDefault M.empty mode' acc
           let table' = M.insert tname' sig' table0
           Right (M.insert mode' table' acc)
+
+    renameGenTables tables =
+      foldM addGen M.empty
+        [ (mode, gen)
+        | (mode, table) <- M.toList tables
+        , gen <- M.elems table
+        ]
+      where
+        addGen acc (mode, gen) = do
+          gen' <- renameGenDecl modeRenMap modRenMap typeRenMap sortRenMap genRenMap gen
+          let mode' = M.findWithDefault mode mode modeRenMap
+          let key' = gdName gen'
+          let table0 = M.findWithDefault M.empty mode' acc
+          case M.lookup key' table0 of
+            Nothing ->
+              let table' = M.insert key' gen' table0
+              in Right (M.insert mode' table' acc)
+            Just existing
+              | existing == gen' -> Right acc
+              | otherwise -> Left "doctrine_functor: namespaced generator collision"
 
 mergeIfaceDoctrines :: Text -> [(FunctorParamDef, Doctrine)] -> Either Text Doctrine
 mergeIfaceDoctrines name params =

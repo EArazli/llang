@@ -48,6 +48,8 @@ tests =
     , testCase "pushout merges cell classes" testPushoutMergeClass
     , testCase "pushout rejects name conflict with different bodies" testPushoutNameConflict
     , testCase "pushout accepts non-identity mode maps" testPushoutAcceptsModeMap
+    , testCase "pushout generator injectivity is mode-aware" testPushoutGenInjectiveByMode
+    , testCase "pushout default type rename follows mode map" testPushoutTypeRenameDefaultUsesModeMap
     , testCase "pushout handles alpha-renaming with mode equations" testPushoutAlphaRenameWithModeEq
     , testCase "pushout supports term-parameterized type maps" testPushoutTermTypeMaps
     , testCase "pushout permutes mixed type/term parameters and renames term sorts" testPushoutTypePermutationSortRename
@@ -58,6 +60,7 @@ tests =
     , testCase "coproduct keeps obligations elaboratable after disjoint type renaming" testCoproductObligationRenameElaborates
     , testCase "coproduct renames colliding modality transforms" testCoproductTransformCollisionRenames
     , testCase "apply pushout accepts implementation morphisms with non-CheckAll checks" testApplyPushoutAcceptsNonCheckAllGlue
+    , testCase "apply pushout renames colliding cells after mode renaming" testApplyPushoutCellCollisionAfterModeRename
     ]
 
 require :: Either Text a -> IO a
@@ -467,6 +470,140 @@ testPushoutAcceptsModeMap = do
   case validateDoctrine (poDoctrine res) of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
+
+testPushoutGenInjectiveByMode :: Assertion
+testPushoutGenInjectiveByMode = do
+  let modeL = ModeName "L"
+  let modeR = ModeName "R"
+  let modes = mkModes (S.fromList [modeL, modeR])
+  let mkNullaryGen mode name =
+        GenDecl
+          { gdName = GenName name
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdDom = []
+          , gdCod = []
+          , gdAttrs = []
+          }
+  let mkDoc name genName =
+        Doctrine
+          { dName = name
+          , dModes = modes
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens =
+              M.fromList
+                [ (modeL, M.singleton (GenName genName) (mkNullaryGen modeL genName))
+                , (modeR, M.singleton (GenName genName) (mkNullaryGen modeR genName))
+                ]
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let src = mkDoc "SrcByMode" "g"
+  let left = mkDoc "LeftByMode" "h"
+  let right = mkDoc "RightByMode" "k"
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
+  imgHL <- require (genD modeL [] [] (GenName "h"))
+  imgHR <- require (genD modeR [] [] (GenName "h"))
+  imgKL <- require (genD modeL [] [] (GenName "k"))
+  imgKR <- require (genD modeR [] [] (GenName "k"))
+  let morF =
+        Morphism
+          { morName = "fByMode"
+          , morSrc = src
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap =
+              M.fromList
+                [ ((modeL, GenName "g"), plainImage imgHL)
+                , ((modeR, GenName "g"), plainImage imgHR)
+                ]
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let morG =
+        Morphism
+          { morName = "gByMode"
+          , morSrc = src
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap =
+              M.fromList
+                [ ((modeL, GenName "g"), plainImage imgKL)
+                , ((modeR, GenName "g"), plainImage imgKR)
+                ]
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  case computePolyPushout "PGenByMode" morF morG of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()
+
+testPushoutTypeRenameDefaultUsesModeMap :: Assertion
+testPushoutTypeRenameDefaultUsesModeMap = do
+  let modeM = ModeName "M"
+  let modeN = ModeName "N"
+  let mkDoc name modeForType =
+        Doctrine
+          { dName = name
+          , dModes = mkModes (S.singleton modeForType)
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton modeForType (M.singleton (TypeName "X") (TypeSig []))
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let src = mkDoc "SrcTypeRename" modeM
+  let body = mkDoc "BodyTypeRename" modeN
+  let target = mkDoc "TargetTypeRename" modeN
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, body, target]
+  let modeMap = M.singleton modeM modeN
+  let incl =
+        Morphism
+          { morName = "inclTypeRename"
+          , morSrc = src
+          , morTgt = body
+          , morIsCoercion = False
+          , morModeMap = modeMap
+          , morModMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let impl =
+        Morphism
+          { morName = "implTypeRename"
+          , morSrc = src
+          , morTgt = target
+          , morIsCoercion = False
+          , morModeMap = modeMap
+          , morModMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  res <- case computePolyPushoutPreferRight "PTypeRenameDefault" "TypeRename" incl impl of
+    Left err -> assertFailure (T.unpack err) >> error "unreachable"
+    Right out -> pure out
+  let typesAtN = M.findWithDefault M.empty modeN (dTypes (poDoctrine res))
+  assertBool "expected type X at mapped target mode N" (M.member (TypeName "X") typesAtN)
 
 testPushoutAlphaRenameWithModeEq :: Assertion
 testPushoutAlphaRenameWithModeEq = do
@@ -963,6 +1100,124 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
     Left err -> assertFailure (T.unpack err)
     Right out -> pure out
   morCheck (poGlue res) @?= CheckStructural
+
+testApplyPushoutCellCollisionAfterModeRename :: Assertion
+testApplyPushoutCellCollisionAfterModeRename = do
+  let modeI = ModeName "I"
+  let modeL = ModeName "L"
+  let modeM = ModeName "M"
+  let tyL = tcon modeL "A" []
+  let tyM = tcon modeM "A" []
+  let src =
+        Doctrine
+          { dName = "IfaceModeRename"
+          , dModes = mkModes (S.singleton modeI)
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  bodyF <- require (genD modeL [tyL] [tyL] (GenName "f"))
+  bodyG <- require (genD modeL [tyL] [tyL] (GenName "g"))
+  let bodyCell =
+        Cell2
+          { c2Name = "eq"
+          , c2Class = Computational
+          , c2Orient = LR
+          , c2TyVars = []
+          , c2TmVars = []
+          , c2LHS = bodyF
+          , c2RHS = bodyG
+          }
+  let body =
+        Doctrine
+          { dName = "BodyModeRename"
+          , dModes = mkModes (S.singleton modeL)
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton modeL (M.singleton (TypeName "A") (TypeSig []))
+          , dGens =
+              M.singleton
+                modeL
+                ( M.fromList
+                    [ (GenName "f", GenDecl (GenName "f") modeL [] [] [InPort tyL] [tyL] [])
+                    , (GenName "g", GenDecl (GenName "g") modeL [] [] [InPort tyL] [tyL] [])
+                    ]
+                )
+          , dCells2 = [bodyCell]
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  targetF <- require (genD modeM [tyM] [tyM] (GenName "f"))
+  targetG <- require (genD modeM [tyM] [tyM] (GenName "g"))
+  let targetCell =
+        Cell2
+          { c2Name = "eq"
+          , c2Class = Computational
+          , c2Orient = LR
+          , c2TyVars = []
+          , c2TmVars = []
+          , c2LHS = targetG
+          , c2RHS = targetF
+          }
+  let target =
+        Doctrine
+          { dName = "TargetModeRename"
+          , dModes = mkModes (S.singleton modeM)
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton modeM (M.singleton (TypeName "A") (TypeSig []))
+          , dGens =
+              M.singleton
+                modeM
+                ( M.fromList
+                    [ (GenName "f", GenDecl (GenName "f") modeM [] [] [InPort tyM] [tyM] [])
+                    , (GenName "g", GenDecl (GenName "g") modeM [] [] [InPort tyM] [tyM] [])
+                    ]
+                )
+          , dCells2 = [targetCell]
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, body, target]
+  let incl =
+        Morphism
+          { morName = "inclModeRename"
+          , morSrc = src
+          , morTgt = body
+          , morIsCoercion = False
+          , morModeMap = M.singleton modeI modeL
+          , morModMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let impl =
+        Morphism
+          { morName = "implModeRename"
+          , morSrc = src
+          , morTgt = target
+          , morIsCoercion = False
+          , morModeMap = M.singleton modeI modeM
+          , morModMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  res <- case computePolyPushoutPreferRight "PApplyModeCell" "FunctorF" incl impl of
+    Left err -> assertFailure (T.unpack err) >> error "unreachable"
+    Right out -> pure out
+  let names = map c2Name (dCells2 (poDoctrine res))
+  assertBool "expected target cell name eq to stay" ("eq" `elem` names)
+  let renamed = [ name | name <- names, "FunctorF_eq" `T.isPrefixOf` name ]
+  assertBool "expected body cell to be renamed after mode collapse" (not (null renamed))
 
 testPushoutCellTmAlphaEq :: Assertion
 testPushoutCellTmAlphaEq = do

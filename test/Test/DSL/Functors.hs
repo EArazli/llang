@@ -24,6 +24,8 @@ tests =
     [ testCase "apply preserves target names and maps body references via impl" testApplyPreservesTargetNames
     , testCase "apply collision renaming keeps target name and prefixes body collision" testApplyCollisionRename
     , testCase "multi-parameter apply requires exact mapping keys" testApplyMappingCoverage
+    , testCase "apply fills implicit identity type maps from implementation morphisms" testApplyImplicitIdentityTypeMap
+    , testCase "apply checks generator targets after mode mapping" testApplyGeneratorModeMapping
     , testCase "zero-parameter functors are rejected" testZeroParameterFunctorRejected
     , testCase "functor body requires parameter namespaces" testNamespaceEnforcement
     , testCase "functor body may extend mode theory" testModeTheoryExtensionAllowed
@@ -136,6 +138,69 @@ testApplyMappingCoverage = do
           ]
   errExtra <- expectElabFailure srcExtra
   assertBool "expected extra key C" ("extra: C" `T.isInfixOf` errExtra)
+
+testApplyImplicitIdentityTypeMap :: Assertion
+testApplyImplicitIdentityTypeMap = do
+  let src =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M;"
+          , "  type X @M;"
+          , "}"
+          , "doctrine T where {"
+          , "  mode M;"
+          , "  type X @M;"
+          , "}"
+          , "morphism impl : S -> T where {"
+          , "  mode M -> M;"
+          , "}"
+          , "doctrine_functor F(A : S) where {"
+          , "  gen keep : [A::M.A::X] -> [A::M.A::X] @A::M;"
+          , "}"
+          , "doctrine App = apply F to T using { A = impl; };"
+          ]
+  env <- expectElab src
+  doc <- expectDoctrine env "App"
+  let mode = ModeName "M"
+  let ty = TCon (TypeRef mode (TypeName "X")) []
+  gens <- case M.lookup mode (dGens doc) of
+    Nothing -> assertFailure "expected mode M generator table"
+    Just table -> pure table
+  keepGen <- case M.lookup (GenName "keep") gens of
+    Nothing -> assertFailure "expected keep generator"
+    Just g -> pure g
+  gdPlainDom keepGen @?= [ty]
+  gdCod keepGen @?= [ty]
+
+testApplyGeneratorModeMapping :: Assertion
+testApplyGeneratorModeMapping = do
+  let src =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M;"
+          , "  type X @M;"
+          , "  gen f : [M.X] -> [M.X] @M;"
+          , "}"
+          , "doctrine T where {"
+          , "  mode M;"
+          , "  type X @M;"
+          , "  gen f : [M.X] -> [M.X] @M;"
+          , "}"
+          , "morphism impl : S -> T where {"
+          , "  mode M -> M;"
+          , "  gen f @M -> f"
+          , "}"
+          , "doctrine_functor F(A : S) where {"
+          , "}"
+          , "doctrine App = apply F to T using { A = impl; };"
+          ]
+  env <- expectElab src
+  doc <- expectDoctrine env "App"
+  let mode = ModeName "M"
+  gens <- case M.lookup mode (dGens doc) of
+    Nothing -> assertFailure "expected mode M generator table"
+    Just table -> pure table
+  assertBool "expected target generator f to be preserved" (M.member (GenName "f") gens)
 
 testZeroParameterFunctorRejected :: Assertion
 testZeroParameterFunctorRejected = do

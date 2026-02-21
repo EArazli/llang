@@ -82,8 +82,8 @@ computePolyPushout name f g = do
   ensureInjective "attrsort" (M.elems attrSortMapG)
   ensureInjective "type" (M.elems typeMapF)
   ensureInjective "type" (M.elems typeMapG)
-  ensureInjective "gen" (M.elems genMapF)
-  ensureInjective "gen" (M.elems genMapG)
+  ensureGenInjective f genMapF
+  ensureGenInjective g genMapG
   let renameAttrSortsB0 = M.fromList [ (img, src) | (src, img) <- M.toList attrSortMapF ]
   let renameAttrSortsC0 = M.fromList [ (img, src) | (src, img) <- M.toList attrSortMapG ]
   let renameTypesB0 = M.fromList [ (img, src) | (src, img) <- M.toList typeMapF ]
@@ -194,8 +194,8 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
   ensureInjective "attrsort" (M.elems attrMapImpl)
   ensureInjective "type" (M.elems typeMapIncl)
   ensureInjective "type" (M.elems typeMapImpl)
-  ensureInjective "gen" (M.elems genMapIncl)
-  ensureInjective "gen" (M.elems genMapImpl)
+  ensureGenInjective incl genMapIncl
+  ensureGenInjective impl genMapImpl
   interfaceAttrRen <- mkInterfaceAttrSortRenameMap attrMapIncl attrMapImpl
   (interfaceTypeRen, interfacePermRen) <- mkInterfaceTypeRenameMap src typeMapIncl permMapIncl typeMapImpl permMapImpl
   interfaceGenRen <- mkInterfaceGenRenameMap genMapIncl genMapImpl
@@ -209,7 +209,7 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
   let renameGens =
         M.union interfaceGenRen
           (collisionGenRenames (mpoInlModeRen modePushout) prefix interfaceGenRen target body)
-  let renameCells = collisionCellRenames prefix src target body
+  let renameCells = collisionCellRenames (mpoInlModeRen modePushout) prefix src target body
   let renameObls = collisionObligationRenames prefix src target body
   let renameTransforms = collisionTransformRenames prefix src target body
   body' <-
@@ -605,7 +605,9 @@ requireTypeRenameMap mor = do
   where
     typeImage m (srcRef, sig) = do
       (tgtRef, mPerm) <- case M.lookup srcRef (morTypeMap m) of
-        Nothing -> Right (srcRef, Nothing)
+        Nothing -> do
+          tgtMode <- applyMorphismMode m (trMode srcRef)
+          Right (srcRef { trMode = tgtMode }, Nothing)
         Just tmpl -> templateTarget tmpl (tsParams sig)
       ensureTypeExists (morTgt m) tgtRef (length (tsParams sig))
       pure (srcRef, tgtRef, mPerm)
@@ -715,7 +717,8 @@ requireGenRenameMap mor = do
         Nothing -> Left "poly pushout requires explicit generator mappings"
         Just d -> do
           imgName <- singleGenName m gen d
-          ensureGenExists (morTgt m) mode imgName
+          tgtMode <- applyMorphismMode m mode
+          ensureGenExists (morTgt m) tgtMode imgName
           Right imgName
       pure ((mode, gdName gen), img)
 
@@ -764,7 +767,16 @@ ensureTypeExists doc ref arity =
 ensureGenExists :: Doctrine -> ModeName -> GenName -> Either Text ()
 ensureGenExists doc mode name =
   case M.lookup mode (dGens doc) >>= M.lookup name of
-    Nothing -> Left "poly pushout: target generator missing"
+    Nothing ->
+      let GenName g = name
+      in Left
+          ( "poly pushout: target generator missing: "
+              <> renderModeName mode
+              <> "."
+              <> g
+              <> " in "
+              <> dName doc
+          )
     Just _ -> Right ()
 
 ensureInjective :: Ord a => Text -> [a] -> Either Text ()
@@ -778,6 +790,15 @@ ensureInjective label images =
     go seen (x:rest)
       | x `S.member` seen = Just x
       | otherwise = go (S.insert x seen) rest
+
+ensureGenInjective :: Morphism -> GenRenameMap -> Either Text ()
+ensureGenInjective mor genMap = do
+  images <- mapM mapped (M.toList genMap)
+  ensureInjective "gen" images
+  where
+    mapped ((srcMode, _srcName), imgName) = do
+      tgtMode <- applyMorphismMode mor srcMode
+      Right (tgtMode, imgName)
 
 disjointTypeRenames :: Text -> Doctrine -> TypeRenameMap -> Doctrine -> TypeRenameMap
 disjointTypeRenames prefix src interfaceRen tgt =
@@ -1039,13 +1060,13 @@ collisionGenRenames modeRen prefix interfaceRen target body =
               in (M.insert key fresh renAcc, used')
             else (renAcc, S.insert name used)
 
-collisionCellRenames :: Text -> Doctrine -> Doctrine -> Doctrine -> M.Map (ModeName, Text) Text
-collisionCellRenames prefix src target body =
+collisionCellRenames :: M.Map ModeName ModeName -> Text -> Doctrine -> Doctrine -> Doctrine -> M.Map (ModeName, Text) Text
+collisionCellRenames modeRen prefix src target body =
   fst (foldl step (M.empty, used0) (dCells2 body))
   where
     srcNames =
       namesByMode
-        [ (dMode (c2LHS cell), c2Name cell)
+        [ (renameModeName modeRen (dMode (c2LHS cell)), c2Name cell)
         | cell <- dCells2 src
         ]
     used0 =
@@ -1054,7 +1075,7 @@ collisionCellRenames prefix src target body =
         | cell <- dCells2 target
         ]
     step (renAcc, usedByMode) cell =
-      let mode = dMode (c2LHS cell)
+      let mode = renameModeName modeRen (dMode (c2LHS cell))
           name = c2Name cell
           used = M.findWithDefault S.empty mode usedByMode
           isInterface = name `S.member` M.findWithDefault S.empty mode srcNames
