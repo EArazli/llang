@@ -18,14 +18,14 @@ import Strat.Poly.Graph
   , PortId
   , EdgeId
   , BinderArg(..)
-  , diagramPortType
+  , diagramPortObj
   , unPortId
   , unEdgeId
   , canonDiagram
   )
-import Strat.Poly.TypeExpr (TypeExpr, TyVar, TmVar(..))
+import Strat.Poly.Obj (Obj, ObjVar, TmVar(..))
 import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.UnifyTy (Subst, emptySubst, unifyTyFlex, applySubstCtx)
+import Strat.Poly.UnifyObj (Subst, emptySubst, unifyObjFlex, applySubstCtx)
 
 
 data IsoState extra = IsoState
@@ -47,8 +47,8 @@ data IsoAlgo extra = IsoAlgo
       :: Diagram
       -> Diagram
       -> extra
-      -> TypeExpr
-      -> TypeExpr
+      -> Obj
+      -> Obj
       -> Either Text [extra]
   , iaComparePayload
       :: (extra -> Diagram -> Diagram -> Either Text [extra])
@@ -72,7 +72,7 @@ diagramIsoEqSlow left right =
 
 diagramIsoMatchWithVars
   :: TypeTheory
-  -> S.Set TyVar
+  -> S.Set ObjVar
   -> S.Set TmVar
   -> S.Set AttrVar
   -> Diagram
@@ -83,7 +83,7 @@ diagramIsoMatchWithVars tt tyFlex tmFlex attrFlex =
 
 diagramIsoMatchWithVarsFrom
   :: TypeTheory
-  -> S.Set TyVar
+  -> S.Set ObjVar
   -> S.Set TmVar
   -> S.Set AttrVar
   -> Subst
@@ -107,7 +107,7 @@ diagramIsoWith algo extra0 left right
   | not (iaTmCtxOk algo left right extra0) = Right []
   | length (dIn left) /= length (dIn right) = Right []
   | length (dOut left) /= length (dOut right) = Right []
-  | IM.size (dPortTy left) /= IM.size (dPortTy right) = Right []
+  | IM.size (dPortObj left) /= IM.size (dPortObj right) = Right []
   | IM.size (dEdges left) /= IM.size (dEdges right) = Right []
   | otherwise =
       case foldl addInit (Just emptyState) initPairs of
@@ -143,7 +143,7 @@ diagramIsoWith algo extra0 left right
 
     done st =
       M.size (isoEdgeMap st) == IM.size (dEdges left)
-        && M.size (isoPortMap st) == IM.size (dPortTy left)
+        && M.size (isoPortMap st) == IM.size (dPortObj left)
 
     propagateQueue st0 =
       case isoQueue st0 of
@@ -252,7 +252,7 @@ diagramIsoWith algo extra0 left right
         && iaPayloadShapeOk algo (ePayload e1) (ePayload e2)
 
     requirePortType msg diag pid =
-      case diagramPortType diag pid of
+      case diagramPortObj diag pid of
         Nothing -> Left msg
         Just ty -> Right ty
 
@@ -329,7 +329,7 @@ algoEq =
 
 algoMatch
   :: TypeTheory
-  -> S.Set TyVar
+  -> S.Set ObjVar
   -> S.Set TmVar
   -> S.Set AttrVar
   -> IsoAlgo IsoExtra
@@ -354,7 +354,7 @@ algoMatch tt tyFlex tmFlex attrFlex =
       case applySubstCtx tt (ieTySubst extra) (dTmCtx left) of
         Left _ -> Right []
         Right tmCtx' ->
-          case unifyTyFlex tt tmCtx' tyFlex tmFlex (ieTySubst extra) ty1 ty2 of
+          case unifyObjFlex tt tmCtx' tyFlex tmFlex (ieTySubst extra) ty1 ty2 of
             Left _ -> Right []
             Right tySubst' ->
               Right [extra { ieTySubst = tySubst' }]

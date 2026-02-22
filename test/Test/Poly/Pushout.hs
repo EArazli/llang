@@ -24,7 +24,7 @@ import Strat.Poly.ModeTheory
   , mtModes
   , mtDecls
   )
-import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), TypeArg(..), TmVar(..), TermDiagram(..), typeMode)
+import Strat.Poly.Obj (ObjVar(..), ObjName(..), ObjRef(..), Obj(..), ObjArg(..), TmVar(..), TermDiagram(..), objMode)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrSort(..), AttrSortDecl(..), AttrLitKind(..))
 import Strat.Poly.Diagram (genD, idD)
@@ -89,15 +89,15 @@ setSingleEdgeBargs diag bargs =
       in pure diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
     _ -> Left "expected a single generator edge"
 
-tvar :: ModeName -> Text -> TyVar
-tvar mode name = TyVar { tvName = name, tvMode = mode }
+tvar :: ModeName -> Text -> ObjVar
+tvar mode name = ObjVar { ovName = name, ovMode = mode }
 
-tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
-tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
+tcon :: ModeName -> Text -> [Obj] -> Obj
+tcon mode name args = OCon (ObjRef mode (ObjName name)) (map OAObj args)
 
 tmMeta :: TmVar -> TermDiagram
 tmMeta v =
-  let mode = typeMode (tmvSort v)
+  let mode = objMode (tmvSort v)
       (outPid, d0) = freshPort (tmvSort v) (emptyDiagram mode [])
       d1 =
         case addEdgePayload (PTmMeta v) [] [outPid] d0 of
@@ -146,21 +146,21 @@ testPushoutDedupByBody = do
   length (dCells2 (poDoctrine res)) @?= 1
 
 
-mkDoctrine :: ModeName -> Text -> TyVar -> Text -> Either String Doctrine
+mkDoctrine :: ModeName -> Text -> ObjVar -> Text -> Either String Doctrine
 mkDoctrine mode name tyVar cellName = do
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = [tyVar]
         , gdTmVars = []
-    , gdDom = map InPort [TVar tyVar]
-        , gdCod = [TVar tyVar]
+    , gdDom = map InPort [OVar tyVar]
+        , gdCod = [OVar tyVar]
         , gdAttrs = []
         }
-  lhs <- case genD mode [TVar tyVar] [TVar tyVar] (gdName gen) of
+  lhs <- case genD mode [OVar tyVar] [OVar tyVar] (gdName gen) of
     Left err -> Left (show err)
     Right d -> Right d
-  let rhs = idD mode [TVar tyVar]
+  let rhs = idD mode [OVar tyVar]
   let cell = Cell2
         { c2Name = cellName
         , c2Class = Computational
@@ -185,10 +185,10 @@ mkDoctrine mode name tyVar cellName = do
     Left err -> Left (show err)
     Right () -> Right doc
 
-mkInclusionMorph :: Text -> Doctrine -> Doctrine -> TyVar -> Morphism
+mkInclusionMorph :: Text -> Doctrine -> Doctrine -> ObjVar -> Morphism
 mkInclusionMorph name src tgt tyVar =
   let mode = ModeName "M"
-      diag = case genD mode [TVar tyVar] [TVar tyVar] (GenName "f") of
+      diag = case genD mode [OVar tyVar] [OVar tyVar] (GenName "f") of
         Left _ -> error "mkInclusionMorph: genD failed"
         Right d -> d
       genMap = M.fromList [((mode, GenName "f"), plainImage diag)]
@@ -252,7 +252,7 @@ testPushoutNameConflict = do
 
 mkCellDoctrine :: ModeName -> Text -> RuleClass -> Orientation -> Either Text Doctrine
 mkCellDoctrine mode name cls orient = do
-  let aName = TypeName "A"
+  let aName = ObjName "A"
   let genF = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
@@ -299,7 +299,7 @@ mkCellDoctrine mode name cls orient = do
 
 mkCellDoctrineWithAlt :: ModeName -> Text -> RuleClass -> Orientation -> Either Text Doctrine
 mkCellDoctrineWithAlt mode name cls orient = do
-  let aName = TypeName "A"
+  let aName = ObjName "A"
   let genF = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
@@ -373,8 +373,8 @@ mkIdMorph name src tgt =
 testPushoutTypePermutationCommutes :: Assertion
 testPushoutTypePermutationCommutes = do
   let mode = ModeName "M"
-  let prod = TypeName "Prod"
-  let pair = TypeName "Pair"
+  let prod = ObjName "Prod"
+  let pair = ObjName "Pair"
   let aVar = tvar mode "a"
   let bVar = tvar mode "b"
   base <- case mkTypeDoctrine mode "A" [(prod, 2)] of
@@ -386,7 +386,7 @@ testPushoutTypePermutationCommutes = do
   right <- case mkTypeDoctrine mode "C" [(prod, 2)] of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
-  let tmplF = TypeTemplate [TPType aVar, TPType bVar] (TCon (TypeRef mode pair) [TAType (TVar bVar), TAType (TVar aVar)])
+  let tmplF = TypeTemplate [TPType aVar, TPType bVar] (OCon (ObjRef mode pair) [OAObj (OVar bVar), OAObj (OVar aVar)])
   let morF = Morphism
         { morName = "f"
         , morSrc = base
@@ -394,7 +394,7 @@ testPushoutTypePermutationCommutes = do
         , morIsCoercion = False
         , morModeMap = identityModeMap base
         , morModMap = identityModMap base
-        , morTypeMap = M.fromList [(TypeRef mode prod, tmplF)]
+        , morTypeMap = M.fromList [(ObjRef mode prod, tmplF)]
         , morGenMap = M.empty
         , morCheck = CheckAll
         , morAttrSortMap = M.empty
@@ -416,7 +416,7 @@ testPushoutTypePermutationCommutes = do
   res <- case computePolyPushout "P" morF morG of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
-  let diagA = idD mode [TCon (TypeRef mode prod) [TAType (TVar aVar), TAType (TVar bVar)]]
+  let diagA = idD mode [OCon (ObjRef mode prod) [OAObj (OVar aVar), OAObj (OVar bVar)]]
   d1 <- case applyMorphismDiagram morF diagA of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -493,7 +493,7 @@ testPushoutTypeRefsStayInPushoutModes = do
           { dName = name
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (TypeName "A") (TypeSig []))
+          , dTypes = M.singleton mode (M.singleton (ObjName "A") (TypeSig []))
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -575,7 +575,7 @@ testPushoutDisjointCellRenameUsesOriginalModeKey = do
           { dName = "LeftCellModeMap"
           , dModes = mkModes (S.singleton modeL)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton modeL (M.singleton (TypeName "A") (TypeSig []))
+          , dTypes = M.singleton modeL (M.singleton (ObjName "A") (TypeSig []))
           , dGens =
               M.singleton
                 modeL
@@ -670,8 +670,8 @@ testPushoutDisjointRenamesAfterModeCollapse = do
           , dAcyclicModes = S.empty
           , dTypes =
               M.fromList
-                [ (modeL1, M.singleton (TypeName "B") (TypeSig []))
-                , (modeL2, M.singleton (TypeName "B") (TypeSig []))
+                [ (modeL1, M.singleton (ObjName "B") (TypeSig []))
+                , (modeL2, M.singleton (ObjName "B") (TypeSig []))
                 ]
           , dGens =
               M.fromList
@@ -743,7 +743,7 @@ testPushoutDisjointRenamesAfterModeCollapse = do
   case validateDoctrine (poDoctrine res) of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  let typeNames = [ t | TypeName t <- M.keys (M.findWithDefault M.empty modeM (dTypes (poDoctrine res))) ]
+  let typeNames = [ t | ObjName t <- M.keys (M.findWithDefault M.empty modeM (dTypes (poDoctrine res))) ]
   assertBool "expected two collapsed-mode type names" (length typeNames == 2)
   assertBool "expected freshened collapsed-mode type names" (all ("LeftCollapse_inl_B" `T.isPrefixOf`) typeNames)
   let genNames = [ g | GenName g <- M.keys (M.findWithDefault M.empty modeM (dGens (poDoctrine res))) ]
@@ -786,8 +786,8 @@ testPushoutCellNamesArePerMode = do
           , dAcyclicModes = S.empty
           , dTypes =
               M.fromList
-                [ (modeL, M.singleton (TypeName "A") (TypeSig []))
-                , (modeR, M.singleton (TypeName "A") (TypeSig []))
+                [ (modeL, M.singleton (ObjName "A") (TypeSig []))
+                , (modeR, M.singleton (ObjName "A") (TypeSig []))
                 ]
           , dGens =
               M.fromList
@@ -869,7 +869,7 @@ testPushoutNonInjectiveTypeCompatible = do
           { dName = name
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.fromList [ (TypeName n, TypeSig []) | n <- typeNames ])
+          , dTypes = M.singleton mode (M.fromList [ (ObjName n, TypeSig []) | n <- typeNames ])
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -880,7 +880,7 @@ testPushoutNonInjectiveTypeCompatible = do
   let left = mkDoc "LeftNI" ["T"]
   let right = mkDoc "RightNI" ["U", "V"]
   mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
-  let tmpl tgtName = TypeTemplate [] (TCon (TypeRef mode (TypeName tgtName)) [])
+  let tmpl tgtName = TypeTemplate [] (OCon (ObjRef mode (ObjName tgtName)) [])
   let morF =
         Morphism
           { morName = "fNI"
@@ -891,8 +891,8 @@ testPushoutNonInjectiveTypeCompatible = do
           , morModMap = identityModMap src
           , morTypeMap =
               M.fromList
-                [ (TypeRef mode (TypeName "X"), tmpl "T")
-                , (TypeRef mode (TypeName "Y"), tmpl "T")
+                [ (ObjRef mode (ObjName "X"), tmpl "T")
+                , (ObjRef mode (ObjName "Y"), tmpl "T")
                 ]
           , morGenMap = M.empty
           , morCheck = CheckAll
@@ -909,8 +909,8 @@ testPushoutNonInjectiveTypeCompatible = do
           , morModMap = identityModMap src
           , morTypeMap =
               M.fromList
-                [ (TypeRef mode (TypeName "X"), tmpl "U")
-                , (TypeRef mode (TypeName "Y"), tmpl "V")
+                [ (ObjRef mode (ObjName "X"), tmpl "U")
+                , (ObjRef mode (ObjName "Y"), tmpl "V")
                 ]
           , morGenMap = M.empty
           , morCheck = CheckAll
@@ -1118,7 +1118,7 @@ testPushoutNonInjectiveGenIncompatible = do
           { dName = "SrcGenBadNI"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (TypeName "A") (TypeSig []))
+          , dTypes = M.singleton mode (M.singleton (ObjName "A") (TypeSig []))
           , dGens = M.singleton mode (M.fromList [(GenName "g1", gen1), (GenName "g2", gen2)])
           , dCells2 = []
           , dActions = M.empty
@@ -1130,7 +1130,7 @@ testPushoutNonInjectiveGenIncompatible = do
           { dName = "LeftGenBadNI"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (TypeName "A") (TypeSig []))
+          , dTypes = M.singleton mode (M.singleton (ObjName "A") (TypeSig []))
           , dGens = M.singleton mode (M.singleton (GenName "h") (mkNullary "h"))
           , dCells2 = []
           , dActions = M.empty
@@ -1142,7 +1142,7 @@ testPushoutNonInjectiveGenIncompatible = do
           { dName = "RightGenBadNI"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (TypeName "A") (TypeSig []))
+          , dTypes = M.singleton mode (M.singleton (ObjName "A") (TypeSig []))
           , dGens =
               M.singleton
                 mode
@@ -1234,7 +1234,7 @@ testPushoutGlueComposesThroughInr = do
           { dName = "SrcGlueCompose"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (TypeName "X") (TypeSig []))
+          , dTypes = M.singleton mode (M.singleton (ObjName "X") (TypeSig []))
           , dGens = M.singleton mode (M.singleton (GenName "f") genF)
           , dCells2 = []
           , dActions = M.empty
@@ -1247,7 +1247,7 @@ testPushoutGlueComposesThroughInr = do
           { dName = "RightGlueCompose"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (TypeName "Y") (TypeSig []))
+          , dTypes = M.singleton mode (M.singleton (ObjName "Y") (TypeSig []))
           , dGens = M.singleton mode (M.singleton (GenName "h") genH)
           , dCells2 = []
           , dActions = M.empty
@@ -1271,7 +1271,7 @@ testPushoutGlueComposesThroughInr = do
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
           }
-  let rightType = TypeTemplate [] (TCon (TypeRef mode (TypeName "Y")) [])
+  let rightType = TypeTemplate [] (OCon (ObjRef mode (ObjName "Y")) [])
   let inrLeg =
         Morphism
           { morName = "inrGlueCompose"
@@ -1280,7 +1280,7 @@ testPushoutGlueComposesThroughInr = do
           , morIsCoercion = False
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
-          , morTypeMap = M.singleton (TypeRef mode (TypeName "X")) rightType
+          , morTypeMap = M.singleton (ObjRef mode (ObjName "X")) rightType
           , morGenMap = M.singleton (mode, GenName "f") (plainImage imgH)
           , morCheck = CheckAll
           , morAttrSortMap = M.empty
@@ -1388,7 +1388,7 @@ testPushoutTypeRenameDefaultUsesModeMap = do
           { dName = name
           , dModes = mkModes (S.singleton modeForType)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton modeForType (M.singleton (TypeName "X") (TypeSig []))
+          , dTypes = M.singleton modeForType (M.singleton (ObjName "X") (TypeSig []))
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -1432,7 +1432,7 @@ testPushoutTypeRenameDefaultUsesModeMap = do
     Left err -> assertFailure (T.unpack err) >> error "unreachable"
     Right out -> pure out
   let typesAtN = M.findWithDefault M.empty modeN (dTypes (poDoctrine res))
-  assertBool "expected type X at mapped target mode N" (M.member (TypeName "X") typesAtN)
+  assertBool "expected type X at mapped target mode N" (M.member (ObjName "X") typesAtN)
 
 testPushoutAlphaRenameWithModeEq :: Assertion
 testPushoutAlphaRenameWithModeEq = do
@@ -1457,17 +1457,17 @@ testPushoutAlphaRenameWithModeEq = do
     Nothing -> assertFailure "expected modal generator in pushout result"
     Just modalGen ->
       case gdPlainDom modalGen of
-        [TMod me (TVar _)] -> mePath me @?= [modF]
+        [OMod me (OVar _)] -> mePath me @?= [modF]
         _ -> assertFailure "expected modal generator domain to retain non-canceling modality"
 
 testPushoutTermTypeMaps :: Assertion
 testPushoutTermTypeMaps = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let natRef = TypeRef modeI (TypeName "Nat")
-  let vecRef = TypeRef modeM (TypeName "Vec")
-  let vec2Ref = TypeRef modeM (TypeName "Vec2")
-  let natTy = TCon natRef []
+  let natRef = ObjRef modeI (ObjName "Nat")
+  let vecRef = ObjRef modeM (ObjName "Vec")
+  let vec2Ref = ObjRef modeM (ObjName "Vec2")
+  let natTy = OCon natRef []
   let src =
         Doctrine
           { dName = "SrcIdx"
@@ -1475,8 +1475,8 @@ testPushoutTermTypeMaps = do
     , dAcyclicModes = S.empty
           , dTypes =
               M.fromList
-                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM])])
+                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
+                , (modeM, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM])])
                 ]
           , dGens = M.empty
           , dCells2 = []
@@ -1491,8 +1491,8 @@ testPushoutTermTypeMaps = do
     , dAcyclicModes = S.empty
           , dTypes =
               M.fromList
-                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(TypeName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM])])
+                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
+                , (modeM, M.fromList [(ObjName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM])])
                 ]
           , dGens = M.empty
           , dCells2 = []
@@ -1511,7 +1511,7 @@ testPushoutTermTypeMaps = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
-  let aVar = TyVar { tvName = "a", tvMode = modeM }
+  let aVar = ObjVar { ovName = "a", ovMode = modeM }
   let morF =
         Morphism
           { morName = "fIdx"
@@ -1525,7 +1525,7 @@ testPushoutTermTypeMaps = do
                 [ ( vecRef
                   , TypeTemplate
                       [TPTm nVar, TPType aVar]
-                      (TCon vec2Ref [TATm (tmMeta nVar), TAType (TVar aVar)])
+                      (OCon vec2Ref [OATm (tmMeta nVar), OAObj (OVar aVar)])
                   )
                 ]
           , morGenMap = M.empty
@@ -1555,12 +1555,12 @@ testPushoutTypePermutationSortRename :: Assertion
 testPushoutTypePermutationSortRename = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let natRef = TypeRef modeI (TypeName "Nat")
-  let natLRef = TypeRef modeI (TypeName "NatL")
-  let vecRef = TypeRef modeM (TypeName "Vec")
-  let vec2Ref = TypeRef modeM (TypeName "Vec2")
-  let natTy = TCon natRef []
-  let natLTy = TCon natLRef []
+  let natRef = ObjRef modeI (ObjName "Nat")
+  let natLRef = ObjRef modeI (ObjName "NatL")
+  let vecRef = ObjRef modeM (ObjName "Vec")
+  let vec2Ref = ObjRef modeM (ObjName "Vec2")
+  let natTy = OCon natRef []
+  let natLTy = OCon natLRef []
   let src =
         Doctrine
           { dName = "SrcIdxSwap"
@@ -1568,8 +1568,8 @@ testPushoutTypePermutationSortRename = do
           , dAcyclicModes = S.empty
           , dTypes =
               M.fromList
-                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM])])
+                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
+                , (modeM, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM])])
                 ]
           , dGens = M.empty
           , dCells2 = []
@@ -1584,8 +1584,8 @@ testPushoutTypePermutationSortRename = do
           , dAcyclicModes = S.empty
           , dTypes =
               M.fromList
-                [ (modeI, M.fromList [(TypeName "NatL", TypeSig [])])
-                , (modeM, M.fromList [(TypeName "Vec2", TypeSig [PS_Ty modeM, PS_Tm natLTy])])
+                [ (modeI, M.fromList [(ObjName "NatL", TypeSig [])])
+                , (modeM, M.fromList [(ObjName "Vec2", TypeSig [PS_Ty modeM, PS_Tm natLTy])])
                 ]
           , dGens = M.empty
           , dCells2 = []
@@ -1604,7 +1604,7 @@ testPushoutTypePermutationSortRename = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
   let nVar = TmVar { tmvName = "n", tmvSort = natLTy, tmvScope = 0 }
-  let aVar = TyVar { tvName = "a", tvMode = modeM }
+  let aVar = ObjVar { ovName = "a", ovMode = modeM }
   let morF =
         Morphism
           { morName = "fIdxSwap"
@@ -1619,7 +1619,7 @@ testPushoutTypePermutationSortRename = do
                 , ( vecRef
                   , TypeTemplate
                       [TPTm nVar, TPType aVar]
-                      (TCon vec2Ref [TAType (TVar aVar), TATm (tmMeta nVar)])
+                      (OCon vec2Ref [OAObj (OVar aVar), OATm (tmMeta nVar)])
                   )
                 ]
           , morGenMap = M.empty
@@ -1645,7 +1645,7 @@ testPushoutTypePermutationSortRename = do
     Left err -> assertFailure (T.unpack err)
     Right out -> pure out
   let modeTypes = M.findWithDefault M.empty modeM (dTypes (poDoctrine res))
-  sig <- case M.lookup (TypeName "Vec") modeTypes of
+  sig <- case M.lookup (ObjName "Vec") modeTypes of
     Nothing -> assertFailure "expected merged Vec type in pushout result" >> error "unreachable"
     Just out -> pure out
   tsParams sig @?= [PS_Tm natTy, PS_Ty modeM]
@@ -1659,7 +1659,7 @@ testCoproductMergesDistinctModeTheories = do
           { dName = "CopA"
           , dModes = mkModes (S.singleton modeM)
           , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(modeM, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(modeM, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -1671,7 +1671,7 @@ testCoproductMergesDistinctModeTheories = do
           { dName = "CopB"
           , dModes = mkModes (S.singleton modeN)
           , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(modeN, M.fromList [(TypeName "B", TypeSig [])])]
+          , dTypes = M.fromList [(modeN, M.fromList [(ObjName "B", TypeSig [])])]
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -1694,8 +1694,8 @@ testCoproductMergesDistinctModeTheories = do
 testCoproductObligationRenameElaborates :: Assertion
 testCoproductObligationRenameElaborates = do
   let mode = ModeName "M"
-  let natRef = TypeRef mode (TypeName "Nat")
-  let natTy = TCon natRef []
+  let natRef = ObjRef mode (ObjName "Nat")
+  let natTy = OCon natRef []
   let rawExpr = PolyAST.ROEDiag (PolyAST.RDId [PolyAST.RPTVar "Nat"])
   let obl =
         ObligationDecl
@@ -1715,7 +1715,7 @@ testCoproductObligationRenameElaborates = do
           { dName = "DocA"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "Nat", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "Nat", TypeSig [])])]
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -1773,14 +1773,14 @@ testCoproductObligationRawModalityRenameElaborates = do
           , gdMode = mode
           , gdTyVars = [aVar]
           , gdTmVars = []
-          , gdDom = [InPort (TVar aVar)]
-          , gdCod = [TVar aVar]
+          , gdDom = [InPort (OVar aVar)]
+          , gdCod = [OVar aVar]
           , gdAttrs = []
           }
   let actionF =
         ModAction
           { maMod = modF
-          , maGenMap = M.singleton (mode, GenName "k") (idD mode [TMod fExpr (TVar aVar)])
+          , maGenMap = M.singleton (mode, GenName "k") (idD mode [OMod fExpr (OVar aVar)])
           , maPolicy = UseAllOriented
           }
   let rawExpr =
@@ -1811,8 +1811,8 @@ testCoproductObligationRawModalityRenameElaborates = do
                   )
               )
           )
-  let fa = TMod fExpr (TVar aVar)
-  let ffa = TMod fExpr fa
+  let fa = OMod fExpr (OVar aVar)
+  let ffa = OMod fExpr fa
   let obl =
         ObligationDecl
           { obName = "raw_mod_refl"
@@ -1820,8 +1820,8 @@ testCoproductObligationRawModalityRenameElaborates = do
           , obForGen = False
           , obTyVars = [aVar]
           , obTmVars = []
-          , obDom = [TVar aVar, fa, ffa, ffa]
-          , obCod = [TVar aVar, fa, ffa, ffa]
+          , obDom = [OVar aVar, fa, ffa, ffa]
+          , obCod = [OVar aVar, fa, ffa, ffa]
           , obLHSExpr = rawExpr
           , obRHSExpr = rawExpr
           , obPolicy = UseAllOriented
@@ -1911,8 +1911,8 @@ testCoproductTransformCollisionRenames = do
           , gdMode = mode
           , gdTyVars = [aVar]
           , gdTmVars = []
-          , gdDom = [InPort (TVar aVar)]
-          , gdCod = [TVar aVar]
+          , gdDom = [InPort (OVar aVar)]
+          , gdCod = [OVar aVar]
           , gdAttrs = []
           }
   let idMod = ModExpr { meSrc = mode, meTgt = mode, mePath = [] }
@@ -1993,7 +1993,7 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
           { dName = "SchemaApply"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(GenName "f", genSrc)])]
           , dCells2 = [srcCell]
           , dActions = M.empty
@@ -2005,7 +2005,7 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
           { dName = "BodyApply"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(GenName "f", genSrc)])]
           , dCells2 = []
           , dActions = M.empty
@@ -2027,7 +2027,7 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
           { dName = "TargetApply"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(GenName "g", genTgt)])]
           , dCells2 = []
           , dActions = M.empty
@@ -2125,8 +2125,8 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
           , dAcyclicModes = S.empty
           , dTypes =
               M.fromList
-                [ (modeL1, M.singleton (TypeName "B") (TypeSig []))
-                , (modeL2, M.fromList [(TypeName "B", TypeSig [PS_Ty modeL2]), (TypeName "C", TypeSig [])])
+                [ (modeL1, M.singleton (ObjName "B") (TypeSig []))
+                , (modeL2, M.fromList [(ObjName "B", TypeSig [PS_Ty modeL2]), (ObjName "C", TypeSig [])])
                 ]
           , dGens =
               M.fromList
@@ -2183,8 +2183,8 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
     Left err -> assertFailure (T.unpack err) >> error "unreachable"
     Right out -> pure out
   let modeTypes = M.findWithDefault M.empty modeM (dTypes (poDoctrine res))
-  assertBool "expected unrenamed type B to remain" (M.member (TypeName "B") modeTypes)
-  let renamedTypes = [ t | TypeName t <- M.keys modeTypes, "TypeGenFocus_B" `T.isPrefixOf` t ]
+  assertBool "expected unrenamed type B to remain" (M.member (ObjName "B") modeTypes)
+  let renamedTypes = [ t | ObjName t <- M.keys modeTypes, "TypeGenFocus_B" `T.isPrefixOf` t ]
   assertBool "expected renamed B after mode-collapse collision" (not (null renamedTypes))
   let modeGens = M.findWithDefault M.empty modeM (dGens (poDoctrine res))
   assertBool "expected unrenamed generator g to remain" (M.member (GenName "g") modeGens)
@@ -2227,7 +2227,7 @@ testApplyPushoutCellCollisionAfterModeRename = do
           { dName = "BodyModeRename"
           , dModes = mkModes (S.singleton modeL)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton modeL (M.singleton (TypeName "A") (TypeSig []))
+          , dTypes = M.singleton modeL (M.singleton (ObjName "A") (TypeSig []))
           , dGens =
               M.singleton
                 modeL
@@ -2258,7 +2258,7 @@ testApplyPushoutCellCollisionAfterModeRename = do
           { dName = "TargetModeRename"
           , dModes = mkModes (S.singleton modeM)
           , dAcyclicModes = S.empty
-          , dTypes = M.singleton modeM (M.singleton (TypeName "A") (TypeSig []))
+          , dTypes = M.singleton modeM (M.singleton (ObjName "A") (TypeSig []))
           , dGens =
               M.singleton
                 modeM
@@ -2313,11 +2313,11 @@ testPushoutCellTmAlphaEq :: Assertion
 testPushoutCellTmAlphaEq = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
-  let vecRef = TypeRef modeM (TypeName "Vec")
+  let natTy = OCon (ObjRef modeI (ObjName "Nat")) []
+  let vecRef = ObjRef modeM (ObjName "Vec")
   let genName = GenName "f"
   let mkTm name = TmVar { tmvName = name, tmvSort = natTy, tmvScope = 0 }
-  let vecTy tmVar = TCon vecRef [TATm (tmMeta tmVar)]
+  let vecTy tmVar = OCon vecRef [OATm (tmMeta tmVar)]
   let srcTm = mkTm "n"
   let leftTm = mkTm "i"
   let rightTm = mkTm "j"
@@ -2390,8 +2390,8 @@ testPushoutCellTmAlphaEq = do
     , dAcyclicModes = S.empty
           , dTypes =
               M.fromList
-                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy])])
+                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
+                , (modeM, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy])])
                 ]
           , dGens =
               M.fromList
@@ -2461,7 +2461,7 @@ testPushoutCellTmAlphaEq = do
 testPushoutInjectionPreservesBinderArgs :: Assertion
 testPushoutInjectionPreservesBinderArgs = do
   let mode = ModeName "M"
-  let aTy = TCon (TypeRef mode (TypeName "A")) []
+  let aTy = OCon (ObjRef mode (ObjName "A")) []
   let gName = GenName "g"
   let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy], bsCod = [aTy] }
   let gDecl =
@@ -2489,7 +2489,7 @@ testPushoutInjectionPreservesBinderArgs = do
   let left =
         iface
           { dName = "LeftBinder"
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
           }
   let right = iface { dName = "RightBinder" }
@@ -2534,10 +2534,10 @@ testPushoutInjectionPreservesBinderArgs = do
 testPushoutAcceptsRenamingWithBinders :: Assertion
 testPushoutAcceptsRenamingWithBinders = do
   let mode = ModeName "M"
-  let aRef = TypeRef mode (TypeName "A")
-  let a1Ref = TypeRef mode (TypeName "A1")
-  let aTy = TCon aRef []
-  let a1Ty = TCon a1Ref []
+  let aRef = ObjRef mode (ObjName "A")
+  let a1Ref = ObjRef mode (ObjName "A1")
+  let aTy = OCon aRef []
+  let a1Ty = OCon a1Ref []
   let gName = GenName "g"
   let g1Name = GenName "g1"
   let slotSigSrc = BinderSig { bsTmCtx = [], bsDom = [aTy], bsCod = [aTy] }
@@ -2567,7 +2567,7 @@ testPushoutAcceptsRenamingWithBinders = do
           { dName = "IfaceRenameBinder"
           , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(gName, ifaceGen)])]
           , dCells2 = []
       , dActions = M.empty
@@ -2579,7 +2579,7 @@ testPushoutAcceptsRenamingWithBinders = do
           { dName = "LeftRenameBinder"
           , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A1", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A1", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(g1Name, leftGen)])]
           , dCells2 = []
       , dActions = M.empty
@@ -2654,10 +2654,10 @@ mkModeEqMorph :: Text -> Doctrine -> Doctrine -> Text -> Morphism
 mkModeEqMorph name src tgt varName =
   let mode = ModeName "M"
       modF = ModName "F"
-      v = TyVar { tvName = varName, tvMode = mode }
+      v = ObjVar { ovName = varName, ovMode = mode }
       fExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF] }
-      hTy = TVar v
-      modalTy = TMod fExpr (TVar v)
+      hTy = OVar v
+      modalTy = OMod fExpr (OVar v)
       hImg = case genD mode [hTy] [hTy] (GenName "h") of
         Left _ -> error "mkModeEqMorph: genD h failed"
         Right d -> d
@@ -2683,14 +2683,14 @@ mkModeEqDoctrine name mt varName useUF = do
   let mode = ModeName "M"
   let modF = ModName "F"
   let modU = ModName "U"
-  let v = TyVar { tvName = varName, tvMode = mode }
+  let v = ObjVar { ovName = varName, ovMode = mode }
   let fExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF] }
   let ufExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF, modU] }
   let hTy =
         if useUF
-          then TMod ufExpr (TVar v)
-          else TVar v
-  let modalTy = TMod fExpr (TVar v)
+          then OMod ufExpr (OVar v)
+          else OVar v
+  let modalTy = OMod fExpr (OVar v)
   lhs <- genD mode [hTy] [hTy] (GenName "h")
   let cell = Cell2
         { c2Name = "eta"
@@ -2706,8 +2706,8 @@ mkModeEqDoctrine name mt varName useUF = do
         , gdMode = mode
         , gdTyVars = [v]
         , gdTmVars = []
-    , gdDom = map InPort [TVar v]
-        , gdCod = [TVar v]
+    , gdDom = map InPort [OVar v]
+        , gdCod = [OVar v]
         , gdAttrs = []
         }
   let genModal = GenDecl
@@ -2734,7 +2734,7 @@ mkModeEqDoctrine name mt varName useUF = do
     Left err -> Left err
     Right () -> Right doc
 
-mkTypeDoctrine :: ModeName -> Text -> [(TypeName, Int)] -> Either Text Doctrine
+mkTypeDoctrine :: ModeName -> Text -> [(ObjName, Int)] -> Either Text Doctrine
 mkTypeDoctrine mode name types = do
   let types' = M.fromList [ (tname, TypeSig (replicate arity (PS_Ty mode))) | (tname, arity) <- types ]
   let doc = Doctrine

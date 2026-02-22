@@ -14,13 +14,13 @@ import qualified Data.Set as S
 import Strat.Poly.Attr (AttrSubst, AttrVar, unifyAttrFlex)
 import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVarsFrom)
-import Strat.Poly.TypeExpr (TmVar, TyVar, TypeExpr)
+import Strat.Poly.Obj (TmVar, ObjVar, Obj)
 import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.UnifyTy
+import Strat.Poly.UnifyObj
   ( Subst
   , applySubstCtx
   , emptySubst
-  , unifyTyFlex
+  , unifyObjFlex
   )
 
 
@@ -37,7 +37,7 @@ data Match = Match
 
 data MatchConfig = MatchConfig
   { mcTheory :: TypeTheory
-  , mcTyFlex :: S.Set TyVar
+  , mcTyFlex :: S.Set ObjVar
   , mcTmFlex :: S.Set TmVar
   , mcAttrFlex :: S.Set AttrVar
   }
@@ -130,7 +130,7 @@ portsCompatible match pats hosts =
 
 extendMatch
   :: TypeTheory
-  -> S.Set TyVar
+  -> S.Set ObjVar
   -> S.Set TmVar
   -> S.Set AttrVar
   -> Diagram
@@ -180,7 +180,7 @@ extendMatch tt tyFlex tmFlex attrFlex lhs host match patEdge hostEdge
     unifyPorts tySubst p h = do
       pTy <- requirePortType lhs p
       hTy <- requirePortType host h
-      unifyTyFlex
+      unifyObjFlex
         tt
         (dTmCtx lhs)
         tyFlex
@@ -191,7 +191,7 @@ extendMatch tt tyFlex tmFlex attrFlex lhs host match patEdge hostEdge
 
 payloadSubsts
   :: TypeTheory
-  -> S.Set TyVar
+  -> S.Set ObjVar
   -> S.Set TmVar
   -> S.Set AttrVar
   -> Match
@@ -281,15 +281,15 @@ payloadSubsts tt tyFlex tmFlex attrFlex match patEdge hostEdge =
 
     _ -> Right []
 
-requirePortType :: Diagram -> PortId -> Either Text TypeExpr
+requirePortType :: Diagram -> PortId -> Either Text Obj
 requirePortType diag pid =
-  case diagramPortType diag pid of
+  case diagramPortObj diag pid of
     Nothing -> Left "match: missing port type"
     Just ty -> Right ty
 
 completeBoundary
   :: TypeTheory
-  -> S.Set TyVar
+  -> S.Set ObjVar
   -> S.Set TmVar
   -> Diagram
   -> Diagram
@@ -317,7 +317,7 @@ completeBoundary tt flexTy flexTm lhs host match =
             Left _ -> chooseCandidate m p pTy rest
             Right hTy ->
               case
-                unifyTyFlex
+                unifyObjFlex
                   tt
                   (dTmCtx lhs)
                   flexTy

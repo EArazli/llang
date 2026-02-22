@@ -15,7 +15,7 @@ import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, ModuleEnv(..), TermDef(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..))
@@ -87,12 +87,12 @@ spliceSpecText =
 modeM :: ModeName
 modeM = ModeName "M"
 
-typeA :: TypeExpr
-typeA = TCon (TypeRef modeM (TypeName "A")) []
+typeA :: Obj
+typeA = OCon (ObjRef modeM (ObjName "A")) []
 
 mkDoctrine :: Bool -> Bool -> Doctrine
 mkDoctrine hasDup hasDrop =
-  let aVar = TyVar { tvName = "a", tvMode = modeM }
+  let aVar = ObjVar { ovName = "a", ovMode = modeM }
       mkGen name tyVars dom cod =
         GenDecl
           { gdName = GenName name
@@ -103,8 +103,8 @@ mkDoctrine hasDup hasDrop =
           , gdCod = cod
           , gdAttrs = []
           }
-      genDup = mkGen "dup" [aVar] [TVar aVar] [TVar aVar, TVar aVar]
-      genDrop = mkGen "drop" [aVar] [TVar aVar] []
+      genDup = mkGen "dup" [aVar] [OVar aVar] [OVar aVar, OVar aVar]
+      genDrop = mkGen "drop" [aVar] [OVar aVar] []
       genF = mkGen "f" [] [typeA, typeA] [typeA]
       genUnit = mkGen "unit" [] [] [typeA]
       gens =
@@ -117,7 +117,7 @@ mkDoctrine hasDup hasDrop =
         { dName = "TestDoc"
         , dModes = mkModes [modeM]
         , dAcyclicModes = S.empty
-        , dTypes = M.fromList [(modeM, M.fromList [(TypeName "A", TypeSig [])])]
+        , dTypes = M.fromList [(modeM, M.fromList [(ObjName "A", TypeSig [])])]
         , dGens = M.fromList [(modeM, M.fromList gens)]
         , dCells2 = []
       , dActions = M.empty
@@ -132,14 +132,14 @@ mkSurfaceWithSpec txt doc = do
 
 mkStructEnv :: Doctrine -> Either Text ModuleEnv
 mkStructEnv target = do
-  let aVar = TyVar { tvName = "a", tvMode = modeM }
+  let aVar = ObjVar { ovName = "a", ovMode = modeM }
       mkGen name cod =
         GenDecl
           { gdName = GenName name
           , gdMode = modeM
           , gdTyVars = [aVar]
           , gdTmVars = []
-          , gdDom = [InPort (TVar aVar)]
+          , gdDom = [InPort (OVar aVar)]
           , gdCod = cod
           , gdAttrs = []
           }
@@ -153,7 +153,7 @@ mkStructEnv target = do
               M.fromList
                 [ ( modeM
                   , M.fromList
-                      [ (GenName "dup", mkGen "dup" [TVar aVar, TVar aVar])
+                      [ (GenName "dup", mkGen "dup" [OVar aVar, OVar aVar])
                       , (GenName "drop", mkGen "drop" [])
                       ]
                   )
@@ -163,8 +163,8 @@ mkStructEnv target = do
           , dObligations = []
           , dAttrSorts = M.empty
           }
-  dupImg <- genD modeM [TVar aVar] [TVar aVar, TVar aVar] (GenName "dup")
-  dropImg <- genD modeM [TVar aVar] [] (GenName "drop")
+  dupImg <- genD modeM [OVar aVar] [OVar aVar, OVar aVar] (GenName "dup")
+  dropImg <- genD modeM [OVar aVar] [] (GenName "drop")
   let morph =
         Morphism
           { morName = "Test.structInst"
@@ -443,7 +443,7 @@ testSurfaceModeEqComp = do
   diag <- either (assertFailure . T.unpack) pure (elabSurfaceDiagram emptyEnv doc surf "lift ; baseid")
   dom <- either (assertFailure . T.unpack) pure (diagramDom diag)
   cod <- either (assertFailure . T.unpack) pure (diagramCod diag)
-  let base = TCon (TypeRef (ModeName "A") (TypeName "Base")) []
+  let base = OCon (ObjRef (ModeName "A") (ObjName "Base")) []
   dom @?= []
   cod @?= [base]
 

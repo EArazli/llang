@@ -25,13 +25,13 @@ import Strat.DSL.AST (RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeM
 import Strat.Poly.DSL.AST
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (emptyDiagram, freshPort, setPortLabel, addEdgePayload, Edge(..), EdgeId(..), PortId(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), validateDiagram, diagramPortType)
+import Strat.Poly.Graph (emptyDiagram, freshPort, setPortLabel, addEdgePayload, Edge(..), EdgeId(..), PortId(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), validateDiagram, diagramPortObj)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names
-import Strat.Poly.TypeExpr
-import qualified Strat.Poly.UnifyTy as U
+import Strat.Poly.Obj
+import qualified Strat.Poly.UnifyObj as U
 import Strat.Poly.TypeTheory (TypeTheory, TmFunSig(..))
-import Strat.Poly.TypeNormalize (normalizeTypeDeep, termExprToDiagramChecked)
+import Strat.Poly.ObjNormalize (normalizeObjDeep, termExprToDiagramChecked)
 import Strat.Poly.Attr
 import Strat.Poly.Morphism
 import Strat.Poly.ModAction (ActionSemanticsResult(..), applyModExpr, validateActionSemanticsWithBudgetResult)
@@ -228,8 +228,8 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
         Nothing -> Left "morphism: missing mode mapping"
         Just mode' -> Right mode'
     mapTyVarMode modeMap v = do
-      mode' <- lookupModeMap modeMap (tvMode v)
-      pure v { tvMode = mode' }
+      mode' <- lookupModeMap modeMap (ovMode v)
+      pure v { ovMode = mode' }
     mapTmVarSort mor v = do
       sort' <- applyMorphismTy mor (tmvSort v)
       pure v { tmvSort = sort' }
@@ -242,15 +242,15 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       if modeTgtDecl /= modeTgtExpected
         then Left "morphism: target mode does not match mode map"
         else Right ()
-      let name = TypeName (rpmtSrcType decl)
-      let ref = TypeRef modeSrc name
+      let name = ObjName (rpmtSrcType decl)
+      let ref = ObjRef modeSrc name
       sig <- lookupTypeSig src ref
       (tmplParams, tyVarsTgt, tmVarsTgt) <- buildTypeTemplateParams tgt modeMap (tsParams sig) (rpmtParams decl)
-      tgtExpr <- elabTypeExpr tgt tyVarsTgt tmVarsTgt M.empty (rpmtTgtType decl)
-      if typeMode tgtExpr /= modeTgtDecl
+      tgtExpr <- elabObjExpr tgt tyVarsTgt tmVarsTgt M.empty (rpmtTgtType decl)
+      if objMode tgtExpr /= modeTgtDecl
         then Left ("morphism: target type expression mode mismatch (expected " <> rpmtTgtMode decl <> ")")
         else Right ()
-      let key = TypeRef modeSrc name
+      let key = ObjRef modeSrc name
       if M.member key mp
         then Left "morphism: duplicate type mapping"
         else Right (M.insert key (TypeTemplate tmplParams tgtExpr) mp)
@@ -272,7 +272,7 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       let rigidTm = S.fromList tmVarsTgt
       ttTgt <- doctrineTypeTheory tgt
       diag <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt diag0
-      let freeTy = freeTyVarsDiagram diag
+      let freeTy = freeObjVarsDiagram diag
       let allowedTy = S.fromList tyVarsTgt
       if S.isSubsetOf freeTy allowedTy
         then Right ()
@@ -509,7 +509,7 @@ elabPolyItem env doc item =
     RPType decl -> do
       let mode = ModeName (rptMode decl)
       ensureMode doc mode
-      let tname = TypeName (rptName decl)
+      let tname = ObjName (rptName decl)
       (_tyVars, _ixVars, sigParams) <- elabParamDecls doc mode (rptVars decl)
       let sig = TypeSig { tsParams = sigParams }
       let table = M.findWithDefault M.empty mode (dTypes doc)
@@ -574,7 +574,7 @@ elabPolyItem env doc item =
       tt <- doctrineTypeTheory doc
       lhs' <- unifyBoundary tt rigidTy rigidTm dom cod lhs
       rhs' <- unifyBoundary tt rigidTy rigidTm dom cod rhs
-      let free = S.union (freeTyVarsDiagram lhs') (freeTyVarsDiagram rhs')
+      let free = S.union (freeObjVarsDiagram lhs') (freeObjVarsDiagram rhs')
       let allowed = S.fromList ruleTyVars
       if S.isSubsetOf free allowed
         then pure ()
@@ -838,10 +838,10 @@ checkImplementsObligations env tgtDoc morph ifaceDoc = do
             <> ")"
         )
 
-mapObligationTyVar :: Morphism -> TyVar -> Either Text TyVar
+mapObligationTyVar :: Morphism -> ObjVar -> Either Text ObjVar
 mapObligationTyVar morph v = do
-  mode' <- applyMorphismMode morph (tvMode v)
-  pure v { tvMode = mode' }
+  mode' <- applyMorphismMode morph (ovMode v)
+  pure v { ovMode = mode' }
 
 mapObligationTmVar :: Morphism -> TmVar -> Either Text TmVar
 mapObligationTmVar morph v = do
@@ -854,7 +854,7 @@ evalObligationExprMapped
   -> Doctrine
   -> Morphism
   -> ModeName
-  -> [TyVar]
+  -> [ObjVar]
   -> [TmVar]
   -> RawOblExpr
   -> Either Text Diagram
@@ -902,7 +902,7 @@ evalObligationExprForGen
   -> Doctrine
   -> Morphism
   -> ModeName
-  -> [TyVar]
+  -> [ObjVar]
   -> [TmVar]
   -> Diagram
   -> RawOblExpr
@@ -950,7 +950,7 @@ evalLiftedForGen
   -> Morphism
   -> ModeName
   -> ModeName
-  -> [TyVar]
+  -> [ObjVar]
   -> [TmVar]
   -> Diagram
   -> LiftBoundary
@@ -984,7 +984,7 @@ evalLiftedForGen env ifaceDoc tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag
       if length dom0 /= 1
         then Left (sideLabel <> ": operator must have exactly one input ([x] -> [...])")
         else do
-          let flexTy = S.difference (freeTyVarsDiagram opTgt) rigidTy
+          let flexTy = S.difference (freeObjVarsDiagram opTgt) rigidTy
           let flexTm = S.difference (freeTmVarsDiagram opTgt) rigidTm
           sDom <- U.unifyCtx ttDoc (dTmCtx opTgt) flexTy flexTm dom0 [argTy]
           applySubstDiagram ttDoc sDom opTgt
@@ -993,8 +993,8 @@ elabObligationDiag
   :: ModuleEnv
   -> Doctrine
   -> ModeName
-  -> [TypeExpr]
-  -> [TyVar]
+  -> [Obj]
+  -> [ObjVar]
   -> [TmVar]
   -> RawDiagExpr
   -> Either Text Diagram
@@ -1055,17 +1055,17 @@ resolveTyVarMode doc defaultMode decl = do
   ensureMode doc mode
   pure mode
 
-resolveTyVarDecl :: Doctrine -> ModeName -> RawTyVarDecl -> Either Text TyVar
+resolveTyVarDecl :: Doctrine -> ModeName -> RawTyVarDecl -> Either Text ObjVar
 resolveTyVarDecl doc defaultMode decl = do
   mode <- resolveTyVarMode doc defaultMode decl
-  pure TyVar { tvName = rtvName decl, tvMode = mode }
+  pure ObjVar { ovName = rtvName decl, ovMode = mode }
 
-elabTmDeclVar :: Doctrine -> [TyVar] -> RawTmVarDecl -> Either Text TmVar
+elabTmDeclVar :: Doctrine -> [ObjVar] -> RawTmVarDecl -> Either Text TmVar
 elabTmDeclVar doc tyVars decl = do
-  sortTy <- elabTypeExpr doc tyVars [] M.empty (rtvdSort decl)
+  sortTy <- elabObjExpr doc tyVars [] M.empty (rtvdSort decl)
   pure TmVar { tmvName = rtvdName decl, tmvSort = sortTy, tmvScope = 0 }
 
-elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text ([TyVar], [TmVar], [ParamSig])
+elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text ([ObjVar], [TmVar], [ParamSig])
 elabParamDecls doc defaultMode params = go [] [] [] params
   where
     go tyAcc tmAcc sigAcc [] = Right (reverse tyAcc, reverse tmAcc, reverse sigAcc)
@@ -1073,30 +1073,30 @@ elabParamDecls doc defaultMode params = go [] [] [] params
       case p of
         RPDType tvDecl -> do
           tv <- resolveTyVarDecl doc defaultMode tvDecl
-          let name = tvName tv
-          if name `elem` map tvName tyAcc || name `elem` map tmvName tmAcc
+          let name = ovName tv
+          if name `elem` map ovName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
-            else go (tv:tyAcc) tmAcc (PS_Ty (tvMode tv) : sigAcc) rest
+            else go (tv:tyAcc) tmAcc (PS_Ty (ovMode tv) : sigAcc) rest
         RPDTerm tmDecl -> do
           let name = rtvdName tmDecl
-          if name `elem` map tvName tyAcc || name `elem` map tmvName tmAcc
+          if name `elem` map ovName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
             else do
               tmVar <- elabTmDeclVar doc tyAcc tmDecl
               go tyAcc (tmVar:tmAcc) (PS_Tm (tmvSort tmVar) : sigAcc) rest
 
-resolveTypeRef :: Doctrine -> RawTypeRef -> Either Text TypeRef
+resolveTypeRef :: Doctrine -> RawTypeRef -> Either Text ObjRef
 resolveTypeRef doc raw =
   case rtrMode raw of
     Just modeName -> do
       let mode = ModeName modeName
       ensureMode doc mode
-      let tname = TypeName (rtrName raw)
+      let tname = ObjName (rtrName raw)
       case M.lookup mode (dTypes doc) >>= M.lookup tname of
         Nothing -> Left ("unknown type constructor: " <> rtrName raw)
-        Just _ -> Right (TypeRef mode tname)
+        Just _ -> Right (ObjRef mode tname)
     Nothing -> do
-      let tname = TypeName (rtrName raw)
+      let tname = ObjName (rtrName raw)
       let matches =
             [ mode
             | (mode, table) <- M.toList (dTypes doc)
@@ -1104,7 +1104,7 @@ resolveTypeRef doc raw =
             ]
       case matches of
         [] -> Left ("unknown type constructor: " <> rtrName raw)
-        [mode] -> Right (TypeRef mode tname)
+        [mode] -> Right (ObjRef mode tname)
         _ -> Left ("ambiguous type constructor: " <> rtrName raw <> " (qualify with Mode.)")
 
 buildTypeTemplateParams
@@ -1112,7 +1112,7 @@ buildTypeTemplateParams
   -> M.Map ModeName ModeName
   -> [ParamSig]
   -> [RawParamDecl]
-  -> Either Text ([TemplateParam], [TyVar], [TmVar])
+  -> Either Text ([TemplateParam], [ObjVar], [TmVar])
 buildTypeTemplateParams tgt modeMap sigParams decls = do
   if length sigParams /= length decls
     then Left "morphism: type mapping binder arity mismatch"
@@ -1125,12 +1125,12 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
         (PS_Ty srcMode, RPDType tyDecl) -> do
           expectedMode <- lookupMappedMode srcMode
           tyVar <- resolveTyVarDecl tgt expectedMode tyDecl
-          ensureFreshName tyAcc tmAcc (tvName tyVar)
+          ensureFreshName tyAcc tmAcc (ovName tyVar)
           go (tyVar:tyAcc) tmAcc (TPType tyVar:tmplAcc) rest
         (PS_Tm srcSort, RPDTerm tmDecl) -> do
-          expectedMode <- lookupMappedMode (typeMode srcSort)
-          tmSort <- elabTypeExpr tgt (reverse tyAcc) (reverse tmAcc) M.empty (rtvdSort tmDecl)
-          if typeMode tmSort /= expectedMode
+          expectedMode <- lookupMappedMode (objMode srcSort)
+          tmSort <- elabObjExpr tgt (reverse tyAcc) (reverse tmAcc) M.empty (rtvdSort tmDecl)
+          if objMode tmSort /= expectedMode
             then Left "morphism: type mapping term binder mode mismatch"
             else Right ()
           ensureFreshName tyAcc tmAcc (rtvdName tmDecl)
@@ -1142,7 +1142,7 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
           Left "morphism: type mapping binder kind mismatch"
 
     ensureFreshName tyAcc tmAcc name =
-      let tyNames = map tvName tyAcc
+      let tyNames = map ovName tyAcc
           tmNames = map tmvName tmAcc
       in if name `elem` tyNames || name `elem` tmNames
           then Left "morphism: duplicate type mapping binders"
@@ -1153,41 +1153,41 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
         Nothing -> Left "morphism: missing mode mapping"
         Just tgtMode -> Right tgtMode
 
-elabContext :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> M.Map Text (Int, TypeExpr) -> RawPolyContext -> Either Text Context
+elabContext :: Doctrine -> ModeName -> [ObjVar] -> [TmVar] -> M.Map Text (Int, Obj) -> RawPolyContext -> Either Text Context
 elabContext doc expectedMode tyVars tmVars tmBound ctx = do
-  tys <- mapM (elabTypeExpr doc tyVars tmVars tmBound) ctx
-  let bad = filter (\ty -> typeMode ty /= expectedMode) tys
+  tys <- mapM (elabObjExpr doc tyVars tmVars tmBound) ctx
+  let bad = filter (\ty -> objMode ty /= expectedMode) tys
   if null bad
     then Right tys
     else Left "boundary type must match generator mode"
 
-elabTypeExpr :: Doctrine -> [TyVar] -> [TmVar] -> M.Map Text (Int, TypeExpr) -> RawPolyTypeExpr -> Either Text TypeExpr
-elabTypeExpr doc tyVars tmVars tmBound expr =
+elabObjExpr :: Doctrine -> [ObjVar] -> [TmVar] -> M.Map Text (Int, Obj) -> RawPolyObjExpr -> Either Text Obj
+elabObjExpr doc tyVars tmVars tmBound expr =
   case expr of
     RPTVar name -> do
-      case [v | v <- tyVars, tvName v == name] of
-        [v] -> Right (TVar v)
+      case [v | v <- tyVars, ovName v == name] of
+        [v] -> Right (OVar v)
         (_:_:_) -> Left ("duplicate type variable name: " <> name)
         [] -> do
           ref <- resolveTypeRef doc RawTypeRef { rtrMode = Nothing, rtrName = name }
           sig <- lookupTypeSig doc ref
           if null (tsParams sig)
-            then Right (TCon ref [])
+            then Right (OCon ref [])
             else Left "type constructor arity mismatch"
     RPTMod rawMe innerRaw -> do
       me <- elabRawModExpr (dModes doc) rawMe
-      inner <- elabTypeExpr doc tyVars tmVars tmBound innerRaw
-      if typeMode inner /= meSrc me
+      inner <- elabObjExpr doc tyVars tmVars tmBound innerRaw
+      if objMode inner /= meSrc me
         then Left "modality application source/argument mode mismatch"
-        else normalizeTypeExpr (dModes doc) (TMod me inner)
+        else normalizeObjExpr (dModes doc) (OMod me inner)
     RPTCon rawRef args -> do
       case asModalityCall rawRef args of
         Just (rawMe, innerRaw) -> do
           me <- elabRawModExpr (dModes doc) rawMe
-          inner <- elabTypeExpr doc tyVars tmVars tmBound innerRaw
-          if typeMode inner /= meSrc me
+          inner <- elabObjExpr doc tyVars tmVars tmBound innerRaw
+          if objMode inner /= meSrc me
             then Left "modality application source/argument mode mismatch"
-            else normalizeTypeExpr (dModes doc) (TMod me inner)
+            else normalizeObjExpr (dModes doc) (OMod me inner)
         Nothing -> do
           ref <- resolveTypeRef doc rawRef
           sig <- lookupTypeSig doc ref
@@ -1196,16 +1196,16 @@ elabTypeExpr doc tyVars tmVars tmBound expr =
             then Left "type constructor arity mismatch"
             else do
               args' <- mapM (elabOneArg params) (zip params args)
-              Right (TCon ref args')
+              Right (OCon ref args')
   where
     elabOneArg _ (PS_Ty m, rawArg) = do
-      argTy <- elabTypeExpr doc tyVars tmVars tmBound rawArg
-      if typeMode argTy == m
-        then Right (TAType argTy)
+      argTy <- elabObjExpr doc tyVars tmVars tmBound rawArg
+      if objMode argTy == m
+        then Right (OAObj argTy)
         else Left "type constructor argument mode mismatch"
     elabOneArg _ (PS_Tm sortTy, rawArg) = do
       tmArg <- elabTmTerm doc tyVars tmVars tmBound (Just sortTy) rawArg
-      Right (TATm tmArg)
+      Right (OATm tmArg)
 
     asModalityCall rawRef0 args0 =
       case (rtrMode rawRef0, rtrName rawRef0, args0) of
@@ -1224,18 +1224,18 @@ elabTypeExpr doc tyVars tmVars tmBound expr =
     hasModality tok = M.member (ModName tok) (mtDecls (dModes doc))
     hasQualifiedType modeTok tyTok =
       let mode = ModeName modeTok
-          tyName = TypeName tyTok
+          tyName = ObjName tyTok
        in case M.lookup mode (dTypes doc) of
             Nothing -> False
             Just table -> M.member tyName table
 
 elabTmTerm
   :: Doctrine
-  -> [TyVar]
+  -> [ObjVar]
   -> [TmVar]
-  -> M.Map Text (Int, TypeExpr)
-  -> Maybe TypeExpr
-  -> RawPolyTypeExpr
+  -> M.Map Text (Int, Obj)
+  -> Maybe Obj
+  -> RawPolyObjExpr
   -> Either Text TermDiagram
 elabTmTerm doc _tyVars tmVars tmBound mExpected raw =
   do
@@ -1287,10 +1287,10 @@ elabTmTerm doc _tyVars tmVars tmBound mExpected raw =
                 Nothing -> Left "term argument uses sparse bound term context")
             [0 .. maxIdx]
 
-lookupTmFunByName :: Doctrine -> TypeExpr -> Text -> Int -> Either Text (TmFunName, TmFunSig)
+lookupTmFunByName :: Doctrine -> Obj -> Text -> Int -> Either Text (TmFunName, TmFunSig)
 lookupTmFunByName doc expectedSort name arity = do
   let fname = TmFunName name
-  let sigs = gatherCandidates (typeMode expectedSort)
+  let sigs = gatherCandidates (objMode expectedSort)
   case sigs of
     [] -> Left ("unknown term function: " <> name)
     [sig] ->
@@ -1350,21 +1350,21 @@ lookupTmFunAny doc name arity =
         InPort _ -> True
         InBinder _ -> False
 
-elabInputShapes :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> [RawInputShape] -> Either Text [InputShape]
+elabInputShapes :: Doctrine -> ModeName -> [ObjVar] -> [TmVar] -> [RawInputShape] -> Either Text [InputShape]
 elabInputShapes doc mode tyVars tmVars = mapM (elabInputShape doc mode tyVars tmVars)
 
-elabInputShape :: Doctrine -> ModeName -> [TyVar] -> [TmVar] -> RawInputShape -> Either Text InputShape
+elabInputShape :: Doctrine -> ModeName -> [ObjVar] -> [TmVar] -> RawInputShape -> Either Text InputShape
 elabInputShape doc mode tyVars tmVars shape =
   case shape of
-    RIPort rawTy -> InPort <$> elabTypeExpr doc tyVars tmVars M.empty rawTy
+    RIPort rawTy -> InPort <$> elabObjExpr doc tyVars tmVars M.empty rawTy
     RIBinder binders rawCod -> do
-      boundTys <- mapM (\b -> elabTypeExpr doc tyVars tmVars M.empty (rbvType b)) binders
+      boundTys <- mapM (\b -> elabObjExpr doc tyVars tmVars M.empty (rbvType b)) binders
       let binderPairs = zip binders boundTys
-      let tmBinders = [ (rbvName b, ty) | (b, ty) <- binderPairs, typeMode ty /= mode ]
-      let termBinders = [ b | (b, ty) <- binderPairs, typeMode ty == mode ]
+      let tmBinders = [ (rbvName b, ty) | (b, ty) <- binderPairs, objMode ty /= mode ]
+      let termBinders = [ b | (b, ty) <- binderPairs, objMode ty == mode ]
       let tmCtx = map snd tmBinders
       let tmBound = M.fromList (zipWith (\(nm, ty) idx -> (nm, (idx, ty))) tmBinders [0..])
-      bsDom <- mapM (\b -> elabTypeExpr doc tyVars tmVars tmBound (rbvType b)) termBinders
+      bsDom <- mapM (\b -> elabObjExpr doc tyVars tmVars tmBound (rbvType b)) termBinders
       bsCod <- elabContext doc mode tyVars tmVars tmBound rawCod
       pure (InBinder BinderSig { bsTmCtx = tmCtx, bsDom = bsDom, bsCod = bsCod })
 
@@ -1378,7 +1378,7 @@ elabRuleLHS
   :: ModuleEnv
   -> Doctrine
   -> ModeName
-  -> [TyVar]
+  -> [ObjVar]
   -> [TmVar]
   -> RawDiagExpr
   -> Either Text (Diagram, M.Map BinderMetaVar BinderSig)
@@ -1392,7 +1392,7 @@ elabRuleRHS
   :: ModuleEnv
   -> Doctrine
   -> ModeName
-  -> [TyVar]
+  -> [ObjVar]
   -> [TmVar]
   -> M.Map BinderMetaVar BinderSig
   -> RawDiagExpr
@@ -1406,7 +1406,7 @@ elabRuleRHS env doc mode tyVars tmVars binderSigs expr = do
       pure diag
     else Left "rule RHS introduces fresh binder metas"
 
-elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [TyVar] -> RawDiagExpr -> Either Text Diagram
+elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [ObjVar] -> RawDiagExpr -> Either Text Diagram
 elabDiagExpr env doc mode ruleVars expr = do
   (diag, _) <- elabDiagExprWith env doc mode [] ruleVars [] M.empty BMNoMeta False expr
   ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
@@ -1417,8 +1417,8 @@ elabDiagExprWith
   :: ModuleEnv
   -> Doctrine
   -> ModeName
-  -> [TypeExpr]
-  -> [TyVar]
+  -> [Obj]
+  -> [ObjVar]
   -> [TmVar]
   -> M.Map BinderMetaVar BinderSig
   -> BinderMetaMode
@@ -1432,8 +1432,8 @@ elabDiagExprWithFresh
   :: ModuleEnv
   -> Doctrine
   -> ModeName
-  -> [TypeExpr]
-  -> [TyVar]
+  -> [Obj]
+  -> [ObjVar]
   -> [TmVar]
   -> M.Map BinderMetaVar BinderSig
   -> BinderMetaMode
@@ -1453,7 +1453,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           ctx' <- liftEither (elabContext doc mode tyVars tmVars M.empty ctx)
           pure (idDTm mode curTmCtx ctx', binderSigs)
         RDMetaVar name -> do
-          (_, ty) <- freshTyVar TyVar { tvName = "mv_" <> name, tvMode = mode }
+          (_, ty) <- freshTyVar ObjVar { ovName = "mv_" <> name, ovMode = mode }
           let (pid, d0) = freshPort ty (emptyDiagram mode curTmCtx)
           d1 <- liftEither (setPortLabel pid name d0)
           pure (d1 { dIn = [pid], dOut = [pid] }, binderSigs)
@@ -1461,7 +1461,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           gen <- liftEither (lookupGen doc mode (GenName name))
           tyRename <- freshTySubst (gdTyVars gen)
           tmRename <- freshTmSubst ttDoc curTmCtx (gdTmVars gen)
-          let renameSubst = U.Subst { U.sTy = tyRename, U.sTm = tmRename }
+          let renameSubst = U.Subst { U.sObj = tyRename, U.sTm = tmRename }
           dom0 <- applySubstCtxDoc ttDoc renameSubst (gdPlainDom gen)
           cod0 <- applySubstCtxDoc ttDoc renameSubst (gdCod gen)
           binderSlots0 <- mapM (applySubstBinderSig ttDoc renameSubst) [ bs | InBinder bs <- gdDom gen ]
@@ -1475,16 +1475,16 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                   then liftEither (Left "generator type/term argument mismatch")
                   else do
                     let (tyRawArgs, tmRawArgs) = splitAt tyArity args
-                    tyArgs <- mapM (liftEither . elabTypeExpr doc tyVars tmVars M.empty) tyRawArgs
+                    tyArgs <- mapM (liftEither . elabObjExpr doc tyVars tmVars M.empty) tyRawArgs
                     freshTyVars <- liftEither (extractFreshTyVars (gdTyVars gen) tyRename)
-                    case and (zipWith (\v t -> tvMode v == typeMode t) freshTyVars tyArgs) of
+                    case and (zipWith (\v t -> ovMode v == objMode t) freshTyVars tyArgs) of
                       False -> liftEither (Left "generator type argument mode mismatch")
                       True -> pure ()
                     freshTmVars <- liftEither (extractFreshTmVars (gdTmVars gen) tmRename)
                     tmArgs <- mapM (uncurry (elabTmArg ttDoc curTmCtx)) (zip freshTmVars tmRawArgs)
                     let argSubst =
                           U.Subst
-                            { U.sTy = M.fromList (zip freshTyVars tyArgs)
+                            { U.sObj = M.fromList (zip freshTyVars tyArgs)
                             , U.sTm = M.fromList (zip freshTmVars tmArgs)
                             }
                     dom1 <- applySubstCtxDoc ttDoc argSubst dom0
@@ -1654,11 +1654,11 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
               liftEither (Left err)
       where
         implicitBoundCandidate ctx expectedSort = do
-          expectedNorm <- normalizeTypeDeep ttDoc expectedSort
+          expectedNorm <- normalizeObjDeep ttDoc expectedSort
           let candidates =
                 [ (idx, sortTy)
                 | (idx, sortTy) <- zip [0 :: Int ..] ctx
-                , typeMode sortTy == typeMode expectedNorm
+                , objMode sortTy == objMode expectedNorm
                 ]
           matching <- fmap catMaybes $ mapM (matches expectedNorm) candidates
           case matching of
@@ -1667,7 +1667,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
             _ -> Left "ambiguous bound term variable (multiple binder variables share this sort)"
 
         matches expectedNorm (idx, sortTy) = do
-          sortNorm <- normalizeTypeDeep ttDoc sortTy
+          sortNorm <- normalizeObjDeep ttDoc sortTy
           pure (if sortNorm == expectedNorm then Just idx else Nothing)
 
     mkGenDiag curTmCtx g attrs bargs dom cod = do
@@ -1687,11 +1687,11 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
       pure d3
 
     lookupPortTy d pid =
-      case diagramPortType d pid of
+      case diagramPortObj d pid of
         Nothing -> Left "loop: internal missing port type"
         Just ty -> Right ty
 
-    canonicalCtx ttDoc ctx = liftEither (mapM (U.applySubstTy ttDoc U.emptySubst) ctx)
+    canonicalCtx ttDoc ctx = liftEither (mapM (U.applySubstObj ttDoc U.emptySubst) ctx)
 
     applySubstCtxDoc ttDoc subst ctx = liftEither (U.applySubstCtx ttDoc subst ctx)
 
@@ -1767,15 +1767,15 @@ lookupGen doc mode name =
     renderMode (ModeName m) = m
     renderGen (GenName g) = g
 
-unifyBoundary :: TypeTheory -> S.Set TyVar -> S.Set TmVar -> Context -> Context -> Diagram -> Either Text Diagram
+unifyBoundary :: TypeTheory -> S.Set ObjVar -> S.Set TmVar -> Context -> Context -> Diagram -> Either Text Diagram
 unifyBoundary tt rigidTy rigidTm dom cod diag = do
   domDiag <- diagramDom diag
-  let flexTy0 = S.difference (freeTyVarsDiagram diag) rigidTy
+  let flexTy0 = S.difference (freeObjVarsDiagram diag) rigidTy
   let flexTm0 = S.difference (freeTmVarsDiagram diag) rigidTm
   s1 <- U.unifyCtx tt (dTmCtx diag) flexTy0 flexTm0 domDiag dom
   diag1 <- applySubstDiagram tt s1 diag
   codDiag <- diagramCod diag1
-  let flexTy1 = S.difference (freeTyVarsDiagram diag1) rigidTy
+  let flexTy1 = S.difference (freeObjVarsDiagram diag1) rigidTy
   let flexTm1 = S.difference (freeTmVarsDiagram diag1) rigidTm
   s2 <- U.unifyCtx tt (dTmCtx diag1) flexTy1 flexTm1 codDiag cod
   applySubstDiagram tt s2 diag1
@@ -1968,23 +1968,23 @@ instance Monad Fresh where
 evalFresh :: Fresh a -> Either Text a
 evalFresh (Fresh f) = fmap fst (f 0)
 
-freshTySubst :: [TyVar] -> Fresh (M.Map TyVar TypeExpr)
+freshTySubst :: [ObjVar] -> Fresh (M.Map ObjVar Obj)
 freshTySubst vars = do
   pairs <- mapM freshTyVar vars
   pure (M.fromList pairs)
 
-freshTmSubst :: TypeTheory -> [TypeExpr] -> [TmVar] -> Fresh (M.Map TmVar TermDiagram)
+freshTmSubst :: TypeTheory -> [Obj] -> [TmVar] -> Fresh (M.Map TmVar TermDiagram)
 freshTmSubst ttDoc tmCtx vars = do
   pairs <- mapM (freshTmVar ttDoc tmCtx) vars
   pure (M.fromList pairs)
 
-extractFreshTyVars :: [TyVar] -> M.Map TyVar TypeExpr -> Either Text [TyVar]
+extractFreshTyVars :: [ObjVar] -> M.Map ObjVar Obj -> Either Text [ObjVar]
 extractFreshTyVars vars subst =
   mapM lookupVar vars
   where
     lookupVar v =
       case M.lookup v subst of
-        Just (TVar v') -> Right v'
+        Just (OVar v') -> Right v'
         _ -> Left "internal error: expected fresh type variable"
 
 extractFreshTmVars :: [TmVar] -> M.Map TmVar TermDiagram -> Either Text [TmVar]
@@ -2007,14 +2007,14 @@ extractFreshTmVars vars subst =
             _ -> Nothing
         _ -> Nothing
 
-freshTyVar :: TyVar -> Fresh (TyVar, TypeExpr)
+freshTyVar :: ObjVar -> Fresh (ObjVar, Obj)
 freshTyVar v = do
   n <- freshInt
-  let name = tvName v <> T.pack ("#" <> show n)
-  let fresh = TyVar { tvName = name, tvMode = tvMode v }
-  pure (v, TVar fresh)
+  let name = ovName v <> T.pack ("#" <> show n)
+  let fresh = ObjVar { ovName = name, ovMode = ovMode v }
+  pure (v, OVar fresh)
 
-freshTmVar :: TypeTheory -> [TypeExpr] -> TmVar -> Fresh (TmVar, TermDiagram)
+freshTmVar :: TypeTheory -> [Obj] -> TmVar -> Fresh (TmVar, TermDiagram)
 freshTmVar ttDoc tmCtx v = do
   n <- freshInt
   let name = tmvName v <> T.pack ("#" <> show n)

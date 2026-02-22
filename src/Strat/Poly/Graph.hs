@@ -25,7 +25,7 @@ module Strat.Poly.Graph
   , canonDiagramRaw
   , canonKey
   , shiftDiagram
-  , diagramPortType
+  , diagramPortObj
   , getPortLabel
   , setPortLabel
   , weakenDiagramTmCtxTo
@@ -55,22 +55,22 @@ import Strat.Poly.Syntax
   , EdgePayload(..)
   , Edge(..)
   , Diagram(..)
-  , TypeExpr
+  , Obj
   , TmVar(..)
   )
-import Strat.Poly.TypeExpr (boundTmIndicesType, typeMode)
+import Strat.Poly.Obj (boundTmIndicesObj, objMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Attr (AttrTerm)
 import Strat.Util.List (dedupe)
 
 
-emptyDiagram :: ModeName -> [TypeExpr] -> Diagram
+emptyDiagram :: ModeName -> [Obj] -> Diagram
 emptyDiagram mode tmCtx = Diagram
   { dMode = mode
   , dTmCtx = tmCtx
   , dIn = []
   , dOut = []
-  , dPortTy = IM.empty
+  , dPortObj = IM.empty
   , dPortLabel = IM.empty
   , dProd = IM.empty
   , dCons = IM.empty
@@ -80,10 +80,10 @@ emptyDiagram mode tmCtx = Diagram
   }
 
 diagramPortIds :: Diagram -> [PortId]
-diagramPortIds diag = map PortId (IM.keys (dPortTy diag))
+diagramPortIds diag = map PortId (IM.keys (dPortObj diag))
 
-diagramPortType :: Diagram -> PortId -> Maybe TypeExpr
-diagramPortType diag pid = IM.lookup (unPortId pid) (dPortTy diag)
+diagramPortObj :: Diagram -> PortId -> Maybe Obj
+diagramPortObj diag pid = IM.lookup (unPortId pid) (dPortObj diag)
 
 getPortLabel :: Diagram -> PortId -> Maybe Text
 getPortLabel diag pid =
@@ -93,7 +93,7 @@ getPortLabel diag pid =
 
 setPortLabel :: PortId -> Text -> Diagram -> Either Text Diagram
 setPortLabel pid name diag =
-  if IM.member (unPortId pid) (dPortTy diag)
+  if IM.member (unPortId pid) (dPortObj diag)
     then
       Right
         diag
@@ -101,18 +101,18 @@ setPortLabel pid name diag =
           }
     else Left "setPortLabel: port does not exist"
 
-weakenDiagramTmCtxTo :: [TypeExpr] -> Diagram -> Either Text Diagram
+weakenDiagramTmCtxTo :: [Obj] -> Diagram -> Either Text Diagram
 weakenDiagramTmCtxTo tmCtxHost diag =
   if dTmCtx diag `L.isPrefixOf` tmCtxHost
     then Right diag { dTmCtx = tmCtxHost }
     else Left "weakenDiagramTmCtxTo: image term-context is not a prefix of host term-context"
 
-freshPort :: TypeExpr -> Diagram -> (PortId, Diagram)
+freshPort :: Obj -> Diagram -> (PortId, Diagram)
 freshPort ty diag =
   let pid = PortId (dNextPort diag)
       k = unPortId pid
       diag' = diag
-        { dPortTy = IM.insert k ty (dPortTy diag)
+        { dPortObj = IM.insert k ty (dPortObj diag)
         , dPortLabel = IM.insert k Nothing (dPortLabel diag)
         , dProd = IM.insert k Nothing (dProd diag)
         , dCons = IM.insert k Nothing (dCons diag)
@@ -131,7 +131,7 @@ addEdgePayload payload ins outs diag = do
       Left (err
         <> " (ins=" <> T.pack (show ins)
         <> ", outs=" <> T.pack (show outs)
-        <> ", ports=" <> T.pack (show (IM.keys (dPortTy diag)))
+        <> ", ports=" <> T.pack (show (IM.keys (dPortObj diag)))
         <> ", next=" <> T.pack (show (dNextPort diag))
         <> ")")
     Right _ -> Right ()
@@ -149,7 +149,7 @@ addEdgePayload payload ins outs diag = do
 
 ensurePortExists :: Diagram -> PortId -> Either Text ()
 ensurePortExists diag pid =
-  case IM.lookup (unPortId pid) (dPortTy diag) of
+  case IM.lookup (unPortId pid) (dPortObj diag) of
     Nothing ->
       Left ("addEdge: port does not exist: " <> T.pack (show pid))
     Just _ -> Right ()
@@ -180,13 +180,13 @@ validateDiagram diag = do
   mapM_ (ensureBoundaryEndpoint "input" (dProd diag)) (dIn diag)
   mapM_ (ensureBoundaryEndpoint "output" (dCons diag)) (dOut diag)
   mapM_ checkEdge (IM.elems (dEdges diag))
-  mapM_ checkPortMode (IM.toList (dPortTy diag))
-  mapM_ checkPort (IM.keys (dPortTy diag))
+  mapM_ checkPortMode (IM.toList (dPortObj diag))
+  mapM_ checkPort (IM.keys (dPortObj diag))
   pure ()
   where
     ensureKeysets =
       do
-        ensureSameKeySet "port types" (dPortTy diag) (dPortLabel diag)
+        ensureSameKeySet "port types" (dPortObj diag) (dPortLabel diag)
         ensureSameKeySet "port labels" (dPortLabel diag) (dProd diag)
         ensureSameKeySet "port labels" (dPortLabel diag) (dCons diag)
     ensureSameKeySet label left right =
@@ -201,7 +201,7 @@ validateDiagram diag = do
             then Right ()
             else Left "validateDiagram: edge map key does not match edge id"
     ensureNextIdBounds = do
-      ensureNextBound "dNextPort" (dNextPort diag) (IM.keys (dPortTy diag))
+      ensureNextBound "dNextPort" (dNextPort diag) (IM.keys (dPortObj diag))
       ensureNextBound "dNextEdge" (dNextEdge diag) (IM.keys (dEdges diag))
       where
         ensureNextBound label nextId keys =
@@ -271,7 +271,7 @@ validateDiagram diag = do
         Nothing -> Left "validateDiagram: missing edge referenced by incidence"
         Just edge -> Right edge
     requirePortType d pid =
-      case diagramPortType d pid of
+      case diagramPortObj d pid of
         Nothing -> Left "validateDiagram: missing port type"
         Just ty -> Right ty
     checkPayload edge =
@@ -323,7 +323,7 @@ validateDiagram diag = do
             case eOuts edge of
               [pid] -> requirePortType diag pid
               _ -> Left "validateDiagram: PTmMeta must have exactly one output"
-          if typeMode outTy == typeMode (tmvSort v)
+          if objMode outTy == objMode (tmvSort v)
             then Right ()
             else Left "validateDiagram: PTmMeta output mode mismatch"
           if outTy == tmvSort v
@@ -332,8 +332,8 @@ validateDiagram diag = do
           let modeIns =
                 [ pid
                 | pid <- dIn diag
-                , Just ty <- [diagramPortType diag pid]
-                , typeMode ty == typeMode (tmvSort v)
+                , Just ty <- [diagramPortObj diag pid]
+                , objMode ty == objMode (tmvSort v)
                 ]
           if tmvScope v > length modeIns
             then Left "validateDiagram: PTmMeta scope exceeds available bound variables"
@@ -361,9 +361,9 @@ validateDiagram diag = do
         then Right ()
         else Left "validateDiagram: port appears in both inputs and outputs"
     checkPortMode (k, ty) =
-      if typeMode ty == dMode diag
+      if objMode ty == dMode diag
         then
-          let bad = S.filter (>= length (dTmCtx diag)) (boundTmIndicesType ty)
+          let bad = S.filter (>= length (dTmCtx diag)) (boundTmIndicesObj ty)
            in if S.null bad
                 then Right ()
                 else Left "validateDiagram: port type uses out-of-scope bound term variable"
@@ -395,7 +395,7 @@ mergePorts diag keep drop
           prod <- mergeEndpoint "producer" prodKeep prodDrop
           cons <- mergeEndpoint "consumer" consKeep consDrop
           let diag' = diag
-                { dPortTy = IM.delete (unPortId drop) (dPortTy diag)
+                { dPortObj = IM.delete (unPortId drop) (dPortObj diag)
                 , dPortLabel =
                     IM.insert
                       (unPortId keep)
@@ -410,7 +410,7 @@ mergePorts diag keep drop
           pure diag'
   where
     requireType pid =
-      case IM.lookup (unPortId pid) (dPortTy diag) of
+      case IM.lookup (unPortId pid) (dPortObj diag) of
         Nothing -> Left "mergePorts: missing port"
         Just ty -> Right ty
     requireLabel pid =
@@ -479,7 +479,7 @@ deletePortIfDangling diag pid =
         (Just Nothing, Just Nothing) ->
           Right
             diag
-              { dPortTy = IM.delete k (dPortTy diag)
+              { dPortObj = IM.delete k (dPortObj diag)
               , dPortLabel = IM.delete k (dPortLabel diag)
               , dProd = IM.delete k (dProd diag)
               , dCons = IM.delete k (dCons diag)
@@ -522,7 +522,7 @@ shiftDiagram portOff edgeOff diag =
   in diag
       { dIn = shiftPorts (dIn diag)
       , dOut = shiftPorts (dOut diag)
-      , dPortTy = shiftPortMap (dPortTy diag)
+      , dPortObj = shiftPortMap (dPortObj diag)
       , dPortLabel = shiftPortMap (dPortLabel diag)
       , dProd = shiftPortMap (fmap (fmap shiftEdge) (dProd diag))
       , dCons = shiftPortMap (fmap (fmap shiftEdge) (dCons diag))
@@ -535,7 +535,7 @@ reindexDiagramForDisplay :: Diagram -> Either Text Diagram
 reindexDiagramForDisplay diag = do
   let (portMap, nextPort) = assignPorts diag
   let edgeMap = assignEdges diag
-  dPortTy' <- buildPortMap portMap (dPortTy diag)
+  dPortObj' <- buildPortMap portMap (dPortObj diag)
   dPortLabel' <- buildPortMap portMap (dPortLabel diag)
   dProd' <- buildEdgeRefMap portMap edgeMap (dProd diag)
   dCons' <- buildEdgeRefMap portMap edgeMap (dCons diag)
@@ -547,7 +547,7 @@ reindexDiagramForDisplay diag = do
     , dTmCtx = dTmCtx diag
     , dIn = dIn'
     , dOut = dOut'
-    , dPortTy = dPortTy'
+    , dPortObj = dPortObj'
     , dPortLabel = dPortLabel'
     , dProd = dProd'
     , dCons = dCons'
@@ -654,7 +654,7 @@ data ColorKey
   | CKBoundOut Int
   | CKSlotIn Int
   | CKSlotOut Int
-  | CKPort TypeExpr (Maybe Text)
+  | CKPort Obj (Maybe Text)
   | CKEdge PayloadKey Int Int
   deriving (Eq, Ord, Show)
 
@@ -709,7 +709,7 @@ canonPayload payload =
 
 canonizeOuter :: Diagram -> Either Text Diagram
 canonizeOuter diag = do
-  let ports = map PortId (IM.keys (dPortTy diag))
+  let ports = map PortId (IM.keys (dPortObj diag))
   let edges = L.sortOn (unEdgeId . eId) (IM.elems (dEdges diag))
   let edgeIds = map eId edges
   let vertices =
@@ -777,7 +777,7 @@ colorKeyFor diag v =
       Right (CKSlotOut j)
     VPort pid -> do
       ty <-
-        case IM.lookup (unPortId pid) (dPortTy diag) of
+        case IM.lookup (unPortId pid) (dPortObj diag) of
           Nothing -> Left "canonDiagram: missing port type"
           Just t -> Right t
       Right (CKPort ty Nothing)
@@ -997,7 +997,7 @@ rebuildCanonicalDiagram :: Diagram -> [PortId] -> [EdgeId] -> Either Text Diagra
 rebuildCanonicalDiagram diag portOrder edgeOrder = do
   let portMap = M.fromList (zip portOrder [ PortId i | i <- [0 :: Int .. length portOrder - 1] ])
   let edgeMap = M.fromList (zip edgeOrder [ EdgeId i | i <- [0 :: Int .. length edgeOrder - 1] ])
-  dPortTy' <-
+  dPortObj' <-
     fmap IM.fromList $
       mapM
         ( \oldPid -> do
@@ -1011,15 +1011,15 @@ rebuildCanonicalDiagram diag portOrder edgeOrder = do
   dOut' <- mapM (requirePortMap portMap) (dOut diag)
   edges' <- mapM (rebuildEdge portMap edgeMap) edgeOrder
   let dEdges' = IM.fromList [ (unEdgeId (eId edge), edge) | edge <- edges' ]
-  dProd' <- buildIncidence "producer" eOuts edges' dPortTy'
-  dCons' <- buildIncidence "consumer" eIns edges' dPortTy'
+  dProd' <- buildIncidence "producer" eOuts edges' dPortObj'
+  dCons' <- buildIncidence "consumer" eIns edges' dPortObj'
   pure
     Diagram
       { dMode = dMode diag
       , dTmCtx = dTmCtx diag
       , dIn = dIn'
       , dOut = dOut'
-      , dPortTy = dPortTy'
+      , dPortObj = dPortObj'
       , dPortLabel = dPortLabel'
       , dProd = dProd'
       , dCons = dCons'
@@ -1039,7 +1039,7 @@ rebuildCanonicalDiagram diag portOrder edgeOrder = do
         Just eid' -> Right eid'
 
     requirePortType pid =
-      case IM.lookup (unPortId pid) (dPortTy diag) of
+      case IM.lookup (unPortId pid) (dPortObj diag) of
         Nothing -> Left "canonDiagram: missing source port type"
         Just ty -> Right ty
 

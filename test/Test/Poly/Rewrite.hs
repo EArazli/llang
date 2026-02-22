@@ -13,11 +13,11 @@ import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar(..))
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Match (Match(..), MatchConfig(..), findFirstMatch)
-import Strat.Poly.UnifyTy (Subst(..))
+import Strat.Poly.UnifyObj (Subst(..))
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory, ModName(..), ModDecl(..), ModExpr(..), ModEqn(..), addMode, addModDecl, addModEqn)
 import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
 import Strat.Poly.Pretty (renderDiagram)
@@ -47,13 +47,13 @@ tests =
 modeName :: ModeName
 modeName = ModeName "M"
 
-aTy :: TypeExpr
-aTy = TCon (TypeRef modeName (TypeName "A")) []
+aTy :: Obj
+aTy = OCon (ObjRef modeName (ObjName "A")) []
 
-tvar :: Text -> TyVar
-tvar name = TyVar { tvName = name, tvMode = modeName }
+tvar :: Text -> ObjVar
+tvar name = ObjVar { ovName = name, ovMode = modeName }
 
-mkGen :: Text -> [TypeExpr] -> [TypeExpr] -> Either Text Diagram
+mkGen :: Text -> [Obj] -> [Obj] -> Either Text Diagram
 mkGen name dom cod = genD modeName dom cod (GenName name)
 
 require :: Either Text a -> IO a
@@ -303,9 +303,9 @@ testNestedBoxesMatch = do
 testBoxTypeVarUnify :: Assertion
 testBoxTypeVarUnify = do
   let aVar = tvar "a"
-  let aVarTy = TVar aVar
-  let aName = TypeName "A"
-  let aConcrete = TCon (TypeRef modeName aName) []
+  let aVarTy = OVar aVar
+  let aName = ObjName "A"
+  let aConcrete = OCon (ObjRef modeName aName) []
   fVar <- require (mkGen "f" [aVarTy] [aVarTy])
   fConcrete <- require (mkGen "f" [aConcrete] [aConcrete])
   lhs <- require (mkBoxDiagram "B" fVar aVarTy)
@@ -317,7 +317,7 @@ testBoxTypeVarUnify = do
   case res of
     Nothing -> assertFailure "expected type-var unification through box"
     Just m ->
-      case M.lookup aVar (sTy (mTySubst m)) of
+      case M.lookup aVar (sObj (mTySubst m)) of
         Nothing -> assertFailure "expected substitution for type variable"
         Just ty -> ty @?= aConcrete
 
@@ -334,10 +334,10 @@ testRewriteUsesModeEq = do
   let lhsEq = ModExpr { meSrc = modeA, meTgt = modeA, mePath = [fName, uName] }
   let rhsEq = ModExpr { meSrc = modeA, meTgt = modeA, mePath = [] }
   mt <- require (addModEqn (ModEqn lhsEq rhsEq) mt3)
-  let base = TCon (TypeRef modeA (TypeName "Base")) []
+  let base = OCon (ObjRef modeA (ObjName "Base")) []
   let fExpr = ModExpr { meSrc = modeA, meTgt = modeB, mePath = [fName] }
   let uExpr = ModExpr { meSrc = modeB, meTgt = modeA, mePath = [uName] }
-  let ufBase = TMod uExpr (TMod fExpr base)
+  let ufBase = OMod uExpr (OMod fExpr base)
   lhs <- require (genD modeA [base] [base] (GenName "foo"))
   let rhs = idD modeA [base]
   host <- require (genD modeA [ufBase] [ufBase] (GenName "foo"))
@@ -367,7 +367,7 @@ testNormalizeDeterminism = do
     (OutOfFuel a, OutOfFuel b) -> a @?= b
     _ -> assertFailure "expected same normalization status"
 
-mkBoxDiagram :: Text -> Diagram -> TypeExpr -> Either Text Diagram
+mkBoxDiagram :: Text -> Diagram -> Obj -> Either Text Diagram
 mkBoxDiagram name inner ty = do
   let (inP, d0) = freshPort ty (emptyDiagram modeName [])
   let (outP, d1) = freshPort ty d0

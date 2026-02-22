@@ -145,7 +145,7 @@ library:
   - Strat.Poly.Term.Confluence
   - Strat.Poly.Term.Termination
   - Strat.Poly.Traversal
-  - Strat.Poly.TypePretty
+  - Strat.Poly.ObjPretty
   - Strat.Util.List
 
 executables:
@@ -193,8 +193,8 @@ tests:
     - Test.Poly.ModeTransforms
     - Test.Poly.Surface
     - Test.Poly.TermNormalize
-    - Test.Poly.UnifyTy
-    - Test.Poly.TypeModes
+    - Test.Poly.UnifyObj
+    - Test.Poly.ObjModes
     - Test.DSL.Functors
     - Test.Value.Doc
     - Test.Frontend.Pipeline

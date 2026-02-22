@@ -3,18 +3,18 @@ module Strat.Poly.Kernel
   ( Doctrine
   , validateDoctrine
   , checkDoctrine
-  , TypeExpr(..)
-  , TypeArg(..)
-  , TypeRef(..)
-  , TypeName(..)
-  , TyVar(..)
-  , normalizeTypeDeep
-  , normalizeTypeDeepWithCtx
+  , Obj(..)
+  , ObjArg(..)
+  , ObjRef(..)
+  , ObjName(..)
+  , ObjVar(..)
+  , normalizeObjDeep
+  , normalizeObjDeepWithCtx
   , normalizeTermDiagram
   , termExprToDiagramChecked
   , diagramToTermExprChecked
-  , unifyTy
-  , unifyTyFlex
+  , unifyObj
+  , unifyObjFlex
   , SearchOutcome(..)
   , autoJoinProof
   ) where
@@ -23,15 +23,15 @@ import Data.Text (Text)
 import Strat.Poly.Doctrine (Doctrine, validateDoctrine)
 import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Proof (SearchOutcome(..))
-import Strat.Poly.TypeExpr (TyVar(..), TypeArg(..), TypeExpr(..), TypeName(..), TypeRef(..))
-import Strat.Poly.TypeNormalize
-  ( normalizeTypeDeep
-  , normalizeTypeDeepWithCtx
+import Strat.Poly.Obj (ObjVar(..), ObjArg(..), Obj(..), ObjName(..), ObjRef(..))
+import Strat.Poly.ObjNormalize
+  ( normalizeObjDeep
+  , normalizeObjDeepWithCtx
   , normalizeTermDiagram
   , termExprToDiagramChecked
   , diagramToTermExprChecked
   )
-import Strat.Poly.UnifyTy (unifyTy, unifyTyFlex)
+import Strat.Poly.UnifyObj (unifyObj, unifyObjFlex)
 
 
 checkDoctrine :: Doctrine -> Either Text ()

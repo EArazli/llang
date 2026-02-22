@@ -11,8 +11,8 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..), TypeArg(..), TermDiagram(..))
-import Strat.Poly.UnifyTy (Subst(..), applySubstTy, normalizeSubst)
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar(..), ObjArg(..), TermDiagram(..))
+import Strat.Poly.UnifyObj (Subst(..), applySubstObj, normalizeSubst)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Names (BoxName(..))
 import Strat.Poly.Diagram
@@ -55,8 +55,8 @@ tests =
     , testCase "validateDiagram rejects boundary output with consumer" testValidateBoundaryOutputConsumed
     , testCase "diagram iso equality ignores ids" testDiagramIsoEq
     , testCase "unionDisjointIntMap rejects collisions" testUnionDisjoint
-    , testCase "applySubstTy chases substitutions" testApplySubstChase
-    , testCase "applySubstTy handles cycles" testApplySubstCycle
+    , testCase "applySubstObj chases substitutions" testApplySubstChase
+    , testCase "applySubstObj handles cycles" testApplySubstCycle
     , testCase "normalizeSubst drops identity" testNormalizeSubstIdentity
     , testCase "diagram iso ignores box names" testDiagramIsoBoxName
     , testCase "validateDoctrine rejects duplicate gen tyvars" testDuplicateGenTyVars
@@ -70,11 +70,11 @@ tests =
 require :: Either Text a -> IO a
 require = either (assertFailure . T.unpack) pure
 
-tvar :: ModeName -> Text -> TyVar
-tvar mode name = TyVar { tvName = name, tvMode = mode }
+tvar :: ModeName -> Text -> ObjVar
+tvar mode name = ObjVar { ovName = name, ovMode = mode }
 
-tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
-tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
+tcon :: ModeName -> Text -> [Obj] -> Obj
+tcon mode name args = OCon (ObjRef mode (ObjName name)) (map OAObj args)
 
 
 testDiagramDomCod :: Assertion
@@ -256,8 +256,8 @@ testApplySubstChase = do
   let b = tvar mode "b"
   let c = tcon mode "C" []
   let tt = modeOnlyTypeTheory (mkModes [mode])
-  let subst = Subst (M.fromList [(a, TVar b), (b, c)]) M.empty
-  ty <- require (applySubstTy tt subst (TVar a))
+  let subst = Subst (M.fromList [(a, OVar b), (b, c)]) M.empty
+  ty <- require (applySubstObj tt subst (OVar a))
   ty @?= c
 
 testApplySubstCycle :: Assertion
@@ -266,17 +266,17 @@ testApplySubstCycle = do
   let a = tvar mode "a"
   let b = tvar mode "b"
   let tt = modeOnlyTypeTheory (mkModes [mode])
-  let subst = Subst (M.fromList [(a, TVar b), (b, TVar a)]) M.empty
-  ty <- require (applySubstTy tt subst (TVar a))
-  ty @?= TVar a
+  let subst = Subst (M.fromList [(a, OVar b), (b, OVar a)]) M.empty
+  ty <- require (applySubstObj tt subst (OVar a))
+  ty @?= OVar a
 
 testNormalizeSubstIdentity :: Assertion
 testNormalizeSubstIdentity = do
   let mode = ModeName "M"
   let a = tvar mode "a"
   let tt = modeOnlyTypeTheory (mkModes [mode])
-  subst <- require (normalizeSubst tt (Subst (M.fromList [(a, TVar a)]) M.empty))
-  sTy subst @?= M.empty
+  subst <- require (normalizeSubst tt (Subst (M.fromList [(a, OVar a)]) M.empty))
+  sObj subst @?= M.empty
 
 testDiagramIsoBoxName :: Assertion
 testDiagramIsoBoxName = do
@@ -303,8 +303,8 @@ testDuplicateGenTyVars = do
         , gdMode = mode
         , gdTyVars = [a, a]
         , gdTmVars = []
-    , gdDom = map InPort [TVar a]
-        , gdCod = [TVar a]
+    , gdDom = map InPort [OVar a]
+        , gdCod = [OVar a]
         , gdAttrs = []
         }
   let doc = Doctrine
@@ -326,7 +326,7 @@ testDuplicateCellTyVars :: Assertion
 testDuplicateCellTyVars = do
   let mode = ModeName "M"
   let a = tvar mode "a"
-  let diag = idD mode [TVar a]
+  let diag = idD mode [OVar a]
   let cell = Cell2
         { c2Name = "dupCellTyVars"
         , c2Class = Structural
@@ -352,7 +352,7 @@ testDuplicateCellTyVars = do
 testRejectRHSTyVars :: Assertion
 testRejectRHSTyVars = do
   let mode = ModeName "M"
-  let aName = TypeName "A"
+  let aName = ObjName "A"
   let bVar = tvar mode "b"
   let gen = GenDecl
         { gdName = GenName "f"
@@ -364,7 +364,7 @@ testRejectRHSTyVars = do
         , gdAttrs = []
         }
   lhs <- require (genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName gen))
-  rhs <- require (genD mode [TVar bVar] [TVar bVar] (gdName gen))
+  rhs <- require (genD mode [OVar bVar] [OVar bVar] (gdName gen))
   let cell = Cell2
         { c2Name = "rhs_fresh"
         , c2Class = Computational
@@ -392,19 +392,19 @@ testRejectRHSTyVars = do
 testAcceptRHSTyVars :: Assertion
 testAcceptRHSTyVars = do
   let mode = ModeName "M"
-  let aName = TypeName "A"
+  let aName = ObjName "A"
   let aVar = tvar mode "a"
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = [aVar]
         , gdTmVars = []
-    , gdDom = map InPort [TVar aVar]
-        , gdCod = [TVar aVar]
+    , gdDom = map InPort [OVar aVar]
+        , gdCod = [OVar aVar]
         , gdAttrs = []
         }
-  lhs <- require (genD mode [TVar aVar] [TVar aVar] (gdName gen))
-  rhs <- require (genD mode [TVar aVar] [TVar aVar] (gdName gen))
+  lhs <- require (genD mode [OVar aVar] [OVar aVar] (gdName gen))
+  rhs <- require (genD mode [OVar aVar] [OVar aVar] (gdName gen))
   let cell = Cell2
         { c2Name = "rhs_ok"
         , c2Class = Computational
@@ -432,7 +432,7 @@ testAcceptRHSTyVars = do
 testRejectEmptyLHS :: Assertion
 testRejectEmptyLHS = do
   let mode = ModeName "M"
-  let aName = TypeName "A"
+  let aName = ObjName "A"
   let lhs = idD mode [tcon mode "A" []]
   let rhs = idD mode [tcon mode "A" []]
   let cell = Cell2
@@ -463,11 +463,11 @@ testCellBoundaryUsesDiagramTmCtx :: Assertion
 testCellBoundaryUsesDiagramTmCtx = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let natRef = TypeRef modeI (TypeName "Nat")
-  let vecRef = TypeRef modeM (TypeName "Vec")
-  let natTy = TCon natRef []
+  let natRef = ObjRef modeI (ObjName "Nat")
+  let vecRef = ObjRef modeM (ObjName "Vec")
+  let natTy = OCon natRef []
   let tmBound0 = TermDiagram (idDTm modeI [natTy] [natTy])
-  let vecBound = TCon vecRef [TATm tmBound0]
+  let vecBound = OCon vecRef [OATm tmBound0]
   lhs <- require (genDTm modeM [natTy] [vecBound] [vecBound] (GenName "marker"))
   rhs <- require (genDTm modeM [natTy] [vecBound] [vecBound] (GenName "marker"))
   let cell =
@@ -487,8 +487,8 @@ testCellBoundaryUsesDiagramTmCtx = do
           , dAcyclicModes = S.empty
           , dTypes =
               M.fromList
-                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy])])
+                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
+                , (modeM, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy])])
                 ]
           , dGens = M.empty
           , dCells2 = [cell]
@@ -505,7 +505,7 @@ testCellBoundaryUsesDiagramTmCtx = do
     Left _ -> pure ()
     Right _ -> assertFailure "expected doctrine to reject mismatched cell tmctx"
 
-buildIsoDiagram :: ModeName -> TypeExpr -> Either Text Diagram
+buildIsoDiagram :: ModeName -> Obj -> Either Text Diagram
 buildIsoDiagram mode a = do
   let (p0, d0) = freshPort a (emptyDiagram mode [])
   let (p1, d1) = freshPort a d0
@@ -539,9 +539,9 @@ permuteIsoDiagram diag = do
             case IM.lookup (unEdgeId eid) edgeMap of
               Just eid' -> eid'
               Nothing -> eid
-      let dPortTy' = IM.fromList
+      let dPortObj' = IM.fromList
             [ (unPortId (remapPort (PortId k)), ty)
-            | (k, ty) <- IM.toList (dPortTy diag)
+            | (k, ty) <- IM.toList (dPortObj diag)
             ]
       let dPortLabel' = IM.fromList
             [ (unPortId (remapPort (PortId k)), label)
@@ -568,7 +568,7 @@ permuteIsoDiagram diag = do
       let diag' = diag
             { dIn = map remapPort (dIn diag)
             , dOut = map remapPort (dOut diag)
-            , dPortTy = dPortTy'
+            , dPortObj = dPortObj'
             , dPortLabel = dPortLabel'
             , dProd = dProd'
             , dCons = dCons'

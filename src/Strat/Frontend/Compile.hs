@@ -14,9 +14,9 @@ import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
-import Strat.Poly.Diagram (Diagram, freeTyVarsDiagram, freeTmVarsDiagram)
+import Strat.Poly.Diagram (Diagram, freeObjVarsDiagram, freeTmVarsDiagram)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
-import Strat.Poly.TypeExpr (TmVar(..))
+import Strat.Poly.Obj (TmVar(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Surface (PolySurfaceDef(..))
@@ -86,7 +86,7 @@ compileSourceDiagram env targetName mMode mSurface uses exprText = do
         case coerceDiagramTo env docUsed diagUsed targetName of
           Right ok -> Right ok
           Left err -> Left (renderMismatch usesMismatch err)
-  if S.null (freeTyVarsDiagram diagFinal)
+  if S.null (freeObjVarsDiagram diagFinal)
     then Right ()
   else Left "unresolved type variables in diagram"
   let unresolvedTm = S.toList (freeTmVarsDiagram diagFinal)

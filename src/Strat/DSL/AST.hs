@@ -189,7 +189,7 @@ data RawPolyTypeMap = RawPolyTypeMap
   { rpmtSrcType :: Text
   , rpmtParams :: [PolyAST.RawParamDecl]
   , rpmtSrcMode :: Text
-  , rpmtTgtType :: PolyAST.RawPolyTypeExpr
+  , rpmtTgtType :: PolyAST.RawPolyObjExpr
   , rpmtTgtMode :: Text
   } deriving (Eq, Show)
 

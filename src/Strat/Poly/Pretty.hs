@@ -9,10 +9,10 @@ import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Strat.Poly.Graph
-import Strat.Poly.TypeExpr
+import Strat.Poly.Obj
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Attr (AttrTerm(..), AttrLit(..), AttrMap, AttrVar(..))
-import Strat.Poly.TypePretty (renderMode, renderType)
+import Strat.Poly.ObjPretty (renderMode, renderType)
 
 
 renderDiagram :: Diagram -> Either Text Text
@@ -38,7 +38,7 @@ renderPorts diag ports =
             case getPortLabel diag p of
               Nothing -> renderPortId p
               Just lbl -> renderPortId p <> "(" <> lbl <> ")"
-      in case IM.lookup (unPortId p) (dPortTy diag) of
+      in case IM.lookup (unPortId p) (dPortObj diag) of
           Nothing -> renderedPort
           Just ty -> renderedPort <> ":" <> renderType ty
 
@@ -167,4 +167,4 @@ renderEdgeId (EdgeId k) = "e" <> T.pack (show k)
 renderBinderMeta :: BinderMetaVar -> Text
 renderBinderMeta (BinderMetaVar x) = "?" <> x
 
--- renderType and renderMode come from Strat.Poly.TypePretty
+-- renderType and renderMode come from Strat.Poly.ObjPretty

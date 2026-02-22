@@ -25,7 +25,7 @@ import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoEqSlow)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeRef(..), TypeName(..))
+import Strat.Poly.Obj (Obj(..), ObjRef(..), ObjName(..))
 import Strat.Poly.Attr (AttrTerm(..), AttrLit(..))
 
 
@@ -200,8 +200,8 @@ finalizeBoundary diag =
 testMode :: ModeName
 testMode = ModeName "M"
 
-testType :: TypeExpr
-testType = TCon (TypeRef testMode (TypeName "A")) []
+testType :: Obj
+testType = OCon (ObjRef testMode (ObjName "A")) []
 
 require :: Either Text a -> IO a
 require (Left err) = assertFailure (T.unpack err) >> fail "unreachable"

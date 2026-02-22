@@ -10,7 +10,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD)
 import Strat.Poly.Graph (Diagram)
@@ -36,8 +36,8 @@ require = either (assertFailure . T.unpack) pure
 modeName :: ModeName
 modeName = ModeName "M"
 
-aTy :: TypeExpr
-aTy = TCon (TypeRef modeName (TypeName "A")) []
+aTy :: Obj
+aTy = OCon (ObjRef modeName (ObjName "A")) []
 
 mkGenDecl :: Text -> GenDecl
 mkGenDecl name =
@@ -75,7 +75,7 @@ mkDoctrine cells =
       { dName = "D"
       , dModes = mkModes (S.singleton modeName)
       , dAcyclicModes = S.empty
-      , dTypes = M.fromList [(modeName, M.fromList [(TypeName "A", TypeSig [])])]
+      , dTypes = M.fromList [(modeName, M.fromList [(ObjName "A", TypeSig [])])]
       , dGens = M.fromList [(modeName, M.fromList [(gdName g, g) | g <- gens])]
       , dCells2 = cells
       , dAttrSorts = M.empty

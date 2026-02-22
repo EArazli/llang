@@ -14,7 +14,7 @@ import Strat.Frontend.Env (meDoctrines)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..), TypeArg(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar(..), ObjArg(..))
 
 
 tests :: TestTree
@@ -49,7 +49,7 @@ testDataMacroElab = do
   types <- case M.lookup mode (dTypes doc) of
     Nothing -> assertFailure "expected type table"
     Just t -> pure t
-  assertBool "expected List type" (M.member (TypeName "List") types)
+  assertBool "expected List type" (M.member (ObjName "List") types)
   gens <- case M.lookup mode (dGens doc) of
     Nothing -> assertFailure "expected generator table"
     Just g -> pure g
@@ -59,11 +59,11 @@ testDataMacroElab = do
   consGen <- case M.lookup (GenName "Cons") gens of
     Nothing -> assertFailure "expected Cons constructor"
     Just g -> pure g
-  let aVar = TyVar { tvName = "a", tvMode = mode }
-  let listTy = TCon (TypeRef mode (TypeName "List")) [TAType (TVar aVar)]
+  let aVar = ObjVar { ovName = "a", ovMode = mode }
+  let listTy = OCon (ObjRef mode (ObjName "List")) [OAObj (OVar aVar)]
   gdPlainDom nilGen @?= []
   gdCod nilGen @?= [listTy]
-  gdPlainDom consGen @?= [TVar aVar, listTy]
+  gdPlainDom consGen @?= [OVar aVar, listTy]
   gdCod consGen @?= [listTy]
 
 testDataMacroCollision :: Assertion

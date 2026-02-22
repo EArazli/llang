@@ -14,8 +14,8 @@ import qualified Test.Poly.ModeTheory as PolyModeTheory
 import qualified Test.Poly.ModeTransforms as PolyModeTransforms
 import qualified Test.Poly.Surface as PolySurface
 import qualified Test.Poly.TermNormalize as PolyTermNormalize
-import qualified Test.Poly.UnifyTy as PolyUnifyTy
-import qualified Test.Poly.TypeModes as PolyTypeModes
+import qualified Test.Poly.UnifyObj as PolyUnifyObj
+import qualified Test.Poly.ObjModes as PolyObjModes
 import qualified Test.Poly.DataMacro as PolyDataMacro
 import qualified Test.Poly.Dependent as PolyDependent
 import qualified Test.Poly.Foliation as PolyFoliation
@@ -45,8 +45,8 @@ main =
       , PolyModeTransforms.tests
       , PolySurface.tests
       , PolyTermNormalize.tests
-      , PolyUnifyTy.tests
-      , PolyTypeModes.tests
+      , PolyUnifyObj.tests
+      , PolyObjModes.tests
       , PolyDataMacro.tests
       , PolyDependent.tests
       , PolyFoliation.tests

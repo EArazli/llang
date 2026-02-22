@@ -25,7 +25,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import qualified Data.Text as T
 import Strat.Poly.ModeTheory
-import Strat.Poly.TypeExpr
+import Strat.Poly.Obj
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
   , TypeParamSig(..)
@@ -38,9 +38,9 @@ import Strat.Poly.Diagram
 import Strat.Poly.Graph (validateDiagram, Edge(..), EdgePayload(..), unPortId)
 import Strat.Poly.Cell2
 import Strat.Poly.DSL.AST (RawOblExpr(..))
-import Strat.Poly.UnifyTy (unifyCtx)
+import Strat.Poly.UnifyObj (unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
-import Strat.Poly.TypeNormalize (termToDiagram, validateTermDiagram)
+import Strat.Poly.ObjNormalize (termToDiagram, validateTermDiagram)
 import Strat.Poly.Term.RewriteCompile (compileAllTermRules)
 import Strat.Poly.Term.Termination (checkTerminatingSCT)
 import Strat.Poly.Term.Confluence (checkConfluent)
@@ -48,7 +48,7 @@ import Strat.Poly.Term.Confluence (checkConfluent)
 
 data ParamSig
   = PS_Ty ModeName
-  | PS_Tm TypeExpr
+  | PS_Tm Obj
   deriving (Eq, Ord, Show)
 
 newtype TypeSig = TypeSig
@@ -56,20 +56,20 @@ newtype TypeSig = TypeSig
   } deriving (Eq, Ord, Show)
 
 data BinderSig = BinderSig
-  { bsTmCtx :: [TypeExpr]
+  { bsTmCtx :: [Obj]
   , bsDom :: Context
   , bsCod :: Context
   } deriving (Eq, Ord, Show)
 
 data InputShape
-  = InPort TypeExpr
+  = InPort Obj
   | InBinder BinderSig
   deriving (Eq, Ord, Show)
 
 data GenDecl = GenDecl
   { gdName :: GenName
   , gdMode :: ModeName
-  , gdTyVars :: [TyVar]
+  , gdTyVars :: [ObjVar]
   , gdTmVars :: [TmVar]
   , gdDom :: [InputShape]
   , gdCod :: Context
@@ -86,7 +86,7 @@ data ObligationDecl = ObligationDecl
   { obName :: Text
   , obMode :: ModeName
   , obForGen :: Bool
-  , obTyVars :: [TyVar]
+  , obTyVars :: [ObjVar]
   , obTmVars :: [TmVar]
   , obDom :: Context
   , obCod :: Context
@@ -106,7 +106,7 @@ data Doctrine = Doctrine
   , dModes :: ModeTheory
   , dAcyclicModes :: S.Set ModeName
   , dAttrSorts :: M.Map AttrSort AttrSortDecl
-  , dTypes :: M.Map ModeName (M.Map TypeName TypeSig)
+  , dTypes :: M.Map ModeName (M.Map ObjName TypeSig)
   , dGens :: M.Map ModeName (M.Map GenName GenDecl)
   , dCells2 :: [Cell2]
   , dActions :: M.Map ModName ModAction
@@ -131,9 +131,9 @@ doctrineTypeTheoryBase doc =
    in
     TypeTheory
       { ttModes = dModes doc
-      , ttTypeParams =
+      , ttObjParams =
           M.fromList
-            [ (TypeRef mode tyName, map toTParam (tsParams sig))
+            [ (ObjRef mode tyName, map toTParam (tsParams sig))
             | (mode, typeTable) <- M.toList (dTypes doc)
             , (tyName, sig) <- M.toList typeTable
             ]
@@ -220,7 +220,7 @@ mkInputVars diag =
   mapM mkOne (zip [0 :: Int ..] (dIn diag))
   where
     mkOne (i, pid) = do
-      sortTy <- IM.lookup (unPortId pid) (dPortTy diag)
+      sortTy <- IM.lookup (unPortId pid) (dPortObj diag)
       pure TmVar { tmvName = "_x" <> T.pack (show i), tmvSort = sortTy, tmvScope = 0 }
 
 validateDoctrine :: Doctrine -> Either Text ()
@@ -242,19 +242,19 @@ validateDoctrine doc = do
 modeIsAcyclic :: Doctrine -> ModeName -> Bool
 modeIsAcyclic doc mode = mode `S.member` dAcyclicModes doc
 
-lookupTypeSig :: Doctrine -> TypeRef -> Either Text TypeSig
+lookupTypeSig :: Doctrine -> ObjRef -> Either Text TypeSig
 lookupTypeSig doc ref =
-  case M.lookup (trMode ref) (dTypes doc) of
+  case M.lookup (orMode ref) (dTypes doc) of
     Nothing -> Left "lookupTypeSig: unknown mode for type"
     Just table ->
-      case M.lookup (trName ref) table of
+      case M.lookup (orName ref) table of
         Nothing -> Left "lookupTypeSig: unknown type constructor"
         Just sig -> Right sig
 
 checkModeTheory :: ModeTheory -> Either Text ()
 checkModeTheory = checkWellFormed
 
-checkTypeTable :: Doctrine -> TypeTheory -> (ModeName, M.Map TypeName TypeSig) -> Either Text ()
+checkTypeTable :: Doctrine -> TypeTheory -> (ModeName, M.Map ObjName TypeSig) -> Either Text ()
 checkTypeTable doc tt (mode, table)
   | M.member mode (mtModes (dModes doc)) = mapM_ checkSig (M.toList table)
   | otherwise = Left "validateDoctrine: types for unknown mode"
@@ -287,13 +287,13 @@ checkGen doc tt mode gd
       checkContext doc tt mode (gdTyVars gd) (gdTmVars gd) [] (gdCod gd)
       checkGenAttrs doc gd
 
-checkInputShape :: Doctrine -> TypeTheory -> ModeName -> [TyVar] -> [TmVar] -> InputShape -> Either Text ()
+checkInputShape :: Doctrine -> TypeTheory -> ModeName -> [ObjVar] -> [TmVar] -> InputShape -> Either Text ()
 checkInputShape doc tt expectedMode tyvars tmvars shape =
   case shape of
     InPort ty -> checkBoundaryType doc tt expectedMode tyvars tmvars [] ty
     InBinder bs -> checkBinderSig doc tt expectedMode tyvars tmvars bs
 
-checkBinderSig :: Doctrine -> TypeTheory -> ModeName -> [TyVar] -> [TmVar] -> BinderSig -> Either Text ()
+checkBinderSig :: Doctrine -> TypeTheory -> ModeName -> [ObjVar] -> [TmVar] -> BinderSig -> Either Text ()
 checkBinderSig doc tt expectedMode tyvars tmvars bs = do
   checkTmCtxTele (bsTmCtx bs)
   checkContext doc tt expectedMode tyvars tmvars (bsTmCtx bs) (bsDom bs)
@@ -330,16 +330,16 @@ checkCell doc tt cell = do
       let tmCtx = dTmCtx (c2LHS cell)
       ctxL <- diagramDom (c2LHS cell)
       ctxR <- diagramDom (c2RHS cell)
-      let tyFlexDom = S.unions (map freeTyVarsType (ctxL <> ctxR))
-      let tmFlexDom = S.unions (map freeTmVarsType (ctxL <> ctxR))
+      let tyFlexDom = S.unions (map freeObjVarsObj (ctxL <> ctxR))
+      let tmFlexDom = S.unions (map freeTmVarsObj (ctxL <> ctxR))
       _ <- unifyCtx tt tmCtx tyFlexDom tmFlexDom ctxL ctxR
       codL <- diagramCod (c2LHS cell)
       codR <- diagramCod (c2RHS cell)
-      let tyFlexCod = S.unions (map freeTyVarsType (codL <> codR))
-      let tmFlexCod = S.unions (map freeTmVarsType (codL <> codR))
+      let tyFlexCod = S.unions (map freeObjVarsObj (codL <> codR))
+      let tmFlexCod = S.unions (map freeTmVarsObj (codL <> codR))
       _ <- unifyCtx tt tmCtx tyFlexCod tmFlexCod codL codR
-      let lhsVars = freeTyVarsDiagram (c2LHS cell)
-      let rhsVars = freeTyVarsDiagram (c2RHS cell)
+      let lhsVars = freeObjVarsDiagram (c2LHS cell)
+      let rhsVars = freeObjVarsDiagram (c2RHS cell)
       let declaredTy = S.fromList (c2TyVars cell)
       if S.isSubsetOf rhsVars (S.union lhsVars declaredTy)
         then Right ()
@@ -369,48 +369,48 @@ checkCell doc tt cell = do
         then Right ()
         else Left "validateDoctrine: RHS references binder metas not captured by LHS binder arguments"
 
-checkContext :: Doctrine -> TypeTheory -> ModeName -> [TyVar] -> [TmVar] -> [TypeExpr] -> Context -> Either Text ()
+checkContext :: Doctrine -> TypeTheory -> ModeName -> [ObjVar] -> [TmVar] -> [Obj] -> Context -> Either Text ()
 checkContext doc tt expectedMode tyvars tmvars tmCtx ctx = mapM_ (checkBoundaryType doc tt expectedMode tyvars tmvars tmCtx) ctx
 
-checkBoundaryType :: Doctrine -> TypeTheory -> ModeName -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> Either Text ()
+checkBoundaryType :: Doctrine -> TypeTheory -> ModeName -> [ObjVar] -> [TmVar] -> [Obj] -> Obj -> Either Text ()
 checkBoundaryType doc tt expectedMode tyvars tmvars tmCtx ty = do
   checkType doc tt tyvars tmvars tmCtx ty
-  if typeMode ty == expectedMode
+  if objMode ty == expectedMode
     then Right ()
     else Left "validateDoctrine: generator boundary mode mismatch"
 
-checkType :: Doctrine -> TypeTheory -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> Either Text ()
+checkType :: Doctrine -> TypeTheory -> [ObjVar] -> [TmVar] -> [Obj] -> Obj -> Either Text ()
 checkType doc tt tyvars tmvars tmCtx ty =
   case ty of
-    TVar v ->
+    OVar v ->
       if v `elem` tyvars
         then
-          if M.member (tvMode v) (mtModes (dModes doc))
+          if M.member (ovMode v) (mtModes (dModes doc))
             then Right ()
             else Left "validateDoctrine: type variable has unknown mode"
         else Left "validateDoctrine: unknown type variable"
-    TCon ref args -> do
+    OCon ref args -> do
       sig <- lookupTypeSig doc ref
       let params = tsParams sig
       if length params /= length args
         then Left "validateDoctrine: type constructor arity mismatch"
         else mapM_ (checkArg ref) (zip params args)
-    TMod _ inner -> do
+    OMod _ inner -> do
       checkType doc tt tyvars tmvars tmCtx inner
-      _ <- normalizeTypeExpr (dModes doc) ty
+      _ <- normalizeObjExpr (dModes doc) ty
       Right ()
   where
-    checkArg _ (PS_Ty m, TAType argTy) = do
+    checkArg _ (PS_Ty m, OAObj argTy) = do
       checkType doc tt tyvars tmvars tmCtx argTy
-      if typeMode argTy == m
+      if objMode argTy == m
         then Right ()
         else Left "validateDoctrine: type constructor argument mode mismatch"
-    checkArg _ (PS_Tm sortTy, TATm tmTerm) = do
+    checkArg _ (PS_Tm sortTy, OATm tmTerm) = do
       checkType doc tt tyvars tmvars tmCtx sortTy
       checkTmTerm doc tt tyvars tmvars tmCtx sortTy tmTerm
     checkArg _ _ = Left "validateDoctrine: type argument kind mismatch"
 
-checkTmTerm :: Doctrine -> TypeTheory -> [TyVar] -> [TmVar] -> [TypeExpr] -> TypeExpr -> TermDiagram -> Either Text ()
+checkTmTerm :: Doctrine -> TypeTheory -> [ObjVar] -> [TmVar] -> [Obj] -> Obj -> TermDiagram -> Either Text ()
 checkTmTerm doc tt tyvars tmvars tmCtx expectedSort tm =
   do
     mapM_ checkMetaVar (S.toList (freeTmVarsTerm tm))
@@ -424,9 +424,9 @@ checkTmTerm doc tt tyvars tmvars tmCtx expectedSort tm =
 
     sameTmVarId a b = tmvName a == tmvName b && tmvScope a == tmvScope b
 
-ensureDistinctTyVars :: Text -> [TyVar] -> Either Text ()
+ensureDistinctTyVars :: Text -> [ObjVar] -> Either Text ()
 ensureDistinctTyVars label vars =
-  let names = map tvName vars
+  let names = map ovName vars
       set = S.fromList names
    in if S.size set == length names
         then Right ()
@@ -440,9 +440,9 @@ ensureDistinctTmVars label vars =
         then Right ()
         else Left label
 
-checkTyVarModes :: Doctrine -> [TyVar] -> Either Text ()
+checkTyVarModes :: Doctrine -> [ObjVar] -> Either Text ()
 checkTyVarModes doc vars =
-  if all (\v -> M.member (tvMode v) (mtModes (dModes doc))) vars
+  if all (\v -> M.member (ovMode v) (mtModes (dModes doc))) vars
     then Right ()
     else Left "validateDoctrine: type variable has unknown mode"
 
@@ -546,7 +546,7 @@ checkModTransformWitness doc fromMe toMe witness = do
     case gdTyVars witness of
       [v] -> Right v
       _ -> Left "mod_transform: witness generator must have exactly one type variable"
-  if tvMode tyVar == meSrc fromMe
+  if ovMode tyVar == meSrc fromMe
     then Right ()
     else Left "mod_transform: witness type variable must live in transform source mode"
   if null (gdTmVars witness)
@@ -563,12 +563,12 @@ checkModTransformWitness doc fromMe toMe witness = do
     case gdCod witness of
       [ty] -> Right ty
       _ -> Left "mod_transform: witness generator codomain must be exactly one output port"
-  let expectedDom = TMod fromMe (TVar tyVar)
-  let expectedCod = TMod toMe (TVar tyVar)
-  domNorm <- normalizeTypeExpr (dModes doc) domTy
-  codNorm <- normalizeTypeExpr (dModes doc) codTy
-  expectedDomNorm <- normalizeTypeExpr (dModes doc) expectedDom
-  expectedCodNorm <- normalizeTypeExpr (dModes doc) expectedCod
+  let expectedDom = OMod fromMe (OVar tyVar)
+  let expectedCod = OMod toMe (OVar tyVar)
+  domNorm <- normalizeObjExpr (dModes doc) domTy
+  codNorm <- normalizeObjExpr (dModes doc) codTy
+  expectedDomNorm <- normalizeObjExpr (dModes doc) expectedDom
+  expectedCodNorm <- normalizeObjExpr (dModes doc) expectedCod
   if domNorm == expectedDomNorm && codNorm == expectedCodNorm
     then Right ()
     else Left "mod_transform: witness generator must have type [mu(A)] -> [nu(A)] for the declared transform"

@@ -196,7 +196,7 @@ validateTemplate info templ =
       if n >= 1 && n <= riExprCount info
         then Right ()
         else Left "surface: template hole out of range"
-    TVar cap -> requireNamedIdent info cap
+    OVar cap -> requireNamedIdent info cap
     TGen ref _ mAttrArgs mBinderArgs -> do
       case ref of
         GenLit _ -> Right ()

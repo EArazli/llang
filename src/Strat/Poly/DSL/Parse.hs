@@ -57,7 +57,7 @@ polyIdTerm = do
 polyGenTerm :: Parser RawDiagExpr
 polyGenTerm = do
   name <- ident
-  mArgs <- optional (symbol "{" *> polyTypeExpr `sepBy` symbol "," <* symbol "}")
+  mArgs <- optional (symbol "{" *> polyObjExpr `sepBy` symbol "," <* symbol "}")
   mAttrArgs <- optional polyAttrArgs
   mBinderArgs <- optional polyBinderArgs
   pure (RDGen name mArgs mAttrArgs mBinderArgs)
@@ -143,7 +143,7 @@ polyAttrTerm =
 polyContext :: Parser RawPolyContext
 polyContext = do
   _ <- symbol "["
-  tys <- polyTypeExpr `sepBy` symbol ","
+  tys <- polyObjExpr `sepBy` symbol ","
   _ <- symbol "]"
   pure tys
 
@@ -162,13 +162,13 @@ polyBinderArg =
 binderMetaVar :: Parser Text
 binderMetaVar = lexeme (char '?' *> identRaw)
 
-polyTypeExpr :: Parser RawPolyTypeExpr
-polyTypeExpr = lexeme regular
+polyObjExpr :: Parser RawPolyObjExpr
+polyObjExpr = lexeme regular
   where
     regular = do
       name <- scopedIdentRaw
       mQual <- optional (try (char '.' *> scopedIdentRaw))
-      mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
+      mArgs <- optional (symbol "(" *> polyObjExpr `sepBy` symbol "," <* symbol ")")
       case mQual of
         Just qualName ->
           let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }

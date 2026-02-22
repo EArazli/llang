@@ -16,9 +16,9 @@ import Data.Monoid (Any(..), getAny)
 import Strat.Poly.Graph
 import Strat.Poly.Diagram
 import Strat.Poly.Match
-import Strat.Poly.TypeExpr (TyVar, TmVar, TypeExpr)
+import Strat.Poly.Obj (ObjVar, TmVar, Obj)
 import Strat.Poly.Cell2
-import Strat.Poly.UnifyTy (emptySubst)
+import Strat.Poly.UnifyObj (emptySubst)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
 import Strat.Poly.TypeTheory (TypeTheory)
@@ -29,7 +29,7 @@ data RewriteRule = RewriteRule
   { rrName   :: Text
   , rrLHS    :: Diagram
   , rrRHS    :: Diagram
-  , rrTyVars :: [TyVar]
+  , rrTyVars :: [ObjVar]
   , rrTmVars :: [TmVar]
   } deriving (Eq, Show)
 
@@ -273,9 +273,9 @@ findSpliceEdge diag =
       [] -> Nothing
       (x:_) -> Just x
 
-requirePortType :: Diagram -> PortId -> Either Text TypeExpr
+requirePortType :: Diagram -> PortId -> Either Text Obj
 requirePortType diag pid =
-  case diagramPortType diag pid of
+  case diagramPortObj diag pid of
     Nothing -> Left "rewriteOnce: missing port type"
     Just ty -> Right ty
 

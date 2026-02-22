@@ -10,7 +10,7 @@ import Strat.Poly.Attr
 import Strat.Poly.Doctrine
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names
-import Strat.Poly.TypeExpr
+import Strat.Poly.Obj
 
 
 preludeDoctrines :: M.Map Text Doctrine
@@ -32,7 +32,7 @@ docDoctrine =
           [ (strSort, AttrSortDecl strSort (Just LKString))
           , (intSort, AttrSortDecl intSort (Just LKInt))
           ]
-    , dTypes = M.singleton docMode (M.singleton (TypeName "Doc") (TypeSig []))
+    , dTypes = M.singleton docMode (M.singleton (ObjName "Doc") (TypeSig []))
     , dGens = M.singleton docMode gens
     , dCells2 = []
       , dActions = M.empty
@@ -47,7 +47,7 @@ docDoctrine =
         , (GenName "cat", simpleGen "cat" [docTy, docTy] [docTy] [])
         , (GenName "indent", simpleGen "indent" [docTy] [docTy] [("n", intSort)])
         ]
-    docTy = TCon (TypeRef docMode (TypeName "Doc")) []
+    docTy = OCon (ObjRef docMode (ObjName "Doc")) []
 
 
 artifactDoctrine :: Doctrine
@@ -65,8 +65,8 @@ artifactDoctrine =
         M.singleton
           artifactMode
           ( M.fromList
-              [ (TypeName "Doc", TypeSig [])
-              , (TypeName "FileTree", TypeSig [])
+              [ (ObjName "Doc", TypeSig [])
+              , (ObjName "FileTree", TypeSig [])
               ]
           )
     , dGens = M.singleton artifactMode gens
@@ -75,8 +75,8 @@ artifactDoctrine =
       , dObligations = []
     }
   where
-    docTy = TCon (TypeRef artifactMode (TypeName "Doc")) []
-    ftTy = TCon (TypeRef artifactMode (TypeName "FileTree")) []
+    docTy = OCon (ObjRef artifactMode (ObjName "Doc")) []
+    ftTy = OCon (ObjRef artifactMode (ObjName "FileTree")) []
     gens =
       M.fromList
         [ (GenName "empty", simpleGen "empty" [] [docTy] [])
@@ -126,6 +126,6 @@ simpleGen name dom cod attrs =
   where
     modeFromCtx [] =
       case dom of
-        (ty:_) -> typeMode ty
+        (ty:_) -> objMode ty
         [] -> error "prelude simpleGen: empty domain and codomain"
-    modeFromCtx (ty:_) = typeMode ty
+    modeFromCtx (ty:_) = objMode ty

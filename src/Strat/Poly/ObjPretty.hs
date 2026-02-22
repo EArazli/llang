@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Strat.Poly.TypePretty
+module Strat.Poly.ObjPretty
   ( renderType
   , renderTypeArg
   , renderTmTerm
@@ -10,28 +10,28 @@ module Strat.Poly.TypePretty
 
 import Data.Text (Text)
 import qualified Data.Text as T
-import Strat.Poly.TypeExpr
+import Strat.Poly.Obj
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..))
 
 
 renderMode :: ModeName -> Text
 renderMode (ModeName t) = t
 
-renderType :: TypeExpr -> Text
+renderType :: Obj -> Text
 renderType ty =
   case ty of
-    TVar v -> tvName v <> "@" <> renderMode (tvMode v)
-    TCon ref [] -> renderTypeRef ref
-    TCon ref args ->
+    OVar v -> ovName v <> "@" <> renderMode (ovMode v)
+    OCon ref [] -> renderTypeRef ref
+    OCon ref args ->
       renderTypeRef ref <> "(" <> T.intercalate ", " (map renderTypeArg args) <> ")"
-    TMod me inner ->
+    OMod me inner ->
       renderModExpr me <> "(" <> renderType inner <> ")"
 
-renderTypeArg :: TypeArg -> Text
+renderTypeArg :: ObjArg -> Text
 renderTypeArg arg =
   case arg of
-    TAType ty -> renderType ty
-    TATm tm -> renderTmTerm tm
+    OAObj ty -> renderType ty
+    OATm tm -> renderTmTerm tm
 
 renderTmTerm :: TermDiagram -> Text
 renderTmTerm _ = "<tm>"
@@ -45,9 +45,9 @@ renderModExpr me =
 renderModName :: ModName -> Text
 renderModName (ModName n) = n
 
-renderTypeRef :: TypeRef -> Text
+renderTypeRef :: ObjRef -> Text
 renderTypeRef ref =
-  renderMode (trMode ref) <> "." <> renderTypeName (trName ref)
+  renderMode (orMode ref) <> "." <> renderTypeName (orName ref)
 
-renderTypeName :: TypeName -> Text
-renderTypeName (TypeName n) = n
+renderTypeName :: ObjName -> Text
+renderTypeName (ObjName n) = n

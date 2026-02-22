@@ -152,6 +152,8 @@ library
       Strat.Poly.Morphism
       Strat.Poly.Names
       Strat.Poly.Normalize
+      Strat.Poly.Obj
+      Strat.Poly.ObjNormalize
       Strat.Poly.Pretty
       Strat.Poly.Proof
       Strat.Poly.Pushout
@@ -166,17 +168,15 @@ library
       Strat.Poly.Term.RewriteCompile
       Strat.Poly.Term.RewriteSystem
       Strat.Poly.TermExpr
-      Strat.Poly.TypeExpr
-      Strat.Poly.TypeNormalize
       Strat.Poly.TypeTheory
-      Strat.Poly.UnifyTy
+      Strat.Poly.UnifyObj
   other-modules:
       Strat.Frontend.Compile
       Strat.Poly.Kernel
       Strat.Poly.Term.Confluence
       Strat.Poly.Term.Termination
       Strat.Poly.Traversal
-      Strat.Poly.TypePretty
+      Strat.Poly.ObjPretty
       Strat.Util.List
   hs-source-dirs:
       src
@@ -238,8 +238,8 @@ test-suite llang-test
       Test.Poly.ModeTransforms
       Test.Poly.Surface
       Test.Poly.TermNormalize
-      Test.Poly.UnifyTy
-      Test.Poly.TypeModes
+      Test.Poly.UnifyObj
+      Test.Poly.ObjModes
       Test.DSL.Functors
       Test.Value.Doc
       Test.Frontend.Pipeline

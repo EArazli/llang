@@ -41,7 +41,7 @@ import Strat.Poly.Graph
   , addEdgePayload
   , emptyDiagram
   , freshPort
-  , diagramPortType
+  , diagramPortObj
   , validateDiagram
   , unPortId
   , unEdgeId
@@ -49,12 +49,12 @@ import Strat.Poly.Graph
   )
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr
+import Strat.Poly.Obj
   ( TermDiagram(..)
   , TmFunName(..)
   , TmVar(..)
-  , TypeExpr(..)
-  , typeMode
+  , Obj(..)
+  , objMode
   )
 import Strat.Poly.TypeTheory
   ( TmFunSig(..)
@@ -64,13 +64,13 @@ import Strat.Poly.TypeTheory
 
 data TermConvEnv = TermConvEnv
   { tcLookupSig :: ModeName -> TmFunName -> Maybe TmFunSig
-  , tcSortEq :: [TypeExpr] -> TypeExpr -> TypeExpr -> Either Text Bool
+  , tcSortEq :: [Obj] -> Obj -> Obj -> Either Text Bool
   }
 
 termExprToDiagram
   :: TypeTheory
-  -> [TypeExpr]
-  -> TypeExpr
+  -> [Obj]
+  -> Obj
   -> TermExpr
   -> Either Text TermDiagram
 termExprToDiagram tt =
@@ -78,8 +78,8 @@ termExprToDiagram tt =
 
 termExprToDiagramUnchecked
   :: TypeTheory
-  -> [TypeExpr]
-  -> TypeExpr
+  -> [Obj]
+  -> Obj
   -> TermExpr
   -> Either Text TermDiagram
 termExprToDiagramUnchecked tt =
@@ -87,12 +87,12 @@ termExprToDiagramUnchecked tt =
 
 termExprToDiagramWith
   :: TermConvEnv
-  -> [TypeExpr]
-  -> TypeExpr
+  -> [Obj]
+  -> Obj
   -> TermExpr
   -> Either Text TermDiagram
 termExprToDiagramWith convEnv tmCtx expectedSort tm = do
-  let mode = typeMode expectedSort
+  let mode = objMode expectedSort
   let modeInputsAll = modeCtx tmCtx mode
   needed <- requiredModePrefixLen tmCtx mode tm
   let modeInputs = take needed modeInputsAll
@@ -150,8 +150,8 @@ termExprToDiagramWith convEnv tmCtx expectedSort tm = do
 
 diagramToTermExprWith
   :: TermConvEnv
-  -> [TypeExpr]
-  -> TypeExpr
+  -> [Obj]
+  -> Obj
   -> TermDiagram
   -> Either Text TermExpr
 diagramToTermExprWith convEnv tmCtx expectedSort (TermDiagram diag) =
@@ -159,8 +159,8 @@ diagramToTermExprWith convEnv tmCtx expectedSort (TermDiagram diag) =
 
 diagramToTermExpr
   :: TypeTheory
-  -> [TypeExpr]
-  -> TypeExpr
+  -> [Obj]
+  -> Obj
   -> TermDiagram
   -> Either Text TermExpr
 diagramToTermExpr tt =
@@ -168,8 +168,8 @@ diagramToTermExpr tt =
 
 diagramGraphToTermExpr
   :: TypeTheory
-  -> [TypeExpr]
-  -> TypeExpr
+  -> [Obj]
+  -> Obj
   -> Diagram
   -> Either Text TermExpr
 diagramGraphToTermExpr tt =
@@ -177,13 +177,13 @@ diagramGraphToTermExpr tt =
 
 diagramGraphToTermExprWith
   :: TermConvEnv
-  -> [TypeExpr]
-  -> TypeExpr
+  -> [Obj]
+  -> Obj
   -> Diagram
   -> Either Text TermExpr
 diagramGraphToTermExprWith convEnv tmCtx expectedSort diag = do
   validateTermGraph diag
-  let mode = typeMode expectedSort
+  let mode = objMode expectedSort
   if dMode diag == mode
     then Right ()
     else Left "diagramToTermExpr: mode mismatch"
@@ -191,7 +191,7 @@ diagramGraphToTermExprWith convEnv tmCtx expectedSort diag = do
   case dOut diag of
     [outPort] -> do
       outTy <-
-        case diagramPortType diag outPort of
+        case diagramPortObj diag outPort of
           Nothing -> Left "diagramToTermExpr: missing output port type"
           Just ty -> Right ty
       outOk <- tcSortEq convEnv tmCtx outTy expectedSort
@@ -214,7 +214,7 @@ diagramGraphToTermExprWith convEnv tmCtx expectedSort diag = do
           Nothing -> Left "diagramToTermExpr: missing expected boundary input sort"
           Just (_, ty) -> Right ty
       actualTy <-
-        case diagramPortType diag pid of
+        case diagramPortObj diag pid of
           Nothing -> Left "diagramToTermExpr: missing boundary input sort"
           Just ty -> Right ty
       ok <- tcSortEq convEnv tmCtx actualTy expectedTy
@@ -287,7 +287,7 @@ validateTermGraph diag = do
           Nothing -> Left "validateTermDiagram: missing expected boundary input sort"
           Just (_, ty) -> Right ty
       actualTy <-
-        case diagramPortType diag pid of
+        case diagramPortObj diag pid of
           Nothing -> Left "validateTermDiagram: missing boundary input sort"
           Just ty -> Right ty
       if actualTy == expectedTy
@@ -304,14 +304,14 @@ validateTermGraph diag = do
         PInternalDrop -> Right ()
         _ -> Left "validateTermDiagram: only PGen/PTmMeta/PInternalDrop are allowed in term diagrams"
 
-modeCtx :: [TypeExpr] -> ModeName -> [(Int, TypeExpr)]
+modeCtx :: [Obj] -> ModeName -> [(Int, Obj)]
 modeCtx tele mode =
   [ (i, ty)
   | (i, ty) <- zip [0 :: Int ..] tele
-  , typeMode ty == mode
+  , objMode ty == mode
   ]
 
-requiredModePrefixLen :: [TypeExpr] -> ModeName -> TermExpr -> Either Text Int
+requiredModePrefixLen :: [Obj] -> ModeName -> TermExpr -> Either Text Int
 requiredModePrefixLen tmCtx mode tm = do
   let modeInputsAll = modeCtx tmCtx mode
   let globals = map fst modeInputsAll
@@ -341,14 +341,14 @@ requiredModePrefixLen tmCtx mode tm = do
     (Left "termExprToDiagram: required prefix exceeds available bound vars of this mode")
   pure needed
 
-lookupBound :: [(Int, TypeExpr)] -> [PortId] -> Int -> Maybe (PortId, TypeExpr)
+lookupBound :: [(Int, Obj)] -> [PortId] -> Int -> Maybe (PortId, Obj)
 lookupBound modeInputs inPorts idx = do
   local <- elemIndex idx (map fst modeInputs)
   pid <- nth inPorts local
   (_, sortTy) <- nth modeInputs local
   pure (pid, sortTy)
 
-allocPorts :: [TypeExpr] -> Diagram -> ([PortId], Diagram)
+allocPorts :: [Obj] -> Diagram -> ([PortId], Diagram)
 allocPorts [] diag = ([], diag)
 allocPorts (ty:rest) diag =
   let (pid, diag1) = freshPort ty diag
@@ -375,10 +375,10 @@ uncheckedConvEnv tt =
     , tcSortEq = \_ a b -> Right (a == b)
     }
 
-requireFunSig :: TermConvEnv -> [TypeExpr] -> TypeExpr -> TmFunName -> [TermExpr] -> Either Text TmFunSig
+requireFunSig :: TermConvEnv -> [Obj] -> Obj -> TmFunName -> [TermExpr] -> Either Text TmFunSig
 requireFunSig convEnv tmCtx sortTy f args = do
   sig <-
-    case tcLookupSig convEnv (typeMode sortTy) f of
+    case tcLookupSig convEnv (objMode sortTy) f of
       Nothing -> Left "termExprToDiagramUnchecked: unknown term function"
       Just s -> Right s
   if length (tfsArgs sig) /= length args

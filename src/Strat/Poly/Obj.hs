@@ -1,26 +1,27 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Strat.Poly.TypeExpr
-  ( TyVar(..)
-  , TypeName(..)
-  , TypeRef(..)
+module Strat.Poly.Obj
+  ( ObjVar(..)
+  , ObjName(..)
+  , ObjRef(..)
   , TmFunName(..)
   , TmVar(..)
   , TermDiagram(..)
-  , TypeArg(..)
-  , TypeExpr(..)
+  , ObjArg(..)
+  , Obj(..)
   , Context
   , mapTermDiagram
-  , mapTypeExpr
-  , freeTyVarsType
-  , freeTyVarsTerm
-  , freeTmVarsType
+  , mapObjExpr
+  , freeObjVarsObj
+  , freeObjVarsTerm
+  , freeTmVarsObj
   , freeTmVarsTerm
-  , boundTmIndicesType
+  , occursObjVar
+  , boundTmIndicesObj
   , boundTmIndicesTerm
   , resolveTmCtxIndex
   , tmCtxForMode
-  , typeMode
-  , normalizeTypeExpr
+  , objMode
+  , normalizeObjExpr
   ) where
 
 import Data.Text (Text)
@@ -29,14 +30,14 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName, ModExpr(..), ModeTheory, composeMod, normalizeModExpr)
 import Strat.Poly.Syntax
-  ( TyVar(..)
-  , TypeName(..)
-  , TypeRef(..)
+  ( ObjVar(..)
+  , ObjName(..)
+  , ObjRef(..)
   , TmFunName(..)
   , TmVar(..)
   , TermDiagram(..)
-  , TypeArg(..)
-  , TypeExpr(..)
+  , ObjArg(..)
+  , Obj(..)
   , Context
   , Diagram(..)
   , Edge(..)
@@ -48,50 +49,50 @@ import Strat.Poly.Syntax
 mapTermDiagram :: (TermDiagram -> TermDiagram) -> TermDiagram -> TermDiagram
 mapTermDiagram f tm = f tm
 
-mapTypeExpr :: (TypeExpr -> TypeExpr) -> (TermDiagram -> TermDiagram) -> TypeExpr -> TypeExpr
-mapTypeExpr fTy fTm = goTy
+mapObjExpr :: (Obj -> Obj) -> (TermDiagram -> TermDiagram) -> Obj -> Obj
+mapObjExpr fTy fTm = goTy
   where
     goTy ty =
       fTy $
         case ty of
-          TVar _ -> ty
-          TCon ref args -> TCon ref (map goArg args)
-          TMod me inner -> TMod me (goTy inner)
+          OVar _ -> ty
+          OCon ref args -> OCon ref (map goArg args)
+          OMod me inner -> OMod me (goTy inner)
     goArg arg =
       case arg of
-        TAType ty -> TAType (goTy ty)
-        TATm tm -> TATm (mapTermDiagram fTm tm)
+        OAObj ty -> OAObj (goTy ty)
+        OATm tm -> OATm (mapTermDiagram fTm tm)
 
-freeTyVarsType :: TypeExpr -> S.Set TyVar
-freeTyVarsType ty =
+freeObjVarsObj :: Obj -> S.Set ObjVar
+freeObjVarsObj ty =
   case ty of
-    TVar v -> S.singleton v
-    TCon _ args -> S.unions (map freeTyVarsArg args)
-    TMod _ inner -> freeTyVarsType inner
+    OVar v -> S.singleton v
+    OCon _ args -> S.unions (map freeObjVarsArg args)
+    OMod _ inner -> freeObjVarsObj inner
   where
-    freeTyVarsArg arg =
+    freeObjVarsArg arg =
       case arg of
-        TAType innerTy -> freeTyVarsType innerTy
-        TATm tm -> freeTyVarsTerm tm
+        OAObj innerObj -> freeObjVarsObj innerObj
+        OATm tm -> freeObjVarsTerm tm
 
-freeTyVarsTerm :: TermDiagram -> S.Set TyVar
-freeTyVarsTerm (TermDiagram diag) =
+freeObjVarsTerm :: TermDiagram -> S.Set ObjVar
+freeObjVarsTerm (TermDiagram diag) =
   S.unions
-    [ S.unions (map freeTyVarsType (IM.elems (dPortTy diag)))
-    , S.unions (map freeTyVarsType (dTmCtx diag))
-    , S.unions (map edgeTyVars (IM.elems (dEdges diag)))
+    [ S.unions (map freeObjVarsObj (IM.elems (dPortObj diag)))
+    , S.unions (map freeObjVarsObj (dTmCtx diag))
+    , S.unions (map edgeObjVars (IM.elems (dEdges diag)))
     ]
   where
-    edgeTyVars edge =
+    edgeObjVars edge =
       case ePayload edge of
-        PTmMeta v -> freeTyVarsType (tmvSort v)
+        PTmMeta v -> freeObjVarsObj (tmvSort v)
         _ -> S.empty
 
 freeTmVarsTerm :: TermDiagram -> S.Set TmVar
 freeTmVarsTerm (TermDiagram diag) =
   S.unions
-    [ S.unions (map freeTmVarsType (IM.elems (dPortTy diag)))
-    , S.unions (map freeTmVarsType (dTmCtx diag))
+    [ S.unions (map freeTmVarsObj (IM.elems (dPortObj diag)))
+    , S.unions (map freeTmVarsObj (dTmCtx diag))
     , S.unions (map edgeTmVars (IM.elems (dEdges diag)))
     ]
   where
@@ -100,17 +101,29 @@ freeTmVarsTerm (TermDiagram diag) =
         PTmMeta v -> S.singleton v
         _ -> S.empty
 
-freeTmVarsType :: TypeExpr -> S.Set TmVar
-freeTmVarsType ty =
+freeTmVarsObj :: Obj -> S.Set TmVar
+freeTmVarsObj ty =
   case ty of
-    TVar _ -> S.empty
-    TCon _ args -> S.unions (map freeTmVarsArg args)
-    TMod _ inner -> freeTmVarsType inner
+    OVar _ -> S.empty
+    OCon _ args -> S.unions (map freeTmVarsArg args)
+    OMod _ inner -> freeTmVarsObj inner
   where
     freeTmVarsArg arg =
       case arg of
-        TAType innerTy -> freeTmVarsType innerTy
-        TATm tm -> freeTmVarsTerm tm
+        OAObj innerObj -> freeTmVarsObj innerObj
+        OATm tm -> freeTmVarsTerm tm
+
+occursObjVar :: ObjVar -> Obj -> Bool
+occursObjVar v ty =
+  case ty of
+    OVar v' -> v == v'
+    OCon _ args -> any occursArg args
+    OMod _ inner -> occursObjVar v inner
+  where
+    occursArg arg =
+      case arg of
+        OAObj innerObj -> occursObjVar v innerObj
+        OATm tmArg -> v `S.member` freeObjVarsTerm tmArg
 
 boundTmIndicesTerm :: TermDiagram -> S.Set Int
 boundTmIndicesTerm (TermDiagram diag) =
@@ -142,7 +155,7 @@ boundTmIndicesTerm (TermDiagram diag) =
                     _ ->
                       collect seen' locals rest
 
-resolveTmCtxIndex :: [TypeExpr] -> ModeName -> Int -> Maybe Int
+resolveTmCtxIndex :: [Obj] -> ModeName -> Int -> Maybe Int
 resolveTmCtxIndex tmCtx mode localPos =
   case drop localPos globals of
     (globalTm:_) -> Just globalTm
@@ -151,59 +164,59 @@ resolveTmCtxIndex tmCtx mode localPos =
     globals =
       [ i
       | (i, ty) <- zip [0 :: Int ..] tmCtx
-      , typeMode ty == mode
+      , objMode ty == mode
       ]
 
-boundTmIndicesType :: TypeExpr -> S.Set Int
-boundTmIndicesType ty =
+boundTmIndicesObj :: Obj -> S.Set Int
+boundTmIndicesObj ty =
   case ty of
-    TVar _ -> S.empty
-    TCon _ args -> S.unions (map boundTmIndicesArg args)
-    TMod _ inner -> boundTmIndicesType inner
+    OVar _ -> S.empty
+    OCon _ args -> S.unions (map boundTmIndicesArg args)
+    OMod _ inner -> boundTmIndicesObj inner
   where
     boundTmIndicesArg arg =
       case arg of
-        TAType innerTy -> boundTmIndicesType innerTy
-        TATm tm -> boundTmIndicesTerm tm
+        OAObj innerObj -> boundTmIndicesObj innerObj
+        OATm tm -> boundTmIndicesTerm tm
 
-tmCtxForMode :: [TypeExpr] -> ModeName -> [TypeExpr]
+tmCtxForMode :: [Obj] -> ModeName -> [Obj]
 tmCtxForMode tele mode =
   [ ty
   | ty <- tele
-  , typeMode ty == mode
+  , objMode ty == mode
   ]
 
-typeMode :: TypeExpr -> ModeName
-typeMode ty =
+objMode :: Obj -> ModeName
+objMode ty =
   case ty of
-    TVar v -> tvMode v
-    TCon r _ -> trMode r
-    TMod me _ -> meTgt me
+    OVar v -> ovMode v
+    OCon r _ -> orMode r
+    OMod me _ -> meTgt me
 
-normalizeTypeExpr :: ModeTheory -> TypeExpr -> Either Text TypeExpr
-normalizeTypeExpr mt ty =
+normalizeObjExpr :: ModeTheory -> Obj -> Either Text Obj
+normalizeObjExpr mt ty =
   case ty of
-    TVar _ -> Right ty
-    TCon ref args -> do
+    OVar _ -> Right ty
+    OCon ref args -> do
       args' <- mapM normalizeArg args
-      Right (TCon ref args')
-    TMod me inner0 -> do
-      inner <- normalizeTypeExpr mt inner0
+      Right (OCon ref args')
+    OMod me inner0 -> do
+      inner <- normalizeObjExpr mt inner0
       (meComposed, innerBase) <-
         case inner of
-          TMod me2 inner2 -> do
+          OMod me2 inner2 -> do
             me' <- composeMod mt me2 me
             Right (me', inner2)
           _ -> Right (me, inner)
-      if typeMode innerBase /= meSrc meComposed
-        then Left "normalizeTypeExpr: modality source does not match inner type mode"
+      if objMode innerBase /= meSrc meComposed
+        then Left "normalizeObjExpr: modality source does not match inner object mode"
         else do
           let meNorm = normalizeModExpr mt meComposed
           if null (mePath meNorm)
             then Right innerBase
-            else Right (TMod meNorm innerBase)
+            else Right (OMod meNorm innerBase)
   where
     normalizeArg arg =
       case arg of
-        TAType innerTy -> TAType <$> normalizeTypeExpr mt innerTy
-        TATm tm -> Right (TATm tm)
+        OAObj innerTy -> OAObj <$> normalizeObjExpr mt innerTy
+        OATm tm -> Right (OATm tm)

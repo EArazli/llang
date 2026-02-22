@@ -11,7 +11,7 @@ import qualified Data.Set as S
 import Strat.Poly.Graph (Diagram(..))
 import Strat.Poly.ModeTheory (ModeName, ModeTheory(..))
 import qualified Strat.Poly.TypeTheory as TT
-import Strat.Poly.TypeExpr (TmVar(..), unTerm)
+import Strat.Poly.Obj (TmVar(..), unTerm)
 import Strat.Poly.TermExpr (TermExpr(..), diagramGraphToTermExprUnchecked, sameTmMetaId)
 import Strat.Poly.Term.RewriteSystem (TRS, TRule(..), mkTRS, boundVarSet)
 

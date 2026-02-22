@@ -14,7 +14,7 @@ import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr
+import Strat.Poly.Obj
 import Test.Poly.Helpers (mkModes)
 
 
@@ -109,7 +109,7 @@ mkDoctrine =
     , dModes = mkModes [modeM]
     , dAcyclicModes = S.singleton modeM
     , dAttrSorts = M.empty
-    , dTypes = M.fromList [(modeM, M.fromList [(TypeName "T", TypeSig [])])]
+    , dTypes = M.fromList [(modeM, M.fromList [(ObjName "T", TypeSig [])])]
     , dGens = M.fromList [(modeM, M.fromList [(GenName "a", genA), (GenName "b", genB), (GenName "c", genC)])]
     , dCells2 = []
       , dActions = M.empty
@@ -160,8 +160,8 @@ modeM :: ModeName
 modeM = ModeName "M"
 
 
-tyT :: TypeExpr
-tyT = TCon (TypeRef modeM (TypeName "T")) []
+tyT :: Obj
+tyT = OCon (ObjRef modeM (ObjName "T")) []
 
 
 require :: Either Text a -> IO a

@@ -7,53 +7,99 @@ This document describes the current kernel and DSL surface used by this reposito
 A doctrine is the kernel object:
 
 - modes and modalities (`mode`, `modality`, `mod_eq`, `mod_transform`)
-- types and generators
+- objects and generators
 - rewrite cells (`computational` and `structural`)
 - modality actions (`action`)
 - schema obligations (`obligation`)
 
 There is no `structure` keyword and no `adjunction` keyword.
 
-## 2. Type Layer
+## 2. Classification and Universes
 
-### 2.1 Type Expressions
+### 2.1 Classification Edges
 
-```hs
-TypeExpr = TVar TyVar | TCon TypeRef [TypeArg] | TMod ModExpr TypeExpr
-TypeArg  = TAType TypeExpr | TATm TermDiagram
-```
+A doctrine SHALL determine a classification graph over modes.
+The classification graph MAY be empty.
 
-`TermDiagram` is graph-backed and represented as:
+A classification edge is written:
 
-```hs
-newtype TermDiagram = TermDiagram { unTerm :: Diagram }
-```
+- `mode M classifiedBy K via U`
 
-Dependent parameters are declared with `PS_Tm sort` in type signatures.
-Inside term diagrams, term metavariables are represented with graph payload `PTmMeta TmVar`.
-The kernel may also insert `PInternalDrop` nodes in term diagrams to consume unused
-required boundary-prefix inputs; this payload is internal-only and not surface syntax.
-`dTmCtx` is the bound-term telescope for the diagram.
+This SHALL mean:
 
-### 2.2 Definitional Equality
+- objects of mode `M` are represented by code terms in mode `K`,
+- the classifier object is `U` (an object of mode `K`),
+- a code for an object of `M` SHALL be well-formed as a term of `K` with classifier `U`,
+- definitional equality of objects in `M` SHALL be definitional equality of their codes in `K`.
 
-Type normalization and term-argument normalization are performed by `normalizeTypeDeep`.
-For `TATm`, normalization uses compiled first-order term rewriting in the term mode:
+### 2.2 Objects and Codes
 
-- rewrite rules come from computational `Cell2` equations (`ttTmRules`) compiled to TRSs
-- normalization is fuel-free (`normalizeTermExpr` on `TermExpr`)
-- doctrines are rejected if term TRSs fail:
-  - SCT-based termination check
-  - critical-pair confluence check (by normalization to normal forms)
+Kernel notion:
 
-Definitional term equality is equality of normalized term expressions (then deterministically re-embedded as `TermDiagram`).
+- an object of mode `M` in context `Γ` is represented by a code term `c` in classifier mode `K` such that `Γ ⊢ c : U` in `K` for the edge `M classifiedBy K via U`.
 
-## 3. Doctrine Layer
+Surface notion:
+
+- the surface language may continue to use the word "type", but kernel checks MUST distinguish object identity from code representation.
+
+If a mode has no explicit classification edge, object well-formedness is determined by that mode's declared object formers and object-parameter rules.
+
+### 2.3 Object Definitional Equality
+
+For a fixed declared definitional fragment `Def(K)` of classifier mode `K`:
+
+- `A ≡ B : Obj(M)` iff `NF_K(code(A)) = NF_K(code(B))`.
+
+`NF_K` SHALL denote the normalization engine selected by `Def(K)`.
+
+Algorithmic rule:
+
+- to check `A ≡ B` in mode `M`, normalize `code(A)` and `code(B)` in classifier mode `K`, then compare normalized syntax.
+
+### 2.4 Allowed Classification Graphs
+
+- self-classification edges (`K classifiedBy K via U`) are permitted;
+- longer cycles MUST be rejected unless explicit universe levels are provided.
+
+### 2.5 Constructor Source
+
+An object former for mode `M` SHALL be any term former in classifier mode `K` whose result is a code of `U` (up to definitional equality in `K`).
+
+### 2.6 Example
+
+For `Tm classifiedBy Ty via U`:
+
+- codes in `Ty`: `Unit : U`, `Arr : U × U -> U`,
+- objects of `Tm` include codes such as `Arr(Unit, Unit)`,
+- `Tm`-object equality is checked by normalizing those `Ty` codes and comparing normal forms.
+
+## 3. Definitional Fragment
+
+Every mode SHALL declare a definitional fragment used for kernel definitional equality.
+
+Current required fragment:
+
+- first-order TRS normalization compiled from admissible computational rules and eligible generators.
+
+Admissibility requirements:
+
+- rewrite compilation must remain in the first-order term fragment,
+- termination MUST be proven (SCT),
+- critical pairs MUST be joinable by normalization.
+
+A doctrine MUST either:
+
+- declare the fragment explicitly per mode, or
+- satisfy kernel derivation rules (computational rules + eligible generators) and pass admissibility checks.
+
+Future fragments (for example NbE) are permitted by this spec but are not required in the current implementation.
+
+## 4. Doctrine Layer
 
 Key records:
 
-- `TypeSig = [ParamSig]`, where `ParamSig = PS_Ty ModeName | PS_Tm TypeExpr`
-- `GenDecl` supports type vars, term vars, attributes, and binder inputs
+- object signatures are parameterized by mode and object parameters (`PS_Ty`, `PS_Tm`)
+- `GenDecl` supports object vars, term vars, attributes, and binder inputs
 - `Cell2` rewrites diagrams
 - `ModAction` stores per-modality generator images
 - `ObligationDecl` stores named equations checked on `implements`
@@ -61,11 +107,11 @@ Key records:
 Validation checks:
 
 - mode/modality well-formedness
-- type/generator/rule well-formedness
+- object/generator/rule well-formedness
 - action coverage and mode correctness
 - obligation diagrams are valid and boundary-compatible
 
-## 4. Diagram Layer
+## 5. Diagram Layer
 
 A `Diagram` is a typed port graph with edge payloads:
 
@@ -78,7 +124,7 @@ A `Diagram` is a typed port graph with edge payloads:
 
 Matching and rewriting are structural and mode-aware.
 
-### 4.1 Isomorphism
+### 5.1 Isomorphism
 
 Structural diagram isomorphism (`diagramIsoEq`) uses:
 
@@ -93,7 +139,7 @@ Structural diagram isomorphism (`diagramIsoEq`) uses:
   - `PTmMeta`: metavariable identity by `(name, scope)`
   - `PInternalDrop`: exact constructor match
 
-### 4.2 Canonical Form
+### 5.2 Canonical Form
 
 Canonicalization reduces a diagram to a colored graph encoding:
 
@@ -105,7 +151,7 @@ Canonical labeling picks a deterministic representative and rebuilds the diagram
 
 Port labels are currently treated as metadata for structural isomorphism/canonization by default (ignored as equality keys), while still being stored on diagrams.
 
-## 5. Modalities
+## 6. Modalities
 
 `mod_eq` gives oriented modality-expression equations.
 
@@ -116,7 +162,7 @@ Current witness constraints:
 
 - if `witness` is omitted, it defaults to the transform name
 - witness generator mode must be the target mode of `mu`/`nu`
-- witness generator must have exactly one type variable `A` in the source mode of `mu`/`nu`
+- witness generator must have exactly one object variable `A` in the source mode of `mu`/`nu`
 - witness generator must have no term variables and no attributes
 - witness generator boundary must be exactly one input and one output with type
   `mu(A) -> nu(A)` after normalization
@@ -125,7 +171,7 @@ Current witness constraints:
 
 `map[<ModExpr>](<DiagExpr>)` elaborates by applying declared actions along the composed modality expression.
 
-## 6. Schemas and Obligations
+## 7. Schemas and Obligations
 
 A schema is an ordinary doctrine used as an interface.
 
@@ -137,7 +183,7 @@ Obligation success is proof-carrying:
 - automated search (`auto`) may try to synthesize a `JoinProof` within a tooling budget
 - if automation fails to find a proof, result is `undecided` (not “false”)
 
-## 6.1 Proof-Carrying Equality Checking
+## 7.1 Proof-Carrying Equality Checking
 
 For morphism law checking, action semantics, obligation discharge, and coherence obligations:
 
@@ -148,7 +194,7 @@ For morphism law checking, action semantics, obligation discharge, and coherence
 Budgets are tooling-level search parameters (`SearchBudget`), not doctrine/morphism/obligation data.
 `sbTimeoutMs` is interpreted as a real wall-clock timeout for auto-proof search.
 
-## 7. DSL Summary
+## 8. DSL Summary
 
 Doctrine items:
 
@@ -173,7 +219,7 @@ Removed legacy items:
 - `structure ... = ...`
 - `adjunction F dashv U`
 
-## 8. Morphisms and Pushouts
+## 9. Morphisms and Pushouts
 
 Morphisms map modes/modalities/types/generators and transport diagrams.
 Pushout/coproduct construction remains available and merges doctrine content with compatibility checks.
@@ -212,7 +258,7 @@ DSL morphism blocks may set optional:
 If search cannot produce a proof within budget, the result is reported as `undecided`
 with a concrete limit reason.
 
-## 9. Surface Elaboration
+## 10. Surface Elaboration
 
 Surface elaboration is capability-driven:
 
@@ -221,6 +267,6 @@ Surface elaboration is capability-driven:
 
 No discipline lattice is consulted.
 
-## 10. Temporary Restrictions
+## 11. Temporary Restrictions
 
 See `RESTRICTIONS.md`.

@@ -20,7 +20,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
 
 import Strat.Poly.Attr (AttrLit(..))
-import Strat.Poly.DSL.AST (RawPolyTypeExpr(..), RawTypeRef(..), RawModExpr(..))
+import Strat.Poly.DSL.AST (RawPolyObjExpr(..), RawTypeRef(..), RawModExpr(..))
 import Strat.Poly.Surface.Spec
 
 
@@ -29,7 +29,7 @@ import Strat.Poly.Surface.Spec
 data SurfaceParam
   = SPIdent Text
   | SPLit AttrLit
-  | SPType RawPolyTypeExpr
+  | SPType RawPolyObjExpr
   deriving (Eq, Show)
 
 data SurfaceNode = SurfaceNode
@@ -375,7 +375,7 @@ templateHole = lexeme $ do
   number <- optional (some digitChar)
   case number of
     Just ds -> pure (THole (read ds))
-    Nothing -> TVar <$> identBody
+    Nothing -> OVar <$> identBody
 
 templateTermRef :: Parser TemplateExpr
 templateTermRef = do
@@ -440,14 +440,14 @@ templateBinderArg =
 binderMetaVar :: Parser Text
 binderMetaVar = lexeme (char '?' *> identBody)
 
-contextExpr :: Parser [RawPolyTypeExpr]
+contextExpr :: Parser [RawPolyObjExpr]
 contextExpr = do
   _ <- symbol "["
   tys <- typeExpr `sepBy` symbol ","
   _ <- symbol "]"
   pure tys
 
-typeExpr :: Parser RawPolyTypeExpr
+typeExpr :: Parser RawPolyObjExpr
 typeExpr = lexeme (try modApp <|> regular)
   where
     modApp = do
@@ -515,7 +515,7 @@ parseSurfaceExpr spec input =
 data Capture
   = CapIdent (Maybe Text) Text
   | CapLit (Maybe Text) AttrLit
-  | CapType (Maybe Text) RawPolyTypeExpr
+  | CapType (Maybe Text) RawPolyObjExpr
   | CapExpr SurfaceNode
   | CapSkip
   deriving (Eq, Show)

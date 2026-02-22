@@ -512,7 +512,7 @@ polyRuleDecl = do
 polyContext :: Parser PolyAST.RawPolyContext
 polyContext = do
   _ <- symbol "["
-  tys <- polyTypeExpr `sepBy` symbol ","
+  tys <- polyObjExpr `sepBy` symbol ","
   _ <- symbol "]"
   pure tys
 
@@ -525,7 +525,7 @@ polyInputShapes = do
 
 polyInputShape :: Parser PolyAST.RawInputShape
 polyInputShape =
-  try polyBinderShape <|> (PolyAST.RIPort <$> polyTypeExpr)
+  try polyBinderShape <|> (PolyAST.RIPort <$> polyObjExpr)
 
 polyBinderShape :: Parser PolyAST.RawInputShape
 polyBinderShape = do
@@ -542,14 +542,14 @@ polyBinderVarDecl = do
   _ <- optional (keyword "tm")
   name <- ident
   _ <- symbol ":"
-  ty <- polyTypeExpr
+  ty <- polyObjExpr
   pure PolyAST.RawBinderVarDecl { PolyAST.rbvName = name, PolyAST.rbvType = ty }
 
 polyTmVarDecl :: Parser PolyAST.RawTmVarDecl
 polyTmVarDecl = do
   name <- ident
   _ <- symbol ":"
-  sortTy <- polyTypeExpr
+  sortTy <- polyObjExpr
   pure PolyAST.RawTmVarDecl { PolyAST.rtvdName = name, PolyAST.rtvdSort = sortTy }
 
 polyTyVarDecl :: Parser PolyAST.RawTyVarDecl
@@ -580,13 +580,13 @@ polyParamList =
   try (symbol "(" *> polyParamDecl `sepBy` symbol "," <* symbol ")")
     <|> (map PolyAST.RPDType <$> many polyTyVarDeclBare)
 
-polyTypeExpr :: Parser PolyAST.RawPolyTypeExpr
-polyTypeExpr = lexeme regular
+polyObjExpr :: Parser PolyAST.RawPolyObjExpr
+polyObjExpr = lexeme regular
   where
     regular = do
       name <- scopedIdentRaw
       mQual <- optional (try (char '.' *> scopedIdentRaw))
-      mArgs <- optional (symbol "(" *> polyTypeExpr `sepBy` symbol "," <* symbol ")")
+      mArgs <- optional (symbol "(" *> polyObjExpr `sepBy` symbol "," <* symbol ")")
       case mQual of
         Just qualName ->
           let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Just name, PolyAST.rtrName = qualName }
@@ -634,7 +634,7 @@ polyIdTerm = do
 polyGenTerm :: Parser PolyAST.RawDiagExpr
 polyGenTerm = do
   name <- ident
-  mArgs <- optional (symbol "{" *> polyTypeExpr `sepBy` symbol "," <* symbol "}")
+  mArgs <- optional (symbol "{" *> polyObjExpr `sepBy` symbol "," <* symbol "}")
   mAttrArgs <- optional polyAttrArgs
   mBinderArgs <- optional polyBinderArgs
   pure (PolyAST.RDGen name mArgs mAttrArgs mBinderArgs)
@@ -857,7 +857,7 @@ morphismTypeMap = do
   _ <- symbol "@"
   srcMode <- ident
   _ <- symbol "->"
-  tgt <- polyTypeExpr
+  tgt <- polyObjExpr
   _ <- symbol "@"
   tgtMode <- ident
   optionalSemi

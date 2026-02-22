@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Syntax
-  ( TypeName(..)
-  , TypeRef(..)
-  , TyVar(..)
+  ( ObjName(..)
+  , ObjRef(..)
+  , ObjVar(..)
   , TmFunName(..)
   , TmVar(..)
   , TermDiagram(..)
-  , TypeArg(..)
-  , TypeExpr(..)
+  , ObjArg(..)
+  , Obj(..)
   , Context
   , PortId(..)
   , EdgeId(..)
@@ -28,23 +28,23 @@ import Strat.Poly.ModeTheory (ModeName, ModExpr)
 import Strat.Poly.Names (BoxName, GenName)
 
 
-newtype TypeName = TypeName Text deriving (Eq, Ord, Show)
+newtype ObjName = ObjName Text deriving (Eq, Ord, Show)
 
-data TypeRef = TypeRef
-  { trMode :: ModeName
-  , trName :: TypeName
+data ObjRef = ObjRef
+  { orMode :: ModeName
+  , orName :: ObjName
   } deriving (Eq, Ord, Show)
 
-data TyVar = TyVar
-  { tvName :: Text
-  , tvMode :: ModeName
+data ObjVar = ObjVar
+  { ovName :: Text
+  , ovMode :: ModeName
   } deriving (Eq, Ord, Show)
 
 newtype TmFunName = TmFunName Text deriving (Eq, Ord, Show)
 
 data TmVar = TmVar
   { tmvName :: Text
-  , tmvSort :: TypeExpr
+  , tmvSort :: Obj
   , tmvScope :: Int
   } deriving (Eq, Ord, Show)
 
@@ -75,10 +75,10 @@ data Edge = Edge
 
 data Diagram = Diagram
   { dMode :: ModeName
-  , dTmCtx :: [TypeExpr]
+  , dTmCtx :: [Obj]
   , dIn :: [PortId]
   , dOut :: [PortId]
-  , dPortTy :: IM.IntMap TypeExpr
+  , dPortObj :: IM.IntMap Obj
   , dPortLabel :: IM.IntMap (Maybe Text)
   , dProd :: IM.IntMap (Maybe EdgeId)
   , dCons :: IM.IntMap (Maybe EdgeId)
@@ -90,18 +90,18 @@ data Diagram = Diagram
 newtype TermDiagram = TermDiagram { unTerm :: Diagram }
   deriving (Eq, Ord, Show)
 
-data TypeArg
-  = TAType TypeExpr
-  | TATm TermDiagram
+data ObjArg
+  = OAObj Obj
+  | OATm TermDiagram
   deriving (Eq, Ord, Show)
 
-data TypeExpr
-  = TVar TyVar
-  | TCon TypeRef [TypeArg]
-  | TMod ModExpr TypeExpr
+data Obj
+  = OVar ObjVar
+  | OCon ObjRef [ObjArg]
+  | OMod ModExpr Obj
   deriving (Eq, Ord, Show)
 
-type Context = [TypeExpr]
+type Context = [Obj]
 
 newtype CanonDiagram = CanonDiagram { unCanon :: Diagram }
   deriving (Eq, Ord, Show)

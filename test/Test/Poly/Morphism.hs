@@ -14,7 +14,7 @@ import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Poly.ModeTheory
-import Strat.Poly.TypeExpr
+import Strat.Poly.Obj
 import Strat.Poly.Names
 import Strat.Poly.Diagram
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), emptyDiagram, freshPort, addEdgePayload)
@@ -53,11 +53,11 @@ tests =
     , testCase "wire metavariables reject duplicate names in one diagram" testWireMetaRuleRejectsDuplicateName
     ]
 
-tvar :: ModeName -> Text -> TyVar
-tvar mode name = TyVar { tvName = name, tvMode = mode }
+tvar :: ModeName -> Text -> ObjVar
+tvar mode name = ObjVar { ovName = name, ovMode = mode }
 
-tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
-tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
+tcon :: ModeName -> Text -> [Obj] -> Obj
+tcon mode name args = OCon (ObjRef mode (ObjName name)) (map OAObj args)
 
 plainImage :: Diagram -> GenImage
 plainImage diag = GenImage diag M.empty
@@ -80,7 +80,7 @@ setSingleEdgePayload diag payload =
 
 tmMeta :: TmVar -> TermDiagram
 tmMeta v =
-  let mode = typeMode (tmvSort v)
+  let mode = objMode (tmvSort v)
       (outPid, d0) = freshPort (tmvSort v) (emptyDiagram mode [])
       d1 =
         case addEdgePayload (PTmMeta v) [] [outPid] d0 of
@@ -93,7 +93,7 @@ testMonoidMorphism = do
   docSrc <- either (assertFailure . T.unpack) pure mkMonoid
   docTgt <- either (assertFailure . T.unpack) pure mkStringMonoid
   let modeMap = identityModeMap docSrc
-  let typeMap = M.fromList [(TypeRef modeM (TypeName "A"), TypeTemplate [] (tcon modeM "Str" []))]
+  let typeMap = M.fromList [(ObjRef modeM (ObjName "A"), TypeTemplate [] (tcon modeM "Str" []))]
   unitImg <- either (assertFailure . T.unpack) pure (genD modeM [] [tcon modeM "Str" []] (GenName "empty"))
   mulImg <- either (assertFailure . T.unpack) pure (genD modeM [tcon modeM "Str" [], tcon modeM "Str" []] [tcon modeM "Str" []] (GenName "append"))
   let mor = Morphism
@@ -118,8 +118,8 @@ testTypeMapReorder = do
   let mode = ModeName "M"
   let a = tvar mode "a"
   let b = tvar mode "b"
-  let prod = TypeName "Prod"
-  let pair = TypeName "Pair"
+  let prod = ObjName "Prod"
+  let pair = ObjName "Pair"
   let genName = GenName "g"
   let genSrc =
         GenDecl
@@ -127,8 +127,8 @@ testTypeMapReorder = do
           , gdMode = mode
           , gdTyVars = [a, b]
           , gdTmVars = []
-          , gdDom = map InPort [TCon (TypeRef mode prod) [TAType (TVar a), TAType (TVar b)]]
-          , gdCod = [TCon (TypeRef mode prod) [TAType (TVar a), TAType (TVar b)]]
+          , gdDom = map InPort [OCon (ObjRef mode prod) [OAObj (OVar a), OAObj (OVar b)]]
+          , gdCod = [OCon (ObjRef mode prod) [OAObj (OVar a), OAObj (OVar b)]]
           , gdAttrs = []
           }
   let genTgt =
@@ -137,8 +137,8 @@ testTypeMapReorder = do
           , gdMode = mode
           , gdTyVars = [a, b]
           , gdTmVars = []
-          , gdDom = map InPort [TCon (TypeRef mode pair) [TAType (TVar a), TAType (TVar b)]]
-          , gdCod = [TCon (TypeRef mode pair) [TAType (TVar a), TAType (TVar b)]]
+          , gdDom = map InPort [OCon (ObjRef mode pair) [OAObj (OVar a), OAObj (OVar b)]]
+          , gdCod = [OCon (ObjRef mode pair) [OAObj (OVar a), OAObj (OVar b)]]
           , gdAttrs = []
           }
   let docSrc = Doctrine
@@ -169,8 +169,8 @@ testTypeMapReorder = do
   docTgt' <- case validateDoctrine docTgt of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
-  img <- either (assertFailure . T.unpack) pure (genD mode [TCon (TypeRef mode pair) [TAType (TVar b), TAType (TVar a)]] [TCon (TypeRef mode pair) [TAType (TVar b), TAType (TVar a)]] genName)
-  let typeMap = M.fromList [(TypeRef mode prod, TypeTemplate [TPType a, TPType b] (TCon (TypeRef mode pair) [TAType (TVar b), TAType (TVar a)]))]
+  img <- either (assertFailure . T.unpack) pure (genD mode [OCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] [OCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] genName)
+  let typeMap = M.fromList [(ObjRef mode prod, TypeTemplate [TPType a, TPType b] (OCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]))]
   let mor = Morphism
         { morName = "SwapProd"
         , morSrc = docSrc'
@@ -192,10 +192,10 @@ testCrossModeMorphism :: Assertion
 testCrossModeMorphism = do
   let modeC = ModeName "C"
   let modeV = ModeName "V"
-  let aRef = TypeRef modeC (TypeName "A")
-  let bRef = TypeRef modeV (TypeName "B")
-  let aTy = TCon aRef []
-  let bTy = TCon bRef []
+  let aRef = ObjRef modeC (ObjName "A")
+  let bRef = ObjRef modeV (ObjName "B")
+  let aTy = OCon aRef []
+  let bTy = OCon bRef []
   let fGen =
         GenDecl
           { gdName = GenName "f"
@@ -221,7 +221,7 @@ testCrossModeMorphism = do
         , dModes = mkModes [modeC]
     , dAcyclicModes = S.empty
       , dAttrSorts = M.empty
-        , dTypes = M.fromList [(modeC, M.fromList [(TypeName "A", TypeSig [])])]
+        , dTypes = M.fromList [(modeC, M.fromList [(ObjName "A", TypeSig [])])]
         , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
         , dCells2 = []
       , dActions = M.empty
@@ -232,7 +232,7 @@ testCrossModeMorphism = do
         , dModes = mkModes [modeV]
     , dAcyclicModes = S.empty
       , dAttrSorts = M.empty
-        , dTypes = M.fromList [(modeV, M.fromList [(TypeName "B", TypeSig [])])]
+        , dTypes = M.fromList [(modeV, M.fromList [(ObjName "B", TypeSig [])])]
         , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
         , dCells2 = []
       , dActions = M.empty
@@ -285,11 +285,11 @@ testModalityMapRewritesTypeModalities = do
   let kTgt = ModExpr { meSrc = modeD, meTgt = modeD, mePath = [modK] }
   let baseSrc = tcon modeA "Base" []
   let baseTgt = tcon modeC "Base" []
-  let fBaseSrc = TMod fSrc baseSrc
-  let hfBaseSrc = TMod hSrc fBaseSrc
-  let gBaseTgt = TMod gTgt baseTgt
-  let kgBaseTgt = TMod kTgt gBaseTgt
-  let gkBaseTgt = TMod (ModExpr { meSrc = modeC, meTgt = modeD, mePath = [modG, modK] }) baseTgt
+  let fBaseSrc = OMod fSrc baseSrc
+  let hfBaseSrc = OMod hSrc fBaseSrc
+  let gBaseTgt = OMod gTgt baseTgt
+  let kgBaseTgt = OMod kTgt gBaseTgt
+  let gkBaseTgt = OMod (ModExpr { meSrc = modeC, meTgt = modeD, mePath = [modG, modK] }) baseTgt
   let modeTheorySrc =
         ModeTheory
           { mtModes =
@@ -365,7 +365,7 @@ testModalityMapRewritesTypeModalities = do
         , dModes = modeTheorySrc
     , dAcyclicModes = S.empty
       , dAttrSorts = M.empty
-        , dTypes = M.fromList [(modeA, M.fromList [(TypeName "Base", TypeSig [])])]
+        , dTypes = M.fromList [(modeA, M.fromList [(ObjName "Base", TypeSig [])])]
         , dGens = M.fromList [(modeB, M.fromList [(GenName "g", genGSrc), (GenName "gg", genGGSrc)])]
         , dCells2 = []
       , dActions = M.empty
@@ -376,7 +376,7 @@ testModalityMapRewritesTypeModalities = do
         , dModes = modeTheoryTgt
     , dAcyclicModes = S.empty
       , dAttrSorts = M.empty
-        , dTypes = M.fromList [(modeC, M.fromList [(TypeName "Base", TypeSig [])])]
+        , dTypes = M.fromList [(modeC, M.fromList [(ObjName "Base", TypeSig [])])]
         , dGens = M.fromList [(modeD, M.fromList [(GenName "g", genGTgt), (GenName "gg", genGGTgt)])]
         , dCells2 = []
       , dActions = M.empty
@@ -398,7 +398,7 @@ testModalityMapRewritesTypeModalities = do
         , morModeMap = M.fromList [(modeA, modeC), (modeB, modeD)]
         , morModMap = M.fromList [(modF, gTgt), (modH, kTgt)]
         , morAttrSortMap = M.empty
-        , morTypeMap = M.fromList [(TypeRef modeA (TypeName "Base"), TypeTemplate [] baseTgt)]
+        , morTypeMap = M.fromList [(ObjRef modeA (ObjName "Base"), TypeTemplate [] baseTgt)]
         , morGenMap = M.fromList [((modeB, GenName "g"), plainImage imgG), ((modeB, GenName "gg"), plainImage imgGG)]
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
@@ -436,8 +436,8 @@ testModalityMapRewritesTypeModalities = do
 testMorphismInstantiationSubstFailure :: Assertion
 testMorphismInstantiationSubstFailure = do
   let mode = ModeName "M"
-  let aRef = TypeRef mode (TypeName "A")
-  let aTy = TCon aRef []
+  let aRef = ObjRef mode (ObjName "A")
+  let aTy = OCon aRef []
   let srcGen =
         GenDecl
           { gdName = GenName "f"
@@ -464,7 +464,7 @@ testMorphismInstantiationSubstFailure = do
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(GenName "f", srcGen)])]
           , dCells2 = []
       , dActions = M.empty
@@ -476,7 +476,7 @@ testMorphismInstantiationSubstFailure = do
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(GenName "g", tgtGen)])]
           , dCells2 = []
       , dActions = M.empty
@@ -489,7 +489,7 @@ testMorphismInstantiationSubstFailure = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
   srcDiag <- either (assertFailure . T.unpack) pure (genD mode [aTy] [aTy] (GenName "f"))
-  let badTy = TCon (TypeRef mode (TypeName "Bad")) [TAType aTy]
+  let badTy = OCon (ObjRef mode (ObjName "Bad")) [OAObj aTy]
   badImg <- either (assertFailure . T.unpack) pure (genD mode [badTy] [badTy] (GenName "g"))
   let mor =
         Morphism
@@ -513,7 +513,7 @@ testBinderIdentityMorphismPreservesBinders :: Assertion
 testBinderIdentityMorphismPreservesBinders = do
   let mode = ModeName "M"
   let lamName = GenName "lam"
-  let aTy' = TCon (TypeRef mode (TypeName "A")) []
+  let aTy' = OCon (ObjRef mode (ObjName "A")) []
   let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
   let lamGen =
         GenDecl
@@ -531,7 +531,7 @@ testBinderIdentityMorphismPreservesBinders = do
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
           , dCells2 = []
       , dActions = M.empty
@@ -581,7 +581,7 @@ testMorphismSpliceRenamesToBinderMeta :: Assertion
 testMorphismSpliceRenamesToBinderMeta = do
   let mode = ModeName "M"
   let gName = GenName "g"
-  let aTy' = TCon (TypeRef mode (TypeName "A")) []
+  let aTy' = OCon (ObjRef mode (ObjName "A")) []
   let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
   let gDecl =
         GenDecl
@@ -599,7 +599,7 @@ testMorphismSpliceRenamesToBinderMeta = do
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
           , dCells2 = []
       , dActions = M.empty
@@ -645,7 +645,7 @@ testMorphismRejectsBadBinderHoleSignatures :: Assertion
 testMorphismRejectsBadBinderHoleSignatures = do
   let mode = ModeName "M"
   let lamName = GenName "lam"
-  let aTy' = TCon (TypeRef mode (TypeName "A")) []
+  let aTy' = OCon (ObjRef mode (ObjName "A")) []
   let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
   let wrongSig = BinderSig { bsTmCtx = [], bsDom = [], bsCod = [aTy'] }
   let lamGen =
@@ -664,7 +664,7 @@ testMorphismRejectsBadBinderHoleSignatures = do
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
           , dCells2 = []
       , dActions = M.empty
@@ -701,15 +701,15 @@ testMorphismRejectsBadBinderHoleSignatures = do
 testTypeTemplateCycleRejected :: Assertion
 testTypeTemplateCycleRejected = do
   let mode = ModeName "M"
-  let aRef = TypeRef mode (TypeName "A")
-  let bRef = TypeRef mode (TypeName "B")
+  let aRef = ObjRef mode (ObjName "A")
+  let bRef = ObjRef mode (ObjName "B")
   let doc =
         Doctrine
           { dName = "CycleDoc"
           , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(TypeName "A", TypeSig []), (TypeName "B", TypeSig [])])]
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig []), (ObjName "B", TypeSig [])])]
           , dGens = M.empty
           , dCells2 = []
       , dActions = M.empty
@@ -729,8 +729,8 @@ testTypeTemplateCycleRejected = do
           , morAttrSortMap = M.empty
           , morTypeMap =
               M.fromList
-                [ (aRef, TypeTemplate [] (TCon bRef []))
-                , (bRef, TypeTemplate [] (TCon aRef []))
+                [ (aRef, TypeTemplate [] (OCon bRef []))
+                , (bRef, TypeTemplate [] (OCon aRef []))
                 ]
           , morGenMap = M.empty
         , morCheck = CheckAll
@@ -746,11 +746,11 @@ testTermTemplateSortMismatch :: Assertion
 testTermTemplateSortMismatch = do
   let modeM' = ModeName "M"
   let modeI' = ModeName "I"
-  let natRef = TypeRef modeI' (TypeName "Nat")
-  let boolRef = TypeRef modeI' (TypeName "Bool")
-  let vecRef = TypeRef modeM' (TypeName "Vec")
-  let natTy = TCon natRef []
-  let boolTy = TCon boolRef []
+  let natRef = ObjRef modeI' (ObjName "Nat")
+  let boolRef = ObjRef modeI' (ObjName "Bool")
+  let vecRef = ObjRef modeM' (ObjName "Vec")
+  let natTy = OCon natRef []
+  let boolTy = OCon boolRef []
   let srcDoc =
         Doctrine
           { dName = "SrcSortMismatch"
@@ -759,8 +759,8 @@ testTermTemplateSortMismatch = do
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI', M.fromList [(TypeName "Nat", TypeSig []), (TypeName "Bool", TypeSig [])])
-                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
+                [ (modeI', M.fromList [(ObjName "Nat", TypeSig []), (ObjName "Bool", TypeSig [])])
+                , (modeM', M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
                 ]
           , dGens = M.empty
           , dCells2 = []
@@ -775,8 +775,8 @@ testTermTemplateSortMismatch = do
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI', M.fromList [(TypeName "Nat", TypeSig []), (TypeName "Bool", TypeSig [])])
-                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
+                [ (modeI', M.fromList [(ObjName "Nat", TypeSig []), (ObjName "Bool", TypeSig [])])
+                , (modeM', M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
                 ]
           , dGens = M.empty
           , dCells2 = []
@@ -790,7 +790,7 @@ testTermTemplateSortMismatch = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
   let nWrong = TmVar { tmvName = "n", tmvSort = boolTy, tmvScope = 0 }
-  let aVar = TyVar { tvName = "a", tvMode = modeM' }
+  let aVar = ObjVar { ovName = "a", ovMode = modeM' }
   let mor =
         Morphism
           { morName = "SortMismatch"
@@ -805,7 +805,7 @@ testTermTemplateSortMismatch = do
                 [ ( vecRef
                   , TypeTemplate
                       [TPTm nWrong, TPType aVar]
-                      (TVar aVar)
+                      (OVar aVar)
                   )
                 ]
           , morGenMap = M.empty
@@ -824,12 +824,12 @@ testTermTypeTemplateInstantiation :: Assertion
 testTermTypeTemplateInstantiation = do
   let modeM' = ModeName "M"
   let modeI' = ModeName "I"
-  let natRef = TypeRef modeI' (TypeName "Nat")
-  let aRef = TypeRef modeM' (TypeName "A")
-  let vecRef = TypeRef modeM' (TypeName "Vec")
-  let vec2Ref = TypeRef modeM' (TypeName "Vec2")
-  let natTy = TCon natRef []
-  let aTy' = TCon aRef []
+  let natRef = ObjRef modeI' (ObjName "Nat")
+  let aRef = ObjRef modeM' (ObjName "A")
+  let vecRef = ObjRef modeM' (ObjName "Vec")
+  let vec2Ref = ObjRef modeM' (ObjName "Vec2")
+  let natTy = OCon natRef []
+  let aTy' = OCon aRef []
   let z = TMFun (TmFunName "Z") []
   let s x = TMFun (TmFunName "S") [x]
   let zGen =
@@ -860,11 +860,11 @@ testTermTypeTemplateInstantiation = do
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI', M.fromList [(TypeName "Nat", TypeSig [])])
+                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
                 , ( modeM'
                   , M.fromList
-                      [ (TypeName "A", TypeSig [])
-                      , (TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])
+                      [ (ObjName "A", TypeSig [])
+                      , (ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])
                       ]
                   )
                 ]
@@ -881,11 +881,11 @@ testTermTypeTemplateInstantiation = do
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI', M.fromList [(TypeName "Nat", TypeSig [])])
+                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
                 , ( modeM'
                   , M.fromList
-                      [ (TypeName "A", TypeSig [])
-                      , (TypeName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM'])
+                      [ (ObjName "A", TypeSig [])
+                      , (ObjName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM'])
                       ]
                   )
                 ]
@@ -904,7 +904,7 @@ testTermTypeTemplateInstantiation = do
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tt -> pure tt
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
-  let aVar = TyVar { tvName = "a", tvMode = modeM' }
+  let aVar = ObjVar { ovName = "a", ovMode = modeM' }
   nSucc <- case termExprToDiagram ttSrc [] natTy (s (TMVar nVar)) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
@@ -934,7 +934,7 @@ testTermTypeTemplateInstantiation = do
                 [ ( vecRef
                   , TypeTemplate
                       [TPTm nVar, TPType aVar]
-                      (TCon vec2Ref [TATm nSucc, TAType (TVar aVar)])
+                      (OCon vec2Ref [OATm nSucc, OAObj (OVar aVar)])
                   )
                 ]
           , morGenMap =
@@ -948,7 +948,7 @@ testTermTypeTemplateInstantiation = do
   case checkMorphism mor of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  let srcDiag = idD modeM' [TCon vecRef [TATm zTm, TAType aTy']]
+  let srcDiag = idD modeM' [OCon vecRef [OATm zTm, OAObj aTy']]
   tgtDiag <- case applyMorphismDiagram mor srcDiag of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -956,7 +956,7 @@ testTermTypeTemplateInstantiation = do
     Left err -> assertFailure (T.unpack err)
     Right ctx -> pure ctx
   case dom of
-    [TCon ref [TATm gotTm, TAType gotA]] -> do
+    [OCon ref [OATm gotTm, OAObj gotA]] -> do
       ref @?= vec2Ref
       gotA @?= aTy'
       gotExpr <- case diagramToTermExpr ttSrc [] natTy gotTm of
@@ -972,10 +972,10 @@ testTermTemplateKindMismatch :: Assertion
 testTermTemplateKindMismatch = do
   let modeM' = ModeName "M"
   let modeI' = ModeName "I"
-  let natRef = TypeRef modeI' (TypeName "Nat")
-  let vecRef = TypeRef modeM' (TypeName "Vec")
-  let vec2Ref = TypeRef modeM' (TypeName "Vec2")
-  let natTy = TCon natRef []
+  let natRef = ObjRef modeI' (ObjName "Nat")
+  let vecRef = ObjRef modeM' (ObjName "Vec")
+  let vec2Ref = ObjRef modeM' (ObjName "Vec2")
+  let natTy = OCon natRef []
   let zGen =
         GenDecl
           { gdName = GenName "Z"
@@ -994,8 +994,8 @@ testTermTemplateKindMismatch = do
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI', M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
+                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
+                , (modeM', M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
                 ]
           , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
           , dCells2 = []
@@ -1010,8 +1010,8 @@ testTermTemplateKindMismatch = do
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI', M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM', M.fromList [(TypeName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
+                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
+                , (modeM', M.fromList [(ObjName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
                 ]
           , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
           , dCells2 = []
@@ -1025,7 +1025,7 @@ testTermTemplateKindMismatch = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
-  let aVar = TyVar { tvName = "a", tvMode = modeM' }
+  let aVar = ObjVar { ovName = "a", ovMode = modeM' }
   let nVarTm = tmMeta nVar
   let mor =
         Morphism
@@ -1041,7 +1041,7 @@ testTermTemplateKindMismatch = do
                 [ ( vecRef
                   , TypeTemplate
                       [TPType aVar, TPTm nVar]
-                      (TCon vec2Ref [TATm nVarTm, TAType (TVar aVar)])
+                      (OCon vec2Ref [OATm nVarTm, OAObj (OVar aVar)])
                   )
                 ]
           , morGenMap = M.empty
@@ -1058,9 +1058,9 @@ testMorphismMapsStructuredTermArgs :: Assertion
 testMorphismMapsStructuredTermArgs = do
   let modeM' = ModeName "M"
   let modeI' = ModeName "I"
-  let natRef = TypeRef modeI' (TypeName "Nat")
-  let vecRef = TypeRef modeM' (TypeName "Vec")
-  let natTy = TCon natRef []
+  let natRef = ObjRef modeI' (ObjName "Nat")
+  let vecRef = ObjRef modeM' (ObjName "Vec")
+  let natTy = OCon natRef []
   let succName = GenName "succ"
   let dblName = GenName "dbl"
   let succDecl =
@@ -1082,8 +1082,8 @@ testMorphismMapsStructuredTermArgs = do
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI', M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy])])
+                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
+                , (modeM', M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy])])
                 ]
           , dGens = M.fromList [(modeI', M.fromList [(succName, succDecl)])]
           , dCells2 = []
@@ -1098,8 +1098,8 @@ testMorphismMapsStructuredTermArgs = do
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI', M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeM', M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy])])
+                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
+                , (modeM', M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy])])
                 ]
           , dGens = M.fromList [(modeI', M.fromList [(dblName, dblDecl)])]
           , dCells2 = []
@@ -1139,12 +1139,12 @@ testMorphismMapsStructuredTermArgs = do
   tmSrc <- case termExprToDiagram ttSrc [] natTy (TMFun (TmFunName "succ") [TMVar nVar]) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
-  let tySrc = TCon vecRef [TATm tmSrc]
+  let tySrc = OCon vecRef [OATm tmSrc]
   tyTgt <- case applyMorphismTy mor tySrc of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right ty -> pure ty
   case tyTgt of
-    TCon ref [TATm tmOut] -> do
+    OCon ref [OATm tmOut] -> do
       ref @?= vecRef
       tmExpr <- case diagramToTermExpr ttTgt [] natTy tmOut of
         Left err -> assertFailure (T.unpack err) >> fail "unreachable"
@@ -1156,7 +1156,7 @@ testMorphismMapsStructuredTermArgs = do
 testMorphismWeakenImageTmCtx :: Assertion
 testMorphismWeakenImageTmCtx = do
   let mode = ModeName "M"
-  let tyX = TCon (TypeRef mode (TypeName "X")) []
+  let tyX = OCon (ObjRef mode (ObjName "X")) []
   let srcName = GenName "g"
   let tgtName = GenName "h"
   let mkGen name =
@@ -1175,7 +1175,7 @@ testMorphismWeakenImageTmCtx = do
           , dModes = mkModes [mode]
           , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.singleton mode (M.singleton (TypeName "X") (TypeSig []))
+          , dTypes = M.singleton mode (M.singleton (ObjName "X") (TypeSig []))
           , dGens = M.singleton mode (M.singleton srcName (mkGen srcName))
           , dCells2 = []
           , dActions = M.empty
@@ -1187,7 +1187,7 @@ testMorphismWeakenImageTmCtx = do
           , dModes = mkModes [mode]
           , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.singleton mode (M.singleton (TypeName "X") (TypeSig []))
+          , dTypes = M.singleton mode (M.singleton (ObjName "X") (TypeSig []))
           , dGens = M.singleton mode (M.singleton tgtName (mkGen tgtName))
           , dCells2 = []
           , dActions = M.empty
@@ -1227,16 +1227,16 @@ testMorphismWeakenImageTmCtx = do
 modeM :: ModeName
 modeM = ModeName "M"
 
-aTy :: TypeExpr
-aTy = TCon (TypeRef modeM (TypeName "A")) []
+aTy :: Obj
+aTy = OCon (ObjRef modeM (ObjName "A")) []
 
-strTy :: TypeExpr
-strTy = TCon (TypeRef modeM (TypeName "Str")) []
+strTy :: Obj
+strTy = OCon (ObjRef modeM (ObjName "Str")) []
 
 mkMonoid :: Either Text Doctrine
 mkMonoid = do
   let mt = mkModes [modeM]
-  let types = M.fromList [(modeM, M.fromList [(TypeName "A", TypeSig [])])]
+  let types = M.fromList [(modeM, M.fromList [(ObjName "A", TypeSig [])])]
   assoc <- assocRule "assoc" aTy (GenName "mul")
   unitL <- unitRule "unitL" aTy (GenName "unit") (GenName "mul") True
   unitR <- unitRule "unitR" aTy (GenName "unit") (GenName "mul") False
@@ -1287,7 +1287,7 @@ mkMonoid = do
 mkStringMonoid :: Either Text Doctrine
 mkStringMonoid = do
   let mt = mkModes [modeM]
-  let types = M.fromList [(modeM, M.fromList [(TypeName "Str", TypeSig [])])]
+  let types = M.fromList [(modeM, M.fromList [(ObjName "Str", TypeSig [])])]
   assoc <- assocRule "assoc" strTy (GenName "append")
   unitL <- unitRule "unitL" strTy (GenName "empty") (GenName "append") True
   unitR <- unitRule "unitR" strTy (GenName "empty") (GenName "append") False
@@ -1335,7 +1335,7 @@ mkStringMonoid = do
     Left err -> Left err
     Right () -> Right doc
 
-assocRule :: Text -> TypeExpr -> GenName -> Either Text Cell2
+assocRule :: Text -> Obj -> GenName -> Either Text Cell2
 assocRule name ty mulName = do
   mul <- genD modeM [ty, ty] [ty] mulName
   id1 <- pure (idD modeM [ty])
@@ -1353,7 +1353,7 @@ assocRule name ty mulName = do
     , c2RHS = rhs
     }
 
-unitRule :: Text -> TypeExpr -> GenName -> GenName -> Bool -> Either Text Cell2
+unitRule :: Text -> Obj -> GenName -> GenName -> Bool -> Either Text Cell2
 unitRule name ty unitName mulName leftSide = do
   unit <- genD modeM [] [ty] unitName
   mul <- genD modeM [ty, ty] [ty] mulName

@@ -13,8 +13,8 @@ import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (meDoctrines, meImplDefaults)
 import Strat.Poly.ModeTheory
-import Strat.Poly.TypeExpr
-import Strat.Poly.UnifyTy
+import Strat.Poly.Obj
+import Strat.Poly.UnifyObj
 import Strat.Poly.Doctrine
   ( Doctrine(..)
   , ModAction(..)
@@ -38,7 +38,7 @@ tests :: TestTree
 tests =
   testGroup
     "Poly.ModeTheory"
-    [ testCase "modality rewrite normalizes nested modality type" testNormalizeTypeExprByModEq
+    [ testCase "modality rewrite normalizes nested modality type" testNormalizeObjExprByModEq
     , testCase "substitution re-normalizes modality type" testSubstReNormalizes
     , testCase "action declarations elaborate and validate" testActionElab
     , testCase "applyAction preserves non-source tmctx and unifies using diagram tmctx" testApplyActionUsesDiagramTmCtx
@@ -59,16 +59,16 @@ tests =
     , testCase "legacy struct keyword is rejected" testStructureKeywordRejected
     ]
 
-testNormalizeTypeExprByModEq :: Assertion
-testNormalizeTypeExprByModEq = do
+testNormalizeObjExprByModEq :: Assertion
+testNormalizeObjExprByModEq = do
   mt <- requireEither (buildStagingTheory (ModeName "RT") (ModeName "CT"))
   let rt = ModeName "RT"
   let quote = ModName "quote"
   let splice = ModName "splice"
-  let natRT = TCon (TypeRef rt (TypeName "Nat")) []
+  let natRT = OCon (ObjRef rt (ObjName "Nat")) []
   let quoteE = ModExpr { meSrc = rt, meTgt = ModeName "CT", mePath = [quote] }
   let spliceE = ModExpr { meSrc = ModeName "CT", meTgt = rt, mePath = [splice] }
-  got <- requireEither (normalizeTypeExpr mt (TMod spliceE (TMod quoteE natRT)))
+  got <- requireEither (normalizeObjExpr mt (OMod spliceE (OMod quoteE natRT)))
   got @?= natRT
 
 testSubstReNormalizes :: Assertion
@@ -78,14 +78,14 @@ testSubstReNormalizes = do
   let ct = ModeName "CT"
   let quote = ModName "quote"
   let splice = ModName "splice"
-  let xVar = TyVar { tvName = "x", tvMode = ct }
-  let aVar = TyVar { tvName = "A", tvMode = rt }
+  let xVar = ObjVar { ovName = "x", ovMode = ct }
+  let aVar = ObjVar { ovName = "A", ovMode = rt }
   let quoteE = ModExpr { meSrc = rt, meTgt = ct, mePath = [quote] }
   let spliceE = ModExpr { meSrc = ct, meTgt = rt, mePath = [splice] }
   let tt = modeOnlyTypeTheory mt
-  subst <- requireEither (unifyTy tt (TVar xVar) (TMod quoteE (TVar aVar)))
-  got <- requireEither (applySubstTy tt subst (TMod spliceE (TVar xVar)))
-  got @?= TVar aVar
+  subst <- requireEither (unifyObj tt (OVar xVar) (OMod quoteE (OVar aVar)))
+  got <- requireEither (applySubstObj tt subst (OMod spliceE (OVar xVar)))
+  got @?= OVar aVar
 
 testActionElab :: Assertion
 testActionElab = do
@@ -118,9 +118,9 @@ testApplyActionUsesDiagramTmCtx = do
   let modeC = ModeName "C"
   let modeI = ModeName "I"
   let modF = ModName "F"
-  let natRef = TypeRef modeI (TypeName "Nat")
-  let vecRef = TypeRef modeC (TypeName "Vec")
-  let natTy = TCon natRef []
+  let natRef = ObjRef modeI (ObjName "Nat")
+  let vecRef = ObjRef modeC (ObjName "Vec")
+  let natTy = OCon natRef []
   let tmCtx = [natTy]
   mt0 <- requireEither (addMode modeC (mkModes []))
   mt1 <- requireEither (addMode modeI mt0)
@@ -132,8 +132,8 @@ testApplyActionUsesDiagramTmCtx = do
   let tmParam = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 1 }
   tmParamTerm <- requireEither (termExprToDiagram tt0 tmCtx natTy (TMVar tmParam))
   tmBound0 <- requireEither (termExprToDiagram tt0 tmCtx natTy (TMBound 0))
-  let vecParam = TCon vecRef [TATm tmParamTerm]
-  let vecBound = TCon vecRef [TATm tmBound0]
+  let vecParam = OCon vecRef [OATm tmParamTerm]
+  let vecBound = OCon vecRef [OATm tmBound0]
   let genName = GenName "g"
   let genDecl =
         GenDecl
@@ -154,8 +154,8 @@ testApplyActionUsesDiagramTmCtx = do
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI, M.fromList [(TypeName "Nat", TypeSig [])])
-                , (modeC, M.fromList [(TypeName "Vec", TypeSig [PS_Tm natTy])])
+                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
+                , (modeC, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy])])
                 ]
           , dGens = M.fromList [(modeC, M.fromList [(genName, genDecl)])]
           , dCells2 = []
@@ -174,7 +174,7 @@ testApplyActionUsesDiagramTmCtx = do
   dom @?= [vecBound]
   cod @?= [vecBound]
   case dom of
-    [TCon _ [TATm tmOut]] -> do
+    [OCon _ [OATm tmOut]] -> do
       expr <- requireEither (diagramToTermExpr tt tmCtx natTy tmOut)
       expr @?= TMBound 0
     _ -> assertFailure "unexpected mapped boundary shape"
@@ -183,7 +183,7 @@ testApplyActionWeakenImageTmCtx :: Assertion
 testApplyActionWeakenImageTmCtx = do
   let modeM = ModeName "M"
   let modF = ModName "F"
-  let tyX = TCon (TypeRef modeM (TypeName "X")) []
+  let tyX = OCon (ObjRef modeM (ObjName "X")) []
   mt0 <- requireEither (addMode modeM (mkModes []))
   mt1 <- requireEither (addModDecl (ModDecl modF modeM modeM) mt0)
   let lhsEq = ModExpr { meSrc = modeM, meTgt = modeM, mePath = [modF] }
@@ -208,7 +208,7 @@ testApplyActionWeakenImageTmCtx = do
           , dModes = mt
           , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.singleton modeM (M.singleton (TypeName "X") (TypeSig []))
+          , dTypes = M.singleton modeM (M.singleton (ObjName "X") (TypeSig []))
           , dGens = M.singleton modeM (M.fromList [(genG, mkGen genG), (genH, mkGen genH)])
           , dCells2 = []
           , dActions =

@@ -14,7 +14,7 @@ import Strat.Frontend.Env (ModuleEnv(..), DoctrineFunctorDef(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..))
 import qualified Strat.Poly.Morphism as PolyMorph
 
 
@@ -63,15 +63,15 @@ testApplyPreservesTargetNames = do
   doc <- expectDoctrine env "R"
   let mode = ModeName "M"
   let types = M.findWithDefault M.empty mode (dTypes doc)
-  assertBool "expected Box type in R" (M.member (TypeName "Box") types)
-  assertBool "R should not expose X type" (not (M.member (TypeName "X") types))
+  assertBool "expected Box type in R" (M.member (ObjName "Box") types)
+  assertBool "R should not expose X type" (not (M.member (ObjName "X") types))
   gens <- case M.lookup mode (dGens doc) of
     Nothing -> assertFailure "expected mode M generator table"
     Just table -> pure table
   flipGen <- case M.lookup (GenName "flip") gens of
     Nothing -> assertFailure "expected generator flip"
     Just g -> pure g
-  let expectedTy = TCon (TypeRef mode (TypeName "Box")) []
+  let expectedTy = OCon (ObjRef mode (ObjName "Box")) []
   gdPlainDom flipGen @?= [expectedTy]
   gdCod flipGen @?= [expectedTy]
 
@@ -166,7 +166,7 @@ testApplyImplicitIdentityTypeMap = do
   env <- expectElab src
   doc <- expectDoctrine env "App"
   let mode = ModeName "M"
-  let ty = TCon (TypeRef mode (TypeName "X")) []
+  let ty = OCon (ObjRef mode (ObjName "X")) []
   gens <- case M.lookup mode (dGens doc) of
     Nothing -> assertFailure "expected mode M generator table"
     Just table -> pure table

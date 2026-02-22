@@ -16,7 +16,7 @@ module Strat.Poly.Diagram
   , applySubstDiagram
   , applyAttrSubstDiagram
   , renameAttrVarsDiagram
-  , freeTyVarsDiagram
+  , freeObjVarsDiagram
   , freeTmVarsDiagram
   , freeAttrVarsDiagram
   , binderArgMetaVarsDiagram
@@ -31,21 +31,21 @@ import qualified Data.Set as S
 import Data.Functor.Identity (runIdentity)
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.TypeExpr (Context, TypeExpr, TyVar, TmVar(..), freeTyVarsType, freeTmVarsType)
+import Strat.Poly.Obj (Context, Obj, ObjVar, TmVar(..), freeObjVarsObj, freeTmVarsObj)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
-import Strat.Poly.UnifyTy
+import Strat.Poly.UnifyObj
   ( Subst
   , emptySubst
   , applySubstCtx
   , unifyCtx
   )
-import qualified Strat.Poly.UnifyTy as U (applySubstDiagram)
+import qualified Strat.Poly.UnifyObj as U (applySubstDiagram)
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.Traversal (foldDiagram, traverseDiagram)
 
 
-idDTm :: ModeName -> [TypeExpr] -> Context -> Diagram
+idDTm :: ModeName -> [Obj] -> Context -> Diagram
 idDTm mode tmCtx ctx =
   let (ports, diag') = allocPorts ctx (emptyDiagram mode tmCtx)
   in diag'
@@ -56,7 +56,7 @@ idDTm mode tmCtx ctx =
 idD :: ModeName -> Context -> Diagram
 idD mode = idDTm mode []
 
-genDTm :: ModeName -> [TypeExpr] -> Context -> Context -> GenName -> Either Text Diagram
+genDTm :: ModeName -> [Obj] -> Context -> Context -> GenName -> Either Text Diagram
 genDTm mode tmCtx dom cod gen =
   genDWithAttrsTm mode tmCtx dom cod gen M.empty
 
@@ -64,7 +64,7 @@ genD :: ModeName -> Context -> Context -> GenName -> Either Text Diagram
 genD mode dom cod gen =
   genDTm mode [] dom cod gen
 
-genDWithAttrsTm :: ModeName -> [TypeExpr] -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
+genDWithAttrsTm :: ModeName -> [Obj] -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
 genDWithAttrsTm mode tmCtx dom cod gen attrs = do
   let (inPorts, diag1) = allocPorts dom (emptyDiagram mode tmCtx)
   let (outPorts, diag2) = allocPorts cod diag1
@@ -92,8 +92,8 @@ compD tt g f
         else Left "diagram composition term-context mismatch"
       domG <- diagramDom g
       codF <- diagramCod f
-      let tyFlex = S.unions (map freeTyVarsType (codF <> domG))
-      let tmFlex = S.unions (map freeTmVarsType (codF <> domG))
+      let tyFlex = S.unions (map freeObjVarsObj (codF <> domG))
+      let tmFlex = S.unions (map freeTmVarsObj (codF <> domG))
       subst <-
         case unifyCtx tt tmCtxF tyFlex tmFlex codF domG of
           Left err -> Left ("diagram composition boundary mismatch: " <> err)
@@ -138,7 +138,7 @@ diagramDom :: Diagram -> Either Text Context
 diagramDom diag = mapM (lookupPort "diagramDom") (dIn diag)
   where
     lookupPort label pid =
-      case IM.lookup (unPortId pid) (dPortTy diag) of
+      case IM.lookup (unPortId pid) (dPortObj diag) of
         Nothing -> Left (label <> ": missing port type")
         Just ty -> Right ty
 
@@ -146,21 +146,21 @@ diagramCod :: Diagram -> Either Text Context
 diagramCod diag = mapM (lookupPort "diagramCod") (dOut diag)
   where
     lookupPort label pid =
-      case IM.lookup (unPortId pid) (dPortTy diag) of
+      case IM.lookup (unPortId pid) (dPortObj diag) of
         Nothing -> Left (label <> ": missing port type")
         Just ty -> Right ty
 
 applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
 applySubstDiagram = U.applySubstDiagram
 
-freeTyVarsDiagram :: Diagram -> S.Set TyVar
-freeTyVarsDiagram =
+freeObjVarsDiagram :: Diagram -> S.Set ObjVar
+freeObjVarsDiagram =
   foldDiagram onDiag (\_ -> mempty) (\_ -> mempty)
   where
     onDiag d =
       S.unions
-        [ S.unions (map freeTyVarsType (IM.elems (dPortTy d)))
-        , S.unions (map freeTyVarsType (dTmCtx d))
+        [ S.unions (map freeObjVarsObj (IM.elems (dPortObj d)))
+        , S.unions (map freeObjVarsObj (dTmCtx d))
         ]
 
 freeAttrVarsDiagram :: Diagram -> S.Set AttrVar
@@ -178,8 +178,8 @@ freeTmVarsDiagram =
   where
     onDiag d =
       S.unions
-        [ S.unions (map freeTmVarsType (IM.elems (dPortTy d)))
-        , S.unions (map freeTmVarsType (dTmCtx d))
+        [ S.unions (map freeTmVarsObj (IM.elems (dPortObj d)))
+        , S.unions (map freeTmVarsObj (dTmCtx d))
         ]
     onPayload payload =
       case payload of
@@ -240,13 +240,13 @@ unionDiagram left right
   | dMode left /= dMode right = Left "unionDiagram: mode mismatch"
   | dTmCtx left /= dTmCtx right = Left "unionDiagram: term-context mismatch"
   | otherwise = do
-      portTy <- unionDisjointIntMap "unionDiagram ports" (dPortTy left) (dPortTy right)
+      portTy <- unionDisjointIntMap "unionDiagram ports" (dPortObj left) (dPortObj right)
       portLabel <- unionDisjointIntMap "unionDiagram labels" (dPortLabel left) (dPortLabel right)
       prod <- unionDisjointIntMap "unionDiagram producers" (dProd left) (dProd right)
       cons <- unionDisjointIntMap "unionDiagram consumers" (dCons left) (dCons right)
       edges <- unionDisjointIntMap "unionDiagram edges" (dEdges left) (dEdges right)
       pure left
-        { dPortTy = portTy
+        { dPortObj = portTy
         , dPortLabel = portLabel
         , dProd = prod
         , dCons = cons

@@ -22,7 +22,7 @@ import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Term.AST (TermExpr(..))
-import Strat.Poly.TypeExpr (TmFunName(..))
+import Strat.Poly.Obj (TmFunName(..))
 
 
 data TRule = TRule

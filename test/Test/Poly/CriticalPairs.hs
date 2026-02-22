@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.ModeTheory
-import Strat.Poly.TypeExpr
+import Strat.Poly.Obj
 import Strat.Poly.Names
 import Strat.Poly.Diagram
 import Strat.Poly.Rewrite (RewriteRule(..))
@@ -41,8 +41,8 @@ testCriticalPairsRespectModeEq = do
   let modU = ModName "U"
   let fExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF] }
   let uExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modU] }
-  let baseTy = TCon (TypeRef mode (TypeName "Base")) []
-  let ufBaseTy = TMod uExpr (TMod fExpr baseTy)
+  let baseTy = OCon (ObjRef mode (ObjName "Base")) []
+  let ufBaseTy = OMod uExpr (OMod fExpr baseTy)
   let mt =
         ModeTheory
           { mtModes = M.singleton mode (ModeInfo mode)
@@ -84,13 +84,13 @@ testCriticalPairsRespectModeEq = do
 testCriticalPairsFreshenTyVars :: Assertion
 testCriticalPairsFreshenTyVars = do
   let mode = ModeName "M"
-  let a = TyVar { tvName = "a", tvMode = mode }
-  let baseTy = TCon (TypeRef mode (TypeName "B")) []
+  let a = ObjVar { ovName = "a", ovMode = mode }
+  let baseTy = OCon (ObjRef mode (ObjName "B")) []
   g1 <- require (genD mode [baseTy] [baseTy] (GenName "g"))
-  h1 <- require (genD mode [TVar a] [TVar a] (GenName "h1"))
+  h1 <- require (genD mode [OVar a] [OVar a] (GenName "h1"))
   lhs1 <- require (tensorD g1 h1)
   g2 <- require (genD mode [baseTy] [baseTy] (GenName "g"))
-  h2 <- require (genD mode [TVar a] [TVar a] (GenName "h2"))
+  h2 <- require (genD mode [OVar a] [OVar a] (GenName "h2"))
   lhs2 <- require (tensorD g2 h2)
   let rule1 =
         RewriteRule
@@ -119,13 +119,13 @@ testCriticalPairsFreshenTyVars = do
         , (aName == "rule.ty1" && bName == "rule.ty2") || (aName == "rule.ty2" && bName == "rule.ty1")
         ]
   assertBool "expected cross-rule critical pair" (not (null cross))
-  assertBool "expected overlap to keep distinct tyvars from both rules" (any (\d -> S.size (freeTyVarsDiagram d) >= 2) cross)
+  assertBool "expected overlap to keep distinct tyvars from both rules" (any (\d -> S.size (freeObjVarsDiagram d) >= 2) cross)
 
 testCriticalPairsFailOnSubstFailure :: Assertion
 testCriticalPairsFailOnSubstFailure = do
   let mode = ModeName "M"
-  let aTy = TCon (TypeRef mode (TypeName "A")) []
-  let badTmSort = TCon (TypeRef mode (TypeName "BadSort")) [TAType aTy]
+  let aTy = OCon (ObjRef mode (ObjName "A")) []
+  let badTmSort = OCon (ObjRef mode (ObjName "BadSort")) [OAObj aTy]
   lhs <- require (genDTm mode [badTmSort] [aTy] [aTy] (GenName "g"))
   let cell =
         Cell2

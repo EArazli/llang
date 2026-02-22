@@ -222,7 +222,7 @@ assignPortNames pol diag = go S.empty M.empty ordered
 
     internalOrder =
       [ PortId k
-      | k <- IM.keys (dPortTy diag)
+      | k <- IM.keys (dPortObj diag)
       , PortId k `S.notMember` boundarySet
       ]
 

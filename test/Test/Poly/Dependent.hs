@@ -18,12 +18,12 @@ import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.ModeTheory (ModeName(..), addMode, emptyModeTheory)
 import Strat.Poly.Doctrine (doctrineTypeTheory)
-import Strat.Poly.TypeExpr
-  ( TypeExpr(..)
-  , TypeArg(..)
-  , TyVar(..)
-  , TypeName(..)
-  , TypeRef(..)
+import Strat.Poly.Obj
+  ( Obj(..)
+  , ObjArg(..)
+  , ObjVar(..)
+  , ObjName(..)
+  , ObjRef(..)
   , TmFunName(..)
   , TmVar(..)
   , TermDiagram(..)
@@ -36,9 +36,9 @@ import Strat.Poly.TypeTheory
   , TmRule(..)
   , modeOnlyTypeTheory
   )
-import Strat.Poly.TypeNormalize (normalizeTypeDeep, normalizeTermDiagram, validateTermDiagram)
-import qualified Strat.Poly.TypeNormalize as TN
-import Strat.Poly.UnifyTy (unifyTm, unifyTyFlex, emptySubst, sTm)
+import Strat.Poly.ObjNormalize (normalizeObjDeep, normalizeTermDiagram, validateTermDiagram)
+import qualified Strat.Poly.ObjNormalize as TN
+import Strat.Poly.UnifyObj (unifyTm, unifyObjFlex, emptySubst, sTm)
 import Strat.Poly.Match (MatchConfig(..), findAllMatches)
 import Strat.Poly.Graph
   ( Diagram(..)
@@ -115,19 +115,19 @@ testDoctrineNormalizeTypeArg = do
   tt <- require (doctrineTypeTheory doc)
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let aTy = TCon (TypeRef modeM (TypeName "A")) []
-  let vecRef = TypeRef modeM (TypeName "Vec")
-  let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
+  let aTy = OCon (ObjRef modeM (ObjName "A")) []
+  let vecRef = ObjRef modeM (ObjName "Vec")
+  let natTy = OCon (ObjRef modeI (ObjName "Nat")) []
   let z = TMFun (TmFunName "Z") []
   let s x = TMFun (TmFunName "S") [x]
   let add x y = TMFun (TmFunName "add") [x, y]
   tmArg <- require (termExprToDiagram tt [] natTy (add (s z) (s z)))
   wantTm <- require (termExprToDiagram tt [] natTy (s (s z)))
-  let ty = TCon vecRef [TATm tmArg, TAType aTy]
-  let want = TCon vecRef [TATm wantTm, TAType aTy]
-  got <- require (normalizeTypeDeep tt ty)
+  let ty = OCon vecRef [OATm tmArg, OAObj aTy]
+  let want = OCon vecRef [OATm wantTm, OAObj aTy]
+  got <- require (normalizeObjDeep tt ty)
   case (got, want) of
-    (TCon gotRef [TATm gotTm, TAType gotA], TCon wantRef [TATm wantTm', TAType wantA]) -> do
+    (OCon gotRef [OATm gotTm, OAObj gotA], OCon wantRef [OATm wantTm', OAObj wantA]) -> do
       gotRef @?= wantRef
       gotA @?= wantA
       gotExpr <- require (diagramToTermExpr tt [] natTy gotTm)
@@ -208,15 +208,15 @@ testMixedModeTmCtxResolution :: Assertion
 testMixedModeTmCtxResolution = do
   let modeC = ModeName "C"
   let modeI = ModeName "I"
-  let fooRef = TypeRef modeC (TypeName "Foo")
-  let natRef = TypeRef modeI (TypeName "Nat")
-  let fooTy = TCon fooRef []
-  let natTy = TCon natRef []
+  let fooRef = ObjRef modeC (ObjName "Foo")
+  let natRef = ObjRef modeI (ObjName "Nat")
+  let fooTy = OCon fooRef []
+  let natTy = OCon natRef []
   let tmCtx = [fooTy, natTy]
   let tt =
         TypeTheory
           { ttModes = mkModes [modeC, modeI]
-          , ttTypeParams =
+          , ttObjParams =
               M.fromList
                 [ (fooRef, [])
                 , (natRef, [])
@@ -250,8 +250,8 @@ testBoundIndexSurvivesCanonization = do
 testValidateTermDiagramRejectsSparseBoundary :: Assertion
 testValidateTermDiagramRejectsSparseBoundary = do
   let modeI = ModeName "I"
-  let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
-  let boolTy = TCon (TypeRef modeI (TypeName "Bool")) []
+  let natTy = OCon (ObjRef modeI (ObjName "Nat")) []
+  let boolTy = OCon (ObjRef modeI (ObjName "Bool")) []
   let tmCtx = [natTy, boolTy]
   let (pBool, d0) = freshPort boolTy (emptyDiagram modeI tmCtx)
   let sparse = d0 { dIn = [pBool], dOut = [pBool] }
@@ -285,32 +285,32 @@ testScopedTmUnify = do
 testDependentUnify :: Assertion
 testDependentUnify = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
-  let vecRef = TypeRef modeM (TypeName "Vec")
-  let aTy = TCon (TypeRef modeM (TypeName "A")) []
-  let tt = tt0 { ttTypeParams = M.fromList [ (vecRef, [TPS_Tm natTy, TPS_Ty modeM]) ] }
+  let vecRef = ObjRef modeM (ObjName "Vec")
+  let aTy = OCon (ObjRef modeM (ObjName "A")) []
+  let tt = tt0 { ttObjParams = M.fromList [ (vecRef, [TPS_Tm natTy, TPS_Ty modeM]) ] }
   let n = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
   lhsTm <- require (termExprToDiagram tt [] natTy (add (TMVar n) z))
   rhsTm <- require (termExprToDiagram tt [] natTy (TMVar n))
-  let lhs = TCon vecRef [TATm lhsTm, TAType aTy]
-  let rhs = TCon vecRef [TATm rhsTm, TAType aTy]
-  _ <- require (unifyTyFlex tt [] S.empty (S.singleton n) emptySubst lhs rhs)
+  let lhs = OCon vecRef [OATm lhsTm, OAObj aTy]
+  let rhs = OCon vecRef [OATm rhsTm, OAObj aTy]
+  _ <- require (unifyObjFlex tt [] S.empty (S.singleton n) emptySubst lhs rhs)
   pure ()
 
 testBoundSortUsesSubstitution :: Assertion
 testBoundSortUsesSubstitution = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let aVar = TyVar { tvName = "a", tvMode = modeM }
-  let lenRef = TypeRef modeI (TypeName "Len")
-  let concrete = TCon (TypeRef modeM (TypeName "AConcrete")) []
-  let tmCtxSort = TCon lenRef [TAType (TVar aVar)]
-  let expectedSort = TCon lenRef [TAType concrete]
+  let aVar = ObjVar { ovName = "a", ovMode = modeM }
+  let lenRef = ObjRef modeI (ObjName "Len")
+  let concrete = OCon (ObjRef modeM (ObjName "AConcrete")) []
+  let tmCtxSort = OCon lenRef [OAObj (OVar aVar)]
+  let expectedSort = OCon lenRef [OAObj concrete]
   let tt =
         TypeTheory
           { ttModes = mkModes [modeM, modeI]
-          , ttTypeParams = M.fromList [(lenRef, [TPS_Ty modeM])]
+          , ttObjParams = M.fromList [(lenRef, [TPS_Ty modeM])]
           , ttTmFuns = M.empty
           , ttTmRules = M.empty
           , ttTmTRS = M.empty
@@ -319,7 +319,7 @@ testBoundSortUsesSubstitution = do
   case unifyTm tt [tmCtxSort] S.empty emptySubst expectedSort bound0 bound0 of
     Left _ -> pure ()
     Right _ -> assertFailure "expected bound sort mismatch before solving substitution"
-  subst <- require (unifyTyFlex tt [] (S.singleton aVar) S.empty emptySubst (TVar aVar) concrete)
+  subst <- require (unifyObjFlex tt [] (S.singleton aVar) S.empty emptySubst (OVar aVar) concrete)
   _ <- require (unifyTm tt [tmCtxSort] S.empty subst expectedSort bound0 bound0)
   pure ()
 
@@ -327,16 +327,16 @@ testMatchBoundSortUsesCurrentSubst :: Assertion
 testMatchBoundSortUsesCurrentSubst = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let aVar = TyVar { tvName = "a", tvMode = modeM }
-  let lenRef = TypeRef modeI (TypeName "Len")
-  let fooRef = TypeRef modeM (TypeName "Foo")
-  let concrete = TCon (TypeRef modeM (TypeName "AConcrete")) []
-  let tmCtxSort = TCon lenRef [TAType (TVar aVar)]
-  let expectedSort = TCon lenRef [TAType concrete]
+  let aVar = ObjVar { ovName = "a", ovMode = modeM }
+  let lenRef = ObjRef modeI (ObjName "Len")
+  let fooRef = ObjRef modeM (ObjName "Foo")
+  let concrete = OCon (ObjRef modeM (ObjName "AConcrete")) []
+  let tmCtxSort = OCon lenRef [OAObj (OVar aVar)]
+  let expectedSort = OCon lenRef [OAObj concrete]
   let tt =
         TypeTheory
           { ttModes = mkModes [modeM, modeI]
-          , ttTypeParams =
+          , ttObjParams =
               M.fromList
                 [ (lenRef, [TPS_Ty modeM])
                 , (fooRef, [TPS_Tm expectedSort])
@@ -348,15 +348,15 @@ testMatchBoundSortUsesCurrentSubst = do
   bound0 <- require (termExprToDiagram tt [tmCtxSort] tmCtxSort (TMBound 0))
 
   let d0 = emptyDiagram modeM [tmCtxSort]
-  let (p1, d1) = freshPort (TVar aVar) d0
-  let (p2, d2) = freshPort (TCon fooRef [TATm bound0]) d1
+  let (p1, d1) = freshPort (OVar aVar) d0
+  let (p2, d2) = freshPort (OCon fooRef [OATm bound0]) d1
   d3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [p1, p2] [] d2)
   let lhs = d3 { dIn = [p1, p2], dOut = [] }
   _ <- require (validateDiagram lhs)
 
   let h0 = emptyDiagram modeM [tmCtxSort]
   let (h1, h1d) = freshPort concrete h0
-  let (h2, h2d) = freshPort (TCon fooRef [TATm bound0]) h1d
+  let (h2, h2d) = freshPort (OCon fooRef [OATm bound0]) h1d
   h3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [h1, h2] [] h2d)
   let host = h3 { dIn = [h1, h2], dOut = [] }
   _ <- require (validateDiagram host)
@@ -368,15 +368,15 @@ testMatchBoundSortUsesCurrentSubst = do
 testDependentCompDefEq :: Assertion
 testDependentCompDefEq = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
-  let vecRef = TypeRef modeM (TypeName "Vec")
-  let outRef = TypeRef modeM (TypeName "Out")
+  let vecRef = ObjRef modeM (ObjName "Vec")
+  let outRef = ObjRef modeM (ObjName "Out")
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
-  let vecTy tmArg = TCon vecRef [TATm tmArg]
-  let outTy = TCon outRef []
+  let vecTy tmArg = OCon vecRef [OATm tmArg]
+  let outTy = OCon outRef []
   let tt =
         tt0
-          { ttTypeParams =
+          { ttObjParams =
               M.fromList
                 [ (vecRef, [TPS_Tm natTy])
                 , (outRef, [])
@@ -393,13 +393,13 @@ testMatchTmCtxCompatibility :: Assertion
 testMatchTmCtxCompatibility = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let aTy = TCon (TypeRef modeM (TypeName "A")) []
-  let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
-  let boolTy = TCon (TypeRef modeI (TypeName "Bool")) []
+  let aTy = OCon (ObjRef modeM (ObjName "A")) []
+  let natTy = OCon (ObjRef modeI (ObjName "Nat")) []
+  let boolTy = OCon (ObjRef modeI (ObjName "Bool")) []
   let tt =
         TypeTheory
           { ttModes = mkModes [modeM, modeI]
-          , ttTypeParams = M.empty
+          , ttObjParams = M.empty
           , ttTmFuns = M.empty
           , ttTmRules = M.empty
           , ttTmTRS = M.empty
@@ -415,8 +415,8 @@ testMatchTmCtxCompatibility = do
 testIsoMatchDropsSubstFailure :: Assertion
 testIsoMatchDropsSubstFailure = do
   let mode = ModeName "M"
-  let goodTy = TCon (TypeRef mode (TypeName "A")) []
-  let badSort = TCon (TypeRef mode (TypeName "BadSort")) [TAType goodTy]
+  let goodTy = OCon (ObjRef mode (ObjName "A")) []
+  let badSort = OCon (ObjRef mode (ObjName "BadSort")) [OAObj goodTy]
   let tt = modeOnlyTypeTheory (mkModes [mode])
   let inner = emptyDiagram mode [badSort]
   _ <- require (validateDiagram inner)
@@ -428,14 +428,14 @@ testIsoMatchDropsSubstFailure = do
 testCheckedTermConversionDefEq :: Assertion
 testCheckedTermConversionDefEq = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
-  let vecRef = TypeRef modeM (TypeName "Vec")
-  let tt = tt0 { ttTypeParams = M.fromList [(vecRef, [TPS_Tm natTy])] }
+  let vecRef = ObjRef modeM (ObjName "Vec")
+  let tt = tt0 { ttObjParams = M.fromList [(vecRef, [TPS_Tm natTy])] }
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
   tmZ <- require (termExprToDiagram tt [] natTy z)
-  let sortAdd = TCon vecRef [TATm tmAdd]
-  let sortZ = TCon vecRef [TATm tmZ]
+  let sortAdd = OCon vecRef [OATm tmAdd]
+  let sortZ = OCon vecRef [OATm tmZ]
   let xVar = TmVar { tmvName = "x", tmvSort = sortAdd, tmvScope = 0 }
   case termExprToDiagram tt [] sortZ (TMVar xVar) of
     Left _ -> pure ()
@@ -446,7 +446,7 @@ testCheckedTermConversionDefEq = do
 testBinderMetaSplice :: Assertion
 testBinderMetaSplice = do
   let mode = ModeName "M"
-  let aTy = TCon (TypeRef mode (TypeName "A")) []
+  let aTy = OCon (ObjRef mode (ObjName "A")) []
   let meta = BinderMetaVar "Body"
   let body = idD mode [aTy]
 
@@ -487,7 +487,7 @@ testExplicitBinderTermArg = do
   diag <- require (elabDiagExpr env doc (ModeName "M") [] raw)
   assertBool "expected no unresolved term variables" (S.null (freeTmVarsDiagram diag))
 
-mkBetaInput :: ModeName -> TypeExpr -> BinderArg -> Either Text Diagram
+mkBetaInput :: ModeName -> Obj -> BinderArg -> Either Text Diagram
 mkBetaInput mode aTy lamArg = do
   let (x, d0) = freshPort aTy (emptyDiagram mode [])
   let (lamOut, d1) = freshPort aTy d0
@@ -498,7 +498,7 @@ mkBetaInput mode aTy lamArg = do
   validateDiagram diag
   pure diag
 
-mkSpliceRHS :: ModeName -> TypeExpr -> BinderMetaVar -> Either Text Diagram
+mkSpliceRHS :: ModeName -> Obj -> BinderMetaVar -> Either Text Diagram
 mkSpliceRHS mode aTy meta = do
   let (x, d0) = freshPort aTy (emptyDiagram mode [])
   let (y, d1) = freshPort aTy d0
@@ -507,7 +507,7 @@ mkSpliceRHS mode aTy meta = do
   validateDiagram diag
   pure diag
 
-mkWrapWithBinder :: ModeName -> TypeExpr -> Diagram -> Either Text Diagram
+mkWrapWithBinder :: ModeName -> Obj -> Diagram -> Either Text Diagram
 mkWrapWithBinder mode outTy inner = do
   let (outPort, d0) = freshPort outTy (emptyDiagram mode [])
   d1 <- addEdgePayload (PGen (GenName "wrap") M.empty [BAConcrete inner]) [] [outPort] d0
@@ -515,13 +515,13 @@ mkWrapWithBinder mode outTy inner = do
   validateDiagram diag
   pure diag
 
-mkNatTypeTheory :: Either Text (TypeTheory, TypeExpr, ModeName, ModeName)
+mkNatTypeTheory :: Either Text (TypeTheory, Obj, ModeName, ModeName)
 mkNatTypeTheory = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
   mt0 <- addMode modeM emptyModeTheory
   mt1 <- addMode modeI mt0
-  let natTy = TCon (TypeRef modeI (TypeName "Nat")) []
+  let natTy = OCon (ObjRef modeI (ObjName "Nat")) []
   let z = TMFun (TmFunName "Z") []
   let s x = TMFun (TmFunName "S") [x]
   let add x y = TMFun (TmFunName "add") [x, y]
@@ -536,7 +536,7 @@ mkNatTypeTheory = do
   let ttSig =
         TypeTheory
           { ttModes = mt1
-          , ttTypeParams = M.empty
+          , ttObjParams = M.empty
           , ttTmFuns = M.fromList [(modeI, funSigs)]
           , ttTmRules = M.empty
           , ttTmTRS = M.empty

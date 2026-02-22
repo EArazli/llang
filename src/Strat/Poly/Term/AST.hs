@@ -8,7 +8,7 @@ module Strat.Poly.Term.AST
   ) where
 
 import qualified Data.Set as S
-import Strat.Poly.TypeExpr (TmFunName, TmVar(..))
+import Strat.Poly.Obj (TmFunName, TmVar(..))
 
 
 data TermExpr

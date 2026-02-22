@@ -13,7 +13,7 @@ import Strat.Poly.Diagram (unionDiagram)
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..))
 
 
 tests :: TestTree
@@ -28,8 +28,8 @@ tests =
 modeName :: ModeName
 modeName = ModeName "M"
 
-aTy :: TypeExpr
-aTy = TCon (TypeRef modeName (TypeName "A")) []
+aTy :: Obj
+aTy = OCon (ObjRef modeName (ObjName "A")) []
 
 require :: Either Text a -> IO a
 require = either (assertFailure . T.unpack) pure
@@ -79,7 +79,7 @@ testDeletePortIfDangling = do
     Right _ -> assertFailure "expected deleting non-dangling port to fail"
   noEdge <- require (deleteEdgeKeepPorts diag (EdgeId 0))
   pruned <- require (deletePortIfDangling noEdge pIn)
-  assertBool "deleted port should be removed from type table" (IM.notMember (unPortId pIn) (dPortTy pruned))
+  assertBool "deleted port should be removed from type table" (IM.notMember (unPortId pIn) (dPortObj pruned))
   assertBool "deleted port should be removed from boundary" (pIn `notElem` dIn pruned)
   empty <- require (deletePortsIfDangling noEdge [pIn, pOut])
   diagramPortIds empty @?= []

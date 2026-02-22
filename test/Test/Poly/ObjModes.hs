@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Test.Poly.TypeModes
+module Test.Poly.ObjModes
   ( tests
   ) where
 
@@ -9,28 +9,30 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.IntMap.Strict as IM
 
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..), TyVar(..), TypeArg(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar(..), ObjArg(..), objMode)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), emptyModeTheory)
 import Strat.Poly.Doctrine (Doctrine(..), TypeSig(..), ParamSig(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Frontend.Env (emptyEnv)
 import Strat.Poly.Diagram (diagramDom)
-import Strat.Poly.UnifyTy (unifyTy)
-import Strat.Poly.Graph (emptyDiagram, freshPort, validateDiagram)
+import Strat.Poly.UnifyObj (unifyObj)
+import Strat.Poly.Graph (Diagram(..), emptyDiagram, freshPort, validateDiagram)
 import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 
 
 tests :: TestTree
 tests =
   testGroup
-    "Poly.TypeModes"
+    "Poly.ObjModes"
     [ testCase "elaboration handles cross-mode nesting" testElabCrossMode
     , testCase "unqualified constructor ambiguity rejected" testAmbiguousConstructor
     , testCase "argument mode mismatch rejected" testArgModeMismatch
     , testCase "unify rejects mode mismatch" testUnifyModeMismatch
     , testCase "validateDiagram rejects port mode mismatch" testValidateDiagramModeMismatch
+    , testCase "diagram ports store Obj in the diagram mode" testDiagramPortsStoreObj
     ]
 
 modeC :: ModeName
@@ -39,13 +41,13 @@ modeC = ModeName "C"
 modeV :: ModeName
 modeV = ModeName "V"
 
-tvar :: ModeName -> Text -> TyVar
-tvar mode name = TyVar { tvName = name, tvMode = mode }
+tvar :: ModeName -> Text -> ObjVar
+tvar mode name = ObjVar { ovName = name, ovMode = mode }
 
-tcon :: ModeName -> Text -> [TypeExpr] -> TypeExpr
-tcon mode name args = TCon (TypeRef mode (TypeName name)) (map TAType args)
+tcon :: ModeName -> Text -> [Obj] -> Obj
+tcon mode name args = OCon (ObjRef mode (ObjName name)) (map OAObj args)
 
-mkDoctrine :: [(ModeName, [(TypeName, TypeSig)])] -> Doctrine
+mkDoctrine :: [(ModeName, [(ObjName, TypeSig)])] -> Doctrine
 mkDoctrine tables =
   Doctrine
     { dName = "D"
@@ -78,8 +80,8 @@ testElabCrossMode :: Assertion
 testElabCrossMode = do
   let doc0 =
         mkDoctrine
-          [ (modeC, [(TypeName "A", TypeSig [])])
-          , (modeV, [(TypeName "A", TypeSig []), (TypeName "Thunk", TypeSig [PS_Ty modeC])])
+          [ (modeC, [(ObjName "A", TypeSig [])])
+          , (modeV, [(ObjName "A", TypeSig []), (ObjName "Thunk", TypeSig [PS_Ty modeC])])
           ]
   doc <- requireDoc doc0
   raw <- case parseDiagExpr "id[V.Thunk(C.A)]" of
@@ -97,8 +99,8 @@ testAmbiguousConstructor :: Assertion
 testAmbiguousConstructor = do
   let doc0 =
         mkDoctrine
-          [ (modeC, [(TypeName "A", TypeSig [])])
-          , (modeV, [(TypeName "A", TypeSig [])])
+          [ (modeC, [(ObjName "A", TypeSig [])])
+          , (modeV, [(ObjName "A", TypeSig [])])
           ]
   doc <- requireDoc doc0
   raw <- case parseDiagExpr "id[A]" of
@@ -113,8 +115,8 @@ testArgModeMismatch :: Assertion
 testArgModeMismatch = do
   let doc0 =
         mkDoctrine
-          [ (modeC, [(TypeName "A", TypeSig [])])
-          , (modeV, [(TypeName "A", TypeSig []), (TypeName "Thunk", TypeSig [PS_Ty modeC])])
+          [ (modeC, [(ObjName "A", TypeSig [])])
+          , (modeV, [(ObjName "A", TypeSig []), (ObjName "Thunk", TypeSig [PS_Ty modeC])])
           ]
   doc <- requireDoc doc0
   raw <- case parseDiagExpr "id[V.Thunk(V.A)]" of
@@ -130,10 +132,10 @@ testUnifyModeMismatch = do
   let aVar = tvar modeC "a"
   let aTy = tcon modeC "A" []
   let tt = modeOnlyTypeTheory emptyModeTheory
-  case unifyTy tt (TVar aVar) aTy of
+  case unifyObj tt (OVar aVar) aTy of
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()
-  case unifyTy tt (TVar aVar) (tcon modeV "B" []) of
+  case unifyObj tt (OVar aVar) (tcon modeV "B" []) of
     Left err ->
       assertBool "expected mode mismatch" ("mode mismatch" `T.isInfixOf` err)
     Right _ -> assertFailure "expected mode mismatch failure"
@@ -147,3 +149,14 @@ testValidateDiagramModeMismatch = do
     Left err ->
       assertBool "expected port mode mismatch" ("wrong mode" `T.isInfixOf` err)
     Right _ -> assertFailure "expected validateDiagram to reject mode mismatch"
+
+testDiagramPortsStoreObj :: Assertion
+testDiagramPortsStoreObj = do
+  let modeM = ModeName "M"
+      objA = tcon modeM "A" []
+      (p0, diag0) = freshPort objA (emptyDiagram modeM [])
+      diag = diag0 { dIn = [p0], dOut = [p0] }
+  case validateDiagram diag of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  mapM_ (\o -> objMode o @?= dMode diag) (IM.elems (dPortObj diag))

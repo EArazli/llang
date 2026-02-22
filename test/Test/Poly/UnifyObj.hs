@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Test.Poly.UnifyTy
+module Test.Poly.UnifyObj
   ( tests
   ) where
 
@@ -8,16 +8,16 @@ import Test.Tasty.HUnit
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeExpr
-  ( TypeExpr(..)
-  , TypeName(..)
-  , TypeRef(..)
-  , TyVar(..)
-  , TypeArg(..)
+import Strat.Poly.Obj
+  ( Obj(..)
+  , ObjName(..)
+  , ObjRef(..)
+  , ObjVar(..)
+  , ObjArg(..)
   , TermDiagram(..)
   )
 import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), modeOnlyTypeTheory)
-import Strat.Poly.UnifyTy (emptySubst, unifyTyFlex)
+import Strat.Poly.UnifyObj (emptySubst, unifyObjFlex)
 import Strat.Poly.Diagram (idDTm)
 import Test.Poly.Helpers (mkModes)
 
@@ -25,23 +25,23 @@ import Test.Poly.Helpers (mkModes)
 tests :: TestTree
 tests =
   testGroup
-    "Poly.UnifyTy"
-    [ testCase "occurs check sees type variables inside term arguments" testOccursTyVarInTermArg
+    "Poly.UnifyObj"
+    [ testCase "occurs check sees object variables inside term arguments" testOccursObjVarInTermArg
     ]
 
-testOccursTyVarInTermArg :: Assertion
-testOccursTyVarInTermArg = do
+testOccursObjVarInTermArg :: Assertion
+testOccursObjVarInTermArg = do
   let mode = ModeName "M"
-      aVar = TyVar { tvName = "a", tvMode = mode }
-      sortTy = TVar aVar
-      fooRef = TypeRef mode (TypeName "Foo")
+      aVar = ObjVar { ovName = "a", ovMode = mode }
+      sortTy = OVar aVar
+      fooRef = ObjRef mode (ObjName "Foo")
       tm = TermDiagram (idDTm mode [sortTy] [sortTy])
-      rhs = TCon fooRef [TATm tm]
+      rhs = OCon fooRef [OATm tm]
       ttBase = modeOnlyTypeTheory (mkModes [mode])
       tt =
         ttBase
-          { ttTypeParams = M.singleton fooRef [TPS_Tm sortTy]
+          { ttObjParams = M.singleton fooRef [TPS_Tm sortTy]
           }
-  case unifyTyFlex tt [sortTy] (S.singleton aVar) S.empty emptySubst (TVar aVar) rhs of
+  case unifyObjFlex tt [sortTy] (S.singleton aVar) S.empty emptySubst (OVar aVar) rhs of
     Left _ -> pure ()
     Right _ -> assertFailure "expected occurs-check failure"

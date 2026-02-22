@@ -35,8 +35,8 @@ import Strat.Poly.Proof
   , checkJoinProof
   )
 import Strat.Poly.Rewrite (rulesFromPolicy)
-import Strat.Poly.TypeExpr
-import Strat.Poly.UnifyTy hiding (applySubstDiagram)
+import Strat.Poly.Obj
+import Strat.Poly.UnifyObj hiding (applySubstDiagram)
 import Strat.Poly.TypeTheory
 
 data ActionSemanticsResult
@@ -197,20 +197,20 @@ freshenRuleTyVars tt cell = do
     else do
       let used0 =
             S.fromList
-              [ (tvMode v, tvName v)
-              | v <- S.toList (S.union (freeTyVarsDiagram (c2LHS cell)) (freeTyVarsDiagram (c2RHS cell)))
+              [ (ovMode v, ovName v)
+              | v <- S.toList (S.union (freeObjVarsDiagram (c2LHS cell)) (freeObjVarsDiagram (c2RHS cell)))
               ]
       let (substMap, _used) = foldl freshOne (M.empty, used0) vars
-      let subst = emptySubst { sTy = substMap }
+      let subst = emptySubst { sObj = substMap }
       lhs <- applySubstDiagram tt subst (c2LHS cell)
       rhs <- applySubstDiagram tt subst (c2RHS cell)
       pure cell { c2LHS = lhs, c2RHS = rhs }
   where
     freshOne (acc, used) v =
-      let name' = pickFresh used (tvMode v) ("actchk_" <> tvName v) 0
-          v' = v { tvName = name' }
-          used' = S.insert (tvMode v', tvName v') used
-          acc' = M.insert v (TVar v') acc
+      let name' = pickFresh used (ovMode v) ("actchk_" <> ovName v) 0
+          v' = v { ovName = name' }
+          used' = S.insert (ovMode v', ovName v') used
+          acc' = M.insert v (OVar v') acc
        in (acc', used')
 
     pickFresh used mode base n =
@@ -261,20 +261,20 @@ applyAction doc mName diagSrc = do
   tt <- doctrineTypeTheory doc
   let me = ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [mName] }
   dTmCtx' <- mapM (mapTypeIfSource me) (dTmCtx diagSrc)
-  dPortTy' <- mapM (mapType me) (dPortTy diagSrc)
-  let diag0 = diagSrc { dMode = mdTgt decl, dTmCtx = dTmCtx', dPortTy = dPortTy' }
+  dPortObj' <- mapM (mapType me) (dPortObj diagSrc)
+  let diag0 = diagSrc { dMode = mdTgt decl, dTmCtx = dTmCtx', dPortObj = dPortObj' }
   let edgeKeys = IM.keys (dEdges diagSrc)
   diag1 <- foldM (step tt action me) diag0 edgeKeys
   validateDiagram diag1
   pure diag1
   where
     mapType me ty = do
-      if typeMode ty /= meSrc me
+      if objMode ty /= meSrc me
         then Left "map: type mode does not match action source"
-        else normalizeTypeExpr (dModes doc) (TMod me ty)
+        else normalizeObjExpr (dModes doc) (OMod me ty)
 
     mapTypeIfSource me ty =
-      if typeMode ty == meSrc me
+      if objMode ty == meSrc me
         then mapType me ty
         else pure ty
 
@@ -340,20 +340,20 @@ applyAction doc mName diagSrc = do
           pure sig { bsTmCtx = tmCtx, bsDom = dom, bsCod = cod }
 
     freshenImageTyVars typeTheory host image = do
-      let vars = S.toList (freeTyVarsDiagram image)
+      let vars = S.toList (freeObjVarsDiagram image)
       if null vars
         then Right image
         else do
-          let used0 = S.fromList [ (tvMode v, tvName v) | v <- S.toList (freeTyVarsDiagram host) ]
+          let used0 = S.fromList [ (ovMode v, ovName v) | v <- S.toList (freeObjVarsDiagram host) ]
           let (_, pairsRev) = foldl freshOne (used0, []) vars
-          let subst = emptySubst { sTy = M.fromList (reverse pairsRev) }
+          let subst = emptySubst { sObj = M.fromList (reverse pairsRev) }
           applySubstDiagram typeTheory subst image
       where
         freshOne (used, acc) v =
-          let name' = pickFresh used (tvMode v) (tvName v <> "_img") 0
-              v' = v { tvName = name' }
-              used' = S.insert (tvMode v', tvName v') used
-           in (used', (v, TVar v') : acc)
+          let name' = pickFresh used (ovMode v) (ovName v <> "_img") 0
+              v' = v { ovName = name' }
+              used' = S.insert (ovMode v', ovName v') used
+           in (used', (v, OVar v') : acc)
 
         pickFresh used mode base n =
           let suffix = if n == (0 :: Int) then "" else T.pack (show n)
@@ -415,7 +415,7 @@ instantiateImage tt diag edgeKey img = do
   codEdge <- mapM (requirePortType diag) (eOuts edge)
   domImg <- diagramDom img
   codImg <- diagramCod img
-  let flexTy = freeTyVarsDiagram img
+  let flexTy = freeObjVarsDiagram img
   let flexTm = freeTmVarsDiagram img
   sDom <- unifyCtxDiagram tt diag flexTy flexTm domImg domEdge
   codImg1 <- applySubstCtx tt sDom codImg
@@ -425,9 +425,9 @@ instantiateImage tt diag edgeKey img = do
   img' <- applySubstDiagram tt s img
   pure (img', s)
 
-requirePortType :: Diagram -> PortId -> Either Text TypeExpr
+requirePortType :: Diagram -> PortId -> Either Text Obj
 requirePortType diag pid =
-  case diagramPortType diag pid of
+  case diagramPortObj diag pid of
     Nothing -> Left "map: missing port type"
     Just ty -> Right ty
 

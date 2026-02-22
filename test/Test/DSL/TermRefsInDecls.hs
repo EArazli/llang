@@ -14,7 +14,7 @@ import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Poly.Diagram (genD)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeName(..), TypeRef(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..))
 
 
 tests :: TestTree
@@ -56,7 +56,7 @@ buildBaseEnv = do
         Left err -> assertFailure (T.unpack err)
         Right e -> pure e
   let mode = ModeName "M"
-  let ty = TCon (TypeRef mode (TypeName "A")) []
+  let ty = OCon (ObjRef mode (ObjName "A")) []
   diag <- case genD mode [ty] [ty] (GenName "f") of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d

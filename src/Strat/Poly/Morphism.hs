@@ -31,10 +31,10 @@ import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Diagram
 import Strat.Poly.Names
-import Strat.Poly.TypeExpr
-import Strat.Poly.UnifyTy hiding (applySubstDiagram)
+import Strat.Poly.Obj
+import Strat.Poly.UnifyObj hiding (applySubstDiagram)
 import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.TypeNormalize (normalizeTypeDeep)
+import Strat.Poly.ObjNormalize (normalizeObjDeep)
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (autoJoinProof)
@@ -51,16 +51,16 @@ import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl
 import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.Traversal (traverseDiagram)
 
-unifyCtxCompat :: TypeTheory -> [TypeExpr] -> Context -> Context -> Either Text Subst
+unifyCtxCompat :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
 unifyCtxCompat tt tmCtx ctxA ctxB =
-  let tyFlex = S.unions (map freeTyVarsType (ctxA <> ctxB))
-      tmFlex = S.unions (map freeTmVarsType (ctxA <> ctxB))
+  let tyFlex = S.unions (map freeObjVarsObj (ctxA <> ctxB))
+      tmFlex = S.unions (map freeTmVarsObj (ctxA <> ctxB))
    in unifyCtx tt tmCtx tyFlex tmFlex ctxA ctxB
 
-unifyCtxFromPattern :: TypeTheory -> [TypeExpr] -> Context -> Context -> Either Text Subst
+unifyCtxFromPattern :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
 unifyCtxFromPattern tt tmCtx pat host =
-  let tyFlex = S.unions (map freeTyVarsType pat)
-      tmFlex = S.unions (map freeTmVarsType pat)
+  let tyFlex = S.unions (map freeObjVarsObj pat)
+      tmFlex = S.unions (map freeTmVarsObj pat)
    in unifyCtx tt tmCtx tyFlex tmFlex pat host
 
 
@@ -72,7 +72,7 @@ data Morphism = Morphism
   , morModeMap :: M.Map ModeName ModeName
   , morModMap :: M.Map ModName ModExpr
   , morAttrSortMap :: M.Map AttrSort AttrSort
-  , morTypeMap :: M.Map TypeRef TypeTemplate
+  , morTypeMap :: M.Map ObjRef TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) GenImage
   , morCheck :: MorphismCheck
   , morPolicy  :: RewritePolicy
@@ -95,13 +95,13 @@ data GenImage = GenImage
   } deriving (Eq, Show)
 
 data TemplateParam
-  = TPType TyVar
+  = TPType ObjVar
   | TPTm TmVar
   deriving (Eq, Ord, Show)
 
 data TypeTemplate = TypeTemplate
   { ttParams :: [TemplateParam]
-  , ttBody :: TypeExpr
+  , ttBody :: Obj
   } deriving (Eq, Show)
 
 mapMode :: Morphism -> ModeName -> Either Text ModeName
@@ -119,15 +119,15 @@ mapAttrSort mor sortName =
     Nothing -> Left "morphism: missing attribute sort mapping"
     Just sortName' -> Right sortName'
 
-mapTyVar :: Morphism -> TyVar -> Either Text TyVar
+mapTyVar :: Morphism -> ObjVar -> Either Text ObjVar
 mapTyVar mor v = do
-  mode' <- mapMode mor (tvMode v)
-  pure v { tvMode = mode' }
+  mode' <- mapMode mor (ovMode v)
+  pure v { ovMode = mode' }
 
-mapTypeRef :: Morphism -> TypeRef -> Either Text TypeRef
+mapTypeRef :: Morphism -> ObjRef -> Either Text ObjRef
 mapTypeRef mor ref = do
-  mode' <- mapMode mor (trMode ref)
-  pure ref { trMode = mode' }
+  mode' <- mapMode mor (orMode ref)
+  pure ref { orMode = mode' }
 
 applyMorphismAttrTerm :: Morphism -> AttrTerm -> Either Text AttrTerm
 applyMorphismAttrTerm mor term =
@@ -137,27 +137,27 @@ applyMorphismAttrTerm mor term =
       sortName' <- mapAttrSort mor (avSort v)
       Right (ATVar v { avSort = sortName' })
 
-applyMorphismTy :: Morphism -> TypeExpr -> Either Text TypeExpr
+applyMorphismTy :: Morphism -> Obj -> Either Text Obj
 applyMorphismTy mor ty =
   case ty of
-    TVar v -> TVar <$> mapTyVar mor v
-    TMod me inner -> do
+    OVar v -> OVar <$> mapTyVar mor v
+    OMod me inner -> do
       inner' <- applyMorphismTy mor inner
       me' <- mapModExpr mor me
-      normalizeTypeExpr (dModes (morTgt mor)) (TMod me' inner')
-    TCon ref args -> do
+      normalizeObjExpr (dModes (morTgt mor)) (OMod me' inner')
+    OCon ref args -> do
       args' <- mapM mapArg args
       case M.lookup ref (morTypeMap mor) of
         Nothing -> do
           ref' <- mapTypeRef mor ref
-          pure (TCon ref' args')
+          pure (OCon ref' args')
         Just tmpl ->
           instantiateTemplate tmpl args'
   where
     mapArg arg =
       case arg of
-        TAType t -> TAType <$> applyMorphismTy mor t
-        TATm tmArg -> TATm <$> applyMorphismTmTerm mor tmArg
+        OAObj t -> OAObj <$> applyMorphismTy mor t
+        OATm tmArg -> OATm <$> applyMorphismTmTerm mor tmArg
 
     instantiateTemplate tmpl args
       | length (ttParams tmpl) /= length args =
@@ -165,13 +165,13 @@ applyMorphismTy mor ty =
       | otherwise = do
           ttTgt <- doctrineTypeTheory (morTgt mor)
           subst <- foldM addParam emptySubst (zip (ttParams tmpl) args)
-          applySubstTy ttTgt subst (ttBody tmpl)
+          applySubstObj ttTgt subst (ttBody tmpl)
 
     addParam s (param, arg) =
       case (param, arg) of
-        (TPType v, TAType t) ->
-          Right s { sTy = M.insert v t (sTy s) }
-        (TPTm v, TATm tmArg) ->
+        (TPType v, OAObj t) ->
+          Right s { sObj = M.insert v t (sObj s) }
+        (TPTm v, OATm tmArg) ->
           Right s { sTm = M.insert v tmArg (sTm s) }
         _ ->
           Left "morphism: type template kind mismatch during instantiation"
@@ -207,8 +207,8 @@ applyMorphismDiagram mor diagSrc = do
   tgtTheory <- doctrineTypeTheory (morTgt mor)
   modeTgt <- mapMode mor modeSrc
   tmCtx <- mapM (applyMorphismTy mor) (dTmCtx diagSrc)
-  portTy <- mapM (applyMorphismTy mor) (dPortTy diagSrc)
-  let diagTgt0 = diagSrc { dMode = modeTgt, dTmCtx = tmCtx, dPortTy = portTy }
+  portTy <- mapM (applyMorphismTy mor) (dPortObj diagSrc)
+  let diagTgt0 = diagSrc { dMode = modeTgt, dTmCtx = tmCtx, dPortObj = portTy }
   let edgeIds = IM.keys (dEdges diagSrc)
   let step acc edgeKey = do
         diagTgt <- acc
@@ -280,7 +280,7 @@ applyMorphismDiagram mor diagSrc = do
 
 mapSubst :: Morphism -> Subst -> Either Text Subst
 mapSubst mor subst = do
-  tyPairs <- mapM mapTyOne (M.toList (sTy subst))
+  tyPairs <- mapM mapTyOne (M.toList (sObj subst))
   tmPairs <- mapM mapTmOne (M.toList (sTm subst))
   pure (Subst (M.fromList tyPairs) (M.fromList tmPairs))
   where
@@ -684,13 +684,13 @@ validateTypeMap mor = do
       let tyVars = [ v | TPType v <- tmplParams ]
       let tmVars = [ v | TPTm v <- tmplParams ]
       checkType (morTgt mor) ttTgt tyVars tmVars [] (ttBody tmpl)
-      mappedMode <- mapMode mor (trMode srcRef)
-      if typeMode (ttBody tmpl) == mappedMode
+      mappedMode <- mapMode mor (orMode srcRef)
+      if objMode (ttBody tmpl) == mappedMode
         then Right ()
         else Left "checkMorphism: type template body mode mismatch"
 
     ensureDistinctTemplateParamNames params =
-      let names = [ tvName v | TPType v <- params ] <> [ tmvName v | TPTm v <- params ]
+      let names = [ ovName v | TPType v <- params ] <> [ tmvName v | TPTm v <- params ]
           set = S.fromList names
       in if S.size set == length names
           then Right ()
@@ -700,12 +700,12 @@ validateTypeMap mor = do
       case (srcParam, tmplParam) of
         (PS_Ty srcMode, TPType v) -> do
           expectedMode <- mapMode mor srcMode
-          if tvMode v == expectedMode
+          if ovMode v == expectedMode
             then Right ()
             else Left "checkMorphism: type template type-parameter mode mismatch"
         (PS_Tm srcSort, TPTm tmParam) -> do
-          expectedMode <- mapMode mor (typeMode srcSort)
-          if typeMode (tmvSort tmParam) == expectedMode
+          expectedMode <- mapMode mor (objMode srcSort)
+          if objMode (tmvSort tmParam) == expectedMode
             then do
               expectedSortTgt <- applyMorphismTy mor srcSort
               sortOk <- sortDefEq ttTgt expectedSortTgt (tmvSort tmParam)
@@ -719,8 +719,8 @@ validateTypeMap mor = do
           Left "checkMorphism: type template kind mismatch"
 
     sortDefEq ttTgt lhs rhs = do
-      lhs' <- normalizeTypeDeep ttTgt lhs
-      rhs' <- normalizeTypeDeep ttTgt rhs
+      lhs' <- normalizeObjDeep ttTgt lhs
+      rhs' <- normalizeObjDeep ttTgt rhs
       pure (lhs' == rhs')
 
 ensureAcyclicTypeTemplates :: Morphism -> Either Text ()
@@ -731,11 +731,11 @@ ensureAcyclicTypeTemplates mor =
       Left ("checkMorphism: cyclic type template map: " <> renderCycle refs)
   where
     renderCycle refs = T.intercalate " -> " (map renderRef refs)
-    renderRef ref = renderMode (trMode ref) <> "." <> renderType (trName ref)
+    renderRef ref = renderMode (orMode ref) <> "." <> renderType (orName ref)
     renderMode (ModeName name) = name
-    renderType (TypeName name) = name
+    renderType (ObjName name) = name
 
-findTemplateCycle :: Morphism -> Maybe [TypeRef]
+findTemplateCycle :: Morphism -> Maybe [ObjRef]
 findTemplateCycle mor =
   goRoots S.empty (M.keys (morTypeMap mor))
   where
@@ -776,23 +776,23 @@ findTemplateCycle mor =
       let prefix = takeWhile (/= ref) stack
       in ref : reverse prefix <> [ref]
 
-typeRefsInType :: TypeExpr -> S.Set TypeRef
+typeRefsInType :: Obj -> S.Set ObjRef
 typeRefsInType ty =
   case ty of
-    TVar _ -> S.empty
-    TCon ref args ->
+    OVar _ -> S.empty
+    OCon ref args ->
       S.insert ref (S.unions (map typeRefsInArg args))
-    TMod _ inner ->
+    OMod _ inner ->
       typeRefsInType inner
   where
     typeRefsInArg arg =
       case arg of
-        TAType t -> typeRefsInType t
-        TATm tmArg -> typeRefsInTerm tmArg
+        OAObj t -> typeRefsInType t
+        OATm tmArg -> typeRefsInTerm tmArg
 
     typeRefsInTerm (TermDiagram diag) =
       S.unions
-        [ S.unions (map typeRefsInType (IM.elems (dPortTy diag)))
+        [ S.unions (map typeRefsInType (IM.elems (dPortObj diag)))
         , S.unions (map typeRefsInType (dTmCtx diag))
         , S.unions
             [ typeRefsInType (tmvSort v)
@@ -1005,7 +1005,7 @@ isoOrFalse d1 d2 =
 cellKey :: Cell2 -> (ModeName, Text)
 cellKey cell = (dMode (c2LHS cell), c2Name cell)
 
-buildTypeRenaming :: Morphism -> Maybe (M.Map TypeRef TypeRef)
+buildTypeRenaming :: Morphism -> Maybe (M.Map ObjRef ObjRef)
 buildTypeRenaming mor = do
   let src = morSrc mor
   mp <- foldl step (Just M.empty) (allTypes src)
@@ -1031,7 +1031,7 @@ buildTypeRenaming mor = do
 
     renamingTarget tmpl arity =
       case ttBody tmpl of
-        TCon tgtRef params
+        OCon tgtRef params
           | length (ttParams tmpl) == arity
           , length params == arity
           , let positions = map (argParamIndex (ttParams tmpl)) params
@@ -1044,9 +1044,9 @@ buildTypeRenaming mor = do
 
     argParamIndex params arg =
       case arg of
-        TAType (TVar v) ->
+        OAObj (OVar v) ->
           findParamIndex params (\p -> case p of TPType v' -> v' == v; _ -> False)
-        TATm tm ->
+        OATm tm ->
           case termMetaOnly tm of
             Just v ->
               findParamIndex params (\p -> case p of TPTm v' -> v' == v; _ -> False)
@@ -1127,14 +1127,14 @@ singleGenNameMaybe srcGen image0 =
     passThroughAttrs attrs =
       M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- attrs ]
 
-renameDiagram :: M.Map TypeRef TypeRef -> M.Map (ModeName, GenName) GenName -> Diagram -> Diagram
+renameDiagram :: M.Map ObjRef ObjRef -> M.Map (ModeName, GenName) GenName -> Diagram -> Diagram
 renameDiagram tyRen genRen diag =
   runIdentity (traverseDiagram onDiag onPayload pure diag)
   where
     onDiag d =
       pure d
-        { dTmCtx = map (renameTypeExpr tyRen) (dTmCtx d)
-        , dPortTy = IM.map (renameTypeExpr tyRen) (dPortTy d)
+        { dTmCtx = map (renameObjExpr tyRen) (dTmCtx d)
+        , dPortObj = IM.map (renameObjExpr tyRen) (dPortObj d)
         }
 
     onPayload payload =
@@ -1144,36 +1144,36 @@ renameDiagram tyRen genRen diag =
             let gen' = M.findWithDefault gen (dMode diag, gen) genRen
             in PGen gen' attrs bargs
           PTmMeta v ->
-            PTmMeta v { tmvSort = renameTypeExpr tyRen (tmvSort v) }
+            PTmMeta v { tmvSort = renameObjExpr tyRen (tmvSort v) }
           _ -> payload
 
-renameTypeExpr :: M.Map TypeRef TypeRef -> TypeExpr -> TypeExpr
-renameTypeExpr ren ty =
+renameObjExpr :: M.Map ObjRef ObjRef -> Obj -> Obj
+renameObjExpr ren ty =
   case ty of
-    TVar v -> TVar v
-    TCon ref args ->
+    OVar v -> OVar v
+    OCon ref args ->
       let ref' = M.findWithDefault ref ref ren
-      in TCon ref' (map renameArg args)
-    TMod me inner ->
-      TMod me (renameTypeExpr ren inner)
+      in OCon ref' (map renameArg args)
+    OMod me inner ->
+      OMod me (renameObjExpr ren inner)
   where
     renameArg arg =
       case arg of
-        TAType t -> TAType (renameTypeExpr ren t)
-        TATm tmArg -> TATm (renameTermDiagram tmArg)
+        OAObj t -> OAObj (renameObjExpr ren t)
+        OATm tmArg -> OATm (renameTermDiagram tmArg)
 
     renameTermDiagram (TermDiagram diag) =
       TermDiagram
         diag
-          { dTmCtx = map (renameTypeExpr ren) (dTmCtx diag)
-          , dPortTy = IM.map (renameTypeExpr ren) (dPortTy diag)
+          { dTmCtx = map (renameObjExpr ren) (dTmCtx diag)
+          , dPortObj = IM.map (renameObjExpr ren) (dPortObj diag)
           , dEdges = IM.map renameEdge (dEdges diag)
           }
 
     renameEdge edge =
       case ePayload edge of
         PTmMeta v ->
-          edge { ePayload = PTmMeta v { tmvSort = renameTypeExpr ren (tmvSort v) } }
+          edge { ePayload = PTmMeta v { tmvSort = renameObjExpr ren (tmvSort v) } }
         _ -> edge
 
 injective :: Ord a => [a] -> Bool
@@ -1193,9 +1193,9 @@ allGens :: Doctrine -> [GenDecl]
 allGens doc =
   concatMap M.elems (M.elems (dGens doc))
 
-allTypes :: Doctrine -> [(TypeRef, TypeSig)]
+allTypes :: Doctrine -> [(ObjRef, TypeSig)]
 allTypes doc =
-  [ (TypeRef mode name, sig)
+  [ (ObjRef mode name, sig)
   | (mode, table) <- M.toList (dTypes doc)
   , (name, sig) <- M.toList table
   ]
@@ -1267,9 +1267,9 @@ instantiateAttrSubst mor gen attrsSrc = do
       let v = AttrVar fieldName sortName'
       Right (fieldName, v)
 
-requirePortType :: Diagram -> PortId -> Either Text TypeExpr
+requirePortType :: Diagram -> PortId -> Either Text Obj
 requirePortType diag pid =
-  case diagramPortType diag pid of
+  case diagramPortObj diag pid of
     Nothing -> Left "applyMorphismDiagram: missing port type"
     Just ty -> Right ty
 

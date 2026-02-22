@@ -28,7 +28,7 @@ import Strat.Poly.DSL.Elab
   , checkImplementsObligationsWithBudget
   , ImplementsCheckResult(..)
   )
-import Strat.Poly.TypeExpr (TypeExpr(..), TypeArg(..), TypeRef(..), TypeName(..), TyVar(..), TmVar(..), TermDiagram(..))
+import Strat.Poly.Obj (Obj(..), ObjArg(..), ObjRef(..), ObjName(..), ObjVar(..), TmVar(..), TermDiagram(..))
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
 import Strat.Poly.Doctrine
   ( Doctrine(..)
@@ -71,7 +71,7 @@ import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 import Strat.Poly.Proof (SearchBudget, defaultSearchBudget, renderSearchLimit)
 import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.TypeNormalize (termExprToDiagramChecked)
+import Strat.Poly.ObjNormalize (termExprToDiagramChecked)
 
 
 elabRawFile :: RawFile -> Either Text ModuleEnv
@@ -414,10 +414,10 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     prefixMod p (ModName n) = ModName (prefixText p n)
     prefixTypeRef p ref =
       ref
-        { trMode = prefixMode p (trMode ref)
-        , trName = TypeName (prefixText p (renderTypeName (trName ref)))
+        { orMode = prefixMode p (orMode ref)
+        , orName = ObjName (prefixText p (renderTypeName (orName ref)))
         }
-    renderTypeName (TypeName t) = t
+    renderTypeName (ObjName t) = t
     prefixAttr p (AttrSort s) = AttrSort (prefixText p s)
     prefixGen p (mode, gen) = (prefixMode p mode, GenName (prefixText p (renderGenName gen)))
     renderGenName (GenName g) = g
@@ -480,30 +480,30 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
               Right (M.insert srcRef tmpl mp)
 
     identityTemplate tt mor srcRef sig = do
-      tgtMode <- PolyMorph.applyMorphismMode mor (trMode srcRef)
-      let tgtRef = srcRef { trMode = tgtMode }
+      tgtMode <- PolyMorph.applyMorphismMode mor (orMode srcRef)
+      let tgtRef = srcRef { orMode = tgtMode }
       params <- mapM (mkParam mor) (zip [0 :: Int ..] (tsParams sig))
       args <- mapM (paramArg tt) params
-      pure (PolyMorph.TypeTemplate params (TCon tgtRef args))
+      pure (PolyMorph.TypeTemplate params (OCon tgtRef args))
 
     mkParam mor (i, param) =
       case param of
         PS_Ty srcMode -> do
           tgtMode <- PolyMorph.applyMorphismMode mor srcMode
-          Right (PolyMorph.TPType TyVar { tvName = "a" <> T.pack (show i), tvMode = tgtMode })
+          Right (PolyMorph.TPType ObjVar { ovName = "a" <> T.pack (show i), ovMode = tgtMode })
         PS_Tm srcSort -> do
           tgtSort <- PolyMorph.applyMorphismTy mor srcSort
           Right (PolyMorph.TPTm TmVar { tmvName = "t" <> T.pack (show i), tmvSort = tgtSort, tmvScope = 0 })
 
     paramArg tt param =
       case param of
-        PolyMorph.TPType v -> Right (TAType (TVar v))
+        PolyMorph.TPType v -> Right (OAObj (OVar v))
         PolyMorph.TPTm v -> do
           tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMVar v)
-          Right (TATm tm)
+          Right (OATm tm)
 
     allTypeDecls doc =
-      [ (TypeRef mode typeName, sig)
+      [ (ObjRef mode typeName, sig)
       | (mode, table) <- M.toList (dTypes doc)
       , (typeName, sig) <- M.toList table
       ]
@@ -543,10 +543,10 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
       case M.lookup srcRef (PolyMorph.morTypeMap mor) of
         Just _ -> Nothing
         Nothing ->
-          case PolyMorph.applyMorphismMode mor (trMode srcRef) of
+          case PolyMorph.applyMorphismMode mor (orMode srcRef) of
             Left _ -> Just True
             Right tgtMode ->
-              let tgtRef = srcRef { trMode = tgtMode }
+              let tgtRef = srcRef { orMode = tgtMode }
               in case lookupTypeSig tgtDoc tgtRef of
                   Left _ -> Just True
                   Right tgtSig ->
@@ -572,7 +572,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     renderList vals = "[" <> T.intercalate ", " vals <> "]"
 
     renderModeName (ModeName n) = n
-    renderTypeRef ref = renderModeName (trMode ref) <> "." <> renderTypeName (trName ref)
+    renderTypeRef ref = renderModeName (orMode ref) <> "." <> renderTypeName (orName ref)
     renderAttrSort (AttrSort s) = s
     renderGenKey (mode, GenName genName) = renderModeName mode <> "." <> genName
 
@@ -653,7 +653,7 @@ namespaceDoctrineWithParam param doc = do
     sortRenMap = M.fromList [ (s, renameSort s) | s <- M.keys (dAttrSorts doc) ]
     typeRenMap =
       M.fromList
-        [ (TypeRef mode tname, renameTypeRef (TypeRef mode tname))
+        [ (ObjRef mode tname, renameTypeRef (ObjRef mode tname))
         | (mode, table) <- M.toList (dTypes doc)
         , tname <- M.keys table
         ]
@@ -668,11 +668,11 @@ namespaceDoctrineWithParam param doc = do
     renameMode (ModeName t) = ModeName (prefix t)
     renameMod (ModName t) = ModName (prefix t)
     renameSort (AttrSort t) = AttrSort (prefix t)
-    renameTypeName (TypeName t) = TypeName (prefix t)
+    renameTypeName (ObjName t) = ObjName (prefix t)
     renameTypeRef ref =
-      TypeRef
-        { trMode = renameMode (trMode ref)
-        , trName = renameTypeName (trName ref)
+      ObjRef
+        { orMode = renameMode (orMode ref)
+        , orName = renameTypeName (orName ref)
         }
     renameGenName (GenName t) = GenName (prefix t)
 
@@ -879,7 +879,7 @@ renameModeTheory modeRen modRen mt =
 renameTypeSig
   :: Map ModeName ModeName
   -> Map ModName ModName
-  -> Map TypeRef TypeRef
+  -> Map ObjRef ObjRef
   -> TypeSig
   -> Either Text TypeSig
 renameTypeSig modeRen modRen typeRen sig =
@@ -888,12 +888,12 @@ renameTypeSig modeRen modRen typeRen sig =
     renParam p =
       case p of
         PS_Ty mode -> Right (PS_Ty (M.findWithDefault mode mode modeRen))
-        PS_Tm ty -> PS_Tm <$> renameTypeExpr modeRen modRen typeRen ty
+        PS_Tm ty -> PS_Tm <$> renameObjExpr modeRen modRen typeRen ty
 
 renameGenDecl
   :: Map ModeName ModeName
   -> Map ModName ModName
-  -> Map TypeRef TypeRef
+  -> Map ObjRef ObjRef
   -> Map AttrSort AttrSort
   -> Map (ModeName, GenName) GenName
   -> GenDecl
@@ -903,7 +903,7 @@ renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
   tyVars' <- mapM renTyVar (gdTyVars gen)
   tmVars' <- mapM renTmVar (gdTmVars gen)
   dom' <- mapM renInput (gdDom gen)
-  cod' <- mapM (renameTypeExpr modeRen modRen typeRen) (gdCod gen)
+  cod' <- mapM (renameObjExpr modeRen modRen typeRen) (gdCod gen)
   let attrs' = [ (field, M.findWithDefault sortName sortName sortRen) | (field, sortName) <- gdAttrs gen ]
   let genName' = M.findWithDefault (gdName gen) (mode0, gdName gen) genRen
   pure
@@ -917,33 +917,33 @@ renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
       , gdAttrs = attrs'
       }
   where
-    renTyVar tv = Right tv { tvMode = M.findWithDefault (tvMode tv) (tvMode tv) modeRen }
+    renTyVar tv = Right tv { ovMode = M.findWithDefault (ovMode tv) (ovMode tv) modeRen }
     renTmVar tm = do
-      sort' <- renameTypeExpr modeRen modRen typeRen (tmvSort tm)
+      sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tm)
       Right tm { tmvSort = sort' }
     renInput shape =
       case shape of
-        InPort ty -> InPort <$> renameTypeExpr modeRen modRen typeRen ty
+        InPort ty -> InPort <$> renameObjExpr modeRen modRen typeRen ty
         InBinder bs -> do
-          tmCtx' <- mapM (renameTypeExpr modeRen modRen typeRen) (bsTmCtx bs)
-          dom' <- mapM (renameTypeExpr modeRen modRen typeRen) (bsDom bs)
-          cod' <- mapM (renameTypeExpr modeRen modRen typeRen) (bsCod bs)
+          tmCtx' <- mapM (renameObjExpr modeRen modRen typeRen) (bsTmCtx bs)
+          dom' <- mapM (renameObjExpr modeRen modRen typeRen) (bsDom bs)
+          cod' <- mapM (renameObjExpr modeRen modRen typeRen) (bsCod bs)
           Right (InBinder bs { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' })
 
-renameTypeExpr
+renameObjExpr
   :: Map ModeName ModeName
   -> Map ModName ModName
-  -> Map TypeRef TypeRef
-  -> TypeExpr
-  -> Either Text TypeExpr
-renameTypeExpr modeRen modRen typeRen ty =
+  -> Map ObjRef ObjRef
+  -> Obj
+  -> Either Text Obj
+renameObjExpr modeRen modRen typeRen ty =
   case ty of
-    TVar tv ->
-      Right (TVar tv { tvMode = M.findWithDefault (tvMode tv) (tvMode tv) modeRen })
-    TMod me inner -> do
-      inner' <- renameTypeExpr modeRen modRen typeRen inner
+    OVar tv ->
+      Right (OVar tv { ovMode = M.findWithDefault (ovMode tv) (ovMode tv) modeRen })
+    OMod me inner -> do
+      inner' <- renameObjExpr modeRen modRen typeRen inner
       pure
-        ( TMod
+        ( OMod
             me
               { meSrc = M.findWithDefault (meSrc me) (meSrc me) modeRen
               , meTgt = M.findWithDefault (meTgt me) (meTgt me) modeRen
@@ -951,32 +951,32 @@ renameTypeExpr modeRen modRen typeRen ty =
               }
             inner'
         )
-    TCon ref args -> do
+    OCon ref args -> do
       args' <- mapM renArg args
       let ref' = M.findWithDefault ref ref typeRen
-      pure (TCon ref' args')
+      pure (OCon ref' args')
   where
     renArg arg =
       case arg of
-        TAType t -> TAType <$> renameTypeExpr modeRen modRen typeRen t
-        TATm tm -> TATm <$> renameTermDiagram modeRen modRen typeRen tm
+        OAObj t -> OAObj <$> renameObjExpr modeRen modRen typeRen t
+        OATm tm -> OATm <$> renameTermDiagram modeRen modRen typeRen tm
 
 renameTermDiagram
   :: Map ModeName ModeName
   -> Map ModName ModName
-  -> Map TypeRef TypeRef
+  -> Map ObjRef ObjRef
   -> TermDiagram
   -> Either Text TermDiagram
 renameTermDiagram modeRen modRen typeRen (TermDiagram diag) = do
-  tmCtx' <- mapM (renameTypeExpr modeRen modRen typeRen) (dTmCtx diag)
-  portTy' <- mapM (renameTypeExpr modeRen modRen typeRen) (dPortTy diag)
+  tmCtx' <- mapM (renameObjExpr modeRen modRen typeRen) (dTmCtx diag)
+  portTy' <- mapM (renameObjExpr modeRen modRen typeRen) (dPortObj diag)
   edges' <- mapM renEdge (dEdges diag)
   pure
     ( TermDiagram
         diag
           { dMode = M.findWithDefault (dMode diag) (dMode diag) modeRen
           , dTmCtx = tmCtx'
-          , dPortTy = portTy'
+          , dPortObj = portTy'
           , dEdges = edges'
           }
     )
@@ -984,7 +984,7 @@ renameTermDiagram modeRen modRen typeRen (TermDiagram diag) = do
     renEdge edge =
       case ePayload edge of
         PTmMeta tm -> do
-          sort' <- renameTypeExpr modeRen modRen typeRen (tmvSort tm)
+          sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tm)
           pure edge { ePayload = PTmMeta tm { tmvSort = sort' } }
         _ -> pure edge
 
@@ -1075,8 +1075,8 @@ buildFoliatedDoctrine name baseDoc mode = do
       stepTy = ty "Step"
       stepsTy = ty "StepList"
       ssaTy = ty "SSA"
-      ty tName = TCon (TypeRef mode (TypeName tName)) []
-      mkType tName = (TypeName tName, TypeSig [])
+      ty tName = OCon (ObjRef mode (ObjName tName)) []
+      mkType tName = (ObjName tName, TypeSig [])
       mkGen gName dom cod attrs =
         ( GenName gName
         , GenDecl

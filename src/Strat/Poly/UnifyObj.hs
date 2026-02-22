@@ -1,14 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Strat.Poly.UnifyTy
+module Strat.Poly.UnifyObj
   ( Subst(..)
   , emptySubst
-  , unifyTy
-  , unifyTyFlex
+  , unifyObj
+  , unifyObjFlex
   , unifyTm
   , unifyCtx
   , diagramTmCtx
   , unifyCtxDiagram
-  , applySubstTy
+  , applySubstObj
   , applySubstTm
   , applySubstDiagram
   , applySubstCtx
@@ -24,13 +24,13 @@ import qualified Data.IntMap.Strict as IM
 import Control.Monad (foldM)
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModeTheory(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.TypeExpr
+import Strat.Poly.Obj
 import Strat.Poly.Graph
   ( Diagram(..)
   , Edge(..)
   , EdgePayload(..)
   , PortId(..)
-  , diagramPortType
+  , diagramPortObj
   , weakenDiagramTmCtxTo
   , unPortId
   , unEdgeId
@@ -42,9 +42,9 @@ import Strat.Poly.TypeTheory
   , lookupTmFunSig
   )
 import Strat.Poly.Traversal (traverseDiagram)
-import Strat.Poly.TypeNormalize
-  ( normalizeTypeDeep
-  , normalizeTypeDeepWithCtx
+import Strat.Poly.ObjNormalize
+  ( normalizeObjDeep
+  , normalizeObjDeepWithCtx
   , normalizeTermDiagram
   , termToDiagram
   )
@@ -57,7 +57,7 @@ import Strat.Poly.TermExpr
 
 
 data Subst = Subst
-  { sTy :: M.Map TyVar TypeExpr
+  { sObj :: M.Map ObjVar Obj
   , sTm :: M.Map TmVar TermDiagram
   } deriving (Eq, Ord, Show)
 
@@ -69,62 +69,62 @@ data PortHead
 emptySubst :: Subst
 emptySubst = Subst M.empty M.empty
 
-unifyTy :: TypeTheory -> TypeExpr -> TypeExpr -> Either Text Subst
-unifyTy tt t1 t2 =
-  let tyFlex = S.union (freeTyVarsType t1) (freeTyVarsType t2)
-      tmFlex = S.union (freeTmVarsType t1) (freeTmVarsType t2)
-   in unifyTyFlex tt [] tyFlex tmFlex emptySubst t1 t2
+unifyObj :: TypeTheory -> Obj -> Obj -> Either Text Subst
+unifyObj tt t1 t2 =
+  let tyFlex = S.union (freeObjVarsObj t1) (freeObjVarsObj t2)
+      tmFlex = S.union (freeTmVarsObj t1) (freeTmVarsObj t2)
+   in unifyObjFlex tt [] tyFlex tmFlex emptySubst t1 t2
 
-unifyTyFlex
+unifyObjFlex
   :: TypeTheory
-  -> [TypeExpr]
-  -> S.Set TyVar
+  -> [Obj]
+  -> S.Set ObjVar
   -> S.Set TmVar
   -> Subst
-  -> TypeExpr
-  -> TypeExpr
+  -> Obj
+  -> Obj
   -> Either Text Subst
-unifyTyFlex tt tmCtx tyFlex tmFlex subst t1 t2 = do
-  t1' <- applySubstTy tt subst t1 >>= expandModSpine
-  t2' <- applySubstTy tt subst t2 >>= expandModSpine
+unifyObjFlex tt tmCtx tyFlex tmFlex subst t1 t2 = do
+  t1' <- applySubstObj tt subst t1 >>= expandModSpine
+  t2' <- applySubstObj tt subst t2 >>= expandModSpine
   unifyWith subst t1' t2'
   where
     expandModSpine ty =
       case ty of
-        TVar _ -> Right ty
-        TCon ref args -> do
+        OVar _ -> Right ty
+        OCon ref args -> do
           args' <- mapM expandArg args
-          Right (TCon ref args')
-        TMod me inner -> do
+          Right (OCon ref args')
+        OMod me inner -> do
           inner' <- expandModSpine inner
           expandPath me inner'
 
     expandArg arg =
       case arg of
-        TAType ty -> TAType <$> expandModSpine ty
-        TATm tm -> Right (TATm tm)
+        OAObj ty -> OAObj <$> expandModSpine ty
+        OATm tm -> Right (OATm tm)
 
     expandPath me inner =
       case mePath me of
         [] ->
           if meSrc me == meTgt me
             then Right inner
-            else Left "unifyTyFlex: ill-typed empty modality path"
+            else Left "unifyObjFlex: ill-typed empty modality path"
         _ -> do
           (cur, out) <- foldM step (meSrc me, inner) (mePath me)
           if cur == meTgt me
             then Right out
-            else Left "unifyTyFlex: ill-typed modality path"
+            else Left "unifyObjFlex: ill-typed modality path"
       where
         step (cur, acc) name =
           case M.lookup name (mtDecls (ttModes tt)) of
-            Nothing -> Left "unifyTyFlex: unknown modality in type"
+            Nothing -> Left "unifyObjFlex: unknown modality in type"
             Just decl ->
               if mdSrc decl == cur
                 then
                   Right
                     ( mdTgt decl
-                    , TMod
+                    , OMod
                         ModExpr
                           { meSrc = mdSrc decl
                           , meTgt = mdTgt decl
@@ -132,72 +132,72 @@ unifyTyFlex tt tmCtx tyFlex tmFlex subst t1 t2 = do
                           }
                         acc
                     )
-                else Left "unifyTyFlex: ill-typed modality path"
+                else Left "unifyObjFlex: ill-typed modality path"
 
     unifyWith s a b =
       case (a, b) of
-        (TVar v, t) -> unifyTyVar s v t
-        (t, TVar v) -> unifyTyVar s v t
-        (TCon refA argsA, TCon refB argsB)
+        (OVar v, t) -> unifyTyVar s v t
+        (t, OVar v) -> unifyTyVar s v t
+        (OCon refA argsA, OCon refB argsB)
           | refA == refB && length argsA == length argsB ->
-              case M.lookup refA (ttTypeParams tt) of
+              case M.lookup refA (ttObjParams tt) of
                 Just params
                   | length params == length argsA ->
                       foldl stepBySig (Right s) (zip params (zip argsA argsB))
                 _ ->
                   foldl step (Right s) (zip argsA argsB)
           | otherwise ->
-              Left ("unifyTyFlex: cannot unify " <> renderTy a <> " with " <> renderTy b)
-        (TMod me1 x1, TMod me2 x2)
+              Left ("unifyObjFlex: cannot unify " <> renderObj a <> " with " <> renderObj b)
+        (OMod me1 x1, OMod me2 x2)
           | me1 == me2 -> unifyWith s x1 x2
-          | otherwise -> Left ("unifyTyFlex: cannot unify " <> renderTy a <> " with " <> renderTy b)
+          | otherwise -> Left ("unifyObjFlex: cannot unify " <> renderObj a <> " with " <> renderObj b)
         _ ->
-          Left ("unifyTyFlex: cannot unify " <> renderTy a <> " with " <> renderTy b)
+          Left ("unifyObjFlex: cannot unify " <> renderObj a <> " with " <> renderObj b)
 
     step acc (argA, argB) = do
       s <- acc
       case (argA, argB) of
-        (TAType tyA, TAType tyB) ->
-          unifyTyFlex tt tmCtx tyFlex tmFlex s tyA tyB
-        (TATm tmA, TATm tmB) -> do
+        (OAObj tyA, OAObj tyB) ->
+          unifyObjFlex tt tmCtx tyFlex tmFlex s tyA tyB
+        (OATm tmA, OATm tmB) -> do
           sort <- inferExpectedTmSort tt tmCtx s tmA tmB
           unifyTm tt tmCtx tmFlex s sort tmA tmB
-        _ -> Left "unifyTyFlex: mixed type/term arguments cannot unify"
+        _ -> Left "unifyObjFlex: mixed type/term arguments cannot unify"
 
     stepBySig acc (paramSig, (argA, argB)) = do
       s <- acc
       case (paramSig, argA, argB) of
-        (TPS_Ty _, TAType tyA, TAType tyB) ->
-          unifyTyFlex tt tmCtx tyFlex tmFlex s tyA tyB
-        (TPS_Tm sort, TATm tmA, TATm tmB) ->
+        (TPS_Ty _, OAObj tyA, OAObj tyB) ->
+          unifyObjFlex tt tmCtx tyFlex tmFlex s tyA tyB
+        (TPS_Tm sort, OATm tmA, OATm tmB) ->
           unifyTm tt tmCtx tmFlex s sort tmA tmB
         (TPS_Ty _, _, _) ->
-          Left "unifyTyFlex: expected type argument for constructor parameter"
+          Left "unifyObjFlex: expected type argument for constructor parameter"
         (TPS_Tm _, _, _) ->
-          Left "unifyTyFlex: expected term argument for constructor parameter"
+          Left "unifyObjFlex: expected term argument for constructor parameter"
 
     unifyTyVar s v t
       | v `S.member` tyFlex = bindTyVar s v t
       | otherwise =
           case t of
-            TVar v' | v == v' -> Right s
-            TVar v' | v' `S.member` tyFlex -> bindTyVar s v' (TVar v)
-            _ -> Left ("unifyTyFlex: rigid variable mismatch " <> renderVar v <> " with " <> renderTy t)
+            OVar v' | v == v' -> Right s
+            OVar v' | v' `S.member` tyFlex -> bindTyVar s v' (OVar v)
+            _ -> Left ("unifyObjFlex: rigid variable mismatch " <> renderObjVar v <> " with " <> renderObj t)
 
     bindTyVar s v t = do
-      t' <- applySubstTy tt s t
-      if tvMode v /= typeMode t'
-        then Left ("unifyTyFlex: mode mismatch " <> renderVar v <> " with " <> renderTy t')
-        else if t' == TVar v
+      t' <- applySubstObj tt s t
+      if ovMode v /= objMode t'
+        then Left ("unifyObjFlex: mode mismatch " <> renderObjVar v <> " with " <> renderObj t')
+        else if t' == OVar v
           then Right s
-          else if occursTyVar v t'
-            then Left ("unifyTyFlex: occurs check failed for " <> renderVar v <> " in " <> renderTy t')
+          else if occursObjVar v t'
+            then Left ("unifyObjFlex: occurs check failed for " <> renderObjVar v <> " in " <> renderObj t')
             else composeSubst tt (Subst (M.singleton v t') M.empty) s
 
 unifyCtx
   :: TypeTheory
-  -> [TypeExpr]
-  -> S.Set TyVar
+  -> [Obj]
+  -> S.Set ObjVar
   -> S.Set TmVar
   -> Context
   -> Context
@@ -206,17 +206,17 @@ unifyCtx tt tmCtx tyFlex tmFlex ctx1 ctx2
   | length ctx1 /= length ctx2 = Left "unifyCtx: length mismatch"
   | otherwise =
       foldM
-        (\s (a, b) -> unifyTyFlex tt tmCtx tyFlex tmFlex s a b)
+        (\s (a, b) -> unifyObjFlex tt tmCtx tyFlex tmFlex s a b)
         emptySubst
         (zip ctx1 ctx2)
 
-diagramTmCtx :: Diagram -> [TypeExpr]
+diagramTmCtx :: Diagram -> [Obj]
 diagramTmCtx = dTmCtx
 
 unifyCtxDiagram
   :: TypeTheory
   -> Diagram
-  -> S.Set TyVar
+  -> S.Set ObjVar
   -> S.Set TmVar
   -> Context
   -> Context
@@ -226,17 +226,17 @@ unifyCtxDiagram tt diag tyFlex tmFlex =
 
 unifyTm
   :: TypeTheory
-  -> [TypeExpr]
+  -> [Obj]
   -> S.Set TmVar
   -> Subst
-  -> TypeExpr
+  -> Obj
   -> TermDiagram
   -> TermDiagram
   -> Either Text Subst
 unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
   tmCtxSub <- applySubstCtx tt subst tmCtx
-  expectedSort0 <- applySubstTy tt subst expectedSort
-  expectedSort' <- normalizeTypeDeepWithCtx tt tmCtxSub expectedSort0
+  expectedSort0 <- applySubstObj tt subst expectedSort
+  expectedSort' <- normalizeObjDeepWithCtx tt tmCtxSub expectedSort0
   lhs0 <- applySubstTmInCtx tt tmCtxSub subst expectedSort' tm1
   rhs0 <- applySubstTmInCtx tt tmCtxSub subst expectedSort' tm2
   lhs <- normalizeTermDiagram tt tmCtxSub expectedSort' lhs0
@@ -251,7 +251,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
   where
     normalizeInCtx s ty = do
       tmCtx' <- applySubstCtx tt s tmCtx
-      normalizeTypeDeepWithCtx tt tmCtx' ty
+      normalizeObjDeepWithCtx tt tmCtx' ty
 
     unifyTmGraph s seen currentSort lhsDiag lhsInputs lp rhsDiag rhsInputs rp
       | (lp, rp) `S.member` seen = Right s
@@ -273,9 +273,9 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                   sig <- requireFunSigArity s currentSort f (length lIns)
                   foldM
                     (\s1 (argSort, lArg, rArg) -> do
-                      argSort0 <- applySubstTy tt s1 argSort
+                      argSort0 <- applySubstObj tt s1 argSort
                       tmCtx1 <- applySubstCtx tt s1 tmCtx
-                      argSort' <- normalizeTypeDeepWithCtx tt tmCtx1 argSort0
+                      argSort' <- normalizeObjDeepWithCtx tt tmCtx1 argSort0
                       unifyTmGraph s1 seen' argSort' lhsDiag lhsInputs lArg rhsDiag rhsInputs rArg
                     )
                     s
@@ -329,8 +329,8 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
         step acc (argSort, x, y) = do
           s1 <- acc
           tmCtx1 <- applySubstCtx tt s1 tmCtx
-          argSort0 <- applySubstTy tt s1 argSort
-          argSort' <- normalizeTypeDeepWithCtx tt tmCtx1 argSort0
+          argSort0 <- applySubstObj tt s1 argSort
+          argSort' <- normalizeObjDeepWithCtx tt tmCtx1 argSort0
           x' <- applySubstExprInCtx tmCtx1 s1 argSort' x
           y' <- applySubstExprInCtx tmCtx1 s1 argSort' y
           xNorm <- normalizeTermExprInCtx tmCtx1 s1 argSort' x'
@@ -338,7 +338,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
           unifyTmNorm s1 argSort' xNorm yNorm
 
     bindTmVar s currentSort v t = do
-      sortV0 <- applySubstTy tt s (tmvSort v)
+      sortV0 <- applySubstObj tt s (tmvSort v)
       sortV <- normalizeInCtx s sortV0
       currentSort' <- normalizeInCtx s currentSort
       if sortV /= currentSort'
@@ -362,7 +362,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                 else Left "unifyTm: escape from bound term-variable scope"
 
     checkTmVarSort s currentSort v = do
-      sortV0 <- applySubstTy tt s (tmvSort v)
+      sortV0 <- applySubstObj tt s (tmvSort v)
       sortV <- normalizeInCtx s sortV0
       currentSort' <- normalizeInCtx s currentSort
       if sortV == currentSort'
@@ -372,7 +372,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
     checkBoundSort s currentSort i =
       if i < length tmCtx
         then do
-          boundSort0 <- applySubstTy tt s (tmCtx !! i)
+          boundSort0 <- applySubstObj tt s (tmCtx !! i)
           boundSort <- normalizeInCtx s boundSort0
           currentSort' <- normalizeInCtx s currentSort
           if boundSort == currentSort'
@@ -392,16 +392,16 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
       requireFunSigArity s currentSort f (length args)
 
     requireFunSigArity s currentSort f arity = do
-      currentSort0 <- applySubstTy tt s currentSort
+      currentSort0 <- applySubstObj tt s currentSort
       currentSort' <- normalizeInCtx s currentSort0
       sig <-
-        case lookupTmFunSig tt (typeMode currentSort') f of
+        case lookupTmFunSig tt (objMode currentSort') f of
           Nothing -> Left "unifyTm: unknown term function"
           Just sig' -> Right sig'
       if length (tfsArgs sig) /= arity
         then Left "unifyTm: term function arity mismatch"
         else Right ()
-      resSort0 <- applySubstTy tt s (tfsRes sig)
+      resSort0 <- applySubstObj tt s (tfsRes sig)
       resSort <- normalizeInCtx s resSort0
       if resSort == currentSort'
         then Right sig
@@ -413,7 +413,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
         go seen currentSort tm =
           case tm of
             TMVar v -> do
-              sort' <- applySubstTy tt s (tmvSort v)
+              sort' <- applySubstObj tt s (tmvSort v)
               let v' = v { tmvSort = sort' }
               case lookupTmById v' (sTm s) of
                 Nothing -> Right (TMVar v')
@@ -436,17 +436,17 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
 
     allowedBoundGlobals s sortV v = do
       sortV' <- normalizeInCtx s sortV
-      let mode = typeMode sortV'
+      let mode = objMode sortV'
       let globals =
             [ i
             | (i, ty) <- zip [0 :: Int ..] tmCtx
-            , typeMode ty == mode
+            , objMode ty == mode
             ]
       pure (S.fromList (take (tmvScope v) globals))
 
     checkPortSort s currentSort diag pid = do
       portSort0 <-
-        case diagramPortType diag pid of
+        case diagramPortObj diag pid of
           Nothing -> Left "unifyTm: missing port type in normalized term graph"
           Just ty -> Right ty
       portSort <- normalizeInCtx s portSort0
@@ -509,66 +509,66 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
         , Just globalTm <- [resolveTmCtxIndex tmCtx (dMode diag) local]
         ]
 
-applySubstTy :: TypeTheory -> Subst -> TypeExpr -> Either Text TypeExpr
-applySubstTy tt subst ty = do
+applySubstObj :: TypeTheory -> Subst -> Obj -> Either Text Obj
+applySubstObj tt subst ty = do
   raw <- goTy S.empty ty
   if needsTmCtxType raw
-    then normalizeTypeExpr (ttModes tt) raw
-    else normalizeTypeDeep tt raw
+    then normalizeObjExpr (ttModes tt) raw
+    else normalizeObjDeep tt raw
   where
     needsTmCtxType expr =
       case expr of
-        TVar _ -> False
-        TMod _ inner -> needsTmCtxType inner
-        TCon _ args -> any needsTmCtxArg args
+        OVar _ -> False
+        OMod _ inner -> needsTmCtxType inner
+        OCon _ args -> any needsTmCtxArg args
 
     needsTmCtxArg arg =
       case arg of
-        TAType innerTy -> needsTmCtxType innerTy
-        TATm tm ->
+        OAObj innerTy -> needsTmCtxType innerTy
+        OATm tm ->
           not (S.null (boundTmIndicesTerm tm)) || maxTmScopeTerm tm > 0
 
     goTy seen expr =
       case expr of
-        TVar v ->
-          case M.lookup v (sTy subst) of
-            Nothing -> Right (TVar v)
+        OVar v ->
+          case M.lookup v (sObj subst) of
+            Nothing -> Right (OVar v)
             Just t ->
               if v `S.member` seen
-                then Right (TVar v)
+                then Right (OVar v)
                 else goTy (S.insert v seen) t
-        TCon ref args -> do
+        OCon ref args -> do
           args' <-
-            case M.lookup ref (ttTypeParams tt) of
+            case M.lookup ref (ttObjParams tt) of
               Just params ->
                 if length params /= length args
-                  then Left "applySubstTy: type constructor arity mismatch"
+                  then Left "applySubstObj: type constructor arity mismatch"
                   else mapM (goArgBySig seen) (zip params args)
               Nothing ->
                 mapM (goArgNoSig seen) args
-          Right (TCon ref args')
-        TMod me inner -> TMod me <$> goTy seen inner
+          Right (OCon ref args')
+        OMod me inner -> OMod me <$> goTy seen inner
 
     goArgBySig seen (param, arg) =
       case (param, arg) of
-        (TPS_Ty _, TAType innerTy) ->
-          TAType <$> goTy seen innerTy
-        (TPS_Tm sortTy, TATm tmArg) -> do
+        (TPS_Ty _, OAObj innerTy) ->
+          OAObj <$> goTy seen innerTy
+        (TPS_Tm sortTy, OATm tmArg) -> do
           sort' <- goTy seen sortTy
-          TATm <$> applySubstTmMaybeNormalize tt subst sort' tmArg
-        (TPS_Ty _, TATm _) ->
-          Left "applySubstTy: expected type argument for constructor parameter"
-        (TPS_Tm _, TAType _) ->
-          Left "applySubstTy: expected term argument for constructor parameter"
+          OATm <$> applySubstTmMaybeNormalize tt subst sort' tmArg
+        (TPS_Ty _, OATm _) ->
+          Left "applySubstObj: expected type argument for constructor parameter"
+        (TPS_Tm _, OAObj _) ->
+          Left "applySubstObj: expected term argument for constructor parameter"
 
     goArgNoSig seen arg =
       case arg of
-        TAType innerTy -> TAType <$> goTy seen innerTy
-        TATm tmArg -> do
+        OAObj innerTy -> OAObj <$> goTy seen innerTy
+        OATm tmArg -> do
           sort <- inferTmSortFromDiagram tt subst tmArg
-          TATm <$> applySubstTmMaybeNormalize tt subst sort tmArg
+          OATm <$> applySubstTmMaybeNormalize tt subst sort tmArg
 
-applySubstTm :: TypeTheory -> Subst -> TypeExpr -> TermDiagram -> Either Text TermDiagram
+applySubstTm :: TypeTheory -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
 applySubstTm tt subst expectedSort tm =
   applySubstTmInCtx tt (dTmCtx (unTerm tm)) subst expectedSort tm
 
@@ -577,34 +577,34 @@ applySubstDiagram tt subst =
   traverseDiagram onDiag onPayload pure
   where
     onDiag d = do
-      dPortTy' <- IM.traverseWithKey (\_ ty -> applySubstTy tt subst ty) (dPortTy d)
-      dTmCtx' <- mapM (applySubstTy tt subst) (dTmCtx d)
-      pure d { dTmCtx = dTmCtx', dPortTy = dPortTy' }
+      dPortObj' <- IM.traverseWithKey (\_ ty -> applySubstObj tt subst ty) (dPortObj d)
+      dTmCtx' <- mapM (applySubstObj tt subst) (dTmCtx d)
+      pure d { dTmCtx = dTmCtx', dPortObj = dPortObj' }
     onPayload payload =
       case payload of
         PTmMeta v -> do
-          sort' <- applySubstTy tt subst (tmvSort v)
+          sort' <- applySubstObj tt subst (tmvSort v)
           pure (PTmMeta v { tmvSort = sort' })
         _ -> pure payload
 
-applySubstTmInCtx :: TypeTheory -> [TypeExpr] -> Subst -> TypeExpr -> TermDiagram -> Either Text TermDiagram
+applySubstTmInCtx :: TypeTheory -> [Obj] -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
 applySubstTmInCtx tt tmCtx subst expectedSort tm = do
   tmCtx' <- applySubstCtx tt subst tmCtx
-  expectedSort0 <- applySubstTy tt subst expectedSort
-  expectedSort' <- normalizeTypeDeepWithCtx tt tmCtx' expectedSort0
+  expectedSort0 <- applySubstObj tt subst expectedSort
+  expectedSort' <- normalizeObjDeepWithCtx tt tmCtx' expectedSort0
   tmGraph0 <- applySubstDiagram tt subst (unTerm tm)
   tmGraph <- weakenDiagramTmCtxTo tmCtx' tmGraph0
   let tmSub = TermDiagram tmGraph
   expr <- diagramToTermExpr tt tmCtx' expectedSort' tmSub
   (tmCtxOut, expr') <- goTm S.empty tmCtx' expectedSort' expr
-  expectedSortOut <- normalizeTypeDeepWithCtx tt tmCtxOut expectedSort0
+  expectedSortOut <- normalizeObjDeepWithCtx tt tmCtxOut expectedSort0
   tm' <- termExprToDiagram tt tmCtxOut expectedSortOut expr'
   normalizeTermDiagram tt tmCtxOut expectedSortOut tm'
   where
     goTm seen curCtx currentSort expr =
       case expr of
         TMVar v -> do
-          sort' <- applySubstTy tt subst (tmvSort v)
+          sort' <- applySubstObj tt subst (tmvSort v)
           let v' = v { tmvSort = sort' }
           case lookupTmById v' (sTm subst) of
             Nothing -> Right (curCtx, TMVar v')
@@ -613,7 +613,7 @@ applySubstTmInCtx tt tmCtx subst expectedSort tm = do
                 then Right (curCtx, TMVar v')
                 else do
                   subCtx0 <- applySubstCtx tt subst (dTmCtx (unTerm tmSub))
-                  sortSub <- normalizeTypeDeepWithCtx tt subCtx0 sort'
+                  sortSub <- normalizeObjDeepWithCtx tt subCtx0 sort'
                   subExpr <- diagramToTermExpr tt subCtx0 sortSub tmSub
                   (subCtx, subExpr') <- goTm (S.insert v' seen) subCtx0 currentSort subExpr
                   merged <- mergeCtx curCtx subCtx
@@ -624,7 +624,7 @@ applySubstTmInCtx tt tmCtx subst expectedSort tm = do
           (ctxOut, argsRev) <-
             foldM
               (\(ctxAcc, acc) (argSort, argTm) -> do
-                argSort' <- normalizeTypeDeepWithCtx tt ctxAcc =<< applySubstTy tt subst argSort
+                argSort' <- normalizeObjDeepWithCtx tt ctxAcc =<< applySubstObj tt subst argSort
                 (ctxArg, argExpr) <- goTm seen ctxAcc argSort' argTm
                 ctxNext <- mergeCtx ctxAcc ctxArg
                 Right (ctxNext, argExpr : acc))
@@ -633,9 +633,9 @@ applySubstTmInCtx tt tmCtx subst expectedSort tm = do
           Right (ctxOut, TMFun name (reverse argsRev))
 
     requireSig curCtx currentSort f arity = do
-      currentSort' <- normalizeTypeDeepWithCtx tt curCtx =<< applySubstTy tt subst currentSort
+      currentSort' <- normalizeObjDeepWithCtx tt curCtx =<< applySubstObj tt subst currentSort
       sig <-
-        case lookupTmFunSig tt (typeMode currentSort') f of
+        case lookupTmFunSig tt (objMode currentSort') f of
           Nothing -> Left "applySubstTmInCtx: unknown term function"
           Just s -> Right s
       if length (tfsArgs sig) == arity
@@ -657,57 +657,57 @@ applySubstTmInCtx tt tmCtx subst expectedSort tm = do
             (Nothing, Nothing) -> Left "applySubstTmInCtx: internal context merge failure"
 
 applySubstCtx :: TypeTheory -> Subst -> Context -> Either Text Context
-applySubstCtx tt subst = mapM (applySubstTy tt subst)
+applySubstCtx tt subst = mapM (applySubstObj tt subst)
 
 normalizeSubst :: TypeTheory -> Subst -> Either Text Subst
 normalizeSubst tt subst = do
-  tyPairs <- mapM normTy (M.toList (sTy subst))
+  tyPairs <- mapM normTy (M.toList (sObj subst))
   tmPairs <- mapM normTm (M.toList (sTm subst))
-  let tyMap = M.fromList [ (v, t) | (v, t) <- tyPairs, t /= TVar v ]
+  let tyMap = M.fromList [ (v, t) | (v, t) <- tyPairs, t /= OVar v ]
   let tmMap = M.fromList [ (v, t) | (v, t) <- tmPairs, not (isTmIdentity v t) ]
   Right (Subst tyMap tmMap)
   where
     normTy (v, t) = do
-      t' <- applySubstTy tt subst t
+      t' <- applySubstObj tt subst t
       pure (v, t')
     normTm (v, t) = do
-      sort' <- applySubstTy tt subst (tmvSort v)
+      sort' <- applySubstObj tt subst (tmvSort v)
       t' <- applySubstTmMaybeNormalize tt subst sort' t
       pure (v { tmvSort = sort' }, t')
 
 composeSubst :: TypeTheory -> Subst -> Subst -> Either Text Subst
 composeSubst tt s2 s1 = do
-  ty1' <- mapM (applySubstTy tt s2) (sTy s1)
+  ty1' <- mapM (applySubstObj tt s2) (sObj s1)
   tm1' <- fmap M.fromList (mapM substTmPair (M.toList (sTm s1)))
-  normalizeSubst tt (Subst (M.union ty1' (sTy s2)) (M.union tm1' (sTm s2)))
+  normalizeSubst tt (Subst (M.union ty1' (sObj s2)) (M.union tm1' (sTm s2)))
   where
     substTmPair (v, t) = do
-      sort' <- applySubstTy tt s2 (tmvSort v)
+      sort' <- applySubstObj tt s2 (tmvSort v)
       t' <- applySubstTmMaybeNormalize tt s2 sort' t
       pure (v { tmvSort = sort' }, t')
 
-applySubstTmMaybeNormalize :: TypeTheory -> Subst -> TypeExpr -> TermDiagram -> Either Text TermDiagram
+applySubstTmMaybeNormalize :: TypeTheory -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
 applySubstTmMaybeNormalize tt subst expectedSort tm =
   if S.null (boundTmIndicesTerm tm) && maxTmScopeTerm tm == 0
     then applySubstTm tt subst expectedSort tm
     else applySubstTmNoNormalize tt subst expectedSort tm
 
-applySubstTmNoNormalize :: TypeTheory -> Subst -> TypeExpr -> TermDiagram -> Either Text TermDiagram
+applySubstTmNoNormalize :: TypeTheory -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
 applySubstTmNoNormalize tt subst expectedSort tm = do
   tmGraph <- applySubstDiagram tt subst (unTerm tm)
   let tmSub = TermDiagram tmGraph
   let tmCtx = dTmCtx (unTerm tmSub)
-  expectedSort0 <- applySubstTy tt subst expectedSort
-  expectedSort' <- normalizeTypeDeepWithCtx tt tmCtx expectedSort0
+  expectedSort0 <- applySubstObj tt subst expectedSort
+  expectedSort' <- normalizeObjDeepWithCtx tt tmCtx expectedSort0
   expr <- diagramToTermExpr tt tmCtx expectedSort' tmSub
   (tmCtxOut, expr') <- go S.empty tmCtx expectedSort' expr
-  expectedSortOut <- normalizeTypeDeepWithCtx tt tmCtxOut expectedSort0
+  expectedSortOut <- normalizeObjDeepWithCtx tt tmCtxOut expectedSort0
   termExprToDiagram tt tmCtxOut expectedSortOut expr'
   where
     go seen curCtx currentSort expr =
       case expr of
         TMVar v -> do
-          sort' <- applySubstTy tt subst (tmvSort v)
+          sort' <- applySubstObj tt subst (tmvSort v)
           let v' = v { tmvSort = sort' }
           case lookupTmById v' (sTm subst) of
             Nothing -> Right (curCtx, TMVar v')
@@ -716,7 +716,7 @@ applySubstTmNoNormalize tt subst expectedSort tm = do
                 then Right (curCtx, TMVar v')
                 else do
                   subCtx0 <- applySubstCtx tt subst (dTmCtx (unTerm tmSub))
-                  sortSub <- normalizeTypeDeepWithCtx tt subCtx0 sort'
+                  sortSub <- normalizeObjDeepWithCtx tt subCtx0 sort'
                   subExpr <- diagramToTermExpr tt subCtx0 sortSub tmSub
                   (subCtx, subExpr') <- go (S.insert v' seen) subCtx0 currentSort subExpr
                   merged <- mergeCtx curCtx subCtx
@@ -727,7 +727,7 @@ applySubstTmNoNormalize tt subst expectedSort tm = do
           (ctxOut, argsRev) <-
             foldM
               (\(ctxAcc, acc) (argSort, argTm) -> do
-                argSort' <- normalizeTypeDeepWithCtx tt ctxAcc =<< applySubstTy tt subst argSort
+                argSort' <- normalizeObjDeepWithCtx tt ctxAcc =<< applySubstObj tt subst argSort
                 (ctxArg, argExpr) <- go seen ctxAcc argSort' argTm
                 ctxNext <- mergeCtx ctxAcc ctxArg
                 Right (ctxNext, argExpr : acc))
@@ -736,9 +736,9 @@ applySubstTmNoNormalize tt subst expectedSort tm = do
           Right (ctxOut, TMFun f (reverse argsRev))
 
     requireSig curCtx currentSort f arity = do
-      currentSort' <- normalizeTypeDeepWithCtx tt curCtx =<< applySubstTy tt subst currentSort
+      currentSort' <- normalizeObjDeepWithCtx tt curCtx =<< applySubstObj tt subst currentSort
       sig <-
-        case lookupTmFunSig tt (typeMode currentSort') f of
+        case lookupTmFunSig tt (objMode currentSort') f of
           Nothing -> Left "applySubstTmNoNormalize: unknown term function"
           Just s -> Right s
       if length (tfsArgs sig) == arity
@@ -769,36 +769,24 @@ maxTmScopeTerm tm =
           ]
     )
 
-inferExpectedTmSort :: TypeTheory -> [TypeExpr] -> Subst -> TermDiagram -> TermDiagram -> Either Text TypeExpr
+inferExpectedTmSort :: TypeTheory -> [Obj] -> Subst -> TermDiagram -> TermDiagram -> Either Text Obj
 inferExpectedTmSort tt tmCtx subst lhs rhs =
   case inferTmSortFromTerm tt tmCtx subst lhs of
     Right ty -> Right ty
     Left _ -> inferTmSortFromTerm tt tmCtx subst rhs
 
-inferTmSortFromTerm :: TypeTheory -> [TypeExpr] -> Subst -> TermDiagram -> Either Text TypeExpr
+inferTmSortFromTerm :: TypeTheory -> [Obj] -> Subst -> TermDiagram -> Either Text Obj
 inferTmSortFromTerm tt _ixCtx subst tm =
   inferTmSortFromDiagram tt subst tm
 
-inferTmSortFromDiagram :: TypeTheory -> Subst -> TermDiagram -> Either Text TypeExpr
+inferTmSortFromDiagram :: TypeTheory -> Subst -> TermDiagram -> Either Text Obj
 inferTmSortFromDiagram tt subst tm =
   case dOut (unTerm tm) of
     [pid] ->
-      case diagramPortType (unTerm tm) pid of
+      case diagramPortObj (unTerm tm) pid of
         Nothing -> Left "inferTmSortFromDiagram: missing output port type"
-        Just ty -> applySubstTy tt subst ty
+        Just ty -> applySubstObj tt subst ty
     _ -> Left "inferTmSortFromDiagram: term diagram must have exactly one output"
-
-occursTyVar :: TyVar -> TypeExpr -> Bool
-occursTyVar v ty =
-  case ty of
-    TVar v' -> v == v'
-    TCon _ args -> any occursArg args
-    TMod _ inner -> occursTyVar v inner
-  where
-    occursArg arg =
-      case arg of
-        TAType innerTy -> occursTyVar v innerTy
-        TATm tmArg -> v `S.member` freeTyVarsTerm tmArg
 
 occursTmVarExpr :: TmVar -> TermExpr -> Bool
 occursTmVarExpr v tm =
@@ -840,29 +828,29 @@ nth xs i
         (y:_) -> Just y
         [] -> Nothing
 
-renderTy :: TypeExpr -> Text
-renderTy ty =
+renderObj :: Obj -> Text
+renderObj ty =
   case ty of
-    TVar v -> renderVar v
-    TCon ref [] -> renderTypeRef ref
-    TCon ref args ->
+    OVar v -> renderObjVar v
+    OCon ref [] -> renderTypeRef ref
+    OCon ref args ->
       renderTypeRef ref <> "(" <> T.intercalate ", " (map renderArg args) <> ")"
-    TMod me inner -> renderModExpr me <> "(" <> renderTy inner <> ")"
+    OMod me inner -> renderModExpr me <> "(" <> renderObj inner <> ")"
   where
     renderArg arg =
       case arg of
-        TAType innerTy -> renderTy innerTy
-        TATm _ -> "<tm>"
+        OAObj innerTy -> renderObj innerTy
+        OATm _ -> "<tm>"
 
-renderVar :: TyVar -> Text
-renderVar v = tvName v <> "@" <> renderMode (tvMode v)
+renderObjVar :: ObjVar -> Text
+renderObjVar v = ovName v <> "@" <> renderMode (ovMode v)
 
-renderTypeRef :: TypeRef -> Text
+renderTypeRef :: ObjRef -> Text
 renderTypeRef ref =
-  renderMode (trMode ref) <> "." <> renderTypeName (trName ref)
+  renderMode (orMode ref) <> "." <> renderTypeName (orName ref)
 
-renderTypeName :: TypeName -> Text
-renderTypeName (TypeName n) = n
+renderTypeName :: ObjName -> Text
+renderTypeName (ObjName n) = n
 
 renderMode :: ModeName -> Text
 renderMode (ModeName n) = n

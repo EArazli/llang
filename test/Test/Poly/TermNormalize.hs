@@ -9,7 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeExpr (TypeExpr(..), TyVar(..), TmFunName(..), TmVar(..))
+import Strat.Poly.Obj (Obj(..), ObjVar(..), TmFunName(..), TmVar(..))
 import Strat.Poly.TypeTheory (TypeTheory(..), modeOnlyTypeTheory)
 import qualified Strat.Poly.TypeTheory as TT
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)
@@ -74,7 +74,7 @@ testCompileRejectsFreshRhsVars = do
   where
     modeM = ModeName "M"
     fName = TmFunName "f"
-    sortTy = TVar TyVar { tvName = "a", tvMode = modeM }
+    sortTy = OVar ObjVar { ovName = "a", ovMode = modeM }
     xVar = TmVar { tmvName = "x", tmvSort = sortTy, tmvScope = 0 }
     yVar = TmVar { tmvName = "y", tmvSort = sortTy, tmvScope = 0 }
     funSigs = M.fromList [(fName, TT.TmFunSig { TT.tfsArgs = [sortTy], TT.tfsRes = sortTy })]
