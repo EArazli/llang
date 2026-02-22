@@ -622,43 +622,6 @@ elabModTransformDecl doc decl = do
   mt' <- addModTransformDecl transformDecl (dModes doc)
   pure doc { dModes = mt' }
 
-checkModTransformWitness :: Doctrine -> ModExpr -> ModExpr -> GenDecl -> Either Text ()
-checkModTransformWitness doc fromMe toMe witness = do
-  let witnessMode = meTgt fromMe
-  if gdMode witness == witnessMode
-    then Right ()
-    else Left "mod_transform: witness generator is declared in the wrong mode"
-  tyVar <-
-    case gdTyVars witness of
-      [v] -> Right v
-      _ -> Left "mod_transform: witness generator must have exactly one type variable"
-  if tvMode tyVar == meSrc fromMe
-    then Right ()
-    else Left "mod_transform: witness type variable must live in transform source mode"
-  if null (gdTmVars witness)
-    then Right ()
-    else Left "mod_transform: witness generator must not have term variables"
-  if null (gdAttrs witness)
-    then Right ()
-    else Left "mod_transform: witness generator must not have attributes"
-  domTy <-
-    case gdDom witness of
-      [InPort ty] -> Right ty
-      _ -> Left "mod_transform: witness generator domain must be exactly one input port"
-  codTy <-
-    case gdCod witness of
-      [ty] -> Right ty
-      _ -> Left "mod_transform: witness generator codomain must be exactly one output port"
-  let expectedDom = TMod fromMe (TVar tyVar)
-  let expectedCod = TMod toMe (TVar tyVar)
-  domNorm <- normalizeTypeExpr (dModes doc) domTy
-  codNorm <- normalizeTypeExpr (dModes doc) codTy
-  expectedDomNorm <- normalizeTypeExpr (dModes doc) expectedDom
-  expectedCodNorm <- normalizeTypeExpr (dModes doc) expectedCod
-  if domNorm == expectedDomNorm && codNorm == expectedCodNorm
-    then Right ()
-    else Left "mod_transform: witness generator must have type [mu(A)] -> [nu(A)] for the declared transform"
-
 ensureDistinct :: Text -> [Text] -> Either Text ()
 ensureDistinct label names =
   let set = S.fromList names

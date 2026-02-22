@@ -13,6 +13,7 @@ module Strat.Poly.Doctrine
   , doctrineTypeTheory
   , lookupTypeSig
   , checkType
+  , checkModTransformWitness
   , validateDoctrine
   , modeIsAcyclic
   ) where
@@ -234,6 +235,7 @@ validateDoctrine doc = do
   mapM_ (checkGenTable doc tt) (M.toList (dGens doc))
   mapM_ (checkCell doc tt) (dCells2 doc)
   mapM_ (checkAction doc) (M.toList (dActions doc))
+  mapM_ (checkModeTransform doc) (M.elems (mtTransforms (dModes doc)))
   mapM_ (checkObligation doc tt) (dObligations doc)
   pure ()
 
@@ -491,6 +493,15 @@ checkAction doc (name, action) = do
         validateDiagram img
   mapM_ checkGenImage (M.keys srcGens)
 
+checkModeTransform :: Doctrine -> ModTransformDecl -> Either Text ()
+checkModeTransform doc decl = do
+  let witnessMode = meTgt (mtdFrom decl)
+  witnessGen <-
+    case M.lookup witnessMode (dGens doc) >>= M.lookup (mtdWitness decl) of
+      Nothing -> Left "validateDoctrine: modality transform witness references unknown generator"
+      Just gen -> Right gen
+  checkModTransformWitness doc (mtdFrom decl) (mtdTo decl) witnessGen
+
 checkObligation :: Doctrine -> TypeTheory -> ObligationDecl -> Either Text ()
 checkObligation doc tt obl = do
   ensureDistinctTyVars ("validateDoctrine: duplicate obligation tyvars in " <> obName obl) (obTyVars obl)
@@ -524,6 +535,43 @@ checkObligation doc tt obl = do
           | otherwise -> Right ()
         ROEComp a b -> ensureNoGenRefs allow a >> ensureNoGenRefs allow b
         ROETensor a b -> ensureNoGenRefs allow a >> ensureNoGenRefs allow b
+
+checkModTransformWitness :: Doctrine -> ModExpr -> ModExpr -> GenDecl -> Either Text ()
+checkModTransformWitness doc fromMe toMe witness = do
+  let witnessMode = meTgt fromMe
+  if gdMode witness == witnessMode
+    then Right ()
+    else Left "mod_transform: witness generator is declared in the wrong mode"
+  tyVar <-
+    case gdTyVars witness of
+      [v] -> Right v
+      _ -> Left "mod_transform: witness generator must have exactly one type variable"
+  if tvMode tyVar == meSrc fromMe
+    then Right ()
+    else Left "mod_transform: witness type variable must live in transform source mode"
+  if null (gdTmVars witness)
+    then Right ()
+    else Left "mod_transform: witness generator must not have term variables"
+  if null (gdAttrs witness)
+    then Right ()
+    else Left "mod_transform: witness generator must not have attributes"
+  domTy <-
+    case gdDom witness of
+      [InPort ty] -> Right ty
+      _ -> Left "mod_transform: witness generator domain must be exactly one input port"
+  codTy <-
+    case gdCod witness of
+      [ty] -> Right ty
+      _ -> Left "mod_transform: witness generator codomain must be exactly one output port"
+  let expectedDom = TMod fromMe (TVar tyVar)
+  let expectedCod = TMod toMe (TVar tyVar)
+  domNorm <- normalizeTypeExpr (dModes doc) domTy
+  codNorm <- normalizeTypeExpr (dModes doc) codTy
+  expectedDomNorm <- normalizeTypeExpr (dModes doc) expectedDom
+  expectedCodNorm <- normalizeTypeExpr (dModes doc) expectedCod
+  if domNorm == expectedDomNorm && codNorm == expectedCodNorm
+    then Right ()
+    else Left "mod_transform: witness generator must have type [mu(A)] -> [nu(A)] for the declared transform"
 
 ensureDistinct :: Ord a => Text -> [a] -> Either Text ()
 ensureDistinct label xs =

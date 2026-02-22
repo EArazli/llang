@@ -117,6 +117,19 @@ computePolyPushout name f g = do
   let renameOblsC = disjointObligationRenames prefixC src (morTgt g)
   let renameTransformsB = disjointTransformRenames prefixB src (morTgt f)
   let renameTransformsC = disjointTransformRenames prefixC src (morTgt g)
+  modeTransforms' <-
+    mergeTransformsPreferRightWithWitness
+      (sanitizePrefix name <> "_pushout")
+      (mpoInlModeRen modePushout)
+      (mpoInlModRen modePushout)
+      renameGensB
+      (mpoInrModeRen modePushout)
+      (mpoInrModRen modePushout)
+      renameGensC
+      (dModes (morTgt f))
+      (dModes (morTgt g))
+  let modeTheory' = (mpoModeTheory modePushout) { mtTransforms = modeTransforms' }
+  let modePushout' = modePushout { mpoModeTheory = modeTheory' }
   b' <-
     renameDoctrine
       (mpoInlModeRen modePushout)
@@ -141,9 +154,9 @@ computePolyPushout name f g = do
       renameOblsC
       renameTransformsC
       (morTgt g)
-  let b'' = b' { dModes = mpoModeTheory modePushout }
-  let c'' = c' { dModes = mpoModeTheory modePushout }
-  merged <- mergeDoctrineList (mpoModeTheory modePushout) [b'', c'']
+  let b'' = b' { dModes = mpoModeTheory modePushout' }
+  let c'' = c' { dModes = mpoModeTheory modePushout' }
+  merged <- mergeDoctrineList (mpoModeTheory modePushout') [b'', c'']
   let pres = merged { dName = name }
   inl <-
     buildInj
@@ -213,6 +226,19 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
   let renameCells = collisionCellRenames (mpoInlModeRen modePushout) prefix src target body
   let renameObls = collisionObligationRenames prefix src target body
   let renameTransforms = collisionTransformRenames prefix src target body
+  modeTransforms' <-
+    mergeTransformsPreferRightWithWitness
+      prefix
+      (mpoInlModeRen modePushout)
+      (mpoInlModRen modePushout)
+      renameGens
+      (mpoInrModeRen modePushout)
+      (mpoInrModRen modePushout)
+      M.empty
+      (dModes body)
+      (dModes target)
+  let modeTheory' = (mpoModeTheory modePushout) { mtTransforms = modeTransforms' }
+  let modePushout' = modePushout { mpoModeTheory = modeTheory' }
   body' <-
     renameDoctrine
       (mpoInlModeRen modePushout)
@@ -237,9 +263,9 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
       M.empty
       M.empty
       target
-  let body'' = body' { dModes = mpoModeTheory modePushout }
-  let target'' = target' { dModes = mpoModeTheory modePushout }
-  merged <- mergeDoctrine (mpoModeTheory modePushout) target'' body''
+  let body'' = body' { dModes = mpoModeTheory modePushout' }
+  let target'' = target' { dModes = mpoModeTheory modePushout' }
+  merged <- mergeDoctrine (mpoModeTheory modePushout') target'' body''
   let pres = merged { dName = newName }
   inr <-
     buildInj
@@ -308,7 +334,17 @@ pushoutModeTheoryPreferRight prefixRaw leftMor rightMor = do
       (addGlueEqn prefix inlModeRen inlModRen inrModeRen inrModRen)
       (decls0, [])
       (M.keys (mtDecls mtSrc))
-  transforms <- mergeTransformsPreferRight prefix inlModeRen inlModRen inrModeRen inrModRen mtLeft mtRight
+  transforms <-
+    mergeTransformsPreferRightWithWitness
+      prefix
+      inlModeRen
+      inlModRen
+      M.empty
+      inrModeRen
+      inrModRen
+      M.empty
+      mtLeft
+      mtRight
   let mtOut =
         ModeTheory
           { mtModes = modesFinal
@@ -461,25 +497,43 @@ pushoutModeTheoryPreferRight prefixRaw leftMor rightMor = do
               Right (decls', eqns <> [ModEqn leftExpr repExpr, ModEqn rightExpr repExpr])
 
 
-mergeTransformsPreferRight
+mergeTransformsPreferRightWithWitness
   :: Text
   -> M.Map ModeName ModeName
   -> M.Map ModName ModName
+  -> GenRenameMap
   -> M.Map ModeName ModeName
   -> M.Map ModName ModName
+  -> GenRenameMap
   -> ModeTheory
   -> ModeTheory
   -> Either Text (M.Map ModTransformName ModTransformDecl)
-mergeTransformsPreferRight prefix inlModeRen inlModRen inrModeRen inrModRen leftMt rightMt = do
+mergeTransformsPreferRightWithWitness
+  prefix
+  inlModeRen
+  inlModRen
+  inlGenRen
+  inrModeRen
+  inrModRen
+  inrGenRen
+  leftMt
+  rightMt = do
   let rightRenamed =
         M.fromList
-          [ (name, renameTransform inrModeRen inrModRen decl)
+          [ (name, renameWithWitness inrModeRen inrModRen inrGenRen decl)
           | (name, decl) <- M.toList (mtTransforms rightMt)
           ]
   foldM addLeft rightRenamed (M.toList (mtTransforms leftMt))
   where
+    renameWithWitness modeRen modRen genRen decl =
+      let decl0 = renameTransform modeRen modRen decl
+          witnessMode0 = meTgt (mtdFrom decl)
+          witness0 = mtdWitness decl
+          witness' = M.findWithDefault witness0 (witnessMode0, witness0) genRen
+      in decl0 { mtdWitness = witness' }
+
     addLeft acc (name, decl) =
-      let decl0 = renameTransform inlModeRen inlModRen decl
+      let decl0 = renameWithWitness inlModeRen inlModRen inlGenRen decl
           used = S.fromList (M.keys acc)
           (name', _) =
             if name `S.member` used
@@ -1468,8 +1522,9 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
         addTransform acc (name, decl) = do
           let name' = M.findWithDefault name name transRen
           let decl0 = renameTransform modeRen modRen decl
-          let mode = meTgt (mtdFrom decl0)
-          let witness' = M.findWithDefault (mtdWitness decl0) (mode, mtdWitness decl0) genRen
+          let witnessMode0 = meTgt (mtdFrom decl)
+          let witness0 = mtdWitness decl
+          let witness' = M.findWithDefault witness0 (witnessMode0, witness0) genRen
           let decl' = decl0 { mtdName = name', mtdWitness = witness' }
           case M.lookup name' acc of
             Nothing -> Right (M.insert name' decl' acc)
@@ -1585,20 +1640,41 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
       let name' = M.findWithDefault (obName obl) (obName obl) oblRen
       let tyVarNames = S.fromList (map tvName (obTyVars obl))
       let tmVarNames = S.fromList (map tmvName (obTmVars obl))
-      let mode' = renameModeName modeRen (obMode obl)
+      let mode0 = obMode obl
+      let mode' = renameModeName modeRen mode0
+      tyVars' <- mapM renameObTyVar (obTyVars obl)
+      tmVars' <- mapM renameObTmVar (obTmVars obl)
       dom' <- mapM (renameTypeExpr modeRen modRen tyRen permRen) (obDom obl)
       cod' <- mapM (renameTypeExpr modeRen modRen tyRen permRen) (obCod obl)
-      lhs' <- renameOblExpr tyVarNames tmVarNames mode' (obLHSExpr obl)
-      rhs' <- renameOblExpr tyVarNames tmVarNames mode' (obRHSExpr obl)
+      lhs' <- renameOblExpr tyVarNames tmVarNames mode0 (obLHSExpr obl)
+      rhs' <- renameOblExpr tyVarNames tmVarNames mode0 (obRHSExpr obl)
       pure
         obl
           { obName = name'
           , obMode = mode'
+          , obTyVars = tyVars'
+          , obTmVars = tmVars'
           , obDom = dom'
           , obCod = cod'
           , obLHSExpr = lhs'
           , obRHSExpr = rhs'
           }
+      where
+        renameObTyVar tv = Right tv { tvMode = renameModeName modeRen (tvMode tv) }
+
+        renameObTmVar tmVar = do
+          sort' <- renameTypeExpr modeRen modRen tyRen permRen (tmvSort tmVar)
+          Right tmVar { tmvSort = sort' }
+
+    renameRawModExpr rawMe =
+      case rawMe of
+        PolyAST.RMId modeNameTxt ->
+          PolyAST.RMId (renderModeName (renameModeName modeRen (ModeName modeNameTxt)))
+        PolyAST.RMComp toks ->
+          PolyAST.RMComp
+            [ renderModName (renameModName modRen (ModName tok))
+            | tok <- toks
+            ]
 
     renameOblExpr tyVarNames tmVarNames mode expr =
       case expr of
@@ -1607,7 +1683,8 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
         PolyAST.ROEMap me inner -> do
           (innerMode, _outerMode) <- rawModExprEndpoints mode me
           inner' <- renameOblExpr tyVarNames tmVarNames innerMode inner
-          pure (PolyAST.ROEMap me inner')
+          let me' = renameRawModExpr me
+          pure (PolyAST.ROEMap me' inner')
         PolyAST.ROEGen ->
           Right PolyAST.ROEGen
         PolyAST.ROELiftDom d ->
@@ -1642,7 +1719,8 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
         PolyAST.RDMap me inner -> do
           (innerMode, _outerMode) <- rawModExprEndpoints mode me
           inner' <- renameRawDiagExpr tyVarNames tmVarNames innerMode inner
-          pure (PolyAST.RDMap me inner')
+          let me' = renameRawModExpr me
+          pure (PolyAST.RDMap me' inner')
         PolyAST.RDComp a b ->
           PolyAST.RDComp <$> renameRawDiagExpr tyVarNames tmVarNames mode a <*> renameRawDiagExpr tyVarNames tmVarNames mode b
         PolyAST.RDTensor a b ->
@@ -1670,7 +1748,8 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
             Just (rawMe, innerRaw) -> do
               (srcMode, _tgtMode) <- rawModExprEndpoints mode rawMe
               inner' <- renameRawTypeAsType tyVarNames tmVarNames srcMode innerRaw
-              pure (PolyAST.RPTCon ref [inner'])
+              let rawMe' = renameRawModExpr rawMe
+              pure (PolyAST.RPTMod rawMe' inner')
             Nothing -> do
               ref0 <- resolveRawTypeRefAsType ref
               sig <- lookupTypeSig doc ref0
@@ -1689,7 +1768,8 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
         PolyAST.RPTMod me inner -> do
           (innerMode, _outerMode) <- rawModExprEndpoints mode me
           inner' <- renameRawTypeAsType tyVarNames tmVarNames innerMode inner
-          pure (PolyAST.RPTMod me inner')
+          let me' = renameRawModExpr me
+          pure (PolyAST.RPTMod me' inner')
 
     renameRawTypeAsTmTerm tmVarNames mode ty =
       case ty of

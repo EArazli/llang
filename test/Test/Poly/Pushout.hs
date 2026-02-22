@@ -28,7 +28,7 @@ import Strat.Poly.TypeExpr (TyVar(..), TypeName(..), TypeRef(..), TypeExpr(..), 
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrSort(..), AttrSortDecl(..), AttrLitKind(..))
 import Strat.Poly.Diagram (genD, idD)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), ObligationDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), gdPlainDom, validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), ModAction(..), ObligationDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), gdPlainDom, validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram)
 import Strat.Poly.Pushout (computePolyPushout, computePolyPushoutPreferRight, computePolyCoproduct, PolyPushoutResult(..))
@@ -68,6 +68,7 @@ tests =
     , testCase "pushout accepts renaming morphisms with binder signatures in target doctrine" testPushoutAcceptsRenamingWithBinders
     , testCase "coproduct merges distinct mode theories" testCoproductMergesDistinctModeTheories
     , testCase "coproduct keeps obligations elaboratable after disjoint type renaming" testCoproductObligationRenameElaborates
+    , testCase "coproduct renames raw modality obligation syntax under collisions" testCoproductObligationRawModalityRenameElaborates
     , testCase "coproduct renames colliding modality transforms" testCoproductTransformCollisionRenames
     , testCase "apply pushout accepts implementation morphisms with non-CheckAll checks" testApplyPushoutAcceptsNonCheckAllGlue
     , testCase "apply pushout type/gen collisions are resolved after mode collapse" testApplyPushoutTypeGenCollisionAfterModeRename
@@ -1760,6 +1761,146 @@ testCoproductObligationRenameElaborates = do
     Left err -> assertFailure ("expected renamed obligation to elaborate and check: " <> T.unpack err)
     Right () -> pure ()
 
+testCoproductObligationRawModalityRenameElaborates :: Assertion
+testCoproductObligationRawModalityRenameElaborates = do
+  let mode = ModeName "M"
+  let modF = ModName "F"
+  let fExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF] }
+  let aVar = tvar mode "A"
+  let genK =
+        GenDecl
+          { gdName = GenName "k"
+          , gdMode = mode
+          , gdTyVars = [aVar]
+          , gdTmVars = []
+          , gdDom = [InPort (TVar aVar)]
+          , gdCod = [TVar aVar]
+          , gdAttrs = []
+          }
+  let actionF =
+        ModAction
+          { maMod = modF
+          , maGenMap = M.singleton (mode, GenName "k") (idD mode [TMod fExpr (TVar aVar)])
+          , maPolicy = UseAllOriented
+          }
+  let rawExpr =
+        PolyAST.ROETensor
+          (PolyAST.ROEDiag (PolyAST.RDGen "k" (Just [PolyAST.RPTVar "A"]) Nothing Nothing))
+          ( PolyAST.ROETensor
+              (PolyAST.ROEMap (PolyAST.RMComp ["F"]) (PolyAST.ROEDiag (PolyAST.RDId [PolyAST.RPTVar "A"])))
+              ( PolyAST.ROETensor
+                  ( PolyAST.ROEDiag
+                      ( PolyAST.RDMap
+                          (PolyAST.RMComp ["F"])
+                          (PolyAST.RDId [PolyAST.RPTMod (PolyAST.RMComp ["F"]) (PolyAST.RPTVar "A")])
+                      )
+                  )
+                  ( PolyAST.ROEDiag
+                      ( PolyAST.RDMap
+                          (PolyAST.RMComp ["F"])
+                          ( PolyAST.RDId
+                              [ PolyAST.RPTCon
+                                  PolyAST.RawTypeRef
+                                    { PolyAST.rtrMode = Nothing
+                                    , PolyAST.rtrName = "F"
+                                    }
+                                  [PolyAST.RPTVar "A"]
+                              ]
+                          )
+                      )
+                  )
+              )
+          )
+  let fa = TMod fExpr (TVar aVar)
+  let ffa = TMod fExpr fa
+  let obl =
+        ObligationDecl
+          { obName = "raw_mod_refl"
+          , obMode = mode
+          , obForGen = False
+          , obTyVars = [aVar]
+          , obTmVars = []
+          , obDom = [TVar aVar, fa, ffa, ffa]
+          , obCod = [TVar aVar, fa, ffa, ffa]
+          , obLHSExpr = rawExpr
+          , obRHSExpr = rawExpr
+          , obPolicy = UseAllOriented
+          }
+  let mt =
+        (mkModes (S.singleton mode))
+          { mtDecls =
+              M.singleton
+                modF
+                ModDecl
+                  { mdName = modF
+                  , mdSrc = mode
+                  , mdTgt = mode
+                  }
+          }
+  let docA =
+        Doctrine
+          { dName = "DocRawA"
+          , dModes = mt
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.singleton mode (M.singleton (GenName "k") genK)
+          , dCells2 = []
+          , dActions = M.singleton modF actionF
+          , dObligations = [obl]
+          , dAttrSorts = M.empty
+          }
+  let docB =
+        Doctrine
+          { dName = "DocRawB"
+          , dModes = mt
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  case validateDoctrine docA of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  case validateDoctrine docB of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure ()
+  out <- case computePolyCoproduct "POblRawRen" docA docB of
+    Left err -> assertFailure (T.unpack err)
+    Right res -> pure (poDoctrine res)
+  genMap <-
+    fmap M.fromList $
+      mapM
+        ( \(mode', genDecl) -> do
+            diag <- case genD mode' (gdPlainDom genDecl) (gdCod genDecl) (gdName genDecl) of
+              Left err -> assertFailure (T.unpack err) >> error "unreachable"
+              Right outDiag -> pure outDiag
+            pure ((mode', gdName genDecl), plainImage diag)
+        )
+        [ (mode', genDecl)
+        | (mode', table) <- M.toList (dGens out)
+        , genDecl <- M.elems table
+        ]
+  let idMorph =
+        Morphism
+          { morName = "POblRawRen.id"
+          , morSrc = out
+          , morTgt = out
+          , morIsCoercion = True
+          , morModeMap = identityModeMap out
+          , morModMap = identityModMap out
+          , morTypeMap = M.empty
+          , morGenMap = genMap
+          , morCheck = CheckNone
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  case checkImplementsObligations emptyEnv out idMorph out of
+    Left err -> assertFailure ("expected raw modality obligation to rename and check: " <> T.unpack err)
+    Right () -> pure ()
+
 testCoproductTransformCollisionRenames :: Assertion
 testCoproductTransformCollisionRenames = do
   let mode = ModeName "M"
@@ -1809,10 +1950,18 @@ testCoproductTransformCollisionRenames = do
   res <- case computePolyCoproduct "PTrCollide" docA docB of
     Left err -> assertFailure (T.unpack err)
     Right out -> pure out
-  let transforms = mtTransforms (dModes (poDoctrine res))
+  let outDoc = poDoctrine res
+  let transforms = mtTransforms (dModes outDoc)
   M.size transforms @?= 2
   assertBool "expected right eta transform name to be preserved in coproduct" (M.member (ModTransformName "eta") transforms)
   assertBool "expected one additional renamed transform" (S.size (S.delete (ModTransformName "eta") (M.keysSet transforms)) == 1)
+  mapM_
+    ( \decl ->
+        let witnessMode = meTgt (mtdFrom decl)
+            gensAtMode = M.findWithDefault M.empty witnessMode (dGens outDoc)
+        in assertBool "expected transform witness generator to exist in output doctrine" (M.member (mtdWitness decl) gensAtMode)
+    )
+    (M.elems transforms)
 
 testApplyPushoutAcceptsNonCheckAllGlue :: Assertion
 testApplyPushoutAcceptsNonCheckAllGlue = do
