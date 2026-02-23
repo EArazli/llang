@@ -2,7 +2,7 @@
 
 This document records user-facing syntax and behavior changes.
 
-## Phase 1 — Mode-signatured type constructors + modeful type expressions
+## Mode-Signatured Type Constructors + Modeful Type Expressions
 
 User-facing changes:
 
@@ -17,7 +17,7 @@ User-facing changes:
 - CLI/pretty-print output shows mode-qualified constructors and tyvar modes, e.g.
   `M.A` and `a@M`.
 
-## Phase 2 — Morphism mode maps
+## Morphism Mode Maps
 
 User-facing changes:
 
@@ -34,7 +34,7 @@ User-facing changes:
 - `pushout` still requires **mode‑preserving** morphisms (identity mode map).
 - New example: `examples/mode_map_demo.run.llang`.
 
-## Phase 3 — Surface structural discipline
+## Surface Structural Discipline
 
 User-facing changes:
 
@@ -54,7 +54,7 @@ User-facing changes:
 - Surfaces may declare `base D;`. When present and `D != doctrine`, elaboration normalizes
   away surface-only generators and returns a diagram in the base doctrine.
 
-## Phase 4 — Terms and `@term` references
+## Terms and `@term` References
 
 User-facing changes:
 
@@ -63,7 +63,7 @@ User-facing changes:
   directly (without run pipelines).
 - Diagram expressions accept `@<TermName>` to splice a named term into a diagram.
 
-## Phase 5 — Coercion morphisms + implicit coercion paths
+## Coercion Morphisms + Implicit Coercion Paths
 
 User-facing changes:
 
@@ -73,14 +73,14 @@ User-facing changes:
 - Runs and terms must end in the declared doctrine; if not, the compiler attempts a **unique
   shortest** coercion path. Ambiguous or missing paths are now errors.
 
-## Phase 6 — Doctrine templates + instantiation
+## Doctrine Templates + Instantiation
 
 User-facing changes:
 
 - `doctrine_template T(P1, ..., Pn) where { doctrine T ... }` defines a parameterized doctrine.
 - `doctrine D = instantiate T(A1, ..., An);` expands the template with identifier substitution.
 
-## Phase 7 — `effects` macro
+## `effects` Macro
 
 User-facing changes:
 
@@ -88,14 +88,14 @@ User-facing changes:
   `Base` using each effect’s `fromBase` morphism, producing intermediate doctrines
   `<Combined>__stepN`.
 
-## Phase 8 — `data` macro inside doctrine blocks
+## `data` Macro Inside Doctrine Blocks
 
 User-facing changes:
 
 - `data T (a@M) @M where { C : [...]; ... }` expands to a `type` declaration plus
   constructor `gen`s with codomain `[T(a,...)]`.
 
-## Phase 9 — Pipeline-based runs
+## Pipeline-Based Runs
 
 User-facing changes:
 

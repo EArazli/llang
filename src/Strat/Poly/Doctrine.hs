@@ -375,7 +375,7 @@ checkContext doc tt expectedMode tyvars tmvars tmCtx ctx = mapM_ (checkBoundaryT
 checkBoundaryType :: Doctrine -> TypeTheory -> ModeName -> [ObjVar] -> [TmVar] -> [Obj] -> Obj -> Either Text ()
 checkBoundaryType doc tt expectedMode tyvars tmvars tmCtx ty = do
   checkType doc tt tyvars tmvars tmCtx ty
-  if objMode ty == expectedMode
+  if objOwnerMode ty == expectedMode
     then Right ()
     else Left "validateDoctrine: generator boundary mode mismatch"
 
@@ -402,7 +402,7 @@ checkType doc tt tyvars tmvars tmCtx ty =
   where
     checkArg _ (PS_Ty m, OAObj argTy) = do
       checkType doc tt tyvars tmvars tmCtx argTy
-      if objMode argTy == m
+      if objOwnerMode argTy == m
         then Right ()
         else Left "validateDoctrine: type constructor argument mode mismatch"
     checkArg _ (PS_Tm sortTy, OATm tmTerm) = do

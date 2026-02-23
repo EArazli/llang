@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Strat.Frontend.Run
   ( Artifact(..)
   , RunResult(..)
@@ -20,7 +21,7 @@ import Strat.Frontend.Env
 import Strat.Frontend.Compile (compileSourceDiagram)
 import Strat.Pipeline
 import Strat.Poly.Doctrine
-import Strat.Poly.Kernel (Obj(..), ObjRef(..), ObjName(..))
+import Strat.Poly.Kernel (Obj(..), pattern OCon, ObjRef(..), ObjName(..))
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.Names (GenName(..), BoxName(..))

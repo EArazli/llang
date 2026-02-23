@@ -1,0 +1,23 @@
+doctrine ClassificationResolution where {
+  mode Ty;
+  mode Tm classifiedBy Ty via Ty.U;
+
+  type U @Ty;
+  type Unit @Ty;
+  type Arr(a@Tm, b@Tm) @Ty;
+
+  gen idArr : [Arr(Unit, Unit)] -> [Arr(Unit, Unit)] @Tm;
+}
+
+pipeline main where {
+  normalize;
+  extract diagram;
+}
+
+run main using main where {
+  source doctrine ClassificationResolution;
+  source mode Tm;
+}
+---
+idArr
+---

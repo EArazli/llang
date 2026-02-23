@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Test.Poly.Pushout
   ( tests
   ) where
@@ -25,7 +26,18 @@ import Strat.Poly.ModeTheory
   , mtModes
   , mtDecls
   )
-import Strat.Poly.Obj (ObjVar(..), ObjName(..), ObjRef(..), Obj(..), ObjArg(..), TmVar(..), TermDiagram(..), objMode)
+import Strat.Poly.Obj
+  ( ObjVar(..)
+  , ObjName(..)
+  , ObjRef(..)
+  , Obj(..)
+  , ObjArg
+  , pattern OAObj
+  , pattern OATm
+  , TmVar(..)
+  , TermDiagram(..)
+  , objMode
+  )
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrSort(..), AttrSortDecl(..), AttrLitKind(..))
 import Strat.Poly.Diagram (genD, idD)

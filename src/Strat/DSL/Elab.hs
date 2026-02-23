@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Strat.DSL.Elab
   ( elabRawFile
   , elabRawFileWithEnv
@@ -28,7 +29,19 @@ import Strat.Poly.DSL.Elab
   , checkImplementsObligationsWithBudget
   , ImplementsCheckResult(..)
   )
-import Strat.Poly.Obj (Obj(..), ObjArg(..), ObjRef(..), ObjName(..), ObjVar(..), TmVar(..), TermDiagram(..))
+import Strat.Poly.Obj
+  ( Obj(..)
+  , CodeTerm(..)
+  , pattern OVar
+  , pattern OCon
+  , pattern OAObj
+  , pattern OATm
+  , ObjRef(..)
+  , ObjName(..)
+  , ObjVar(..)
+  , TmVar(..)
+  , TermDiagram(..)
+  )
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
 import Strat.Poly.Doctrine
   ( Doctrine(..)
@@ -889,7 +902,11 @@ renameModeTheory modeRen modRen typeRen mt = do
               { cdClassifier = renMode (cdClassifier decl)
               , cdUniverse = universe'
               }
-      Right (M.insert mode' decl' acc)
+      case M.lookup mode' acc of
+        Nothing -> Right (M.insert mode' decl' acc)
+        Just existing
+          | existing == decl' -> Right acc
+          | otherwise -> Left "namespace: classifiedBy collision after renaming"
 
 renameTypeSig
   :: Map ModeName ModeName
@@ -951,26 +968,33 @@ renameObjExpr
   -> Map ObjRef ObjRef
   -> Obj
   -> Either Text Obj
-renameObjExpr modeRen modRen typeRen ty =
-  case ty of
-    OVar tv ->
-      Right (OVar tv { ovMode = M.findWithDefault (ovMode tv) (ovMode tv) modeRen })
-    OMod me inner -> do
-      inner' <- renameObjExpr modeRen modRen typeRen inner
-      pure
-        ( OMod
-            me
-              { meSrc = M.findWithDefault (meSrc me) (meSrc me) modeRen
-              , meTgt = M.findWithDefault (meTgt me) (meTgt me) modeRen
-              , mePath = map (\m -> M.findWithDefault m m modRen) (mePath me)
-              }
-            inner'
-        )
-    OCon ref args -> do
-      args' <- mapM renArg args
-      let ref' = M.findWithDefault ref ref typeRen
-      pure (OCon ref' args')
+renameObjExpr modeRen modRen typeRen ty = do
+  code' <- renCode (objCode ty)
+  let owner' = renMode (objOwnerMode ty)
+  pure Obj { objOwnerMode = owner', objCode = code' }
   where
+    renMode mode = M.findWithDefault mode mode modeRen
+
+    renCode code =
+      case code of
+        CTVar tv ->
+          Right (CTVar tv { ovMode = renMode (ovMode tv) })
+        CTMod me inner -> do
+          inner' <- renCode inner
+          Right
+            ( CTMod
+                me
+                  { meSrc = renMode (meSrc me)
+                  , meTgt = renMode (meTgt me)
+                  , mePath = map (\m -> M.findWithDefault m m modRen) (mePath me)
+                  }
+                inner'
+            )
+        CTCon ref args -> do
+          args' <- mapM renArg args
+          let ref' = M.findWithDefault ref ref typeRen
+          pure (CTCon ref' args')
+
     renArg arg =
       case arg of
         OAObj t -> OAObj <$> renameObjExpr modeRen modRen typeRen t

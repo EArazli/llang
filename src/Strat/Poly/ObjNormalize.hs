@@ -2,6 +2,7 @@
 module Strat.Poly.ObjNormalize
   ( normalizeObjDeep
   , normalizeObjDeepWithCtx
+  , normalizeCodeTermDeepWithCtx
   , normalizeTermDiagram
   , termExprToDiagramChecked
   , diagramToTermExprChecked
@@ -22,9 +23,10 @@ import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Obj
   ( TermDiagram(..)
-  , ObjArg(..)
+  , CodeArg(..)
+  , CodeTerm(..)
   , Obj(..)
-  , objMode
+  , objOwnerMode
   , normalizeObjExpr
   )
 import Strat.Poly.TypeTheory
@@ -47,34 +49,47 @@ import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
 normalizeObjDeep :: TypeTheory -> Obj -> Either Text Obj
 normalizeObjDeep tt = normalizeObjDeepWithCtx tt []
 
+normalizeCodeTermDeepWithCtx
+  :: TypeTheory
+  -> [Obj]
+  -> ModeName
+  -> CodeTerm
+  -> Either Text CodeTerm
+normalizeCodeTermDeepWithCtx tt tmCtx owner code =
+  objCode <$> normalizeObjDeepWithCtx tt tmCtx Obj { objOwnerMode = owner, objCode = code }
+
 normalizeObjDeepWithCtx :: TypeTheory -> [Obj] -> Obj -> Either Text Obj
 normalizeObjDeepWithCtx tt tmCtx ty = do
   ty' <- go ty
   normalizeObjExpr (ttModes tt) ty'
   where
     go expr =
-      case expr of
-        OVar _ -> Right expr
-        OMod me inner -> OMod me <$> go inner
-        OCon ref args ->
+      case objCode expr of
+        CTVar _ -> Right expr
+        CTMod me innerCode -> do
+          inner <- go Obj { objOwnerMode = objOwnerMode expr, objCode = innerCode }
+          Right expr { objCode = CTMod me (objCode inner) }
+        CTCon ref args ->
           case M.lookup ref (ttObjParams tt) of
             Just params ->
               if length params /= length args
                 then Left "normalizeObjDeep: type constructor arity mismatch"
-                else OCon ref <$> mapM normalizeArg (zip params args)
+                else do
+                  args' <- mapM normalizeArg (zip params args)
+                  Right expr { objCode = CTCon ref args' }
             Nothing ->
               if null args
-                then Right (OCon ref [])
+                then Right expr
                 else Left "normalizeObjDeep: unknown type constructor"
 
-    normalizeArg (TPS_Ty _, OAObj tyArg) = OAObj <$> go tyArg
-    normalizeArg (TPS_Tm sortTy, OATm tm) = do
+    normalizeArg (TPS_Ty _, CAObj tyArg) = CAObj <$> go tyArg
+    normalizeArg (TPS_Tm sortTy, CATm tm) = do
       sortTy' <- go sortTy
       tm' <- normalizeTermDiagram tt tmCtx sortTy' tm
-      Right (OATm tm')
-    normalizeArg (TPS_Ty _, OATm _) =
+      Right (CATm tm')
+    normalizeArg (TPS_Ty _, CATm _) =
       Left "normalizeObjDeep: expected type argument"
-    normalizeArg (TPS_Tm _, OAObj _) =
+    normalizeArg (TPS_Tm _, CAObj _) =
       Left "normalizeObjDeep: expected term argument"
 
 normalizeTermDiagram
@@ -86,7 +101,7 @@ normalizeTermDiagram
 normalizeTermDiagram tt tmCtx expectedSort term = do
   expectedSort' <- wrap "normalize-sort" (normalizeObjDeepWithCtx tt tmCtx expectedSort)
   src <- wrap "term-to-diagram" (termToDiagram tt tmCtx expectedSort' term)
-  trs <- wrap "trs-lookup" (termTRSForMode tt (objMode expectedSort'))
+  trs <- wrap "trs-lookup" (termTRSForMode tt (objOwnerMode expectedSort'))
   expr0 <- wrap "diagram-to-termexpr" (diagramGraphToTermExprUnchecked src)
   let expr = normalizeTermExpr trs expr0
   out <- wrap "termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' expr)
@@ -101,7 +116,7 @@ normalizeTermDiagram tt tmCtx expectedSort term = do
       mapLeft
         ( \err ->
             "normalizeTermDiagram[mode="
-              <> renderMode (objMode expectedSort)
+              <> renderMode (objOwnerMode expectedSort)
               <> ", expectedSort="
               <> T.pack (show expectedSort)
               <> ", tmCtxSize="
@@ -126,7 +141,7 @@ termToDiagram tt tmCtx expectedSort (TermDiagram term0) = do
   expectedSort' <- wrap "normalize-sort" (normalizeObjDeepWithCtx tt tmCtx expectedSort)
   term <- wrap "weaken-tmctx" (weakenDiagramTmCtxTo tmCtx term0)
   wrap "validate-term-graph" (validateTermGraph term)
-  if dMode term == objMode expectedSort'
+  if dMode term == objOwnerMode expectedSort'
     then Right ()
     else wrapFail "mode-mismatch" "term mode differs from expected sort mode"
   wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' term)
@@ -136,7 +151,7 @@ termToDiagram tt tmCtx expectedSort (TermDiagram term0) = do
       mapLeft
         ( \err ->
             "termToDiagram[mode="
-              <> renderMode (objMode expectedSort)
+              <> renderMode (objOwnerMode expectedSort)
               <> ", expectedSort="
               <> T.pack (show expectedSort)
               <> ", tmCtxSize="
@@ -153,7 +168,7 @@ termToDiagram tt tmCtx expectedSort (TermDiagram term0) = do
     wrapFail stage msg =
       Left
         ( "termToDiagram[mode="
-            <> renderMode (objMode expectedSort)
+            <> renderMode (objOwnerMode expectedSort)
             <> ", expectedSort="
             <> T.pack (show expectedSort)
             <> ", tmCtxSize="
@@ -178,7 +193,7 @@ diagramToTerm tt tmCtx expectedSort term0 = do
   expectedSort' <- normalizeObjDeepWithCtx tt tmCtx expectedSort
   let term = term0 { dTmCtx = tmCtx }
   validateTermGraph term
-  if dMode term == objMode expectedSort'
+  if dMode term == objOwnerMode expectedSort'
     then Right ()
     else Left "diagramToTerm: mode mismatch"
   ensureOutputSort tt tmCtx expectedSort' term

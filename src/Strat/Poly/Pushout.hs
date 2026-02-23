@@ -2121,23 +2121,28 @@ renameObjExpr
   -> TypePermMap
   -> Obj
   -> Either Text Obj
-renameObjExpr modeRen modRen ren permRen ty =
-  case ty of
-    OVar v ->
-      Right (OVar v { ovMode = renameModeName modeRen (ovMode v) })
-    OMod me inner -> do
-      inner' <- renameObjExpr modeRen modRen ren permRen inner
-      Right (OMod (renameModExpr modeRen modRen me) inner')
-    OCon ref args -> do
-      args' <- mapM renameArg args
-      let ref1 = M.findWithDefault ref ref ren
-      let ref' = ref1 { orMode = renameModeName modeRen (orMode ref1) }
-      case M.lookup ref permRen of
-        Nothing -> Right (OCon ref' args')
-        Just perm -> do
-          args'' <- applyPerm perm args'
-          Right (OCon ref' args'')
+renameObjExpr modeRen modRen ren permRen ty = do
+  code' <- renameCode (objCode ty)
+  let owner' = renameModeName modeRen (objOwnerMode ty)
+  Right Obj { objOwnerMode = owner', objCode = code' }
   where
+    renameCode code =
+      case code of
+        CTVar v ->
+          Right (CTVar v { ovMode = renameModeName modeRen (ovMode v) })
+        CTMod me inner -> do
+          inner' <- renameCode inner
+          Right (CTMod (renameModExpr modeRen modRen me) inner')
+        CTCon ref args -> do
+          args' <- mapM renameArg args
+          let ref1 = M.findWithDefault ref ref ren
+          let ref' = ref1 { orMode = renameModeName modeRen (orMode ref1) }
+          case M.lookup ref permRen of
+            Nothing -> Right (CTCon ref' args')
+            Just perm -> do
+              args'' <- applyPerm perm args'
+              Right (CTCon ref' args'')
+
     renameArg arg =
       case arg of
         OAObj t -> OAObj <$> renameObjExpr modeRen modRen ren permRen t
@@ -2500,14 +2505,14 @@ normalizeDiagramModes mt diag = do
       normalizeObjExpr mt ty'
 
     goType ty =
-      case ty of
-        OVar _ -> Right ty
-        OCon ref args -> do
+      case objCode ty of
+        CTVar _ -> Right ty
+        CTCon ref args -> do
           args' <- mapM goArg args
-          Right (OCon ref args')
-        OMod me inner -> do
-          inner' <- goType inner
-          Right (OMod me inner')
+          Right ty { objCode = CTCon ref args' }
+        CTMod me innerCode -> do
+          inner' <- goType Obj { objOwnerMode = objOwnerMode ty, objCode = innerCode }
+          Right ty { objCode = CTMod me (objCode inner') }
 
     goArg arg =
       case arg of

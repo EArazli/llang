@@ -1,4 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE ViewPatterns #-}
 module Strat.Poly.Obj
   ( ObjVar(..)
   , ObjName(..)
@@ -6,8 +8,12 @@ module Strat.Poly.Obj
   , TmFunName(..)
   , TmVar(..)
   , TermDiagram(..)
-  , ObjArg(..)
-  , Obj(..)
+  , CodeArg(..)
+  , CodeTerm(..)
+  , ObjArg
+  , pattern OAObj
+  , pattern OATm
+  , Obj(Obj, objOwnerMode, objCode, OVar, OCon, OMod)
   , Context
   , mapTermDiagram
   , mapObjExpr
@@ -20,7 +26,9 @@ module Strat.Poly.Obj
   , boundTmIndicesTerm
   , resolveTmCtxIndex
   , tmCtxForMode
+  , codeMode0
   , objMode
+  , normalizeCodeTerm
   , normalizeObjExpr
   ) where
 
@@ -36,7 +44,8 @@ import Strat.Poly.Syntax
   , TmFunName(..)
   , TmVar(..)
   , TermDiagram(..)
-  , ObjArg(..)
+  , CodeArg(..)
+  , CodeTerm(..)
   , Obj(..)
   , Context
   , Diagram(..)
@@ -46,34 +55,73 @@ import Strat.Poly.Syntax
   , unEdgeId
   )
 
+type ObjArg = CodeArg
+
+pattern OAObj :: Obj -> ObjArg
+pattern OAObj ty = CAObj ty
+
+pattern OATm :: TermDiagram -> ObjArg
+pattern OATm tm = CATm tm
+
+pattern OVar :: ObjVar -> Obj
+pattern OVar v <- Obj _ (CTVar v)
+  where
+    OVar v = Obj { objOwnerMode = ovMode v, objCode = CTVar v }
+
+pattern OCon :: ObjRef -> [ObjArg] -> Obj
+pattern OCon ref args <- Obj _ (CTCon ref args)
+  where
+    OCon ref args = Obj { objOwnerMode = orMode ref, objCode = CTCon ref args }
+
+pattern OMod :: ModExpr -> Obj -> Obj
+pattern OMod me inner <- Obj _ (CTMod me (codeAsObj (meSrc me) -> inner))
+  where
+    OMod me inner = Obj { objOwnerMode = meTgt me, objCode = CTMod me (objCode inner) }
+
+{-# COMPLETE OAObj, OATm #-}
+{-# COMPLETE OVar, OCon, OMod #-}
+
+codeAsObj :: ModeName -> CodeTerm -> Obj
+codeAsObj owner code = Obj { objOwnerMode = owner, objCode = code }
+
 mapTermDiagram :: (TermDiagram -> TermDiagram) -> TermDiagram -> TermDiagram
 mapTermDiagram f tm = f tm
 
 mapObjExpr :: (Obj -> Obj) -> (TermDiagram -> TermDiagram) -> Obj -> Obj
-mapObjExpr fTy fTm = goTy
+mapObjExpr fTy fTm = goObj
   where
-    goTy ty =
+    goObj obj =
       fTy $
-        case ty of
-          OVar _ -> ty
-          OCon ref args -> OCon ref (map goArg args)
-          OMod me inner -> OMod me (goTy inner)
+        obj
+          { objCode = goCode (objOwnerMode obj) (objCode obj)
+          }
+    goCode owner code =
+      case code of
+        CTVar _ -> code
+        CTCon ref args -> CTCon ref (map goArg args)
+        CTMod me inner ->
+          let innerObj = goObj Obj { objOwnerMode = owner, objCode = inner }
+          in CTMod me (objCode innerObj)
     goArg arg =
       case arg of
-        OAObj ty -> OAObj (goTy ty)
-        OATm tm -> OATm (mapTermDiagram fTm tm)
+        CAObj ty -> CAObj (goObj ty)
+        CATm tm -> CATm (mapTermDiagram fTm tm)
 
 freeObjVarsObj :: Obj -> S.Set ObjVar
-freeObjVarsObj ty =
-  case ty of
-    OVar v -> S.singleton v
-    OCon _ args -> S.unions (map freeObjVarsArg args)
-    OMod _ inner -> freeObjVarsObj inner
+freeObjVarsObj obj =
+  freeObjVarsCode (objCode obj)
   where
+    freeObjVarsCode code =
+      case code of
+        CTVar v -> S.singleton v
+        CTCon _ args -> S.unions (map freeObjVarsArg args)
+        CTMod _ inner -> freeObjVarsCode inner
     freeObjVarsArg arg =
       case arg of
-        OAObj innerObj -> freeObjVarsObj innerObj
-        OATm tm -> freeObjVarsTerm tm
+        CAObj innerObj -> freeObjVarsObj innerObj
+        -- Object metavariables are tracked through object arguments only.
+        -- Term arguments carry term metavariables/sorts and are handled separately.
+        CATm _ -> S.empty
 
 freeObjVarsTerm :: TermDiagram -> S.Set ObjVar
 freeObjVarsTerm (TermDiagram diag) =
@@ -102,28 +150,33 @@ freeTmVarsTerm (TermDiagram diag) =
         _ -> S.empty
 
 freeTmVarsObj :: Obj -> S.Set TmVar
-freeTmVarsObj ty =
-  case ty of
-    OVar _ -> S.empty
-    OCon _ args -> S.unions (map freeTmVarsArg args)
-    OMod _ inner -> freeTmVarsObj inner
+freeTmVarsObj obj =
+  freeTmVarsCode (objCode obj)
   where
+    freeTmVarsCode code =
+      case code of
+        CTVar _ -> S.empty
+        CTCon _ args -> S.unions (map freeTmVarsArg args)
+        CTMod _ inner -> freeTmVarsCode inner
     freeTmVarsArg arg =
       case arg of
-        OAObj innerObj -> freeTmVarsObj innerObj
-        OATm tm -> freeTmVarsTerm tm
+        CAObj innerObj -> freeTmVarsObj innerObj
+        CATm tm -> freeTmVarsTerm tm
 
 occursObjVar :: ObjVar -> Obj -> Bool
-occursObjVar v ty =
-  case ty of
-    OVar v' -> v == v'
-    OCon _ args -> any occursArg args
-    OMod _ inner -> occursObjVar v inner
+occursObjVar v obj =
+  occursInCode (objCode obj)
   where
+    occursInCode code =
+      case code of
+        CTVar v' -> v == v'
+        CTCon _ args -> any occursArg args
+        CTMod _ inner -> occursInCode inner
     occursArg arg =
       case arg of
-        OAObj innerObj -> occursObjVar v innerObj
-        OATm tmArg -> v `S.member` freeObjVarsTerm tmArg
+        CAObj innerObj -> occursObjVar v innerObj
+        -- Term arguments are ignored for object-variable occurs checks.
+        CATm _ -> False
 
 boundTmIndicesTerm :: TermDiagram -> S.Set Int
 boundTmIndicesTerm (TermDiagram diag) =
@@ -168,16 +221,18 @@ resolveTmCtxIndex tmCtx mode localPos =
       ]
 
 boundTmIndicesObj :: Obj -> S.Set Int
-boundTmIndicesObj ty =
-  case ty of
-    OVar _ -> S.empty
-    OCon _ args -> S.unions (map boundTmIndicesArg args)
-    OMod _ inner -> boundTmIndicesObj inner
+boundTmIndicesObj obj =
+  boundInCode (objCode obj)
   where
+    boundInCode code =
+      case code of
+        CTVar _ -> S.empty
+        CTCon _ args -> S.unions (map boundTmIndicesArg args)
+        CTMod _ inner -> boundInCode inner
     boundTmIndicesArg arg =
       case arg of
-        OAObj innerObj -> boundTmIndicesObj innerObj
-        OATm tm -> boundTmIndicesTerm tm
+        CAObj innerObj -> boundTmIndicesObj innerObj
+        CATm tm -> boundTmIndicesTerm tm
 
 tmCtxForMode :: [Obj] -> ModeName -> [Obj]
 tmCtxForMode tele mode =
@@ -186,37 +241,45 @@ tmCtxForMode tele mode =
   , objMode ty == mode
   ]
 
-objMode :: Obj -> ModeName
-objMode ty =
-  case ty of
-    OVar v -> ovMode v
-    OCon r _ -> orMode r
-    OMod me _ -> meTgt me
+codeMode0 :: CodeTerm -> ModeName
+codeMode0 code =
+  case code of
+    CTVar v -> ovMode v
+    CTCon r _ -> orMode r
+    CTMod me _ -> meTgt me
 
-normalizeObjExpr :: ModeTheory -> Obj -> Either Text Obj
-normalizeObjExpr mt ty =
-  case ty of
-    OVar _ -> Right ty
-    OCon ref args -> do
+objMode :: Obj -> ModeName
+objMode = objOwnerMode
+
+normalizeCodeTerm :: ModeTheory -> CodeTerm -> Either Text CodeTerm
+normalizeCodeTerm mt code =
+  case code of
+    CTVar _ -> Right code
+    CTCon ref args -> do
       args' <- mapM normalizeArg args
-      Right (OCon ref args')
-    OMod me inner0 -> do
-      inner <- normalizeObjExpr mt inner0
+      Right (CTCon ref args')
+    CTMod me inner0 -> do
+      inner <- normalizeCodeTerm mt inner0
       (meComposed, innerBase) <-
         case inner of
-          OMod me2 inner2 -> do
+          CTMod me2 inner2 -> do
             me' <- composeMod mt me2 me
             Right (me', inner2)
           _ -> Right (me, inner)
-      if objMode innerBase /= meSrc meComposed
+      if codeMode0 innerBase /= meSrc meComposed
         then Left "normalizeObjExpr: modality source does not match inner object mode"
         else do
           let meNorm = normalizeModExpr mt meComposed
           if null (mePath meNorm)
             then Right innerBase
-            else Right (OMod meNorm innerBase)
+            else Right (CTMod meNorm innerBase)
   where
     normalizeArg arg =
       case arg of
-        OAObj innerTy -> OAObj <$> normalizeObjExpr mt innerTy
-        OATm tm -> Right (OATm tm)
+        CAObj innerTy -> CAObj <$> normalizeObjExpr mt innerTy
+        CATm tm -> Right (CATm tm)
+
+normalizeObjExpr :: ModeTheory -> Obj -> Either Text Obj
+normalizeObjExpr mt obj = do
+  code' <- normalizeCodeTerm mt (objCode obj)
+  Right obj { objCode = code' }

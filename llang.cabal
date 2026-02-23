@@ -99,8 +99,10 @@ data-files:
     examples/run/terms/cart_monoid.term.run.llang
     examples/run/terms/stlc_bool.term.run.llang
     examples/run/terms/term_ref.run.llang
+    examples/run/classification_resolution.ok.run.llang
     examples/run/xfail/README.md
     examples/run/xfail/classification_cycle.fail.run.llang
+    examples/run/xfail/classification_wrong_classifier.fail.run.llang
     examples/run/xfail/algebra/no_dup_error.fail.run.llang
     examples/run/xfail/dependent/free_index_must_fail.fail.run.llang
     examples/run/xfail/modes/dual_discipline_term_surface.fail.run.llang
@@ -154,6 +156,7 @@ library
       Strat.Poly.Names
       Strat.Poly.Normalize
       Strat.Poly.Obj
+      Strat.Poly.ObjClassifier
       Strat.Poly.ObjNormalize
       Strat.Poly.Pretty
       Strat.Poly.Proof
@@ -242,6 +245,7 @@ test-suite llang-test
       Test.Poly.TermNormalize
       Test.Poly.UnifyObj
       Test.Poly.ObjModes
+      Test.Poly.ClassificationResolution
       Test.DSL.Functors
       Test.Value.Doc
       Test.Frontend.Pipeline

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Strat.Poly.CriticalPairs
   ( CPMode(..)
   , CriticalPair(..)
@@ -20,7 +21,18 @@ import qualified Strat.Poly.DiagramIso as DiagramIso
 import qualified Strat.Poly.Diagram as Diag
 import Strat.Poly.Diagram
 import Strat.Poly.Match (Match(..))
-import Strat.Poly.Obj (ObjVar(..), TmVar(..), TermDiagram(..), Obj(..), mapObjExpr)
+import Strat.Poly.Obj
+  ( ObjVar(..)
+  , TmVar(..)
+  , TermDiagram(..)
+  , Obj(..)
+  , pattern OVar
+  , pattern OCon
+  , pattern OMod
+  , pattern OAObj
+  , pattern OATm
+  , mapObjExpr
+  )
 import qualified Strat.Poly.UnifyObj as U
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite (RewriteRule(..))

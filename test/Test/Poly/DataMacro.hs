@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Test.Poly.DataMacro
   ( tests
   ) where
@@ -14,7 +15,15 @@ import Strat.Frontend.Env (meDoctrines)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar(..), ObjArg(..))
+import Strat.Poly.Obj
+  ( Obj(..)
+  , ObjName(..)
+  , ObjRef(..)
+  , ObjVar(..)
+  , ObjArg
+  , pattern OAObj
+  , pattern OATm
+  )
 
 
 tests :: TestTree

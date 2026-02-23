@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Test.Poly.Dependent
   ( tests
   ) where
@@ -20,7 +21,9 @@ import Strat.Poly.ModeTheory (ModeName(..), addMode, emptyModeTheory)
 import Strat.Poly.Doctrine (doctrineTypeTheory)
 import Strat.Poly.Obj
   ( Obj(..)
-  , ObjArg(..)
+  , ObjArg
+  , pattern OAObj
+  , pattern OATm
   , ObjVar(..)
   , ObjName(..)
   , ObjRef(..)

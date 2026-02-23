@@ -269,12 +269,12 @@ applyAction doc mName diagSrc = do
   pure diag1
   where
     mapType me ty = do
-      if objMode ty /= meSrc me
+      if objOwnerMode ty /= meSrc me
         then Left "map: type mode does not match action source"
         else normalizeObjExpr (dModes doc) (OMod me ty)
 
     mapTypeIfSource me ty =
-      if objMode ty == meSrc me
+      if objOwnerMode ty == meSrc me
         then mapType me ty
         else pure ty
 

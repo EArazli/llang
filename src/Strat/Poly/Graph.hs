@@ -58,7 +58,7 @@ import Strat.Poly.Syntax
   , Obj
   , TmVar(..)
   )
-import Strat.Poly.Obj (boundTmIndicesObj, objMode)
+import Strat.Poly.Obj (boundTmIndicesObj, objOwnerMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Attr (AttrTerm)
 import Strat.Util.List (dedupe)
@@ -323,7 +323,7 @@ validateDiagram diag = do
             case eOuts edge of
               [pid] -> requirePortType diag pid
               _ -> Left "validateDiagram: PTmMeta must have exactly one output"
-          if objMode outTy == objMode (tmvSort v)
+          if objOwnerMode outTy == objOwnerMode (tmvSort v)
             then Right ()
             else Left "validateDiagram: PTmMeta output mode mismatch"
           if outTy == tmvSort v
@@ -333,7 +333,7 @@ validateDiagram diag = do
                 [ pid
                 | pid <- dIn diag
                 , Just ty <- [diagramPortObj diag pid]
-                , objMode ty == objMode (tmvSort v)
+                , objOwnerMode ty == objOwnerMode (tmvSort v)
                 ]
           if tmvScope v > length modeIns
             then Left "validateDiagram: PTmMeta scope exceeds available bound variables"
@@ -361,7 +361,7 @@ validateDiagram diag = do
         then Right ()
         else Left "validateDiagram: port appears in both inputs and outputs"
     checkPortMode (k, ty) =
-      if objMode ty == dMode diag
+      if objOwnerMode ty == dMode diag
         then
           let bad = S.filter (>= length (dTmCtx diag)) (boundTmIndicesObj ty)
            in if S.null bad

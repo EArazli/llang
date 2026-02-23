@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Test.Poly.ObjModes
   ( tests
   ) where
@@ -11,7 +12,16 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar(..), ObjArg(..), objMode)
+import Strat.Poly.Obj
+  ( Obj(..)
+  , ObjName(..)
+  , ObjRef(..)
+  , ObjVar(..)
+  , ObjArg
+  , pattern OAObj
+  , pattern OATm
+  , objMode
+  )
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), emptyModeTheory)
 import Strat.Poly.Doctrine (Doctrine(..), TypeSig(..), ParamSig(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
@@ -28,8 +38,8 @@ tests =
   testGroup
     "Poly.ObjModes"
     [ testCase "elaboration handles cross-mode nesting" testElabCrossMode
-    , testCase "unqualified constructor ambiguity rejected" testAmbiguousConstructor
-    , testCase "argument mode mismatch rejected" testArgModeMismatch
+    , testCase "unqualified constructor resolves in expected owner mode" testUnqualifiedConstructorResolvesExpectedMode
+    , testCase "wrong qualifier for argument owner mode is rejected" testArgWrongQualifier
     , testCase "unify rejects mode mismatch" testUnifyModeMismatch
     , testCase "validateDiagram rejects port mode mismatch" testValidateDiagramModeMismatch
     , testCase "diagram ports store Obj in the diagram mode" testDiagramPortsStoreObj
@@ -96,8 +106,8 @@ testElabCrossMode = do
     Right d -> pure d
   dom @?= [tcon modeV "Thunk" [tcon modeC "A" []]]
 
-testAmbiguousConstructor :: Assertion
-testAmbiguousConstructor = do
+testUnqualifiedConstructorResolvesExpectedMode :: Assertion
+testUnqualifiedConstructorResolvesExpectedMode = do
   let doc0 =
         mkDoctrine
           [ (modeC, [(ObjName "A", TypeSig [])])
@@ -107,13 +117,16 @@ testAmbiguousConstructor = do
   raw <- case parseDiagExpr "id[A]" of
     Left err -> assertFailure (T.unpack err)
     Right expr -> pure expr
-  case elabDiagExpr emptyEnv doc modeC [] raw of
-    Left err ->
-      assertBool "expected ambiguity error" ("ambiguous" `T.isInfixOf` err)
-    Right _ -> assertFailure "expected ambiguity error"
+  diag <- case elabDiagExpr emptyEnv doc modeC [] raw of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  dom <- case diagramDom diag of
+    Left err -> assertFailure (T.unpack err)
+    Right d -> pure d
+  dom @?= [tcon modeC "A" []]
 
-testArgModeMismatch :: Assertion
-testArgModeMismatch = do
+testArgWrongQualifier :: Assertion
+testArgWrongQualifier = do
   let doc0 =
         mkDoctrine
           [ (modeC, [(ObjName "A", TypeSig [])])
@@ -125,8 +138,8 @@ testArgModeMismatch = do
     Right expr -> pure expr
   case elabDiagExpr emptyEnv doc modeV [] raw of
     Left err ->
-      assertBool "expected argument mode mismatch" ("argument mode mismatch" `T.isInfixOf` err)
-    Right _ -> assertFailure "expected argument mode mismatch"
+      assertBool "expected wrong qualifier error" ("qualifier V" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected wrong qualifier error"
 
 testUnifyModeMismatch :: Assertion
 testUnifyModeMismatch = do

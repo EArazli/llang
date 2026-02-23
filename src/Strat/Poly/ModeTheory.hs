@@ -28,7 +28,7 @@ import qualified Data.Map.Strict as M
 import Data.Map.Strict (Map)
 import qualified Data.Set as S
 import Strat.Poly.ModeSyntax
-import Strat.Poly.Syntax (Obj(..), ObjRef(..), ObjVar(..))
+import Strat.Poly.Syntax (Obj(..))
 
 
 data ModeInfo = ModeInfo
@@ -116,7 +116,6 @@ classificationDeps mt =
 
 classificationOrder :: ModeTheory -> Either Text [ModeName]
 classificationOrder mt = do
-  checkClassificationWellFormed mt
   let modes = M.keys (mtModes mt)
   (_, doneFinal, postRev) <- foldl step (Right (S.empty, S.empty, [])) modes
   if S.size doneFinal == length modes
@@ -293,8 +292,4 @@ mkExprFromPath mt src path = do
         else Left "mode theory: modality composition type mismatch"
 
 objMode0 :: Obj -> ModeName
-objMode0 obj =
-  case obj of
-    OVar (ObjVar _ mode) -> mode
-    OCon (ObjRef mode _) _ -> mode
-    OMod me _ -> meTgt me
+objMode0 = objOwnerMode

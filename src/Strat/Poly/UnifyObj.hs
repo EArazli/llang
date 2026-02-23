@@ -89,31 +89,36 @@ unifyObjFlex tt tmCtx tyFlex tmFlex subst t1 t2 = do
   t2' <- applySubstObj tt subst t2 >>= expandModSpine
   unifyWith subst t1' t2'
   where
+    mkObj owner code = Obj { objOwnerMode = owner, objCode = code }
+
+    objVarObj v = mkObj (ovMode v) (CTVar v)
+
     expandModSpine ty =
-      case ty of
-        OVar _ -> Right ty
-        OCon ref args -> do
+      case objCode ty of
+        CTVar _ -> Right ty
+        CTCon ref args -> do
           args' <- mapM expandArg args
-          Right (OCon ref args')
-        OMod me inner -> do
-          inner' <- expandModSpine inner
-          expandPath me inner'
+          Right ty { objCode = CTCon ref args' }
+        CTMod me innerCode -> do
+          inner' <- expandModSpine (mkObj (objOwnerMode ty) innerCode)
+          code' <- expandPath me (objCode inner')
+          Right ty { objCode = code' }
 
     expandArg arg =
       case arg of
-        OAObj ty -> OAObj <$> expandModSpine ty
-        OATm tm -> Right (OATm tm)
+        CAObj ty -> CAObj <$> expandModSpine ty
+        CATm tm -> Right (CATm tm)
 
-    expandPath me inner =
+    expandPath me innerCode =
       case mePath me of
         [] ->
           if meSrc me == meTgt me
-            then Right inner
+            then Right innerCode
             else Left "unifyObjFlex: ill-typed empty modality path"
         _ -> do
-          (cur, out) <- foldM step (meSrc me, inner) (mePath me)
+          (cur, outCode) <- foldM step (meSrc me, innerCode) (mePath me)
           if cur == meTgt me
-            then Right out
+            then Right outCode
             else Left "unifyObjFlex: ill-typed modality path"
       where
         step (cur, acc) name =
@@ -124,7 +129,7 @@ unifyObjFlex tt tmCtx tyFlex tmFlex subst t1 t2 = do
                 then
                   Right
                     ( mdTgt decl
-                    , OMod
+                    , CTMod
                         ModExpr
                           { meSrc = mdSrc decl
                           , meTgt = mdTgt decl
@@ -135,10 +140,16 @@ unifyObjFlex tt tmCtx tyFlex tmFlex subst t1 t2 = do
                 else Left "unifyObjFlex: ill-typed modality path"
 
     unifyWith s a b =
-      case (a, b) of
-        (OVar v, t) -> unifyTyVar s v t
-        (t, OVar v) -> unifyTyVar s v t
-        (OCon refA argsA, OCon refB argsB)
+      if objOwnerMode a /= objOwnerMode b
+        then Left ("unifyObjFlex: owner-mode mismatch " <> renderObj a <> " with " <> renderObj b)
+        else unifyCode s (objOwnerMode a) (objCode a) (objCode b)
+
+    unifyCode s owner codeA codeB =
+      case (codeA, codeB) of
+        (CTVar v, CTVar w) -> unifyTyVar s v (objVarObj w)
+        (CTVar v, t) -> unifyTyVar s v (mkObj owner t)
+        (t, CTVar v) -> unifyTyVar s v (mkObj owner t)
+        (CTCon refA argsA, CTCon refB argsB)
           | refA == refB && length argsA == length argsB ->
               case M.lookup refA (ttObjParams tt) of
                 Just params
@@ -147,19 +158,21 @@ unifyObjFlex tt tmCtx tyFlex tmFlex subst t1 t2 = do
                 _ ->
                   foldl step (Right s) (zip argsA argsB)
           | otherwise ->
-              Left ("unifyObjFlex: cannot unify " <> renderObj a <> " with " <> renderObj b)
-        (OMod me1 x1, OMod me2 x2)
-          | me1 == me2 -> unifyWith s x1 x2
-          | otherwise -> Left ("unifyObjFlex: cannot unify " <> renderObj a <> " with " <> renderObj b)
+              Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
+        (CTMod me1 innerA, CTMod me2 innerB)
+          | me1 == me2 ->
+              unifyCode s owner innerA innerB
+          | otherwise ->
+              Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
         _ ->
-          Left ("unifyObjFlex: cannot unify " <> renderObj a <> " with " <> renderObj b)
+          Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
 
     step acc (argA, argB) = do
       s <- acc
       case (argA, argB) of
-        (OAObj tyA, OAObj tyB) ->
+        (CAObj tyA, CAObj tyB) ->
           unifyObjFlex tt tmCtx tyFlex tmFlex s tyA tyB
-        (OATm tmA, OATm tmB) -> do
+        (CATm tmA, CATm tmB) -> do
           sort <- inferExpectedTmSort tt tmCtx s tmA tmB
           unifyTm tt tmCtx tmFlex s sort tmA tmB
         _ -> Left "unifyObjFlex: mixed type/term arguments cannot unify"
@@ -167,9 +180,9 @@ unifyObjFlex tt tmCtx tyFlex tmFlex subst t1 t2 = do
     stepBySig acc (paramSig, (argA, argB)) = do
       s <- acc
       case (paramSig, argA, argB) of
-        (TPS_Ty _, OAObj tyA, OAObj tyB) ->
+        (TPS_Ty _, CAObj tyA, CAObj tyB) ->
           unifyObjFlex tt tmCtx tyFlex tmFlex s tyA tyB
-        (TPS_Tm sort, OATm tmA, OATm tmB) ->
+        (TPS_Tm sort, CATm tmA, CATm tmB) ->
           unifyTm tt tmCtx tmFlex s sort tmA tmB
         (TPS_Ty _, _, _) ->
           Left "unifyObjFlex: expected type argument for constructor parameter"
@@ -179,16 +192,16 @@ unifyObjFlex tt tmCtx tyFlex tmFlex subst t1 t2 = do
     unifyTyVar s v t
       | v `S.member` tyFlex = bindTyVar s v t
       | otherwise =
-          case t of
-            OVar v' | v == v' -> Right s
-            OVar v' | v' `S.member` tyFlex -> bindTyVar s v' (OVar v)
+          case objCode t of
+            CTVar v' | v == v' -> Right s
+            CTVar v' | v' `S.member` tyFlex -> bindTyVar s v' (objVarObj v)
             _ -> Left ("unifyObjFlex: rigid variable mismatch " <> renderObjVar v <> " with " <> renderObj t)
 
     bindTyVar s v t = do
       t' <- applySubstObj tt s t
-      if ovMode v /= objMode t'
+      if ovMode v /= objOwnerMode t'
         then Left ("unifyObjFlex: mode mismatch " <> renderObjVar v <> " with " <> renderObj t')
-        else if t' == OVar v
+        else if t' == objVarObj v
           then Right s
           else if occursObjVar v t'
             then Left ("unifyObjFlex: occurs check failed for " <> renderObjVar v <> " in " <> renderObj t')
@@ -395,7 +408,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
       currentSort0 <- applySubstObj tt s currentSort
       currentSort' <- normalizeInCtx s currentSort0
       sig <-
-        case lookupTmFunSig tt (objMode currentSort') f of
+        case lookupTmFunSig tt (objOwnerMode currentSort') f of
           Nothing -> Left "unifyTm: unknown term function"
           Just sig' -> Right sig'
       if length (tfsArgs sig) /= arity
@@ -436,11 +449,11 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
 
     allowedBoundGlobals s sortV v = do
       sortV' <- normalizeInCtx s sortV
-      let mode = objMode sortV'
+      let mode = objOwnerMode sortV'
       let globals =
             [ i
             | (i, ty) <- zip [0 :: Int ..] tmCtx
-            , objMode ty == mode
+            , objOwnerMode ty == mode
             ]
       pure (S.fromList (take (tmvScope v) globals))
 
@@ -516,28 +529,30 @@ applySubstObj tt subst ty = do
     then normalizeObjExpr (ttModes tt) raw
     else normalizeObjDeep tt raw
   where
+    mkObj owner code = Obj { objOwnerMode = owner, objCode = code }
+
     needsTmCtxType expr =
-      case expr of
-        OVar _ -> False
-        OMod _ inner -> needsTmCtxType inner
-        OCon _ args -> any needsTmCtxArg args
+      case objCode expr of
+        CTVar _ -> False
+        CTMod _ innerCode -> needsTmCtxType (mkObj (objOwnerMode expr) innerCode)
+        CTCon _ args -> any needsTmCtxArg args
 
     needsTmCtxArg arg =
       case arg of
-        OAObj innerTy -> needsTmCtxType innerTy
-        OATm tm ->
+        CAObj innerTy -> needsTmCtxType innerTy
+        CATm tm ->
           not (S.null (boundTmIndicesTerm tm)) || maxTmScopeTerm tm > 0
 
     goTy seen expr =
-      case expr of
-        OVar v ->
+      case objCode expr of
+        CTVar v ->
           case M.lookup v (sObj subst) of
-            Nothing -> Right (OVar v)
+            Nothing -> Right expr
             Just t ->
               if v `S.member` seen
-                then Right (OVar v)
+                then Right expr
                 else goTy (S.insert v seen) t
-        OCon ref args -> do
+        CTCon ref args -> do
           args' <-
             case M.lookup ref (ttObjParams tt) of
               Just params ->
@@ -546,27 +561,29 @@ applySubstObj tt subst ty = do
                   else mapM (goArgBySig seen) (zip params args)
               Nothing ->
                 mapM (goArgNoSig seen) args
-          Right (OCon ref args')
-        OMod me inner -> OMod me <$> goTy seen inner
+          Right expr { objCode = CTCon ref args' }
+        CTMod me innerCode -> do
+          inner' <- goTy seen (mkObj (objOwnerMode expr) innerCode)
+          Right expr { objCode = CTMod me (objCode inner') }
 
     goArgBySig seen (param, arg) =
       case (param, arg) of
-        (TPS_Ty _, OAObj innerTy) ->
-          OAObj <$> goTy seen innerTy
-        (TPS_Tm sortTy, OATm tmArg) -> do
+        (TPS_Ty _, CAObj innerTy) ->
+          CAObj <$> goTy seen innerTy
+        (TPS_Tm sortTy, CATm tmArg) -> do
           sort' <- goTy seen sortTy
-          OATm <$> applySubstTmMaybeNormalize tt subst sort' tmArg
-        (TPS_Ty _, OATm _) ->
+          CATm <$> applySubstTmMaybeNormalize tt subst sort' tmArg
+        (TPS_Ty _, CATm _) ->
           Left "applySubstObj: expected type argument for constructor parameter"
-        (TPS_Tm _, OAObj _) ->
+        (TPS_Tm _, CAObj _) ->
           Left "applySubstObj: expected term argument for constructor parameter"
 
     goArgNoSig seen arg =
       case arg of
-        OAObj innerTy -> OAObj <$> goTy seen innerTy
-        OATm tmArg -> do
+        CAObj innerTy -> CAObj <$> goTy seen innerTy
+        CATm tmArg -> do
           sort <- inferTmSortFromDiagram tt subst tmArg
-          OATm <$> applySubstTmMaybeNormalize tt subst sort tmArg
+          CATm <$> applySubstTmMaybeNormalize tt subst sort tmArg
 
 applySubstTm :: TypeTheory -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
 applySubstTm tt subst expectedSort tm =
@@ -635,7 +652,7 @@ applySubstTmInCtx tt tmCtx subst expectedSort tm = do
     requireSig curCtx currentSort f arity = do
       currentSort' <- normalizeObjDeepWithCtx tt curCtx =<< applySubstObj tt subst currentSort
       sig <-
-        case lookupTmFunSig tt (objMode currentSort') f of
+        case lookupTmFunSig tt (objOwnerMode currentSort') f of
           Nothing -> Left "applySubstTmInCtx: unknown term function"
           Just s -> Right s
       if length (tfsArgs sig) == arity
@@ -663,7 +680,7 @@ normalizeSubst :: TypeTheory -> Subst -> Either Text Subst
 normalizeSubst tt subst = do
   tyPairs <- mapM normTy (M.toList (sObj subst))
   tmPairs <- mapM normTm (M.toList (sTm subst))
-  let tyMap = M.fromList [ (v, t) | (v, t) <- tyPairs, t /= OVar v ]
+  let tyMap = M.fromList [ (v, t) | (v, t) <- tyPairs, t /= Obj { objOwnerMode = ovMode v, objCode = CTVar v } ]
   let tmMap = M.fromList [ (v, t) | (v, t) <- tmPairs, not (isTmIdentity v t) ]
   Right (Subst tyMap tmMap)
   where
@@ -738,7 +755,7 @@ applySubstTmNoNormalize tt subst expectedSort tm = do
     requireSig curCtx currentSort f arity = do
       currentSort' <- normalizeObjDeepWithCtx tt curCtx =<< applySubstObj tt subst currentSort
       sig <-
-        case lookupTmFunSig tt (objMode currentSort') f of
+        case lookupTmFunSig tt (objOwnerMode currentSort') f of
           Nothing -> Left "applySubstTmNoNormalize: unknown term function"
           Just s -> Right s
       if length (tfsArgs sig) == arity
@@ -830,17 +847,24 @@ nth xs i
 
 renderObj :: Obj -> Text
 renderObj ty =
-  case ty of
-    OVar v -> renderObjVar v
-    OCon ref [] -> renderTypeRef ref
-    OCon ref args ->
-      renderTypeRef ref <> "(" <> T.intercalate ", " (map renderArg args) <> ")"
-    OMod me inner -> renderModExpr me <> "(" <> renderObj inner <> ")"
+  "{owner="
+    <> renderMode (objOwnerMode ty)
+    <> ", code="
+    <> renderCode (objCode ty)
+    <> "}"
   where
+    renderCode code =
+      case code of
+        CTVar v -> renderObjVar v
+        CTCon ref [] -> renderTypeRef ref
+        CTCon ref args ->
+          renderTypeRef ref <> "(" <> T.intercalate ", " (map renderArg args) <> ")"
+        CTMod me inner -> renderModExpr me <> "(" <> renderCode inner <> ")"
+
     renderArg arg =
       case arg of
-        OAObj innerTy -> renderObj innerTy
-        OATm _ -> "<tm>"
+        CAObj innerTy -> renderObj innerTy
+        CATm _ -> "<tm>"
 
 renderObjVar :: ObjVar -> Text
 renderObjVar v = ovName v <> "@" <> renderMode (ovMode v)

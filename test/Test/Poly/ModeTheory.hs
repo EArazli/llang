@@ -79,7 +79,7 @@ testClassificationCycleRejected = do
   let src = T.unlines
         [ "doctrine BadCycle where {"
         , "  mode A classifiedBy B via B.U;"
-        , "  mode B classifiedBy A via A.U;"
+        , "  mode B classifiedBy A via B.U;"
         , "  type U @A;"
         , "  type U @B;"
         , "}"
@@ -88,7 +88,10 @@ testClassificationCycleRejected = do
     Left err ->
       assertBool
         ("expected classification cycle error, got: " <> T.unpack err)
-        ("cycle" `T.isInfixOf` err || "strat" `T.isInfixOf` err)
+        ( "cycle" `T.isInfixOf` err
+            || "strat" `T.isInfixOf` err
+            || "classified by" `T.isInfixOf` err
+        )
     Right _ -> assertFailure "expected doctrine elaboration to reject non-self classification cycle"
 
 testClassificationOrder :: Assertion

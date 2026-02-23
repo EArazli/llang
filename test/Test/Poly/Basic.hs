@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Test.Poly.Basic
   ( tests
   ) where
@@ -11,7 +12,16 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar(..), ObjArg(..), TermDiagram(..))
+import Strat.Poly.Obj
+  ( Obj(..)
+  , ObjName(..)
+  , ObjRef(..)
+  , ObjVar(..)
+  , ObjArg
+  , pattern OAObj
+  , pattern OATm
+  , TermDiagram(..)
+  )
 import Strat.Poly.UnifyObj (Subst(..), applySubstObj, normalizeSubst)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Names (BoxName(..))

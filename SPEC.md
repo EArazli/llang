@@ -36,12 +36,19 @@ This SHALL mean:
 Current kernel restriction:
 
 - each mode has at most one `classifiedBy` edge.
+- `cdTag` is parsed and stored but has no kernel semantics in the current implementation (reserved for a later phase).
 
 ### 2.2 Objects and Codes
 
 Kernel notion:
 
 - an object of mode `M` in context `Γ` is represented by a code term `c` in classifier mode `K` such that `Γ ⊢ c : U` in `K` for the edge `M classifiedBy K via U`.
+
+Implementation-facing mode split:
+
+- every object stores an **owner mode** (`objOwnerMode`) and a **code term** (`objCode`),
+- owner mode is the mode checked at diagram boundaries and term-sort boundaries,
+- classifier/code mode is used to resolve constructors and choose code-side normalization/equality behavior.
 
 Surface notion:
 
@@ -51,7 +58,7 @@ If a mode has no explicit classification edge, object well-formedness is determi
 
 Universe well-formedness (minimum kernel check):
 
-- for `mode M classifiedBy K via U;`, the universe object MUST satisfy `objMode(U) = K`.
+- for `mode M classifiedBy K via U;`, the universe object MUST satisfy `objOwnerMode(U) = K`.
 
 ### 2.3 Object Definitional Equality
 
@@ -74,6 +81,11 @@ Algorithmic rule:
 ### 2.5 Constructor Source
 
 An object former for mode `M` SHALL be any term former in classifier mode `K` whose result is a code of `U` (up to definitional equality in `K`).
+
+Current elaboration rule:
+
+- when elaborating an object expression with expected owner mode `M`, unqualified constructors are resolved only in classifier mode `K = classifier(M)`,
+- a qualified constructor `Q.C` is accepted only when `Q = K`; other qualifiers are rejected as wrong-classifier references.
 
 ### 2.6 Example
 

@@ -16,6 +16,7 @@ import qualified Test.Poly.Surface as PolySurface
 import qualified Test.Poly.TermNormalize as PolyTermNormalize
 import qualified Test.Poly.UnifyObj as PolyUnifyObj
 import qualified Test.Poly.ObjModes as PolyObjModes
+import qualified Test.Poly.ClassificationResolution as PolyClassificationResolution
 import qualified Test.Poly.DataMacro as PolyDataMacro
 import qualified Test.Poly.Dependent as PolyDependent
 import qualified Test.Poly.Foliation as PolyFoliation
@@ -47,6 +48,7 @@ main =
       , PolyTermNormalize.tests
       , PolyUnifyObj.tests
       , PolyObjModes.tests
+      , PolyClassificationResolution.tests
       , PolyDataMacro.tests
       , PolyDependent.tests
       , PolyFoliation.tests

@@ -138,19 +138,27 @@ applyMorphismAttrTerm mor term =
       Right (ATVar v { avSort = sortName' })
 
 applyMorphismTy :: Morphism -> Obj -> Either Text Obj
-applyMorphismTy mor ty =
-  case ty of
-    OVar v -> OVar <$> mapTyVar mor v
-    OMod me inner -> do
-      inner' <- applyMorphismTy mor inner
+applyMorphismTy mor ty = do
+  owner' <- mapMode mor (objOwnerMode ty)
+  case objCode ty of
+    CTVar v -> do
+      v' <- mapTyVar mor v
+      pure Obj { objOwnerMode = owner', objCode = CTVar v' }
+    CTMod me innerCode -> do
+      inner' <- applyMorphismTy mor Obj { objOwnerMode = objOwnerMode ty, objCode = innerCode }
       me' <- mapModExpr mor me
-      normalizeObjExpr (dModes (morTgt mor)) (OMod me' inner')
-    OCon ref args -> do
+      normalizeObjExpr
+        (dModes (morTgt mor))
+        Obj
+          { objOwnerMode = owner'
+          , objCode = CTMod me' (objCode inner')
+          }
+    CTCon ref args -> do
       args' <- mapM mapArg args
       case M.lookup ref (morTypeMap mor) of
         Nothing -> do
           ref' <- mapTypeRef mor ref
-          pure (OCon ref' args')
+          pure Obj { objOwnerMode = owner', objCode = CTCon ref' args' }
         Just tmpl ->
           instantiateTemplate tmpl args'
   where
@@ -1149,14 +1157,17 @@ renameDiagram tyRen genRen diag =
 
 renameObjExpr :: M.Map ObjRef ObjRef -> Obj -> Obj
 renameObjExpr ren ty =
-  case ty of
-    OVar v -> OVar v
-    OCon ref args ->
-      let ref' = M.findWithDefault ref ref ren
-      in OCon ref' (map renameArg args)
-    OMod me inner ->
-      OMod me (renameObjExpr ren inner)
+  ty { objCode = renameCode (objCode ty) }
   where
+    renameCode code =
+      case code of
+        CTVar v -> CTVar v
+        CTCon ref args ->
+          let ref' = M.findWithDefault ref ref ren
+          in CTCon ref' (map renameArg args)
+        CTMod me inner ->
+          CTMod me (renameCode inner)
+
     renameArg arg =
       case arg of
         OAObj t -> OAObj (renameObjExpr ren t)

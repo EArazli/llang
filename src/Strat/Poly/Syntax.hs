@@ -6,7 +6,8 @@ module Strat.Poly.Syntax
   , TmFunName(..)
   , TmVar(..)
   , TermDiagram(..)
-  , ObjArg(..)
+  , CodeArg(..)
+  , CodeTerm(..)
   , Obj(..)
   , Context
   , PortId(..)
@@ -90,15 +91,21 @@ data Diagram = Diagram
 newtype TermDiagram = TermDiagram { unTerm :: Diagram }
   deriving (Eq, Ord, Show)
 
-data ObjArg
-  = OAObj Obj
-  | OATm TermDiagram
+data CodeArg
+  = CAObj Obj
+  | CATm TermDiagram
   deriving (Eq, Ord, Show)
 
-data Obj
-  = OVar ObjVar
-  | OCon ObjRef [ObjArg]
-  | OMod ModExpr Obj
+data CodeTerm
+  = CTVar ObjVar
+  | CTCon ObjRef [CodeArg]
+  | CTMod ModExpr CodeTerm
+  deriving (Eq, Ord, Show)
+
+data Obj = Obj
+  { objOwnerMode :: ModeName
+  , objCode :: CodeTerm
+  }
   deriving (Eq, Ord, Show)
 
 type Context = [Obj]

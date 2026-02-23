@@ -54,7 +54,7 @@ import Strat.Poly.Obj
   , TmFunName(..)
   , TmVar(..)
   , Obj(..)
-  , objMode
+  , objOwnerMode
   )
 import Strat.Poly.TypeTheory
   ( TmFunSig(..)
@@ -92,7 +92,7 @@ termExprToDiagramWith
   -> TermExpr
   -> Either Text TermDiagram
 termExprToDiagramWith convEnv tmCtx expectedSort tm = do
-  let mode = objMode expectedSort
+  let mode = objOwnerMode expectedSort
   let modeInputsAll = modeCtx tmCtx mode
   needed <- requiredModePrefixLen tmCtx mode tm
   let modeInputs = take needed modeInputsAll
@@ -183,7 +183,7 @@ diagramGraphToTermExprWith
   -> Either Text TermExpr
 diagramGraphToTermExprWith convEnv tmCtx expectedSort diag = do
   validateTermGraph diag
-  let mode = objMode expectedSort
+  let mode = objOwnerMode expectedSort
   if dMode diag == mode
     then Right ()
     else Left "diagramToTermExpr: mode mismatch"
@@ -308,7 +308,7 @@ modeCtx :: [Obj] -> ModeName -> [(Int, Obj)]
 modeCtx tele mode =
   [ (i, ty)
   | (i, ty) <- zip [0 :: Int ..] tele
-  , objMode ty == mode
+  , objOwnerMode ty == mode
   ]
 
 requiredModePrefixLen :: [Obj] -> ModeName -> TermExpr -> Either Text Int
@@ -378,7 +378,7 @@ uncheckedConvEnv tt =
 requireFunSig :: TermConvEnv -> [Obj] -> Obj -> TmFunName -> [TermExpr] -> Either Text TmFunSig
 requireFunSig convEnv tmCtx sortTy f args = do
   sig <-
-    case tcLookupSig convEnv (objMode sortTy) f of
+    case tcLookupSig convEnv (objOwnerMode sortTy) f of
       Nothing -> Left "termExprToDiagramUnchecked: unknown term function"
       Just s -> Right s
   if length (tfsArgs sig) /= length args
