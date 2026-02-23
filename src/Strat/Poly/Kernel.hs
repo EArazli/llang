@@ -52,7 +52,7 @@ import Strat.Poly.Obj
   , ObjName(..)
   , ObjRef(..)
   )
-import Strat.Poly.ObjNormalize
+import Strat.Poly.DefEq
   ( normalizeObjDeep
   , normalizeObjDeepWithCtx
   , normalizeCodeTermDeepWithCtx

@@ -16,7 +16,7 @@ import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, ModuleEnv(..), TermDef(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.ModeTheory (ModeName(..), ClassificationDecl(..), ModeTheory(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), pattern ObjVar, CodeTerm(..), mkCon)
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), pattern ObjVar, CodeArg(..), CodeTerm(..), mkCon)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..))
@@ -43,6 +43,8 @@ tests =
     , testCase "surface rejects drop without drop capability" testSurfaceRejectsDropWithoutCapability
     , testCase "surface composition unifies through mode equations" testSurfaceModeEqComp
     , testCase "surface resolves classified constructors in classifier mode with owner preserved" testSurfaceClassifiedTypeResolution
+    , testCase "surface bare identifiers prefer nullary constructors over metas" testSurfaceBareIdentResolvesNullaryConstructor
+    , testCase "surface elaborates constructor args in signature owner modes" testSurfaceConstructorArgOwnerModes
     , testCase "template @TermName splice uses module term" testSurfaceTemplateSplice
     , testCase "surface elaboration eliminates to base doctrine" testSurfaceEliminatesToBaseDoctrine
     ]
@@ -236,9 +238,18 @@ testSurfaceElabOk = do
   let doc = mkDoctrine True True
   surf <- either (assertFailure . T.unpack) pure (mkSurfaceWithSpec specText doc)
   let expr = T.unlines [ "term {", "  in x:A;", "  out x", "}" ]
-  case elabSurfaceDiagram emptyEnv doc surf expr of
-    Left err -> assertFailure (T.unpack err)
-    Right _ -> pure ()
+  diag <- either (assertFailure . T.unpack) pure (elabSurfaceDiagram emptyEnv doc surf expr)
+  inPort <-
+    case dIn diag of
+      [p] -> pure p
+      _ -> assertFailure "expected one input port" >> fail "unreachable"
+  inTy <-
+    case IM.lookup (unPortId inPort) (dPortObj diag) of
+      Nothing -> assertFailure "missing input port object" >> fail "unreachable"
+      Just ty -> pure ty
+  case objCode inTy of
+    CTCon ref [] -> ref @?= ObjRef modeM (ObjName "A")
+    _ -> assertFailure "expected bare A to resolve as nullary constructor code"
 
 testSurfaceDup :: Assertion
 testSurfaceDup = do
@@ -557,6 +568,95 @@ testSurfaceClassifiedTypeResolution = do
       case objCode ty of
         CTCon ref [] -> ref @?= unitRef
         _ -> assertFailure "expected Unit code"
+
+testSurfaceBareIdentResolvesNullaryConstructor :: Assertion
+testSurfaceBareIdentResolvesNullaryConstructor = do
+  let doc = mkDoctrine True True
+  surf <- either (assertFailure . T.unpack) pure (mkSurfaceWithSpec specText doc)
+  diag <-
+    either
+      (assertFailure . T.unpack)
+      pure
+      (elabSurfaceDiagram emptyEnv doc surf (T.unlines [ "term {", "  in x:A;", "  out x", "}" ]))
+  inPort <-
+    case dIn diag of
+      [p] -> pure p
+      _ -> assertFailure "expected one input port" >> fail "unreachable"
+  inTy <-
+    case IM.lookup (unPortId inPort) (dPortObj diag) of
+      Nothing -> assertFailure "missing input port object" >> fail "unreachable"
+      Just ty -> pure ty
+  case objCode inTy of
+    CTCon ref [] -> ref @?= ObjRef modeM (ObjName "A")
+    _ -> assertFailure "expected bare A to resolve as nullary constructor code"
+
+testSurfaceConstructorArgOwnerModes :: Assertion
+testSurfaceConstructorArgOwnerModes = do
+  let src =
+        T.unlines
+          [ "doctrine SurfCrossMode where {"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
+          , "  mode N classifiedBy N via N.U_N;"
+          , "  type U_N @N;"
+          , "  type B @N;"
+          , "  type WrapN(x@N) @M;"
+          , "}"
+          , "surface Surf where {"
+          , "  doctrine SurfCrossMode;"
+          , "  mode M;"
+          , "  lexer {"
+          , "    keywords: term, in, out;"
+          , "    symbols: \"(\", \")\", \"{\", \"}\", \":\", \";\", \",\";"
+          , "  }"
+          , "  expr {"
+          , "    atom:"
+          , "      ident(name) \"(\" <expr> \")\" => $1 ; #name"
+          , "    | ident(name) => $name"
+          , "    | \"out\" <expr> => $1"
+          , "    | \"term\" \"{\" <expr> \"}\" => $1"
+          , "    | \"(\" <expr> \")\" => <expr>"
+          , "    ;"
+          , "    prefix:"
+          , "      \"in\" ident(name) \":\" <type>(ty) \";\" <expr> => <expr> bind in(name, ty, 1)"
+          , "    ;"
+          , "    infixr 10 \",\" => $1 * $2;"
+          , "  }"
+          , "}"
+          ]
+  env <- either (assertFailure . T.unpack) pure (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "SurfCrossMode" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine SurfCrossMode" >> fail "unreachable"
+      Just d -> pure d
+  surf <-
+    case M.lookup "Surf" (meSurfaces env) of
+      Nothing -> assertFailure "missing surface Surf" >> fail "unreachable"
+      Just s -> pure s
+  diag <-
+    either
+      (assertFailure . T.unpack)
+      pure
+      (elabSurfaceDiagram emptyEnv doc surf (T.unlines [ "term {", "  in x:WrapN(B);", "  out x", "}" ]))
+  inPort <-
+    case dIn diag of
+      [p] -> pure p
+      _ -> assertFailure "expected one input port" >> fail "unreachable"
+  inTy <-
+    case IM.lookup (unPortId inPort) (dPortObj diag) of
+      Nothing -> assertFailure "missing input port object" >> fail "unreachable"
+      Just ty -> pure ty
+  let mMode = ModeName "M"
+  let nMode = ModeName "N"
+  objOwnerMode inTy @?= mMode
+  case objCode inTy of
+    CTCon wrapRef [CAObj argTy] -> do
+      wrapRef @?= ObjRef mMode (ObjName "WrapN")
+      objOwnerMode argTy @?= nMode
+      case objCode argTy of
+        CTCon bRef [] -> bRef @?= ObjRef nMode (ObjName "B")
+        _ -> assertFailure "expected WrapN argument to elaborate as N.B constructor"
+    _ -> assertFailure "expected WrapN(B) object code"
 
 testSurfaceTemplateSplice :: Assertion
 testSurfaceTemplateSplice = do

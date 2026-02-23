@@ -33,6 +33,7 @@ import Control.Monad (foldM)
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModeTheory(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
+import Strat.Poly.ObjClassifier (modeClassifierMode)
 import Strat.Poly.Graph
   ( Diagram(..)
   , Edge(..)
@@ -50,7 +51,7 @@ import Strat.Poly.TypeTheory
   , lookupTmFunSig
   )
 import Strat.Poly.Traversal (traverseDiagram)
-import Strat.Poly.ObjNormalize
+import Strat.Poly.DefEq
   ( normalizeObjDeep
   , normalizeObjDeepWithCtx
   , normalizeTermDiagram
@@ -164,7 +165,10 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
           args' <- mapM expandArg args
           Right ty { objCode = CTCon ref args' }
         CTMod me innerCode -> do
-          inner' <- expandModSpine (mkObj (objOwnerMode ty) innerCode)
+          if objOwnerMode ty == meTgt me
+            then Right ()
+            else Left "unifyObjFlex: modality target does not match object owner mode in CTMod spine"
+          inner' <- expandModSpine (mkObj (meSrc me) innerCode)
           code' <- expandPath me (objCode inner')
           Right ty { objCode = code' }
 
@@ -269,11 +273,12 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
             case tmvOwnerMode v of
               Just owner -> owner
               Nothing -> objOwnerMode sortV
+      let scopeMode = modeClassifierMode (ttModes tt) ownerV
       if ownerV /= objOwnerMode t'
         then Left ("unifyObjFlex: mode mismatch " <> renderObjVar v <> " with " <> renderObj t')
         else if t' == objVarObj v
           then Right s
-          else if occursObjVar v t'
+        else if occursObjVar v t'
             then Left ("unifyObjFlex: occurs check failed for " <> renderObjVar v <> " in " <> renderObj t')
             else do
               let boundSet = boundTmIndicesObj t'
@@ -283,7 +288,7 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
                           (tmvScope v)
                           [ i
                           | (i, tyCtx) <- zip [0 :: Int ..] tmCtx'
-                          , objOwnerMode tyCtx == ownerV
+                          , objOwnerMode tyCtx == scopeMode
                           ]
                       )
               if tmvScope v == 0 && not (S.null boundSet)

@@ -17,7 +17,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.Rewrite (RewriteRule(..))
 import Strat.Poly.CriticalPairs
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Poly.Doctrine (Doctrine(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), TypeSig(..), validateDoctrine)
 import Strat.Common.Rules (RewritePolicy(..), Orientation(..))
 import Test.Poly.Helpers (mkModes)
 
@@ -144,7 +144,7 @@ testCriticalPairsFailOnSubstFailure = do
           , dModes = mkModes [mode]
           , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.empty
+          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
           , dGens = M.empty
           , dCells2 = [cell]
           , dActions = M.empty

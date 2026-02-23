@@ -24,13 +24,16 @@ import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import qualified Data.Text as T
+import Data.Maybe (mapMaybe)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Obj
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
+  , DefFragment(..)
   , TypeParamSig(..)
   , TmFunSig(..)
   , TmRule(..)
+  , emptyDefFragment
   )
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
@@ -40,10 +43,13 @@ import Strat.Poly.Cell2
 import Strat.Poly.DSL.AST (RawOblExpr(..))
 import Strat.Poly.UnifyObj (unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
-import Strat.Poly.ObjNormalize (termToDiagram, validateTermDiagram)
+import Strat.Poly.DefEq (termToDiagram, validateTermDiagram)
 import Strat.Poly.Term.RewriteCompile (compileAllTermRules)
 import Strat.Poly.Term.Termination (checkTerminatingSCT)
 import Strat.Poly.Term.Confluence (checkConfluent)
+import Strat.Poly.Term.AST (TermExpr(..))
+import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
+import qualified Strat.Poly.Term.RewriteSystem as RS
 
 
 data ParamSig
@@ -120,14 +126,16 @@ mkTypeTheory :: Doctrine -> Either Text TypeTheory
 mkTypeTheory doc = do
   let tt0 = doctrineTypeTheoryBase doc
   trs <- compileAllTermRules tt0
-  mapM_ checkTerminatingSCT (M.elems trs)
-  mapM_ checkConfluent (M.elems trs)
-  pure tt0 { ttTmTRS = trs }
+  let fragments = setFragmentTRS (dModes doc) (ttDefFragments tt0) trs
+  mapM_ checkFragmentTermination (M.elems fragments)
+  mapM_ checkFragmentConfluence (M.elems fragments)
+  pure tt0 { ttDefFragments = fragments }
 
 doctrineTypeTheoryBase :: Doctrine -> TypeTheory
 doctrineTypeTheoryBase doc =
   let tmFuns = derivedTmFuns doc
       tmRules = derivedTmRules doc tmFuns
+      fragments0 = mkDefFragments (dModes doc) tmFuns tmRules M.empty
    in
     TypeTheory
       { ttModes = dModes doc
@@ -137,15 +145,89 @@ doctrineTypeTheoryBase doc =
             | (mode, typeTable) <- M.toList (dTypes doc)
             , (tyName, sig) <- M.toList typeTable
             ]
-      , ttTmFuns = tmFuns
-      , ttTmRules = tmRules
-      , ttTmTRS = M.empty
+      , ttDefFragments = fragments0
       }
   where
     toTParam ps =
       case ps of
         PS_Ty m -> TPS_Ty m
         PS_Tm sortTy -> TPS_Tm sortTy
+
+mkDefFragments
+  :: ModeTheory
+  -> M.Map ModeName (M.Map TmFunName TmFunSig)
+  -> M.Map ModeName [TmRule]
+  -> M.Map ModeName TRS
+  -> M.Map ModeName DefFragment
+mkDefFragments mt tmFuns tmRules tmTRS =
+  M.fromList
+    [ ( mode
+      , DefFragment
+          { dfMode = mode
+          , dfFuns = M.findWithDefault M.empty mode tmFuns
+          , dfRules = M.findWithDefault [] mode tmRules
+          , dfTRS = M.findWithDefault (mkTRS mode []) mode tmTRS
+          }
+      )
+    | mode <- M.keys (mtModes mt)
+    ]
+
+setFragmentTRS
+  :: ModeTheory
+  -> M.Map ModeName DefFragment
+  -> M.Map ModeName TRS
+  -> M.Map ModeName DefFragment
+setFragmentTRS mt fragments tmTRS =
+  M.fromList
+    [ (mode, fragmentFor mode)
+    | mode <- M.keys (mtModes mt)
+    ]
+  where
+    fragmentFor mode =
+      let base = M.findWithDefault (emptyDefFragment mode) mode fragments
+       in base
+            { dfTRS = M.findWithDefault (mkTRS mode []) mode tmTRS
+            }
+
+checkFragmentTermination :: DefFragment -> Either Text ()
+checkFragmentTermination fragment =
+  case checkTerminatingSCT (dfTRS fragment) of
+    Right () -> Right ()
+    Left err ->
+      Left
+        ( err
+            <> "\n  root symbols: "
+            <> renderRootSymbols (dfTRS fragment)
+            <> "\n  fragment rules:\n"
+            <> renderFragmentRules (dfTRS fragment)
+        )
+
+checkFragmentConfluence :: DefFragment -> Either Text ()
+checkFragmentConfluence fragment =
+  checkConfluent (dfTRS fragment)
+
+renderRootSymbols :: TRS -> Text
+renderRootSymbols trs =
+  if null names
+    then "(none)"
+    else T.intercalate ", " names
+  where
+    names = S.toList (S.fromList (mapMaybe rootName (RS.trsRules trs)))
+    rootName rule =
+      case RS.trLHS rule of
+        TMFun (TmFunName name) _ -> Just name
+        _ -> Nothing
+
+renderFragmentRules :: TRS -> Text
+renderFragmentRules trs =
+  if null linesOut
+    then "    (none)"
+    else T.unlines [ "    " <> line | line <- linesOut ]
+  where
+    linesOut =
+      [ RS.trName rule <> ": " <> T.pack (show (RS.trLHS rule)) <> " -> " <> T.pack (show (RS.trRHS rule))
+      | rule <- RS.trsRules trs
+      ]
 
 derivedTmFuns :: Doctrine -> M.Map ModeName (M.Map TmFunName TmFunSig)
 derivedTmFuns doc =

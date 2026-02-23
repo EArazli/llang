@@ -89,6 +89,7 @@ Current elaboration rule:
 
 - when elaborating an object expression with expected owner mode `M`, unqualified constructors are resolved only in classifier mode `K = classifier(M)`,
 - a qualified constructor `Q.C` is accepted only when `Q = K`; other qualifiers are rejected as wrong-classifier references.
+- in surface type annotations, constructor parameters of kind `PS_Tm` are currently not supported; term-indexed arguments must be expressed through core/kernel paths (not direct surface syntax).
 
 ### 2.6 Example
 
@@ -133,6 +134,25 @@ A doctrine MUST either:
 - satisfy kernel derivation rules (computational rules + eligible generators) and pass admissibility checks.
 
 Future fragments (for example NbE) are permitted by this spec but are not required in the current implementation.
+
+### 3.1 Kernel DefEq API (Current)
+
+Current implementation centralizes normalization/equality entrypoints in `Strat.Poly.DefEq`:
+
+- `normalizeTermDiagram`
+- `normalizeObjDeep` / `normalizeObjDeepWithCtx`
+- `normalizeCodeTermDeepWithCtx`
+- `defEqObj`
+- `defEqTermDiagram`
+
+Per-mode definitional data is represented by `DefFragment`:
+
+- `dfMode`: mode name
+- `dfFuns`: admissible term symbols in that mode
+- `dfRules`: admissible computational rules in that mode
+- `dfTRS`: compiled TRS used by normalization/equality
+
+`normalizeCodeTermDeepWithCtx` and `normalizeTermDiagram` are the shared normalization services used by object equality (`defEqObj`) and term equality (`defEqTermDiagram`).
 
 ## 4. Doctrine Layer
 
@@ -192,6 +212,7 @@ Kernel substitution is a single metavariable substitution environment.
 Well-formedness invariant:
 
 - a metavariable is only instantiated in the syntactic category where it occurs; kind mismatches are rejected as kernel errors.
+- code-metavariable scope checks are performed against the classifier-mode slice of the telescope (`modeClassifierMode owner`), not the owner-mode slice.
 
 ### 5.2 Canonical Form
 

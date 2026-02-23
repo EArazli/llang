@@ -42,7 +42,7 @@ import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.ObjNormalize (termExprToDiagramChecked)
+import Strat.Poly.DefEq (termExprToDiagramChecked)
 import qualified Strat.Poly.DSL.AST as PolyAST
 
 

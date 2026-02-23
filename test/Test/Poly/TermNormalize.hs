@@ -11,7 +11,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Obj (Obj(..), ObjVar, pattern ObjVar, ovName, ovMode, TmFunName(..), TmVar(..))
-import Strat.Poly.TypeTheory (TypeTheory(..), modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory, setModeTermFuns, setModeTermRules)
 import qualified Strat.Poly.TypeTheory as TT
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
@@ -64,7 +64,7 @@ testCompileRejectsFreshRhsVars = do
   lhs <- requireEither (termExprToDiagram ttBase [] sortTy (TMFun fName [TMVar xVar]))
   rhs <- requireEither (termExprToDiagram ttBase [] sortTy (TMVar yVar))
   let rule = TT.TmRule { TT.trVars = [xVar, yVar], TT.trLHS = lhs, TT.trRHS = rhs }
-  let tt = ttBase { ttTmRules = M.singleton modeM [rule] }
+  let tt = setModeTermRules modeM [rule] ttBase
   case compileTermRules tt modeM of
     Left err ->
       assertBool
@@ -79,7 +79,7 @@ testCompileRejectsFreshRhsVars = do
     xVar = TmVar { tmvName = "x", tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
     yVar = TmVar { tmvName = "y", tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
     funSigs = M.fromList [(fName, TT.TmFunSig { TT.tfsArgs = [sortTy], TT.tfsRes = sortTy })]
-    ttBase = (modeOnlyTypeTheory (mkModes [modeM])) { ttTmFuns = M.singleton modeM funSigs }
+    ttBase = setModeTermFuns modeM funSigs (modeOnlyTypeTheory (mkModes [modeM]))
 
 requireEither :: Either Text a -> IO a
 requireEither result =

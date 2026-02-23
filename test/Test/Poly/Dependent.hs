@@ -42,9 +42,12 @@ import Strat.Poly.TypeTheory
   , TmFunSig(..)
   , TmRule(..)
   , modeOnlyTypeTheory
+  , setModeTermFuns
+  , setModeTermRules
+  , setModeTermTRS
   )
-import Strat.Poly.ObjNormalize (normalizeObjDeep, normalizeTermDiagram, validateTermDiagram)
-import qualified Strat.Poly.ObjNormalize as TN
+import Strat.Poly.DefEq (normalizeObjDeep, normalizeTermDiagram, validateTermDiagram)
+import qualified Strat.Poly.DefEq as DE
 import Strat.Poly.UnifyObj (unifyTm, unifyObjFlex, emptySubst, lookupTmMeta)
 import Strat.Poly.Match (MatchConfig(..), findAllMatches)
 import Strat.Poly.Graph
@@ -86,7 +89,9 @@ tests =
     , testCase "bound term sort checks apply current substitution" testBoundSortUsesSubstitution
     , testCase "matching applies current substitution to bound term sorts" testMatchBoundSortUsesCurrentSubst
     , testCase "dependent composition respects definitional term equality" testDependentCompDefEq
+    , testCase "object defeq reduces term indices inside code terms" testDefEqObjTermIndexReduction
     , testCase "matching requires term-context compatibility" testMatchTmCtxCompatibility
+    , testCase "matching accepts term-context compatibility up to defeq" testMatchTmCtxDefEqCompatibility
     , testCase "iso matching drops candidates when dependent substitution fails" testIsoMatchDropsSubstFailure
     , testCase "checked term conversion accepts definitional sort equality" testCheckedTermConversionDefEq
     , testCase "binder metas + splice rewrite" testBinderMetaSplice
@@ -186,7 +191,11 @@ testRejectNonTerminatingTermTRS = do
     Left err ->
       assertBool
         ("expected termination failure, got: " <> T.unpack err)
-        ("termination not proven" `T.isInfixOf` err)
+        (  "termination not proven" `T.isInfixOf` err
+        && "ModeName \"I\"" `T.isInfixOf` err
+        && "root symbols" `T.isInfixOf` err
+        && "f" `T.isInfixOf` err
+        )
     Right _ ->
       assertFailure "expected doctrine elaboration to reject non-terminating term TRS"
 
@@ -211,7 +220,10 @@ testRejectNonConfluentTermTRS = do
     Left err ->
       assertBool
         ("expected confluence failure, got: " <> T.unpack err)
-        ("confluence failed" `T.isInfixOf` err)
+        (  "confluence failed" `T.isInfixOf` err
+        && "overlaps" `T.isInfixOf` err
+        && "at [" `T.isInfixOf` err
+        )
     Right _ ->
       assertFailure "expected doctrine elaboration to reject non-confluent term TRS"
 
@@ -225,16 +237,12 @@ testMixedModeTmCtxResolution = do
   let natTy = mkCon natRef []
   let tmCtx = [fooTy, natTy]
   let tt =
-        TypeTheory
-          { ttModes = mkModes [modeC, modeI]
-          , ttObjParams =
+        (modeOnlyTypeTheory (mkModes [modeC, modeI]))
+          { ttObjParams =
               M.fromList
                 [ (fooRef, [])
                 , (natRef, [])
                 ]
-          , ttTmFuns = M.empty
-          , ttTmRules = M.empty
-          , ttTmTRS = M.empty
           }
   tm <- require (termExprToDiagram tt tmCtx natTy (TMBound 1))
   let unlabeledTm =
@@ -319,13 +327,8 @@ testBoundSortUsesSubstitution = do
   let tmCtxSort = mkCon lenRef [OAObj (OVar aVar)]
   let expectedSort = mkCon lenRef [OAObj concrete]
   let tt =
-        TypeTheory
-          { ttModes = mkModes [modeM, modeI]
-          , ttObjParams = M.fromList [(lenRef, [TPS_Ty modeM])]
-          , ttTmFuns = M.empty
-          , ttTmRules = M.empty
-          , ttTmTRS = M.empty
-          }
+        (modeOnlyTypeTheory (mkModes [modeM, modeI]))
+          { ttObjParams = M.fromList [(lenRef, [TPS_Ty modeM])] }
   bound0 <- require (termExprToDiagram tt [tmCtxSort] tmCtxSort (TMBound 0))
   case unifyTm tt [tmCtxSort] S.empty emptySubst expectedSort bound0 bound0 of
     Left _ -> pure ()
@@ -345,16 +348,12 @@ testMatchBoundSortUsesCurrentSubst = do
   let tmCtxSort = mkCon lenRef [OAObj (OVar aVar)]
   let expectedSort = mkCon lenRef [OAObj concrete]
   let tt =
-        TypeTheory
-          { ttModes = mkModes [modeM, modeI]
-          , ttObjParams =
+        (modeOnlyTypeTheory (mkModes [modeM, modeI]))
+          { ttObjParams =
               M.fromList
                 [ (lenRef, [TPS_Ty modeM])
                 , (fooRef, [TPS_Tm expectedSort])
                 ]
-          , ttTmFuns = M.empty
-          , ttTmRules = M.empty
-          , ttTmTRS = M.empty
           }
   bound0 <- require (termExprToDiagram tt [tmCtxSort] tmCtxSort (TMBound 0))
 
@@ -400,6 +399,25 @@ testDependentCompDefEq = do
   _ <- require (compD tt g f)
   pure ()
 
+testDefEqObjTermIndexReduction :: Assertion
+testDefEqObjTermIndexReduction = do
+  (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
+  let vecRef = ObjRef modeM (ObjName "Vec")
+  let z = TMFun (TmFunName "Z") []
+  let add x y = TMFun (TmFunName "add") [x, y]
+  let tt =
+        tt0
+          { ttObjParams = M.fromList [(vecRef, [TPS_Tm natTy])] }
+  tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
+  tmZ <- require (termExprToDiagram tt [] natTy z)
+  let lhs = mkCon vecRef [OATm tmAdd]
+  let rhs = mkCon vecRef [OATm tmZ]
+  lhsCodeN <- require (DE.normalizeCodeTermDeepWithCtx tt [] modeM (objCode lhs))
+  rhsCodeN <- require (DE.normalizeCodeTermDeepWithCtx tt [] modeM (objCode rhs))
+  lhsCodeN @?= rhsCodeN
+  ok <- require (DE.defEqObj tt [] lhs rhs)
+  assertBool "expected object defeq to join reducible term-indexed code terms" ok
+
 testMatchTmCtxCompatibility :: Assertion
 testMatchTmCtxCompatibility = do
   let modeM = ModeName "M"
@@ -408,13 +426,8 @@ testMatchTmCtxCompatibility = do
   let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
   let boolTy = mkCon (ObjRef modeI (ObjName "Bool")) []
   let tt =
-        TypeTheory
-          { ttModes = mkModes [modeM, modeI]
-          , ttObjParams = M.empty
-          , ttTmFuns = M.empty
-          , ttTmRules = M.empty
-          , ttTmTRS = M.empty
-          }
+        (modeOnlyTypeTheory (mkModes [modeM, modeI]))
+          { ttObjParams = M.empty }
   let lhs = (idD modeM [aTy]) { dTmCtx = [natTy] }
   let host = (idD modeM [aTy]) { dTmCtx = [boolTy] }
   _ <- require (validateDiagram lhs)
@@ -423,12 +436,35 @@ testMatchTmCtxCompatibility = do
   matches <- require (findAllMatches cfg lhs host)
   assertBool "expected no matches for incompatible term contexts" (null matches)
 
+testMatchTmCtxDefEqCompatibility :: Assertion
+testMatchTmCtxDefEqCompatibility = do
+  (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
+  let vecRef = ObjRef modeM (ObjName "Vec")
+  let vecTy tmArg = mkCon vecRef [OATm tmArg]
+  let z = TMFun (TmFunName "Z") []
+  let add x y = TMFun (TmFunName "add") [x, y]
+  let tt =
+        tt0
+          { ttObjParams = M.fromList [(vecRef, [TPS_Tm natTy])] }
+  tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
+  tmZ <- require (termExprToDiagram tt [] natTy z)
+  let lhsTy = vecTy tmAdd
+  let rhsTy = vecTy tmZ
+  let lhs = (idD modeM [lhsTy]) { dTmCtx = [lhsTy] }
+  let rhs = (idD modeM [rhsTy]) { dTmCtx = [rhsTy] }
+  _ <- require (validateDiagram lhs)
+  _ <- require (validateDiagram rhs)
+  matches <- require (diagramIsoMatchWithVars tt S.empty S.empty lhs rhs)
+  assertBool "expected at least one iso match under definitional tmctx equality" (not (null matches))
+
 testIsoMatchDropsSubstFailure :: Assertion
 testIsoMatchDropsSubstFailure = do
   let mode = ModeName "M"
   let goodTy = mkCon (ObjRef mode (ObjName "A")) []
   let badSort = mkCon (ObjRef mode (ObjName "BadSort")) [OAObj goodTy]
-  let tt = modeOnlyTypeTheory (mkModes [mode])
+  let tt =
+        (modeOnlyTypeTheory (mkModes [mode]))
+          { ttObjParams = M.fromList [(ObjRef mode (ObjName "A"), [])] }
   let inner = emptyDiagram mode [badSort]
   _ <- require (validateDiagram inner)
   lhs <- require (mkWrapWithBinder mode goodTy inner)
@@ -451,7 +487,7 @@ testCheckedTermConversionDefEq = do
   case termExprToDiagram tt [] sortZ (TMVar xVar) of
     Left _ -> pure ()
     Right _ -> assertFailure "expected unchecked conversion to reject structural sort mismatch"
-  _ <- require (TN.termExprToDiagramChecked tt [] sortZ (TMVar xVar))
+  _ <- require (DE.termExprToDiagramChecked tt [] sortZ (TMVar xVar))
   pure ()
 
 testBinderMetaSplice :: Assertion
@@ -547,13 +583,9 @@ mkNatTypeTheory = do
           , (TmFunName "add", TmFunSig [natTy, natTy] natTy)
           ]
   let ttSig =
-        TypeTheory
-          { ttModes = mt1
-          , ttObjParams = M.empty
-          , ttTmFuns = M.fromList [(modeI, funSigs)]
-          , ttTmRules = M.empty
-          , ttTmTRS = M.empty
-          }
+        setModeTermFuns modeI funSigs $
+          (modeOnlyTypeTheory mt1)
+            { ttObjParams = M.empty }
   r1L <- termExprToDiagram ttSig [] natTy (add z (TMVar vN))
   r1R <- termExprToDiagram ttSig [] natTy (TMVar vN)
   r2L <- termExprToDiagram ttSig [] natTy (add (s (TMVar vM)) (TMVar vN))
@@ -565,7 +597,11 @@ mkNatTypeTheory = do
         , TmRule { trVars = [vM, vN], trLHS = r2L, trRHS = r2R }
         , TmRule { trVars = [vN], trLHS = r3L, trRHS = r3R }
         ]
-  let tt1 = ttSig { ttTmRules = M.fromList [(modeI, rules)] }
-  trs <- compileAllTermRules tt1
-  let tt = tt1 { ttTmTRS = trs }
+  let tt1 = setModeTermRules modeI rules ttSig
+  trsMap <- compileAllTermRules tt1
+  trsMode <-
+    case M.lookup modeI trsMap of
+      Nothing -> Left "mkNatTypeTheory: missing compiled TRS for mode I"
+      Just trs -> Right trs
+  let tt = setModeTermTRS modeI trsMode tt1
   pure (tt, natTy, modeM, modeI)

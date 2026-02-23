@@ -175,6 +175,10 @@ Concretely:
 * Their sort is the classifier universe `U`.
 * Their scope is governed by the classifier’s portion of the telescope (same discipline you already use for `tmvScope`).
 
+Implementation note (current):
+
+* Scope checks for code metavariable bindings are performed against the classifier-mode slice `modeClassifierMode(owner)` of `dTmCtx`.
+
 Update matching/unification:
 
 * Port-object unification becomes **code-term unification** in the classifier:
@@ -197,6 +201,16 @@ Implement a uniform pipeline:
 1. From doctrine rules, identify each mode’s admissible **definitional TRS fragment** (same idea as current `derivedTmFuns` + computational `Cell2` rules).
 2. Compile admissible rules to TRSs per mode; check termination + confluence in the same way you do now.
 3. Provide `normalizeCodeTerm(mode, term)` as fuel-free normalization.
+
+Current concrete kernel API/structures:
+
+* `Strat.Poly.TypeTheory.DefFragment` and `ttDefFragments :: Map ModeName DefFragment`.
+* `Strat.Poly.DefEq` as the single entrypoint for normalization/equality:
+  * `normalizeTermDiagram`
+  * `normalizeObjDeep` / `normalizeObjDeepWithCtx`
+  * `normalizeCodeTermDeepWithCtx`
+  * `defEqObj`
+  * `defEqTermDiagram`
 
 Then:
 

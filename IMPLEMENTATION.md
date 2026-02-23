@@ -1,423 +1,517 @@
-## Issue remedy instructions (fix these before starting Phase 3)
+# Phase 4 review (last 2 commits): issues, incomplete pieces, and fix instructions
 
-These are the things I would correct now because Phase 3 will lean on them and it’s cheaper to tighten them before the big refactor.
+## 1) Surface type elaboration treats **all bare identifiers** as fresh type metavariables
 
-### 1) Detect conflicts when merging `mtClassifiedBy` (don’t use left-biased `Map.union` silently)
+### Where
 
-**Where:** `src/Strat/Poly/DSL/Elab.hs`, function `mergeIface`
-Currently:
+`src/Strat/Poly/Surface/Elab.hs`
+
+Function: `elabSurfaceObjExpr`
+
+Current behavior:
 
 ```hs
-mtClassifiedBy = M.union (mtClassifiedBy (dModes doc0)) (mtClassifiedBy (dModes doc1))
+RPTVar name -> do
+  mv <- mkTypeMetaVar doc mode name
+  return $ mkObj mode $ CTMeta mv
 ```
 
-`M.union` is left-biased: conflicting declarations for the same mode name are silently dropped. This is risky once classification starts influencing type/object meaning (Phase 3+).
+### Why this is a problem
 
-**Remedy:**
+* It prevents surface programs from referring to **nullary type constructors** by name (e.g. `Unit`, `A`) unless written as `Unit()` (which the surface examples/tests do not do).
+* It contradicts the intended “classified constructor resolution” behavior tested in `testSurfaceClassifiedTypeResolution` (expects `Unit` to resolve to `CTCon (ObjRef Ty Unit) []` when used as a `Tm`-mode type).
+* It makes surface type annotations silently “hole-like”: typos become unconstrained metas instead of errors or constructor references.
 
-* Replace with a merge that:
+### Minimal correct behavior
 
-  * accepts identical `ClassificationDecl`s, and
-  * errors on conflicts (different classifier or different universe).
-* Use `M.unionWithKey` and compare `cdClassifier` and `cdUniverse` structurally (after normalizing mod spines on universes if you already have a normalization function for object expressions).
+For `RPTVar name` in surface type positions:
 
-**Expected behavior:** if an interface is imported twice identically it merges; if two imports disagree, you get a clear “conflicting classifiedBy for mode …” error.
+1. Try to resolve `name` as a **nullary type constructor** in the appropriate classifier mode for `mode`.
+2. If found and arity is 0 → elaborate to `CTCon ref []` (owner stays `mode`).
+3. If not found → either:
 
-### 2) Remove duplicated well-formedness checks in `classificationOrder`
+   * (recommended) error (to catch typos), **or**
+   * treat as a meta (backwards-compat “hole types”).
 
-**Where:** `src/Strat/Poly/ModeTheory.hs`
+Given the repository already has surface programs like `in x:A;`, and doctrine declares `type A @M;`, the most consistent behavior is: **prefer constructor if it exists; else meta**.
 
-`checkWellFormed` already calls `checkClassificationWellFormed`, and `classificationOrder` calls it again.
+### Agent instructions (implementation)
 
-**Remedy:**
+1. Edit `src/Strat/Poly/Surface/Elab.hs`, inside `elabSurfaceObjExpr`:
 
-* Make `classificationOrder` assume the mode theory is already well-formed (or have a private helper `classificationOrderUnchecked`).
-* Keep `checkWellFormed` as the “public entrypoint” that calls checks in the right order.
+   * Replace the `RPTVar` branch with logic:
 
-This is not a correctness bug, but it will matter once this is called more often (Phase 3 will likely query classification info repeatedly).
+     * Compute classifier mode `cls <- modeClassifierMode (dModes doc) mode` (error if missing).
+     * Look up type signature table in `dTypes doc` at `cls`.
+     * If `(ObjName name)` exists and has 0 params:
 
-### 3) In `renameModeTheory`, avoid “overwrite on collision” for classifiedBy renaming
+       * Return `mkObj mode (CTCon (ObjRef cls (ObjName name)) [])`.
+     * If exists but arity > 0:
 
-**Where:** `src/Strat/DSL/Elab.hs`, `renameModeTheory`
+       * Return error telling user to supply arguments (or use constructor syntax).
+     * If not found:
 
-You fold `M.insert` into a new map. If renaming ever becomes non-injective (or a future refactor accidentally causes collisions), you silently overwrite.
+       * Fallback to current meta behavior (or error; pick one policy and document).
+2. Update/extend error messages to mention **classifier mode** when resolution fails, since that’s now how types are resolved.
 
-**Remedy:**
+### Agent instructions (tests)
 
-* Replace local `addClassification` helper with:
+Add/strengthen tests to ensure this is locked in:
 
-  * “insert unless key absent; if present, require equality else error”.
-* (Even if you believe renamings are injective today, this is cheap protection.)
+* In `test/Test/Poly/Surface.hs`:
 
-### 4) Decide what `cdTag` is for and enforce invariants (or remove until Phase 7)
+  * Extend `testSurfaceInOut` (or add a new test) to assert that the `A` in `in x:A;` elaborates to a `CTCon` (not `CTMeta`).
+  * Keep `testSurfaceClassifiedTypeResolution` as the regression for classified modes.
+* Ensure at least one surface test checks:
 
-**Where:** `src/Strat/Poly/ModeTheory.hs`, `ClassificationDecl`
-`cdTag` is parsed and stored but unused. That’s fine, but Phase 3 will need a stable story about how tags affect name resolution or universe selection.
-
-**Remedy options:**
-
-* If tags are for future ergonomics only: explicitly document “cdTag unused until Phase 7” in `SPEC.md` and do nothing else.
-* If tags are meant to be semantic: start enforcing uniqueness of tags per classified mode now, or forbid them until Phase 7.
-
-I recommend the first option (document and postpone) to reduce Phase 3 scope.
+  * Unqualified `Unit` resolves to `CTCon` in the presence of classification `Tm ▷ Ty`.
 
 ---
 
-## Phase 3 implementation instructions (CodeTerm infrastructure + object classifier queries)
+## 2) Surface type constructor arguments are elaborated in the **wrong owner mode**
 
-This is written to match `PLAN.md` Phase 3: introduce a CodeTerm representation and make “objects are codes in a classifier universe” structurally real in the kernel, without yet implementing the Phase 5 definitional fragment rewrite engine.
+### Where
 
-### Phase 3 target invariants
+`src/Strat/Poly/Surface/Elab.hs`
 
-After Phase 3:
+Function: `elabSurfaceObjExpr`, branch `RPTCon rawRef args`
 
-1. You can ask, for any “object of mode M”:
-
-* whether it is *classified*, and if so:
-
-  * its classifier mode `K`
-  * its universe object `U` in `K`.
-
-2. Normalization/equality hooks exist in the right place:
-
-* `normalizeObj(tt, obj)` normalizes the *code* in the classifier (Phase 5 will strengthen the notion of normalization).
-* `objEq(tt, obj1, obj2)` compares via normalized codes.
-
-3. Term-index normalization still works:
-
-* If an object contains term indices (your current `OATm` payload), those indices are still normalized correctly with respect to their expected sorts, contexts, and mode theory.
-
-### Design choice you need to commit to now
-
-Phase 3 should stop treating an object’s *mode* as “the mode of the syntax node’s head constructor”. That assumption breaks under classification.
-
-You need two notions:
-
-* **Owner mode**: the mode whose *objects* these are (e.g., “this is a Tm-object/type”).
-* **Code mode**: the mode in which the code for the owner object lives (its classifier mode).
-
-In the existing codebase, `objMode` currently plays both roles. Phase 3 must split them.
-
-### Step 1 — Introduce `CodeTerm` and make `Obj` carry owner-mode separately
-
-**Files to edit:**
-
-* `src/Strat/Poly/Syntax.hs`
-* `src/Strat/Poly/Obj.hs`
-* Any module pattern-matching on `OVar`/`OCon`/`OMod`
-
-**Mechanical refactor:**
-
-1. Rename the existing `Obj` AST into a new type `CodeTerm` (or `ObjExpr`), and rename constructors to avoid confusion.
-
-Current:
+Current behavior:
 
 ```hs
-data Obj = OVar ObjVar | OCon ObjRef [ObjArg] | OMod ModExpr Obj
+args' <- mapM (elabSurfaceObjExpr doc mode) args
+...
+checkParam (PS_Ty m, argTy) =
+  if objOwnerMode argTy == m then Right () else Left ...
 ```
 
-Phase 3 shape:
+### Why this is a problem
 
-```hs
-data Obj = Obj
-  { objOwnerMode :: ModeName
-  , objCode      :: CodeTerm
-  }
+* Every argument is elaborated using the *outer* `mode`, even when the constructor’s parameter signature says the argument is an object in some other owner mode `m`.
+* This makes any type constructor with cross-mode object parameters unusable in surface type annotations (it will fail the mode check even when the user wrote a correct expression).
 
-data CodeTerm
-  = CTVar ObjVar
-  | CTCon ObjRef [CodeArg]
-  | CTMod ModExpr CodeTerm
+### Agent instructions (implementation)
 
-data CodeArg
-  = CAObj Obj
-  | CATm TermDiagram  -- keep TermDiagram for now (Phase 3 exit criterion is term-index normalization)
-```
+1. In `RPTCon rawRef args` branch:
 
-2. Provide helpers:
+   * After you obtain `sig <- lookupTypeSig doc ref`, do **signature-directed elaboration**:
 
-* `codeMode0 :: CodeTerm -> ModeName` (structural head-mode: from `ObjRef` or `ObjVar` or `CTMod` target).
-* `objMode :: Obj -> ModeName` becomes `objOwnerMode` (keep `objMode` name if you want, but it must now mean owner-mode).
+     * Zip the raw `args` with `sigParams sig`.
+     * For each `(paramSig, argRaw)`:
 
-3. Update `ObjVar`:
+       * If `paramSig` is `PS_Ty m` → call `elabSurfaceObjExpr doc m argRaw`.
+       * If `paramSig` is `PS_Tm sortTy` → keep current “surface: term arguments not supported” behavior (or implement term args later), but the error should mention the constructor and parameter index.
+2. Remove the current `args' <- mapM (elabSurfaceObjExpr doc mode) args` since it is structurally wrong.
 
-* Keep `ovMode` for now as the **owner mode** of the object variable (so unification/matching in `UnifyObj` doesn’t need to change yet).
-* In Phase 4 you will eliminate `ObjVar` anyway.
+### Agent instructions (tests)
 
-**Why this ordering:** it minimizes immediate blast radius: you can keep `UnifyObj` and other object-level operations mostly structural, but now objects explicitly carry the mode they belong to.
+* Add a focused surface test:
 
-### Step 2 — Add classifier queries (the “Phase 3 deliverable module”)
-
-**Add a new module:** `src/Strat/Poly/ObjClassifier.hs` (or similar).
-
-Provide a minimal API:
-
-```hs
--- Returns classifier info for an *owner mode*.
-classifierOfMode :: ModeTheory -> ModeName -> Maybe ClassificationDecl
-
--- Helper accessors.
-modeClassifierMode :: ModeTheory -> ModeName -> ModeName
-modeUniverseObj    :: ModeTheory -> ModeName -> Maybe Obj
-
--- Code mode of an Obj (depends on classification and/or code head mode).
-objCodeMode :: ModeTheory -> Obj -> ModeName
-```
-
-Recommended semantics:
-
-* If `classifierOfMode mt m = Just (ClassificationDecl k u …)`:
-
-  * `modeClassifierMode mt m = k`
-  * `modeUniverseObj mt m = Just u`
-* If no classification edge exists:
-
-  * `modeClassifierMode mt m = m`
-  * `modeUniverseObj mt m = Nothing` (explicitly “unclassified”)
-
-**Important:** Do *not* fabricate an implicit universe for unclassified modes in Phase 3. You don’t have infrastructure for that yet; it will create false invariants.
-
-### Step 3 — Rebase object normalization around owner-mode + code-mode
-
-**Files to edit:**
-
-* `src/Strat/Poly/ObjNormalize.hs`
-* `src/Strat/Poly/Obj.hs`
-
-Target changes:
-
-1. Replace any logic that assumes `objMode obj == …` with owner-mode checks, and use `objCodeMode` when you need classifier/code mode.
-
-2. Keep the current “deep normalization” behavior for term indices:
-
-* Traverse `objCode` recursively:
-
-  * `CAObj subObj` → normalizeObjDeep subObj
-  * `CATm tm` → normalize term diagram with the expected sort (same behavior you already have)
-
-3. Add/rename entrypoints:
-
-* `normalizeObjDeepWithCtx :: TypeTheory -> [Obj] -> Obj -> Either Text Obj`
-* `normalizeCodeTermDeepWithCtx :: … -> CodeTerm -> Either Text CodeTerm`
-
-4. Phase 3 `normalizeObj` should:
-
-* normalize term indices (existing behavior)
-* normalize modality expressions (`normalizeObjExpr`-like behavior, but for `CodeTerm`)
-* **do not** attempt Phase 5 “definitional fragment” reductions yet.
-
-### Step 4 — Update unification/matching to use the wrapper shape
-
-**Files to edit:**
-
-* `src/Strat/Poly/UnifyObj.hs`
-* `src/Strat/Poly/Match.hs` (and anywhere else that calls `unifyObjFlex`)
-
-Work items:
-
-1. Update `unifyObj` to unify `Obj` values by:
-
-* checking `objOwnerMode` matches (or allowing mismatch only where you explicitly want it; default is “must match”)
-* unifying the underlying `CodeTerm`.
-
-2. Update all pattern matches from `OVar/OCon/OMod` to `CTVar/CTCon/CTMod` on the code.
-
-3. Update occurs checks and free-variable computation to traverse:
-
-* `Obj.objCode`
-* `CodeArg.CAObj` recursively
-* ignore `CATm` for object metavariable occurrences (term metas are separate)
-
-4. Update diagnostics:
-
-* `renderObj` should show both:
-
-  * owner mode, and
-  * rendered code term (with its own head mode visible via `ObjRef` as before).
-    This will be critical when Phase 3 starts producing “wrong classifier” errors.
-
-### Step 5 — Make elaboration classification-aware
-
-This is the biggest Phase 3 change.
-
-**File to edit:**
-
-* `src/Strat/Poly/DSL/Elab.hs`
-
-#### 5.1 Change object elaboration signature to accept an *expected owner mode*
-
-Right now `elabObjExpr` infers/decides too much from the syntax (including using global lookup in `resolveTypeRef`).
-
-New shape:
-
-```hs
-elabObjExpr
-  :: Doctrine
-  -> [ObjVar]              -- type vars (owner modes)
-  -> [TmVar]               -- term vars
-  -> Map ModName (ModeName, ModeName) -- sig params (existing)
-  -> ModeName              -- expected owner mode
-  -> RawPolyObjExpr
-  -> Either Text Obj
-```
-
-Return `Obj { objOwnerMode = expectedOwnerMode, objCode = … }`.
-
-#### 5.2 Resolve constructors in the classifier mode, not the owner mode
-
-Compute:
-
-* `k = modeClassifierMode (dModes doc) expectedOwnerMode`
-
-Then update resolution logic:
-
-* For unqualified constructors/vars that are used as constructors:
-
-  * resolve them **in mode `k` only** (not global scan).
-* For qualified references `M.X`:
-
-  * interpret the qualifier as a **code-mode qualifier**, and require `M == k`.
-  * if mismatch, error: “object of mode expectedOwnerMode is classified by k; constructor qualifier M is not allowed here”.
-
-This gives you a clean invariant: “the code for an object of mode M is written using the vocabulary of its classifier mode”.
-
-This is what makes classification operational in Phase 3 without yet redesigning the surface language.
-
-#### 5.3 Keep parameter-checking semantics exactly as before
-
-When you elaborate `CTCon ref args` in classifier mode `k`, you still:
-
-* look up `TypeSig` / `TypeParamSig` for `ref`
-* for each `TPS_Ty mArgOwner`:
-
-  * recursively call `elabObjExpr … mArgOwner rawArg`
-  * wrap as `CAObj`
-* for each `TPS_Tm sortObj`:
-
-  * elaborate as term argument (existing `elabTmTerm`)
-  * wrap as `CATm`
-
-The only difference is: the `ObjRef` being applied now lives in `k` (classifier vocabulary), not in `expectedOwnerMode`.
-
-This preserves existing dependent/indexed type syntax and keeps Phase 3 contained.
-
-#### 5.4 Universe elaboration for classification decls
-
-In `applyPendingClassifications` you already elaborate the universe `U` as an `Obj`. After Phase 3’s wrapper change, you must elaborate it as:
-
-* expected owner mode = classifier mode `K`
-* so its `objOwnerMode = K` and its `objCode` is built in classifierOf(K) (or K itself if unclassified).
-
-Then `ModeTheory.addClassification`’s universe-mode check must use `objOwnerMode` (not “code head mode”).
-
-### Step 6 — Update kernel validation where `objMode` was used as “head mode”
-
-**Files to audit and update:**
-
-* `src/Strat/Poly/Graph.hs`
-* `src/Strat/Poly/Doctrine.hs`
-* `src/Strat/Poly/TermExpr.hs` and term conversion modules
-* `src/Strat/Poly/Actions.hs`
-
-Rule of thumb for Phase 3:
-
-* If the check is about “what mode does this object belong to as a *port label*?” → use **owner mode**.
-* If the check is about “what mode is this code written in / which mode theory should normalize it?” → use **classifier/code mode**.
-
-Concretely:
-
-* `validateDiagram` port label check should remain owner-mode equality:
-
-  * `objOwnerMode portObj == dMode diag`.
-* Any place that previously did `objMode sortTy` to decide which term TRS to use:
-
-  * keep it as owner-mode (because term sorts are still objects of the term’s mode).
-  * Phase 3 does **not** change term typing semantics.
-
-### Step 7 — Tests and example programs to add for Phase 3
-
-You need tests that demonstrate classification affects object elaboration and normalization behavior.
-
-#### 7.1 Unit tests (Haskell)
-
-Add a new test module e.g. `test/Test/Poly/ClassificationPhase3.hs`:
-
-1. **Classifier-based constructor resolution**
-
-* Build a doctrine with:
-
-  * `mode Ty; type U @Ty;`
-  * `mode Tm classifiedBy Ty via Ty.U;`
-  * Code constructors in `Ty`, e.g. `type Unit @Ty; type Arr(a@Tm, b@Tm) @Ty;`
-* Elaborate an object expression in owner mode `Tm`:
-
-  * `Arr(Unit, Unit)` should succeed and produce `Obj{owner=Tm, code=CTCon (Ty.Arr) …}`
-  * `Tm.Arr(Unit, Unit)` should fail with “constructor qualifier Tm not allowed; expected Ty”.
-
-2. **Term-index normalization still works under wrapper**
-
-* Extend doctrine:
-
-  * `type Nat @Ty; gen Z : [] -> [Nat] @Ty; gen S : [Nat] -> [Nat] @Ty;`
-  * `type Vec(n : Nat, a@Tm) @Ty;`
-* Form an object in owner mode `Tm`: `Vec(S(Z), Unit)`
-* Ensure `normalizeObjDeepWithCtx` still normalizes the `CATm` payload correctly (even if no rewrite happens, it should at least round-trip and preserve well-formedness).
-
-#### 7.2 Example runner additions
-
-Add a new passing run example, e.g. `examples/run/classification_phase3.ok.run.llang`:
-
-* Define `Ty`, `U`, `Tm classifiedBy Ty via U`.
-* Define code constructors in Ty (`Unit`, `Arr`).
-* Define a `Tm` generator whose boundary uses `Arr(Unit, Unit)` (without `Ty.` qualifier if you want to test unqualified lookup in classifier; with qualifier if you want to test stricter behavior).
-
-Add a new xfail example, e.g. `examples/run/xfail/classification_wrong_classifier.fail.run.llang`:
-
-* Same setup, but use a constructor from the wrong mode in a `Tm` boundary (e.g., `Tm.Unit` or `Other.Unit`).
-* Expect the new Phase 3 error message.
-
-### Step 8 — SPEC updates required for Phase 3
-
-`SPEC.md` already has the conceptual classification story. For Phase 3, add implementation-facing clarifications:
-
-* A short subsection describing the two-mode notion:
-
-  * owner mode (port label mode),
-  * classifier/code mode (where its code is written),
-  * and that Phase 3 attaches both explicitly.
-
-* State Phase 3’s elaboration resolution rule explicitly:
-
-  * “When elaborating an object for owner mode M, unqualified constructors are resolved in the classifier mode of M; qualified constructors must match that classifier mode.”
-
-This is crucial to prevent future ambiguity.
+  * Doctrine: two modes `M` and `N` (self-classified), declare a type constructor in `M` that takes an object parameter in `N`.
+  * Surface type annotation uses that constructor and passes an `N`-mode object.
+  * Expect surface elaboration succeeds and the argument’s owner mode matches `N`.
 
 ---
 
-## Phase 3 completion checklist
+## 3) `expandModSpine` in unification recurses through `CTMod` with the wrong “inner owner” (latent correctness bug)
 
-Use this as the “done” gate:
+### Where
 
-1. **Core refactor compiles**:
+`src/Strat/Poly/UnifyObj.hs`
 
-* All uses of `OVar/OCon/OMod` updated to `Obj{…}` + `CTVar/CTCon/CTMod`.
+Function: `expandModSpine`
 
-2. **Classifier query works**:
+Current behavior:
 
-* A helper exists to compute classifier mode + universe for an owner mode, and it is used in elaboration (not just stored).
+```hs
+CTMod me innerCode -> do
+  inner' <- expandModSpine (mkObj (objOwnerMode ty) innerCode)
+  code' <- expandPath me (objCode inner')
+  return ty { objCode = code' }
+```
 
-3. **Classification affects elaboration**:
+### Why this is a problem
 
-* In a doctrine with `Tm classifiedBy Ty`, an object written in `Tm` must resolve constructors from `Ty` (or error clearly).
+* Conceptually, the inner code of `CTMod me _` is an object in `meSrc me`, not `objOwnerMode ty` (which corresponds to `meTgt me` for well-typed terms).
+* Today this is mostly “latent” because `expandModSpine` doesn’t enforce owner-mode consistency, but it will become a real bug the moment you:
 
-4. **Term-index normalization still works**:
+  * add mode-sensitive normalization/validation inside expansion, or
+  * reuse this helper elsewhere expecting well-typed recursion.
 
-* Existing normalization of embedded term indices still passes tests.
+### Agent instructions (implementation)
 
-5. **No silent merges**:
+1. Change the recursive call to:
 
-* `mtClassifiedBy` merge now errors on conflicts (or requires equality).
+   * `inner' <- expandModSpine (mkObj (meSrc me) innerCode)`
+2. Add a defensive check (recommended):
 
-6. **New tests/examples added**:
+   * If `objOwnerMode ty /= meTgt me`, error with a clear message (this catches malformed objects early).
 
-* At least one positive + one xfail demonstrating Phase 3 behavior.
+### Agent instructions (tests)
+
+* Add a small unit test in `test/Test/Poly/UnifyObj.hs` (or a new file) that:
+
+  * Builds an object with `CTMod` and nested `CTMod` inside it.
+  * Calls `unifyObjFlex` on two equivalent objects where expansion is required.
+  * This should remain stable as future refactors add checks.
+
+---
+
+## 4) PLAN.md vs implementation: scope discipline for code metas uses **owner mode**, plan mentions **classifier portion**
+
+### Where
+
+`src/Strat/Poly/UnifyObj.hs`, function `bindTyVar`
+
+Current behavior:
+
+* Computes `allowed` indices by filtering `tmCtx'` entries with `objOwnerMode == ownerV`.
+
+PLAN.md (Phase 4) says:
+
+* “scope governed by the classifier’s portion of the telescope”.
+
+### Why this matters
+
+* If future phases expect “code terms live in classifier mode, so their allowable bound indices come from the classifier slice”, the current check is enforcing a different rule.
+* This is the kind of mismatch that will explode later when you attempt more dependent pattern matching and code-level definitional equality (Phase 5+).
+
+### Agent instructions (resolution path)
+
+Do **one** of the following, explicitly and consistently:
+
+**Option A (update implementation to match PLAN):**
+
+1. Decide “classifier portion” precisely:
+
+   * Likely: use `modeClassifierMode ownerV` as the mode whose tmCtx slice is in scope.
+2. Change `allowed` computation to filter by that classifier mode rather than ownerV.
+3. Update `boundTmIndicesObj` / `boundTmIndicesTerm` invariants if needed so that indices are taken from classifier slice.
+4. Add tests that demonstrate code metavars can depend on classifier-slice variables, and cannot escape them.
+
+**Option B (update PLAN/SPEC to match implementation):**
+
+1. Keep the current owner-slice scope rule.
+2. Update `PLAN.md` Phase 4 text and add a short note in `SPEC.md` (or a dedicated invariants section) explaining why owner-slice is the intended rule.
+
+Given Phase 5 is about definitional equality of codes “as terms in classifier”, Option A is more coherent long-term, but pick based on intended semantics.
+
+---
+
+## 5) Known limitation (not a Phase 4 regression, but now more visible): surface types still disallow term arguments
+
+### Where
+
+`src/Strat/Poly/Surface/Elab.hs` in `checkParam`:
+
+```hs
+PS_Tm _ -> Left "surface: term arguments are not supported in surface type annotations"
+```
+
+### Impact
+
+Surface programs cannot write term-indexed types (e.g., `Vec(n, A)`), even though the core object language supports term arguments.
+
+### Agent instructions
+
+* Document as a limitation in `SPEC.md` surface section, **or**
+* Treat as a Phase 5/6 prerequisite depending on whether Phase 5 needs dependent surfaces.
+
+---
+
+# Phase 5 implementation plan: “Definitional equality engine via per-mode definitional fragments”
+
+This plan is structured as actionable agent tasks, including concrete file touch-points and tests.
+
+## Phase 5 goals (acceptance criteria)
+
+1. **Single normalization/equality service** is used everywhere:
+
+   * term diagram normalization,
+   * object/code normalization,
+   * unification comparisons.
+2. For each mode `M`, compute its **definitional fragment**:
+
+   * admissible definitional symbols (term functions),
+   * admissible computational rules (from `Cell2` marked computational),
+   * compiled per-mode TRS with termination + confluence checks.
+3. Provide a fuel-free `normalizeCodeTerm` entrypoint that is the basis of **type equality**:
+
+   * Normalization of object equality becomes “normalize code in appropriate mode fragment + compare”.
+4. Existing tests continue to pass, and new tests lock in the new centralization behavior.
+
+## Non-goals (explicitly defer)
+
+* Full code-level rewriting of `CTCon` using classifier-mode gens (this likely overlaps Phase 6).
+* Adding surface support for term-indexed type annotations unless required by downstream tests.
+
+---
+
+## Work breakdown
+
+## 1) Introduce a first-class “definitional engine” API
+
+### Files
+
+* New: `src/Strat/Poly/DefEq.hs` (or `Definitional.hs`)
+* Touch: `src/Strat/Poly/TypeTheory.hs`
+* Touch: `src/Strat/Poly/Doctrine.hs`
+* Touch: `src/Strat/Poly/ObjNormalize.hs`
+* Touch: `src/Strat/Poly/UnifyObj.hs`
+
+### Agent instructions
+
+1. Create a new module that owns **all** normalization and definitional equality entrypoints:
+
+   * `normalizeTermDiagram` (wrap existing logic)
+   * `normalizeObjDeepWithCtx` / `normalizeObj` (wrap existing logic)
+   * `normalizeCodeTerm` (new, see below)
+   * `defEqTermDiagram` and `defEqObj` (new; just “normalize then structural compare”)
+2. Update call sites:
+
+   * `ObjNormalize` becomes the implementation (or is folded into the new module).
+   * `UnifyObj` should call `DefEq.normalizeTermDiagram` and `DefEq.normalizeObj…` instead of importing `ObjNormalize` directly (or re-exporting from there).
+3. Keep the implementation minimal at first:
+
+   * Build a thin façade over existing normalization functions; the goal is to have a single authority module for defeq.
+
+### Tests
+
+* No new behavior yet; compile+tests should pass unchanged.
+
+---
+
+## 2) Make “per-mode definitional fragments” explicit in `TypeTheory`
+
+### Current state (what exists)
+
+* `doctrineTypeTheory` already computes:
+
+  * `ttTmFuns :: Map ModeName (Map TmFunName TmFunSig)`
+  * `ttTmRules :: Map ModeName [TmRule]`
+  * `ttTmTRS :: Map ModeName TRS`
+* Termination and confluence checks already happen in `Doctrine.doctrineTypeTheory`.
+
+### Agent instructions
+
+1. Introduce a new record:
+
+   ```hs
+   data DefFragment = DefFragment
+     { dfMode  :: ModeName
+     , dfFuns  :: Map TmFunName TmFunSig
+     , dfRules :: [TmRule]
+     , dfTRS   :: TRS
+     }
+   ```
+2. In `TypeTheory`, replace (or supplement) the three parallel maps with:
+
+   ```hs
+   ttDefFragments :: Map ModeName DefFragment
+   ```
+
+   Keep compatibility helpers:
+
+   * `termTRSForMode` becomes `dfTRS . lookup`.
+3. Refactor `Doctrine.doctrineTypeTheory`:
+
+   * Build `DefFragment` per mode in one place.
+   * Perform termination + confluence checks per fragment.
+4. Keep all rule filtering logic identical initially; Phase 5 is primarily architecture.
+
+### Tests
+
+* Add a unit test that asserts `ttDefFragments` contains entries for all modes that have any derived definitional content (or for all modes in doctrine, depending on design choice).
+
+---
+
+## 3) Implement `normalizeCodeTerm` as a stable API
+
+### Key design constraint in current codebase
+
+`CodeTerm` is not a `TermDiagram`. It contains:
+
+* `CTCon ObjRef [CodeArg]`
+* `CTMeta TmVar`
+* `CTMod ModExpr CodeTerm`
+
+And `CodeArg` is either:
+
+* `CAObj Obj` (which contains its own code term),
+* `CATm TermDiagram` (term in its own mode)
+
+Therefore, “normalize code term in mode K’s fragment” must at least:
+
+* normalize modality spines (mode equations),
+* normalize CAObj subobjects recursively,
+* normalize CATm term diagrams using the correct per-mode fragment,
+* then produce a canonical `CodeTerm` tree.
+
+### Agent instructions
+
+1. Add a new function (in the new DefEq module or in ObjNormalize, but exported via DefEq):
+
+   ```hs
+   normalizeCodeTermDeepWithCtx
+     :: TypeTheory
+     -> [Obj]        -- tmCtx
+     -> ModeName     -- owner mode of the *object whose code this is*
+     -> CodeTerm
+     -> Either Text CodeTerm
+   ```
+
+   Notes:
+
+   * You need the *owner* mode to type-check/normalize `CTMod` application boundaries (`meTgt` must match owner at that node).
+2. Implement as:
+
+   * For `CTMeta`: return as-is.
+   * For `CTCon ref args`:
+
+     * Normalize each `args[i]`:
+
+       * `CAObj t`: normalize `t` via `normalizeObjDeepWithCtx` and rewrap.
+       * `CATm d`: normalize via `normalizeTermDiagram` using the expected sort (see below).
+     * Return rebuilt `CTCon`.
+   * For `CTMod me inner`:
+
+     * Normalize `me` using `normalizeModExpr`.
+     * Normalize `inner` recursively using inner-owner `meSrc me`.
+     * Rebuild, and then **fuse/normalize** modality spines the same way `normalizeObjExpr` currently does (either:
+
+       * call `normalizeObjExpr` on a temporary `Obj owner (CTMod ...)` and then extract code, or
+       * reimplement the fusion logic for code terms).
+3. Sorting of `CATm`:
+
+   * If you have access to the type signature of `ref` in `CTCon ref args`, you can compute the expected term argument sort from `PS_Tm sortTy`.
+   * If you don’t (or for robustness), normalize term diagrams using:
+
+     * `normalizeTermDiagram tt tmCtx expectedSort diag`
+   * This requires that you thread expected sorts when you have them; so prefer signature-driven recursion at code-level too (similar to object-level normalization).
+4. Replace the existing “code term normalization logic” in `normalizeObjDeepWithCtx` with a call to this new function so there is exactly one implementation.
+
+### Tests
+
+Add tests that directly exercise `normalizeCodeTermDeepWithCtx` via object normalization:
+
+* Construct a doctrine with a dependent type constructor whose term argument reduces (e.g. the existing dependent Vec examples).
+* Assert:
+
+  * `normalizeObjDeepWithCtx` makes two objects equal whose only difference is a reducible term argument inside the code term.
+  * This should be tested at the object level (ports/types), not just term level.
+
+---
+
+## 4) Centralize definitional equality checks (“normalize then compare”)
+
+### Agent instructions
+
+1. Add:
+
+   ```hs
+   defEqObj :: TypeTheory -> [Obj] -> Obj -> Obj -> Either Text Bool
+   defEqObj tt tmCtx a b = do
+     aN <- normalizeObjDeepWithCtx tt tmCtx a
+     bN <- normalizeObjDeepWithCtx tt tmCtx b
+     pure (aN == bN)
+   ```
+2. Add:
+
+   ```hs
+   defEqTermDiagram :: TypeTheory -> [Obj] -> Obj -> TermDiagram -> TermDiagram -> Either Text Bool
+   ```
+
+   where `Obj` is the expected sort; normalize both via `normalizeTermDiagram` and compare.
+3. Replace ad-hoc equality checks in:
+
+   * `Strat/Poly/DiagramIso.hs` (where sorts are compared after substitutions),
+   * any matching code that does raw equality on objects/terms that should be definitional.
+
+This step is what makes “codes the basis of type equality” mechanically true.
+
+### Tests
+
+* Add a DiagramIso regression where isomorphism depends on definitional equality of port types (e.g., types differ only in reducible term index).
+
+---
+
+## 5) Update unification to rely on the definitional engine consistently
+
+### Agent instructions
+
+1. Audit all normalization in `src/Strat/Poly/UnifyObj.hs`:
+
+   * Ensure term normalization uses the centralized API.
+   * Ensure object normalization used before comparisons is consistent (particularly for modality normalization and term-index normalization).
+2. Eliminate duplicate normalization paths:
+
+   * If `unifyTm` does its own “normalize-to-term-expr and back” steps, ensure it calls the shared `normalizeTermDiagram` and only does the extra conversion steps where strictly required.
+3. Add one invariant:
+
+   * Whenever you compare `Obj` or `TermDiagram` for equality in unification, compare **normalized** forms unless the comparison is strictly syntactic-by-design (e.g., occurs checks).
+
+### Tests
+
+* Add a unification test where the success depends on term-index reduction inside object codes (if not already covered by Vec-dependent tests).
+
+---
+
+## 6) Termination + confluence: tighten surfacing and diagnostics
+
+Even though these checks exist, Phase 5 is a good time to make failures actionable, because the engine becomes “the” source of definitional equality.
+
+### Agent instructions
+
+1. When SCT termination check fails, include:
+
+   * mode name,
+   * the root symbols involved (TmFunName),
+   * the offending rules pretty-printed.
+2. When confluence check fails, include:
+
+   * the critical pair and overlap position details if available.
+
+### Tests
+
+* Add a negative test doctrine that intentionally creates a non-terminating definitional fragment in some mode; assert the error message includes the mode and root symbol.
+
+---
+
+## 7) Documentation updates
+
+### Agent instructions
+
+1. Update `SPEC.md`:
+
+   * Add/extend a section describing:
+
+     * “definitional fragment per mode”,
+     * how `normalizeTermDiagram` and `normalizeCodeTerm` interact,
+     * how definitional equality is used for type equality (objects).
+2. Update `PLAN.md` Phase 5:
+
+   * Reflect the concrete API names and the new `DefFragment` structure.
+   * Resolve the “scope by classifier vs owner” mismatch explicitly (see Phase 4 issue #4).
+
+---
+
+# Implementation checklist (agent-facing)
+
+## Phase 4 fixes checklist
+
+* [ ] Surface: `RPTVar` resolves nullary constructors when available.
+* [ ] Surface: `RPTCon` elaborates args in signature-directed owner modes (`PS_Ty m` ⇒ recurse with `m`).
+* [ ] UnifyObj: fix `expandModSpine` inner owner to `meSrc`.
+* [ ] Decide and document scope rule (owner-slice vs classifier-slice).
+* [ ] Add regression tests for surface constructor resolution (including classified case).
+
+## Phase 5 checklist
+
+* [ ] Add `DefEq` module (or equivalent) as the single entrypoint.
+* [ ] Replace parallel `ttTmFuns/ttTmRules/ttTmTRS` with `ttDefFragments`.
+* [ ] Implement and export `normalizeCodeTermDeepWithCtx`.
+* [ ] Refactor object normalization to call the new code-normalizer.
+* [ ] Add `defEqObj` / `defEqTermDiagram` (“normalize then compare”).
+* [ ] Route unification and iso checks through the defeq API.
+* [ ] Improve termination/confluence diagnostics + negative tests.
+* [ ] Update SPEC + PLAN text to match implementation reality.

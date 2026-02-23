@@ -89,7 +89,7 @@ import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 import Strat.Poly.Proof (SearchBudget, defaultSearchBudget, renderSearchLimit)
 import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.ObjNormalize (termExprToDiagramChecked)
+import Strat.Poly.DefEq (termExprToDiagramChecked)
 import Strat.Poly.ObjClassifier (modeUniverseObj)
 
 

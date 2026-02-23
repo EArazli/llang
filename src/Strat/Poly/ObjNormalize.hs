@@ -20,7 +20,7 @@ import Strat.Poly.Graph
   , diagramPortObj
   , weakenDiagramTmCtxTo
   )
-import Strat.Poly.ModeTheory (ModeName, meSrc)
+import Strat.Poly.ModeTheory (ModeName, meSrc, meTgt)
 import Strat.Poly.Obj
   ( TermDiagram(..)
   , CodeArg(..)
@@ -32,6 +32,7 @@ import Strat.Poly.Obj
 import Strat.Poly.TypeTheory
   ( TypeParamSig(..)
   , TypeTheory(..)
+  , termTRSForMode
   , lookupTmFunSig
   )
 import Strat.Poly.TermExpr
@@ -43,7 +44,6 @@ import Strat.Poly.TermExpr
   , validateTermGraph
   )
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
-import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
 
 
 normalizeObjDeep :: TypeTheory -> Obj -> Either Text Obj
@@ -56,41 +56,54 @@ normalizeCodeTermDeepWithCtx
   -> CodeTerm
   -> Either Text CodeTerm
 normalizeCodeTermDeepWithCtx tt tmCtx owner code =
-  objCode <$> normalizeObjDeepWithCtx tt tmCtx Obj { objOwnerMode = owner, objCode = code }
+  case code of
+    CTMeta _ -> Right code
+    CTCon ref args ->
+      case M.lookup ref (ttObjParams tt) of
+        Just params ->
+          if length params /= length args
+            then Left "normalizeCodeTermDeepWithCtx: type constructor arity mismatch"
+            else do
+              args' <- mapM normalizeArgBySig (zip params args)
+              Right (CTCon ref args')
+        Nothing ->
+          if M.null (ttObjParams tt)
+            then do
+              -- modeOnlyTypeTheory intentionally omits constructor signatures; normalize structurally.
+              args' <- mapM normalizeUnknownArg args
+              Right (CTCon ref args')
+            else
+              if null args
+                then Right code
+                else Left "normalizeCodeTermDeepWithCtx: unknown type constructor"
+    CTMod me innerCode -> do
+      if meTgt me /= owner
+        then Left "normalizeCodeTermDeepWithCtx: modality target does not match object owner mode"
+        else Right ()
+      inner' <- normalizeCodeTermDeepWithCtx tt tmCtx (meSrc me) innerCode
+      merged <- normalizeObjExpr (ttModes tt) Obj { objOwnerMode = owner, objCode = CTMod me inner' }
+      pure (objCode merged)
+  where
+    normalizeArgBySig (TPS_Ty _, CAObj tyArg) =
+      CAObj <$> normalizeObjDeepWithCtx tt tmCtx tyArg
+    normalizeArgBySig (TPS_Tm sortTy, CATm tm) = do
+      sortTy' <- normalizeObjDeepWithCtx tt tmCtx sortTy
+      tm' <- normalizeTermDiagram tt tmCtx sortTy' tm
+      Right (CATm tm')
+    normalizeArgBySig (TPS_Ty _, CATm _) =
+      Left "normalizeCodeTermDeepWithCtx: expected type argument"
+    normalizeArgBySig (TPS_Tm _, CAObj _) =
+      Left "normalizeCodeTermDeepWithCtx: expected term argument"
+
+    normalizeUnknownArg arg =
+      case arg of
+        CAObj tyArg -> CAObj <$> normalizeObjDeepWithCtx tt tmCtx tyArg
+        CATm tm -> Right (CATm tm)
 
 normalizeObjDeepWithCtx :: TypeTheory -> [Obj] -> Obj -> Either Text Obj
 normalizeObjDeepWithCtx tt tmCtx ty = do
-  ty' <- go ty
-  normalizeObjExpr (ttModes tt) ty'
-  where
-    go expr =
-      case objCode expr of
-        CTMeta _ -> Right expr
-        CTMod me innerCode -> do
-          inner <- go Obj { objOwnerMode = meSrc me, objCode = innerCode }
-          Right expr { objCode = CTMod me (objCode inner) }
-        CTCon ref args ->
-          case M.lookup ref (ttObjParams tt) of
-            Just params ->
-              if length params /= length args
-                then Left "normalizeObjDeep: type constructor arity mismatch"
-                else do
-                  args' <- mapM normalizeArg (zip params args)
-                  Right expr { objCode = CTCon ref args' }
-            Nothing ->
-              if null args
-                then Right expr
-                else Left "normalizeObjDeep: unknown type constructor"
-
-    normalizeArg (TPS_Ty _, CAObj tyArg) = CAObj <$> go tyArg
-    normalizeArg (TPS_Tm sortTy, CATm tm) = do
-      sortTy' <- go sortTy
-      tm' <- normalizeTermDiagram tt tmCtx sortTy' tm
-      Right (CATm tm')
-    normalizeArg (TPS_Ty _, CATm _) =
-      Left "normalizeObjDeep: expected type argument"
-    normalizeArg (TPS_Tm _, CAObj _) =
-      Left "normalizeObjDeep: expected term argument"
+  code' <- normalizeCodeTermDeepWithCtx tt tmCtx (objOwnerMode ty) (objCode ty)
+  normalizeObjExpr (ttModes tt) ty { objCode = code' }
 
 normalizeTermDiagram
   :: TypeTheory
@@ -101,7 +114,7 @@ normalizeTermDiagram
 normalizeTermDiagram tt tmCtx expectedSort term = do
   expectedSort' <- wrap "normalize-sort" (normalizeObjDeepWithCtx tt tmCtx expectedSort)
   src <- wrap "term-to-diagram" (termToDiagram tt tmCtx expectedSort' term)
-  trs <- wrap "trs-lookup" (termTRSForMode tt (objOwnerMode expectedSort'))
+  let trs = termTRSForMode tt (objOwnerMode expectedSort')
   expr0 <- wrap "diagram-to-termexpr" (diagramGraphToTermExprUnchecked src)
   let expr = normalizeTermExpr trs expr0
   out <- wrap "termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' expr)
@@ -219,12 +232,6 @@ requireSingleOut term =
   case dOut term of
     [pid] -> Right pid
     _ -> Left "termToDiagram: term diagram must have exactly one output"
-
-termTRSForMode :: TypeTheory -> ModeName -> Either Text TRS
-termTRSForMode tt mode =
-  case M.lookup mode (ttTmTRS tt) of
-    Nothing -> Right (mkTRS mode [])
-    Just trs -> Right trs
 
 termExprToDiagramChecked
   :: TypeTheory

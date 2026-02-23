@@ -21,7 +21,7 @@ compileTermRules tt mode = do
   rules <- mapM compileOne (zip [0 :: Int ..] raw)
   pure (mkTRS mode rules)
   where
-    raw = M.findWithDefault [] mode (TT.ttTmRules tt)
+    raw = TT.termRulesForMode tt mode
 
     compileOne (i, rule) = do
       let vars = TT.trVars rule
@@ -50,7 +50,7 @@ compileTermRules tt mode = do
 compileAllTermRules :: TT.TypeTheory -> Either Text (M.Map ModeName TRS)
 compileAllTermRules tt = do
   let modeNames = M.keysSet (mtModes (TT.ttModes tt))
-  let withRuleModes = M.keysSet (TT.ttTmRules tt)
+  let withRuleModes = M.keysSet (TT.ttDefFragments tt)
   let allModes = S.toList (S.union modeNames withRuleModes)
   trs <- mapM (\mode -> do t <- compileTermRules tt mode; pure (mode, t)) allModes
   pure (M.fromList trs)

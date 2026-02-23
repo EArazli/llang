@@ -238,8 +238,14 @@ elabSurfaceObjExpr :: Doctrine -> ModeName -> RawPolyObjExpr -> Either Text Obj
 elabSurfaceObjExpr doc mode expr =
   case expr of
     RPTVar name -> do
-      v <- mkTypeMetaVar doc mode name
-      Right Obj { objOwnerMode = mode, objCode = CTMeta v }
+      let rawRef = RawTypeRef { rtrMode = Nothing, rtrName = name }
+      resolved <- resolveNullaryCtor rawRef
+      case resolved of
+        Just ref ->
+          Right Obj { objOwnerMode = mode, objCode = CTCon ref [] }
+        Nothing -> do
+          v <- mkTypeMetaVar doc mode name
+          Right Obj { objOwnerMode = mode, objCode = CTMeta v }
     RPTMod rawMe innerRaw -> do
       me <- elabRawModExprSurface (dModes doc) rawMe
       if meTgt me /= mode
@@ -279,10 +285,11 @@ elabSurfaceObjExpr doc mode expr =
           if length params /= length args
             then Left "surface: type constructor arity mismatch"
             else do
-              args' <- mapM elabOneArg (zip params args)
+              let ctorName = rtrName rawRef
+              args' <- mapM (elabOneArg ctorName) (zip3 [1 :: Int ..] params args)
               Right Obj { objOwnerMode = mode, objCode = CTCon ref args' }
   where
-    elabOneArg (param, rawArg) =
+    elabOneArg ctorName (argIx, param, rawArg) =
       case param of
         PS_Ty m -> do
           argTy <- elabSurfaceObjExpr doc m rawArg
@@ -290,7 +297,35 @@ elabSurfaceObjExpr doc mode expr =
             then Right (CAObj argTy)
             else Left "surface: type constructor argument mode mismatch"
         PS_Tm _ ->
-          Left "surface: term arguments are not supported in surface type annotations"
+          Left
+            ( "surface: constructor `"
+                <> ctorName
+                <> "` argument #"
+                <> T.pack (show argIx)
+                <> " is term-indexed; term arguments are not supported in surface type annotations"
+            )
+
+    resolveNullaryCtor rawRef =
+      case resolveTypeRef doc mode rawRef of
+        Right ref -> do
+          sig <- lookupTypeSig doc ref
+          if null (tsParams sig)
+            then Right (Just ref)
+            else
+              Left
+                ( "surface: constructor `"
+                    <> rtrName rawRef
+                    <> "` resolves in classifier mode "
+                    <> renderMode (Ty.orMode ref)
+                    <> " with arity "
+                    <> T.pack (show (length (tsParams sig)))
+                    <> "; use explicit constructor arguments"
+                )
+        Left err
+          | "unknown type constructor" `T.isPrefixOf` err ->
+              Right Nothing
+          | otherwise ->
+              Left err
 
     asModalityCall rawRef0 args0 =
       case (rtrMode rawRef0, rtrName rawRef0, args0) of
@@ -315,6 +350,8 @@ elabSurfaceObjExpr doc mode expr =
        in case M.lookup mode' (dTypes doc) of
             Nothing -> False
             Just table -> M.member tyName table
+
+    renderMode (ModeName n) = n
 
 elabRawModExprSurface :: ModeTheory -> RawModExpr -> Either Text ModExpr
 elabRawModExprSurface mt raw =

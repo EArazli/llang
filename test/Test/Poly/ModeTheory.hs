@@ -26,7 +26,7 @@ import Strat.Poly.Doctrine
   , doctrineTypeTheory
   , gdPlainDom
   )
-import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory(..), modeOnlyTypeTheory)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genDTm, genD, diagramDom, diagramCod)
 import Strat.Poly.Graph (Diagram(..))
@@ -56,6 +56,7 @@ tests =
     , testCase "for_gen lift operators allow codomain arity changes" testForGenLiftAllowsCodArityChange
     , testCase "for_gen rejects @gen under mode-changing map context" testForGenGenPlacementRejected
     , testCase "@gen outside for_gen is rejected" testGenOutsideForGenRejected
+    , testCase "doctrine type theory builds definitional fragments for all modes" testDefFragmentsCoverModes
     , testCase "action coherence follows mod_eq" testActionModEqCoherence
     , testCase "implements fails when schema obligations are not provable" testAdjObligationFail
     , testCase "implements succeeds when schema obligations hold" testAdjObligationPass
@@ -206,6 +207,26 @@ testActionElab = do
   case M.lookup (ModName "F") (dActions doc) >>= M.lookup (ModeName "A", GenName "g") . maGenMap of
     Nothing -> assertFailure "missing action image for g under F"
     Just _ -> pure ()
+
+testDefFragmentsCoverModes :: Assertion
+testDefFragmentsCoverModes = do
+  let src = T.unlines
+        [ "doctrine DefFrags where {"
+        , "  mode M classifiedBy M via M.U;"
+        , "  type U @M;"
+        , "  mode N classifiedBy N via N.V;"
+        , "  type V @N;"
+        , "  type A @M;"
+        , "  gen idA : [A] -> [A] @M;"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "DefFrags" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine DefFrags" >> fail "unreachable"
+      Just d -> pure d
+  tt <- requireEither (doctrineTypeTheory doc)
+  M.keysSet (ttDefFragments tt) @?= M.keysSet (mtModes (dModes doc))
 
 testApplyActionUsesDiagramTmCtx :: Assertion
 testApplyActionUsesDiagramTmCtx = do

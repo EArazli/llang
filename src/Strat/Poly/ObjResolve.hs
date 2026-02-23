@@ -51,7 +51,18 @@ resolveTypeRefInClassifier doc ownerMode classifierMode raw =
 
     lookupQualified mode =
       case M.lookup mode (dTypes doc) >>= M.lookup tname of
-        Nothing -> Left ("unknown type constructor: " <> rtrName raw)
+        Nothing ->
+          Left
+            ( "unknown type constructor: "
+                <> rtrName raw
+                <> " (object mode "
+                <> renderMode ownerMode
+                <> " is classified by "
+                <> renderMode classifierMode
+                <> "; looked in classifier mode "
+                <> renderMode mode
+                <> ")"
+            )
         Just _ -> Right (ObjRef mode tname)
 
     renderMode (ModeName name) = name

@@ -33,7 +33,7 @@ import Strat.Poly.ObjClassifier (modeClassifierMode, modeUniverseObj)
 import Strat.Poly.ObjResolve (resolveTypeRefInClassifier)
 import qualified Strat.Poly.UnifyObj as U
 import Strat.Poly.TypeTheory (TypeTheory, TmFunSig(..))
-import Strat.Poly.ObjNormalize (normalizeObjDeep, termExprToDiagramChecked)
+import Strat.Poly.DefEq (normalizeObjDeep, termExprToDiagramChecked)
 import Strat.Poly.Attr
 import Strat.Poly.Morphism
 import Strat.Poly.ModAction (ActionSemanticsResult(..), applyModExpr, validateActionSemanticsWithBudgetResult)

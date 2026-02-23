@@ -27,7 +27,7 @@ import Strat.Poly.Obj
   , ObjRef(..)
   , TmFunName(..)
   )
-import Strat.Poly.ObjNormalize (diagramToTermExprChecked, normalizeObjDeepWithCtx)
+import Strat.Poly.DefEq (diagramToTermExprChecked, normalizeObjDeepWithCtx)
 import Strat.Poly.TermExpr (TermExpr(..))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit

@@ -142,6 +142,7 @@ library
       Strat.Poly.Cell2
       Strat.Poly.Coherence
       Strat.Poly.CriticalPairs
+      Strat.Poly.DefEq
       Strat.Poly.Diagram
       Strat.Poly.DiagramIso
       Strat.Poly.Doctrine

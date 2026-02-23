@@ -26,6 +26,7 @@ import Strat.Poly.Graph
 import Strat.Poly.Obj (Obj, TmVar(..))
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.UnifyObj (Subst, emptySubst, unifyObjFlex, applySubstCtx)
+import Strat.Poly.DefEq (defEqObj)
 
 
 data IsoState extra = IsoState
@@ -344,8 +345,19 @@ algoMatch tt flex attrFlex =
         , applySubstCtx tt (ieTySubst extra) (dTmCtx right)
         )
         of
-        (Right left', Right right') -> left' == right'
+        (Right left', Right right') ->
+          either (const False) id (defEqCtx left' right')
         _ -> False
+
+    defEqCtx leftCtx rightCtx = go [] leftCtx rightCtx
+      where
+        go _ [] [] = Right True
+        go tmCtxAcc (a:as) (b:bs) = do
+          ok <- defEqObj tt tmCtxAcc a b
+          if ok
+            then go (tmCtxAcc <> [a]) as bs
+            else Right False
+        go _ _ _ = Right False
 
     comparePorts left _ extra ty1 ty2 =
       case applySubstCtx tt (ieTySubst extra) (dTmCtx left) of

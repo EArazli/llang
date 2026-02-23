@@ -34,7 +34,7 @@ import Strat.Poly.Names
 import Strat.Poly.Obj
 import Strat.Poly.UnifyObj hiding (applySubstDiagram)
 import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.ObjNormalize (normalizeObjDeep)
+import Strat.Poly.DefEq (normalizeObjDeep)
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.ObjClassifier (modeUniverseObj)
