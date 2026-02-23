@@ -502,7 +502,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
       tgtMode <- PolyMorph.applyMorphismMode mor (orMode srcRef)
       let tgtRef = srcRef { orMode = tgtMode }
       params <- mapM (mkParam mor) (zip [0 :: Int ..] (tsParams sig))
-      args <- mapM (paramArg tt) params
+      args <- mapM (paramArg tt) (zip (tsParams sig) params)
       pure (PolyMorph.TypeTemplate params (mkCon tgtRef args))
 
     mkParam mor (i, param) =
@@ -514,20 +514,34 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
               let tv =
                     TmVar
                       { tmvName = "a" <> T.pack (show i)
-                      , tmvSort = universe { objOwnerMode = tgtMode }
+                      , tmvSort = universe
                       , tmvScope = 0
+                      , tmvOwnerMode = Just tgtMode
                       }
               Right (PolyMorph.TPType tv)
             Nothing ->
-              Right (PolyMorph.TPType ObjVar { ovName = "a" <> T.pack (show i), ovMode = tgtMode })
+              Left
+                ( "apply: type metavariable `a"
+                    <> T.pack (show i)
+                    <> "@"
+                    <> renderMode tgtMode
+                    <> "` requires `mode "
+                    <> renderMode tgtMode
+                    <> " classifiedBy ... via ...;` with a declared universe"
+                )
         PS_Tm srcSort -> do
           tgtSort <- PolyMorph.applyMorphismTy mor srcSort
-          Right (PolyMorph.TPTm TmVar { tmvName = "t" <> T.pack (show i), tmvSort = tgtSort, tmvScope = 0 })
+          Right (PolyMorph.TPTm TmVar { tmvName = "t" <> T.pack (show i), tmvSort = tgtSort, tmvScope = 0, tmvOwnerMode = Nothing })
+      where
+        renderMode (ModeName n) = n
 
-    paramArg tt param =
-      case param of
-        PolyMorph.TPType v -> Right (OAObj (OVar v))
-        PolyMorph.TPTm v -> do
+    paramArg tt (srcParam, param) =
+      case (srcParam, param) of
+        (PS_Ty _, PolyMorph.TPType v) ->
+          Right (OAObj Obj { objOwnerMode = maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v), objCode = CTMeta v })
+        (PS_Tm _, PolyMorph.TPType _) ->
+          Left "apply: internal kind mismatch for type template argument"
+        (_, PolyMorph.TPTm v) -> do
           tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMVar v)
           Right (OATm tm)
 

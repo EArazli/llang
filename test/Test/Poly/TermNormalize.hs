@@ -76,8 +76,8 @@ testCompileRejectsFreshRhsVars = do
     modeM = ModeName "M"
     fName = TmFunName "f"
     sortTy = OVar ObjVar { ovName = "a", ovMode = modeM }
-    xVar = TmVar { tmvName = "x", tmvSort = sortTy, tmvScope = 0 }
-    yVar = TmVar { tmvName = "y", tmvSort = sortTy, tmvScope = 0 }
+    xVar = TmVar { tmvName = "x", tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
+    yVar = TmVar { tmvName = "y", tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
     funSigs = M.fromList [(fName, TT.TmFunSig { TT.tfsArgs = [sortTy], TT.tfsRes = sortTy })]
     ttBase = (modeOnlyTypeTheory (mkModes [modeM])) { ttTmFuns = M.singleton modeM funSigs }
 

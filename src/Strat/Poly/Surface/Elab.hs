@@ -39,7 +39,7 @@ import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
 import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
 import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurfaceExpr)
 import Strat.Poly.Surface.Spec
-import Strat.Poly.Obj (Obj(Obj, objOwnerMode, objCode), ObjName(..), ObjVar, ovName, ovMode, Context, CodeArg(..), CodeTerm(..), objMode, freeObjVarsObj, freeTmVarsObj)
+import Strat.Poly.Obj (Obj(Obj, objOwnerMode, objCode), ObjName(..), ObjVar, ovName, ovMode, TmVar, Context, CodeArg(..), CodeTerm(..), objMode, freeObjVarsObj, freeTmVarsObj)
 import Strat.Poly.ObjClassifier (modeUniverseObj)
 import Strat.Poly.ObjResolve (resolveTypeRef)
 import qualified Strat.Poly.Obj as Ty
@@ -59,7 +59,7 @@ applySubstCtx :: ModeTheory -> Subst -> Context -> Either Text Context
 applySubstCtx mt =
   U.applySubstCtx (modeOnlyTypeTheory mt)
 
-unifyObjFlex :: ModeTheory -> S.Set ObjVar -> Subst -> Obj -> Obj -> Either Text Subst
+unifyObjFlex :: ModeTheory -> S.Set TmVar -> Subst -> Obj -> Obj -> Either Text Subst
 unifyObjFlex mt flex =
   U.unifyObjFlex (modeOnlyTypeTheory mt) [] flex
 
@@ -208,7 +208,7 @@ data ElabEnv = ElabEnv
 initEnv :: Either Text ElabEnv
 initEnv = Right (ElabEnv M.empty U.emptySubst)
 
-mkTypeMetaVar :: Doctrine -> ModeName -> Text -> Either Text ObjVar
+mkTypeMetaVar :: Doctrine -> ModeName -> Text -> Either Text TmVar
 mkTypeMetaVar doc ownerMode name = do
   universe <-
     case modeUniverseObj (dModes doc) ownerMode of
@@ -226,8 +226,10 @@ mkTypeMetaVar doc ownerMode name = do
   pure
     Ty.TmVar
       { Ty.tmvName = name
-      , Ty.tmvSort = universe { objOwnerMode = ownerMode }
+      -- Code metavariables are sorted in the classifier universe object itself.
+      , Ty.tmvSort = universe
       , Ty.tmvScope = 0
+      , Ty.tmvOwnerMode = Just ownerMode
       }
   where
     renderMode (ModeName n) = n
@@ -506,7 +508,9 @@ instantiateImplUnaryGen iface mor g ty = do
   dSchema <- instantiateUnaryGen ifaceTT g (Ty.OVar srcVar)
   dMapped <- PolyMorph.applyMorphismDiagram mor dSchema
   tgtSort <- PolyMorph.applyMorphismTy mor (Ty.tmvSort srcVar)
-  let tgtVar = srcVar { Ty.tmvSort = tgtSort }
+  let srcOwner = maybe (Ty.objOwnerMode (Ty.tmvSort srcVar)) id (Ty.tmvOwnerMode srcVar)
+  tgtOwner <- PolyMorph.applyMorphismMode mor srcOwner
+  let tgtVar = srcVar { Ty.tmvSort = tgtSort, Ty.tmvOwnerMode = Just tgtOwner }
   applySubstDiagram
     tgtTT
     (U.mkSubst (M.singleton tgtVar ty) M.empty)
@@ -1290,12 +1294,12 @@ instance Monad Fresh where
 evalFresh :: Fresh a -> Either Text a
 evalFresh (Fresh f) = fmap fst (f 0)
 
-freshSubst :: [ObjVar] -> Fresh Subst
+freshSubst :: [TmVar] -> Fresh Subst
 freshSubst vars = do
   pairs <- mapM freshVar vars
   pure (U.mkSubst (M.fromList pairs) M.empty)
 
-extractFreshVars :: [ObjVar] -> Subst -> Either Text [ObjVar]
+extractFreshVars :: [TmVar] -> Subst -> Either Text [TmVar]
 extractFreshVars vars subst =
   mapM lookupVar vars
   where
@@ -1304,14 +1308,14 @@ extractFreshVars vars subst =
         Just (Ty.OVar v') -> Right v'
         _ -> Left "internal error: expected fresh type variable"
 
-freshVar :: ObjVar -> Fresh (ObjVar, Obj)
+freshVar :: TmVar -> Fresh (TmVar, Obj)
 freshVar v = do
   n <- freshInt
   let name = ovName v <> T.pack ("#" <> show n)
   let fresh = v { Ty.tmvName = name }
   pure (v, Ty.OVar fresh)
 
-freshTyVar :: ObjVar -> Fresh ObjVar
+freshTyVar :: TmVar -> Fresh TmVar
 freshTyVar v = do
   n <- freshInt
   let name = ovName v <> T.pack ("#" <> show n)

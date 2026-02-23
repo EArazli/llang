@@ -37,6 +37,7 @@ import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.ObjNormalize (normalizeObjDeep)
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
+import Strat.Poly.ObjClassifier (modeUniverseObj)
 import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Proof
   ( JoinProof
@@ -97,7 +98,7 @@ data GenImage = GenImage
   } deriving (Eq, Show)
 
 data TemplateParam
-  = TPType ObjVar
+  = TPType TmVar
   | TPTm TmVar
   deriving (Eq, Ord, Show)
 
@@ -121,15 +122,10 @@ mapAttrSort mor sortName =
     Nothing -> Left "morphism: missing attribute sort mapping"
     Just sortName' -> Right sortName'
 
-mapTyVar :: Morphism -> ObjVar -> Either Text ObjVar
-mapTyVar mor v = do
+mapCodeMeta :: Morphism -> ModeName -> TmVar -> Either Text TmVar
+mapCodeMeta mor owner' v = do
   sort' <- applyMorphismTy mor (tmvSort v)
-  pure v { tmvSort = sort' }
-
-mapCodeMeta :: Morphism -> TmVar -> Either Text TmVar
-mapCodeMeta mor v = do
-  sort' <- applyMorphismTy mor (tmvSort v)
-  pure v { tmvSort = sort' }
+  pure v { tmvSort = sort', tmvOwnerMode = Just owner' }
 
 mapTypeRef :: Morphism -> ObjRef -> Either Text ObjRef
 mapTypeRef mor ref = do
@@ -149,7 +145,7 @@ applyMorphismTy mor ty = do
   owner' <- mapMode mor (objOwnerMode ty)
   case objCode ty of
     CTMeta v -> do
-      v' <- mapCodeMeta mor v
+      v' <- mapCodeMeta mor owner' v
       pure Obj { objOwnerMode = owner', objCode = CTMeta v' }
     CTMod me innerCode -> do
       inner' <- applyMorphismTy mor Obj { objOwnerMode = meSrc me, objCode = innerCode }
@@ -300,7 +296,9 @@ mapSubst mor subst = do
   pure (mkSubst (M.fromList tyPairs) (M.fromList tmPairs))
   where
     mapTyOne (v, t) = do
-      v' <- mapTyVar mor v
+      ownerSrc <- pure (maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v))
+      ownerTgt <- mapMode mor ownerSrc
+      v' <- mapCodeMeta mor ownerTgt v
       t' <- applyMorphismTy mor t
       pure (v', t')
     mapTmOne (v, t) = do
@@ -705,7 +703,7 @@ validateTypeMap mor = do
         else Left "checkMorphism: type template body mode mismatch"
 
     ensureDistinctTemplateParamNames params =
-      let names = [ ovName v | TPType v <- params ] <> [ tmvName v | TPTm v <- params ]
+      let names = [ tmvName v | TPType v <- params ] <> [ tmvName v | TPTm v <- params ]
           set = S.fromList names
       in if S.size set == length names
           then Right ()
@@ -715,9 +713,18 @@ validateTypeMap mor = do
       case (srcParam, tmplParam) of
         (PS_Ty srcMode, TPType v) -> do
           expectedMode <- mapMode mor srcMode
-          if objMode (tmvSort v) == expectedMode
+          expectedUniverse <-
+            case modeUniverseObj (dModes (morTgt mor)) expectedMode of
+              Nothing ->
+                Left
+                  ( "checkMorphism: type template type parameter requires classified universe for mode "
+                      <> renderMode expectedMode
+                  )
+              Just u -> Right u
+          sortOk <- sortDefEq ttTgt expectedUniverse (tmvSort v)
+          if sortOk
             then Right ()
-            else Left "checkMorphism: type template type-parameter mode mismatch"
+            else Left "checkMorphism: type template type-parameter universe mismatch"
         (PS_Tm srcSort, TPTm tmParam) -> do
           expectedMode <- mapMode mor (objMode srcSort)
           if objMode (tmvSort tmParam) == expectedMode
@@ -732,6 +739,8 @@ validateTypeMap mor = do
           Left "checkMorphism: type template kind mismatch"
         (PS_Tm _, _) ->
           Left "checkMorphism: type template kind mismatch"
+      where
+        renderMode (ModeName n) = n
 
     sortDefEq ttTgt lhs rhs = do
       lhs' <- normalizeObjDeep ttTgt lhs

@@ -16,7 +16,7 @@ import Data.Monoid (Any(..), getAny)
 import Strat.Poly.Graph
 import Strat.Poly.Diagram
 import Strat.Poly.Match
-import Strat.Poly.Obj (ObjVar, TmVar, Obj)
+import Strat.Poly.Obj (TmVar, Obj)
 import Strat.Poly.Cell2
 import Strat.Poly.UnifyObj (emptySubst)
 import Strat.Common.Rules (RewritePolicy(..))
@@ -29,7 +29,7 @@ data RewriteRule = RewriteRule
   { rrName   :: Text
   , rrLHS    :: Diagram
   , rrRHS    :: Diagram
-  , rrTyVars :: [ObjVar]
+  , rrTyVars :: [TmVar]
   , rrTmVars :: [TmVar]
   } deriving (Eq, Show)
 

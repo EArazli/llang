@@ -61,19 +61,30 @@ type CellRenameMap = M.Map (ModeName, Text) Text
 type OblRenameMap = M.Map Text Text
 type TransformRenameMap = M.Map ModTransformName ModTransformName
 
-mkTypeMetaVarForMode :: Doctrine -> ModeName -> Text -> Either Text ObjVar
+mkTypeMetaVarForMode :: Doctrine -> ModeName -> Text -> Either Text TmVar
 mkTypeMetaVarForMode doc ownerMode name = do
-  universe <- Right (modeUniverseObj (dModes doc) ownerMode)
-  pure $
-    case universe of
-      Just u ->
-        TmVar
-          { tmvName = name
-          , tmvSort = u { objOwnerMode = ownerMode }
-          , tmvScope = 0
-          }
+  universe <-
+    case modeUniverseObj (dModes doc) ownerMode of
       Nothing ->
-        ObjVar { ovName = name, ovMode = ownerMode }
+        Left
+          ( "pushout: type metavariable `"
+              <> name
+              <> "@"
+              <> renderMode ownerMode
+              <> "` requires `mode "
+              <> renderMode ownerMode
+              <> " classifiedBy ... via ...;` with a declared universe"
+          )
+      Just u -> Right u
+  pure
+    TmVar
+      { tmvName = name
+      , tmvSort = universe
+      , tmvScope = 0
+      , tmvOwnerMode = Just ownerMode
+      }
+  where
+    renderMode (ModeName n) = n
 
 data ModePushout = ModePushout
   { mpoModeTheory :: ModeTheory
@@ -1712,7 +1723,7 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
 
         renameTyVar tv = do
           sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tv)
-          Right tv { tmvSort = sort' }
+          Right tv { tmvSort = sort', tmvOwnerMode = fmap (renameModeName modeRen) (tmvOwnerMode tv) }
         renameTmVar tmVar = do
           sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tmVar)
           Right tmVar { tmvSort = sort' }
@@ -1770,7 +1781,7 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
       where
         renameObTyVar tv = do
           sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tv)
-          Right tv { tmvSort = sort' }
+          Right tv { tmvSort = sort', tmvOwnerMode = fmap (renameModeName modeRen) (tmvOwnerMode tv) }
 
         renameObTmVar tmVar = do
           sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tmVar)
@@ -2149,7 +2160,7 @@ renameObjExpr modeRen modRen ren permRen ty = do
       case code of
         CTMeta v -> do
           sort' <- renameObjExpr modeRen modRen ren permRen (tmvSort v)
-          Right (CTMeta v { tmvSort = sort' })
+          Right (CTMeta v { tmvSort = sort', tmvOwnerMode = fmap (renameModeName modeRen) (tmvOwnerMode v) })
         CTMod me inner -> do
           inner' <- renameCode inner
           Right (CTMod (renameModExpr modeRen modRen me) inner')
@@ -2425,7 +2436,7 @@ genDeclAlphaEqIgnoringName g1 g2 =
   let shared = GenName "__cmp__"
   in genDeclAlphaEq (g1 { gdName = shared }) (g2 { gdName = shared })
 
-alphaRenameCellTo :: [ObjVar] -> [ObjVar] -> [TmVar] -> [TmVar] -> Cell2 -> Either Text Cell2
+alphaRenameCellTo :: [TmVar] -> [TmVar] -> [TmVar] -> [TmVar] -> Cell2 -> Either Text Cell2
 alphaRenameCellTo fromTy toTy fromTm toTm cell
   | length fromTy /= length toTy = Left "poly pushout: alpha rename type arity mismatch"
   | length fromTm /= length toTm = Left "poly pushout: alpha rename term-variable arity mismatch"
@@ -2436,17 +2447,17 @@ alphaRenameCellTo fromTy toTy fromTm toTm cell
           rhs' = renameDiagramAlpha tyMap tmMap (c2RHS cell)
       in Right cell { c2TyVars = toTy, c2TmVars = toTm, c2LHS = lhs', c2RHS = rhs' }
 
-renameTyVarAlpha :: M.Map ObjVar ObjVar -> ObjVar -> ObjVar
+renameTyVarAlpha :: M.Map TmVar TmVar -> TmVar -> TmVar
 renameTyVarAlpha tyMap v =
   M.findWithDefault v v tyMap
 
-renameTmVarAlpha :: M.Map ObjVar ObjVar -> M.Map TmVar TmVar -> TmVar -> TmVar
+renameTmVarAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> TmVar -> TmVar
 renameTmVarAlpha tyMap tmMap v =
   case M.lookup v tmMap of
     Just v' -> v'
     Nothing -> v { tmvSort = renameTypeAlpha tyMap tmMap (tmvSort v) }
 
-renameTypeAlpha :: M.Map ObjVar ObjVar -> M.Map TmVar TmVar -> Obj -> Obj
+renameTypeAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Obj -> Obj
 renameTypeAlpha tyMap tmMap = mapObjExpr renameTy renameTm
   where
     renameTy ty =
@@ -2469,7 +2480,7 @@ renameTypeAlpha tyMap tmMap = mapObjExpr renameTy renameTm
               PTmMeta v -> PTmMeta (renameTmVarAlpha tyMap tmMap v)
               _ -> payload
 
-renameInputShapeAlpha :: M.Map ObjVar ObjVar -> M.Map TmVar TmVar -> InputShape -> InputShape
+renameInputShapeAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> InputShape -> InputShape
 renameInputShapeAlpha tyMap tmMap shape =
   case shape of
     InPort ty -> InPort (renameTypeAlpha tyMap tmMap ty)
@@ -2479,7 +2490,7 @@ renameInputShapeAlpha tyMap tmMap shape =
           cod' = map (renameTypeAlpha tyMap tmMap) (bsCod bs)
       in InBinder bs { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
 
-renameDiagramAlpha :: M.Map ObjVar ObjVar -> M.Map TmVar TmVar -> Diagram -> Diagram
+renameDiagramAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Diagram -> Diagram
 renameDiagramAlpha tyMap tmMap =
   runIdentity . traverseDiagram onDiag pure pure
   where
@@ -2639,7 +2650,7 @@ buildTypeMap doc modeRen modRen renames permRen = do
           Right (M.insert ref tmpl mp)
     renameTemplate tt tgtRef mPerm params = do
       tmplParams <- mapM mkParam (zip [0 :: Int ..] params)
-      args0 <- mapM (toArg tt) tmplParams
+      args0 <- mapM (toArg tt) (zip params tmplParams)
       args <- case mPerm of
         Nothing -> Right args0
         Just perm -> applyPerm perm args0
@@ -2652,12 +2663,15 @@ buildTypeMap doc modeRen modRen renames permRen = do
           Right (TPType v)
         PS_Tm sortTy -> do
           sortTy' <- renameObjExpr modeRen modRen renames permRen sortTy
-          Right (TPTm TmVar { tmvName = "i" <> T.pack (show i), tmvSort = sortTy', tmvScope = 0 })
+          Right (TPTm TmVar { tmvName = "i" <> T.pack (show i), tmvSort = sortTy', tmvScope = 0, tmvOwnerMode = Nothing })
 
-    toArg tt param =
-      case param of
-        TPType v -> Right (OAObj (OVar v))
-        TPTm v -> do
+    toArg tt (srcParam, param) =
+      case (srcParam, param) of
+        (PS_Ty ownerMode, TPType v) ->
+          Right (OAObj Obj { objOwnerMode = renameModeName modeRen ownerMode, objCode = CTMeta v })
+        (PS_Tm _, TPType _) ->
+          Left "poly pushout: internal kind mismatch for type template argument"
+        (_, TPTm v) -> do
           tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMVar v)
           Right (OATm tm)
 
@@ -2769,7 +2783,7 @@ composeMorphisms name first second = do
       where
         oneType ttSrc (srcRef, sig) = do
           paramsSrc <- mapM (mkSourceParam sig) (zip [0 :: Int ..] (tsParams sig))
-          argsSrc <- mapM (sourceParamArg ttSrc) paramsSrc
+          argsSrc <- mapM (sourceParamArg ttSrc) (zip (tsParams sig) paramsSrc)
           let tySrc = mkCon srcRef argsSrc
           tyMid <- applyMorphismTy first tySrc
           tyTgt <- applyMorphismTy second tyMid
@@ -2787,22 +2801,29 @@ composeMorphisms name first second = do
                       { tmvName = "t" <> T.pack (show i)
                       , tmvSort = sortTy
                       , tmvScope = 0
+                      , tmvOwnerMode = Nothing
                       }
               in Right (TPTm tmVar)
 
-        sourceParamArg ttSrc param =
-          case param of
-            TPType v -> Right (OAObj (OVar v))
-            TPTm v -> do
+        sourceParamArg ttSrc (srcParam, param) =
+          case (srcParam, param) of
+            (PS_Ty ownerMode, TPType v) ->
+              Right (OAObj Obj { objOwnerMode = ownerMode, objCode = CTMeta v })
+            (PS_Tm _, TPType _) ->
+              Left "poly pushout: internal kind mismatch for composed type argument"
+            (_, TPTm v) -> do
               tm <- termExprToDiagramChecked ttSrc [] (tmvSort v) (TMVar v)
               Right (OATm tm)
 
         mapComposedParam param =
           case param of
             TPType v -> do
+              let ownerSrc = maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v)
+              ownerMid <- applyMorphismMode first ownerSrc
+              ownerTgt <- applyMorphismMode second ownerMid
               sortMid <- applyMorphismTy first (tmvSort v)
               sortTgt <- applyMorphismTy second sortMid
-              Right (TPType v { tmvSort = sortTgt })
+              Right (TPType v { tmvSort = sortTgt, tmvOwnerMode = Just ownerTgt })
             TPTm v -> do
               sortMid <- applyMorphismTy first (tmvSort v)
               sortTgt <- applyMorphismTy second sortMid

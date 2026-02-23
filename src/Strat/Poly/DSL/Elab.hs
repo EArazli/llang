@@ -230,11 +230,13 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
         Nothing -> Left "morphism: missing mode mapping"
         Just mode' -> Right mode'
     mapTyVarMode mor v = do
+      ownerSrc <- ownerModeForTypeMeta (morSrc mor) v
+      ownerTgt <- applyMorphismMode mor ownerSrc
       sort' <- applyMorphismTy mor (tmvSort v)
-      pure v { tmvSort = sort' }
+      pure v { tmvSort = sort', tmvOwnerMode = Just ownerTgt }
     mapTmVarSort mor v = do
       sort' <- applyMorphismTy mor (tmvSort v)
-      pure v { tmvSort = sort' }
+      pure v { tmvSort = sort', tmvOwnerMode = Nothing }
     addTypeMap src tgt modeMap mp decl = do
       let modeSrc = ModeName (rpmtSrcMode decl)
       let modeTgtDecl = ModeName (rpmtTgtMode decl)
@@ -905,15 +907,17 @@ checkImplementsObligations env tgtDoc morph ifaceDoc = do
             <> ")"
         )
 
-mapObligationTyVar :: Morphism -> ObjVar -> Either Text ObjVar
+mapObligationTyVar :: Morphism -> TmVar -> Either Text TmVar
 mapObligationTyVar morph v = do
+  ownerSrc <- ownerModeForTypeMeta (morSrc morph) v
+  ownerTgt <- applyMorphismMode morph ownerSrc
   sort' <- applyMorphismTy morph (tmvSort v)
-  pure v { tmvSort = sort' }
+  pure v { tmvSort = sort', tmvOwnerMode = Just ownerTgt }
 
 mapObligationTmVar :: Morphism -> TmVar -> Either Text TmVar
 mapObligationTmVar morph v = do
   sort' <- applyMorphismTy morph (tmvSort v)
-  pure v { tmvSort = sort' }
+  pure v { tmvSort = sort', tmvOwnerMode = Nothing }
 
 evalObligationExprMapped
   :: ModuleEnv
@@ -921,7 +925,7 @@ evalObligationExprMapped
   -> Doctrine
   -> Morphism
   -> ModeName
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> RawOblExpr
   -> Either Text Diagram
@@ -969,7 +973,7 @@ evalObligationExprForGen
   -> Doctrine
   -> Morphism
   -> ModeName
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> Diagram
   -> RawOblExpr
@@ -1017,7 +1021,7 @@ evalLiftedForGen
   -> Morphism
   -> ModeName
   -> ModeName
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> Diagram
   -> LiftBoundary
@@ -1062,7 +1066,7 @@ elabObligationDiag
   -> Doctrine
   -> ModeName
   -> [Obj]
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> RawDiagExpr
   -> Either Text Diagram
@@ -1123,12 +1127,12 @@ resolveTyVarMode doc defaultMode decl = do
   ensureMode doc mode
   pure mode
 
-resolveTyVarDecl :: Doctrine -> ModeName -> RawTyVarDecl -> Either Text ObjVar
+resolveTyVarDecl :: Doctrine -> ModeName -> RawTyVarDecl -> Either Text TmVar
 resolveTyVarDecl doc defaultMode decl = do
   mode <- resolveTyVarMode doc defaultMode decl
   mkTypeMetaVar doc mode (rtvName decl)
 
-mkTypeMetaVar :: Doctrine -> ModeName -> Text -> Either Text ObjVar
+mkTypeMetaVar :: Doctrine -> ModeName -> Text -> Either Text TmVar
 mkTypeMetaVar doc ownerMode name = do
   universe <-
     case modeUniverseObj (dModes doc) ownerMode of
@@ -1146,32 +1150,58 @@ mkTypeMetaVar doc ownerMode name = do
   pure
     TmVar
       { tmvName = name
-      , tmvSort = universe { objOwnerMode = ownerMode }
+      -- Code metavariables are sorted in the classifier universe object itself.
+      , tmvSort = universe
       , tmvScope = 0
+      , tmvOwnerMode = Just ownerMode
       }
   where
     renderMode (ModeName n) = n
 
-elabTmDeclVar :: Doctrine -> ModeName -> [ObjVar] -> RawTmVarDecl -> Either Text TmVar
+ownerModeForTypeMeta :: Doctrine -> TmVar -> Either Text ModeName
+ownerModeForTypeMeta doc v =
+  case tmvOwnerMode v of
+    Just owner
+      | M.member owner (mtModes (dModes doc)) ->
+          Right owner
+      | otherwise ->
+          Left
+            ( "type metavariable `"
+                <> tmvName v
+                <> "` has unknown owner mode `"
+                <> renderMode owner
+                <> "`"
+            )
+    Nothing ->
+      Left
+        ( "type metavariable `"
+            <> tmvName v
+            <> "` is missing an explicit owner mode"
+        )
+  where
+    renderMode (ModeName n) = n
+
+elabTmDeclVar :: Doctrine -> ModeName -> [TmVar] -> RawTmVarDecl -> Either Text TmVar
 elabTmDeclVar doc defaultMode tyVars decl = do
   sortTy <-
     case elabObjExpr doc tyVars [] M.empty defaultMode (rtvdSort decl) of
       Right ty -> Right ty
       Left _ -> elabObjExprInferOwner doc tyVars [] M.empty (rtvdSort decl)
-  pure TmVar { tmvName = rtvdName decl, tmvSort = sortTy, tmvScope = 0 }
+  pure TmVar { tmvName = rtvdName decl, tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
 
-elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text ([ObjVar], [TmVar], [ParamSig])
+elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text ([TmVar], [TmVar], [ParamSig])
 elabParamDecls doc defaultMode params = go [] [] [] params
   where
     go tyAcc tmAcc sigAcc [] = Right (reverse tyAcc, reverse tmAcc, reverse sigAcc)
     go tyAcc tmAcc sigAcc (p:rest) =
       case p of
         RPDType tvDecl -> do
-          tv <- resolveTyVarDecl doc defaultMode tvDecl
+          ownerMode <- resolveTyVarMode doc defaultMode tvDecl
+          tv <- mkTypeMetaVar doc ownerMode (rtvName tvDecl)
           let name = ovName tv
           if name `elem` map ovName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
-            else go (tv:tyAcc) tmAcc (PS_Ty (objOwnerMode (tmvSort tv)) : sigAcc) rest
+            else go (tv:tyAcc) tmAcc (PS_Ty ownerMode : sigAcc) rest
         RPDTerm tmDecl -> do
           let name = rtvdName tmDecl
           if name `elem` map ovName tyAcc || name `elem` map tmvName tmAcc
@@ -1185,7 +1215,7 @@ buildTypeTemplateParams
   -> M.Map ModeName ModeName
   -> [ParamSig]
   -> [RawParamDecl]
-  -> Either Text ([TemplateParam], [ObjVar], [TmVar])
+  -> Either Text ([TemplateParam], [TmVar], [TmVar])
 buildTypeTemplateParams tgt modeMap sigParams decls = do
   if length sigParams /= length decls
     then Left "morphism: type mapping binder arity mismatch"
@@ -1207,7 +1237,7 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
             then Left "morphism: type mapping term binder mode mismatch"
             else Right ()
           ensureFreshName tyAcc tmAcc (rtvdName tmDecl)
-          let tmVar = TmVar { tmvName = rtvdName tmDecl, tmvSort = tmSort, tmvScope = 0 }
+          let tmVar = TmVar { tmvName = rtvdName tmDecl, tmvSort = tmSort, tmvScope = 0, tmvOwnerMode = Nothing }
           go tyAcc (tmVar:tmAcc) (TPTm tmVar:tmplAcc) rest
         (PS_Ty _, _) ->
           Left "morphism: type mapping binder kind mismatch"
@@ -1226,7 +1256,7 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
         Nothing -> Left "morphism: missing mode mapping"
         Just tgtMode -> Right tgtMode
 
-elabContext :: Doctrine -> ModeName -> [ObjVar] -> [TmVar] -> M.Map Text (Int, Obj) -> RawPolyContext -> Either Text Context
+elabContext :: Doctrine -> ModeName -> [TmVar] -> [TmVar] -> M.Map Text (Int, Obj) -> RawPolyContext -> Either Text Context
 elabContext doc expectedMode tyVars tmVars tmBound ctx = do
   tys <- mapM (elabObjExpr doc tyVars tmVars tmBound expectedMode) ctx
   let bad = filter (\ty -> objOwnerMode ty /= expectedMode) tys
@@ -1236,7 +1266,7 @@ elabContext doc expectedMode tyVars tmVars tmBound ctx = do
 
 elabObjExpr
   :: Doctrine
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> M.Map Text (Int, Obj)
   -> ModeName
@@ -1246,9 +1276,10 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
   case expr of
     RPTVar name -> do
       case [v | v <- tyVars, ovName v == name] of
-        [v] ->
-          if objOwnerMode (tmvSort v) == expectedOwnerMode
-            then Right (OVar v)
+        [v] -> do
+          ownerMode <- ownerModeForTypeMeta doc v
+          if ownerMode == expectedOwnerMode
+            then Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTMeta v }
             else Left "type variable mode mismatch"
         (_:_:_) -> Left ("duplicate type variable name: " <> name)
         [] -> do
@@ -1342,7 +1373,7 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
 
 elabObjExprInferOwner
   :: Doctrine
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> M.Map Text (Int, Obj)
   -> RawPolyObjExpr
@@ -1364,7 +1395,7 @@ elabObjExprInferOwner doc tyVars tmVars tmBound expr =
 
 elabTmTerm
   :: Doctrine
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> M.Map Text (Int, Obj)
   -> Maybe Obj
@@ -1483,10 +1514,10 @@ lookupTmFunAny doc name arity =
         InPort _ -> True
         InBinder _ -> False
 
-elabInputShapes :: Doctrine -> ModeName -> [ObjVar] -> [TmVar] -> [RawInputShape] -> Either Text [InputShape]
+elabInputShapes :: Doctrine -> ModeName -> [TmVar] -> [TmVar] -> [RawInputShape] -> Either Text [InputShape]
 elabInputShapes doc mode tyVars tmVars = mapM (elabInputShape doc mode tyVars tmVars)
 
-elabInputShape :: Doctrine -> ModeName -> [ObjVar] -> [TmVar] -> RawInputShape -> Either Text InputShape
+elabInputShape :: Doctrine -> ModeName -> [TmVar] -> [TmVar] -> RawInputShape -> Either Text InputShape
 elabInputShape doc mode tyVars tmVars shape =
   case shape of
     RIPort rawTy -> InPort <$> elabObjExpr doc tyVars tmVars M.empty mode rawTy
@@ -1511,7 +1542,7 @@ elabRuleLHS
   :: ModuleEnv
   -> Doctrine
   -> ModeName
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> RawDiagExpr
   -> Either Text (Diagram, M.Map BinderMetaVar BinderSig)
@@ -1525,7 +1556,7 @@ elabRuleRHS
   :: ModuleEnv
   -> Doctrine
   -> ModeName
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> M.Map BinderMetaVar BinderSig
   -> RawDiagExpr
@@ -1539,7 +1570,7 @@ elabRuleRHS env doc mode tyVars tmVars binderSigs expr = do
       pure diag
     else Left "rule RHS introduces fresh binder metas"
 
-elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [ObjVar] -> RawDiagExpr -> Either Text Diagram
+elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [TmVar] -> RawDiagExpr -> Either Text Diagram
 elabDiagExpr env doc mode ruleVars expr = do
   (diag, _) <- elabDiagExprWith env doc mode [] ruleVars [] M.empty BMNoMeta False expr
   ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
@@ -1551,7 +1582,7 @@ elabDiagExprWith
   -> Doctrine
   -> ModeName
   -> [Obj]
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> M.Map BinderMetaVar BinderSig
   -> BinderMetaMode
@@ -1566,7 +1597,7 @@ elabDiagExprWithFresh
   -> Doctrine
   -> ModeName
   -> [Obj]
-  -> [ObjVar]
+  -> [TmVar]
   -> [TmVar]
   -> M.Map BinderMetaVar BinderSig
   -> BinderMetaMode
@@ -1586,13 +1617,13 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           ctx' <- liftEither (elabContext doc mode tyVars tmVars M.empty ctx)
           pure (idDTm mode curTmCtx ctx', binderSigs)
         RDMetaVar name -> do
-          (_, ty) <- freshTyVar ObjVar { ovName = "mv_" <> name, ovMode = mode }
+          (_, ty) <- freshTyVar doc ObjVar { ovName = "mv_" <> name, ovMode = mode }
           let (pid, d0) = freshPort ty (emptyDiagram mode curTmCtx)
           d1 <- liftEither (setPortLabel pid name d0)
           pure (d1 { dIn = [pid], dOut = [pid] }, binderSigs)
         RDGen name mArgs mAttrArgs mBinderArgs -> do
           gen <- liftEither (lookupGen doc mode (GenName name))
-          tyRename <- freshTySubst (gdTyVars gen)
+          tyRename <- freshTySubst doc (gdTyVars gen)
           tmRename <- freshTmSubst ttDoc curTmCtx (gdTmVars gen)
           let renameSubst = U.mkSubst tyRename tmRename
           dom0 <- applySubstCtxDoc ttDoc renameSubst (gdPlainDom gen)
@@ -1609,13 +1640,14 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                   else do
                     let (tyRawArgs, tmRawArgs) = splitAt tyArity args
                     freshTyVars <- liftEither (extractFreshTyVars (gdTyVars gen) tyRename)
+                    freshTyOwners <- mapM (liftEither . ownerModeForTypeMeta doc) freshTyVars
                     tyArgs <-
                       mapM
-                        ( \(v, rawTyArg) ->
-                            liftEither (elabObjExpr doc tyVars tmVars M.empty (objOwnerMode (tmvSort v)) rawTyArg)
+                        ( \((_, ownerMode), rawTyArg) ->
+                            liftEither (elabObjExpr doc tyVars tmVars M.empty ownerMode rawTyArg)
                         )
-                        (zip freshTyVars tyRawArgs)
-                    case and (zipWith (\v t -> objOwnerMode (tmvSort v) == objOwnerMode t) freshTyVars tyArgs) of
+                        (zip (zip freshTyVars freshTyOwners) tyRawArgs)
+                    case and (zipWith (\ownerMode t -> ownerMode == objOwnerMode t) freshTyOwners tyArgs) of
                       False -> liftEither (Left "generator type argument mode mismatch")
                       True -> pure ()
                     freshTmVars <- liftEither (extractFreshTmVars (gdTmVars gen) tmRename)
@@ -1904,7 +1936,7 @@ lookupGen doc mode name =
     renderMode (ModeName m) = m
     renderGen (GenName g) = g
 
-unifyBoundary :: TypeTheory -> S.Set ObjVar -> S.Set TmVar -> Context -> Context -> Diagram -> Either Text Diagram
+unifyBoundary :: TypeTheory -> S.Set TmVar -> S.Set TmVar -> Context -> Context -> Diagram -> Either Text Diagram
 unifyBoundary tt rigidTy rigidTm dom cod diag = do
   domDiag <- diagramDom diag
   let flexTy0 = S.difference (freeObjVarsDiagram diag) rigidTy
@@ -2107,9 +2139,9 @@ instance Monad Fresh where
 evalFresh :: Fresh a -> Either Text a
 evalFresh (Fresh f) = fmap fst (f 0)
 
-freshTySubst :: [ObjVar] -> Fresh (M.Map ObjVar Obj)
-freshTySubst vars = do
-  pairs <- mapM freshTyVar vars
+freshTySubst :: Doctrine -> [TmVar] -> Fresh (M.Map TmVar Obj)
+freshTySubst doc vars = do
+  pairs <- mapM (freshTyVar doc) vars
   pure (M.fromList pairs)
 
 freshTmSubst :: TypeTheory -> [Obj] -> [TmVar] -> Fresh (M.Map TmVar TermDiagram)
@@ -2117,7 +2149,7 @@ freshTmSubst ttDoc tmCtx vars = do
   pairs <- mapM (freshTmVar ttDoc tmCtx) vars
   pure (M.fromList pairs)
 
-extractFreshTyVars :: [ObjVar] -> M.Map ObjVar Obj -> Either Text [ObjVar]
+extractFreshTyVars :: [TmVar] -> M.Map TmVar Obj -> Either Text [TmVar]
 extractFreshTyVars vars subst =
   mapM lookupVar vars
   where
@@ -2146,18 +2178,19 @@ extractFreshTmVars vars subst =
             _ -> Nothing
         _ -> Nothing
 
-freshTyVar :: ObjVar -> Fresh (ObjVar, Obj)
-freshTyVar v = do
+freshTyVar :: Doctrine -> TmVar -> Fresh (TmVar, Obj)
+freshTyVar doc v = do
   n <- freshInt
   let name = ovName v <> T.pack ("#" <> show n)
   let fresh = v { tmvName = name }
-  pure (v, OVar fresh)
+  ownerMode <- liftEither (ownerModeForTypeMeta doc v)
+  pure (v, Obj { objOwnerMode = ownerMode, objCode = CTMeta fresh })
 
 freshTmVar :: TypeTheory -> [Obj] -> TmVar -> Fresh (TmVar, TermDiagram)
 freshTmVar ttDoc tmCtx v = do
   n <- freshInt
   let name = tmvName v <> T.pack ("#" <> show n)
-  let fresh = TmVar { tmvName = name, tmvSort = tmvSort v, tmvScope = max (tmvScope v) (length tmCtx) }
+  let fresh = TmVar { tmvName = name, tmvSort = tmvSort v, tmvScope = max (tmvScope v) (length tmCtx), tmvOwnerMode = Nothing }
   tm <- liftEither (termExprToDiagramChecked ttDoc tmCtx (tmvSort fresh) (TMVar fresh))
   pure (v, tm)
 

@@ -53,7 +53,9 @@ Implementation-facing mode split:
 Surface notion:
 
 - the surface language may continue to use the word "type", but kernel checks MUST distinguish object identity from code representation.
-- a surface "type variable" elaborates to a code metavariable in the classifier language; its sort is the classifier universe object `U` for the owner mode.
+- a surface "type variable" elaborates to a code metavariable (`CTMeta`) whose sort is derived from the classifier universe object `U` for the owner mode.
+- the stored sort of that metavariable is exactly `U` (in classifier mode); owner mode is carried by the enclosing `Obj`, not by rewriting `U`'s owner.
+- Strategy A is enforced: there is no implicit fallback universe/object sort for code metavariables.
 
 If a mode has no explicit classification edge, object well-formedness is determined by that mode's declared object formers and object-parameter rules.
 

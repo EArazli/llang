@@ -274,8 +274,8 @@ testValidateTermDiagramRejectsSparseBoundary = do
 testScopedTmUnify :: Assertion
 testScopedTmUnify = do
   (tt, natTy, _modeM, _modeI) <- require mkNatTypeTheory
-  let i0 = TmVar { tmvName = "i", tmvSort = natTy, tmvScope = 0 }
-  let j1 = TmVar { tmvName = "j", tmvSort = natTy, tmvScope = 1 }
+  let i0 = TmVar { tmvName = "i", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
+  let j1 = TmVar { tmvName = "j", tmvSort = natTy, tmvScope = 1, tmvOwnerMode = Nothing }
   tI0 <- require (termExprToDiagram tt [natTy] natTy (TMVar i0))
   tJ1 <- require (termExprToDiagram tt [natTy] natTy (TMVar j1))
   tB0 <- require (termExprToDiagram tt [natTy] natTy (TMBound 0))
@@ -299,7 +299,7 @@ testDependentUnify = do
   let vecRef = ObjRef modeM (ObjName "Vec")
   let aTy = mkCon (ObjRef modeM (ObjName "A")) []
   let tt = tt0 { ttObjParams = M.fromList [ (vecRef, [TPS_Tm natTy, TPS_Ty modeM]) ] }
-  let n = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
+  let n = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
   lhsTm <- require (termExprToDiagram tt [] natTy (add (TMVar n) z))
@@ -447,7 +447,7 @@ testCheckedTermConversionDefEq = do
   tmZ <- require (termExprToDiagram tt [] natTy z)
   let sortAdd = mkCon vecRef [OATm tmAdd]
   let sortZ = mkCon vecRef [OATm tmZ]
-  let xVar = TmVar { tmvName = "x", tmvSort = sortAdd, tmvScope = 0 }
+  let xVar = TmVar { tmvName = "x", tmvSort = sortAdd, tmvScope = 0, tmvOwnerMode = Nothing }
   case termExprToDiagram tt [] sortZ (TMVar xVar) of
     Left _ -> pure ()
     Right _ -> assertFailure "expected unchecked conversion to reject structural sort mismatch"
@@ -538,8 +538,8 @@ mkNatTypeTheory = do
   let z = TMFun (TmFunName "Z") []
   let s x = TMFun (TmFunName "S") [x]
   let add x y = TMFun (TmFunName "add") [x, y]
-  let vM = TmVar { tmvName = "m", tmvSort = natTy, tmvScope = 0 }
-  let vN = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
+  let vM = TmVar { tmvName = "m", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
+  let vN = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let funSigs =
         M.fromList
           [ (TmFunName "Z", TmFunSig [] natTy)

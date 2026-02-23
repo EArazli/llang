@@ -223,7 +223,7 @@ testApplyActionUsesDiagramTmCtx = do
   let rhsEq = ModExpr { meSrc = modeC, meTgt = modeC, mePath = [] }
   mt <- requireEither (addModEqn (ModEqn lhsEq rhsEq) mt2)
   let tt0 = modeOnlyTypeTheory mt
-  let tmParam = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 1 }
+  let tmParam = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 1, tmvOwnerMode = Nothing }
   tmParamTerm <- requireEither (termExprToDiagram tt0 tmCtx natTy (TMVar tmParam))
   tmBound0 <- requireEither (termExprToDiagram tt0 tmCtx natTy (TMBound 0))
   let vecParam = mkCon vecRef [OATm tmParamTerm]

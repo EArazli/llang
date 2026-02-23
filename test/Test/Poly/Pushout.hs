@@ -144,6 +144,33 @@ mkModes modes =
     , mtClassifiedBy = M.empty
     }
 
+universeName :: ModeName -> ObjName
+universeName (ModeName n) = ObjName ("U_" <> n)
+
+universeObj :: ModeName -> Obj
+universeObj mode = mkCon (ObjRef mode (universeName mode)) []
+
+selfClassifiedModes :: S.Set ModeName -> ModeTheory
+selfClassifiedModes modes =
+  let mt = mkModes modes
+  in mt
+       { mtClassifiedBy =
+           M.fromList
+             [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing })
+             | mode <- S.toList modes
+             ]
+       }
+
+insertUniverseTypes
+  :: S.Set ModeName
+  -> M.Map ModeName (M.Map ObjName TypeSig)
+  -> M.Map ModeName (M.Map ObjName TypeSig)
+insertUniverseTypes modes tys =
+  foldl
+    (\acc mode -> M.insertWith M.union mode (M.singleton (universeName mode) (TypeSig [])) acc)
+    tys
+    (S.toList modes)
+
 
 testPushoutDedupByBody :: Assertion
 testPushoutDedupByBody = do
@@ -1573,6 +1600,7 @@ testPushoutTermTypeMaps :: Assertion
 testPushoutTermTypeMaps = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
+  let modeSet = S.fromList [modeM, modeI]
   let natRef = ObjRef modeI (ObjName "Nat")
   let vecRef = ObjRef modeM (ObjName "Vec")
   let vec2Ref = ObjRef modeM (ObjName "Vec2")
@@ -1580,9 +1608,9 @@ testPushoutTermTypeMaps = do
   let src =
         Doctrine
           { dName = "SrcIdx"
-          , dModes = mkModes (S.fromList [modeM, modeI])
+          , dModes = selfClassifiedModes modeSet
     , dAcyclicModes = S.empty
-          , dTypes =
+          , dTypes = insertUniverseTypes modeSet $
               M.fromList
                 [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
                 , (modeM, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM])])
@@ -1596,9 +1624,9 @@ testPushoutTermTypeMaps = do
   let left =
         Doctrine
           { dName = "LeftIdx"
-          , dModes = mkModes (S.fromList [modeM, modeI])
+          , dModes = selfClassifiedModes modeSet
     , dAcyclicModes = S.empty
-          , dTypes =
+          , dTypes = insertUniverseTypes modeSet $
               M.fromList
                 [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
                 , (modeM, M.fromList [(ObjName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM])])
@@ -1619,7 +1647,7 @@ testPushoutTermTypeMaps = do
   case validateDoctrine right of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
+  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let aVar = ObjVar { ovName = "a", ovMode = modeM }
   let morF =
         Morphism
@@ -1664,6 +1692,7 @@ testPushoutTypePermutationSortRename :: Assertion
 testPushoutTypePermutationSortRename = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
+  let modeSet = S.fromList [modeM, modeI]
   let natRef = ObjRef modeI (ObjName "Nat")
   let natLRef = ObjRef modeI (ObjName "NatL")
   let vecRef = ObjRef modeM (ObjName "Vec")
@@ -1673,9 +1702,9 @@ testPushoutTypePermutationSortRename = do
   let src =
         Doctrine
           { dName = "SrcIdxSwap"
-          , dModes = mkModes (S.fromList [modeM, modeI])
+          , dModes = selfClassifiedModes modeSet
           , dAcyclicModes = S.empty
-          , dTypes =
+          , dTypes = insertUniverseTypes modeSet $
               M.fromList
                 [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
                 , (modeM, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM])])
@@ -1689,9 +1718,9 @@ testPushoutTypePermutationSortRename = do
   let left =
         Doctrine
           { dName = "LeftIdxSwap"
-          , dModes = mkModes (S.fromList [modeM, modeI])
+          , dModes = selfClassifiedModes modeSet
           , dAcyclicModes = S.empty
-          , dTypes =
+          , dTypes = insertUniverseTypes modeSet $
               M.fromList
                 [ (modeI, M.fromList [(ObjName "NatL", TypeSig [])])
                 , (modeM, M.fromList [(ObjName "Vec2", TypeSig [PS_Ty modeM, PS_Tm natLTy])])
@@ -1712,7 +1741,7 @@ testPushoutTypePermutationSortRename = do
   case validateDoctrine right of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  let nVar = TmVar { tmvName = "n", tmvSort = natLTy, tmvScope = 0 }
+  let nVar = TmVar { tmvName = "n", tmvSort = natLTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let aVar = ObjVar { ovName = "a", ovMode = modeM }
   let morF =
         Morphism
@@ -2235,7 +2264,7 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
           , dTypes =
               M.fromList
                 [ (modeL1, M.singleton (ObjName "B") (TypeSig []))
-                , (modeL2, M.fromList [(ObjName "B", TypeSig [PS_Ty modeL2]), (ObjName "C", TypeSig [])])
+                , (modeL2, M.fromList [(ObjName "B", TypeSig []), (ObjName "C", TypeSig [])])
                 ]
           , dGens =
               M.fromList
@@ -2425,7 +2454,7 @@ testPushoutCellTmAlphaEq = do
   let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
   let vecRef = ObjRef modeM (ObjName "Vec")
   let genName = GenName "f"
-  let mkTm name = TmVar { tmvName = name, tmvSort = natTy, tmvScope = 0 }
+  let mkTm name = TmVar { tmvName = name, tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let vecTy tmVar = mkCon vecRef [OATm (tmMeta tmVar)]
   let srcTm = mkTm "n"
   let leftTm = mkTm "i"
@@ -2847,11 +2876,12 @@ mkModeEqDoctrine name mt varName useUF = do
 mkTypeDoctrine :: ModeName -> Text -> [(ObjName, Int)] -> Either Text Doctrine
 mkTypeDoctrine mode name types = do
   let types' = M.fromList [ (tname, TypeSig (replicate arity (PS_Ty mode))) | (tname, arity) <- types ]
+  let modeSet = S.singleton mode
   let doc = Doctrine
         { dName = name
-        , dModes = mkModes (S.singleton mode)
+        , dModes = selfClassifiedModes modeSet
     , dAcyclicModes = S.empty
-        , dTypes = M.fromList [(mode, types')]
+        , dTypes = insertUniverseTypes modeSet (M.fromList [(mode, types')])
         , dGens = M.empty
         , dCells2 = []
       , dActions = M.empty

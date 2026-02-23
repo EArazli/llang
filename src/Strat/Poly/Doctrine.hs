@@ -69,7 +69,7 @@ data InputShape
 data GenDecl = GenDecl
   { gdName :: GenName
   , gdMode :: ModeName
-  , gdTyVars :: [ObjVar]
+  , gdTyVars :: [TmVar]
   , gdTmVars :: [TmVar]
   , gdDom :: [InputShape]
   , gdCod :: Context
@@ -86,7 +86,7 @@ data ObligationDecl = ObligationDecl
   { obName :: Text
   , obMode :: ModeName
   , obForGen :: Bool
-  , obTyVars :: [ObjVar]
+  , obTyVars :: [TmVar]
   , obTmVars :: [TmVar]
   , obDom :: Context
   , obCod :: Context
@@ -221,7 +221,7 @@ mkInputVars diag =
   where
     mkOne (i, pid) = do
       sortTy <- IM.lookup (unPortId pid) (dPortObj diag)
-      pure TmVar { tmvName = "_x" <> T.pack (show i), tmvSort = sortTy, tmvScope = 0 }
+      pure TmVar { tmvName = "_x" <> T.pack (show i), tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
 
 validateDoctrine :: Doctrine -> Either Text ()
 validateDoctrine doc = do
@@ -287,13 +287,13 @@ checkGen doc tt mode gd
       checkContext doc tt mode (gdTyVars gd) (gdTmVars gd) [] (gdCod gd)
       checkGenAttrs doc gd
 
-checkInputShape :: Doctrine -> TypeTheory -> ModeName -> [ObjVar] -> [TmVar] -> InputShape -> Either Text ()
+checkInputShape :: Doctrine -> TypeTheory -> ModeName -> [TmVar] -> [TmVar] -> InputShape -> Either Text ()
 checkInputShape doc tt expectedMode tyvars tmvars shape =
   case shape of
     InPort ty -> checkBoundaryType doc tt expectedMode tyvars tmvars [] ty
     InBinder bs -> checkBinderSig doc tt expectedMode tyvars tmvars bs
 
-checkBinderSig :: Doctrine -> TypeTheory -> ModeName -> [ObjVar] -> [TmVar] -> BinderSig -> Either Text ()
+checkBinderSig :: Doctrine -> TypeTheory -> ModeName -> [TmVar] -> [TmVar] -> BinderSig -> Either Text ()
 checkBinderSig doc tt expectedMode tyvars tmvars bs = do
   checkTmCtxTele (bsTmCtx bs)
   checkContext doc tt expectedMode tyvars tmvars (bsTmCtx bs) (bsDom bs)
@@ -371,23 +371,23 @@ checkCell doc tt cell = do
         then Right ()
         else Left "validateDoctrine: RHS references binder metas not captured by LHS binder arguments"
 
-checkContext :: Doctrine -> TypeTheory -> ModeName -> [ObjVar] -> [TmVar] -> [Obj] -> Context -> Either Text ()
+checkContext :: Doctrine -> TypeTheory -> ModeName -> [TmVar] -> [TmVar] -> [Obj] -> Context -> Either Text ()
 checkContext doc tt expectedMode tyvars tmvars tmCtx ctx = mapM_ (checkBoundaryType doc tt expectedMode tyvars tmvars tmCtx) ctx
 
-checkBoundaryType :: Doctrine -> TypeTheory -> ModeName -> [ObjVar] -> [TmVar] -> [Obj] -> Obj -> Either Text ()
+checkBoundaryType :: Doctrine -> TypeTheory -> ModeName -> [TmVar] -> [TmVar] -> [Obj] -> Obj -> Either Text ()
 checkBoundaryType doc tt expectedMode tyvars tmvars tmCtx ty = do
   checkType doc tt tyvars tmvars tmCtx ty
   if objOwnerMode ty == expectedMode
     then Right ()
     else Left "validateDoctrine: generator boundary mode mismatch"
 
-checkType :: Doctrine -> TypeTheory -> [ObjVar] -> [TmVar] -> [Obj] -> Obj -> Either Text ()
+checkType :: Doctrine -> TypeTheory -> [TmVar] -> [TmVar] -> [Obj] -> Obj -> Either Text ()
 checkType doc tt tyvars tmvars tmCtx ty =
   case ty of
     OVar v ->
       if v `elem` tyvars
         then
-          if M.member (objOwnerMode (tmvSort v)) (mtModes (dModes doc))
+          if M.member (tyVarOwnerMode v) (mtModes (dModes doc))
             then Right ()
             else Left "validateDoctrine: type variable has unknown mode"
         else Left "validateDoctrine: unknown type variable"
@@ -412,7 +412,7 @@ checkType doc tt tyvars tmvars tmCtx ty =
       checkTmTerm doc tt tyvars tmvars tmCtx sortTy tmTerm
     checkArg _ _ = Left "validateDoctrine: type argument kind mismatch"
 
-checkTmTerm :: Doctrine -> TypeTheory -> [ObjVar] -> [TmVar] -> [Obj] -> Obj -> TermDiagram -> Either Text ()
+checkTmTerm :: Doctrine -> TypeTheory -> [TmVar] -> [TmVar] -> [Obj] -> Obj -> TermDiagram -> Either Text ()
 checkTmTerm doc tt tyvars tmvars tmCtx expectedSort tm =
   do
     mapM_ checkMetaVar (S.toList (freeTmVarsTerm tm))
@@ -426,9 +426,9 @@ checkTmTerm doc tt tyvars tmvars tmCtx expectedSort tm =
 
     sameTmVarId a b = tmvName a == tmvName b && tmvScope a == tmvScope b
 
-ensureDistinctTyVars :: Text -> [ObjVar] -> Either Text ()
+ensureDistinctTyVars :: Text -> [TmVar] -> Either Text ()
 ensureDistinctTyVars label vars =
-  let names = map ovName vars
+  let names = map tmvName vars
       set = S.fromList names
    in if S.size set == length names
         then Right ()
@@ -442,9 +442,9 @@ ensureDistinctTmVars label vars =
         then Right ()
         else Left label
 
-checkTyVarModes :: Doctrine -> [ObjVar] -> Either Text ()
+checkTyVarModes :: Doctrine -> [TmVar] -> Either Text ()
 checkTyVarModes doc vars =
-  if all (\v -> M.member (objOwnerMode (tmvSort v)) (mtModes (dModes doc))) vars
+  if all (\v -> M.member (tyVarOwnerMode v) (mtModes (dModes doc))) vars
     then Right ()
     else Left "validateDoctrine: type variable has unknown mode"
 
@@ -548,7 +548,7 @@ checkModTransformWitness doc fromMe toMe witness = do
     case gdTyVars witness of
       [v] -> Right v
       _ -> Left "mod_transform: witness generator must have exactly one type variable"
-  if objOwnerMode (tmvSort tyVar) == meSrc fromMe
+  if tyVarOwnerMode tyVar == meSrc fromMe
     then Right ()
     else Left "mod_transform: witness type variable must live in transform source mode"
   if null (gdTmVars witness)
@@ -580,6 +580,12 @@ ensureDistinct label xs =
   if length (L.nub xs) == length xs
     then Right ()
     else Left label
+
+tyVarOwnerMode :: TmVar -> ModeName
+tyVarOwnerMode v =
+  case tmvOwnerMode v of
+    Just owner -> owner
+    Nothing -> objOwnerMode (tmvSort v)
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t

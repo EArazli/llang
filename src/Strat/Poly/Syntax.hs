@@ -49,6 +49,7 @@ data TmVar = TmVar
   { tmvName :: Text
   , tmvSort :: Obj
   , tmvScope :: Int
+  , tmvOwnerMode :: Maybe ModeName
   } deriving (Eq, Ord, Show)
 
 newtype PortId = PortId Int deriving (Eq, Ord, Show)
@@ -117,14 +118,24 @@ metaSortObj mode =
     , objCode = CTCon (ObjRef mode (ObjName "__obj_meta_sort")) []
     }
 
+tmVarOwner :: TmVar -> ModeName
+tmVarOwner v =
+  case tmvOwnerMode v of
+    Just owner -> owner
+    Nothing -> objOwnerMode (tmvSort v)
+
+objVarView :: TmVar -> Maybe (Text, ModeName)
+objVarView v = Just (tmvName v, tmVarOwner v)
+
 pattern ObjVar :: Text -> ModeName -> ObjVar
-pattern ObjVar {ovName, ovMode} <- TmVar ovName (objOwnerMode -> ovMode) _
+pattern ObjVar {ovName, ovMode} <- (objVarView -> Just (ovName, ovMode))
   where
     ObjVar ovName ovMode =
       TmVar
         { tmvName = ovName
         , tmvSort = metaSortObj ovMode
         , tmvScope = 0
+        , tmvOwnerMode = Just ovMode
         }
 
 {-# COMPLETE ObjVar #-}

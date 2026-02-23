@@ -24,6 +24,8 @@ import Strat.Poly.Obj
   , occursObjVar
   )
 import Strat.Poly.Diagram (idDTm)
+import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
+import Test.Poly.Helpers (mkModes)
 import qualified Strat.Poly.UnifyObj as U
 
 
@@ -33,6 +35,7 @@ tests =
     "Poly.UnifyObj"
     [ testCase "object vars in term arguments are visible to free/occurs checks" testSeesObjVarInTermArg
     , testCase "unified substitution rejects code/term kind collisions" testRejectsMetaKindCollision
+    , testCase "scope-0 code metavariables reject bound term indices in object bindings" testRejectsCodeMetaScopeEscape
     ]
 
 testSeesObjVarInTermArg :: Assertion
@@ -67,3 +70,20 @@ testRejectsMetaKindCollision = do
     Left err -> assertFailure ("unexpected insertTmMeta failure: " <> show err) >> pure U.emptySubst
     Right s -> pure s
   assertKindMismatch (U.insertCodeMeta v rhsObj substTmFirst)
+
+testRejectsCodeMetaScopeEscape :: Assertion
+testRejectsCodeMetaScopeEscape = do
+  let mode = ModeName "M"
+      tt = modeOnlyTypeTheory (mkModes [mode])
+      v = ObjVar { ovName = "x", ovMode = mode }
+      sortTy = mkCon (ObjRef mode (ObjName "S")) []
+      fooRef = ObjRef mode (ObjName "Foo")
+      tm = TermDiagram (idDTm mode [sortTy] [sortTy])
+      rhs = mkCon fooRef [OATm tm]
+  case U.unifyObjFlex tt [sortTy] (S.singleton v) U.emptySubst (OVar v) rhs of
+    Left err ->
+      assertBool
+        "expected code-meta scope escape error"
+        ("scope-0 code metavariable" `isInfixOf` err)
+    Right _ ->
+      assertFailure "expected unification to reject scope-0 code metavariable binding with bound indices"

@@ -263,13 +263,35 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
 
     bindTyVar s v t = do
       t' <- applySubstObj tt s t
-      if objOwnerMode (tmvSort v) /= objOwnerMode t'
+      tmCtx' <- applySubstCtx tt s tmCtx
+      sortV <- normalizeObjDeepWithCtx tt tmCtx' =<< applySubstObj tt s (tmvSort v)
+      let ownerV =
+            case tmvOwnerMode v of
+              Just owner -> owner
+              Nothing -> objOwnerMode sortV
+      if ownerV /= objOwnerMode t'
         then Left ("unifyObjFlex: mode mismatch " <> renderObjVar v <> " with " <> renderObj t')
         else if t' == objVarObj v
           then Right s
           else if occursObjVar v t'
             then Left ("unifyObjFlex: occurs check failed for " <> renderObjVar v <> " in " <> renderObj t')
-            else composeSubst tt (mkSubst (M.singleton v t') M.empty) s
+            else do
+              let boundSet = boundTmIndicesObj t'
+                  allowed =
+                    S.fromList
+                      ( take
+                          (tmvScope v)
+                          [ i
+                          | (i, tyCtx) <- zip [0 :: Int ..] tmCtx'
+                          , objOwnerMode tyCtx == ownerV
+                          ]
+                      )
+              if tmvScope v == 0 && not (S.null boundSet)
+                then Left "unifyObjFlex: scope-0 code metavariable cannot mention bound indices"
+                else
+                  if S.isSubsetOf boundSet allowed
+                    then composeSubst tt (mkSubst (M.singleton v t') M.empty) s
+                    else Left "unifyObjFlex: escape from bound term-variable scope in code metavariable binding"
 
 unifyCtx
   :: TypeTheory
@@ -928,8 +950,15 @@ renderObj ty =
         CAObj innerTy -> renderObj innerTy
         CATm _ -> "<tm>"
 
-renderObjVar :: ObjVar -> Text
-renderObjVar v = tmvName v <> "@" <> renderMode (objOwnerMode (tmvSort v))
+renderObjVar :: TmVar -> Text
+renderObjVar v =
+  tmvName v
+    <> "@"
+    <> renderMode
+      ( case tmvOwnerMode v of
+          Just owner -> owner
+          Nothing -> objOwnerMode (tmvSort v)
+      )
 
 renderTypeRef :: ObjRef -> Text
 renderTypeRef ref =

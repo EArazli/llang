@@ -80,7 +80,12 @@ mkCon ref args = mkObj (orMode ref) (CTCon ref args)
 pattern OVar :: ObjVar -> Obj
 pattern OVar v <- Obj _ (CTMeta v)
   where
-    OVar v = mkObj (objOwnerMode (tmvSort v)) (CTMeta v)
+    OVar v = mkObj owner (CTMeta v)
+      where
+        owner =
+          case tmvOwnerMode v of
+            Just m -> m
+            Nothing -> objOwnerMode (tmvSort v)
 
 pattern OCon :: ObjRef -> [ObjArg] -> Obj
 pattern OCon ref args <- Obj _ (CTCon ref args)
@@ -253,7 +258,10 @@ tmCtxForMode tele mode =
 codeMode0 :: CodeTerm -> ModeName
 codeMode0 code =
   case code of
-    CTMeta v -> objOwnerMode (tmvSort v)
+    CTMeta v ->
+      case tmvOwnerMode v of
+        Just owner -> owner
+        Nothing -> objOwnerMode (tmvSort v)
     CTCon r _ -> orMode r
     CTMod me _ -> meTgt me
 

@@ -56,6 +56,23 @@ tests =
 tvar :: ModeName -> Text -> ObjVar
 tvar mode name = ObjVar { ovName = name, ovMode = mode }
 
+universeName :: ModeName -> ObjName
+universeName (ModeName n) = ObjName ("U_" <> n)
+
+universeObj :: ModeName -> Obj
+universeObj mode = mkCon (ObjRef mode (universeName mode)) []
+
+selfClassifiedModes :: [ModeName] -> ModeTheory
+selfClassifiedModes modes =
+  let mt = mkModes modes
+  in mt
+       { mtClassifiedBy =
+           M.fromList
+             [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing })
+             | mode <- modes
+             ]
+       }
+
 tcon :: ModeName -> Text -> [Obj] -> Obj
 tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
 
@@ -116,8 +133,9 @@ testMonoidMorphism = do
 testTypeMapReorder :: Assertion
 testTypeMapReorder = do
   let mode = ModeName "M"
-  let a = tvar mode "a"
-  let b = tvar mode "b"
+  let uTy = universeObj mode
+  let a = TmVar { tmvName = "a", tmvSort = uTy, tmvScope = 0, tmvOwnerMode = Just mode }
+  let b = TmVar { tmvName = "b", tmvSort = uTy, tmvScope = 0, tmvOwnerMode = Just mode }
   let prod = ObjName "Prod"
   let pair = ObjName "Pair"
   let genName = GenName "g"
@@ -143,10 +161,10 @@ testTypeMapReorder = do
           }
   let docSrc = Doctrine
         { dName = "Src"
-        , dModes = mkModes [mode]
+        , dModes = selfClassifiedModes [mode]
     , dAcyclicModes = S.empty
       , dAttrSorts = M.empty
-        , dTypes = M.fromList [(mode, M.fromList [(prod, TypeSig [PS_Ty mode, PS_Ty mode])])]
+        , dTypes = M.fromList [(mode, M.fromList [(universeName mode, TypeSig []), (prod, TypeSig [PS_Ty mode, PS_Ty mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genSrc)])]
         , dCells2 = []
       , dActions = M.empty
@@ -154,10 +172,10 @@ testTypeMapReorder = do
         }
   let docTgt = Doctrine
         { dName = "Tgt"
-        , dModes = mkModes [mode]
+        , dModes = selfClassifiedModes [mode]
     , dAcyclicModes = S.empty
       , dAttrSorts = M.empty
-        , dTypes = M.fromList [(mode, M.fromList [(pair, TypeSig [PS_Ty mode, PS_Ty mode])])]
+        , dTypes = M.fromList [(mode, M.fromList [(universeName mode, TypeSig []), (pair, TypeSig [PS_Ty mode, PS_Ty mode])])]
         , dGens = M.fromList [(mode, M.fromList [(genName, genTgt)])]
         , dCells2 = []
       , dActions = M.empty
@@ -791,7 +809,7 @@ testTermTemplateSortMismatch = do
   tgt <- case validateDoctrine tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
-  let nWrong = TmVar { tmvName = "n", tmvSort = boolTy, tmvScope = 0 }
+  let nWrong = TmVar { tmvName = "n", tmvSort = boolTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let aVar = ObjVar { ovName = "a", ovMode = modeM' }
   let mor =
         Morphism
@@ -857,15 +875,16 @@ testTermTypeTemplateInstantiation = do
   let srcDoc =
         Doctrine
           { dName = "SrcTermTemplate"
-          , dModes = mkModes [modeM', modeI']
+          , dModes = selfClassifiedModes [modeM', modeI']
     , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
+                [ (modeI', M.fromList [(universeName modeI', TypeSig []), (ObjName "Nat", TypeSig [])])
                 , ( modeM'
                   , M.fromList
-                      [ (ObjName "A", TypeSig [])
+                      [ (universeName modeM', TypeSig [])
+                      , (ObjName "A", TypeSig [])
                       , (ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])
                       ]
                   )
@@ -878,15 +897,16 @@ testTermTypeTemplateInstantiation = do
   let tgtDoc =
         Doctrine
           { dName = "TgtTermTemplate"
-          , dModes = mkModes [modeM', modeI']
+          , dModes = selfClassifiedModes [modeM', modeI']
     , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
           , dTypes =
               M.fromList
-                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
+                [ (modeI', M.fromList [(universeName modeI', TypeSig []), (ObjName "Nat", TypeSig [])])
                 , ( modeM'
                   , M.fromList
-                      [ (ObjName "A", TypeSig [])
+                      [ (universeName modeM', TypeSig [])
+                      , (ObjName "A", TypeSig [])
                       , (ObjName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM'])
                       ]
                   )
@@ -905,8 +925,8 @@ testTermTypeTemplateInstantiation = do
   ttSrc <- case doctrineTypeTheory src of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tt -> pure tt
-  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
-  let aVar = ObjVar { ovName = "a", ovMode = modeM' }
+  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
+  let aVar = TmVar { tmvName = "a", tmvSort = universeObj modeM', tmvScope = 0, tmvOwnerMode = Just modeM' }
   nSucc <- case termExprToDiagram ttSrc [] natTy (s (TMVar nVar)) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
@@ -1026,7 +1046,7 @@ testTermTemplateKindMismatch = do
   tgt <- case validateDoctrine tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
-  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
+  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let aVar = ObjVar { ovName = "a", ovMode = modeM' }
   let nVarTm = tmMeta nVar
   let mor =
@@ -1137,7 +1157,7 @@ testMorphismMapsStructuredTermArgs = do
   ttTgt <- case doctrineTypeTheory tgt of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tt -> pure tt
-  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
+  let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   tmSrc <- case termExprToDiagram ttSrc [] natTy (TMFun (TmFunName "succ") [TMVar nVar]) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
