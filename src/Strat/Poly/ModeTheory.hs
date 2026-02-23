@@ -8,12 +8,16 @@ module Strat.Poly.ModeTheory
   , ModDecl(..)
   , ModEqn(..)
   , ModTransformDecl(..)
+  , ClassificationDecl(..)
   , ModeTheory(..)
   , emptyModeTheory
   , addMode
   , addModDecl
   , addModEqn
   , addModTransformDecl
+  , addClassification
+  , classificationDeps
+  , classificationOrder
   , composeMod
   , normalizeModExpr
   , checkWellFormed
@@ -22,42 +26,19 @@ module Strat.Poly.ModeTheory
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import Data.Map.Strict (Map)
-import Strat.Poly.Names (GenName)
+import qualified Data.Set as S
+import Strat.Poly.ModeSyntax
+import Strat.Poly.Syntax (Obj(..), ObjRef(..), ObjVar(..))
 
-
-newtype ModeName = ModeName Text deriving (Eq, Ord, Show)
-newtype ModName = ModName Text deriving (Eq, Ord, Show)
-newtype ModTransformName = ModTransformName Text deriving (Eq, Ord, Show)
 
 data ModeInfo = ModeInfo
   { miName :: ModeName
   } deriving (Eq, Show)
 
-data ModDecl = ModDecl
-  { mdName :: ModName
-  , mdSrc :: ModeName
-  , mdTgt :: ModeName
-  }
-  deriving (Eq, Show)
-
--- A modality expression is a composition path in application order.
-data ModExpr = ModExpr
-  { meSrc :: ModeName
-  , meTgt :: ModeName
-  , mePath :: [ModName]
-  }
-  deriving (Eq, Ord, Show)
-
-data ModEqn = ModEqn
-  { meLHS :: ModExpr
-  , meRHS :: ModExpr
-  } deriving (Eq, Show)
-
-data ModTransformDecl = ModTransformDecl
-  { mtdName :: ModTransformName
-  , mtdFrom :: ModExpr
-  , mtdTo :: ModExpr
-  , mtdWitness :: GenName
+data ClassificationDecl = ClassificationDecl
+  { cdClassifier :: ModeName
+  , cdUniverse :: Obj
+  , cdTag :: Maybe Text
   } deriving (Eq, Show)
 
 data ModeTheory = ModeTheory
@@ -65,12 +46,13 @@ data ModeTheory = ModeTheory
   , mtDecls :: Map ModName ModDecl
   , mtEqns :: [ModEqn]
   , mtTransforms :: Map ModTransformName ModTransformDecl
+  , mtClassifiedBy :: Map ModeName ClassificationDecl
   }
   deriving (Eq, Show)
 
 
 emptyModeTheory :: ModeTheory
-emptyModeTheory = ModeTheory M.empty M.empty [] M.empty
+emptyModeTheory = ModeTheory M.empty M.empty [] M.empty M.empty
 
 addMode :: ModeName -> ModeTheory -> Either Text ModeTheory
 addMode name mt
@@ -103,6 +85,66 @@ addModTransformDecl decl mt = do
     then Left "duplicate modality transform name"
     else Right mt { mtTransforms = M.insert (mtdName decl) decl (mtTransforms mt) }
 
+addClassification :: ModeName -> ClassificationDecl -> ModeTheory -> Either Text ModeTheory
+addClassification mode decl mt = do
+  if M.member mode (mtModes mt)
+    then Right ()
+    else Left "mode theory: classifiedBy uses unknown mode"
+  if M.member (cdClassifier decl) (mtModes mt)
+    then Right ()
+    else Left "mode theory: classifiedBy uses unknown mode"
+  if M.member mode (mtClassifiedBy mt)
+    then Left "mode theory: classifiedBy duplicate for mode"
+    else Right ()
+  if objMode0 (cdUniverse decl) == cdClassifier decl
+    then Right ()
+    else Left "mode theory: classifiedBy universe mode mismatch"
+  Right mt { mtClassifiedBy = M.insert mode decl (mtClassifiedBy mt) }
+
+classificationDeps :: ModeTheory -> Map ModeName [ModeName]
+classificationDeps mt =
+  M.fromList
+    [ (mode, edgeDeps mode)
+    | mode <- M.keys (mtModes mt)
+    ]
+  where
+    edgeDeps mode =
+      case M.lookup mode (mtClassifiedBy mt) of
+        Just decl
+          | cdClassifier decl /= mode -> [cdClassifier decl]
+        _ -> []
+
+classificationOrder :: ModeTheory -> Either Text [ModeName]
+classificationOrder mt = do
+  checkClassificationWellFormed mt
+  let modes = M.keys (mtModes mt)
+  (_, doneFinal, postRev) <- foldl step (Right (S.empty, S.empty, [])) modes
+  if S.size doneFinal == length modes
+    then Right (reverse postRev)
+    else Left "mode theory: classification order incomplete"
+  where
+    step acc mode = do
+      st <- acc
+      dfs mode st
+
+    dfs mode st@(visiting, done, postRev)
+      | mode `S.member` done = Right st
+      | mode `S.member` visiting =
+          Left ("mode theory: classification cycle detected at " <> renderMode mode)
+      | otherwise = do
+          let visiting' = S.insert mode visiting
+          st' <- foldl stepDep (Right (visiting', done, postRev)) (M.findWithDefault [] mode (classificationDeps mt))
+          let (visitingDone, doneDone, postRevDone) = st'
+          let visitingFinal = S.delete mode visitingDone
+          let doneFinal = S.insert mode doneDone
+          Right (visitingFinal, doneFinal, mode : postRevDone)
+
+    stepDep acc dep = do
+      st <- acc
+      dfs dep st
+
+    renderMode (ModeName name) = name
+
 composeMod :: ModeTheory -> ModExpr -> ModExpr -> Either Text ModExpr
 composeMod _ f g
   | meTgt f /= meSrc g = Left "mode mismatch in modality composition"
@@ -130,10 +172,33 @@ checkWellFormed mt = do
   mapM_ checkDecl (M.elems (mtDecls mt))
   mapM_ (validateModEqn mt) (mtEqns mt)
   mapM_ (validateModTransformDecl mt) (M.elems (mtTransforms mt))
+  checkClassificationWellFormed mt
+  checkClassificationStratifiable mt
   where
     checkDecl decl
       | M.member (mdSrc decl) (mtModes mt) && M.member (mdTgt decl) (mtModes mt) = Right ()
       | otherwise = Left "modality declaration uses unknown mode"
+
+checkClassificationWellFormed :: ModeTheory -> Either Text ()
+checkClassificationWellFormed mt =
+  mapM_ checkOne (M.toList (mtClassifiedBy mt))
+  where
+    checkOne (mode, decl) = do
+      if M.member mode (mtModes mt)
+        then Right ()
+        else Left "mode theory: classifiedBy uses unknown mode"
+      if M.member (cdClassifier decl) (mtModes mt)
+        then Right ()
+        else Left "mode theory: classifiedBy uses unknown mode"
+      if objMode0 (cdUniverse decl) == cdClassifier decl
+        then Right ()
+        else Left "mode theory: classifiedBy universe mode mismatch"
+
+checkClassificationStratifiable :: ModeTheory -> Either Text ()
+checkClassificationStratifiable mt =
+  case classificationOrder mt of
+    Left err -> Left err
+    Right _ -> Right ()
 
 validateModTransformDecl :: ModeTheory -> ModTransformDecl -> Either Text ()
 validateModTransformDecl mt decl = do
@@ -202,7 +267,6 @@ rewriteOnce mt me =
         Nothing ->
           case path of
             (_:xs) -> findRewrite (idx + 1) xs
-            [] -> Nothing
 
     firstRule _ [] = Nothing
     firstRule path (eqn:eqns) =
@@ -227,3 +291,10 @@ mkExprFromPath mt src path = do
       if mdSrc decl == cur
         then walk (mdTgt decl) ms
         else Left "mode theory: modality composition type mismatch"
+
+objMode0 :: Obj -> ModeName
+objMode0 obj =
+  case obj of
+    OVar (ObjVar _ mode) -> mode
+    OCon (ObjRef mode _) _ -> mode
+    OMod me _ -> meTgt me

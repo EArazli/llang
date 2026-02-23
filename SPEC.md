@@ -23,7 +23,7 @@ The classification graph MAY be empty.
 
 A classification edge is written:
 
-- `mode M classifiedBy K via U`
+- `mode M classifiedBy K via U;`
 
 This SHALL mean:
 
@@ -31,6 +31,11 @@ This SHALL mean:
 - the classifier object is `U` (an object of mode `K`),
 - a code for an object of `M` SHALL be well-formed as a term of `K` with classifier `U`,
 - definitional equality of objects in `M` SHALL be definitional equality of their codes in `K`.
+- the edge is a directed dependency `M ▷ K`.
+
+Current kernel restriction:
+
+- each mode has at most one `classifiedBy` edge.
 
 ### 2.2 Objects and Codes
 
@@ -43,6 +48,10 @@ Surface notion:
 - the surface language may continue to use the word "type", but kernel checks MUST distinguish object identity from code representation.
 
 If a mode has no explicit classification edge, object well-formedness is determined by that mode's declared object formers and object-parameter rules.
+
+Universe well-formedness (minimum kernel check):
+
+- for `mode M classifiedBy K via U;`, the universe object MUST satisfy `objMode(U) = K`.
 
 ### 2.3 Object Definitional Equality
 
@@ -59,7 +68,8 @@ Algorithmic rule:
 ### 2.4 Allowed Classification Graphs
 
 - self-classification edges (`K classifiedBy K via U`) are permitted;
-- longer cycles MUST be rejected unless explicit universe levels are provided.
+- classification graphs MUST NOT contain cycles of length greater than 1;
+- longer cycles are rejected unless explicit universe levels are provided.
 
 ### 2.5 Constructor Source
 
@@ -72,6 +82,21 @@ For `Tm classifiedBy Ty via U`:
 - codes in `Ty`: `Unit : U`, `Arr : U × U -> U`,
 - objects of `Tm` include codes such as `Arr(Unit, Unit)`,
 - `Tm`-object equality is checked by normalizing those `Ty` codes and comparing normal forms.
+
+Allowed:
+
+- `Ty classifiedBy Ty via Ty.U;`
+- `Tm classifiedBy Ty via Ty.U;`
+
+Rejected:
+
+- `A classifiedBy B via B.U;` with `B classifiedBy A via A.U;` (non-self cycle).
+
+### 2.7 Classifier Dependency Order
+
+For doctrine validation and later normalization/unification environment construction, the kernel SHALL compute a classifier dependency order `order : [ModeName]` such that:
+
+- if `M classifiedBy K` and `M != K`, then `K` appears before `M` in `order`.
 
 ## 3. Definitional Fragment
 

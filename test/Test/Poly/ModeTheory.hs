@@ -38,7 +38,10 @@ tests :: TestTree
 tests =
   testGroup
     "Poly.ModeTheory"
-    [ testCase "modality rewrite normalizes nested modality type" testNormalizeObjExprByModEq
+    [ testCase "self-classification allows universe declared later" testSelfClassificationDeferred
+    , testCase "classification cycle (non-self) is rejected" testClassificationCycleRejected
+    , testCase "classificationOrder places classifier before classified mode" testClassificationOrder
+    , testCase "modality rewrite normalizes nested modality type" testNormalizeObjExprByModEq
     , testCase "substitution re-normalizes modality type" testSubstReNormalizes
     , testCase "action declarations elaborate and validate" testActionElab
     , testCase "applyAction preserves non-source tmctx and unifies using diagram tmctx" testApplyActionUsesDiagramTmCtx
@@ -58,6 +61,54 @@ tests =
     , testCase "legacy adj keyword is rejected" testAdjunctionKeywordRejected
     , testCase "legacy struct keyword is rejected" testStructureKeywordRejected
     ]
+
+testSelfClassificationDeferred :: Assertion
+testSelfClassificationDeferred = do
+  let src = T.unlines
+        [ "doctrine SelfClass where {"
+        , "  mode Ty classifiedBy Ty via Ty.U;"
+        , "  type U @Ty;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()
+
+testClassificationCycleRejected :: Assertion
+testClassificationCycleRejected = do
+  let src = T.unlines
+        [ "doctrine BadCycle where {"
+        , "  mode A classifiedBy B via B.U;"
+        , "  mode B classifiedBy A via A.U;"
+        , "  type U @A;"
+        , "  type U @B;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected classification cycle error, got: " <> T.unpack err)
+        ("cycle" `T.isInfixOf` err || "strat" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected doctrine elaboration to reject non-self classification cycle"
+
+testClassificationOrder :: Assertion
+testClassificationOrder = do
+  let ty = ModeName "Ty"
+  let tm = ModeName "Tm"
+  let uTy = OVar ObjVar { ovName = "U", ovMode = ty }
+  let uTy2 = OVar ObjVar { ovName = "U2", ovMode = ty }
+  mt0 <- requireEither (addMode ty (mkModes []))
+  mt1 <- requireEither (addMode tm mt0)
+  mt2 <- requireEither (addClassification ty ClassificationDecl { cdClassifier = ty, cdUniverse = uTy, cdTag = Nothing } mt1)
+  mt3 <- requireEither (addClassification tm ClassificationDecl { cdClassifier = ty, cdUniverse = uTy2, cdTag = Nothing } mt2)
+  order <- requireEither (classificationOrder mt3)
+  let pos mode = lookup mode (zip order [0 :: Int ..])
+  assertBool "expected classificationOrder to include Ty and Tm" (maybe False (const True) (pos ty) && maybe False (const True) (pos tm))
+  case (pos ty, pos tm) of
+    (Just i, Just j) ->
+      assertBool "expected Ty to appear before Tm in classification order" (i < j)
+    _ ->
+      assertFailure "classificationOrder missing expected modes"
 
 testNormalizeObjExprByModEq :: Assertion
 testNormalizeObjExprByModEq = do

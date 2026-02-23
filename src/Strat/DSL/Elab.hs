@@ -50,6 +50,7 @@ import Strat.Poly.ModeTheory
   , ModeInfo(..)
   , ModDecl(..)
   , ModEqn(..)
+  , ClassificationDecl(..)
   , ModName(..)
   , ModExpr(..)
   , ModTransformName(..)
@@ -624,7 +625,7 @@ validateFunctorSchema schema = do
 
 namespaceDoctrineWithParam :: Text -> Doctrine -> Either Text Doctrine
 namespaceDoctrineWithParam param doc = do
-  modeTheory' <- renameModeTheory modeRenMap modRenMap (dModes doc)
+  modeTheory' <- renameModeTheory modeRenMap modRenMap typeRenMap (dModes doc)
   types' <- renameTypeTables (dTypes doc)
   gens' <- renameGenTables (dGens doc)
   let attrSorts' =
@@ -726,6 +727,7 @@ mergeIface left right = do
   modes <- unionByEq "mode" (mtModes (dModes left)) (mtModes (dModes right))
   decls <- unionByEq "modality" (mtDecls (dModes left)) (mtDecls (dModes right))
   transforms <- unionByEq "mod_transform" (mtTransforms (dModes left)) (mtTransforms (dModes right))
+  classified <- unionByEq "classifiedBy" (mtClassifiedBy (dModes left)) (mtClassifiedBy (dModes right))
   attrSorts <- unionByEq "attrsort" (dAttrSorts left) (dAttrSorts right)
   types <- mergeModeTables "type" (dTypes left) (dTypes right)
   gens <- mergeModeTables "generator" (dGens left) (dGens right)
@@ -740,6 +742,7 @@ mergeIface left right = do
             , mtDecls = decls
             , mtEqns = mtEqns (dModes left) <> mtEqns (dModes right)
             , mtTransforms = transforms
+            , mtClassifiedBy = classified
             }
       , dAcyclicModes = S.union (dAcyclicModes left) (dAcyclicModes right)
       , dAttrSorts = attrSorts
@@ -835,9 +838,11 @@ freshTextName base used =
 renameModeTheory
   :: Map ModeName ModeName
   -> Map ModName ModName
+  -> Map ObjRef ObjRef
   -> ModeTheory
   -> Either Text ModeTheory
-renameModeTheory modeRen modRen mt =
+renameModeTheory modeRen modRen typeRen mt = do
+  classifiedBy <- foldM addClassification M.empty (M.toList (mtClassifiedBy mt))
   Right
     ModeTheory
       { mtModes =
@@ -864,6 +869,7 @@ renameModeTheory modeRen modRen mt =
             [ (renTransform name, decl { mtdName = renTransform name, mtdFrom = renExpr (mtdFrom decl), mtdTo = renExpr (mtdTo decl) })
             | (name, decl) <- M.toList (mtTransforms mt)
             ]
+      , mtClassifiedBy = classifiedBy
       }
   where
     renMode mode = M.findWithDefault mode mode modeRen
@@ -875,6 +881,15 @@ renameModeTheory modeRen modRen mt =
         , meTgt = renMode (meTgt me)
         , mePath = map renMod (mePath me)
         }
+    addClassification acc (mode, decl) = do
+      universe' <- renameObjExpr modeRen modRen typeRen (cdUniverse decl)
+      let mode' = renMode mode
+      let decl' =
+            decl
+              { cdClassifier = renMode (cdClassifier decl)
+              , cdUniverse = universe'
+              }
+      Right (M.insert mode' decl' acc)
 
 renameTypeSig
   :: Map ModeName ModeName

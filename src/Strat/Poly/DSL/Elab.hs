@@ -339,6 +339,11 @@ morphismBudget budgetDefault raw =
         , sbTimeoutMs = timeoutMs
         }
 
+data ElabState = ElabState
+  { esDoc :: Doctrine
+  , esPendingClass :: [(ModeName, RawClassifiedByDecl)]
+  }
+
 elabPolyDoctrine :: ModuleEnv -> RawPolyDoctrine -> Either Text Doctrine
 elabPolyDoctrine env raw = fst <$> elabPolyDoctrineWithBudgetResult defaultSearchBudget env raw
 
@@ -354,8 +359,9 @@ elabPolyDoctrineWithBudgetResult budget env raw = do
       case M.lookup name (meDoctrines env) of
         Nothing -> Left ("Unknown doctrine: " <> name)
         Just doc -> Right (Just doc)
-  let start = seedDoctrine (rpdName raw) base
-  doc <- foldM (elabPolyItem env) start (rpdItems raw)
+  let start = ElabState { esDoc = seedDoctrine (rpdName raw) base, esPendingClass = [] }
+  st <- foldM (elabPolyItem env) start (rpdItems raw)
+  doc <- applyPendingClassifications st
   validateDoctrine doc
   result <- validateActionSemanticsWithBudgetResult budget doc
   case result of
@@ -377,8 +383,9 @@ elabPolyDoctrineFromBaseWithBudgetResult
   -> RawPolyDoctrine
   -> Either Text (Doctrine, Int)
 elabPolyDoctrineFromBaseWithBudgetResult budget env baseDoc raw = do
-  let start = seedDoctrine (rpdName raw) (Just baseDoc)
-  doc <- foldM (elabPolyItem env) start (rpdItems raw)
+  let start = ElabState { esDoc = seedDoctrine (rpdName raw) (Just baseDoc), esPendingClass = [] }
+  st <- foldM (elabPolyItem env) start (rpdItems raw)
+  doc <- applyPendingClassifications st
   validateDoctrine doc
   result <- validateActionSemanticsWithBudgetResult budget doc
   case result of
@@ -409,8 +416,33 @@ seedDoctrine name base =
       }
     Just doc -> doc { dName = name, dAttrSorts = dAttrSorts doc }
 
-elabPolyItem :: ModuleEnv -> Doctrine -> RawPolyItem -> Either Text Doctrine
-elabPolyItem env doc item =
+applyPendingClassifications :: ElabState -> Either Text Doctrine
+applyPendingClassifications st =
+  foldM addOne (esDoc st) (esPendingClass st)
+  where
+    addOne doc (mode, rawClass) = do
+      ensureMode doc mode
+      let classifier = ModeName (rcdClassifier rawClass)
+      ensureMode doc classifier
+      universe <- elabObjExpr doc [] [] M.empty (rcdUniverse rawClass)
+      if objMode universe == classifier
+        then Right ()
+        else Left "classifiedBy universe mode mismatch"
+      mt' <-
+        addClassification
+          mode
+          ClassificationDecl
+            { cdClassifier = classifier
+            , cdUniverse = universe
+            , cdTag = rcdTag rawClass
+            }
+          (dModes doc)
+      Right doc { dModes = mt' }
+
+elabPolyItem :: ModuleEnv -> ElabState -> RawPolyItem -> Either Text ElabState
+elabPolyItem env st item =
+  let doc = esDoc st
+   in
   case item of
     RPMode decl -> do
       let mode = ModeName (rmdName decl)
@@ -419,7 +451,11 @@ elabPolyItem env doc item =
             if rmdAcyclic decl
               then S.insert mode (dAcyclicModes doc)
               else dAcyclicModes doc
-      pure doc { dModes = mt', dAcyclicModes = acyclic' }
+      let pending' =
+            case rmdClassifiedBy decl of
+              Nothing -> esPendingClass st
+              Just rawClass -> esPendingClass st <> [(mode, rawClass)]
+      pure st { esDoc = doc { dModes = mt', dAcyclicModes = acyclic' }, esPendingClass = pending' }
     RPModality decl -> do
       let modDecl =
             ModDecl
@@ -428,14 +464,16 @@ elabPolyItem env doc item =
               , mdTgt = ModeName (rmodTgt decl)
               }
       mt' <- addModDecl modDecl (dModes doc)
-      pure doc { dModes = mt' }
+      pure st { esDoc = doc { dModes = mt' } }
     RPModEq decl -> do
       lhs <- elabRawModExpr (dModes doc) (rmeLHS decl)
       rhs <- elabRawModExpr (dModes doc) (rmeRHS decl)
       mt' <- addModEqn (ModEqn lhs rhs) (dModes doc)
-      pure doc { dModes = mt' }
+      pure st { esDoc = doc { dModes = mt' } }
     RPModTransform decl ->
-      elabModTransformDecl doc decl
+      do
+        doc' <- elabModTransformDecl doc decl
+        pure st { esDoc = doc' }
     RPAction decl -> do
       let modName = ModName (radModName decl)
       modDecl <-
@@ -453,7 +491,7 @@ elabPolyItem env doc item =
               }
       if M.member modName (dActions doc)
         then Left "duplicate action declaration"
-        else pure doc { dActions = M.insert modName action (dActions doc) }
+        else pure st { esDoc = doc { dActions = M.insert modName action (dActions doc) } }
     RPObligation decl -> do
       let mode = ModeName (rodMode decl)
       ensureMode doc mode
@@ -477,7 +515,7 @@ elabPolyItem env doc item =
                   , obRHSExpr = rodRHS decl
                   , obPolicy = UseStructuralAsBidirectional
                   }
-          pure doc { dObligations = dObligations doc <> [obl] }
+          pure st { esDoc = doc { dObligations = dObligations doc <> [obl] } }
         else do
           (tyVars, tmVars, _sigParams) <- elabParamDecls doc mode (rodVars decl)
           dom <- elabContext doc mode tyVars tmVars M.empty (rodDom decl)
@@ -497,7 +535,7 @@ elabPolyItem env doc item =
                   , obRHSExpr = rodRHS decl
                   , obPolicy = UseStructuralAsBidirectional
                   }
-          pure doc { dObligations = dObligations doc <> [obl] }
+          pure st { esDoc = doc { dObligations = dObligations doc <> [obl] } }
     RPAttrSort decl -> do
       let sortName = AttrSort (rasName decl)
       litKind <- mapM parseAttrLitKind (rasKind decl)
@@ -505,7 +543,7 @@ elabPolyItem env doc item =
         then Left "duplicate attribute sort name"
         else do
           let sortDecl = AttrSortDecl { asName = sortName, asLitKind = litKind }
-          pure doc { dAttrSorts = M.insert sortName sortDecl (dAttrSorts doc) }
+          pure st { esDoc = doc { dAttrSorts = M.insert sortName sortDecl (dAttrSorts doc) } }
     RPType decl -> do
       let mode = ModeName (rptMode decl)
       ensureMode doc mode
@@ -518,7 +556,7 @@ elabPolyItem env doc item =
         else do
           let table' = M.insert tname sig table
           let types' = M.insert mode table' (dTypes doc)
-          pure doc { dTypes = types' }
+          pure st { esDoc = doc { dTypes = types' } }
     RPGen decl -> do
       let mode = ModeName (rpgMode decl)
       ensureMode doc mode
@@ -543,7 +581,7 @@ elabPolyItem env doc item =
         else do
           let table' = M.insert gname gen table
           let gens' = M.insert mode table' (dGens doc)
-          pure doc { dGens = gens' }
+          pure st { esDoc = doc { dGens = gens' } }
     RPData decl -> do
       let modeName = rpdTyMode decl
       let mode = ModeName modeName
@@ -560,7 +598,7 @@ elabPolyItem env doc item =
             , rptMode = modeName
             }
       let ctors = map (mkCtor modeName (rpdTyName decl) (rpdTyVars decl)) (rpdCtors decl)
-      foldM (elabPolyItem env) doc (RPType typeDecl : map RPGen ctors)
+      foldM (elabPolyItem env) st (RPType typeDecl : map RPGen ctors)
     RPRule decl -> do
       let mode = ModeName (rprMode decl)
       ensureMode doc mode
@@ -593,7 +631,7 @@ elabPolyItem env doc item =
             , c2LHS = lhs'
             , c2RHS = rhs'
             }
-      pure doc { dCells2 = dCells2 doc <> [cell] }
+      pure st { esDoc = doc { dCells2 = dCells2 doc <> [cell] } }
       where
         withRule action =
           case action of

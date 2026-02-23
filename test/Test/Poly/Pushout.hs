@@ -19,6 +19,7 @@ import Strat.Poly.ModeTheory
   , ModEqn(..)
   , ModTransformName(..)
   , ModTransformDecl(..)
+  , ClassificationDecl(..)
   , ModeTheory(..)
   , ModeInfo(..)
   , mtModes
@@ -30,7 +31,7 @@ import Strat.Poly.Attr (AttrSort(..), AttrSortDecl(..), AttrLitKind(..))
 import Strat.Poly.Diagram (genD, idD)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), ModAction(..), ObligationDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), gdPlainDom, validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram)
+import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram, applyMorphismTy)
 import Strat.Poly.Pushout (computePolyPushout, computePolyPushoutPreferRight, computePolyCoproduct, PolyPushoutResult(..))
 import Strat.Poly.Graph (Diagram(..), BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..), emptyDiagram, freshPort, addEdgePayload)
 import Strat.Poly.DiagramIso (diagramIsoEq)
@@ -60,6 +61,7 @@ tests =
     , testCase "pushout glue composes through right injection" testPushoutGlueComposesThroughInr
     , testCase "pushout generator injectivity is mode-aware" testPushoutGenInjectiveByMode
     , testCase "pushout default type rename follows mode map" testPushoutTypeRenameDefaultUsesModeMap
+    , testCase "pushout classifiedBy universes follow type renames" testPushoutClassificationUniverseFollowsTypeRename
     , testCase "pushout handles alpha-renaming with mode equations" testPushoutAlphaRenameWithModeEq
     , testCase "pushout supports term-parameterized type maps" testPushoutTermTypeMaps
     , testCase "pushout permutes mixed type/term parameters and renames term sorts" testPushoutTypePermutationSortRename
@@ -123,6 +125,7 @@ mkModes modes =
     , mtDecls = M.empty
     , mtEqns = []
     , mtTransforms = M.empty
+    , mtClassifiedBy = M.empty
     }
 
 
@@ -1434,6 +1437,96 @@ testPushoutTypeRenameDefaultUsesModeMap = do
   let typesAtN = M.findWithDefault M.empty modeN (dTypes (poDoctrine res))
   assertBool "expected type X at mapped target mode N" (M.member (ObjName "X") typesAtN)
 
+testPushoutClassificationUniverseFollowsTypeRename :: Assertion
+testPushoutClassificationUniverseFollowsTypeRename = do
+  let mode = ModeName "M"
+  let typeName = ObjName "U"
+  let universe = OCon (ObjRef mode typeName) []
+  let classDecl =
+        ClassificationDecl
+          { cdClassifier = mode
+          , cdUniverse = universe
+          , cdTag = Nothing
+          }
+  let src =
+        Doctrine
+          { dName = "SrcClassRename"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.empty
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let left =
+        Doctrine
+          { dName = "LeftClassRename"
+          , dModes =
+              (mkModes (S.singleton mode))
+                { mtClassifiedBy = M.singleton mode classDecl
+                }
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton mode (M.singleton typeName (TypeSig []))
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  let right =
+        Doctrine
+          { dName = "RightClassRename"
+          , dModes = mkModes (S.singleton mode)
+          , dAcyclicModes = S.empty
+          , dTypes = M.singleton mode (M.singleton typeName (TypeSig []))
+          , dGens = M.empty
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
+  let inl =
+        Morphism
+          { morName = "classInl"
+          , morSrc = src
+          , morTgt = left
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  let inr =
+        Morphism
+          { morName = "classInr"
+          , morSrc = src
+          , morTgt = right
+          , morIsCoercion = False
+          , morModeMap = identityModeMap src
+          , morModMap = identityModMap src
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  res <- case computePolyPushout "PClassRename" inl inr of
+    Left err -> assertFailure (T.unpack err) >> error "unreachable"
+    Right out -> pure out
+  decl <-
+    case M.lookup mode (mtClassifiedBy (dModes (poDoctrine res))) of
+      Nothing ->
+        assertFailure "expected classifiedBy declaration in pushout doctrine" >> error "unreachable"
+      Just out -> pure out
+  expectedUniverse <- require (applyMorphismTy (poInl res) universe)
+  cdUniverse decl @?= expectedUniverse
+
 testPushoutAlphaRenameWithModeEq :: Assertion
 testPushoutAlphaRenameWithModeEq = do
   let mode = ModeName "M"
@@ -2648,6 +2741,7 @@ mkModeEqTheory mode modF modU =
             (ModExpr { meSrc = mode, meTgt = mode, mePath = [] })
         ]
     , mtTransforms = M.empty
+    , mtClassifiedBy = M.empty
     }
 
 mkModeEqMorph :: Text -> Doctrine -> Doctrine -> Text -> Morphism

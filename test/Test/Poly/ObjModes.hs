@@ -68,6 +68,7 @@ mkModes modes =
     , mtDecls = M.empty
     , mtEqns = []
     , mtTransforms = M.empty
+    , mtClassifiedBy = M.empty
     }
 
 requireDoc :: Doctrine -> IO Doctrine

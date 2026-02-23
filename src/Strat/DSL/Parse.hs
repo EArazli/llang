@@ -269,8 +269,20 @@ polyModeDecl = do
   _ <- symbol "mode"
   name <- ident
   acyclic <- option False (True <$ symbol "acyclic")
+  mClass <- optional $ do
+    _ <- symbol "classifiedBy"
+    cls <- ident
+    _ <- symbol "via"
+    uni <- polyObjExpr
+    mTag <- optional (symbol "as" *> ident)
+    pure
+      PolyAST.RawClassifiedByDecl
+        { PolyAST.rcdClassifier = cls
+        , PolyAST.rcdUniverse = uni
+        , PolyAST.rcdTag = mTag
+        }
   optionalSemi
-  pure (PolyAST.RPMode (PolyAST.RawModeDecl name acyclic))
+  pure (PolyAST.RPMode (PolyAST.RawModeDecl name acyclic mClass))
 
 polyModalityDecl :: Parser PolyAST.RawPolyItem
 polyModalityDecl = do

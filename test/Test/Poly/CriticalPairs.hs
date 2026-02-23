@@ -57,6 +57,7 @@ testCriticalPairsRespectModeEq = do
                   (ModExpr { meSrc = mode, meTgt = mode, mePath = [] })
               ]
           , mtTransforms = M.empty
+          , mtClassifiedBy = M.empty
           }
   lhsUF <- require (genD mode [ufBaseTy] [ufBaseTy] (GenName "g"))
   lhsBase <- require (genD mode [baseTy] [baseTy] (GenName "g"))

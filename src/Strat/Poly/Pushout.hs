@@ -21,6 +21,7 @@ import Strat.Poly.Morphism
 import Strat.Poly.ModeTheory
   ( ModeName(..)
   , ModeTheory(..)
+  , ClassificationDecl(..)
   , ModeInfo(..)
   , ModName(..)
   , ModDecl(..)
@@ -128,7 +129,31 @@ computePolyPushout name f g = do
       renameGensC
       (dModes (morTgt f))
       (dModes (morTgt g))
-  let modeTheory' = (mpoModeTheory modePushout) { mtTransforms = modeTransforms' }
+  classFromRight <-
+    renamedClassifiedByMap
+      (mpoInrModeRen modePushout)
+      (mpoInrModRen modePushout)
+      renameTypesC
+      permTypesC0
+      (dModes (morTgt g))
+  classFromLeft <-
+    renamedClassifiedByMap
+      (mpoInlModeRen modePushout)
+      (mpoInlModRen modePushout)
+      renameTypesB
+      permTypesB0
+      (dModes (morTgt f))
+  class0 <-
+    mergeNamedMapsByEq
+      "mode pushout: conflicting classifiedBy declarations"
+      classFromRight
+      classFromLeft
+  let modeTheory' =
+        (mpoModeTheory modePushout)
+          { mtTransforms = modeTransforms'
+          , mtClassifiedBy = class0
+          }
+  _ <- checkWellFormed modeTheory'
   let modePushout' = modePushout { mpoModeTheory = modeTheory' }
   b' <-
     renameDoctrine
@@ -237,7 +262,31 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
       M.empty
       (dModes body)
       (dModes target)
-  let modeTheory' = (mpoModeTheory modePushout) { mtTransforms = modeTransforms' }
+  classFromRight <-
+    renamedClassifiedByMap
+      (mpoInrModeRen modePushout)
+      (mpoInrModRen modePushout)
+      M.empty
+      M.empty
+      (dModes target)
+  classFromLeft <-
+    renamedClassifiedByMap
+      (mpoInlModeRen modePushout)
+      (mpoInlModRen modePushout)
+      renameTypes
+      interfacePermRen
+      (dModes body)
+  class0 <-
+    mergeNamedMapsByEq
+      "mode pushout: conflicting classifiedBy declarations"
+      classFromRight
+      classFromLeft
+  let modeTheory' =
+        (mpoModeTheory modePushout)
+          { mtTransforms = modeTransforms'
+          , mtClassifiedBy = class0
+          }
+  _ <- checkWellFormed modeTheory'
   let modePushout' = modePushout { mpoModeTheory = modeTheory' }
   body' <-
     renameDoctrine
@@ -325,7 +374,11 @@ pushoutModeTheoryPreferRight prefixRaw leftMor rightMor = do
   let modesFinal = buildModesFinal inlModeRen inrModeRen mtLeft mtRight
   declsFromRight <- renamedDeclMap inrModeRen inrModRen mtRight
   declsFromLeft <- renamedDeclMap inlModeRen inlModRen mtLeft
-  decls0 <- mergeNamedDecls "mode pushout: conflicting modality declarations" declsFromRight declsFromLeft
+  decls0 <-
+    mergeNamedMapsByEq
+      "mode pushout: conflicting modality declarations"
+      declsFromRight
+      declsFromLeft
   let eqns0 =
         map (renameModEqn inrModeRen inrModRen) (mtEqns mtRight)
           <> map (renameModEqn inlModeRen inlModRen) (mtEqns mtLeft)
@@ -351,6 +404,7 @@ pushoutModeTheoryPreferRight prefixRaw leftMor rightMor = do
           , mtDecls = decls1
           , mtEqns = eqns0 <> glueEqns
           , mtTransforms = transforms
+          , mtClassifiedBy = M.empty
           }
   _ <- checkWellFormed mtOut
   pure
@@ -445,16 +499,6 @@ pushoutModeTheoryPreferRight prefixRaw leftMor rightMor = do
             , let name' = renameModName modRen name
             ]
         )
-
-    mergeNamedDecls errMsg leftDecls rightDecls =
-      foldM step leftDecls (M.toList rightDecls)
-      where
-        step acc (name, decl) =
-          case M.lookup name acc of
-            Nothing -> Right (M.insert name decl acc)
-            Just existing
-              | existing == decl -> Right acc
-              | otherwise -> Left errMsg
 
     addGlueEqn pref inlModeRen' inlModRen' inrModeRen' inrModRen' (decls, eqns) srcMod = do
       leftExpr0 <- lookupModImage "left" leftMor srcMod
@@ -607,6 +651,38 @@ renderModeName (ModeName t) = t
 
 renderModName :: ModName -> Text
 renderModName (ModName t) = t
+
+mergeNamedMapsByEq :: (Ord k, Eq v) => Text -> M.Map k v -> M.Map k v -> Either Text (M.Map k v)
+mergeNamedMapsByEq errMsg leftMap rightMap =
+  foldM step leftMap (M.toList rightMap)
+  where
+    step acc (name, value) =
+      case M.lookup name acc of
+        Nothing -> Right (M.insert name value acc)
+        Just existing
+          | existing == value -> Right acc
+          | otherwise -> Left errMsg
+
+renamedClassifiedByMap
+  :: M.Map ModeName ModeName
+  -> M.Map ModName ModName
+  -> TypeRenameMap
+  -> TypePermMap
+  -> ModeTheory
+  -> Either Text (M.Map ModeName ClassificationDecl)
+renamedClassifiedByMap modeRen modRen tyRen permRen mt = do
+  pairs <- mapM renameOne (M.toList (mtClassifiedBy mt))
+  pure (M.fromList pairs)
+  where
+    renameOne (mode, decl) = do
+      universe' <- renameObjExpr modeRen modRen tyRen permRen (cdUniverse decl)
+      pure
+        ( renameModeName modeRen mode
+        , decl
+            { cdClassifier = renameModeName modeRen (cdClassifier decl)
+            , cdUniverse = universe'
+            }
+        )
 
 computePolyCoproduct :: Text -> Doctrine -> Doctrine -> Either Text PolyPushoutResult
 computePolyCoproduct name a b = do
@@ -1504,6 +1580,7 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
 
     renameModeTransforms transRen mt0 = do
       transforms' <- foldM addTransform M.empty (M.toList (mtTransforms mt0))
+      classifiedBy' <- foldM addClassification M.empty (M.toList (mtClassifiedBy mt0))
       let modes' =
             M.fromList
               [ (mode', info { miName = mode' })
@@ -1517,7 +1594,7 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
               , let name' = renameModName modRen name
               ]
       let eqns' = map (renameModEqn modeRen modRen) (mtEqns mt0)
-      Right mt0 { mtModes = modes', mtDecls = decls', mtEqns = eqns', mtTransforms = transforms' }
+      Right mt0 { mtModes = modes', mtDecls = decls', mtEqns = eqns', mtTransforms = transforms', mtClassifiedBy = classifiedBy' }
       where
         addTransform acc (name, decl) = do
           let name' = M.findWithDefault name name transRen
@@ -1531,6 +1608,20 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
             Just existing
               | existing == decl' -> Right acc
               | otherwise -> Left "poly pushout: modality transform name collision"
+
+        addClassification acc (mode, decl) = do
+          universe' <- renameObjExpr modeRen modRen tyRen permRen (cdUniverse decl)
+          let mode' = renameModeName modeRen mode
+          let decl' =
+                decl
+                  { cdClassifier = renameModeName modeRen (cdClassifier decl)
+                  , cdUniverse = universe'
+                  }
+          case M.lookup mode' acc of
+            Nothing -> Right (M.insert mode' decl' acc)
+            Just existing
+              | existing == decl' -> Right acc
+              | otherwise -> Left "poly pushout: classifiedBy collision"
 
     renameAttrSorts ren table =
       foldl add (Right M.empty) (M.elems table)

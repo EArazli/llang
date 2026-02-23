@@ -19,12 +19,13 @@ import Strat.Poly.Graph
   , diagramPortObj
   , weakenDiagramTmCtxTo
   )
-import Strat.Poly.ModeTheory (ModeName, composeMod, normalizeModExpr, meSrc, mePath)
+import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Obj
   ( TermDiagram(..)
   , ObjArg(..)
   , Obj(..)
   , objMode
+  , normalizeObjExpr
   )
 import Strat.Poly.TypeTheory
   ( TypeParamSig(..)
@@ -49,7 +50,7 @@ normalizeObjDeep tt = normalizeObjDeepWithCtx tt []
 normalizeObjDeepWithCtx :: TypeTheory -> [Obj] -> Obj -> Either Text Obj
 normalizeObjDeepWithCtx tt tmCtx ty = do
   ty' <- go ty
-  normalizeObjExpr0 ty'
+  normalizeObjExpr (ttModes tt) ty'
   where
     go expr =
       case expr of
@@ -75,36 +76,6 @@ normalizeObjDeepWithCtx tt tmCtx ty = do
       Left "normalizeObjDeep: expected type argument"
     normalizeArg (TPS_Tm _, OAObj _) =
       Left "normalizeObjDeep: expected term argument"
-
-    normalizeObjExpr0 expr =
-      case expr of
-        OVar _ -> Right expr
-        OCon ref args -> do
-          args' <- mapM normalizeArg0 args
-          Right (OCon ref args')
-        OMod me inner0 -> do
-          inner <- normalizeObjExpr0 inner0
-          (meComposed, innerBase) <-
-            case inner of
-              OMod me2 inner2 -> do
-                me' <- composeMod0 me2 me
-                Right (me', inner2)
-              _ -> Right (me, inner)
-          if objMode innerBase /= meSrc meComposed
-            then Left "normalizeObjExpr: modality source does not match inner type mode"
-            else do
-              let meNorm = normalizeModExpr0 meComposed
-              if null (mePath meNorm)
-                then Right innerBase
-                else Right (OMod meNorm innerBase)
-
-    normalizeArg0 arg =
-      case arg of
-        OAObj innerTy -> OAObj <$> normalizeObjExpr0 innerTy
-        OATm tm -> Right (OATm tm)
-
-    composeMod0 = composeMod (ttModes tt)
-    normalizeModExpr0 = normalizeModExpr (ttModes tt)
 
 normalizeTermDiagram
   :: TypeTheory

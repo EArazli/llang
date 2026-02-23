@@ -24,7 +24,7 @@ module Strat.Poly.Syntax
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import Strat.Poly.Attr (AttrMap)
-import Strat.Poly.ModeTheory (ModeName, ModExpr)
+import Strat.Poly.ModeSyntax (ModeName, ModExpr)
 import Strat.Poly.Names (BoxName, GenName)
 
 

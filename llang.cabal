@@ -100,6 +100,7 @@ data-files:
     examples/run/terms/stlc_bool.term.run.llang
     examples/run/terms/term_ref.run.llang
     examples/run/xfail/README.md
+    examples/run/xfail/classification_cycle.fail.run.llang
     examples/run/xfail/algebra/no_dup_error.fail.run.llang
     examples/run/xfail/dependent/free_index_must_fail.fail.run.llang
     examples/run/xfail/modes/dual_discipline_term_surface.fail.run.llang
@@ -173,6 +174,7 @@ library
   other-modules:
       Strat.Frontend.Compile
       Strat.Poly.Kernel
+      Strat.Poly.ModeSyntax
       Strat.Poly.Term.Confluence
       Strat.Poly.Term.Termination
       Strat.Poly.Traversal
