@@ -19,7 +19,11 @@ import Strat.Poly.Obj
   ( Obj(..)
   , ObjName(..)
   , ObjRef(..)
-  , ObjVar(..)
+  , mkCon
+  , ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , ObjArg
   , pattern OAObj
   , pattern OATm
@@ -38,7 +42,8 @@ testDataMacroElab :: Assertion
 testDataMacroElab = do
   let src = T.unlines
         [ "doctrine D where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  data List (a@M) @M where {"
         , "    Nil : [];"
         , "    Cons : [a, List(a)];"
@@ -68,8 +73,10 @@ testDataMacroElab = do
   consGen <- case M.lookup (GenName "Cons") gens of
     Nothing -> assertFailure "expected Cons constructor"
     Just g -> pure g
-  let aVar = ObjVar { ovName = "a", ovMode = mode }
-  let listTy = OCon (ObjRef mode (ObjName "List")) [OAObj (OVar aVar)]
+  aVar <- case gdTyVars nilGen of
+    [v] -> pure v
+    _ -> assertFailure "expected Nil constructor to carry one type metavariable"
+  let listTy = mkCon (ObjRef mode (ObjName "List")) [OAObj (OVar aVar)]
   gdPlainDom nilGen @?= []
   gdCod nilGen @?= [listTy]
   gdPlainDom consGen @?= [OVar aVar, listTy]
@@ -79,7 +86,8 @@ testDataMacroCollision :: Assertion
 testDataMacroCollision = do
   let src = T.unlines
         [ "doctrine D where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  gen Nil : [] -> [] @M;"
         , "  data List (a@M) @M where {"
         , "    Nil : [];"

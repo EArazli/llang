@@ -1,5 +1,6 @@
 doctrine ClassificationWrongClassifier where {
-  mode Ty;
+  mode Ty classifiedBy Ty via Ty.U_Ty;
+  type U_Ty @Ty;
   mode Tm classifiedBy Ty via Ty.U;
 
   type U @Ty;

@@ -1,13 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE ViewPatterns #-}
 module Strat.Poly.Syntax
   ( ObjName(..)
   , ObjRef(..)
-  , ObjVar(..)
+  , ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , TmFunName(..)
   , TmVar(..)
   , TermDiagram(..)
   , CodeArg(..)
-  , CodeTerm(..)
+  , CodeTerm(CTMeta, CTCon, CTMod)
   , Obj(..)
   , Context
   , PortId(..)
@@ -36,10 +41,7 @@ data ObjRef = ObjRef
   , orName :: ObjName
   } deriving (Eq, Ord, Show)
 
-data ObjVar = ObjVar
-  { ovName :: Text
-  , ovMode :: ModeName
-  } deriving (Eq, Ord, Show)
+type ObjVar = TmVar
 
 newtype TmFunName = TmFunName Text deriving (Eq, Ord, Show)
 
@@ -97,7 +99,7 @@ data CodeArg
   deriving (Eq, Ord, Show)
 
 data CodeTerm
-  = CTVar ObjVar
+  = CTMeta TmVar
   | CTCon ObjRef [CodeArg]
   | CTMod ModExpr CodeTerm
   deriving (Eq, Ord, Show)
@@ -107,6 +109,25 @@ data Obj = Obj
   , objCode :: CodeTerm
   }
   deriving (Eq, Ord, Show)
+
+metaSortObj :: ModeName -> Obj
+metaSortObj mode =
+  Obj
+    { objOwnerMode = mode
+    , objCode = CTCon (ObjRef mode (ObjName "__obj_meta_sort")) []
+    }
+
+pattern ObjVar :: Text -> ModeName -> ObjVar
+pattern ObjVar {ovName, ovMode} <- TmVar ovName (objOwnerMode -> ovMode) _
+  where
+    ObjVar ovName ovMode =
+      TmVar
+        { tmvName = ovName
+        , tmvSort = metaSortObj ovMode
+        , tmvScope = 0
+        }
+
+{-# COMPLETE ObjVar #-}
 
 type Context = [Obj]
 

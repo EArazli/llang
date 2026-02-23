@@ -20,7 +20,7 @@ import Strat.Poly.Graph
   , diagramPortObj
   , weakenDiagramTmCtxTo
   )
-import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.ModeTheory (ModeName, meSrc)
 import Strat.Poly.Obj
   ( TermDiagram(..)
   , CodeArg(..)
@@ -65,9 +65,9 @@ normalizeObjDeepWithCtx tt tmCtx ty = do
   where
     go expr =
       case objCode expr of
-        CTVar _ -> Right expr
+        CTMeta _ -> Right expr
         CTMod me innerCode -> do
-          inner <- go Obj { objOwnerMode = objOwnerMode expr, objCode = innerCode }
+          inner <- go Obj { objOwnerMode = meSrc me, objCode = innerCode }
           Right expr { objCode = CTMod me (objCode inner) }
         CTCon ref args ->
           case M.lookup ref (ttObjParams tt) of

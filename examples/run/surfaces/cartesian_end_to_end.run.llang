@@ -1,6 +1,6 @@
 doctrine CartLaws where {
-  mode M;
-
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   gen dup(a@M) : [a] -> [a, a] @M;
   gen drop(a@M) : [a] -> [] @M;
 
@@ -9,7 +9,8 @@ doctrine CartLaws where {
 }
 
 doctrine SurfaceTarget where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type A @M;
 
   gen copy(a@M) : [a] -> [a, a] @M;
@@ -33,7 +34,6 @@ implements CartLaws for SurfaceTarget using cartInst;
 surface Surf where {
   doctrine SurfaceTarget;
   mode M;
-
   lexer {
     keywords: term, in, out;
     symbols: "(", ")", "{", "}", ":", ";", ",";

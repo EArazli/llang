@@ -1,7 +1,8 @@
 doctrine Staging where {
-  mode RT;
-  mode CT;
-
+  mode RT classifiedBy RT via RT.U_RT;
+  type U_RT @RT;
+  mode CT classifiedBy CT via CT.U_CT;
+  type U_CT @CT;
   modality quote : RT -> CT;
   modality splice : CT -> RT;
   mod_eq splice.quote -> id@RT;
@@ -15,7 +16,6 @@ doctrine Staging where {
 surface StageExpr where {
   doctrine Staging;
   mode RT;
-
   lexer {
     keywords: stage;
     symbols: ;
@@ -31,7 +31,6 @@ surface StageExpr where {
 surface StageExprCT where {
   doctrine Staging;
   mode CT;
-
   lexer {
     keywords: stageq;
     symbols: ;
@@ -45,9 +44,10 @@ surface StageExprCT where {
 }
 
 doctrine Staging2 where {
-  mode R2;
-  mode C2;
-
+  mode R2 classifiedBy R2 via R2.U_R2;
+  type U_R2 @R2;
+  mode C2 classifiedBy C2 via C2.U_C2;
+  type U_C2 @C2;
   modality Q : R2 -> C2;
   modality S : C2 -> R2;
   mod_eq S.Q -> id@R2;

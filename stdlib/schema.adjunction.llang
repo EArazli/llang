@@ -1,7 +1,8 @@
 doctrine SchemaAdjunction where {
-  mode C;
-  mode L;
-
+  mode C classifiedBy C via C.U_C;
+  type U_C @C;
+  mode L classifiedBy L via L.U_L;
+  type U_L @L;
   modality F : C -> L;
   modality U : L -> C;
 

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Test.Poly.Surface
   ( tests
   ) where
@@ -14,8 +15,8 @@ import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, ModuleEnv(..), TermDef(..))
 import Strat.Common.Rules (RewritePolicy(..))
-import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar(..))
+import Strat.Poly.ModeTheory (ModeName(..), ClassificationDecl(..), ModeTheory(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), pattern ObjVar, CodeTerm(..), mkCon)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..))
@@ -23,7 +24,7 @@ import Strat.Poly.Surface.Parse (parseSurfaceSpec)
 import Strat.Poly.Surface (PolySurfaceDef, elabPolySurfaceDecl)
 import Strat.Poly.Surface.Elab (elabSurfaceExpr)
 import Strat.Poly.Diagram (idD, genD, diagramDom, diagramCod)
-import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..))
+import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..), unPortId)
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Test.Poly.Helpers (mkModes)
 
@@ -41,6 +42,7 @@ tests =
     , testCase "surface rejects duplication without dup capability" testSurfaceRejectsDupWithoutCapability
     , testCase "surface rejects drop without drop capability" testSurfaceRejectsDropWithoutCapability
     , testCase "surface composition unifies through mode equations" testSurfaceModeEqComp
+    , testCase "surface resolves classified constructors in classifier mode with owner preserved" testSurfaceClassifiedTypeResolution
     , testCase "template @TermName splice uses module term" testSurfaceTemplateSplice
     , testCase "surface elaboration eliminates to base doctrine" testSurfaceEliminatesToBaseDoctrine
     ]
@@ -50,7 +52,7 @@ specText :: Text
 specText =
   T.unlines
     [ "doctrine TestDoc;"
-    , "mode M;"
+    , "  mode M;"
     , "lexer {"
     , "  keywords: term, in, out;"
     , "  symbols: \"(\", \")\", \"{\", \"}\", \":\", \";\", \",\";"
@@ -74,7 +76,7 @@ spliceSpecText :: Text
 spliceSpecText =
   T.unlines
     [ "doctrine TestDoc;"
-    , "mode M;"
+    , "  mode M;"
     , "lexer {"
     , "  keywords: use;"
     , "  symbols: ;"
@@ -88,11 +90,24 @@ modeM :: ModeName
 modeM = ModeName "M"
 
 typeA :: Obj
-typeA = OCon (ObjRef modeM (ObjName "A")) []
+typeA = mkCon (ObjRef modeM (ObjName "A")) []
 
 mkDoctrine :: Bool -> Bool -> Doctrine
 mkDoctrine hasDup hasDrop =
-  let aVar = ObjVar { ovName = "a", ovMode = modeM }
+  let uRef = ObjRef modeM (ObjName "U_M")
+      universe = mkCon uRef []
+      classifiedModes =
+        (mkModes [modeM])
+          { mtClassifiedBy =
+              M.singleton
+                modeM
+                ClassificationDecl
+                  { cdClassifier = modeM
+                  , cdUniverse = universe
+                  , cdTag = Nothing
+                  }
+          }
+      aVar = ObjVar "a" modeM
       mkGen name tyVars dom cod =
         GenDecl
           { gdName = GenName name
@@ -115,9 +130,9 @@ mkDoctrine hasDup hasDrop =
           <> [ (GenName "drop", genDrop) | hasDrop ]
    in Doctrine
         { dName = "TestDoc"
-        , dModes = mkModes [modeM]
+        , dModes = classifiedModes
         , dAcyclicModes = S.empty
-        , dTypes = M.fromList [(modeM, M.fromList [(ObjName "A", TypeSig [])])]
+        , dTypes = M.fromList [(modeM, M.fromList [(ObjName "U_M", TypeSig []), (ObjName "A", TypeSig [])])]
         , dGens = M.fromList [(modeM, M.fromList gens)]
         , dCells2 = []
       , dActions = M.empty
@@ -132,7 +147,20 @@ mkSurfaceWithSpec txt doc = do
 
 mkStructEnv :: Doctrine -> Either Text ModuleEnv
 mkStructEnv target = do
-  let aVar = ObjVar { ovName = "a", ovMode = modeM }
+  let uRef = ObjRef modeM (ObjName "U_M")
+      universe = mkCon uRef []
+      classifiedModes =
+        (mkModes [modeM])
+          { mtClassifiedBy =
+              M.singleton
+                modeM
+                ClassificationDecl
+                  { cdClassifier = modeM
+                  , cdUniverse = universe
+                  , cdTag = Nothing
+                  }
+          }
+      aVar = ObjVar "a" modeM
       mkGen name cod =
         GenDecl
           { gdName = GenName name
@@ -146,9 +174,9 @@ mkStructEnv target = do
       iface =
         Doctrine
           { dName = "StructCartesian"
-          , dModes = mkModes [modeM]
+          , dModes = classifiedModes
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
+          , dTypes = M.fromList [(modeM, M.singleton (ObjName "U_M") (TypeSig []))]
           , dGens =
               M.fromList
                 [ ( modeM
@@ -264,12 +292,14 @@ testSurfaceStructImplements = do
   let src =
         T.unlines
           [ "doctrine StructCartesian where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  gen dup (a@M) : [a] -> [a, a] @M;"
           , "  gen drop (a@M) : [a] -> [] @M;"
           , "}"
           , "doctrine Target where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type A @M;"
           , "  gen copy (a@M) : [a] -> [a, a] @M;"
           , "  gen kill (a@M) : [a] -> [] @M;"
@@ -332,12 +362,14 @@ testSurfaceStructMissing = do
   let src =
         T.unlines
           [ "doctrine StructCartesian where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  gen dup (a@M) : [a] -> [a, a] @M;"
           , "  gen drop (a@M) : [a] -> [] @M;"
           , "}"
           , "doctrine Target where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type A @M;"
           , "  gen copy (a@M) : [a] -> [a, a] @M;"
           , "  gen kill (a@M) : [a] -> [] @M;"
@@ -407,8 +439,10 @@ testSurfaceModeEqComp = do
   let src =
         T.unlines
           [ "doctrine SurfModes where {"
-          , "  mode A;"
-          , "  mode B;"
+          , "  mode A classifiedBy A via A.U_A;"
+          , "  type U_A @A;"
+          , "  mode B classifiedBy B via B.U_B;"
+          , "  type U_B @B;"
           , "  modality F : A -> B;"
           , "  modality U : B -> A;"
           , "  mod_eq U.F -> id@A;"
@@ -443,9 +477,86 @@ testSurfaceModeEqComp = do
   diag <- either (assertFailure . T.unpack) pure (elabSurfaceDiagram emptyEnv doc surf "lift ; baseid")
   dom <- either (assertFailure . T.unpack) pure (diagramDom diag)
   cod <- either (assertFailure . T.unpack) pure (diagramCod diag)
-  let base = OCon (ObjRef (ModeName "A") (ObjName "Base")) []
+  let base = mkCon (ObjRef (ModeName "A") (ObjName "Base")) []
   dom @?= []
   cod @?= [base]
+
+testSurfaceClassifiedTypeResolution :: Assertion
+testSurfaceClassifiedTypeResolution = do
+  let src =
+        T.unlines
+          [ "doctrine SurfClassified where {"
+          , "  mode Ty classifiedBy Ty via Ty.U_Ty;"
+          , "  type U_Ty @Ty;"
+          , "  mode Tm classifiedBy Ty via Ty.U;"
+          , "  type U @Ty;"
+          , "  type Unit @Ty;"
+          , "  type Arr(a@Tm, b@Tm) @Ty;"
+          , "}"
+          , "surface Surf where {"
+          , "  doctrine SurfClassified;"
+          , "  mode Tm;"
+          , "  lexer {"
+          , "    keywords: term, in, out;"
+          , "    symbols: \"(\", \")\", \"{\", \"}\", \":\", \";\", \",\";"
+          , "  }"
+          , "  expr {"
+          , "    atom:"
+          , "      ident(name) \"(\" <expr> \")\" => $1 ; #name"
+          , "    | ident(name) => $name"
+          , "    | \"out\" <expr> => $1"
+          , "    | \"term\" \"{\" <expr> \"}\" => $1"
+          , "    | \"(\" <expr> \")\" => <expr>"
+          , "    ;"
+          , "    prefix:"
+          , "      \"in\" ident(name) \":\" <type>(ty) \";\" <expr> => <expr> bind in(name, ty, 1)"
+          , "    ;"
+          , "    infixr 10 \",\" => $1 * $2;"
+          , "  }"
+          , "}"
+          ]
+  env <- either (assertFailure . T.unpack) pure (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "SurfClassified" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine SurfClassified" >> fail "unreachable"
+      Just d -> pure d
+  surf <-
+    case M.lookup "Surf" (meSurfaces env) of
+      Nothing -> assertFailure "missing surface Surf" >> fail "unreachable"
+      Just s -> pure s
+  diag <-
+    either
+      (assertFailure . T.unpack)
+      pure
+      (elabSurfaceDiagram emptyEnv doc surf (T.unlines [ "term {", "  in x:Unit;", "  out x", "}" ]))
+  inPort <-
+    case dIn diag of
+      [p] -> pure p
+      _ -> assertFailure "expected one input port" >> fail "unreachable"
+  outPort <-
+    case dOut diag of
+      [p] -> pure p
+      _ -> assertFailure "expected one output port" >> fail "unreachable"
+  inTy <-
+    case IM.lookup (unPortId inPort) (dPortObj diag) of
+      Nothing -> assertFailure "missing input port object" >> fail "unreachable"
+      Just ty -> pure ty
+  outTy <-
+    case IM.lookup (unPortId outPort) (dPortObj diag) of
+      Nothing -> assertFailure "missing output port object" >> fail "unreachable"
+      Just ty -> pure ty
+  assertUnit inTy
+  outTy @?= inTy
+  where
+    tmMode = ModeName "Tm"
+    tyMode = ModeName "Ty"
+    unitRef = ObjRef tyMode (ObjName "Unit")
+
+    assertUnit ty = do
+      objOwnerMode ty @?= tmMode
+      case objCode ty of
+        CTCon ref [] -> ref @?= unitRef
+        _ -> assertFailure "expected Unit code"
 
 testSurfaceTemplateSplice :: Assertion
 testSurfaceTemplateSplice = do
@@ -471,7 +582,8 @@ testSurfaceEliminatesToBaseDoctrine = do
   let src =
         T.unlines
           [ "doctrine D where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type A @M;"
           , "  gen f : [] -> [A] @M;"
           , "}"

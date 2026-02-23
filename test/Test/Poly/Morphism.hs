@@ -57,7 +57,7 @@ tvar :: ModeName -> Text -> ObjVar
 tvar mode name = ObjVar { ovName = name, ovMode = mode }
 
 tcon :: ModeName -> Text -> [Obj] -> Obj
-tcon mode name args = OCon (ObjRef mode (ObjName name)) (map OAObj args)
+tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
 
 plainImage :: Diagram -> GenImage
 plainImage diag = GenImage diag M.empty
@@ -127,8 +127,8 @@ testTypeMapReorder = do
           , gdMode = mode
           , gdTyVars = [a, b]
           , gdTmVars = []
-          , gdDom = map InPort [OCon (ObjRef mode prod) [OAObj (OVar a), OAObj (OVar b)]]
-          , gdCod = [OCon (ObjRef mode prod) [OAObj (OVar a), OAObj (OVar b)]]
+          , gdDom = map InPort [mkCon (ObjRef mode prod) [OAObj (OVar a), OAObj (OVar b)]]
+          , gdCod = [mkCon (ObjRef mode prod) [OAObj (OVar a), OAObj (OVar b)]]
           , gdAttrs = []
           }
   let genTgt =
@@ -137,8 +137,8 @@ testTypeMapReorder = do
           , gdMode = mode
           , gdTyVars = [a, b]
           , gdTmVars = []
-          , gdDom = map InPort [OCon (ObjRef mode pair) [OAObj (OVar a), OAObj (OVar b)]]
-          , gdCod = [OCon (ObjRef mode pair) [OAObj (OVar a), OAObj (OVar b)]]
+          , gdDom = map InPort [mkCon (ObjRef mode pair) [OAObj (OVar a), OAObj (OVar b)]]
+          , gdCod = [mkCon (ObjRef mode pair) [OAObj (OVar a), OAObj (OVar b)]]
           , gdAttrs = []
           }
   let docSrc = Doctrine
@@ -169,8 +169,8 @@ testTypeMapReorder = do
   docTgt' <- case validateDoctrine docTgt of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
-  img <- either (assertFailure . T.unpack) pure (genD mode [OCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] [OCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] genName)
-  let typeMap = M.fromList [(ObjRef mode prod, TypeTemplate [TPType a, TPType b] (OCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]))]
+  img <- either (assertFailure . T.unpack) pure (genD mode [mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] [mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] genName)
+  let typeMap = M.fromList [(ObjRef mode prod, TypeTemplate [TPType a, TPType b] (mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]))]
   let mor = Morphism
         { morName = "SwapProd"
         , morSrc = docSrc'
@@ -194,8 +194,8 @@ testCrossModeMorphism = do
   let modeV = ModeName "V"
   let aRef = ObjRef modeC (ObjName "A")
   let bRef = ObjRef modeV (ObjName "B")
-  let aTy = OCon aRef []
-  let bTy = OCon bRef []
+  let aTy = mkCon aRef []
+  let bTy = mkCon bRef []
   let fGen =
         GenDecl
           { gdName = GenName "f"
@@ -439,7 +439,7 @@ testMorphismInstantiationSubstFailure :: Assertion
 testMorphismInstantiationSubstFailure = do
   let mode = ModeName "M"
   let aRef = ObjRef mode (ObjName "A")
-  let aTy = OCon aRef []
+  let aTy = mkCon aRef []
   let srcGen =
         GenDecl
           { gdName = GenName "f"
@@ -491,7 +491,7 @@ testMorphismInstantiationSubstFailure = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
   srcDiag <- either (assertFailure . T.unpack) pure (genD mode [aTy] [aTy] (GenName "f"))
-  let badTy = OCon (ObjRef mode (ObjName "Bad")) [OAObj aTy]
+  let badTy = mkCon (ObjRef mode (ObjName "Bad")) [OAObj aTy]
   badImg <- either (assertFailure . T.unpack) pure (genD mode [badTy] [badTy] (GenName "g"))
   let mor =
         Morphism
@@ -515,7 +515,7 @@ testBinderIdentityMorphismPreservesBinders :: Assertion
 testBinderIdentityMorphismPreservesBinders = do
   let mode = ModeName "M"
   let lamName = GenName "lam"
-  let aTy' = OCon (ObjRef mode (ObjName "A")) []
+  let aTy' = mkCon (ObjRef mode (ObjName "A")) []
   let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
   let lamGen =
         GenDecl
@@ -583,7 +583,7 @@ testMorphismSpliceRenamesToBinderMeta :: Assertion
 testMorphismSpliceRenamesToBinderMeta = do
   let mode = ModeName "M"
   let gName = GenName "g"
-  let aTy' = OCon (ObjRef mode (ObjName "A")) []
+  let aTy' = mkCon (ObjRef mode (ObjName "A")) []
   let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
   let gDecl =
         GenDecl
@@ -647,7 +647,7 @@ testMorphismRejectsBadBinderHoleSignatures :: Assertion
 testMorphismRejectsBadBinderHoleSignatures = do
   let mode = ModeName "M"
   let lamName = GenName "lam"
-  let aTy' = OCon (ObjRef mode (ObjName "A")) []
+  let aTy' = mkCon (ObjRef mode (ObjName "A")) []
   let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy'], bsCod = [aTy'] }
   let wrongSig = BinderSig { bsTmCtx = [], bsDom = [], bsCod = [aTy'] }
   let lamGen =
@@ -731,8 +731,8 @@ testTypeTemplateCycleRejected = do
           , morAttrSortMap = M.empty
           , morTypeMap =
               M.fromList
-                [ (aRef, TypeTemplate [] (OCon bRef []))
-                , (bRef, TypeTemplate [] (OCon aRef []))
+                [ (aRef, TypeTemplate [] (mkCon bRef []))
+                , (bRef, TypeTemplate [] (mkCon aRef []))
                 ]
           , morGenMap = M.empty
         , morCheck = CheckAll
@@ -751,8 +751,8 @@ testTermTemplateSortMismatch = do
   let natRef = ObjRef modeI' (ObjName "Nat")
   let boolRef = ObjRef modeI' (ObjName "Bool")
   let vecRef = ObjRef modeM' (ObjName "Vec")
-  let natTy = OCon natRef []
-  let boolTy = OCon boolRef []
+  let natTy = mkCon natRef []
+  let boolTy = mkCon boolRef []
   let srcDoc =
         Doctrine
           { dName = "SrcSortMismatch"
@@ -830,8 +830,8 @@ testTermTypeTemplateInstantiation = do
   let aRef = ObjRef modeM' (ObjName "A")
   let vecRef = ObjRef modeM' (ObjName "Vec")
   let vec2Ref = ObjRef modeM' (ObjName "Vec2")
-  let natTy = OCon natRef []
-  let aTy' = OCon aRef []
+  let natTy = mkCon natRef []
+  let aTy' = mkCon aRef []
   let z = TMFun (TmFunName "Z") []
   let s x = TMFun (TmFunName "S") [x]
   let zGen =
@@ -936,7 +936,7 @@ testTermTypeTemplateInstantiation = do
                 [ ( vecRef
                   , TypeTemplate
                       [TPTm nVar, TPType aVar]
-                      (OCon vec2Ref [OATm nSucc, OAObj (OVar aVar)])
+                      (mkCon vec2Ref [OATm nSucc, OAObj (OVar aVar)])
                   )
                 ]
           , morGenMap =
@@ -950,7 +950,7 @@ testTermTypeTemplateInstantiation = do
   case checkMorphism mor of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  let srcDiag = idD modeM' [OCon vecRef [OATm zTm, OAObj aTy']]
+  let srcDiag = idD modeM' [mkCon vecRef [OATm zTm, OAObj aTy']]
   tgtDiag <- case applyMorphismDiagram mor srcDiag of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -977,7 +977,7 @@ testTermTemplateKindMismatch = do
   let natRef = ObjRef modeI' (ObjName "Nat")
   let vecRef = ObjRef modeM' (ObjName "Vec")
   let vec2Ref = ObjRef modeM' (ObjName "Vec2")
-  let natTy = OCon natRef []
+  let natTy = mkCon natRef []
   let zGen =
         GenDecl
           { gdName = GenName "Z"
@@ -1043,7 +1043,7 @@ testTermTemplateKindMismatch = do
                 [ ( vecRef
                   , TypeTemplate
                       [TPType aVar, TPTm nVar]
-                      (OCon vec2Ref [OATm nVarTm, OAObj (OVar aVar)])
+                      (mkCon vec2Ref [OATm nVarTm, OAObj (OVar aVar)])
                   )
                 ]
           , morGenMap = M.empty
@@ -1062,7 +1062,7 @@ testMorphismMapsStructuredTermArgs = do
   let modeI' = ModeName "I"
   let natRef = ObjRef modeI' (ObjName "Nat")
   let vecRef = ObjRef modeM' (ObjName "Vec")
-  let natTy = OCon natRef []
+  let natTy = mkCon natRef []
   let succName = GenName "succ"
   let dblName = GenName "dbl"
   let succDecl =
@@ -1141,7 +1141,7 @@ testMorphismMapsStructuredTermArgs = do
   tmSrc <- case termExprToDiagram ttSrc [] natTy (TMFun (TmFunName "succ") [TMVar nVar]) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
-  let tySrc = OCon vecRef [OATm tmSrc]
+  let tySrc = mkCon vecRef [OATm tmSrc]
   tyTgt <- case applyMorphismTy mor tySrc of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right ty -> pure ty
@@ -1158,7 +1158,7 @@ testMorphismMapsStructuredTermArgs = do
 testMorphismWeakenImageTmCtx :: Assertion
 testMorphismWeakenImageTmCtx = do
   let mode = ModeName "M"
-  let tyX = OCon (ObjRef mode (ObjName "X")) []
+  let tyX = mkCon (ObjRef mode (ObjName "X")) []
   let srcName = GenName "g"
   let tgtName = GenName "h"
   let mkGen name =
@@ -1230,10 +1230,10 @@ modeM :: ModeName
 modeM = ModeName "M"
 
 aTy :: Obj
-aTy = OCon (ObjRef modeM (ObjName "A")) []
+aTy = mkCon (ObjRef modeM (ObjName "A")) []
 
 strTy :: Obj
-strTy = OCon (ObjRef modeM (ObjName "Str")) []
+strTy = mkCon (ObjRef modeM (ObjName "Str")) []
 
 mkMonoid :: Either Text Doctrine
 mkMonoid = do

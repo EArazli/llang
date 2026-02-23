@@ -47,7 +47,7 @@ docDoctrine =
         , (GenName "cat", simpleGen "cat" [docTy, docTy] [docTy] [])
         , (GenName "indent", simpleGen "indent" [docTy] [docTy] [("n", intSort)])
         ]
-    docTy = OCon (ObjRef docMode (ObjName "Doc")) []
+    docTy = mkCon (ObjRef docMode (ObjName "Doc")) []
 
 
 artifactDoctrine :: Doctrine
@@ -75,8 +75,8 @@ artifactDoctrine =
       , dObligations = []
     }
   where
-    docTy = OCon (ObjRef artifactMode (ObjName "Doc")) []
-    ftTy = OCon (ObjRef artifactMode (ObjName "FileTree")) []
+    docTy = mkCon (ObjRef artifactMode (ObjName "Doc")) []
+    ftTy = mkCon (ObjRef artifactMode (ObjName "FileTree")) []
     gens =
       M.fromList
         [ (GenName "empty", simpleGen "empty" [] [docTy] [])

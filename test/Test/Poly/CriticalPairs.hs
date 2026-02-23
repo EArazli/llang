@@ -41,7 +41,7 @@ testCriticalPairsRespectModeEq = do
   let modU = ModName "U"
   let fExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF] }
   let uExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modU] }
-  let baseTy = OCon (ObjRef mode (ObjName "Base")) []
+  let baseTy = mkCon (ObjRef mode (ObjName "Base")) []
   let ufBaseTy = OMod uExpr (OMod fExpr baseTy)
   let mt =
         ModeTheory
@@ -86,7 +86,7 @@ testCriticalPairsFreshenTyVars :: Assertion
 testCriticalPairsFreshenTyVars = do
   let mode = ModeName "M"
   let a = ObjVar { ovName = "a", ovMode = mode }
-  let baseTy = OCon (ObjRef mode (ObjName "B")) []
+  let baseTy = mkCon (ObjRef mode (ObjName "B")) []
   g1 <- require (genD mode [baseTy] [baseTy] (GenName "g"))
   h1 <- require (genD mode [OVar a] [OVar a] (GenName "h1"))
   lhs1 <- require (tensorD g1 h1)
@@ -125,8 +125,8 @@ testCriticalPairsFreshenTyVars = do
 testCriticalPairsFailOnSubstFailure :: Assertion
 testCriticalPairsFailOnSubstFailure = do
   let mode = ModeName "M"
-  let aTy = OCon (ObjRef mode (ObjName "A")) []
-  let badTmSort = OCon (ObjRef mode (ObjName "BadSort")) [OAObj aTy]
+  let aTy = mkCon (ObjRef mode (ObjName "A")) []
+  let badTmSort = mkCon (ObjRef mode (ObjName "BadSort")) [OAObj aTy]
   lhs <- require (genDTm mode [badTmSort] [aTy] [aTy] (GenName "g"))
   let cell =
         Cell2

@@ -14,7 +14,7 @@ import Strat.Frontend.Env (ModuleEnv(..), DoctrineFunctorDef(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), mkCon)
 import qualified Strat.Poly.Morphism as PolyMorph
 
 
@@ -43,11 +43,13 @@ testApplyPreservesTargetNames = do
   let src =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "}"
           , "doctrine L where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type Box @M;"
           , "}"
           , "morphism impl : S -> L where {"
@@ -71,7 +73,7 @@ testApplyPreservesTargetNames = do
   flipGen <- case M.lookup (GenName "flip") gens of
     Nothing -> assertFailure "expected generator flip"
     Just g -> pure g
-  let expectedTy = OCon (ObjRef mode (ObjName "Box")) []
+  let expectedTy = mkCon (ObjRef mode (ObjName "Box")) []
   gdPlainDom flipGen @?= [expectedTy]
   gdCod flipGen @?= [expectedTy]
 
@@ -81,11 +83,13 @@ testApplyCollisionRename = do
   let src =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "}"
           , "doctrine L where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type Box @M;"
           , "  gen get : [] -> [Box] @M;"
           , "}"
@@ -148,11 +152,13 @@ testApplyImplicitIdentityTypeMap = do
   let src =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "}"
           , "doctrine T where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "}"
           , "morphism impl : S -> T where {"
@@ -166,7 +172,7 @@ testApplyImplicitIdentityTypeMap = do
   env <- expectElab src
   doc <- expectDoctrine env "App"
   let mode = ModeName "M"
-  let ty = OCon (ObjRef mode (ObjName "X")) []
+  let ty = mkCon (ObjRef mode (ObjName "X")) []
   gens <- case M.lookup mode (dGens doc) of
     Nothing -> assertFailure "expected mode M generator table"
     Just table -> pure table
@@ -181,11 +187,13 @@ testApplyImplicitIdentityTypeMapArity = do
   let src =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X(a@M) @M;"
           , "}"
           , "doctrine T where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "}"
           , "morphism impl : S -> T where {"
@@ -205,12 +213,14 @@ testApplyGeneratorModeMapping = do
   let src =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
           , "}"
           , "doctrine T where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
           , "}"
@@ -235,12 +245,14 @@ testApplyMissingMappingDiagnostics = do
   let src =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  attrsort Str = string;"
           , "  type X @M;"
           , "}"
           , "doctrine T where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "}"
           , "morphism impl : S -> T where {"
           , "  mode M -> M;"
@@ -260,12 +272,14 @@ testApplyMissingGenMappingDiagnostics = do
   let setupSrc =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
           , "}"
           , "doctrine T where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
           , "}"
@@ -311,7 +325,8 @@ testNamespaceEnforcement = do
   let src =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "}"
           , "doctrine_functor F(L : S) where {"
@@ -327,22 +342,26 @@ testModeTheoryExtensionAllowed = do
   let src =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  modality mu : M -> M;"
           , "  type X @M;"
           , "}"
           , "doctrine T where {"
-          , "  mode N;"
+          , "  mode N classifiedBy N via N.U_N;"
+          , "  type U_N @N;"
           , "  modality nu : N -> N;"
           , "  type Y @N;"
           , "}"
           , "morphism impl : S -> T where {"
           , "  mode M -> N;"
           , "  modality mu -> nu;"
+          , "  type U_M @M -> U_N @N;"
           , "  type X @M -> Y @N;"
           , "}"
           , "doctrine_functor F(L : S) where {"
-          , "  mode K;"
+          , "  mode K classifiedBy K via K.U_K;"
+          , "  type U_K @K;"
           , "  modality up : L::M -> K;"
           , "  type Z @K;"
           , "}"
@@ -359,14 +378,16 @@ testModEqPreservation = do
   let src =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  modality mu : M -> M;"
           , "  mod_eq mu . mu -> mu;"
           , "  type X @M;"
           , "  gen g : [M.X] -> [M.X] @M;"
           , "}"
           , "doctrine T where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  modality a : M -> M;"
           , "  modality b : M -> M;"
           , "  type X @M;"
@@ -388,7 +409,8 @@ testFunctorInternalNames = do
   let src =
         T.unlines
           [ "doctrine S where {"
-          , "  mode M;"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  type U_M @M;"
           , "  type X @M;"
           , "}"
           , "doctrine_functor F(L : S) where {"

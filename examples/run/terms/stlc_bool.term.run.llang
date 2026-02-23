@@ -3,7 +3,6 @@ import "../../../stdlib/bool.llang";
 surface BoolTerm where {
   doctrine Bool;
   mode M;
-
   lexer {
     keywords: term, in, out;
     symbols: "(", ")", "{", "}", ":", ";", ",";

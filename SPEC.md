@@ -53,6 +53,7 @@ Implementation-facing mode split:
 Surface notion:
 
 - the surface language may continue to use the word "type", but kernel checks MUST distinguish object identity from code representation.
+- a surface "type variable" elaborates to a code metavariable in the classifier language; its sort is the classifier universe object `U` for the owner mode.
 
 If a mode has no explicit classification edge, object well-formedness is determined by that mode's declared object formers and object-parameter rules.
 
@@ -136,7 +137,10 @@ Future fragments (for example NbE) are permitted by this spec but are not requir
 Key records:
 
 - object signatures are parameterized by mode and object parameters (`PS_Ty`, `PS_Tm`)
-- `GenDecl` supports object vars, term vars, attributes, and binder inputs
+- `GenDecl` supports metavariables with two roles:
+  - code metavariables (type-level) represented in object codes as `CTMeta`
+  - term metavariables represented on term edges as `PTmMeta`
+  Surface syntax may still call code metavariables "type variables".
 - `Cell2` rewrites diagrams
 - `ModAction` stores per-modality generator images
 - `ObligationDecl` stores named equations checked on `implements`
@@ -173,8 +177,19 @@ Structural diagram isomorphism (`diagramIsoEq`) uses:
   - `PBox`: inner diagram only (box name is annotation)
   - `PFeedback`: inner diagram
   - `PSplice`: binder metavariable
-  - `PTmMeta`: metavariable identity by `(name, scope)`
+  - `PTmMeta`: metavariable identity by `(name, scope, sort)`
   - `PInternalDrop`: exact constructor match
+
+### 5.3 Meta Substitution
+
+Kernel substitution is a single metavariable substitution environment.
+
+- code metavariables map to object/code terms
+- term metavariables map to term diagrams
+
+Well-formedness invariant:
+
+- a metavariable is only instantiated in the syntactic category where it occurs; kind mismatches are rejected as kernel errors.
 
 ### 5.2 Canonical Form
 

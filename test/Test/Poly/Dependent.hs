@@ -21,10 +21,14 @@ import Strat.Poly.ModeTheory (ModeName(..), addMode, emptyModeTheory)
 import Strat.Poly.Doctrine (doctrineTypeTheory)
 import Strat.Poly.Obj
   ( Obj(..)
+  , mkCon
   , ObjArg
   , pattern OAObj
   , pattern OATm
-  , ObjVar(..)
+  , ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , ObjName(..)
   , ObjRef(..)
   , TmFunName(..)
@@ -41,7 +45,7 @@ import Strat.Poly.TypeTheory
   )
 import Strat.Poly.ObjNormalize (normalizeObjDeep, normalizeTermDiagram, validateTermDiagram)
 import qualified Strat.Poly.ObjNormalize as TN
-import Strat.Poly.UnifyObj (unifyTm, unifyObjFlex, emptySubst, sTm)
+import Strat.Poly.UnifyObj (unifyTm, unifyObjFlex, emptySubst, lookupTmMeta)
 import Strat.Poly.Match (MatchConfig(..), findAllMatches)
 import Strat.Poly.Graph
   ( Diagram(..)
@@ -96,8 +100,10 @@ testDoctrineNormalizeTypeArg :: Assertion
 testDoctrineNormalizeTypeArg = do
   let src = T.unlines
         [ "doctrine DepNorm where {"
-        , "  mode M;"
-        , "  mode I;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
+        , "  mode I classifiedBy I via I.U_I;"
+        , "  type U_I @I;"
         , "  type Nat @I;"
         , "  type A @M;"
         , "  type Vec(n : Nat, a@M) @M;"
@@ -118,16 +124,16 @@ testDoctrineNormalizeTypeArg = do
   tt <- require (doctrineTypeTheory doc)
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let aTy = OCon (ObjRef modeM (ObjName "A")) []
+  let aTy = mkCon (ObjRef modeM (ObjName "A")) []
   let vecRef = ObjRef modeM (ObjName "Vec")
-  let natTy = OCon (ObjRef modeI (ObjName "Nat")) []
+  let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
   let z = TMFun (TmFunName "Z") []
   let s x = TMFun (TmFunName "S") [x]
   let add x y = TMFun (TmFunName "add") [x, y]
   tmArg <- require (termExprToDiagram tt [] natTy (add (s z) (s z)))
   wantTm <- require (termExprToDiagram tt [] natTy (s (s z)))
-  let ty = OCon vecRef [OATm tmArg, OAObj aTy]
-  let want = OCon vecRef [OATm wantTm, OAObj aTy]
+  let ty = mkCon vecRef [OATm tmArg, OAObj aTy]
+  let want = mkCon vecRef [OATm wantTm, OAObj aTy]
   got <- require (normalizeObjDeep tt ty)
   case (got, want) of
     (OCon gotRef [OATm gotTm, OAObj gotA], OCon wantRef [OATm wantTm', OAObj wantA]) -> do
@@ -168,7 +174,8 @@ testRejectNonTerminatingTermTRS :: Assertion
 testRejectNonTerminatingTermTRS = do
   let src = T.unlines
         [ "doctrine BadLoop where {"
-        , "  mode I;"
+        , "  mode I classifiedBy I via I.U_I;"
+        , "  type U_I @I;"
         , "  type Nat @I;"
         , "  gen f : [Nat] -> [Nat] @I;"
         , "  rule computational loop -> : [Nat] -> [Nat] @I ="
@@ -187,7 +194,8 @@ testRejectNonConfluentTermTRS :: Assertion
 testRejectNonConfluentTermTRS = do
   let src = T.unlines
         [ "doctrine BadConfluence where {"
-        , "  mode I;"
+        , "  mode I classifiedBy I via I.U_I;"
+        , "  type U_I @I;"
         , "  type Nat @I;"
         , "  gen a : [] -> [Nat] @I;"
         , "  gen b : [] -> [Nat] @I;"
@@ -213,8 +221,8 @@ testMixedModeTmCtxResolution = do
   let modeI = ModeName "I"
   let fooRef = ObjRef modeC (ObjName "Foo")
   let natRef = ObjRef modeI (ObjName "Nat")
-  let fooTy = OCon fooRef []
-  let natTy = OCon natRef []
+  let fooTy = mkCon fooRef []
+  let natTy = mkCon natRef []
   let tmCtx = [fooTy, natTy]
   let tt =
         TypeTheory
@@ -253,8 +261,8 @@ testBoundIndexSurvivesCanonization = do
 testValidateTermDiagramRejectsSparseBoundary :: Assertion
 testValidateTermDiagramRejectsSparseBoundary = do
   let modeI = ModeName "I"
-  let natTy = OCon (ObjRef modeI (ObjName "Nat")) []
-  let boolTy = OCon (ObjRef modeI (ObjName "Bool")) []
+  let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
+  let boolTy = mkCon (ObjRef modeI (ObjName "Bool")) []
   let tmCtx = [natTy, boolTy]
   let (pBool, d0) = freshPort boolTy (emptyDiagram modeI tmCtx)
   let sparse = d0 { dIn = [pBool], dOut = [pBool] }
@@ -277,7 +285,7 @@ testScopedTmUnify = do
     Right _ ->
       assertFailure "expected scope-0 metavariable to reject bound term"
   sub <- require (unifyTm tt [natTy] (S.singleton j1) emptySubst natTy tJ1 tB0)
-  case M.lookup j1 (sTm sub) of
+  case lookupTmMeta sub j1 of
     Just tm -> do
       expr <- require (diagramToTermExpr tt [natTy] natTy tm)
       case expr of
@@ -289,16 +297,16 @@ testDependentUnify :: Assertion
 testDependentUnify = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
-  let aTy = OCon (ObjRef modeM (ObjName "A")) []
+  let aTy = mkCon (ObjRef modeM (ObjName "A")) []
   let tt = tt0 { ttObjParams = M.fromList [ (vecRef, [TPS_Tm natTy, TPS_Ty modeM]) ] }
   let n = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0 }
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
   lhsTm <- require (termExprToDiagram tt [] natTy (add (TMVar n) z))
   rhsTm <- require (termExprToDiagram tt [] natTy (TMVar n))
-  let lhs = OCon vecRef [OATm lhsTm, OAObj aTy]
-  let rhs = OCon vecRef [OATm rhsTm, OAObj aTy]
-  _ <- require (unifyObjFlex tt [] S.empty (S.singleton n) emptySubst lhs rhs)
+  let lhs = mkCon vecRef [OATm lhsTm, OAObj aTy]
+  let rhs = mkCon vecRef [OATm rhsTm, OAObj aTy]
+  _ <- require (unifyObjFlex tt [] (S.singleton n) emptySubst lhs rhs)
   pure ()
 
 testBoundSortUsesSubstitution :: Assertion
@@ -307,9 +315,9 @@ testBoundSortUsesSubstitution = do
   let modeI = ModeName "I"
   let aVar = ObjVar { ovName = "a", ovMode = modeM }
   let lenRef = ObjRef modeI (ObjName "Len")
-  let concrete = OCon (ObjRef modeM (ObjName "AConcrete")) []
-  let tmCtxSort = OCon lenRef [OAObj (OVar aVar)]
-  let expectedSort = OCon lenRef [OAObj concrete]
+  let concrete = mkCon (ObjRef modeM (ObjName "AConcrete")) []
+  let tmCtxSort = mkCon lenRef [OAObj (OVar aVar)]
+  let expectedSort = mkCon lenRef [OAObj concrete]
   let tt =
         TypeTheory
           { ttModes = mkModes [modeM, modeI]
@@ -322,7 +330,7 @@ testBoundSortUsesSubstitution = do
   case unifyTm tt [tmCtxSort] S.empty emptySubst expectedSort bound0 bound0 of
     Left _ -> pure ()
     Right _ -> assertFailure "expected bound sort mismatch before solving substitution"
-  subst <- require (unifyObjFlex tt [] (S.singleton aVar) S.empty emptySubst (OVar aVar) concrete)
+  subst <- require (unifyObjFlex tt [] (S.singleton aVar) emptySubst (OVar aVar) concrete)
   _ <- require (unifyTm tt [tmCtxSort] S.empty subst expectedSort bound0 bound0)
   pure ()
 
@@ -333,9 +341,9 @@ testMatchBoundSortUsesCurrentSubst = do
   let aVar = ObjVar { ovName = "a", ovMode = modeM }
   let lenRef = ObjRef modeI (ObjName "Len")
   let fooRef = ObjRef modeM (ObjName "Foo")
-  let concrete = OCon (ObjRef modeM (ObjName "AConcrete")) []
-  let tmCtxSort = OCon lenRef [OAObj (OVar aVar)]
-  let expectedSort = OCon lenRef [OAObj concrete]
+  let concrete = mkCon (ObjRef modeM (ObjName "AConcrete")) []
+  let tmCtxSort = mkCon lenRef [OAObj (OVar aVar)]
+  let expectedSort = mkCon lenRef [OAObj concrete]
   let tt =
         TypeTheory
           { ttModes = mkModes [modeM, modeI]
@@ -352,19 +360,19 @@ testMatchBoundSortUsesCurrentSubst = do
 
   let d0 = emptyDiagram modeM [tmCtxSort]
   let (p1, d1) = freshPort (OVar aVar) d0
-  let (p2, d2) = freshPort (OCon fooRef [OATm bound0]) d1
+  let (p2, d2) = freshPort (mkCon fooRef [OATm bound0]) d1
   d3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [p1, p2] [] d2)
   let lhs = d3 { dIn = [p1, p2], dOut = [] }
   _ <- require (validateDiagram lhs)
 
   let h0 = emptyDiagram modeM [tmCtxSort]
   let (h1, h1d) = freshPort concrete h0
-  let (h2, h2d) = freshPort (OCon fooRef [OATm bound0]) h1d
+  let (h2, h2d) = freshPort (mkCon fooRef [OATm bound0]) h1d
   h3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [h1, h2] [] h2d)
   let host = h3 { dIn = [h1, h2], dOut = [] }
   _ <- require (validateDiagram host)
 
-  let cfg = MatchConfig tt (S.singleton aVar) S.empty S.empty
+  let cfg = MatchConfig tt (S.singleton aVar) S.empty
   matches <- require (findAllMatches cfg lhs host)
   assertBool "expected at least one match" (not (null matches))
 
@@ -375,8 +383,8 @@ testDependentCompDefEq = do
   let outRef = ObjRef modeM (ObjName "Out")
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
-  let vecTy tmArg = OCon vecRef [OATm tmArg]
-  let outTy = OCon outRef []
+  let vecTy tmArg = mkCon vecRef [OATm tmArg]
+  let outTy = mkCon outRef []
   let tt =
         tt0
           { ttObjParams =
@@ -396,9 +404,9 @@ testMatchTmCtxCompatibility :: Assertion
 testMatchTmCtxCompatibility = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let aTy = OCon (ObjRef modeM (ObjName "A")) []
-  let natTy = OCon (ObjRef modeI (ObjName "Nat")) []
-  let boolTy = OCon (ObjRef modeI (ObjName "Bool")) []
+  let aTy = mkCon (ObjRef modeM (ObjName "A")) []
+  let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
+  let boolTy = mkCon (ObjRef modeI (ObjName "Bool")) []
   let tt =
         TypeTheory
           { ttModes = mkModes [modeM, modeI]
@@ -411,21 +419,21 @@ testMatchTmCtxCompatibility = do
   let host = (idD modeM [aTy]) { dTmCtx = [boolTy] }
   _ <- require (validateDiagram lhs)
   _ <- require (validateDiagram host)
-  let cfg = MatchConfig tt S.empty S.empty S.empty
+  let cfg = MatchConfig tt S.empty S.empty
   matches <- require (findAllMatches cfg lhs host)
   assertBool "expected no matches for incompatible term contexts" (null matches)
 
 testIsoMatchDropsSubstFailure :: Assertion
 testIsoMatchDropsSubstFailure = do
   let mode = ModeName "M"
-  let goodTy = OCon (ObjRef mode (ObjName "A")) []
-  let badSort = OCon (ObjRef mode (ObjName "BadSort")) [OAObj goodTy]
+  let goodTy = mkCon (ObjRef mode (ObjName "A")) []
+  let badSort = mkCon (ObjRef mode (ObjName "BadSort")) [OAObj goodTy]
   let tt = modeOnlyTypeTheory (mkModes [mode])
   let inner = emptyDiagram mode [badSort]
   _ <- require (validateDiagram inner)
   lhs <- require (mkWrapWithBinder mode goodTy inner)
   rhs <- require (mkWrapWithBinder mode goodTy inner)
-  matches <- require (diagramIsoMatchWithVars tt S.empty S.empty S.empty lhs rhs)
+  matches <- require (diagramIsoMatchWithVars tt S.empty S.empty lhs rhs)
   assertBool "expected no matches when binder substitution normalization fails" (null matches)
 
 testCheckedTermConversionDefEq :: Assertion
@@ -437,8 +445,8 @@ testCheckedTermConversionDefEq = do
   let add x y = TMFun (TmFunName "add") [x, y]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
   tmZ <- require (termExprToDiagram tt [] natTy z)
-  let sortAdd = OCon vecRef [OATm tmAdd]
-  let sortZ = OCon vecRef [OATm tmZ]
+  let sortAdd = mkCon vecRef [OATm tmAdd]
+  let sortZ = mkCon vecRef [OATm tmZ]
   let xVar = TmVar { tmvName = "x", tmvSort = sortAdd, tmvScope = 0 }
   case termExprToDiagram tt [] sortZ (TMVar xVar) of
     Left _ -> pure ()
@@ -449,7 +457,7 @@ testCheckedTermConversionDefEq = do
 testBinderMetaSplice :: Assertion
 testBinderMetaSplice = do
   let mode = ModeName "M"
-  let aTy = OCon (ObjRef mode (ObjName "A")) []
+  let aTy = mkCon (ObjRef mode (ObjName "A")) []
   let meta = BinderMetaVar "Body"
   let body = idD mode [aTy]
 
@@ -471,8 +479,10 @@ testExplicitBinderTermArg :: Assertion
 testExplicitBinderTermArg = do
   let src = T.unlines
         [ "doctrine ImplicitBinderIndex where {"
-        , "  mode M;"
-        , "  mode I;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
+        , "  mode I classifiedBy I via I.U_I;"
+        , "  type U_I @I;"
         , "  type Nat @I;"
         , "  gen Z : [] -> [Nat] @I;"
         , "  type Vec(n : Nat) @M;"
@@ -524,7 +534,7 @@ mkNatTypeTheory = do
   let modeI = ModeName "I"
   mt0 <- addMode modeM emptyModeTheory
   mt1 <- addMode modeI mt0
-  let natTy = OCon (ObjRef modeI (ObjName "Nat")) []
+  let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
   let z = TMFun (TmFunName "Z") []
   let s x = TMFun (TmFunName "S") [x]
   let add x y = TMFun (TmFunName "add") [x, y]

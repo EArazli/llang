@@ -201,7 +201,7 @@ freshenRuleTyVars tt cell = do
               | v <- S.toList (S.union (freeObjVarsDiagram (c2LHS cell)) (freeObjVarsDiagram (c2RHS cell)))
               ]
       let (substMap, _used) = foldl freshOne (M.empty, used0) vars
-      let subst = emptySubst { sObj = substMap }
+      let subst = mkSubst substMap M.empty
       lhs <- applySubstDiagram tt subst (c2LHS cell)
       rhs <- applySubstDiagram tt subst (c2RHS cell)
       pure cell { c2LHS = lhs, c2RHS = rhs }
@@ -346,7 +346,7 @@ applyAction doc mName diagSrc = do
         else do
           let used0 = S.fromList [ (ovMode v, ovName v) | v <- S.toList (freeObjVarsDiagram host) ]
           let (_, pairsRev) = foldl freshOne (used0, []) vars
-          let subst = emptySubst { sObj = M.fromList (reverse pairsRev) }
+          let subst = mkSubst (M.fromList (reverse pairsRev)) M.empty
           applySubstDiagram typeTheory subst image
       where
         freshOne (used, acc) v =
@@ -417,10 +417,11 @@ instantiateImage tt diag edgeKey img = do
   codImg <- diagramCod img
   let flexTy = freeObjVarsDiagram img
   let flexTm = freeTmVarsDiagram img
-  sDom <- unifyCtxDiagram tt diag flexTy flexTm domImg domEdge
+  let flex = S.union flexTy flexTm
+  sDom <- unifyCtxDiagram tt diag flex domImg domEdge
   codImg1 <- applySubstCtx tt sDom codImg
   codEdge1 <- applySubstCtx tt sDom codEdge
-  sCod <- unifyCtxDiagram tt diag flexTy flexTm codImg1 codEdge1
+  sCod <- unifyCtxDiagram tt diag flex codImg1 codEdge1
   s <- composeSubst tt sCod sDom
   img' <- applySubstDiagram tt s img
   pure (img', s)

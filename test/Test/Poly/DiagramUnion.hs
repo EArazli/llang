@@ -13,7 +13,7 @@ import Strat.Poly.Diagram (unionDiagram)
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), mkCon)
 
 
 tests :: TestTree
@@ -29,7 +29,7 @@ modeName :: ModeName
 modeName = ModeName "M"
 
 aTy :: Obj
-aTy = OCon (ObjRef modeName (ObjName "A")) []
+aTy = mkCon (ObjRef modeName (ObjName "A")) []
 
 require :: Either Text a -> IO a
 require = either (assertFailure . T.unpack) pure

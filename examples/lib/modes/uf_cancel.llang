@@ -1,7 +1,8 @@
 doctrine UFCancel where {
-  mode A;
-  mode B;
-
+  mode A classifiedBy A via A.U_A;
+  type U_A @A;
+  mode B classifiedBy B via B.U_B;
+  type U_B @B;
   modality F : A -> B;
   modality U : B -> A;
   mod_eq U.F -> id@A;

@@ -29,7 +29,8 @@ import Strat.Poly.Graph (emptyDiagram, freshPort, setPortLabel, addEdgePayload, 
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.Obj
-import Strat.Poly.ObjClassifier (modeClassifierMode)
+import Strat.Poly.ObjClassifier (modeClassifierMode, modeUniverseObj)
+import Strat.Poly.ObjResolve (resolveTypeRefInClassifier)
 import qualified Strat.Poly.UnifyObj as U
 import Strat.Poly.TypeTheory (TypeTheory, TmFunSig(..))
 import Strat.Poly.ObjNormalize (normalizeObjDeep, termExprToDiagramChecked)
@@ -228,9 +229,9 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       case M.lookup mode modeMap of
         Nothing -> Left "morphism: missing mode mapping"
         Just mode' -> Right mode'
-    mapTyVarMode modeMap v = do
-      mode' <- lookupModeMap modeMap (ovMode v)
-      pure v { ovMode = mode' }
+    mapTyVarMode mor v = do
+      sort' <- applyMorphismTy mor (tmvSort v)
+      pure v { tmvSort = sort' }
     mapTmVarSort mor v = do
       sort' <- applyMorphismTy mor (tmvSort v)
       pure v { tmvSort = sort' }
@@ -261,7 +262,7 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       modeTgt <- lookupModeMap modeMap modeSrc
       ensureMode tgt modeTgt
       gen <- lookupGen src modeSrc (GenName (rpmgSrcGen decl))
-      tyVarsTgt <- mapM (mapTyVarMode modeMap) (gdTyVars gen)
+      tyVarsTgt <- mapM (mapTyVarMode mor0) (gdTyVars gen)
       tmVarsTgt <- mapM (mapTmVarSort mor0) (gdTmVars gen)
       binderSigs0 <- buildBinderHoleSigs mor0 gen
       (diag0, _) <- elabDiagExprWith env tgt modeTgt [] tyVarsTgt tmVarsTgt binderSigs0 BMUse True (rpmgRhs decl)
@@ -462,26 +463,19 @@ elabPolyItem env st item =
           Nothing -> Right mt0
           Just rawClass -> do
             let classifier = ModeName (rcdClassifier rawClass)
-            if M.member classifier (mtModes mt0)
-              then
-                addClassification
-                  mode
-                  ClassificationDecl
-                    { cdClassifier = classifier
-                    , cdUniverse =
-                        Obj
-                          { objOwnerMode = classifier
-                          , objCode =
-                              CTVar
-                                ObjVar
-                                  { ovName = "__pending_universe"
-                                  , ovMode = classifier
-                                  }
-                          }
-                    , cdTag = rcdTag rawClass
-                    }
-                  mt0
-              else Right mt0
+            addClassification
+              mode
+              ClassificationDecl
+                { cdClassifier = classifier
+                , cdUniverse =
+                    OVar
+                      ObjVar
+                        { ovName = "__pending_universe"
+                        , ovMode = classifier
+                        }
+                , cdTag = rcdTag rawClass
+                }
+              mt0
       let acyclic' =
             if rmdAcyclic decl
               then S.insert mode (dAcyclicModes doc)
@@ -913,8 +907,8 @@ checkImplementsObligations env tgtDoc morph ifaceDoc = do
 
 mapObligationTyVar :: Morphism -> ObjVar -> Either Text ObjVar
 mapObligationTyVar morph v = do
-  mode' <- applyMorphismMode morph (ovMode v)
-  pure v { ovMode = mode' }
+  sort' <- applyMorphismTy morph (tmvSort v)
+  pure v { tmvSort = sort' }
 
 mapObligationTmVar :: Morphism -> TmVar -> Either Text TmVar
 mapObligationTmVar morph v = do
@@ -1059,7 +1053,8 @@ evalLiftedForGen env ifaceDoc tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag
         else do
           let flexTy = S.difference (freeObjVarsDiagram opTgt) rigidTy
           let flexTm = S.difference (freeTmVarsDiagram opTgt) rigidTm
-          sDom <- U.unifyCtx ttDoc (dTmCtx opTgt) flexTy flexTm dom0 [argTy]
+          let flex = S.union flexTy flexTm
+          sDom <- U.unifyCtx ttDoc (dTmCtx opTgt) flex dom0 [argTy]
           applySubstDiagram ttDoc sDom opTgt
 
 elabObligationDiag
@@ -1131,7 +1126,31 @@ resolveTyVarMode doc defaultMode decl = do
 resolveTyVarDecl :: Doctrine -> ModeName -> RawTyVarDecl -> Either Text ObjVar
 resolveTyVarDecl doc defaultMode decl = do
   mode <- resolveTyVarMode doc defaultMode decl
-  pure ObjVar { ovName = rtvName decl, ovMode = mode }
+  mkTypeMetaVar doc mode (rtvName decl)
+
+mkTypeMetaVar :: Doctrine -> ModeName -> Text -> Either Text ObjVar
+mkTypeMetaVar doc ownerMode name = do
+  universe <-
+    case modeUniverseObj (dModes doc) ownerMode of
+      Nothing ->
+        Left
+          ( "type metavariable `"
+              <> name
+              <> "@"
+              <> renderMode ownerMode
+              <> "` requires `mode "
+              <> renderMode ownerMode
+              <> " classifiedBy ... via ...;` with a declared universe"
+          )
+      Just u -> Right u
+  pure
+    TmVar
+      { tmvName = name
+      , tmvSort = universe { objOwnerMode = ownerMode }
+      , tmvScope = 0
+      }
+  where
+    renderMode (ModeName n) = n
 
 elabTmDeclVar :: Doctrine -> ModeName -> [ObjVar] -> RawTmVarDecl -> Either Text TmVar
 elabTmDeclVar doc defaultMode tyVars decl = do
@@ -1152,7 +1171,7 @@ elabParamDecls doc defaultMode params = go [] [] [] params
           let name = ovName tv
           if name `elem` map ovName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
-            else go (tv:tyAcc) tmAcc (PS_Ty (ovMode tv) : sigAcc) rest
+            else go (tv:tyAcc) tmAcc (PS_Ty (objOwnerMode (tmvSort tv)) : sigAcc) rest
         RPDTerm tmDecl -> do
           let name = rtvdName tmDecl
           if name `elem` map ovName tyAcc || name `elem` map tmvName tmAcc
@@ -1160,36 +1179,6 @@ elabParamDecls doc defaultMode params = go [] [] [] params
             else do
               tmVar <- elabTmDeclVar doc defaultMode tyAcc tmDecl
               go tyAcc (tmVar:tmAcc) (PS_Tm (tmvSort tmVar) : sigAcc) rest
-
-resolveTypeRefInClassifier :: Doctrine -> ModeName -> ModeName -> RawTypeRef -> Either Text ObjRef
-resolveTypeRefInClassifier doc ownerMode classifierMode raw =
-  case rtrMode raw of
-    Just modeName -> do
-      let qualifier = ModeName modeName
-      ensureMode doc qualifier
-      if qualifier == classifierMode
-        then lookupQualified qualifier
-        else
-          Left
-            ( "object of mode "
-                <> renderMode ownerMode
-                <> " is classified by "
-                <> renderMode classifierMode
-                <> "; constructor qualifier "
-                <> modeName
-                <> " is not allowed here"
-            )
-    Nothing ->
-      lookupQualified classifierMode
-  where
-    tname = ObjName (rtrName raw)
-
-    lookupQualified mode =
-      case M.lookup mode (dTypes doc) >>= M.lookup tname of
-        Nothing -> Left ("unknown type constructor: " <> rtrName raw)
-        Just _ -> Right (ObjRef mode tname)
-
-    renderMode (ModeName name) = name
 
 buildTypeTemplateParams
   :: Doctrine
@@ -1258,8 +1247,8 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
     RPTVar name -> do
       case [v | v <- tyVars, ovName v == name] of
         [v] ->
-          if ovMode v == expectedOwnerMode
-            then Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTVar v }
+          if objOwnerMode (tmvSort v) == expectedOwnerMode
+            then Right (OVar v)
             else Left "type variable mode mismatch"
         (_:_:_) -> Left ("duplicate type variable name: " <> name)
         [] -> do
@@ -1605,7 +1594,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           gen <- liftEither (lookupGen doc mode (GenName name))
           tyRename <- freshTySubst (gdTyVars gen)
           tmRename <- freshTmSubst ttDoc curTmCtx (gdTmVars gen)
-          let renameSubst = U.Subst { U.sObj = tyRename, U.sTm = tmRename }
+          let renameSubst = U.mkSubst tyRename tmRename
           dom0 <- applySubstCtxDoc ttDoc renameSubst (gdPlainDom gen)
           cod0 <- applySubstCtxDoc ttDoc renameSubst (gdCod gen)
           binderSlots0 <- mapM (applySubstBinderSig ttDoc renameSubst) [ bs | InBinder bs <- gdDom gen ]
@@ -1623,19 +1612,18 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                     tyArgs <-
                       mapM
                         ( \(v, rawTyArg) ->
-                            liftEither (elabObjExpr doc tyVars tmVars M.empty (ovMode v) rawTyArg)
+                            liftEither (elabObjExpr doc tyVars tmVars M.empty (objOwnerMode (tmvSort v)) rawTyArg)
                         )
                         (zip freshTyVars tyRawArgs)
-                    case and (zipWith (\v t -> ovMode v == objOwnerMode t) freshTyVars tyArgs) of
+                    case and (zipWith (\v t -> objOwnerMode (tmvSort v) == objOwnerMode t) freshTyVars tyArgs) of
                       False -> liftEither (Left "generator type argument mode mismatch")
                       True -> pure ()
                     freshTmVars <- liftEither (extractFreshTmVars (gdTmVars gen) tmRename)
                     tmArgs <- mapM (uncurry (elabTmArg ttDoc curTmCtx)) (zip freshTmVars tmRawArgs)
                     let argSubst =
-                          U.Subst
-                            { U.sObj = M.fromList (zip freshTyVars tyArgs)
-                            , U.sTm = M.fromList (zip freshTmVars tmArgs)
-                            }
+                          U.mkSubst
+                            (M.fromList (zip freshTyVars tyArgs))
+                            (M.fromList (zip freshTmVars tmArgs))
                     dom1 <- applySubstCtxDoc ttDoc argSubst dom0
                     cod1 <- applySubstCtxDoc ttDoc argSubst cod0
                     binderSlots1 <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
@@ -1921,12 +1909,14 @@ unifyBoundary tt rigidTy rigidTm dom cod diag = do
   domDiag <- diagramDom diag
   let flexTy0 = S.difference (freeObjVarsDiagram diag) rigidTy
   let flexTm0 = S.difference (freeTmVarsDiagram diag) rigidTm
-  s1 <- U.unifyCtx tt (dTmCtx diag) flexTy0 flexTm0 domDiag dom
+  let flex0 = S.union flexTy0 flexTm0
+  s1 <- U.unifyCtx tt (dTmCtx diag) flex0 domDiag dom
   diag1 <- applySubstDiagram tt s1 diag
   codDiag <- diagramCod diag1
   let flexTy1 = S.difference (freeObjVarsDiagram diag1) rigidTy
   let flexTm1 = S.difference (freeTmVarsDiagram diag1) rigidTm
-  s2 <- U.unifyCtx tt (dTmCtx diag1) flexTy1 flexTm1 codDiag cod
+  let flex1 = S.union flexTy1 flexTm1
+  s2 <- U.unifyCtx tt (dTmCtx diag1) flex1 codDiag cod
   applySubstDiagram tt s2 diag1
 
 elabGenAttrs :: Doctrine -> GenDecl -> Maybe [RawAttrArg] -> Either Text AttrMap
@@ -2160,7 +2150,7 @@ freshTyVar :: ObjVar -> Fresh (ObjVar, Obj)
 freshTyVar v = do
   n <- freshInt
   let name = ovName v <> T.pack ("#" <> show n)
-  let fresh = ObjVar { ovName = name, ovMode = ovMode v }
+  let fresh = v { tmvName = name }
   pure (v, OVar fresh)
 
 freshTmVar :: TypeTheory -> [Obj] -> TmVar -> Fresh (TmVar, TermDiagram)

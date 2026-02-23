@@ -14,9 +14,13 @@ import qualified Data.IntMap.Strict as IM
 
 import Strat.Poly.Obj
   ( Obj(..)
+  , mkCon
   , ObjName(..)
   , ObjRef(..)
-  , ObjVar(..)
+  , ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , ObjArg
   , pattern OAObj
   , pattern OATm
@@ -55,7 +59,7 @@ tvar :: ModeName -> Text -> ObjVar
 tvar mode name = ObjVar { ovName = name, ovMode = mode }
 
 tcon :: ModeName -> Text -> [Obj] -> Obj
-tcon mode name args = OCon (ObjRef mode (ObjName name)) (map OAObj args)
+tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
 
 mkDoctrine :: [(ModeName, [(ObjName, TypeSig)])] -> Doctrine
 mkDoctrine tables =

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Test.Poly.TermNormalize
   ( tests
   ) where
@@ -9,7 +10,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.Obj (Obj(..), ObjVar(..), TmFunName(..), TmVar(..))
+import Strat.Poly.Obj (Obj(..), ObjVar, pattern ObjVar, ovName, ovMode, TmFunName(..), TmVar(..))
 import Strat.Poly.TypeTheory (TypeTheory(..), modeOnlyTypeTheory)
 import qualified Strat.Poly.TypeTheory as TT
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)

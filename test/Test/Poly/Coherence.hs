@@ -10,7 +10,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), mkCon)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD)
 import Strat.Poly.Graph (Diagram)
@@ -37,7 +37,7 @@ modeName :: ModeName
 modeName = ModeName "M"
 
 aTy :: Obj
-aTy = OCon (ObjRef modeName (ObjName "A")) []
+aTy = mkCon (ObjRef modeName (ObjName "A")) []
 
 mkGenDecl :: Text -> GenDecl
 mkGenDecl name =

@@ -24,6 +24,7 @@ import Strat.Poly.Doctrine
   , TypeSig(..)
   , ParamSig(..)
   , doctrineTypeTheory
+  , gdPlainDom
   )
 import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 import Strat.Poly.Names (GenName(..))
@@ -41,6 +42,7 @@ tests =
     [ testCase "self-classification allows universe declared later" testSelfClassificationDeferred
     , testCase "classification cycle (non-self) is rejected" testClassificationCycleRejected
     , testCase "classificationOrder places classifier before classified mode" testClassificationOrder
+    , testCase "classified modality over classifier-headed code normalizes" testClassifiedModalityNormalization
     , testCase "modality rewrite normalizes nested modality type" testNormalizeObjExprByModEq
     , testCase "substitution re-normalizes modality type" testSubstReNormalizes
     , testCase "action declarations elaborate and validate" testActionElab
@@ -113,13 +115,49 @@ testClassificationOrder = do
     _ ->
       assertFailure "classificationOrder missing expected modes"
 
+testClassifiedModalityNormalization :: Assertion
+testClassifiedModalityNormalization = do
+  let src = T.unlines
+        [ "doctrine ClassifiedModality where {"
+        , "  mode Ty classifiedBy Ty via Ty.U_Ty;"
+        , "  type U_Ty @Ty;"
+        , "  mode Tm classifiedBy Ty via Ty.U;"
+        , "  modality mu : Tm -> Tm;"
+        , "  type U @Ty;"
+        , "  type X @Ty;"
+        , "  gen idMu : [mu(X)] -> [mu(X)] @Tm;"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "ClassifiedModality" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine ClassifiedModality" >> fail "unreachable"
+      Just d -> pure d
+  gen <-
+    case M.lookup (ModeName "Tm") (dGens doc) >>= M.lookup (GenName "idMu") of
+      Nothing -> assertFailure "missing generator idMu" >> fail "unreachable"
+      Just g -> pure g
+  case gdPlainDom gen of
+    [obj] -> do
+      objOwnerMode obj @?= ModeName "Tm"
+      case objCode obj of
+        CTMod me innerCode -> do
+          meSrc me @?= ModeName "Tm"
+          meTgt me @?= ModeName "Tm"
+          case innerCode of
+            CTCon ref [] ->
+              ref @?= ObjRef (ModeName "Ty") (ObjName "X")
+            _ -> assertFailure "expected modality body to be Ty.X code"
+        _ -> assertFailure "expected modality code for idMu boundary"
+    _ -> assertFailure "expected one boundary object for idMu"
+
 testNormalizeObjExprByModEq :: Assertion
 testNormalizeObjExprByModEq = do
   mt <- requireEither (buildStagingTheory (ModeName "RT") (ModeName "CT"))
   let rt = ModeName "RT"
   let quote = ModName "quote"
   let splice = ModName "splice"
-  let natRT = OCon (ObjRef rt (ObjName "Nat")) []
+  let natRT = mkCon (ObjRef rt (ObjName "Nat")) []
   let quoteE = ModExpr { meSrc = rt, meTgt = ModeName "CT", mePath = [quote] }
   let spliceE = ModExpr { meSrc = ModeName "CT", meTgt = rt, mePath = [splice] }
   got <- requireEither (normalizeObjExpr mt (OMod spliceE (OMod quoteE natRT)))
@@ -145,8 +183,10 @@ testActionElab :: Assertion
 testActionElab = do
   let src = T.unlines
         [ "doctrine Act where {"
-        , "  mode A;"
-        , "  mode B;"
+        , "  mode A classifiedBy A via A.U_A;"
+        , "  type U_A @A;"
+        , "  mode B classifiedBy B via B.U_B;"
+        , "  type U_B @B;"
         , "  type X @A;"
         , "  type Y @B;"
         , "  modality F : A -> B;"
@@ -174,7 +214,7 @@ testApplyActionUsesDiagramTmCtx = do
   let modF = ModName "F"
   let natRef = ObjRef modeI (ObjName "Nat")
   let vecRef = ObjRef modeC (ObjName "Vec")
-  let natTy = OCon natRef []
+  let natTy = mkCon natRef []
   let tmCtx = [natTy]
   mt0 <- requireEither (addMode modeC (mkModes []))
   mt1 <- requireEither (addMode modeI mt0)
@@ -186,8 +226,8 @@ testApplyActionUsesDiagramTmCtx = do
   let tmParam = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 1 }
   tmParamTerm <- requireEither (termExprToDiagram tt0 tmCtx natTy (TMVar tmParam))
   tmBound0 <- requireEither (termExprToDiagram tt0 tmCtx natTy (TMBound 0))
-  let vecParam = OCon vecRef [OATm tmParamTerm]
-  let vecBound = OCon vecRef [OATm tmBound0]
+  let vecParam = mkCon vecRef [OATm tmParamTerm]
+  let vecBound = mkCon vecRef [OATm tmBound0]
   let genName = GenName "g"
   let genDecl =
         GenDecl
@@ -237,7 +277,7 @@ testApplyActionWeakenImageTmCtx :: Assertion
 testApplyActionWeakenImageTmCtx = do
   let modeM = ModeName "M"
   let modF = ModName "F"
-  let tyX = OCon (ObjRef modeM (ObjName "X")) []
+  let tyX = mkCon (ObjRef modeM (ObjName "X")) []
   mt0 <- requireEither (addMode modeM (mkModes []))
   mt1 <- requireEither (addModDecl (ModDecl modF modeM modeM) mt0)
   let lhsEq = ModExpr { meSrc = modeM, meTgt = modeM, mePath = [modF] }
@@ -283,8 +323,10 @@ testMapCrossModeElab :: Assertion
 testMapCrossModeElab = do
   let src = T.unlines
         [ "doctrine CrossMap where {"
-        , "  mode A;"
-        , "  mode B;"
+        , "  mode A classifiedBy A via A.U_A;"
+        , "  type U_A @A;"
+        , "  mode B classifiedBy B via B.U_B;"
+        , "  type U_B @B;"
         , "  modality F : A -> B;"
         , "  type X @A;"
         , "  gen g(a@A) : [a] -> [a] @A;"
@@ -303,7 +345,8 @@ testForGenObligationElab :: Assertion
 testForGenObligationElab = do
   let src = T.unlines
         [ "doctrine ForGenLift where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  type X @M;"
         , "  gen op : [M.X] -> [M.X] @M;"
         , "  gen f : [M.X, M.X] -> [M.X] @M;"
@@ -328,14 +371,16 @@ testForGenImplementsQuantifiesTarget :: Assertion
 testForGenImplementsQuantifiesTarget = do
   let src = T.unlines
         [ "doctrine FGSchema where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  type X @M;"
         , "  gen keep : [M.X] -> [M.X] @M;"
         , "  obligation all_id for_gen @M ="
         , "    @gen == id[M.X]"
         , "}"
         , "doctrine FGTgt where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  type X @M;"
         , "  gen keep : [M.X] -> [M.X] @M;"
         , "  gen bad : [M.X] -> [M.X] @M;"
@@ -362,14 +407,16 @@ testForGenSchemaRefsMapped :: Assertion
 testForGenSchemaRefsMapped = do
   let src = T.unlines
         [ "doctrine FGSchemaMap where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  type X @M;"
         , "  gen op(a@M) : [a] -> [a] @M;"
         , "  obligation mapped_op for_gen @M ="
         , "    @gen ; lift_cod(op) == @gen ; lift_cod(op)"
         , "}"
         , "doctrine FGTgtMap where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  type X @M;"
         , "  gen discard(a@M) : [a] -> [] @M;"
         , "  gen keep(a@M) : [a] -> [a] @M;"
@@ -391,14 +438,16 @@ testForGenPolyLiftInstantiation :: Assertion
 testForGenPolyLiftInstantiation = do
   let src = T.unlines
         [ "doctrine FGSchemaPolyLift where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  type X @M;"
         , "  gen op(a@M) : [a] -> [a] @M;"
         , "  obligation refl for_gen @M ="
         , "    @gen ; lift_cod(op) == @gen ; lift_cod(op)"
         , "}"
         , "doctrine FGTgtPolyLift where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  type X @M;"
         , "  gen keep : [M.X] -> [M.X] @M;"
         , "  gen op2(a@M) : [a] -> [a] @M;"
@@ -419,14 +468,16 @@ testForGenLiftAllowsCodArityChange :: Assertion
 testForGenLiftAllowsCodArityChange = do
   let src = T.unlines
         [ "doctrine FGSchemaDropLift where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  type X @M;"
         , "  gen drop(a@M) : [a] -> [] @M;"
         , "  obligation erased for_gen @M ="
         , "    lift_dom(drop) == lift_dom(drop)"
         , "}"
         , "doctrine FGTgtDropLift where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  type X @M;"
         , "  gen discard(a@M) : [a] -> [] @M;"
         , "}"
@@ -446,8 +497,10 @@ testForGenGenPlacementRejected :: Assertion
 testForGenGenPlacementRejected = do
   let src = T.unlines
         [ "doctrine BadForGenPlacement where {"
-        , "  mode A;"
-        , "  mode B;"
+        , "  mode A classifiedBy A via A.U_A;"
+        , "  type U_A @A;"
+        , "  mode B classifiedBy B via B.U_B;"
+        , "  type U_B @B;"
         , "  modality F : A -> B;"
         , "  type X @A;"
         , "  type Y @B;"
@@ -468,7 +521,8 @@ testGenOutsideForGenRejected :: Assertion
 testGenOutsideForGenRejected = do
   let src = T.unlines
         [ "doctrine BadGenObl where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  type X @M;"
         , "  gen g : [M.X] -> [M.X] @M;"
         , "  obligation bad : [M.X] -> [M.X] @M ="
@@ -487,7 +541,8 @@ testActionModEqCoherence :: Assertion
 testActionModEqCoherence = do
   let src = T.unlines
         [ "doctrine BadAction where {"
-        , "  mode A;"
+        , "  mode A classifiedBy A via A.U_A;"
+        , "  type U_A @A;"
         , "  type X @A;"
         , "  modality F : A -> A;"
         , "  mod_eq F -> id@A;"
@@ -513,8 +568,10 @@ testAdjObligationFail :: Assertion
 testAdjObligationFail = do
   let src = T.unlines
         [ "doctrine AdjSchema where {"
-        , "  mode C;"
-        , "  mode L;"
+        , "  mode C classifiedBy C via C.U_C;"
+        , "  type U_C @C;"
+        , "  mode L classifiedBy L via L.U_L;"
+        , "  type U_L @L;"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -527,8 +584,10 @@ testAdjObligationFail = do
         , "    eta{U(b)} ; map[U](eps{b}) == id[U(b)]"
         , "}"
         , "doctrine BadAdj where {"
-        , "  mode C;"
-        , "  mode L;"
+        , "  mode C classifiedBy C via C.U_C;"
+        , "  type U_C @C;"
+        , "  mode L classifiedBy L via L.U_L;"
+        , "  type U_L @L;"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -566,8 +625,10 @@ testAdjObligationPass :: Assertion
 testAdjObligationPass = do
   let src = T.unlines
         [ "doctrine AdjSchema where {"
-        , "  mode C;"
-        , "  mode L;"
+        , "  mode C classifiedBy C via C.U_C;"
+        , "  type U_C @C;"
+        , "  mode L classifiedBy L via L.U_L;"
+        , "  type U_L @L;"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -580,8 +641,10 @@ testAdjObligationPass = do
         , "    eta{U(b)} ; map[U](eps{b}) == id[U(b)]"
         , "}"
         , "doctrine GoodAdj where {"
-        , "  mode C;"
-        , "  mode L;"
+        , "  mode C classifiedBy C via C.U_C;"
+        , "  type U_C @C;"
+        , "  mode L classifiedBy L via L.U_L;"
+        , "  type U_L @L;"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -619,7 +682,8 @@ testMonadObligationPass :: Assertion
 testMonadObligationPass = do
   let src = T.unlines
         [ "doctrine SchemaMonad where {"
-        , "  mode C;"
+        , "  mode C classifiedBy C via C.U_C;"
+        , "  type U_C @C;"
         , "  modality T : C -> C;"
         , "  gen ret(x@C) : [x] -> [T(x)] @C;"
         , "  gen join(x@C) : [T(T(x))] -> [T(x)] @C;"
@@ -631,7 +695,8 @@ testMonadObligationPass = do
         , "    map[T](join{a}) ; join{a} == join{T(a)} ; join{a}"
         , "}"
         , "doctrine IdMonad where {"
-        , "  mode C;"
+        , "  mode C classifiedBy C via C.U_C;"
+        , "  type U_C @C;"
         , "  modality T : C -> C;"
         , "  type A @C;"
         , "  gen ret(a@C) : [a] -> [T(a)] @C;"
@@ -661,8 +726,10 @@ testAdjunctionKeywordRejected :: Assertion
 testAdjunctionKeywordRejected = do
   let src = T.unlines
         [ "doctrine BadAdj where {"
-        , "  mode C;"
-        , "  mode L;"
+        , "  mode C classifiedBy C via C.U_C;"
+        , "  type U_C @C;"
+        , "  mode L classifiedBy L via L.U_L;"
+        , "  type U_L @L;"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  " <> "adju" <> "nction F dashv U;"
@@ -676,7 +743,8 @@ testStructureKeywordRejected :: Assertion
 testStructureKeywordRejected = do
   let src = T.unlines
         [ "doctrine BadStruct where {"
-        , "  mode M;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  type U_M @M;"
         , "  " <> "stru" <> "cture M = cartesian;"
         , "}"
         ]

@@ -3,7 +3,6 @@ import "./console.llang";
 surface MiniFun where {
   doctrine ConsoleExpr;
   mode M;
-
   lexer {
     keywords: ;
     symbols: "(", ")", ",";

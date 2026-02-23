@@ -14,15 +14,19 @@ import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Obj
   ( Obj(..)
+  , mkCon
   , ObjName(..)
   , ObjRef(..)
-  , ObjVar(..)
+  , ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , ObjArg
   , pattern OAObj
   , pattern OATm
   , TermDiagram(..)
   )
-import Strat.Poly.UnifyObj (Subst(..), applySubstObj, normalizeSubst)
+import Strat.Poly.UnifyObj (Subst, applySubstObj, mkSubst, normalizeSubst, codeBindings)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Names (BoxName(..))
 import Strat.Poly.Diagram
@@ -84,7 +88,7 @@ tvar :: ModeName -> Text -> ObjVar
 tvar mode name = ObjVar { ovName = name, ovMode = mode }
 
 tcon :: ModeName -> Text -> [Obj] -> Obj
-tcon mode name args = OCon (ObjRef mode (ObjName name)) (map OAObj args)
+tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
 
 
 testDiagramDomCod :: Assertion
@@ -266,7 +270,7 @@ testApplySubstChase = do
   let b = tvar mode "b"
   let c = tcon mode "C" []
   let tt = modeOnlyTypeTheory (mkModes [mode])
-  let subst = Subst (M.fromList [(a, OVar b), (b, c)]) M.empty
+  let subst = mkSubst (M.fromList [(a, OVar b), (b, c)]) M.empty
   ty <- require (applySubstObj tt subst (OVar a))
   ty @?= c
 
@@ -276,7 +280,7 @@ testApplySubstCycle = do
   let a = tvar mode "a"
   let b = tvar mode "b"
   let tt = modeOnlyTypeTheory (mkModes [mode])
-  let subst = Subst (M.fromList [(a, OVar b), (b, OVar a)]) M.empty
+  let subst = mkSubst (M.fromList [(a, OVar b), (b, OVar a)]) M.empty
   ty <- require (applySubstObj tt subst (OVar a))
   ty @?= OVar a
 
@@ -285,8 +289,8 @@ testNormalizeSubstIdentity = do
   let mode = ModeName "M"
   let a = tvar mode "a"
   let tt = modeOnlyTypeTheory (mkModes [mode])
-  subst <- require (normalizeSubst tt (Subst (M.fromList [(a, OVar a)]) M.empty))
-  sObj subst @?= M.empty
+  subst <- require (normalizeSubst tt (mkSubst (M.fromList [(a, OVar a)]) M.empty))
+  codeBindings subst @?= []
 
 testDiagramIsoBoxName :: Assertion
 testDiagramIsoBoxName = do
@@ -475,9 +479,9 @@ testCellBoundaryUsesDiagramTmCtx = do
   let modeI = ModeName "I"
   let natRef = ObjRef modeI (ObjName "Nat")
   let vecRef = ObjRef modeM (ObjName "Vec")
-  let natTy = OCon natRef []
+  let natTy = mkCon natRef []
   let tmBound0 = TermDiagram (idDTm modeI [natTy] [natTy])
-  let vecBound = OCon vecRef [OATm tmBound0]
+  let vecBound = mkCon vecRef [OATm tmBound0]
   lhs <- require (genDTm modeM [natTy] [vecBound] [vecBound] (GenName "marker"))
   rhs <- require (genDTm modeM [natTy] [vecBound] [vecBound] (GenName "marker"))
   let cell =

@@ -40,8 +40,10 @@ testModTransformParseElab = do
   let src =
         T.unlines
           [ "doctrine Adj where {"
-          , "  mode C;"
-          , "  mode D;"
+          , "  mode C classifiedBy C via C.U_C;"
+          , "  type U_C @C;"
+          , "  mode D classifiedBy D via D.U_D;"
+          , "  type U_D @D;"
           , "  modality F : C -> D;"
           , "  modality U : D -> C;"
           , "  gen eta(a@C) : [a] -> [U.F(a)] @C;"
@@ -64,8 +66,10 @@ testModTransformRejectEndpoints = do
   let src =
         T.unlines
           [ "doctrine Bad where {"
-          , "  mode C;"
-          , "  mode D;"
+          , "  mode C classifiedBy C via C.U_C;"
+          , "  type U_C @C;"
+          , "  mode D classifiedBy D via D.U_D;"
+          , "  type U_D @D;"
           , "  modality F : C -> D;"
           , "  modality U : D -> C;"
           , "  mod_transform bad : F => U;"
@@ -80,8 +84,10 @@ testModTransformRejectWitnessShape = do
   let src =
         T.unlines
           [ "doctrine Wrong where {"
-          , "  mode C;"
-          , "  mode D;"
+          , "  mode C classifiedBy C via C.U_C;"
+          , "  type U_C @C;"
+          , "  mode D classifiedBy D via D.U_D;"
+          , "  type U_D @D;"
           , "  modality F : C -> D;"
           , "  modality U : D -> C;"
           , "  gen etaBad(a@C) : [U.F(a), U.F(a)] -> [U.F(a)] @C;"

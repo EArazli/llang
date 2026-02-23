@@ -1,5 +1,6 @@
 doctrine ConsoleExpr where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type Str @M;
   type Unit @M;
 

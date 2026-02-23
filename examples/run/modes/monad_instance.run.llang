@@ -1,8 +1,8 @@
 import "../../../stdlib/schema.monad.llang";
 
 doctrine IdMonad where {
-  mode C;
-
+  mode C classifiedBy C via C.U_C;
+  type U_C @C;
   modality T : C -> C;
 
   type A @C;

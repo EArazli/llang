@@ -1,9 +1,10 @@
 import "./struct_caps.llang";
 
 doctrine DualDiscipline where {
-  mode Lin;
-  mode Cart;
-
+  mode Lin classifiedBy Lin via Lin.U_Lin;
+  type U_Lin @Lin;
+  mode Cart classifiedBy Cart via Cart.U_Cart;
+  type U_Cart @Cart;
   type Num @Lin;
   type Num @Cart;
 

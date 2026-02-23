@@ -100,8 +100,10 @@ data-files:
     examples/run/terms/stlc_bool.term.run.llang
     examples/run/terms/term_ref.run.llang
     examples/run/classification_resolution.ok.run.llang
+    examples/run/classification_forward_ref.ok.run.llang
     examples/run/xfail/README.md
     examples/run/xfail/classification_cycle.fail.run.llang
+    examples/run/xfail/classification_missing_classifier.fail.run.llang
     examples/run/xfail/classification_wrong_classifier.fail.run.llang
     examples/run/xfail/algebra/no_dup_error.fail.run.llang
     examples/run/xfail/dependent/free_index_must_fail.fail.run.llang
@@ -178,6 +180,7 @@ library
       Strat.Frontend.Compile
       Strat.Poly.Kernel
       Strat.Poly.ModeSyntax
+      Strat.Poly.ObjResolve
       Strat.Poly.Term.Confluence
       Strat.Poly.Term.Termination
       Strat.Poly.Traversal

@@ -1,6 +1,6 @@
 doctrine ForGenSchemaMap where {
-  mode M;
-
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type X @M;
 
   gen op(a@M) : [a] -> [a] @M;
@@ -10,8 +10,8 @@ doctrine ForGenSchemaMap where {
 }
 
 doctrine ForGenTargetMap where {
-  mode M;
-
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type X @M;
 
   gen discard(a@M) : [a] -> [] @M;

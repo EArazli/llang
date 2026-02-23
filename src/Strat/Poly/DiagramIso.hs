@@ -23,7 +23,7 @@ import Strat.Poly.Graph
   , unEdgeId
   , canonDiagram
   )
-import Strat.Poly.Obj (Obj, ObjVar, TmVar(..))
+import Strat.Poly.Obj (Obj, TmVar(..))
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.UnifyObj (Subst, emptySubst, unifyObjFlex, applySubstCtx)
 
@@ -72,18 +72,16 @@ diagramIsoEqSlow left right =
 
 diagramIsoMatchWithVars
   :: TypeTheory
-  -> S.Set ObjVar
   -> S.Set TmVar
   -> S.Set AttrVar
   -> Diagram
   -> Diagram
   -> Either Text [(Subst, AttrSubst)]
-diagramIsoMatchWithVars tt tyFlex tmFlex attrFlex =
-  diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex emptySubst M.empty
+diagramIsoMatchWithVars tt flex attrFlex =
+  diagramIsoMatchWithVarsFrom tt flex attrFlex emptySubst M.empty
 
 diagramIsoMatchWithVarsFrom
   :: TypeTheory
-  -> S.Set ObjVar
   -> S.Set TmVar
   -> S.Set AttrVar
   -> Subst
@@ -91,9 +89,9 @@ diagramIsoMatchWithVarsFrom
   -> Diagram
   -> Diagram
   -> Either Text [(Subst, AttrSubst)]
-diagramIsoMatchWithVarsFrom tt tyFlex tmFlex attrFlex tySubst attrSubst left right = do
+diagramIsoMatchWithVarsFrom tt flex attrFlex tySubst attrSubst left right = do
   let initExtra = IsoExtra tySubst attrSubst
-  xs <- diagramIsoWith (algoMatch tt tyFlex tmFlex attrFlex) initExtra left right
+  xs <- diagramIsoWith (algoMatch tt flex attrFlex) initExtra left right
   pure [ (ieTySubst ex, ieAttrSubst ex) | ex <- xs ]
 
 diagramIsoWith
@@ -329,11 +327,10 @@ algoEq =
 
 algoMatch
   :: TypeTheory
-  -> S.Set ObjVar
   -> S.Set TmVar
   -> S.Set AttrVar
   -> IsoAlgo IsoExtra
-algoMatch tt tyFlex tmFlex attrFlex =
+algoMatch tt flex attrFlex =
   IsoAlgo
     { iaComparePorts = comparePorts
     , iaComparePayload = comparePayload
@@ -354,7 +351,7 @@ algoMatch tt tyFlex tmFlex attrFlex =
       case applySubstCtx tt (ieTySubst extra) (dTmCtx left) of
         Left _ -> Right []
         Right tmCtx' ->
-          case unifyObjFlex tt tmCtx' tyFlex tmFlex (ieTySubst extra) ty1 ty2 of
+          case unifyObjFlex tt tmCtx' flex (ieTySubst extra) ty1 ty2 of
             Left _ -> Right []
             Right tySubst' ->
               Right [extra { ieTySubst = tySubst' }]
@@ -431,4 +428,7 @@ algoMatch tt tyFlex tmFlex attrFlex =
     binderShape _ _ = False
 
 sameTmMetaId :: TmVar -> TmVar -> Bool
-sameTmMetaId a b = tmvName a == tmvName b && tmvScope a == tmvScope b
+sameTmMetaId a b =
+  tmvName a == tmvName b
+    && tmvScope a == tmvScope b
+    && tmvSort a == tmvSort b

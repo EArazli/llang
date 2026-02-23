@@ -1,5 +1,6 @@
 doctrine LambdaBeta where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type A @M;
 
   gen lam : [binder { x : A } : [A]] -> [A] @M;

@@ -1,5 +1,6 @@
 doctrine Iface where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type A @M;
   gen dup (a@M) : [a] -> [a, a] @M;
   gen drop (a@M) : [a] -> [] @M;
@@ -16,7 +17,6 @@ implements Iface for Target using Target.fromBase;
 surface IfaceSSA where {
   doctrine Iface;
   mode M;
-
   lexer {
     keywords: diag, in, out;
     symbols: "(", ")", "{", "}", ":", "=", ";", ",";

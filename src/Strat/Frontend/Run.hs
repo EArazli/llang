@@ -22,6 +22,7 @@ import Strat.Frontend.Compile (compileSourceDiagram)
 import Strat.Pipeline
 import Strat.Poly.Doctrine
 import Strat.Poly.Kernel (Obj(..), pattern OCon, ObjRef(..), ObjName(..))
+import Strat.Poly.Obj (mkCon)
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.Names (GenName(..), BoxName(..))
@@ -346,7 +347,7 @@ encodeSSAArtifact doc ssa = do
   let mode = ssaMode ssa
       requireType0 tName = do
         _ <- lookupTypeSig doc (ObjRef mode (ObjName tName))
-        pure (OCon (ObjRef mode (ObjName tName)) [])
+        pure (mkCon (ObjRef mode (ObjName tName)) [])
       requireGen gName =
         case M.lookup mode (dGens doc) >>= M.lookup (GenName gName) of
           Nothing -> Left ("pipeline: derived doctrine missing SSA generator " <> gName)

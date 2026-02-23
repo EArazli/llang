@@ -332,12 +332,14 @@ checkCell doc tt cell = do
       ctxR <- diagramDom (c2RHS cell)
       let tyFlexDom = S.unions (map freeObjVarsObj (ctxL <> ctxR))
       let tmFlexDom = S.unions (map freeTmVarsObj (ctxL <> ctxR))
-      _ <- unifyCtx tt tmCtx tyFlexDom tmFlexDom ctxL ctxR
+      let flexDom = S.union tyFlexDom tmFlexDom
+      _ <- unifyCtx tt tmCtx flexDom ctxL ctxR
       codL <- diagramCod (c2LHS cell)
       codR <- diagramCod (c2RHS cell)
       let tyFlexCod = S.unions (map freeObjVarsObj (codL <> codR))
       let tmFlexCod = S.unions (map freeTmVarsObj (codL <> codR))
-      _ <- unifyCtx tt tmCtx tyFlexCod tmFlexCod codL codR
+      let flexCod = S.union tyFlexCod tmFlexCod
+      _ <- unifyCtx tt tmCtx flexCod codL codR
       let lhsVars = freeObjVarsDiagram (c2LHS cell)
       let rhsVars = freeObjVarsDiagram (c2RHS cell)
       let declaredTy = S.fromList (c2TyVars cell)
@@ -385,7 +387,7 @@ checkType doc tt tyvars tmvars tmCtx ty =
     OVar v ->
       if v `elem` tyvars
         then
-          if M.member (ovMode v) (mtModes (dModes doc))
+          if M.member (objOwnerMode (tmvSort v)) (mtModes (dModes doc))
             then Right ()
             else Left "validateDoctrine: type variable has unknown mode"
         else Left "validateDoctrine: unknown type variable"
@@ -442,7 +444,7 @@ ensureDistinctTmVars label vars =
 
 checkTyVarModes :: Doctrine -> [ObjVar] -> Either Text ()
 checkTyVarModes doc vars =
-  if all (\v -> M.member (ovMode v) (mtModes (dModes doc))) vars
+  if all (\v -> M.member (objOwnerMode (tmvSort v)) (mtModes (dModes doc))) vars
     then Right ()
     else Left "validateDoctrine: type variable has unknown mode"
 
@@ -546,7 +548,7 @@ checkModTransformWitness doc fromMe toMe witness = do
     case gdTyVars witness of
       [v] -> Right v
       _ -> Left "mod_transform: witness generator must have exactly one type variable"
-  if ovMode tyVar == meSrc fromMe
+  if objOwnerMode (tmvSort tyVar) == meSrc fromMe
     then Right ()
     else Left "mod_transform: witness type variable must live in transform source mode"
   if null (gdTmVars witness)

@@ -1,11 +1,13 @@
 doctrine Base where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type Nat @M;
   type Bool @M;
 }
 
 doctrine StateSchema where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type S @M;
 }
 

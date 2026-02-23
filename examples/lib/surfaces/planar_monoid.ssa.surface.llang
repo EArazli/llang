@@ -3,7 +3,6 @@ import "../algebra/cart_monoid.llang";
 surface PlanarSSA where {
   doctrine CartMonoid;
   mode M;
-
   lexer {
     keywords: diag, in, out;
     symbols: "(", ")", "{", "}", ":", "=", ";", ",";

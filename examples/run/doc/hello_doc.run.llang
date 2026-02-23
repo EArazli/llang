@@ -1,5 +1,6 @@
 doctrine HelloWorld where {
-  mode M acyclic;
+  mode M acyclic classifiedBy M via M.U_M;
+  type U_M @M;
   type Unit @M;
   gen hello : [] -> [Unit] @M;
 }

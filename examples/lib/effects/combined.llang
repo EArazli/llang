@@ -2,7 +2,8 @@ import "../../../stdlib/effects/exception.template.llang"
 import "../../../stdlib/effects/writer.template.llang"
 
 doctrine Base where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type Unit @M;
   type Err @M;
   type Log @M;

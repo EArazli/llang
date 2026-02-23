@@ -90,9 +90,6 @@ addClassification mode decl mt = do
   if M.member mode (mtModes mt)
     then Right ()
     else Left "mode theory: classifiedBy uses unknown mode"
-  if M.member (cdClassifier decl) (mtModes mt)
-    then Right ()
-    else Left "mode theory: classifiedBy uses unknown mode"
   if M.member mode (mtClassifiedBy mt)
     then Left "mode theory: classifiedBy duplicate for mode"
     else Right ()

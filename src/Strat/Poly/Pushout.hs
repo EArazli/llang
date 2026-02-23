@@ -33,6 +33,7 @@ import Strat.Poly.ModeTheory
   , checkWellFormed
   )
 import Strat.Poly.Obj
+import Strat.Poly.ObjClassifier (modeUniverseObj)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs, diagramDom, diagramCod)
@@ -59,6 +60,20 @@ type GenRenameMap = M.Map (ModeName, GenName) GenName
 type CellRenameMap = M.Map (ModeName, Text) Text
 type OblRenameMap = M.Map Text Text
 type TransformRenameMap = M.Map ModTransformName ModTransformName
+
+mkTypeMetaVarForMode :: Doctrine -> ModeName -> Text -> Either Text ObjVar
+mkTypeMetaVarForMode doc ownerMode name = do
+  universe <- Right (modeUniverseObj (dModes doc) ownerMode)
+  pure $
+    case universe of
+      Just u ->
+        TmVar
+          { tmvName = name
+          , tmvSort = u { objOwnerMode = ownerMode }
+          , tmvScope = 0
+          }
+      Nothing ->
+        ObjVar { ovName = name, ovMode = ownerMode }
 
 data ModePushout = ModePushout
   { mpoModeTheory :: ModeTheory
@@ -1695,7 +1710,9 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
             Just existing | existing == gen' -> Right acc
             _ -> Left "poly pushout: generator name collision"
 
-        renameTyVar tv = Right tv { ovMode = renameModeName modeRen (ovMode tv) }
+        renameTyVar tv = do
+          sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tv)
+          Right tv { tmvSort = sort' }
         renameTmVar tmVar = do
           sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tmVar)
           Right tmVar { tmvSort = sort' }
@@ -1751,7 +1768,9 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
           , obRHSExpr = rhs'
           }
       where
-        renameObTyVar tv = Right tv { ovMode = renameModeName modeRen (ovMode tv) }
+        renameObTyVar tv = do
+          sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tv)
+          Right tv { tmvSort = sort' }
 
         renameObTmVar tmVar = do
           sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tmVar)
@@ -2128,8 +2147,9 @@ renameObjExpr modeRen modRen ren permRen ty = do
   where
     renameCode code =
       case code of
-        CTVar v ->
-          Right (CTVar v { ovMode = renameModeName modeRen (ovMode v) })
+        CTMeta v -> do
+          sort' <- renameObjExpr modeRen modRen ren permRen (tmvSort v)
+          Right (CTMeta v { tmvSort = sort' })
         CTMod me inner -> do
           inner' <- renameCode inner
           Right (CTMod (renameModExpr modeRen modRen me) inner')
@@ -2506,12 +2526,12 @@ normalizeDiagramModes mt diag = do
 
     goType ty =
       case objCode ty of
-        CTVar _ -> Right ty
+        CTMeta _ -> Right ty
         CTCon ref args -> do
           args' <- mapM goArg args
           Right ty { objCode = CTCon ref args' }
         CTMod me innerCode -> do
-          inner' <- goType Obj { objOwnerMode = objOwnerMode ty, objCode = innerCode }
+          inner' <- goType Obj { objOwnerMode = meSrc me, objCode = innerCode }
           Right ty { objCode = CTMod me (objCode inner') }
 
     goArg arg =
@@ -2623,12 +2643,13 @@ buildTypeMap doc modeRen modRen renames permRen = do
       args <- case mPerm of
         Nothing -> Right args0
         Just perm -> applyPerm perm args0
-      pure (TypeTemplate tmplParams (OCon tgtRef args))
+      pure (TypeTemplate tmplParams (mkCon tgtRef args))
 
     mkParam (i, param) =
       case param of
-        PS_Ty mode ->
-          Right (TPType ObjVar { ovName = "a" <> T.pack (show i), ovMode = renameModeName modeRen mode })
+        PS_Ty mode -> do
+          v <- mkTypeMetaVarForMode doc (renameModeName modeRen mode) ("a" <> T.pack (show i))
+          Right (TPType v)
         PS_Tm sortTy -> do
           sortTy' <- renameObjExpr modeRen modRen renames permRen sortTy
           Right (TPTm TmVar { tmvName = "i" <> T.pack (show i), tmvSort = sortTy', tmvScope = 0 })
@@ -2749,7 +2770,7 @@ composeMorphisms name first second = do
         oneType ttSrc (srcRef, sig) = do
           paramsSrc <- mapM (mkSourceParam sig) (zip [0 :: Int ..] (tsParams sig))
           argsSrc <- mapM (sourceParamArg ttSrc) paramsSrc
-          let tySrc = OCon srcRef argsSrc
+          let tySrc = mkCon srcRef argsSrc
           tyMid <- applyMorphismTy first tySrc
           tyTgt <- applyMorphismTy second tyMid
           paramsTgt <- mapM mapComposedParam paramsSrc
@@ -2757,8 +2778,9 @@ composeMorphisms name first second = do
 
         mkSourceParam _sig (i, param) =
           case param of
-            PS_Ty mode ->
-              Right (TPType ObjVar { ovName = "a" <> T.pack (show i), ovMode = mode })
+            PS_Ty mode -> do
+              v <- mkTypeMetaVarForMode (morSrc first) mode ("a" <> T.pack (show i))
+              Right (TPType v)
             PS_Tm sortTy ->
               let tmVar =
                     TmVar
@@ -2778,9 +2800,9 @@ composeMorphisms name first second = do
         mapComposedParam param =
           case param of
             TPType v -> do
-              modeMid <- applyMorphismMode first (ovMode v)
-              modeTgt <- applyMorphismMode second modeMid
-              Right (TPType v { ovMode = modeTgt })
+              sortMid <- applyMorphismTy first (tmvSort v)
+              sortTgt <- applyMorphismTy second sortMid
+              Right (TPType v { tmvSort = sortTgt })
             TPTm v -> do
               sortMid <- applyMorphismTy first (tmvSort v)
               sortTgt <- applyMorphismTy second sortMid

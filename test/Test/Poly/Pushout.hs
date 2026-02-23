@@ -27,10 +27,14 @@ import Strat.Poly.ModeTheory
   , mtDecls
   )
 import Strat.Poly.Obj
-  ( ObjVar(..)
+  ( ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , ObjName(..)
   , ObjRef(..)
   , Obj(..)
+  , mkCon
   , ObjArg
   , pattern OAObj
   , pattern OATm
@@ -107,7 +111,7 @@ tvar :: ModeName -> Text -> ObjVar
 tvar mode name = ObjVar { ovName = name, ovMode = mode }
 
 tcon :: ModeName -> Text -> [Obj] -> Obj
-tcon mode name args = OCon (ObjRef mode (ObjName name)) (map OAObj args)
+tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
 
 tmMeta :: TmVar -> TermDiagram
 tmMeta v =
@@ -401,7 +405,7 @@ testPushoutTypePermutationCommutes = do
   right <- case mkTypeDoctrine mode "C" [(prod, 2)] of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
-  let tmplF = TypeTemplate [TPType aVar, TPType bVar] (OCon (ObjRef mode pair) [OAObj (OVar bVar), OAObj (OVar aVar)])
+  let tmplF = TypeTemplate [TPType aVar, TPType bVar] (mkCon (ObjRef mode pair) [OAObj (OVar bVar), OAObj (OVar aVar)])
   let morF = Morphism
         { morName = "f"
         , morSrc = base
@@ -431,7 +435,7 @@ testPushoutTypePermutationCommutes = do
   res <- case computePolyPushout "P" morF morG of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
-  let diagA = idD mode [OCon (ObjRef mode prod) [OAObj (OVar aVar), OAObj (OVar bVar)]]
+  let diagA = idD mode [mkCon (ObjRef mode prod) [OAObj (OVar aVar), OAObj (OVar bVar)]]
   d1 <- case applyMorphismDiagram morF diagA of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
@@ -895,7 +899,7 @@ testPushoutNonInjectiveTypeCompatible = do
   let left = mkDoc "LeftNI" ["T"]
   let right = mkDoc "RightNI" ["U", "V"]
   mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
-  let tmpl tgtName = TypeTemplate [] (OCon (ObjRef mode (ObjName tgtName)) [])
+  let tmpl tgtName = TypeTemplate [] (mkCon (ObjRef mode (ObjName tgtName)) [])
   let morF =
         Morphism
           { morName = "fNI"
@@ -1286,7 +1290,7 @@ testPushoutGlueComposesThroughInr = do
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
           }
-  let rightType = TypeTemplate [] (OCon (ObjRef mode (ObjName "Y")) [])
+  let rightType = TypeTemplate [] (mkCon (ObjRef mode (ObjName "Y")) [])
   let inrLeg =
         Morphism
           { morName = "inrGlueCompose"
@@ -1453,7 +1457,7 @@ testPushoutClassificationUniverseFollowsTypeRename :: Assertion
 testPushoutClassificationUniverseFollowsTypeRename = do
   let mode = ModeName "M"
   let typeName = ObjName "U"
-  let universe = OCon (ObjRef mode typeName) []
+  let universe = mkCon (ObjRef mode typeName) []
   let classDecl =
         ClassificationDecl
           { cdClassifier = mode
@@ -1572,7 +1576,7 @@ testPushoutTermTypeMaps = do
   let natRef = ObjRef modeI (ObjName "Nat")
   let vecRef = ObjRef modeM (ObjName "Vec")
   let vec2Ref = ObjRef modeM (ObjName "Vec2")
-  let natTy = OCon natRef []
+  let natTy = mkCon natRef []
   let src =
         Doctrine
           { dName = "SrcIdx"
@@ -1630,7 +1634,7 @@ testPushoutTermTypeMaps = do
                 [ ( vecRef
                   , TypeTemplate
                       [TPTm nVar, TPType aVar]
-                      (OCon vec2Ref [OATm (tmMeta nVar), OAObj (OVar aVar)])
+                      (mkCon vec2Ref [OATm (tmMeta nVar), OAObj (OVar aVar)])
                   )
                 ]
           , morGenMap = M.empty
@@ -1664,8 +1668,8 @@ testPushoutTypePermutationSortRename = do
   let natLRef = ObjRef modeI (ObjName "NatL")
   let vecRef = ObjRef modeM (ObjName "Vec")
   let vec2Ref = ObjRef modeM (ObjName "Vec2")
-  let natTy = OCon natRef []
-  let natLTy = OCon natLRef []
+  let natTy = mkCon natRef []
+  let natLTy = mkCon natLRef []
   let src =
         Doctrine
           { dName = "SrcIdxSwap"
@@ -1724,7 +1728,7 @@ testPushoutTypePermutationSortRename = do
                 , ( vecRef
                   , TypeTemplate
                       [TPTm nVar, TPType aVar]
-                      (OCon vec2Ref [OAObj (OVar aVar), OATm (tmMeta nVar)])
+                      (mkCon vec2Ref [OAObj (OVar aVar), OATm (tmMeta nVar)])
                   )
                 ]
           , morGenMap = M.empty
@@ -1800,7 +1804,7 @@ testCoproductObligationRenameElaborates :: Assertion
 testCoproductObligationRenameElaborates = do
   let mode = ModeName "M"
   let natRef = ObjRef mode (ObjName "Nat")
-  let natTy = OCon natRef []
+  let natTy = mkCon natRef []
   let rawExpr = PolyAST.ROEDiag (PolyAST.RDId [PolyAST.RPTVar "Nat"])
   let obl =
         ObligationDecl
@@ -2418,11 +2422,11 @@ testPushoutCellTmAlphaEq :: Assertion
 testPushoutCellTmAlphaEq = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let natTy = OCon (ObjRef modeI (ObjName "Nat")) []
+  let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
   let vecRef = ObjRef modeM (ObjName "Vec")
   let genName = GenName "f"
   let mkTm name = TmVar { tmvName = name, tmvSort = natTy, tmvScope = 0 }
-  let vecTy tmVar = OCon vecRef [OATm (tmMeta tmVar)]
+  let vecTy tmVar = mkCon vecRef [OATm (tmMeta tmVar)]
   let srcTm = mkTm "n"
   let leftTm = mkTm "i"
   let rightTm = mkTm "j"
@@ -2566,7 +2570,7 @@ testPushoutCellTmAlphaEq = do
 testPushoutInjectionPreservesBinderArgs :: Assertion
 testPushoutInjectionPreservesBinderArgs = do
   let mode = ModeName "M"
-  let aTy = OCon (ObjRef mode (ObjName "A")) []
+  let aTy = mkCon (ObjRef mode (ObjName "A")) []
   let gName = GenName "g"
   let slotSig = BinderSig { bsTmCtx = [], bsDom = [aTy], bsCod = [aTy] }
   let gDecl =
@@ -2641,8 +2645,8 @@ testPushoutAcceptsRenamingWithBinders = do
   let mode = ModeName "M"
   let aRef = ObjRef mode (ObjName "A")
   let a1Ref = ObjRef mode (ObjName "A1")
-  let aTy = OCon aRef []
-  let a1Ty = OCon a1Ref []
+  let aTy = mkCon aRef []
+  let a1Ty = mkCon a1Ref []
   let gName = GenName "g"
   let g1Name = GenName "g1"
   let slotSigSrc = BinderSig { bsTmCtx = [], bsDom = [aTy], bsCod = [aTy] }

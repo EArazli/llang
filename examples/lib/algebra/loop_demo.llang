@@ -1,5 +1,6 @@
 doctrine LoopDemo where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type A @M;
 
   gen dup : [A] -> [A, A] @M;

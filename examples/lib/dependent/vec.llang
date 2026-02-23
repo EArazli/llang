@@ -1,7 +1,8 @@
 doctrine VecDependent where {
-  mode M;
-  mode I;
-
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
+  mode I classifiedBy I via I.U_I;
+  type U_I @I;
   type Nat @I;
   type A @M;
   type Vec(n : Nat, a@M) @M;

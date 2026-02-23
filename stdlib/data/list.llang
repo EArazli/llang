@@ -1,5 +1,6 @@
 doctrine ListData where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   data List (a@M) @M where {
     Nil  : [];
     Cons : [a, List(a)];

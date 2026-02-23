@@ -32,13 +32,17 @@ import Strat.Poly.DSL.Elab
 import Strat.Poly.Obj
   ( Obj(..)
   , CodeTerm(..)
+  , mkCon
   , pattern OVar
   , pattern OCon
   , pattern OAObj
   , pattern OATm
   , ObjRef(..)
   , ObjName(..)
-  , ObjVar(..)
+  , ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , TmVar(..)
   , TermDiagram(..)
   )
@@ -86,6 +90,7 @@ import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 import Strat.Poly.Proof (SearchBudget, defaultSearchBudget, renderSearchLimit)
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.ObjNormalize (termExprToDiagramChecked)
+import Strat.Poly.ObjClassifier (modeUniverseObj)
 
 
 elabRawFile :: RawFile -> Either Text ModuleEnv
@@ -498,13 +503,23 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
       let tgtRef = srcRef { orMode = tgtMode }
       params <- mapM (mkParam mor) (zip [0 :: Int ..] (tsParams sig))
       args <- mapM (paramArg tt) params
-      pure (PolyMorph.TypeTemplate params (OCon tgtRef args))
+      pure (PolyMorph.TypeTemplate params (mkCon tgtRef args))
 
     mkParam mor (i, param) =
       case param of
         PS_Ty srcMode -> do
           tgtMode <- PolyMorph.applyMorphismMode mor srcMode
-          Right (PolyMorph.TPType ObjVar { ovName = "a" <> T.pack (show i), ovMode = tgtMode })
+          case modeUniverseObj (dModes (PolyMorph.morTgt mor)) tgtMode of
+            Just universe -> do
+              let tv =
+                    TmVar
+                      { tmvName = "a" <> T.pack (show i)
+                      , tmvSort = universe { objOwnerMode = tgtMode }
+                      , tmvScope = 0
+                      }
+              Right (PolyMorph.TPType tv)
+            Nothing ->
+              Right (PolyMorph.TPType ObjVar { ovName = "a" <> T.pack (show i), ovMode = tgtMode })
         PS_Tm srcSort -> do
           tgtSort <- PolyMorph.applyMorphismTy mor srcSort
           Right (PolyMorph.TPTm TmVar { tmvName = "t" <> T.pack (show i), tmvSort = tgtSort, tmvScope = 0 })
@@ -949,7 +964,9 @@ renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
       , gdAttrs = attrs'
       }
   where
-    renTyVar tv = Right tv { ovMode = M.findWithDefault (ovMode tv) (ovMode tv) modeRen }
+    renTyVar tv = do
+      sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tv)
+      Right tv { tmvSort = sort' }
     renTmVar tm = do
       sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tm)
       Right tm { tmvSort = sort' }
@@ -977,8 +994,9 @@ renameObjExpr modeRen modRen typeRen ty = do
 
     renCode code =
       case code of
-        CTVar tv ->
-          Right (CTVar tv { ovMode = renMode (ovMode tv) })
+        CTMeta tv -> do
+          sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tv)
+          Right (CTMeta tv { tmvSort = sort' })
         CTMod me inner -> do
           inner' <- renCode inner
           Right
@@ -1114,7 +1132,7 @@ buildFoliatedDoctrine name baseDoc mode = do
       stepTy = ty "Step"
       stepsTy = ty "StepList"
       ssaTy = ty "SSA"
-      ty tName = OCon (ObjRef mode (ObjName tName)) []
+      ty tName = mkCon (ObjRef mode (ObjName tName)) []
       mkType tName = (ObjName tName, TypeSig [])
       mkGen gName dom cod attrs =
         ( GenName gName

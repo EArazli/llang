@@ -2,7 +2,10 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
 module Strat.Poly.Obj
-  ( ObjVar(..)
+  ( ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , ObjName(..)
   , ObjRef(..)
   , TmFunName(..)
@@ -13,6 +16,8 @@ module Strat.Poly.Obj
   , ObjArg
   , pattern OAObj
   , pattern OATm
+  , mkObj
+  , mkCon
   , Obj(Obj, objOwnerMode, objCode, OVar, OCon, OMod)
   , Context
   , mapTermDiagram
@@ -38,7 +43,10 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName, ModExpr(..), ModeTheory, composeMod, normalizeModExpr)
 import Strat.Poly.Syntax
-  ( ObjVar(..)
+  ( ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , ObjName(..)
   , ObjRef(..)
   , TmFunName(..)
@@ -63,26 +71,30 @@ pattern OAObj ty = CAObj ty
 pattern OATm :: TermDiagram -> ObjArg
 pattern OATm tm = CATm tm
 
+mkObj :: ModeName -> CodeTerm -> Obj
+mkObj owner code = Obj { objOwnerMode = owner, objCode = code }
+
+mkCon :: ObjRef -> [ObjArg] -> Obj
+mkCon ref args = mkObj (orMode ref) (CTCon ref args)
+
 pattern OVar :: ObjVar -> Obj
-pattern OVar v <- Obj _ (CTVar v)
+pattern OVar v <- Obj _ (CTMeta v)
   where
-    OVar v = Obj { objOwnerMode = ovMode v, objCode = CTVar v }
+    OVar v = mkObj (objOwnerMode (tmvSort v)) (CTMeta v)
 
 pattern OCon :: ObjRef -> [ObjArg] -> Obj
 pattern OCon ref args <- Obj _ (CTCon ref args)
-  where
-    OCon ref args = Obj { objOwnerMode = orMode ref, objCode = CTCon ref args }
 
 pattern OMod :: ModExpr -> Obj -> Obj
 pattern OMod me inner <- Obj _ (CTMod me (codeAsObj (meSrc me) -> inner))
   where
-    OMod me inner = Obj { objOwnerMode = meTgt me, objCode = CTMod me (objCode inner) }
+    OMod me inner = mkObj (meTgt me) (CTMod me (objCode inner))
 
 {-# COMPLETE OAObj, OATm #-}
 {-# COMPLETE OVar, OCon, OMod #-}
 
 codeAsObj :: ModeName -> CodeTerm -> Obj
-codeAsObj owner code = Obj { objOwnerMode = owner, objCode = code }
+codeAsObj = mkObj
 
 mapTermDiagram :: (TermDiagram -> TermDiagram) -> TermDiagram -> TermDiagram
 mapTermDiagram f tm = f tm
@@ -97,10 +109,10 @@ mapObjExpr fTy fTm = goObj
           }
     goCode owner code =
       case code of
-        CTVar _ -> code
+        CTMeta _ -> code
         CTCon ref args -> CTCon ref (map goArg args)
         CTMod me inner ->
-          let innerObj = goObj Obj { objOwnerMode = owner, objCode = inner }
+          let innerObj = goObj Obj { objOwnerMode = meSrc me, objCode = inner }
           in CTMod me (objCode innerObj)
     goArg arg =
       case arg of
@@ -113,15 +125,13 @@ freeObjVarsObj obj =
   where
     freeObjVarsCode code =
       case code of
-        CTVar v -> S.singleton v
+        CTMeta v -> S.singleton v
         CTCon _ args -> S.unions (map freeObjVarsArg args)
         CTMod _ inner -> freeObjVarsCode inner
     freeObjVarsArg arg =
       case arg of
         CAObj innerObj -> freeObjVarsObj innerObj
-        -- Object metavariables are tracked through object arguments only.
-        -- Term arguments carry term metavariables/sorts and are handled separately.
-        CATm _ -> S.empty
+        CATm tmArg -> freeObjVarsTerm tmArg
 
 freeObjVarsTerm :: TermDiagram -> S.Set ObjVar
 freeObjVarsTerm (TermDiagram diag) =
@@ -155,7 +165,7 @@ freeTmVarsObj obj =
   where
     freeTmVarsCode code =
       case code of
-        CTVar _ -> S.empty
+        CTMeta _ -> S.empty
         CTCon _ args -> S.unions (map freeTmVarsArg args)
         CTMod _ inner -> freeTmVarsCode inner
     freeTmVarsArg arg =
@@ -169,14 +179,13 @@ occursObjVar v obj =
   where
     occursInCode code =
       case code of
-        CTVar v' -> v == v'
+        CTMeta v' -> v == v'
         CTCon _ args -> any occursArg args
         CTMod _ inner -> occursInCode inner
     occursArg arg =
       case arg of
         CAObj innerObj -> occursObjVar v innerObj
-        -- Term arguments are ignored for object-variable occurs checks.
-        CATm _ -> False
+        CATm tmArg -> v `S.member` freeObjVarsTerm tmArg
 
 boundTmIndicesTerm :: TermDiagram -> S.Set Int
 boundTmIndicesTerm (TermDiagram diag) =
@@ -226,7 +235,7 @@ boundTmIndicesObj obj =
   where
     boundInCode code =
       case code of
-        CTVar _ -> S.empty
+        CTMeta _ -> S.empty
         CTCon _ args -> S.unions (map boundTmIndicesArg args)
         CTMod _ inner -> boundInCode inner
     boundTmIndicesArg arg =
@@ -244,7 +253,7 @@ tmCtxForMode tele mode =
 codeMode0 :: CodeTerm -> ModeName
 codeMode0 code =
   case code of
-    CTVar v -> ovMode v
+    CTMeta v -> objOwnerMode (tmvSort v)
     CTCon r _ -> orMode r
     CTMod me _ -> meTgt me
 
@@ -254,7 +263,7 @@ objMode = objOwnerMode
 normalizeCodeTerm :: ModeTheory -> CodeTerm -> Either Text CodeTerm
 normalizeCodeTerm mt code =
   case code of
-    CTVar _ -> Right code
+    CTMeta _ -> Right code
     CTCon ref args -> do
       args' <- mapM normalizeArg args
       Right (CTCon ref args')
@@ -266,13 +275,10 @@ normalizeCodeTerm mt code =
             me' <- composeMod mt me2 me
             Right (me', inner2)
           _ -> Right (me, inner)
-      if codeMode0 innerBase /= meSrc meComposed
-        then Left "normalizeObjExpr: modality source does not match inner object mode"
-        else do
-          let meNorm = normalizeModExpr mt meComposed
-          if null (mePath meNorm)
-            then Right innerBase
-            else Right (CTMod meNorm innerBase)
+      let meNorm = normalizeModExpr mt meComposed
+      if null (mePath meNorm)
+        then Right innerBase
+        else Right (CTMod meNorm innerBase)
   where
     normalizeArg arg =
       case arg of
@@ -280,6 +286,31 @@ normalizeCodeTerm mt code =
         CATm tm -> Right (CATm tm)
 
 normalizeObjExpr :: ModeTheory -> Obj -> Either Text Obj
-normalizeObjExpr mt obj = do
-  code' <- normalizeCodeTerm mt (objCode obj)
-  Right obj { objCode = code' }
+normalizeObjExpr mt obj =
+  case objCode obj of
+    CTMeta _ -> Right obj
+    CTCon ref args -> do
+      args' <- mapM normalizeArg args
+      Right obj { objCode = CTCon ref args' }
+    CTMod me innerCode -> do
+      if meTgt me /= objOwnerMode obj
+        then Left "normalizeObjExpr: modality target does not match object owner mode"
+        else Right ()
+      inner <- normalizeObjExpr mt Obj { objOwnerMode = meSrc me, objCode = innerCode }
+      collapse me (objCode inner)
+  where
+    normalizeArg arg =
+      case arg of
+        CAObj innerObj -> CAObj <$> normalizeObjExpr mt innerObj
+        CATm tm -> Right (CATm tm)
+
+    collapse me code =
+      case code of
+        CTMod me2 inner2 -> do
+          me' <- composeMod mt me2 me
+          collapse me' inner2
+        _ -> do
+          let meNorm = normalizeModExpr mt me
+          if null (mePath meNorm)
+            then Right obj { objCode = code }
+            else Right obj { objCode = CTMod meNorm code }

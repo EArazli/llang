@@ -1,8 +1,7 @@
-doctrine ClassificationResolution where {
+doctrine ClassificationForwardRef where {
+  mode Tm classifiedBy Ty via Ty.U;
   mode Ty classifiedBy Ty via Ty.U_Ty;
   type U_Ty @Ty;
-  mode Tm classifiedBy Ty via Ty.U;
-
   type U @Ty;
   type Unit @Ty;
   type Arr(a@Tm, b@Tm) @Ty;
@@ -16,7 +15,7 @@ pipeline main where {
 }
 
 run main using main where {
-  source doctrine ClassificationResolution;
+  source doctrine ClassificationForwardRef;
   source mode Tm;
 }
 ---

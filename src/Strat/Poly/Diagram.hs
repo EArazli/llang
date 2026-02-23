@@ -94,8 +94,9 @@ compD tt g f
       codF <- diagramCod f
       let tyFlex = S.unions (map freeObjVarsObj (codF <> domG))
       let tmFlex = S.unions (map freeTmVarsObj (codF <> domG))
+      let flex = S.union tyFlex tmFlex
       subst <-
-        case unifyCtx tt tmCtxF tyFlex tmFlex codF domG of
+        case unifyCtx tt tmCtxF flex codF domG of
           Left err -> Left ("diagram composition boundary mismatch: " <> err)
           Right s -> Right s
       f' <- applySubstDiagram tt subst f

@@ -362,7 +362,6 @@ mkMatchConfig :: TypeTheory -> RewriteRule -> MatchConfig
 mkMatchConfig tt rule =
   MatchConfig
     { mcTheory = tt
-    , mcTyFlex = S.fromList (rrTyVars rule)
-    , mcTmFlex = S.fromList (rrTmVars rule)
+    , mcFlex = S.union (S.fromList (rrTyVars rule)) (S.fromList (rrTmVars rule))
     , mcAttrFlex = freeAttrVarsDiagram (rrLHS rule)
     }

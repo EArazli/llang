@@ -3,7 +3,6 @@ import "./dual_discipline_surface.llang";
 surface DupTermCart where {
   doctrine DualDiscipline;
   mode Cart;
-
   lexer {
     keywords: diag, in, out;
     symbols: "(", ")", "{", "}", ":", ";", ",";
@@ -27,7 +26,6 @@ surface DupTermCart where {
 surface DupTermLin where {
   doctrine DualDiscipline;
   mode Lin;
-
   lexer {
     keywords: diag, in, out;
     symbols: "(", ")", "{", "}", ":", ";", ",";

@@ -16,7 +16,7 @@ import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Poly.Attr
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), lookupTypeSig, gdPlainDom, doctrineTypeTheory)
 import Strat.Poly.DSL.AST (RawPolyObjExpr(..), RawTypeRef(..), RawModExpr(..))
-import Strat.Poly.Diagram (Diagram(..), idD, genD, unionDiagram, diagramDom, diagramCod, freeObjVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
+import Strat.Poly.Diagram (Diagram(..), idD, genD, unionDiagram, diagramDom, diagramCod, freeObjVarsDiagram, freeTmVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
 import Strat.Poly.Graph
   ( PortId(..)
   , Edge(..)
@@ -39,7 +39,9 @@ import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
 import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
 import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurfaceExpr)
 import Strat.Poly.Surface.Spec
-import Strat.Poly.Obj (Obj, ObjName(..), ObjRef(..), ObjVar(..), Context, objMode, freeObjVarsObj)
+import Strat.Poly.Obj (Obj(Obj, objOwnerMode, objCode), ObjName(..), ObjVar, ovName, ovMode, Context, CodeArg(..), CodeTerm(..), objMode, freeObjVarsObj, freeTmVarsObj)
+import Strat.Poly.ObjClassifier (modeUniverseObj)
+import Strat.Poly.ObjResolve (resolveTypeRef)
 import qualified Strat.Poly.Obj as Ty
 import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
 import qualified Strat.Poly.UnifyObj as U
@@ -59,14 +61,15 @@ applySubstCtx mt =
 
 unifyObjFlex :: ModeTheory -> S.Set ObjVar -> Subst -> Obj -> Obj -> Either Text Subst
 unifyObjFlex mt flex =
-  U.unifyObjFlex (modeOnlyTypeTheory mt) [] flex S.empty
+  U.unifyObjFlex (modeOnlyTypeTheory mt) [] flex
 
 composeSubst :: ModeTheory -> Subst -> Subst -> Either Text Subst
 composeSubst mt =
   U.composeSubst (modeOnlyTypeTheory mt)
 
-freeObjVarsCtx :: Context -> S.Set ObjVar
-freeObjVarsCtx = S.unions . map freeObjVarsObj
+freeFlexCtx :: Context -> S.Set ObjVar
+freeFlexCtx =
+  S.unions . map (\ty -> S.union (freeObjVarsObj ty) (freeTmVarsObj ty))
 
 
 -- Public entrypoint
@@ -205,44 +208,88 @@ data ElabEnv = ElabEnv
 initEnv :: Either Text ElabEnv
 initEnv = Right (ElabEnv M.empty U.emptySubst)
 
+mkTypeMetaVar :: Doctrine -> ModeName -> Text -> Either Text ObjVar
+mkTypeMetaVar doc ownerMode name = do
+  universe <-
+    case modeUniverseObj (dModes doc) ownerMode of
+      Nothing ->
+        Left
+          ( "surface: type metavariable `"
+              <> name
+              <> "@"
+              <> renderMode ownerMode
+              <> "` requires `mode "
+              <> renderMode ownerMode
+              <> " classifiedBy ... via ...;` with a declared universe"
+          )
+      Just u -> Right u
+  pure
+    Ty.TmVar
+      { Ty.tmvName = name
+      , Ty.tmvSort = universe { objOwnerMode = ownerMode }
+      , Ty.tmvScope = 0
+      }
+  where
+    renderMode (ModeName n) = n
+
 elabSurfaceObjExpr :: Doctrine -> ModeName -> RawPolyObjExpr -> Either Text Obj
 elabSurfaceObjExpr doc mode expr =
   case expr of
-    RPTVar name ->
-      Right (Ty.OVar (ObjVar { ovName = name, ovMode = mode }))
+    RPTVar name -> do
+      v <- mkTypeMetaVar doc mode name
+      Right Obj { objOwnerMode = mode, objCode = CTMeta v }
     RPTMod rawMe innerRaw -> do
       me <- elabRawModExprSurface (dModes doc) rawMe
-      inner <- elabSurfaceObjExpr doc mode innerRaw
-      if objMode inner /= meSrc me
+      if meTgt me /= mode
+        then Left "surface: modality application target/object mode mismatch"
+        else Right ()
+      inner <- elabSurfaceObjExpr doc (meSrc me) innerRaw
+      if objOwnerMode inner /= meSrc me
         then Left "surface: modality application source/argument mode mismatch"
-        else Ty.normalizeObjExpr (dModes doc) (Ty.OMod me inner)
+        else
+          Ty.normalizeObjExpr
+            (dModes doc)
+            Obj
+              { objOwnerMode = mode
+              , objCode = CTMod me (objCode inner)
+              }
     RPTCon rawRef args -> do
       case asModalityCall rawRef args of
         Just (rawMe, innerRaw) -> do
           me <- elabRawModExprSurface (dModes doc) rawMe
-          inner <- elabSurfaceObjExpr doc mode innerRaw
-          if objMode inner /= meSrc me
+          if meTgt me /= mode
+            then Left "surface: modality application target/object mode mismatch"
+            else Right ()
+          inner <- elabSurfaceObjExpr doc (meSrc me) innerRaw
+          if objOwnerMode inner /= meSrc me
             then Left "surface: modality application source/argument mode mismatch"
-            else Ty.normalizeObjExpr (dModes doc) (Ty.OMod me inner)
+            else
+              Ty.normalizeObjExpr
+                (dModes doc)
+                Obj
+                  { objOwnerMode = mode
+                  , objCode = CTMod me (objCode inner)
+                  }
         Nothing -> do
-          ref <- resolveTypeRefSurface doc rawRef
+          ref <- resolveTypeRef doc mode rawRef
           sig <- lookupTypeSig doc ref
           let params = tsParams sig
           if length params /= length args
             then Left "surface: type constructor arity mismatch"
             else do
-              args' <- mapM (elabSurfaceObjExpr doc mode) args
-              let checkParam (param, argTy) =
-                    case param of
-                      PS_Ty m ->
-                        if objMode argTy == m
-                          then Right ()
-                          else Left "surface: type constructor argument mode mismatch"
-                      PS_Tm _ ->
-                        Left "surface: term arguments are not supported in surface type annotations"
-              mapM_ checkParam (zip params args')
-              Right (Ty.OCon ref (map Ty.OAObj args'))
+              args' <- mapM elabOneArg (zip params args)
+              Right Obj { objOwnerMode = mode, objCode = CTCon ref args' }
   where
+    elabOneArg (param, rawArg) =
+      case param of
+        PS_Ty m -> do
+          argTy <- elabSurfaceObjExpr doc m rawArg
+          if objOwnerMode argTy == m
+            then Right (CAObj argTy)
+            else Left "surface: type constructor argument mode mismatch"
+        PS_Tm _ ->
+          Left "surface: term arguments are not supported in surface type annotations"
+
     asModalityCall rawRef0 args0 =
       case (rtrMode rawRef0, rtrName rawRef0, args0) of
         (Nothing, name, [inner]) ->
@@ -266,30 +313,6 @@ elabSurfaceObjExpr doc mode expr =
        in case M.lookup mode' (dTypes doc) of
             Nothing -> False
             Just table -> M.member tyName table
-
-resolveTypeRefSurface :: Doctrine -> RawTypeRef -> Either Text ObjRef
-resolveTypeRefSurface doc raw =
-  case rtrMode raw of
-    Just modeName -> do
-      let mode = ModeName modeName
-      if M.member mode (mtModes (dModes doc))
-        then Right ()
-        else Left "surface: unknown mode"
-      let tname = ObjName (rtrName raw)
-      case M.lookup mode (dTypes doc) >>= M.lookup tname of
-        Nothing -> Left "surface: unknown type constructor"
-        Just _ -> Right (ObjRef mode tname)
-    Nothing -> do
-      let tname = ObjName (rtrName raw)
-      let matches =
-            [ mode
-            | (mode, table) <- M.toList (dTypes doc)
-            , M.member tname table
-            ]
-      case matches of
-        [] -> Left "surface: unknown type constructor"
-        [mode] -> Right (ObjRef mode tname)
-        _ -> Left "surface: ambiguous type constructor (qualify with Mode.)"
 
 elabRawModExprSurface :: ModeTheory -> RawModExpr -> Either Text ModExpr
 elabRawModExprSurface mt raw =
@@ -482,14 +505,11 @@ instantiateImplUnaryGen iface mor g ty = do
       _ -> Left "surface: structural schema generator must be unary polymorphic"
   dSchema <- instantiateUnaryGen ifaceTT g (Ty.OVar srcVar)
   dMapped <- PolyMorph.applyMorphismDiagram mor dSchema
-  tgtMode <-
-    case M.lookup (ovMode srcVar) (PolyMorph.morModeMap mor) of
-      Nothing -> Left "surface: implements morphism is missing a mode mapping for structural schema"
-      Just m -> Right m
-  let tgtVar = srcVar { ovMode = tgtMode }
+  tgtSort <- PolyMorph.applyMorphismTy mor (Ty.tmvSort srcVar)
+  let tgtVar = srcVar { Ty.tmvSort = tgtSort }
   applySubstDiagram
     tgtTT
-    (U.Subst { U.sObj = M.singleton tgtVar ty, U.sTm = M.empty })
+    (U.mkSubst (M.singleton tgtVar ty) M.empty)
     dMapped
 
 isDupShape :: GenDecl -> Bool
@@ -557,7 +577,8 @@ prepareBinder doc mode mt env params (Just decl) =
       pure (Just (RBInput varName ty), Just bodyHole, env')
     BindLet varCap valueHole bodyHole -> do
       varName <- liftEither (requireIdentParam params varCap)
-      fresh <- freshTyVar (ObjVar { ovName = varName, ovMode = mode })
+      base <- liftEither (mkTypeMetaVar doc mode varName)
+      fresh <- freshTyVar base
       let ty = Ty.OVar fresh
       let env' =
             env
@@ -715,13 +736,14 @@ buildTypeSubst doc mode env paramMap = do
   pairs <- mapM toPair (M.toList paramMap)
   let localTy = M.fromList (concat pairs)
       envSub = eeTypeSubst env
-  pure envSub { U.sObj = M.union localTy (U.sObj envSub) }
+      localSub = U.mkSubst localTy M.empty
+  U.composeSubst (modeOnlyTypeTheory (dModes doc)) envSub localSub
   where
     toPair (name, param) =
       case param of
         SPType rawTy -> do
           ty <- elabSurfaceObjExpr doc mode rawTy
-          let var = ObjVar { ovName = name, ovMode = mode }
+          var <- mkTypeMetaVar doc mode name
           pure [(var, ty)]
         _ -> pure []
 
@@ -985,7 +1007,7 @@ instantiateUnaryGen tt gen ty = do
     [v] -> Right (M.singleton v ty)
     [] -> Right M.empty
     _ -> Left "surface: structural generator must be unary polymorphic in exactly one type variable"
-  let subst = U.Subst { U.sObj = substTy, U.sTm = M.empty }
+  let subst = U.mkSubst substTy M.empty
   dom <- U.applySubstCtx tt subst (gdPlainDom gen)
   cod <- U.applySubstCtx tt subst (gdCod gen)
   genD (gdMode gen) dom cod (gdName gen)
@@ -1049,7 +1071,7 @@ genDFromDecl mt mode env gen mArgs attrs bargs = do
           then liftEither (Left "surface: generator type argument mismatch")
           else do
             freshVars <- liftEither (extractFreshVars tyVars renameSubst)
-            let subst = U.Subst (M.fromList (zip freshVars args')) M.empty
+            let subst = U.mkSubst (M.fromList (zip freshVars args')) M.empty
             dom2' <- liftEither (applySubstCtx mt subst dom1)
             cod2' <- liftEither (applySubstCtx mt subst cod1)
             slots2' <- liftEither (mapM (applySubstBinderSigTy mt subst) slots1)
@@ -1093,14 +1115,14 @@ checkBinderArgs mt dom cod slots args =
           slot <- applySubstBinderSigTy mt substAcc slot0
           inner <- applySubstDiagram (modeOnlyTypeTheory mt) substAcc inner0
           domArg <- diagramDom inner
-          let flexDom = S.union (freeObjVarsCtx (bsDom slot)) (freeObjVarsCtx domArg)
-          sDom <- U.unifyCtx (modeOnlyTypeTheory mt) [] flexDom S.empty (bsDom slot) domArg
+          let flexDom = S.union (freeFlexCtx (bsDom slot)) (freeFlexCtx domArg)
+          sDom <- U.unifyCtx (modeOnlyTypeTheory mt) [] flexDom (bsDom slot) domArg
           subst1 <- composeSubst mt sDom substAcc
           slot1 <- applySubstBinderSigTy mt sDom slot
           inner1 <- applySubstDiagram (modeOnlyTypeTheory mt) sDom inner
           codArg <- diagramCod inner1
-          let flexCod = S.union (freeObjVarsCtx (bsCod slot1)) (freeObjVarsCtx codArg)
-          sCod <- U.unifyCtx (modeOnlyTypeTheory mt) [] flexCod S.empty (bsCod slot1) codArg
+          let flexCod = S.union (freeFlexCtx (bsCod slot1)) (freeFlexCtx codArg)
+          sCod <- U.unifyCtx (modeOnlyTypeTheory mt) [] flexCod (bsCod slot1) codArg
           subst2 <- composeSubst mt sCod subst1
           inner2 <- applySubstDiagram (modeOnlyTypeTheory mt) sCod inner1
           Right (subst2, out <> [BAConcrete inner2])
@@ -1135,8 +1157,10 @@ compSurf :: ModeTheory -> SurfDiag -> SurfDiag -> Either Text SurfDiag
 compSurf mt a b = do
   codA <- diagramCod (sdDiag a)
   domB <- diagramDom (sdDiag b)
-  let flex = S.union (freeObjVarsDiagram (sdDiag a)) (freeObjVarsDiagram (sdDiag b))
-  subst <- U.unifyCtx (modeOnlyTypeTheory mt) [] flex S.empty codA domB
+  let flexA = S.union (freeObjVarsDiagram (sdDiag a)) (freeTmVarsDiagram (sdDiag a))
+  let flexB = S.union (freeObjVarsDiagram (sdDiag b)) (freeTmVarsDiagram (sdDiag b))
+  let flex = S.union flexA flexB
+  subst <- U.unifyCtx (modeOnlyTypeTheory mt) [] flex codA domB
   a' <- applySubstSurf mt subst a
   b' <- applySubstSurf mt subst b
   let bShift = shiftDiagram (dNextPort (sdDiag a')) (dNextEdge (sdDiag a')) (sdDiag b')
@@ -1269,14 +1293,14 @@ evalFresh (Fresh f) = fmap fst (f 0)
 freshSubst :: [ObjVar] -> Fresh Subst
 freshSubst vars = do
   pairs <- mapM freshVar vars
-  pure (U.Subst (M.fromList pairs) M.empty)
+  pure (U.mkSubst (M.fromList pairs) M.empty)
 
 extractFreshVars :: [ObjVar] -> Subst -> Either Text [ObjVar]
 extractFreshVars vars subst =
   mapM lookupVar vars
   where
     lookupVar v =
-      case M.lookup v (U.sObj subst) of
+      case U.lookupCodeMeta subst v of
         Just (Ty.OVar v') -> Right v'
         _ -> Left "internal error: expected fresh type variable"
 
@@ -1284,14 +1308,14 @@ freshVar :: ObjVar -> Fresh (ObjVar, Obj)
 freshVar v = do
   n <- freshInt
   let name = ovName v <> T.pack ("#" <> show n)
-  let fresh = v { ovName = name }
+  let fresh = v { Ty.tmvName = name }
   pure (v, Ty.OVar fresh)
 
 freshTyVar :: ObjVar -> Fresh ObjVar
 freshTyVar v = do
   n <- freshInt
   let name = ovName v <> T.pack ("#" <> show n)
-  pure v { ovName = name }
+  pure v { Ty.tmvName = name }
 
 freshInt :: Fresh Int
 freshInt = Fresh (\n -> Right (n, n + 1))

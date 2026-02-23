@@ -1,7 +1,8 @@
 doctrine GradedMonad where {
-  mode G;
-  mode M;
-
+  mode G classifiedBy G via G.U_G;
+  type U_G @G;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   -- Grade monoid: natural numbers with zero, successor, and addition
   type Count @G;
 

@@ -1,5 +1,6 @@
 doctrine D where {
-  mode M acyclic;
+  mode M acyclic classifiedBy M via M.U_M;
+  type U_M @M;
   type T @M;
   gen a : [] -> [T] @M;
   gen b : [T] -> [T] @M;

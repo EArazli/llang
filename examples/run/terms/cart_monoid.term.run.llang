@@ -3,7 +3,6 @@ import "../../lib/algebra/cart_monoid.llang";
 surface CartTerm where {
   doctrine CartMonoid;
   mode M;
-
   lexer {
     keywords: term, in, out;
     symbols: "(", ")", "{", "}", ":", ";", ",";

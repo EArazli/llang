@@ -25,7 +25,7 @@ import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoEqSlow)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.Obj (Obj(..), ObjRef(..), ObjName(..))
+import Strat.Poly.Obj (Obj(..), ObjRef(..), ObjName(..), mkCon)
 import Strat.Poly.Attr (AttrTerm(..), AttrLit(..))
 
 
@@ -201,7 +201,7 @@ testMode :: ModeName
 testMode = ModeName "M"
 
 testType :: Obj
-testType = OCon (ObjRef testMode (ObjName "A")) []
+testType = mkCon (ObjRef testMode (ObjName "A")) []
 
 require :: Either Text a -> IO a
 require (Left err) = assertFailure (T.unpack err) >> fail "unreachable"

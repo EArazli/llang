@@ -15,7 +15,10 @@ module Strat.Poly.Kernel
   , pattern OMod
   , ObjRef(..)
   , ObjName(..)
-  , ObjVar(..)
+  , ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , normalizeObjDeep
   , normalizeObjDeepWithCtx
   , normalizeCodeTermDeepWithCtx
@@ -33,7 +36,10 @@ import Strat.Poly.Doctrine (Doctrine, validateDoctrine)
 import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Proof (SearchOutcome(..))
 import Strat.Poly.Obj
-  ( ObjVar(..)
+  ( ObjVar
+  , pattern ObjVar
+  , ovName
+  , ovMode
   , ObjArg
   , CodeArg(..)
   , CodeTerm(..)

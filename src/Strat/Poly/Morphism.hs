@@ -55,13 +55,15 @@ unifyCtxCompat :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
 unifyCtxCompat tt tmCtx ctxA ctxB =
   let tyFlex = S.unions (map freeObjVarsObj (ctxA <> ctxB))
       tmFlex = S.unions (map freeTmVarsObj (ctxA <> ctxB))
-   in unifyCtx tt tmCtx tyFlex tmFlex ctxA ctxB
+      flex = S.union tyFlex tmFlex
+   in unifyCtx tt tmCtx flex ctxA ctxB
 
 unifyCtxFromPattern :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
 unifyCtxFromPattern tt tmCtx pat host =
   let tyFlex = S.unions (map freeObjVarsObj pat)
       tmFlex = S.unions (map freeTmVarsObj pat)
-   in unifyCtx tt tmCtx tyFlex tmFlex pat host
+      flex = S.union tyFlex tmFlex
+   in unifyCtx tt tmCtx flex pat host
 
 
 data Morphism = Morphism
@@ -121,8 +123,13 @@ mapAttrSort mor sortName =
 
 mapTyVar :: Morphism -> ObjVar -> Either Text ObjVar
 mapTyVar mor v = do
-  mode' <- mapMode mor (ovMode v)
-  pure v { ovMode = mode' }
+  sort' <- applyMorphismTy mor (tmvSort v)
+  pure v { tmvSort = sort' }
+
+mapCodeMeta :: Morphism -> TmVar -> Either Text TmVar
+mapCodeMeta mor v = do
+  sort' <- applyMorphismTy mor (tmvSort v)
+  pure v { tmvSort = sort' }
 
 mapTypeRef :: Morphism -> ObjRef -> Either Text ObjRef
 mapTypeRef mor ref = do
@@ -141,11 +148,11 @@ applyMorphismTy :: Morphism -> Obj -> Either Text Obj
 applyMorphismTy mor ty = do
   owner' <- mapMode mor (objOwnerMode ty)
   case objCode ty of
-    CTVar v -> do
-      v' <- mapTyVar mor v
-      pure Obj { objOwnerMode = owner', objCode = CTVar v' }
+    CTMeta v -> do
+      v' <- mapCodeMeta mor v
+      pure Obj { objOwnerMode = owner', objCode = CTMeta v' }
     CTMod me innerCode -> do
-      inner' <- applyMorphismTy mor Obj { objOwnerMode = objOwnerMode ty, objCode = innerCode }
+      inner' <- applyMorphismTy mor Obj { objOwnerMode = meSrc me, objCode = innerCode }
       me' <- mapModExpr mor me
       normalizeObjExpr
         (dModes (morTgt mor))
@@ -178,9 +185,9 @@ applyMorphismTy mor ty = do
     addParam s (param, arg) =
       case (param, arg) of
         (TPType v, OAObj t) ->
-          Right s { sObj = M.insert v t (sObj s) }
+          insertCodeMeta v t s
         (TPTm v, OATm tmArg) ->
-          Right s { sTm = M.insert v tmArg (sTm s) }
+          insertTmMeta v tmArg s
         _ ->
           Left "morphism: type template kind mismatch during instantiation"
 
@@ -288,9 +295,9 @@ applyMorphismDiagram mor diagSrc = do
 
 mapSubst :: Morphism -> Subst -> Either Text Subst
 mapSubst mor subst = do
-  tyPairs <- mapM mapTyOne (M.toList (sObj subst))
-  tmPairs <- mapM mapTmOne (M.toList (sTm subst))
-  pure (Subst (M.fromList tyPairs) (M.fromList tmPairs))
+  tyPairs <- mapM mapTyOne (codeBindings subst)
+  tmPairs <- mapM mapTmOne (tmBindings subst)
+  pure (mkSubst (M.fromList tyPairs) (M.fromList tmPairs))
   where
     mapTyOne (v, t) = do
       v' <- mapTyVar mor v
@@ -708,7 +715,7 @@ validateTypeMap mor = do
       case (srcParam, tmplParam) of
         (PS_Ty srcMode, TPType v) -> do
           expectedMode <- mapMode mor srcMode
-          if ovMode v == expectedMode
+          if objMode (tmvSort v) == expectedMode
             then Right ()
             else Left "checkMorphism: type template type-parameter mode mismatch"
         (PS_Tm srcSort, TPTm tmParam) -> do
@@ -1161,7 +1168,7 @@ renameObjExpr ren ty =
   where
     renameCode code =
       case code of
-        CTVar v -> CTVar v
+        CTMeta v -> CTMeta v
         CTCon ref args ->
           let ref' = M.findWithDefault ref ref ren
           in CTCon ref' (map renameArg args)

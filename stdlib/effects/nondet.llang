@@ -1,4 +1,5 @@
 doctrine Nondet where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   gen choose : [] -> [] @M;
 }

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Test.Poly.Rewrite
   ( tests
   ) where
@@ -13,11 +14,11 @@ import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar(..))
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar, pattern ObjVar, ovName, ovMode, mkCon)
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Match (Match(..), MatchConfig(..), findFirstMatch)
-import Strat.Poly.UnifyObj (Subst(..))
+import Strat.Poly.UnifyObj (Subst, lookupCodeMeta)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory, ModName(..), ModDecl(..), ModExpr(..), ModEqn(..), addMode, addModDecl, addModEqn)
 import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
 import Strat.Poly.Pretty (renderDiagram)
@@ -48,7 +49,7 @@ modeName :: ModeName
 modeName = ModeName "M"
 
 aTy :: Obj
-aTy = OCon (ObjRef modeName (ObjName "A")) []
+aTy = mkCon (ObjRef modeName (ObjName "A")) []
 
 tvar :: Text -> ObjVar
 tvar name = ObjVar { ovName = name, ovMode = modeName }
@@ -138,7 +139,7 @@ testInjectiveMatch = do
   g <- require (mkGen "f" [aTy] [aTy])
   pat <- require (tensorD g g)
   let host = g
-  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) S.empty S.empty S.empty
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) S.empty S.empty
   res <- case findFirstMatch cfg pat host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
@@ -292,7 +293,7 @@ testNestedBoxesMatch = do
   inner <- require (mkBoxDiagram "Inner" f aTy)
   lhs <- require (mkBoxDiagram "Outer" inner aTy)
   host <- require (mkBoxDiagram "Outer" inner aTy)
-  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) S.empty S.empty S.empty
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) S.empty S.empty
   res <- case findFirstMatch cfg lhs host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
@@ -305,19 +306,19 @@ testBoxTypeVarUnify = do
   let aVar = tvar "a"
   let aVarTy = OVar aVar
   let aName = ObjName "A"
-  let aConcrete = OCon (ObjRef modeName aName) []
+  let aConcrete = mkCon (ObjRef modeName aName) []
   fVar <- require (mkGen "f" [aVarTy] [aVarTy])
   fConcrete <- require (mkGen "f" [aConcrete] [aConcrete])
   lhs <- require (mkBoxDiagram "B" fVar aVarTy)
   host <- require (mkBoxDiagram "B" fConcrete aConcrete)
-  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) (S.singleton aVar) S.empty S.empty
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) (S.singleton aVar) S.empty
   res <- case findFirstMatch cfg lhs host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
   case res of
     Nothing -> assertFailure "expected type-var unification through box"
     Just m ->
-      case M.lookup aVar (sObj (mTySubst m)) of
+      case lookupCodeMeta (mTySubst m) aVar of
         Nothing -> assertFailure "expected substitution for type variable"
         Just ty -> ty @?= aConcrete
 
@@ -334,7 +335,7 @@ testRewriteUsesModeEq = do
   let lhsEq = ModExpr { meSrc = modeA, meTgt = modeA, mePath = [fName, uName] }
   let rhsEq = ModExpr { meSrc = modeA, meTgt = modeA, mePath = [] }
   mt <- require (addModEqn (ModEqn lhsEq rhsEq) mt3)
-  let base = OCon (ObjRef modeA (ObjName "Base")) []
+  let base = mkCon (ObjRef modeA (ObjName "Base")) []
   let fExpr = ModExpr { meSrc = modeA, meTgt = modeB, mePath = [fName] }
   let uExpr = ModExpr { meSrc = modeB, meTgt = modeA, mePath = [uName] }
   let ufBase = OMod uExpr (OMod fExpr base)

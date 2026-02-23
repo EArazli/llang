@@ -1,5 +1,6 @@
 doctrine Monoid where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type A @M;
 
   gen unit : [] -> [A] @M;
@@ -10,7 +11,8 @@ doctrine Monoid where {
 }
 
 doctrine StringMonoid where {
-  mode M;
+  mode M classifiedBy M via M.U_M;
+  type U_M @M;
   type Str @M;
 
   gen empty : [] -> [Str] @M;

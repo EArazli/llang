@@ -3,7 +3,6 @@ import "../terms/splice_source.llang";
 surface SpliceSurface where {
   doctrine SpliceBase;
   mode M;
-
   lexer {
     keywords: term;
     symbols: "{", "}";

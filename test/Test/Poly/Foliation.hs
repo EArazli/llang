@@ -161,7 +161,7 @@ modeM = ModeName "M"
 
 
 tyT :: Obj
-tyT = OCon (ObjRef modeM (ObjName "T")) []
+tyT = mkCon (ObjRef modeM (ObjName "T")) []
 
 
 require :: Either Text a -> IO a

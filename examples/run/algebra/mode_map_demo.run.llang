@@ -1,7 +1,8 @@
 doctrine D where {
-  mode C;
-  mode V;
-
+  mode C classifiedBy C via C.U_C;
+  type U_C @C;
+  mode V classifiedBy V via V.U_V;
+  type U_V @V;
   type A @C;
   type B @V;
 
