@@ -253,6 +253,7 @@ polyBlock = do
 polyItem :: Parser PolyAST.RawPolyItem
 polyItem =
   polyModeDecl
+    <|> polyComprehensionDecl
     <|> polyModalityDecl
     <|> polyModEqDecl
     <|> polyModTransformDecl
@@ -282,6 +283,50 @@ polyModeDecl = do
         }
   optionalSemi
   pure (PolyAST.RPMode (PolyAST.RawModeDecl name acyclic mClass))
+
+polyComprehensionDecl :: Parser PolyAST.RawPolyItem
+polyComprehensionDecl = do
+  _ <- symbol "comprehension"
+  mode <- ident
+  _ <- symbol "where"
+  _ <- symbol "{"
+  fields <- many compField
+  _ <- symbol "}"
+  optionalSemi
+  (ctxExt, varName, reindexName) <- ensureCompFields fields
+  pure
+    ( PolyAST.RPComprehension
+        PolyAST.RawCompDecl
+          { PolyAST.rcmpMode = mode
+          , PolyAST.rcmpCtxExt = ctxExt
+          , PolyAST.rcmpVar = varName
+          , PolyAST.rcmpReindex = reindexName
+          }
+    )
+  where
+    compField = do
+      key <- ident
+      _ <- symbol "="
+      value <- ident
+      optionalSemi
+      pure (key, value)
+
+    ensureCompFields fields = do
+      ctxExt <- requireField "ctx_ext" fields
+      varName <- requireField "var" fields
+      reindexName <- requireField "reindex" fields
+      let validKeys = S.fromList ["ctx_ext", "var", "reindex"]
+          unknown = [k | (k, _) <- fields, not (k `S.member` validKeys)]
+      case unknown of
+        [] -> pure ()
+        (k:_) -> fail ("unknown comprehension field: " <> T.unpack k)
+      pure (ctxExt, varName, reindexName)
+
+    requireField key fields =
+      case [v | (k, v) <- fields, k == key] of
+        [v] -> pure v
+        [] -> fail ("missing comprehension field: " <> T.unpack key)
+        _ -> fail ("duplicate comprehension field: " <> T.unpack key)
 
 polyModalityDecl :: Parser PolyAST.RawPolyItem
 polyModalityDecl = do

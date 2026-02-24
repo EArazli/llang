@@ -1,5 +1,9 @@
 doctrine GradedMonad where {
   mode G classifiedBy G via G.U_G;
+  gen comp_ctx_ext(a@G) : [a] -> [a] @G;
+  gen comp_var(a@G) : [a] -> [a] @G;
+  gen comp_reindex(a@G) : [a] -> [a] @G;
+  comprehension G where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_G : [] -> [G.U_G] @G;
   mode M classifiedBy M via M.U_M;
   gen U_M : [] -> [M.U_M] @M;
@@ -22,6 +26,16 @@ doctrine GradedMonad where {
   -- Computation types
   gen A : [] -> [M.U_M] @M;
   gen B : [] -> [M.U_M] @M;
+  gen ctx_ext(a@M) : [a] -> [a] @M;
+  gen var(a@M) : [a] -> [a] @M;
+  gen reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };
+  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M =
+    ctx_ext{a} == id[a]
+  rule computational var_id -> (a@M) : [a] -> [a] @M =
+    var{a} == id[a]
+  rule computational reindex_id -> (a@M) : [a] -> [a] @M =
+    reindex{a} == id[a]
 
   -- T(g, a) — a computation producing `a` that costs `g` resources
   gen T(g : Count, a@M) : [] -> [M.U_M] @M;

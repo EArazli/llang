@@ -14,7 +14,6 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import qualified Data.Set as S
 import Data.Map.Strict (Map)
-import Data.Ord (comparing)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
 import Strat.Frontend.Env
@@ -56,10 +55,12 @@ import Strat.Poly.Doctrine
   , GenParam(..)
   , InputShape(..)
   , ObligationDecl(..)
+  , CtorTables
   , deriveCtorTables
   , doctrineTypeTheory
+  , doctrineTypeTheoryFromTables
   , gdPlainDom
-  , isTypeDeclGenName
+  , isTypeDeclGenNameInTables
   , validateDoctrine
   )
 import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
@@ -70,6 +71,7 @@ import Strat.Poly.ModeTheory
   , ModDecl(..)
   , ModEqn(..)
   , ClassificationDecl(..)
+  , CompDecl(..)
   , ModName(..)
   , ModExpr(..)
   , ModTransformName(..)
@@ -340,24 +342,29 @@ lookupFunctor env name =
     Nothing -> Left ("Unknown doctrine_functor: " <> name)
     Just def -> Right def
 
-allTypeDeclsForDoc :: Doctrine -> [(ObjRef, [TypeParamSig])]
+allTypeDeclsForDoc :: Doctrine -> Either Text [(ObjRef, [TypeParamSig])]
 allTypeDeclsForDoc doc =
   case deriveCtorTables doc of
-    Left _ -> []
+    Left err -> Left ("allTypeDeclsForDoc: " <> err)
     Right tables ->
-      M.toList (foldl insertOwner M.empty (M.toList tables))
+      allTypeDeclsForDocInTables doc tables
+
+allTypeDeclsForDocInTables :: Doctrine -> CtorTables -> Either Text [(ObjRef, [TypeParamSig])]
+allTypeDeclsForDocInTables doc tables = do
+  merged <- foldM insertOwner M.empty (M.toList tables)
+  Right (M.toList merged)
   where
     insertOwner acc (ownerMode, table) =
       let classifierMode = modeClassifierMode (dModes doc) ownerMode
-      in foldl (insertCtor classifierMode) acc (M.toList table)
+      in foldM (insertCtor classifierMode) acc (M.toList table)
 
     insertCtor classifierMode acc (ctorName, sig) =
       let ref = ObjRef classifierMode ctorName
-      in M.insertWith keepExisting ref sig acc
-
-    keepExisting new old
-      | new == old = old
-      | otherwise = old
+      in case M.lookup ref acc of
+          Nothing -> Right (M.insert ref sig acc)
+          Just sig0
+            | sig0 == sig -> Right acc
+            | otherwise -> Left "allTypeDeclsForDoc: ambiguous constructor signature across owner modes"
 
 lookupCtorSigByRef :: Doctrine -> ObjRef -> Either Text [TypeParamSig]
 lookupCtorSigByRef doc ref = do
@@ -448,7 +455,8 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
   attrMap <- mergeDisjoint "attrsort" attrMaps
   typeMaps <- mapM (uncurry liftCompletedTypeMap) implMorphs
   typeMap <- mergeDisjoint "type" typeMaps
-  genMap <- mergeDisjoint "generator" [liftGenMap p (PolyMorph.morGenMap mor) | (p, mor) <- implMorphs]
+  genMaps <- mapM (uncurry liftCompletedGenMap) implMorphs
+  genMap <- mergeDisjoint "generator" genMaps
   pure
     PolyMorph.Morphism
       { PolyMorph.morName = rdaName raw <> ".__impl_iface"
@@ -503,6 +511,9 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     liftCompletedTypeMap p mor = do
       completed <- completeTypeMap mor
       pure (liftTypeMap p completed)
+    liftCompletedGenMap p mor = do
+      completed <- completeGenMap mor
+      pure (liftGenMap p completed)
     liftGenMap p mp =
       M.fromList
         [ (prefixGen p srcKey, img)
@@ -523,25 +534,63 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
                 else Left ("apply: morphism " <> PolyMorph.morName mor <> " missing attrsort mapping")
 
     completeTypeMap mor = do
-      tt <- doctrineTypeTheory (PolyMorph.morTgt mor)
-      foldM (addType tt) M.empty (allTypeDeclsForDoc (PolyMorph.morSrc mor))
-      where
-        explicit = PolyMorph.morTypeMap mor
-        addType tt mp (srcRef, sig) =
-          case M.lookup srcRef explicit of
-            Just tmpl -> Right (M.insert srcRef tmpl mp)
-            Nothing -> do
-              tmpl <- identityTemplate tt mor srcRef sig
-              Right (M.insert srcRef tmpl mp)
+      tgtCtorTables <- deriveCtorTables (PolyMorph.morTgt mor)
+      tt <- doctrineTypeTheoryFromTables (PolyMorph.morTgt mor) tgtCtorTables
+      srcCtorTables <- deriveCtorTables (PolyMorph.morSrc mor)
+      ctors <- allTypeDeclsForDocInTables (PolyMorph.morSrc mor) srcCtorTables
+      let explicit = PolyMorph.morTypeMap mor
+      let addType mp (srcRef, sig) =
+            case M.lookup srcRef explicit of
+              Just tmpl -> Right (M.insert srcRef tmpl mp)
+              Nothing -> do
+                tmpl <- identityTemplate tt tgtCtorTables mor srcRef sig
+                Right (M.insert srcRef tmpl mp)
+      foldM addType M.empty ctors
 
-    identityTemplate tt mor srcRef sig = do
+    completeGenMap mor =
+      foldM addCompFallback explicit compSupportKeys
+      where
+        srcDoc = PolyMorph.morSrc mor
+        explicit = PolyMorph.morGenMap mor
+        compSupportKeys =
+          [ (mode, genName)
+          | (mode, classDecl) <- M.toList (mtClassifiedBy (dModes srcDoc))
+          , Just comp <- [cdComp classDecl]
+          , genName <- [compCtxExt comp, compVar comp, compReindex comp]
+          , hasSourceGen mode genName
+          ]
+        hasSourceGen mode genName =
+          case M.lookup mode (dGens srcDoc) of
+            Nothing -> False
+            Just table -> M.member genName table
+        addCompFallback mp srcKey@(srcMode, srcGenName) =
+          case M.lookup srcKey mp of
+            Just _ -> Right mp
+            Nothing -> do
+              tgtMode <- PolyMorph.applyMorphismMode mor srcMode
+              tgtGen <-
+                case M.lookup tgtMode (dGens (PolyMorph.morTgt mor)) >>= M.lookup srcGenName of
+                  Nothing ->
+                    Left
+                      ( "apply: morphism "
+                          <> PolyMorph.morName mor
+                          <> " missing generator mapping for comprehension support "
+                          <> renderMode srcMode
+                          <> "."
+                          <> renderGen srcGenName
+                      )
+                  Just gd -> Right gd
+              diag <- genDWithAttrs tgtMode (gdPlainDom tgtGen) (gdCod tgtGen) (gdName tgtGen) M.empty
+              Right (M.insert srcKey (PolyMorph.GenImage diag M.empty) mp)
+
+    identityTemplate tt tgtCtorTables mor srcRef sig = do
       tgtMode <- PolyMorph.applyMorphismMode mor (orMode srcRef)
       let tgtRef = srcRef { orMode = tgtMode }
-      params <- mapM (mkParam mor) (zip [0 :: Int ..] sig)
+      params <- mapM (mkParam tgtCtorTables mor) (zip [0 :: Int ..] sig)
       args <- mapM (paramArg tt) (zip sig params)
       pure (PolyMorph.TypeTemplate params (mkCon tgtRef args))
 
-    mkParam mor (i, param) =
+    mkParam tgtCtorTables mor (i, param) =
       case param of
         TPS_Ty srcMode -> do
           tgtMode <- PolyMorph.applyMorphismMode mor srcMode
@@ -566,7 +615,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
                     <> " classifiedBy ... via ...;` with a declared universe"
                 )
         TPS_Tm srcSort -> do
-          tgtSort <- PolyMorph.applyMorphismTy mor srcSort
+          tgtSort <- PolyMorph.applyMorphismTyWithTables tgtCtorTables mor srcSort
           Right (PolyMorph.TPTm TmVar { tmvName = "t" <> T.pack (show i), tmvSort = tgtSort, tmvScope = 0, tmvOwnerMode = Nothing })
       where
         renderMode (ModeName n) = n
@@ -584,15 +633,17 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     validateApplyCoverage paramName mor = do
       let srcDoc = PolyMorph.morSrc mor
       let tgtDoc = PolyMorph.morTgt mor
+      srcCtorTables <- deriveCtorTables srcDoc
+      srcTypes <- allTypeDeclsForDocInTables srcDoc srcCtorTables
       let typeIssues =
             [ (srcRef, issue)
-            | (srcRef, srcSig) <- allTypeDeclsForDoc srcDoc
+            | (srcRef, srcSig) <- srcTypes
             , Just issue <- [typeMappingIssue srcRef srcSig tgtDoc mor]
             ]
       let missingTypes = [ srcRef | (srcRef, isMissing) <- typeIssues, isMissing ]
       let incompatibleTypes = [ srcRef | (srcRef, isMissing) <- typeIssues, not isMissing ]
       let allBadTypes = missingTypes <> incompatibleTypes
-      let missingGens = [ srcKey | srcKey <- allGenKeys srcDoc, M.notMember srcKey (PolyMorph.morGenMap mor) ]
+      let missingGens = [ srcKey | srcKey <- allGenKeys srcDoc srcCtorTables, M.notMember srcKey (PolyMorph.morGenMap mor) ]
       let missingAttrSorts = [ srcSort | srcSort <- M.keys (dAttrSorts srcDoc), needsAttrMapping srcSort tgtDoc mor ]
       if null allBadTypes && null missingGens && null missingAttrSorts
         then Right ()
@@ -632,12 +683,20 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
         Just _ -> False
         Nothing -> M.notMember srcSort (dAttrSorts tgtDoc)
 
-    allGenKeys doc =
+    allGenKeys doc ctorTables =
       [ (mode, gdName genDecl)
       | (mode, table) <- M.toList (dGens doc)
       , genDecl <- M.elems table
-      , not (isTypeDeclGenName doc mode (gdName genDecl))
+      , not (isComprehensionSupport doc mode (gdName genDecl))
+      , not (isTypeDeclGenNameInTables doc ctorTables mode (genToObjName (gdName genDecl)))
       ]
+    isComprehensionSupport doc mode genName =
+      case M.lookup mode (mtClassifiedBy (dModes doc)) >>= cdComp of
+        Nothing -> False
+        Just comp ->
+          genName == compCtxExt comp
+            || genName == compVar comp
+            || genName == compReindex comp
 
     renderMissing label vals =
       label <> "=" <> renderList vals
@@ -646,6 +705,9 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     renderList vals = "[" <> T.intercalate ", " vals <> "]"
 
     renderModeName (ModeName n) = n
+    renderMode (ModeName n) = n
+    genToObjName (GenName n) = ObjName n
+    renderGen (GenName n) = n
     renderTypeRef ref = renderModeName (orMode ref) <> "." <> renderTypeName (orName ref)
     renderAttrSort (AttrSort s) = s
     renderGenKey (mode, GenName genName) = renderModeName mode <> "." <> genName
@@ -698,7 +760,52 @@ validateFunctorSchema schema = do
 
 namespaceDoctrineWithParam :: Text -> Doctrine -> Either Text Doctrine
 namespaceDoctrineWithParam param doc = do
-  modeTheory' <- renameModeTheory modeRenMap modRenMap typeRenMap (dModes doc)
+  ctorDecls <- allTypeDeclsForDoc doc
+  let prefix t = param <> "::" <> t
+      renameMode (ModeName t) = ModeName (prefix t)
+      renameMod (ModName t) = ModName (prefix t)
+      renameSort (AttrSort t) = AttrSort (prefix t)
+      renameTypeName (ObjName t) = ObjName (prefix t)
+      renameTypeRef ref =
+        ObjRef
+          { orMode = renameMode (orMode ref)
+          , orName = renameTypeName (orName ref)
+          }
+      renameGenName (GenName t) = GenName (prefix t)
+      modeRenMap = M.fromList [ (m, renameMode m) | m <- M.keys (mtModes (dModes doc)) ]
+      modRenMap = M.fromList [ (m, renameMod m) | m <- M.keys (mtDecls (dModes doc)) ]
+      sortRenMap = M.fromList [ (s, renameSort s) | s <- M.keys (dAttrSorts doc) ]
+      typeRenMap =
+        M.fromList
+          [ (ref, renameTypeRef ref)
+          | (ref, _) <- ctorDecls
+          ]
+      genRenMap =
+        M.fromList
+          [ ((mode, gdName gd), renameGenName (gdName gd))
+          | (mode, table) <- M.toList (dGens doc)
+          , gd <- M.elems table
+          ]
+      renameGenTables tables =
+        foldM addGen M.empty
+          [ (mode, gen)
+          | (mode, table) <- M.toList tables
+          , gen <- M.elems table
+          ]
+        where
+          addGen acc (mode, gen) = do
+            gen' <- renameGenDecl modeRenMap modRenMap typeRenMap sortRenMap genRenMap gen
+            let mode' = M.findWithDefault mode mode modeRenMap
+            let key' = gdName gen'
+            let table0 = M.findWithDefault M.empty mode' acc
+            case M.lookup key' table0 of
+              Nothing ->
+                let table' = M.insert key' gen' table0
+                in Right (M.insert mode' table' acc)
+              Just existing
+                | existing == gen' -> Right acc
+                | otherwise -> Left "doctrine_functor: namespaced generator collision"
+  modeTheory' <- renameModeTheory modeRenMap modRenMap typeRenMap genRenMap (dModes doc)
   gens' <- renameGenTables (dGens doc)
   let attrSorts' =
         M.fromList
@@ -718,52 +825,6 @@ namespaceDoctrineWithParam param doc = do
       , dAttrSorts = attrSorts'
       , dGens = gens'
       }
-  where
-    prefix t = param <> "::" <> t
-    modeRenMap = M.fromList [ (m, renameMode m) | m <- M.keys (mtModes (dModes doc)) ]
-    modRenMap = M.fromList [ (m, renameMod m) | m <- M.keys (mtDecls (dModes doc)) ]
-    sortRenMap = M.fromList [ (s, renameSort s) | s <- M.keys (dAttrSorts doc) ]
-    typeRenMap =
-      M.fromList
-        [ (ref, renameTypeRef ref)
-        | (ref, _) <- allTypeDeclsForDoc doc
-        ]
-    genRenMap =
-      M.fromList
-        [ ((mode, gdName gd), renameGenName (gdName gd))
-        | (mode, table) <- M.toList (dGens doc)
-        , gd <- M.elems table
-        ]
-    renameMode (ModeName t) = ModeName (prefix t)
-    renameMod (ModName t) = ModName (prefix t)
-    renameSort (AttrSort t) = AttrSort (prefix t)
-    renameTypeName (ObjName t) = ObjName (prefix t)
-    renameTypeRef ref =
-      ObjRef
-        { orMode = renameMode (orMode ref)
-        , orName = renameTypeName (orName ref)
-        }
-    renameGenName (GenName t) = GenName (prefix t)
-
-    renameGenTables tables =
-      foldM addGen M.empty
-        [ (mode, gen)
-        | (mode, table) <- M.toList tables
-        , gen <- M.elems table
-        ]
-      where
-        addGen acc (mode, gen) = do
-          gen' <- renameGenDecl modeRenMap modRenMap typeRenMap sortRenMap genRenMap gen
-          let mode' = M.findWithDefault mode mode modeRenMap
-          let key' = gdName gen'
-          let table0 = M.findWithDefault M.empty mode' acc
-          case M.lookup key' table0 of
-            Nothing ->
-              let table' = M.insert key' gen' table0
-              in Right (M.insert mode' table' acc)
-            Just existing
-              | existing == gen' -> Right acc
-              | otherwise -> Left "doctrine_functor: namespaced generator collision"
 
 mergeIfaceDoctrines :: Text -> [(FunctorParamDef, Doctrine)] -> Either Text Doctrine
 mergeIfaceDoctrines name params =
@@ -890,9 +951,10 @@ renameModeTheory
   :: Map ModeName ModeName
   -> Map ModName ModName
   -> Map ObjRef ObjRef
+  -> Map (ModeName, GenName) GenName
   -> ModeTheory
   -> Either Text ModeTheory
-renameModeTheory modeRen modRen typeRen mt = do
+renameModeTheory modeRen modRen typeRen genRen mt = do
   classifiedBy <- foldM addClassification M.empty (M.toList (mtClassifiedBy mt))
   Right
     ModeTheory
@@ -934,17 +996,28 @@ renameModeTheory modeRen modRen typeRen mt = do
         }
     addClassification acc (mode, decl) = do
       universe' <- renameObjExpr modeRen modRen typeRen (cdUniverse decl)
+      comp' <- traverse (renameComp mode) (cdComp decl)
       let mode' = renMode mode
       let decl' =
             decl
               { cdClassifier = renMode (cdClassifier decl)
               , cdUniverse = universe'
+              , cdComp = comp'
               }
       case M.lookup mode' acc of
         Nothing -> Right (M.insert mode' decl' acc)
         Just existing
           | existing == decl' -> Right acc
           | otherwise -> Left "namespace: classifiedBy collision after renaming"
+
+    renameComp mode comp =
+      let renameGen g = M.findWithDefault g (mode, g) genRen
+       in Right
+            comp
+              { compCtxExt = renameGen (compCtxExt comp)
+              , compVar = renameGen (compVar comp)
+              , compReindex = renameGen (compReindex comp)
+              }
 
 renameGenDecl
   :: Map ModeName ModeName
@@ -975,7 +1048,7 @@ renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
       , gdAttrs = attrs'
       }
   where
-    rebuildParams [] tyVars tmVars = Right (orderedParams tyVars tmVars)
+    rebuildParams [] tyVars tmVars = Right (map GP_Ty tyVars <> map GP_Tm tmVars)
     rebuildParams params tyVars tmVars = mapM rebuildOne params
       where
         rebuildOne gp =
@@ -990,22 +1063,7 @@ renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
         [v] -> Right v
         _ -> Left ("namespace: failed to rebuild " <> label <> " parameter metadata")
 
-    sameVarId a b = tmvName a == tmvName b && tmvScope a == tmvScope b
-
-    orderedParams tyVars tmVars =
-      map snd (L.sortBy (comparing fst) tagged)
-      where
-        tagged =
-          [ ((tyPos v, 0 :: Int, i), GP_Ty v)
-          | (i, v) <- zip [0 :: Int ..] tyVars
-          ]
-            <> [ ((tmPos v, 1 :: Int, i), GP_Tm v)
-               | (i, v) <- zip [0 :: Int ..] tmVars
-               ]
-        tyPos v =
-          if tmvScope v >= 0 then tmvScope v else 0
-        tmPos v =
-          if tmvScope v < 0 then negate (tmvScope v) - 1 else tmvScope v
+    sameVarId a b = tmvName a == tmvName b
 
     renTyVar tv = do
       sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tv)
@@ -1179,6 +1237,7 @@ buildFoliatedDoctrine name baseDoc mode = do
           { cdClassifier = mode
           , cdUniverse = universeTy
           , cdTag = Nothing
+          , cdComp = Nothing
           }
       mt = mt0 { mtClassifiedBy = M.singleton mode classDecl }
   let strSort = AttrSort "Str"
@@ -1432,7 +1491,8 @@ buildPolyFromBase :: SearchBudget -> Text -> Text -> ModuleEnv -> Doctrine -> Ei
 buildPolyFromBase budget baseName newName env newDoc = do
   baseDoc <- lookupDoctrine env baseName
   ensureAbsent "morphism" morName (meMorphisms env)
-  genMap <- fmap M.fromList (mapM genImage (allGens baseDoc))
+  ctorTables <- deriveCtorTables baseDoc
+  genMap <- fmap M.fromList (mapM genImage (allGens baseDoc ctorTables))
   let mor =
         PolyMorph.Morphism
           { PolyMorph.morName = morName
@@ -1467,11 +1527,11 @@ buildPolyFromBase budget baseName newName env newDoc = do
   where
     morName = newName <> ".fromBase"
 
-    allGens doc =
+    allGens doc ctorTables =
       [ (mode, gen)
       | (mode, table) <- M.toList (dGens doc)
       , gen <- M.elems table
-      , not (isTypeDeclGenName doc mode (gdName gen))
+      , not (isTypeDeclGenNameInTables doc ctorTables mode (genToObjName (gdName gen)))
       ]
 
     genImage (mode, gen) = do
@@ -1502,3 +1562,5 @@ buildPolyFromBase budget baseName newName env newDoc = do
 
     identityAttrSortMap doc =
       M.fromList [(s, s) | s <- M.keys (dAttrSorts doc)]
+
+    genToObjName (GenName n) = ObjName n

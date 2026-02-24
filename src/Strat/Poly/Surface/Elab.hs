@@ -16,12 +16,15 @@ import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Poly.Attr
 import Strat.Poly.Doctrine
   ( Doctrine(..)
+  , CtorTables
   , GenDecl(..)
   , InputShape(..)
   , BinderSig(..)
-  , lookupCtorSigForOwner
+  , deriveCtorTables
+  , lookupCtorSigForOwnerInTables
   , gdPlainDom
   , doctrineTypeTheory
+  , doctrineTypeTheoryFromTables
   )
 import Strat.Poly.DSL.AST (RawPolyObjExpr(..), RawTypeRef(..), RawModExpr(..))
 import Strat.Poly.Diagram (Diagram(..), idD, genD, unionDiagram, diagramDom, diagramCod, freeObjVarsDiagram, freeTmVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
@@ -49,7 +52,11 @@ import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurface
 import Strat.Poly.Surface.Spec
 import Strat.Poly.Obj (Obj(Obj, objOwnerMode, objCode), ObjName(..), ObjVar, ovName, ovMode, TmVar, Context, CodeArg(..), CodeTerm(..), objMode, freeObjVarsObj, freeTmVarsObj)
 import Strat.Poly.ObjClassifier (modeUniverseObj)
-import Strat.Poly.ObjResolve (resolveTypeRef, resolveTypeRefMaybe)
+import Strat.Poly.ObjClassifier (modeClassifierMode)
+import Strat.Poly.ObjResolve
+  ( resolveTypeRefInClassifierInTables
+  , resolveTypeRefInClassifierMaybeInTables
+  )
 import qualified Strat.Poly.Obj as Ty
 import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..), modeOnlyTypeTheory)
 import qualified Strat.Poly.UnifyObj as U
@@ -87,10 +94,11 @@ elabSurfaceExpr menv docS surf src = do
   let mode = psMode surf
   let mt = dModes docS
   let spec = psSpec surf
+  ctorTables <- deriveCtorTables docS
   node <- parseSurfaceExpr spec src
   ops <- requireStructuralOps menv docS mode
   env0 <- initEnv
-  surfDiag <- evalFresh (elabNode menv docS mt mode ops env0 node)
+  surfDiag <- evalFresh (elabNode menv docS ctorTables mt mode ops env0 node)
   if M.null (sdUses surfDiag)
     then pure ()
     else Left "surface: unresolved variables"
@@ -242,8 +250,8 @@ mkTypeMetaVar doc ownerMode name = do
   where
     renderMode (ModeName n) = n
 
-elabSurfaceObjExpr :: Doctrine -> ModeName -> RawPolyObjExpr -> Either Text Obj
-elabSurfaceObjExpr doc mode expr =
+elabSurfaceObjExprWithTables :: Doctrine -> CtorTables -> ModeName -> RawPolyObjExpr -> Either Text Obj
+elabSurfaceObjExprWithTables doc ctorTables mode expr =
   case expr of
     RPTVar name -> do
       let rawRef = RawTypeRef { rtrMode = Nothing, rtrName = name }
@@ -259,7 +267,7 @@ elabSurfaceObjExpr doc mode expr =
       if meTgt me /= mode
         then Left "surface: modality application target/object mode mismatch"
         else Right ()
-      inner <- elabSurfaceObjExpr doc (meSrc me) innerRaw
+      inner <- elabSurfaceObjExprWithTables doc ctorTables (meSrc me) innerRaw
       if objOwnerMode inner /= meSrc me
         then Left "surface: modality application source/argument mode mismatch"
         else
@@ -276,7 +284,7 @@ elabSurfaceObjExpr doc mode expr =
           if meTgt me /= mode
             then Left "surface: modality application target/object mode mismatch"
             else Right ()
-          inner <- elabSurfaceObjExpr doc (meSrc me) innerRaw
+          inner <- elabSurfaceObjExprWithTables doc ctorTables (meSrc me) innerRaw
           if objOwnerMode inner /= meSrc me
             then Left "surface: modality application source/argument mode mismatch"
             else
@@ -287,8 +295,8 @@ elabSurfaceObjExpr doc mode expr =
                   , objCode = CTMod me (objCode inner)
                   }
         Nothing -> do
-          ref <- resolveTypeRef doc mode rawRef
-          params <- lookupCtorSigForOwner doc mode ref
+          ref <- resolveTypeRefInClassifierInTables doc ctorTables mode classifierMode rawRef
+          params <- lookupCtorSigForOwnerInTables doc ctorTables mode ref
           if length params /= length args
             then Left "surface: type constructor arity mismatch"
             else do
@@ -296,10 +304,12 @@ elabSurfaceObjExpr doc mode expr =
               args' <- mapM (elabOneArg ctorName) (zip3 [1 :: Int ..] params args)
               Right Obj { objOwnerMode = mode, objCode = CTCon ref args' }
   where
+    classifierMode = modeClassifierMode (dModes doc) mode
+
     elabOneArg ctorName (argIx, param, rawArg) =
       case param of
         TPS_Ty m -> do
-          argTy <- elabSurfaceObjExpr doc m rawArg
+          argTy <- elabSurfaceObjExprWithTables doc ctorTables m rawArg
           if objOwnerMode argTy == m
             then Right (CAObj argTy)
             else Left "surface: type constructor argument mode mismatch"
@@ -314,11 +324,11 @@ elabSurfaceObjExpr doc mode expr =
 
     resolveNullaryCtor rawRef =
       do
-        mRef <- resolveTypeRefMaybe doc mode rawRef
+        mRef <- resolveTypeRefInClassifierMaybeInTables doc ctorTables mode classifierMode rawRef
         case mRef of
           Nothing -> Right Nothing
           Just ref -> do
-            params <- lookupCtorSigForOwner doc mode ref
+            params <- lookupCtorSigForOwnerInTables doc ctorTables mode ref
             if null params
               then Right (Just ref)
               else
@@ -351,9 +361,11 @@ elabSurfaceObjExpr doc mode expr =
 
     hasQualifiedType modeTok tyTok =
       case
-        resolveTypeRefMaybe
+        resolveTypeRefInClassifierMaybeInTables
           doc
+          ctorTables
           mode
+          classifierMode
           RawTypeRef
             { rtrMode = Just modeTok
             , rtrName = tyTok
@@ -548,14 +560,15 @@ resolveImplOp targetMode matchesShape implMorphs =
 instantiateImplUnaryGen :: Doctrine -> PolyMorph.Morphism -> GenDecl -> Obj -> Either Text Diagram
 instantiateImplUnaryGen iface mor g ty = do
   ifaceTT <- doctrineTypeTheory iface
-  tgtTT <- doctrineTypeTheory (PolyMorph.morTgt mor)
+  tgtCtorTables <- deriveCtorTables (PolyMorph.morTgt mor)
+  tgtTT <- doctrineTypeTheoryFromTables (PolyMorph.morTgt mor) tgtCtorTables
   srcVar <-
     case gdTyVars g of
       [v] -> Right v
       _ -> Left "surface: structural schema generator must be unary polymorphic"
   dSchema <- instantiateUnaryGen ifaceTT g (Ty.OVar srcVar)
   dMapped <- PolyMorph.applyMorphismDiagram mor dSchema
-  tgtSort <- PolyMorph.applyMorphismTy mor (Ty.tmvSort srcVar)
+  tgtSort <- PolyMorph.applyMorphismTyWithTables tgtCtorTables mor (Ty.tmvSort srcVar)
   let srcOwner = maybe (Ty.objOwnerMode (Ty.tmvSort srcVar)) id (Ty.tmvOwnerMode srcVar)
   tgtOwner <- PolyMorph.applyMorphismMode mor srcOwner
   let tgtVar = srcVar { Ty.tmvSort = tgtSort, Ty.tmvOwnerMode = Just tgtOwner }
@@ -585,10 +598,10 @@ data RuntimeBinder
   | RBValue Text Int
   deriving (Eq, Show)
 
-elabNode :: ModuleEnv -> Doctrine -> ModeTheory -> ModeName -> StructuralOps -> ElabEnv -> SurfaceNode -> Fresh SurfDiag
-elabNode menv doc mt mode ops env node = do
-  typeSubst <- liftEither (buildTypeSubst doc mode env (snParams node))
-  (mBinder, mBodyHole, bodyEnv) <- prepareBinder doc mode mt env (snParams node) (snBinder node)
+elabNode :: ModuleEnv -> Doctrine -> CtorTables -> ModeTheory -> ModeName -> StructuralOps -> ElabEnv -> SurfaceNode -> Fresh SurfDiag
+elabNode menv doc ctorTables mt mode ops env node = do
+  typeSubst <- liftEither (buildTypeSubst doc ctorTables mode env (snParams node))
+  (mBinder, mBodyHole, bodyEnv) <- prepareBinder doc ctorTables mode mt env (snParams node) (snBinder node)
   let children = snChildren node
   childDiags <-
     mapM
@@ -597,27 +610,28 @@ elabNode menv doc mt mode ops env node = do
               case mBodyHole of
                 Just bodyIdx | idx == bodyIdx -> bodyEnv
                 _ -> env
-         in elabNode menv doc mt mode ops childEnv child)
+         in elabNode menv doc ctorTables mt mode ops childEnv child)
       (zip [1 ..] children)
-  surf <- evalTemplate menv doc mt mode ops env (snParams node) typeSubst childDiags (snTemplate node)
+  surf <- evalTemplate menv doc ctorTables mt mode ops env (snParams node) typeSubst childDiags (snTemplate node)
   applyBinder mt doc mode ops mBinder surf
 
 prepareBinder
   :: Doctrine
+  -> CtorTables
   -> ModeName
   -> ModeTheory
   -> ElabEnv
   -> M.Map Text SurfaceParam
   -> Maybe BinderDecl
   -> Fresh (Maybe RuntimeBinder, Maybe Int, ElabEnv)
-prepareBinder _doc _mode _mt env _params Nothing =
+prepareBinder _doc _ctorTables _mode _mt env _params Nothing =
   pure (Nothing, Nothing, env)
-prepareBinder doc mode mt env params (Just decl) =
+prepareBinder doc ctorTables mode mt env params (Just decl) =
   case decl of
     BindIn varCap typeCap bodyHole -> do
       varName <- liftEither (requireIdentParam params varCap)
       tyRaw <- liftEither (requireTypeParam params typeCap)
-      tyAnn <- liftEither (elabSurfaceObjExpr doc mode tyRaw)
+      tyAnn <- liftEither (elabSurfaceObjExprWithTables doc ctorTables mode tyRaw)
       if objMode tyAnn /= mode
         then liftEither (Left "surface: binder type must be in surface mode")
         else pure ()
@@ -678,6 +692,7 @@ ensureDirectGenCallAttrs gen =
 evalTemplate
   :: ModuleEnv
   -> Doctrine
+  -> CtorTables
   -> ModeTheory
   -> ModeName
   -> StructuralOps
@@ -687,7 +702,7 @@ evalTemplate
   -> [SurfDiag]
   -> TemplateExpr
   -> Fresh SurfDiag
-evalTemplate menv doc mt mode ops env paramMap subst childList templ =
+evalTemplate menv doc ctorTables mt mode ops env paramMap subst childList templ =
   case templ of
     THole n ->
       case drop (n - 1) childList of
@@ -712,7 +727,7 @@ evalTemplate menv doc mt mode ops env paramMap subst childList templ =
                 then liftEither (Left ("surface: term @" <> name <> " mode mismatch"))
                 else pure (emptySurf (tdDiagram td))
     TId ctx -> do
-      ctx'0 <- liftEither (mapM (elabSurfaceObjExpr doc mode) ctx)
+      ctx'0 <- liftEither (mapM (elabSurfaceObjExprWithTables doc ctorTables mode) ctx)
       ctx' <- liftEither (mapM (applySubstObj mt subst) ctx'0)
       pure (emptySurf (idD mode ctx'))
     TGen ref mArgs mAttrArgs mBinderArgs -> do
@@ -728,7 +743,7 @@ evalTemplate menv doc mt mode ops env paramMap subst childList templ =
         case mArgs of
           Nothing -> pure Nothing
           Just args -> do
-            tys <- liftEither (mapM (elabSurfaceObjExpr doc mode) args)
+            tys <- liftEither (mapM (elabSurfaceObjExprWithTables doc ctorTables mode) args)
             pure (Just tys)
       args' <-
         liftEither
@@ -737,27 +752,28 @@ evalTemplate menv doc mt mode ops env paramMap subst childList templ =
               Just args -> Just <$> mapM (applySubstObj mt subst) args
           )
       attrs <- liftEither (elabTemplateGenAttrs doc gen paramMap mAttrArgs)
-      bargs <- evalTemplateBinderArgs menv doc mt mode ops env paramMap subst childList mBinderArgs
+      bargs <- evalTemplateBinderArgs menv doc ctorTables mt mode ops env paramMap subst childList mBinderArgs
       diag <- genDFromDecl mt mode env gen args' attrs bargs
       pure (emptySurf diag)
     TBox name inner -> do
-      innerDiag <- evalTemplate menv doc mt mode ops env paramMap subst childList inner
+      innerDiag <- evalTemplate menv doc ctorTables mt mode ops env paramMap subst childList inner
       liftEither (boxSurf mode name innerDiag)
     TLoop inner -> do
-      innerDiag <- evalTemplate menv doc mt mode ops env paramMap subst childList inner
+      innerDiag <- evalTemplate menv doc ctorTables mt mode ops env paramMap subst childList inner
       liftEither (loopSurf innerDiag)
     TComp a b -> do
-      d1 <- evalTemplate menv doc mt mode ops env paramMap subst childList a
-      d2 <- evalTemplate menv doc mt mode ops env paramMap subst childList b
+      d1 <- evalTemplate menv doc ctorTables mt mode ops env paramMap subst childList a
+      d2 <- evalTemplate menv doc ctorTables mt mode ops env paramMap subst childList b
       liftEither (compSurf mt d1 d2)
     TTensor a b -> do
-      d1 <- evalTemplate menv doc mt mode ops env paramMap subst childList a
-      d2 <- evalTemplate menv doc mt mode ops env paramMap subst childList b
+      d1 <- evalTemplate menv doc ctorTables mt mode ops env paramMap subst childList a
+      d2 <- evalTemplate menv doc ctorTables mt mode ops env paramMap subst childList b
       liftEither (tensorSurf d1 d2)
 
 evalTemplateBinderArgs
   :: ModuleEnv
   -> Doctrine
+  -> CtorTables
   -> ModeTheory
   -> ModeName
   -> StructuralOps
@@ -767,24 +783,24 @@ evalTemplateBinderArgs
   -> [SurfDiag]
   -> Maybe [TemplateBinderArg]
   -> Fresh [BinderArg]
-evalTemplateBinderArgs _menv _doc _mt _mode _ops _env _paramMap _subst _children Nothing =
+evalTemplateBinderArgs _menv _doc _ctorTables _mt _mode _ops _env _paramMap _subst _children Nothing =
   pure []
-evalTemplateBinderArgs menv doc mt mode ops env paramMap subst children (Just args) =
+evalTemplateBinderArgs menv doc ctorTables mt mode ops env paramMap subst children (Just args) =
   mapM evalOne args
   where
     evalOne arg =
       case arg of
         TBAMeta name -> pure (BAMeta (BinderMetaVar name))
         TBAExpr expr -> do
-          sd <- evalTemplate menv doc mt mode ops env paramMap subst children expr
+          sd <- evalTemplate menv doc ctorTables mt mode ops env paramMap subst children expr
           if M.null (sdUses sd)
             then do
               liftEither (validateDiagram (sdDiag sd))
               pure (BAConcrete (sdDiag sd))
             else liftEither (Left "surface: binder argument uses unresolved surface variables")
 
-buildTypeSubst :: Doctrine -> ModeName -> ElabEnv -> M.Map Text SurfaceParam -> Either Text Subst
-buildTypeSubst doc mode env paramMap = do
+buildTypeSubst :: Doctrine -> CtorTables -> ModeName -> ElabEnv -> M.Map Text SurfaceParam -> Either Text Subst
+buildTypeSubst doc ctorTables mode env paramMap = do
   pairs <- mapM toPair (M.toList paramMap)
   let localTy = M.fromList (concat pairs)
       envSub = eeTypeSubst env
@@ -794,7 +810,7 @@ buildTypeSubst doc mode env paramMap = do
     toPair (name, param) =
       case param of
         SPType rawTy -> do
-          ty <- elabSurfaceObjExpr doc mode rawTy
+          ty <- elabSurfaceObjExprWithTables doc ctorTables mode rawTy
           var <- mkTypeMetaVar doc mode name
           pure [(var, ty)]
         _ -> pure []

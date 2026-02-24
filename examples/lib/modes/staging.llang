@@ -1,7 +1,15 @@
 doctrine Staging where {
   mode RT classifiedBy RT via RT.U_RT;
+  gen comp_ctx_ext(a@RT) : [a] -> [a] @RT;
+  gen comp_var(a@RT) : [a] -> [a] @RT;
+  gen comp_reindex(a@RT) : [a] -> [a] @RT;
+  comprehension RT where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_RT : [] -> [RT.U_RT] @RT;
   mode CT classifiedBy CT via CT.U_CT;
+  gen comp_ctx_ext(a@CT) : [a] -> [a] @CT;
+  gen comp_var(a@CT) : [a] -> [a] @CT;
+  gen comp_reindex(a@CT) : [a] -> [a] @CT;
+  comprehension CT where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_CT : [] -> [CT.U_CT] @CT;
   modality quote : RT -> CT;
   modality splice : CT -> RT;

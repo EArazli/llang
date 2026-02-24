@@ -2,8 +2,16 @@ import "./struct_caps.llang";
 
 doctrine DualDiscipline where {
   mode Lin classifiedBy Lin via Lin.U_Lin;
+  gen comp_ctx_ext(a@Lin) : [a] -> [a] @Lin;
+  gen comp_var(a@Lin) : [a] -> [a] @Lin;
+  gen comp_reindex(a@Lin) : [a] -> [a] @Lin;
+  comprehension Lin where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_Lin : [] -> [Lin.U_Lin] @Lin;
   mode Cart classifiedBy Cart via Cart.U_Cart;
+  gen comp_ctx_ext(a@Cart) : [a] -> [a] @Cart;
+  gen comp_var(a@Cart) : [a] -> [a] @Cart;
+  gen comp_reindex(a@Cart) : [a] -> [a] @Cart;
+  comprehension Cart where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_Cart : [] -> [Cart.U_Cart] @Cart;
   gen Num : [] -> [Lin.U_Lin] @Lin;
   gen Num : [] -> [Cart.U_Cart] @Cart;

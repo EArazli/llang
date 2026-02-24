@@ -45,6 +45,10 @@ buildBaseEnv = do
   let src = T.unlines
         [ "doctrine D where {"
         , "  mode M classifiedBy M via U_M;"
+        , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen comp_var(a@M) : [a] -> [a] @M;"
+        , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
         , "  gen U_M : [] -> [U_M] @M;"
         , "  gen A : [] -> [U_M] @M;"
         , "  gen f : [A] -> [A] @M;"

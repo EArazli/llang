@@ -33,8 +33,10 @@ data DefFragment = DefFragment
 
 data TypeTheory = TypeTheory
   { ttModes :: ModeTheory
+  , ttCtorTables :: M.Map ModeName (M.Map ObjName [TypeParamSig])
   , ttObjParams :: M.Map ObjRef [TypeParamSig]
   , ttDefFragments :: M.Map ModeName DefFragment
+  , ttStrictCtorLookup :: Bool
   } deriving (Eq, Show)
 
 data TypeParamSig
@@ -63,8 +65,10 @@ modeOnlyTypeTheory mt =
    in
   TypeTheory
     { ttModes = mt
+    , ttCtorTables = M.empty
     , ttObjParams = M.empty
     , ttDefFragments = fragments
+    , ttStrictCtorLookup = False
     }
 
 emptyDefFragment :: ModeName -> DefFragment

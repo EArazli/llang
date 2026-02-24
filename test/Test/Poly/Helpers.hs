@@ -12,7 +12,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Strat.Poly.Doctrine (Doctrine(..))
-import Strat.Poly.Doctrine (GenDecl(..), GenParam(..))
+import Strat.Poly.Doctrine (GenDecl(..), GenParam(..), InputShape(..))
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj (Obj, ObjName(..), ObjRef(..), TmVar(..), mkCon)
@@ -38,13 +38,30 @@ universeName (ModeName n) = ObjName ("U_" <> n)
 universeObj :: ModeName -> Obj
 universeObj mode = mkCon (ObjRef mode (universeName mode)) []
 
+compCtxExtName :: GenName
+compCtxExtName = GenName "comp_ctx_ext"
+
+compVarName :: GenName
+compVarName = GenName "comp_var"
+
+compReindexName :: GenName
+compReindexName = GenName "comp_reindex"
+
+compDecl :: CompDecl
+compDecl =
+  CompDecl
+    { compCtxExt = compCtxExtName
+    , compVar = compVarName
+    , compReindex = compReindexName
+    }
+
 selfClassifiedModes :: [ModeName] -> ModeTheory
 selfClassifiedModes modes =
   let mt = mkModes modes
    in mt
         { mtClassifiedBy =
             M.fromList
-              [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing })
+              [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing, cdComp = Just compDecl })
               | mode <- modes
               ]
         }
@@ -72,7 +89,7 @@ ctorDecl mode ctorName sig =
               TmVar
                 { tmvName = "a" <> T.pack (show pos)
                 , tmvSort = universeObj m
-                , tmvScope = pos
+                , tmvScope = 0
                 , tmvOwnerMode = Just m
                 }
       ]
@@ -83,7 +100,7 @@ ctorDecl mode ctorName sig =
               TmVar
                 { tmvName = "x" <> T.pack (show pos)
                 , tmvSort = sortTy
-                , tmvScope = negate (pos + 1)
+                , tmvScope = 0
                 , tmvOwnerMode = Just mode
                 }
       ]
@@ -109,12 +126,39 @@ addSelfClassifications modes mt =
               M.insertWith
                 (\_ old -> old)
                 mode
-                (ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing })
+                (ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing, cdComp = Just compDecl })
                 acc
           )
           (mtClassifiedBy mt)
           modes
     }
+
+compSupportGen :: ModeName -> GenName -> GenDecl
+compSupportGen mode name =
+  GenDecl
+    { gdName = name
+    , gdMode = mode
+    , gdTyVars = []
+    , gdTmVars = []
+    , gdParams = []
+    , gdDom = [InPort (universeObj mode)]
+    , gdCod = [universeObj mode]
+    , gdAttrs = []
+    }
+
+insertCompSupportGens
+  :: ModeName
+  -> M.Map ModeName (M.Map GenName GenDecl)
+  -> M.Map ModeName (M.Map GenName GenDecl)
+insertCompSupportGens mode gens0 =
+  let support =
+        M.fromList
+          [ (compCtxExtName, compSupportGen mode compCtxExtName)
+          , (compVarName, compSupportGen mode compVarName)
+          , (compReindexName, compSupportGen mode compReindexName)
+          ]
+      modeMap = M.findWithDefault M.empty mode gens0
+   in M.insert mode (M.union modeMap support) gens0
 
 insertCtorDecls
   :: ModeName
@@ -135,7 +179,11 @@ withSelfClassifiedCtors :: [(ModeName, [(ObjName, [TypeParamSig])])] -> Doctrine
 withSelfClassifiedCtors entries doc =
   doc
     { dModes = addSelfClassifications (map fst entries) (dModes doc)
-    , dGens = foldl (\acc (mode, sigs) -> insertCtorDecls mode sigs acc) (dGens doc) entries
+    , dGens =
+        foldl
+          (\acc (mode, sigs) -> insertCompSupportGens mode (insertCtorDecls mode sigs acc))
+          (dGens doc)
+          entries
     }
 
 identityModeMap :: Doctrine -> M.Map ModeName ModeName

@@ -9,8 +9,13 @@ module Strat.Poly.Morphism
   , applyMorphismMode
   , applyMorphismModExpr
   , applyMorphismTy
+  , applyMorphismTyWithTables
+  , applyMorphismTyWithCaches
   , applyMorphismBinderSig
+  , applyMorphismBinderSigWithTables
   , applyMorphismDiagram
+  , applyMorphismDiagramWithTables
+  , applyMorphismDiagramWithTheories
   , instantiateGenImageBinders
   , checkMorphismResultWithBudget
   , checkMorphismWithBudget
@@ -49,7 +54,18 @@ import Strat.Poly.Proof
   , renderSearchLimit
   , checkJoinProof
   )
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), ModEqn(..), composeMod, normalizeModExpr)
+import Strat.Poly.ModeTheory
+  ( ModeName(..)
+  , ModeTheory(..)
+  , ModName(..)
+  , ModDecl(..)
+  , ModExpr(..)
+  , ModEqn(..)
+  , ClassificationDecl(..)
+  , CompDecl(..)
+  , composeMod
+  , normalizeModExpr
+  )
 import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.Traversal (traverseDiagram)
 
@@ -123,15 +139,33 @@ mapAttrSort mor sortName =
     Nothing -> Left "morphism: missing attribute sort mapping"
     Just sortName' -> Right sortName'
 
-mapCodeMeta :: Morphism -> ModeName -> TmVar -> Either Text TmVar
-mapCodeMeta mor owner' v = do
-  sort' <- applyMorphismTy mor (tmvSort v)
-  pure v { tmvSort = sort', tmvOwnerMode = Just owner' }
-
-mapTypeRef :: Morphism -> ObjRef -> Either Text ObjRef
-mapTypeRef mor ref = do
-  mode' <- mapMode mor (orMode ref)
-  pure ref { orMode = mode' }
+mapTypeRef :: CtorTables -> Morphism -> ModeName -> ModeName -> ObjRef -> Either Text ObjRef
+mapTypeRef tgtCtorTables mor ownerSrc ownerTgt ref = do
+  classifierTgt <- mapMode mor (orMode ref)
+  let mapped = ref { orMode = classifierTgt }
+  case lookupCtorSigForOwnerInTables (morTgt mor) tgtCtorTables ownerTgt mapped of
+    Right _ ->
+      Right mapped
+    Left _ ->
+      case fallbackUniverseRef of
+        Just uRef -> Right uRef
+        Nothing -> Right mapped
+  where
+    fallbackUniverseRef =
+      case modeUniverseObj (dModes (morSrc mor)) ownerSrc of
+        Just srcUniverse ->
+          case objCode srcUniverse of
+            CTCon srcUniverseRef []
+              | srcUniverseRef == ref ->
+                  case modeUniverseObj (dModes (morTgt mor)) ownerTgt of
+                    Just tgtUniverse ->
+                      case objCode tgtUniverse of
+                        CTCon tgtUniverseRef [] -> Just tgtUniverseRef
+                        _ -> Nothing
+                    Nothing -> Nothing
+              | otherwise -> Nothing
+            _ -> Nothing
+        Nothing -> Nothing
 
 applyMorphismAttrTerm :: Morphism -> AttrTerm -> Either Text AttrTerm
 applyMorphismAttrTerm mor term =
@@ -143,41 +177,62 @@ applyMorphismAttrTerm mor term =
 
 applyMorphismTy :: Morphism -> Obj -> Either Text Obj
 applyMorphismTy mor ty = do
-  owner' <- mapMode mor (objOwnerMode ty)
-  case objCode ty of
-    CTMeta v -> do
-      v' <- mapCodeMeta mor owner' v
-      pure Obj { objOwnerMode = owner', objCode = CTMeta v' }
-    CTMod me innerCode -> do
-      inner' <- applyMorphismTy mor Obj { objOwnerMode = meSrc me, objCode = innerCode }
-      me' <- mapModExpr mor me
-      normalizeObjExpr
-        (dModes (morTgt mor))
-        Obj
-          { objOwnerMode = owner'
-          , objCode = CTMod me' (objCode inner')
-          }
-    CTCon ref args -> do
-      args' <- mapM mapArg args
-      case M.lookup ref (morTypeMap mor) of
-        Nothing -> do
-          ref' <- mapTypeRef mor ref
-          pure Obj { objOwnerMode = owner', objCode = CTCon ref' args' }
-        Just tmpl ->
-          instantiateTemplate tmpl args'
+  tgtCtorTables <- deriveCtorTables (morTgt mor)
+  applyMorphismTyWithTables tgtCtorTables mor ty
+
+applyMorphismTyWithTables :: CtorTables -> Morphism -> Obj -> Either Text Obj
+applyMorphismTyWithTables tgtCtorTables mor ty = do
+  srcTheory <- doctrineTypeTheory (morSrc mor)
+  tgtTheory <- doctrineTypeTheoryFromTables (morTgt mor) tgtCtorTables
+  applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor ty
+
+applyMorphismTyWithCaches
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> Morphism
+  -> Obj
+  -> Either Text Obj
+applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor ty = do
+  go ty
   where
+    go ty = do
+      let ownerSrc = objOwnerMode ty
+      owner' <- mapMode mor (objOwnerMode ty)
+      case objCode ty of
+        CTMeta v -> do
+          sort' <- go (tmvSort v)
+          let v' = v { tmvSort = sort', tmvOwnerMode = Just owner' }
+          pure Obj { objOwnerMode = owner', objCode = CTMeta v' }
+        CTMod me innerCode -> do
+          inner' <- go Obj { objOwnerMode = meSrc me, objCode = innerCode }
+          me' <- mapModExpr mor me
+          normalizeObjExpr
+            (dModes (morTgt mor))
+            Obj
+              { objOwnerMode = owner'
+              , objCode = CTMod me' (objCode inner')
+              }
+        CTCon ref args -> do
+          args' <- mapM mapArg args
+          case M.lookup ref (morTypeMap mor) of
+            Nothing -> do
+              ref' <- mapTypeRef tgtCtorTables mor ownerSrc owner' ref
+              pure Obj { objOwnerMode = owner', objCode = CTCon ref' args' }
+            Just tmpl ->
+              instantiateTemplate tmpl args'
+
     mapArg arg =
       case arg of
-        OAObj t -> OAObj <$> applyMorphismTy mor t
-        OATm tmArg -> OATm <$> applyMorphismTmTerm mor tmArg
+        OAObj t -> OAObj <$> go t
+        OATm tmArg -> OATm <$> applyMorphismTmTermWithTheories srcTheory tgtTheory tgtCtorTables mor tmArg
 
     instantiateTemplate tmpl args
       | length (ttParams tmpl) /= length args =
           Left "morphism: type template arity mismatch during instantiation"
       | otherwise = do
-          ttTgt <- doctrineTypeTheory (morTgt mor)
           subst <- foldM addParam emptySubst (zip (ttParams tmpl) args)
-          applySubstObj ttTgt subst (ttBody tmpl)
+          applySubstObj tgtTheory subst (ttBody tmpl)
 
     addParam s (param, arg) =
       case (param, arg) of
@@ -188,9 +243,15 @@ applyMorphismTy mor ty = do
         _ ->
           Left "morphism: type template kind mismatch during instantiation"
 
-applyMorphismTmTerm :: Morphism -> TermDiagram -> Either Text TermDiagram
-applyMorphismTmTerm mor (TermDiagram tm) =
-  TermDiagram <$> applyMorphismDiagram mor tm
+applyMorphismTmTermWithTheories
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> Morphism
+  -> TermDiagram
+  -> Either Text TermDiagram
+applyMorphismTmTermWithTheories srcTheory tgtTheory tgtCtorTables mor (TermDiagram tm) =
+  TermDiagram <$> applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor tm
 
 mapModExpr :: Morphism -> ModExpr -> Either Text ModExpr
 mapModExpr mor me = do
@@ -215,11 +276,29 @@ applyMorphismModExpr = mapModExpr
 
 applyMorphismDiagram :: Morphism -> Diagram -> Either Text Diagram
 applyMorphismDiagram mor diagSrc = do
+  tgtCtorTables <- deriveCtorTables (morTgt mor)
+  applyMorphismDiagramWithTables tgtCtorTables mor diagSrc
+
+applyMorphismDiagramWithTables :: CtorTables -> Morphism -> Diagram -> Either Text Diagram
+applyMorphismDiagramWithTables = applyMorphismDiagramInTables
+
+applyMorphismDiagramInTables :: CtorTables -> Morphism -> Diagram -> Either Text Diagram
+applyMorphismDiagramInTables tgtCtorTables mor diagSrc = do
   srcTheory <- doctrineTypeTheory (morSrc mor)
-  tgtTheory <- doctrineTypeTheory (morTgt mor)
+  tgtTheory <- doctrineTypeTheoryFromTables (morTgt mor) tgtCtorTables
+  applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc
+
+applyMorphismDiagramWithTheories
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> Morphism
+  -> Diagram
+  -> Either Text Diagram
+applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc = do
   modeTgt <- mapMode mor modeSrc
-  tmCtx <- mapM (applyMorphismTy mor) (dTmCtx diagSrc)
-  portTy <- mapM (applyMorphismTy mor) (dPortObj diagSrc)
+  tmCtx <- mapM (applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor) (dTmCtx diagSrc)
+  portTy <- mapM (applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor) (dPortObj diagSrc)
   let diagTgt0 = diagSrc { dMode = modeTgt, dTmCtx = tmCtx, dPortObj = portTy }
   let edgeIds = IM.keys (dEdges diagSrc)
   let step acc edgeKey = do
@@ -231,8 +310,17 @@ applyMorphismDiagram mor diagSrc = do
               PGen genName attrsSrc bargsSrc -> do
                 genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
                 substSrc <- instantiateGen srcTheory genDecl diagSrc edgeSrc
-                substTgt <- mapSubst mor substSrc
+                substTgt <- mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor substSrc
+                mappedBargs <- mapM (applyMorphismBinderArgWithTheories srcTheory tgtTheory tgtCtorTables mor) bargsSrc
                 case M.lookup (modeSrc, genName) (morGenMap mor) of
+                  Nothing
+                    | isComprehensionSupportGen (morSrc mor) modeSrc genName -> do
+                        tgtGen <- lookupGenInMode (morTgt mor) modeTgt genName
+                        if null mappedBargs
+                          then
+                            updateEdgePayload diagTgt edgeKey (PGen (gdName tgtGen) attrsSrc [])
+                          else
+                            Left "applyMorphismDiagram: implicit comprehension generator mapping does not support binder arguments"
                   Nothing -> Left "applyMorphismDiagram: missing generator mapping"
                   Just image0 -> do
                     let image = giDiagram image0
@@ -240,7 +328,6 @@ applyMorphismDiagram mor diagSrc = do
                       then Left "applyMorphismDiagram: generator mapping mode mismatch"
                       else Right ()
                     attrSubst <- instantiateAttrSubst mor genDecl attrsSrc
-                    mappedBargs <- mapM (applyMorphismBinderArg mor) bargsSrc
                     holeSub <- buildBinderHoleSub genDecl mappedBargs
                     instImage0 <- applySubstDiagram tgtTheory substTgt image
                     instHoleSigs0 <- applySubstBinderSigsTT tgtTheory substTgt (giBinderSigs image0)
@@ -254,15 +341,15 @@ applyMorphismDiagram mor diagSrc = do
                     instImage' <- weakenDiagramTmCtxTo (dTmCtx diagTgt) instImage
                     spliceEdge diagTgt edgeKey instImage'
               PBox name inner -> do
-                inner' <- applyMorphismDiagram mor inner
+                inner' <- applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor inner
                 updateEdgePayload diagTgt edgeKey (PBox name inner')
               PFeedback inner -> do
-                inner' <- applyMorphismDiagram mor inner
+                inner' <- applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor inner
                 updateEdgePayload diagTgt edgeKey (PFeedback inner')
               PSplice x ->
                 updateEdgePayload diagTgt edgeKey (PSplice x)
               PTmMeta v -> do
-                sort' <- applyMorphismTy mor (tmvSort v)
+                sort' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor (tmvSort v)
                 updateEdgePayload diagTgt edgeKey (PTmMeta v { tmvSort = sort' })
               PInternalDrop ->
                 updateEdgePayload diagTgt edgeKey PInternalDrop
@@ -290,8 +377,14 @@ applyMorphismDiagram mor diagSrc = do
       let holes = binderHoleNames (length bargs)
       pure (M.fromList (zip holes bargs))
 
-mapSubst :: Morphism -> Subst -> Either Text Subst
-mapSubst mor subst = do
+mapSubstWithTheories
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> Morphism
+  -> Subst
+  -> Either Text Subst
+mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor subst = do
   tyPairs <- mapM mapTyOne (codeBindings subst)
   tmPairs <- mapM mapTmOne (tmBindings subst)
   pure (mkSubst (M.fromList tyPairs) (M.fromList tmPairs))
@@ -299,25 +392,42 @@ mapSubst mor subst = do
     mapTyOne (v, t) = do
       ownerSrc <- pure (maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v))
       ownerTgt <- mapMode mor ownerSrc
-      v' <- mapCodeMeta mor ownerTgt v
-      t' <- applyMorphismTy mor t
+      sortV' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor (tmvSort v)
+      let v' = v { tmvSort = sortV', tmvOwnerMode = Just ownerTgt }
+      t' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor t
       pure (v', t')
     mapTmOne (v, t) = do
-      sort' <- applyMorphismTy mor (tmvSort v)
-      t' <- applyMorphismTmTerm mor t
+      sort' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor (tmvSort v)
+      t' <- applyMorphismTmTermWithTheories srcTheory tgtTheory tgtCtorTables mor t
       pure (v { tmvSort = sort' }, t')
 
-applyMorphismBinderArg :: Morphism -> BinderArg -> Either Text BinderArg
-applyMorphismBinderArg mor barg =
+applyMorphismBinderArgWithTheories
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> Morphism
+  -> BinderArg
+  -> Either Text BinderArg
+applyMorphismBinderArgWithTheories srcTheory tgtTheory tgtCtorTables mor barg =
   case barg of
-    BAConcrete d -> BAConcrete <$> applyMorphismDiagram mor d
+    BAConcrete d -> BAConcrete <$> applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor d
     BAMeta x -> Right (BAMeta x)
 
 applyMorphismBinderSig :: Morphism -> BinderSig -> Either Text BinderSig
 applyMorphismBinderSig mor sig = do
-  tmCtx' <- mapM (applyMorphismTy mor) (bsTmCtx sig)
-  dom' <- mapM (applyMorphismTy mor) (bsDom sig)
-  cod' <- mapM (applyMorphismTy mor) (bsCod sig)
+  tgtCtorTables <- deriveCtorTables (morTgt mor)
+  applyMorphismBinderSigWithTables tgtCtorTables mor sig
+
+applyMorphismBinderSigWithTables :: CtorTables -> Morphism -> BinderSig -> Either Text BinderSig
+applyMorphismBinderSigWithTables = applyMorphismBinderSigInTables
+
+applyMorphismBinderSigInTables :: CtorTables -> Morphism -> BinderSig -> Either Text BinderSig
+applyMorphismBinderSigInTables tgtCtorTables mor sig = do
+  srcTheory <- doctrineTypeTheory (morSrc mor)
+  tgtTheory <- doctrineTypeTheoryFromTables (morTgt mor) tgtCtorTables
+  tmCtx' <- mapM (applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor) (bsTmCtx sig)
+  dom' <- mapM (applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor) (bsDom sig)
+  cod' <- mapM (applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor) (bsCod sig)
   pure sig { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
 
 applySubstBinderSigTT :: TypeTheory -> Subst -> BinderSig -> Either Text BinderSig
@@ -483,12 +593,17 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
 
 checkMorphismResultWithBudget :: SearchBudget -> Morphism -> Either Text MorphismCheckResult
 checkMorphismResultWithBudget budget mor = do
+  srcCtorTables <- deriveCtorTables (morSrc mor)
+  tgtCtorTables <- deriveCtorTables (morTgt mor)
+  ttSrc <- doctrineTypeTheoryFromTables (morSrc mor) srcCtorTables
+  ttTgt <- doctrineTypeTheoryFromTables (morTgt mor) tgtCtorTables
+  let srcGens = allGensInTables (morSrc mor) srcCtorTables
   validateModeMap mor
   validateModMap mor
   validateModEqPreservation mor
   validateAttrSortMap mor
-  validateTypeMap mor
-  mapM_ (checkGenMapping mor) (allGens (morSrc mor))
+  validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor
+  mapM_ (checkGenMapping tgtCtorTables ttSrc ttTgt mor) srcGens
   case morCheck mor of
     CheckNone -> Right (MorphismCheckProved [])
     _ -> do
@@ -496,14 +611,14 @@ checkMorphismResultWithBudget budget mor = do
             case morCheck mor of
               CheckAll -> dCells2 (morSrc mor)
               CheckStructural -> filter ((== Structural) . c2Class) (dCells2 (morSrc mor))
-      fastOk <- inclusionFastPath mor
+      fastOk <- inclusionFastPath srcCtorTables mor
       if fastOk
         then Right (MorphismCheckProved [])
         else do
-          renameOk <- renamingFastPath mor srcCells
+          renameOk <- renamingFastPath srcCtorTables tgtCtorTables mor srcCells
           if renameOk
             then Right (MorphismCheckProved [])
-            else checkCells budget mor srcCells
+            else checkCells budget ttSrc ttTgt tgtCtorTables mor srcCells
 
 checkMorphismWithBudget :: SearchBudget -> Morphism -> Either Text ()
 checkMorphismWithBudget budget mor = do
@@ -677,14 +792,13 @@ validateAttrSortMap mor = do
                     <> renderMaybeKind tgtKind
                 )
 
-validateTypeMap :: Morphism -> Either Text ()
-validateTypeMap mor = do
-  ttTgt <- doctrineTypeTheory (morTgt mor)
+validateTypeMap :: CtorTables -> CtorTables -> TypeTheory -> TypeTheory -> Morphism -> Either Text ()
+validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor = do
   ensureAcyclicTypeTemplates mor
   mapM_ (checkEntry ttTgt) (M.toList (morTypeMap mor))
   where
     checkEntry ttTgt (srcRef, tmpl) = do
-      srcParams <- lookupCtorSigByRef (morSrc mor) srcRef
+      srcParams <- lookupCtorSigByRefInTables (morSrc mor) srcCtorTables srcRef
       let tmplParams = ttParams tmpl
       if length tmplParams /= length srcParams
         then Left "checkMorphism: type template arity mismatch"
@@ -726,7 +840,7 @@ validateTypeMap mor = do
           expectedMode <- mapMode mor (objMode srcSort)
           if objMode (tmvSort tmParam) == expectedMode
             then do
-              expectedSortTgt <- applyMorphismTy mor srcSort
+              expectedSortTgt <- applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables mor srcSort
               sortOk <- sortDefEq ttTgt expectedSortTgt (tmvSort tmParam)
               if sortOk
                 then Right ()
@@ -852,51 +966,57 @@ attrSortMapIsIdentity mor =
         , (_, sortName) <- gdAttrs gen
         ]
 
-checkGenMapping :: Morphism -> GenDecl -> Either Text ()
-checkGenMapping mor gen = do
-  ttTgt <- doctrineTypeTheory (morTgt mor)
+checkGenMapping :: CtorTables -> TypeTheory -> TypeTheory -> Morphism -> GenDecl -> Either Text ()
+checkGenMapping tgtCtorTables ttSrc ttTgt mor gen = do
   let modeSrc = gdMode gen
   modeTgt <- mapMode mor modeSrc
-  dom <- mapM (applyMorphismTy mor) (gdPlainDom gen)
-  cod <- mapM (applyMorphismTy mor) (gdCod gen)
-  image0 <- case M.lookup (modeSrc, gdName gen) (morGenMap mor) of
-    Nothing -> Left "checkMorphism: missing generator mapping"
-    Just d -> Right d
-  let image = giDiagram image0
-  if dMode image /= modeTgt
-    then Left "checkMorphism: generator mapping mode mismatch"
-    else do
-      domImg <- diagramDom image
-      codImg <- diagramCod image
-      _ <- unifyCtxCompat ttTgt [] dom domImg
-      _ <- unifyCtxCompat ttTgt [] cod codImg
-      let binderSlotsSrc =
-            [ bs
-            | InBinder bs <- gdDom gen
-            ]
-      let holes =
-            [ BinderMetaVar ("b" <> T.pack (show i))
-            | i <- [0 .. length binderSlotsSrc - 1]
-            ]
-      binderSlotsTgt <- mapM (applyMorphismBinderSig mor) binderSlotsSrc
-      let expectedBinderSigs = M.fromList (zip holes binderSlotsTgt)
-      if giBinderSigs image0 == expectedBinderSigs
-        then Right ()
-        else Left "checkMorphism: generator mapping binder-hole signatures mismatch"
-      let usedMetas = binderMetaVarsDiagram image
-      let declaredMetas = M.keysSet (giBinderSigs image0)
-      if usedMetas `S.isSubsetOf` declaredMetas
-        then Right ()
-        else Left "checkMorphism: generator mapping uses undeclared binder metas"
-      pure ()
+  dom <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables mor) (gdPlainDom gen)
+  cod <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables mor) (gdCod gen)
+  case M.lookup (modeSrc, gdName gen) (morGenMap mor) of
+    Nothing
+      | isComprehensionSupportGen (morSrc mor) modeSrc (gdName gen) -> do
+          tgtGen <- lookupGenInMode (morTgt mor) modeTgt (gdName gen)
+          _ <- unifyCtxCompat ttTgt [] dom (gdPlainDom tgtGen)
+          _ <- unifyCtxCompat ttTgt [] cod (gdCod tgtGen)
+          pure ()
+    Nothing ->
+      Left "checkMorphism: missing generator mapping"
+    Just image0 -> do
+      let image = giDiagram image0
+      if dMode image /= modeTgt
+        then Left "checkMorphism: generator mapping mode mismatch"
+        else do
+          domImg <- diagramDom image
+          codImg <- diagramCod image
+          _ <- unifyCtxCompat ttTgt [] dom domImg
+          _ <- unifyCtxCompat ttTgt [] cod codImg
+          let binderSlotsSrc =
+                [ bs
+                | InBinder bs <- gdDom gen
+                ]
+          let holes =
+                [ BinderMetaVar ("b" <> T.pack (show i))
+                | i <- [0 .. length binderSlotsSrc - 1]
+                ]
+          binderSlotsTgt <- mapM (applyMorphismBinderSigWithTables tgtCtorTables mor) binderSlotsSrc
+          let expectedBinderSigs = M.fromList (zip holes binderSlotsTgt)
+          if giBinderSigs image0 == expectedBinderSigs
+            then Right ()
+            else Left "checkMorphism: generator mapping binder-hole signatures mismatch"
+          let usedMetas = binderMetaVarsDiagram image
+          let declaredMetas = M.keysSet (giBinderSigs image0)
+          if usedMetas `S.isSubsetOf` declaredMetas
+            then Right ()
+            else Left "checkMorphism: generator mapping uses undeclared binder metas"
+          pure ()
 
-checkCells :: SearchBudget -> Morphism -> [Cell2] -> Either Text MorphismCheckResult
-checkCells _ _ [] = Right (MorphismCheckProved [])
-checkCells budget mor (cell:rest) = do
-  result <- checkCell budget mor cell
+checkCells :: SearchBudget -> TypeTheory -> TypeTheory -> CtorTables -> Morphism -> [Cell2] -> Either Text MorphismCheckResult
+checkCells _ _ _ _ _ [] = Right (MorphismCheckProved [])
+checkCells budget ttSrc ttTgt tgtCtorTables mor (cell:rest) = do
+  result <- checkCell budget ttSrc ttTgt tgtCtorTables mor cell
   case result of
     MorphismCheckProved proofs -> do
-      restResult <- checkCells budget mor rest
+      restResult <- checkCells budget ttSrc ttTgt tgtCtorTables mor rest
       case restResult of
         MorphismCheckProved restProofs ->
           Right (MorphismCheckProved (proofs <> restProofs))
@@ -905,28 +1025,28 @@ checkCells budget mor (cell:rest) = do
     MorphismCheckUndecided{} ->
       Right result
 
-checkCell :: SearchBudget -> Morphism -> Cell2 -> Either Text MorphismCheckResult
-checkCell budget mor cell = do
-  lhs <- applyMorphismDiagram mor (c2LHS cell)
-  rhs <- applyMorphismDiagram mor (c2RHS cell)
-  tt <- doctrineTypeTheory (morTgt mor)
+checkCell :: SearchBudget -> TypeTheory -> TypeTheory -> CtorTables -> Morphism -> Cell2 -> Either Text MorphismCheckResult
+checkCell budget ttSrc ttTgt tgtCtorTables mor cell = do
+  lhs <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables mor (c2LHS cell)
+  rhs <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables mor (c2RHS cell)
   let rules = rulesFromPolicy (morPolicy mor) (dCells2 (morTgt mor))
-  proof <- autoJoinProof tt budget rules lhs rhs
+  proof <- autoJoinProof ttTgt budget rules lhs rhs
   case proof of
     SearchUndecided lim ->
       Right (MorphismCheckUndecided (c2Name cell) lim)
     SearchProved witness -> do
-      checkJoinProof tt rules witness
+      checkJoinProof ttTgt rules witness
       Right (MorphismCheckProved [(c2Name cell, witness)])
 
-inclusionFastPath :: Morphism -> Either Text Bool
-inclusionFastPath mor
+inclusionFastPath :: CtorTables -> Morphism -> Either Text Bool
+inclusionFastPath srcCtorTables mor
   | not (modeMapIsIdentity mor) = Right False
   | not (modMapIsIdentity mor) = Right False
   | not (attrSortMapIsIdentity mor) = Right False
   | not (M.null (morTypeMap mor)) = Right False
   | otherwise = do
-      okGens <- allM (genIsIdentity mor) (allGens (morSrc mor))
+      let srcGens = allGensInTables (morSrc mor) srcCtorTables
+      okGens <- allM (genIsIdentity mor) srcGens
       if not okGens
         then Right False
         else do
@@ -951,13 +1071,15 @@ inclusionFastPath mor
               okR <- isoOrFalse (c2RHS cell) (c2RHS tgt)
               pure (okL && okR)
 
-renamingFastPath :: Morphism -> [Cell2] -> Either Text Bool
-renamingFastPath mor srcCells = do
+renamingFastPath :: CtorTables -> CtorTables -> Morphism -> [Cell2] -> Either Text Bool
+renamingFastPath srcCtorTables tgtCtorTables mor srcCells = do
   if not (modeMapIsIdentity mor) || not (modMapIsIdentity mor) || not (attrSortMapIsIdentity mor)
     then Right False
-    else do
-      let tgt = morTgt mor
-      case (buildTypeRenaming mor, buildGenRenaming mor) of
+  else do
+    let tgt = morTgt mor
+    mTypeRen <- buildTypeRenaming srcCtorTables tgtCtorTables mor
+    mGenRen <- buildGenRenaming srcCtorTables mor
+    case (mTypeRen, mGenRen) of
         (Just tyRen, Just genRen) -> do
           mTgtMap <- buildCellMap (dCells2 tgt)
           nameOk <- case mTgtMap of
@@ -1026,13 +1148,16 @@ isoOrFalse d1 d2 =
 cellKey :: Cell2 -> (ModeName, Text)
 cellKey cell = (dMode (c2LHS cell), c2Name cell)
 
-buildTypeRenaming :: Morphism -> Maybe (M.Map ObjRef ObjRef)
-buildTypeRenaming mor = do
+buildTypeRenaming :: CtorTables -> CtorTables -> Morphism -> Either Text (Maybe (M.Map ObjRef ObjRef))
+buildTypeRenaming srcCtorTables tgtCtorTables mor = do
   let src = morSrc mor
-  mp <- foldl step (Just M.empty) (allCtors src)
-  if injective (M.elems mp)
-    then Just mp
-    else Nothing
+  srcCtors <- allCtorsInTables src srcCtorTables
+  case foldl step (Just M.empty) srcCtors of
+    Nothing -> Right Nothing
+    Just mp ->
+      if injective (M.elems mp)
+        then Right (Just mp)
+        else Right Nothing
   where
     tgt = morTgt mor
     step acc (ref, sig) = do
@@ -1044,7 +1169,7 @@ buildTypeRenaming mor = do
       case mapped of
         Nothing -> Nothing
         Just tgtRef ->
-          case lookupCtorSigByRef tgt tgtRef of
+          case lookupCtorSigByRefInTables tgt tgtCtorTables tgtRef of
             Right sigTgt
               | length sigTgt == length sig ->
                   Just (M.insert ref tgtRef mp)
@@ -1092,12 +1217,15 @@ buildTypeRenaming mor = do
         Just _ -> True
         Nothing -> False
 
-buildGenRenaming :: Morphism -> Maybe (M.Map (ModeName, GenName) GenName)
-buildGenRenaming mor = do
-  mp <- foldl step (Just M.empty) (allGens (morSrc mor))
-  if injective (M.elems mp)
-    then Just mp
-    else Nothing
+buildGenRenaming :: CtorTables -> Morphism -> Either Text (Maybe (M.Map (ModeName, GenName) GenName))
+buildGenRenaming srcCtorTables mor = do
+  let srcGens = allGensInTables (morSrc mor) srcCtorTables
+  case foldl step (Just M.empty) srcGens of
+    Nothing -> Right Nothing
+    Just mp ->
+      if injective (M.elems mp)
+        then Right (Just mp)
+        else Right Nothing
   where
     tgt = morTgt mor
     step acc gen = do
@@ -1213,39 +1341,51 @@ allM f (x:xs) = do
     then allM f xs
     else Right False
 
-allGens :: Doctrine -> [GenDecl]
-allGens doc =
+allGensInTables :: Doctrine -> CtorTables -> [GenDecl]
+allGensInTables doc tables =
   [ gd
   | (mode, table) <- M.toList (dGens doc)
   , gd <- M.elems table
-  , not (isTypeDeclGenName doc mode (gdName gd))
+  , not (isComprehensionSupportGen doc mode (gdName gd))
+  , let GenName gName = gdName gd
+  , let ctorNames = M.findWithDefault S.empty mode ctorNamesByClassifier
+  , ObjName gName `S.notMember` ctorNames
   ]
+  where
+    ctorNamesByClassifier =
+      M.fromListWith S.union
+        [ (modeClassifierMode (dModes doc) ownerMode, S.fromList (M.keys table))
+        | (ownerMode, table) <- M.toList tables
+        ]
 
-allCtors :: Doctrine -> [(ObjRef, [TypeParamSig])]
-allCtors doc =
-  case deriveCtorTables doc of
-    Left _ -> []
-    Right tables ->
-      M.toList
-        ( foldl insertOwner M.empty (M.toList tables)
-        )
+isComprehensionSupportGen :: Doctrine -> ModeName -> GenName -> Bool
+isComprehensionSupportGen doc mode genName =
+  case M.lookup mode (mtClassifiedBy (dModes doc)) >>= cdComp of
+    Just comp ->
+      genName == compCtxExt comp
+        || genName == compVar comp
+        || genName == compReindex comp
+    Nothing -> False
+
+allCtorsInTables :: Doctrine -> CtorTables -> Either Text [(ObjRef, [TypeParamSig])]
+allCtorsInTables doc tables = do
+  merged <- foldM insertOwner M.empty (M.toList tables)
+  pure (M.toList merged)
   where
     insertOwner acc (ownerMode, table) =
       let classifierMode = modeClassifierMode (dModes doc) ownerMode
-       in foldl (insertCtor classifierMode) acc (M.toList table)
+       in foldM (insertCtor classifierMode) acc (M.toList table)
 
     insertCtor classifierMode acc (ctorName, sig) =
       let ref = ObjRef classifierMode ctorName
-       in M.insertWith prefer ref sig acc
+       in case M.lookup ref acc of
+            Nothing -> Right (M.insert ref sig acc)
+            Just sig0
+              | sig0 == sig -> Right acc
+              | otherwise -> Left "ambiguous constructor signature across owner modes"
 
-    prefer new old =
-      if new == old
-        then old
-        else old
-
-lookupCtorSigByRef :: Doctrine -> ObjRef -> Either Text [TypeParamSig]
-lookupCtorSigByRef doc ref = do
-  tables <- deriveCtorTables doc
+lookupCtorSigByRefInTables :: Doctrine -> CtorTables -> ObjRef -> Either Text [TypeParamSig]
+lookupCtorSigByRefInTables doc tables ref = do
   let sigs =
         [ sig
         | (ownerMode, table) <- M.toList tables

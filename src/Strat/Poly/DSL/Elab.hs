@@ -9,8 +9,10 @@ module Strat.Poly.DSL.Elab
   , elabPolyMorphismWithBudgetResult
   , elabDiagExpr
   , ImplementsCheckResult(..)
+  , ImplementsProof(..)
   , checkImplementsObligationsWithBudget
   , checkImplementsObligations
+  , identityMorphismFor
   , parsePolicy
   ) where
 
@@ -18,10 +20,10 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
-import qualified Data.List as L
 import qualified Data.Set as S
+import qualified Data.List as L
+import Data.Char (isAlphaNum)
 import Data.Maybe (catMaybes, fromMaybe)
-import Data.Ord (comparing)
 import Control.Monad (foldM, when)
 import Strat.DSL.AST (RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..), RawPolyModalityMap(..), RawPolyAttrSortMap(..))
 import Strat.Poly.DSL.AST
@@ -32,22 +34,35 @@ import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.Obj
 import Strat.Poly.ObjClassifier (modeClassifierMode, modeUniverseObj)
-import Strat.Poly.ObjResolve (resolveTypeRefInClassifier, resolveTypeRefInClassifierMaybe)
+import Strat.Poly.ObjResolve
+  ( resolveTypeRefInClassifierInTables
+  , resolveTypeRefInClassifierMaybeInTables
+  )
 import qualified Strat.Poly.UnifyObj as U
-import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..), TmFunSig(..))
-import Strat.Poly.DefEq (normalizeObjDeep, termExprToDiagramChecked)
+import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), TmFunSig(..))
+import Strat.Poly.DefEq (normalizeObjDeep, termExprToDiagramChecked, defEqTermDiagram)
 import Strat.Poly.Attr
 import Strat.Poly.Morphism
 import Strat.Poly.ModAction (ActionSemanticsResult(..), applyModExpr, validateActionSemanticsWithBudgetResult)
+import Strat.Poly.CompObligations (installGeneratedCompObligations)
+import Strat.Poly.Slots
+  ( Slot(..)
+  , SlotId(..)
+  , SlotKind(..)
+  , SlotSig(..)
+  , extractDoctrineSlotsWithTables
+  )
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.Rewrite (rulesFromPolicy)
-import Strat.Poly.Normalize (autoJoinProof)
+import Strat.Poly.Normalize (NormalizationStatus(..), autoJoinProof, normalize)
+import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Proof
-  ( JoinProof
+  ( JoinProof(..)
+  , RewritePath(..)
   , SearchBudget(..)
   , SearchLimit
   , SearchOutcome(..)
@@ -67,6 +82,10 @@ elabPolyMorphismWithBudgetResult :: SearchBudget -> ModuleEnv -> RawPolyMorphism
 elabPolyMorphismWithBudgetResult budgetDefault env raw = do
   src <- lookupPolyDoctrine env (rpmSrc raw)
   tgt <- lookupPolyDoctrine env (rpmTgt raw)
+  srcCtorTables <- deriveCtorTables src
+  ttSrc <- doctrineTypeTheoryFromTables src srcCtorTables
+  tgtCtorTables <- deriveCtorTables tgt
+  ttTgt <- doctrineTypeTheoryFromTables tgt tgtCtorTables
   let checkName = maybe "all" id (rpmCheck raw)
   checkMode <- parseMorphismCheck checkName
   let policyName = maybe "UseStructuralAsBidirectional" id (rpmPolicy raw)
@@ -77,7 +96,7 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
   modeMap <- buildModeMap src tgt [ m | RPMMode m <- rpmItems raw ]
   modMap <- buildModMap src tgt modeMap [ mm | RPMModality mm <- rpmItems raw ]
   attrSortMap <- buildAttrSortMap src tgt [ a | RPMAttrSort a <- rpmItems raw ]
-  typeMap <- foldM (addTypeMap src tgt modeMap) M.empty [ t | RPMType t <- rpmItems raw ]
+  typeMap <- foldM (addTypeMap src srcCtorTables tgt modeMap) M.empty [ t | RPMType t <- rpmItems raw ]
   let mor0 = Morphism
         { morName = rpmName raw
         , morSrc = src
@@ -91,8 +110,8 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
         , morCheck = checkMode
         , morPolicy = policy
         }
-  genMap <- foldM (addGenMap src tgt modeMap mor0) M.empty [ g | RPMGen g <- rpmItems raw ]
-  ensureAllGenMapped src genMap
+  genMap <- foldM (addGenMap src tgt ttSrc ttTgt tgtCtorTables modeMap mor0) M.empty [ g | RPMGen g <- rpmItems raw ]
+  ensureAllGenMapped src srcCtorTables genMap
   let mor = Morphism
         { morName = rpmName raw
         , morSrc = src
@@ -231,15 +250,15 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       case M.lookup mode modeMap of
         Nothing -> Left "morphism: missing mode mapping"
         Just mode' -> Right mode'
-    mapTyVarMode mor v = do
+    mapTyVarMode ttSrc ttTgt tgtTables mor v = do
       ownerSrc <- ownerModeForTypeMeta (morSrc mor) v
       ownerTgt <- applyMorphismMode mor ownerSrc
-      sort' <- applyMorphismTy mor (tmvSort v)
+      sort' <- applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor (tmvSort v)
       pure v { tmvSort = sort', tmvOwnerMode = Just ownerTgt }
-    mapTmVarSort mor v = do
-      sort' <- applyMorphismTy mor (tmvSort v)
+    mapTmVarSort ttSrc ttTgt tgtTables mor v = do
+      sort' <- applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor (tmvSort v)
       pure v { tmvSort = sort', tmvOwnerMode = Nothing }
-    addTypeMap src tgt modeMap mp decl = do
+    addTypeMap src srcTables tgt modeMap mp decl = do
       let modeSrc = ModeName (rpmtSrcMode decl)
       let modeTgtDecl = ModeName (rpmtTgtMode decl)
       ensureMode src modeSrc
@@ -249,12 +268,12 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
         then Left "morphism: target mode does not match mode map"
         else Right ()
       let name = ObjName (rpmtSrcType decl)
-      mRef <- lookupCtorRefForOwner src modeSrc name
+      let mRef = lookupCtorRefForOwnerInTables src srcTables modeSrc name
       srcRef <-
         case mRef of
           Nothing -> Left "morphism: unknown source type in type map"
           Just ref -> Right ref
-      srcParams <- lookupCtorSigForOwner src modeSrc srcRef
+      srcParams <- lookupCtorSigForOwnerInTables src srcTables modeSrc srcRef
       (tmplParams, tyVarsTgt, tmVarsTgt) <- buildTypeTemplateParams tgt modeMap srcParams (rpmtParams decl)
       tgtExpr <- elabObjExpr tgt tyVarsTgt tmVarsTgt M.empty modeTgtDecl (rpmtTgtType decl)
       if objOwnerMode tgtExpr /= modeTgtDecl
@@ -263,23 +282,22 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       if M.member srcRef mp
         then Left "morphism: duplicate type mapping"
         else Right (M.insert srcRef (TypeTemplate tmplParams tgtExpr) mp)
-    addGenMap src tgt modeMap mor0 mp decl = do
+    addGenMap src tgt ttSrc ttTgt tgtTables modeMap mor0 mp decl = do
       let modeSrc = ModeName (rpmgMode decl)
       ensureMode src modeSrc
       modeTgt <- lookupModeMap modeMap modeSrc
       ensureMode tgt modeTgt
       gen <- lookupGen src modeSrc (GenName (rpmgSrcGen decl))
-      tyVarsTgt <- mapM (mapTyVarMode mor0) (gdTyVars gen)
-      tmVarsTgt <- mapM (mapTmVarSort mor0) (gdTmVars gen)
-      binderSigs0 <- buildBinderHoleSigs mor0 gen
+      tyVarsTgt <- mapM (mapTyVarMode ttSrc ttTgt tgtTables mor0) (gdTyVars gen)
+      tmVarsTgt <- mapM (mapTmVarSort ttSrc ttTgt tgtTables mor0) (gdTmVars gen)
+      binderSigs0 <- buildBinderHoleSigs ttSrc ttTgt tgtTables mor0 gen
       (diag0, _) <- elabDiagExprWith env tgt modeTgt [] tyVarsTgt tmVarsTgt binderSigs0 BMUse True (rpmgRhs decl)
       let domSrc = gdPlainDom gen
       let codSrc = gdCod gen
-      domTgt <- mapM (applyMorphismTy mor0) domSrc
-      codTgt <- mapM (applyMorphismTy mor0) codSrc
+      domTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor0) domSrc
+      codTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor0) codSrc
       let rigidTy = S.fromList tyVarsTgt
       let rigidTm = S.fromList tmVarsTgt
-      ttTgt <- doctrineTypeTheory tgt
       diag <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt diag0
       let freeTy = freeObjVarsDiagram diag
       let allowedTy = S.fromList tyVarsTgt
@@ -300,26 +318,42 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       if M.member key mp
         then Left "morphism: duplicate generator mapping"
         else Right (M.insert key (GenImage diag binderSigs0) mp)
-    buildBinderHoleSigs mor gen =
+    buildBinderHoleSigs ttSrc ttTgt tgtTables mor gen =
       let slots = [ bs | InBinder bs <- gdDom gen ]
           holes = [ BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length slots - 1] ]
-      in fmap M.fromList (mapM (mapOne mor) (zip holes slots))
-    mapOne mor (hole, sig) = do
-      tmCtx' <- mapM (applyMorphismTy mor) (bsTmCtx sig)
-      dom' <- mapM (applyMorphismTy mor) (bsDom sig)
-      cod' <- mapM (applyMorphismTy mor) (bsCod sig)
+      in fmap M.fromList (mapM (mapOne ttSrc ttTgt tgtTables mor) (zip holes slots))
+    mapOne ttSrc ttTgt tgtTables mor (hole, sig) = do
+      tmCtx' <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor) (bsTmCtx sig)
+      dom' <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor) (bsDom sig)
+      cod' <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor) (bsCod sig)
       pure (hole, sig { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' })
     -- no template restriction; any target type expression using only params is allowed
-    ensureAllGenMapped src mp = do
+    ensureAllGenMapped src srcCtorTables mp = do
+      let isCompSupport mode gName =
+            case M.lookup mode (mtClassifiedBy (dModes src)) >>= cdComp of
+              Just comp ->
+                gName == compCtxExt comp
+                  || gName == compVar comp
+                  || gName == compReindex comp
+              Nothing -> False
       let gens =
             [ (mode, gdName g)
             | (mode, table) <- M.toList (dGens src)
             , g <- M.elems table
-            , not (isTypeDeclGenName src mode (gdName g))
+            , not (isCompSupport mode (gdName g))
+            , not (isTypeDeclGenNameInTables src srcCtorTables mode (ObjName (renderGenName (gdName g))))
             ]
       case [ (m, g) | (m, g) <- gens, M.notMember (m, g) mp ] of
         [] -> Right ()
-        _ -> Left "morphism: missing generator mapping"
+        missing ->
+          Left
+            ( "morphism: missing generator mapping: "
+                <> T.intercalate
+                  ", "
+                  [ renderModeName m <> "." <> renderGenName g
+                  | (m, g) <- missing
+                  ]
+            )
 
 parsePolicy :: Text -> Either Text RewritePolicy
 parsePolicy name =
@@ -356,6 +390,7 @@ morphismBudget budgetDefault raw =
 data ElabState = ElabState
   { esDoc :: Doctrine
   , esPendingClass :: [(ModeName, RawClassifiedByDecl)]
+  , esPendingComp :: [RawCompDecl]
   }
 
 elabPolyDoctrine :: ModuleEnv -> RawPolyDoctrine -> Either Text Doctrine
@@ -373,14 +408,37 @@ elabPolyDoctrineWithBudgetResult budget env raw = do
       case M.lookup name (meDoctrines env) of
         Nothing -> Left ("Unknown doctrine: " <> name)
         Just doc -> Right (Just doc)
-  let start = ElabState { esDoc = seedDoctrine (rpdName raw) base, esPendingClass = [] }
+  let start = ElabState { esDoc = seedDoctrine (rpdName raw) base, esPendingClass = [], esPendingComp = [] }
   st <- foldM (elabPolyItem env) start (rpdItems raw)
-  doc <- applyPendingClassifications st
+  doc0 <- applyPendingDeclarations st
+  doc <- installGeneratedCompObligations doc0
   validateDoctrine doc
+  actionProofCount <- validateActionSemanticsProofCount budget doc
+  compProofCount <- validateCompSemanticsProofCount budget env doc
+  pure (doc, actionProofCount + compProofCount)
+
+elabPolyDoctrineFromBaseWithBudgetResult
+  :: SearchBudget
+  -> ModuleEnv
+  -> Doctrine
+  -> RawPolyDoctrine
+  -> Either Text (Doctrine, Int)
+elabPolyDoctrineFromBaseWithBudgetResult budget env baseDoc raw = do
+  let start = ElabState { esDoc = seedDoctrine (rpdName raw) (Just baseDoc), esPendingClass = [], esPendingComp = [] }
+  st <- foldM (elabPolyItem env) start (rpdItems raw)
+  doc0 <- applyPendingDeclarations st
+  doc <- installGeneratedCompObligations doc0
+  validateDoctrine doc
+  actionProofCount <- validateActionSemanticsProofCount budget doc
+  compProofCount <- validateCompSemanticsProofCount budget env doc
+  pure (doc, actionProofCount + compProofCount)
+
+validateActionSemanticsProofCount :: SearchBudget -> Doctrine -> Either Text Int
+validateActionSemanticsProofCount budget doc = do
   result <- validateActionSemanticsWithBudgetResult budget doc
   case result of
     ActionSemanticsProved proofs ->
-      pure (doc, length proofs)
+      Right (length proofs)
     ActionSemanticsUndecided label lim ->
       Left
         ( "validateDoctrine: action semantics undecided for "
@@ -390,29 +448,85 @@ elabPolyDoctrineWithBudgetResult budget env raw = do
             <> ")"
         )
 
-elabPolyDoctrineFromBaseWithBudgetResult
-  :: SearchBudget
-  -> ModuleEnv
-  -> Doctrine
-  -> RawPolyDoctrine
-  -> Either Text (Doctrine, Int)
-elabPolyDoctrineFromBaseWithBudgetResult budget env baseDoc raw = do
-  let start = ElabState { esDoc = seedDoctrine (rpdName raw) (Just baseDoc), esPendingClass = [] }
-  st <- foldM (elabPolyItem env) start (rpdItems raw)
-  doc <- applyPendingClassifications st
-  validateDoctrine doc
-  result <- validateActionSemanticsWithBudgetResult budget doc
-  case result of
-    ActionSemanticsProved proofs ->
-      pure (doc, length proofs)
-    ActionSemanticsUndecided label lim ->
-      Left
-        ( "validateDoctrine: action semantics undecided for "
-            <> label
-            <> " ("
-            <> renderSearchLimit lim
-            <> ")"
-        )
+validateCompSemanticsProofCount :: SearchBudget -> ModuleEnv -> Doctrine -> Either Text Int
+validateCompSemanticsProofCount budget env doc = do
+  let generated = [obl | obl <- dObligations doc, obGenerated obl]
+  if null generated
+    then Right 0
+    else do
+      let schemaDoc = doc { dObligations = generated }
+      identityMor <- identityMorphismFor doc
+      result <- checkImplementsObligationsWithBudget budget env doc identityMor schemaDoc
+      case result of
+        ImplementsCheckProved proofs ->
+          Right (length proofs)
+        ImplementsCheckUndecided label lim ->
+          Left
+            ( "validateDoctrine: comprehension semantics undecided for "
+                <> label
+                <> " ("
+                <> renderSearchLimit lim
+                <> ")"
+            )
+
+identityMorphismFor :: Doctrine -> Either Text Morphism
+identityMorphismFor doc = do
+  genMap <- mkIdentityGenMap doc
+  pure
+    Morphism
+      { morName = "__generated.comp.identity"
+      , morSrc = doc
+      , morTgt = doc
+      , morIsCoercion = True
+      , morModeMap = modeMap
+      , morModMap = modMap
+      , morAttrSortMap = attrSortMap
+      , morTypeMap = M.empty
+      , morGenMap = genMap
+      , morCheck = CheckNone
+      , morPolicy = UseStructuralAsBidirectional
+      }
+  where
+    modeMap =
+      M.fromList
+        [ (m, m)
+        | m <- M.keys (mtModes (dModes doc))
+        ]
+    modMap =
+      M.fromList
+        [ ( name
+          , ModExpr
+              { meSrc = mdSrc decl
+              , meTgt = mdTgt decl
+              , mePath = [name]
+              }
+          )
+        | (name, decl) <- M.toList (mtDecls (dModes doc))
+        ]
+    attrSortMap =
+      M.fromList
+        [ (s, s)
+        | s <- M.keys (dAttrSorts doc)
+        ]
+
+mkIdentityGenMap :: Doctrine -> Either Text (M.Map (ModeName, GenName) GenImage)
+mkIdentityGenMap doc = do
+  ctorTables <- deriveCtorTables doc
+  fmap M.fromList (mapM mkOne (allNonTypeGens ctorTables))
+  where
+    allNonTypeGens ctorTables =
+      [ (mode, gd)
+      | (mode, table) <- M.toList (dGens doc)
+      , gd <- M.elems table
+      , not (isTypeDeclGenNameInTables doc ctorTables mode (ObjName (renderGenName (gdName gd))))
+      ]
+
+    mkOne (mode, gd) = do
+      diag <- mkForGenDiag mode gd
+      let binderSlots = [ bs | InBinder bs <- gdDom gd ]
+      let holes = [ BinderMetaVar ("for_gen_b" <> T.pack (show i)) | i <- [0 .. length binderSlots - 1] ]
+      let binderSigs = M.fromList (zip holes binderSlots)
+      pure ((mode, gdName gd), GenImage diag binderSigs)
 
 seedDoctrine :: Text -> Maybe Doctrine -> Doctrine
 seedDoctrine name base =
@@ -428,6 +542,11 @@ seedDoctrine name base =
       , dObligations = []
       }
     Just doc -> doc { dName = name, dAttrSorts = dAttrSorts doc }
+
+applyPendingDeclarations :: ElabState -> Either Text Doctrine
+applyPendingDeclarations st = do
+  doc <- applyPendingClassifications st
+  applyPendingComprehensions st doc
 
 applyPendingClassifications :: ElabState -> Either Text Doctrine
 applyPendingClassifications st =
@@ -458,6 +577,10 @@ applyPendingClassifications st =
               { cdClassifier = classifier
               , cdUniverse = universe
               , cdTag = rcdTag rawClass
+              , cdComp =
+                  case M.lookup mode (mtClassifiedBy (dModes doc)) of
+                    Just existing -> cdComp existing
+                    Nothing -> Nothing
               }
       mt' <-
         case M.lookup mode (mtClassifiedBy (dModes doc)) of
@@ -472,6 +595,74 @@ applyPendingClassifications st =
                     }
               else Left "classifiedBy classifier mismatch for pending mode"
       Right doc { dModes = mt' }
+
+applyPendingComprehensions :: ElabState -> Doctrine -> Either Text Doctrine
+applyPendingComprehensions st doc0 = do
+  ctorTables <- deriveCtorTables doc0
+  foldM (addOne ctorTables) doc0 (esPendingComp st)
+  where
+    addOne ctorTables doc rawComp = do
+      let mode = ModeName (rcmpMode rawComp)
+      ensureMode doc mode
+      classDecl <-
+        case M.lookup mode (mtClassifiedBy (dModes doc)) of
+          Nothing -> Left "comprehension declaration requires classifiedBy on the mode"
+          Just decl -> Right decl
+      let ctxExtName = GenName (rcmpCtxExt rawComp)
+      let varName = GenName (rcmpVar rawComp)
+      let reindexName = GenName (rcmpReindex rawComp)
+      ensureGen mode ctxExtName doc
+      ensureGen mode varName doc
+      ensureGen mode reindexName doc
+      ensureNonType ctorTables mode ctxExtName doc
+      ensureNonType ctorTables mode varName doc
+      ensureNonType ctorTables mode reindexName doc
+      let compDecl =
+            CompDecl
+              { compCtxExt = ctxExtName
+              , compVar = varName
+              , compReindex = reindexName
+              }
+      case cdComp classDecl of
+        Nothing ->
+          let classDecl' = classDecl { cdComp = Just compDecl }
+              mt' = (dModes doc) { mtClassifiedBy = M.insert mode classDecl' (mtClassifiedBy (dModes doc)) }
+           in Right doc { dModes = mt' }
+        Just existing
+          | existing == compDecl -> Right doc
+          | otherwise -> Left "duplicate comprehension declaration for mode"
+
+    ensureGen mode genName doc =
+      case M.lookup mode (dGens doc) >>= M.lookup genName of
+        Just _ -> Right ()
+        Nothing ->
+          Left
+            ( "comprehension declaration references unknown generator "
+                <> renderMode mode
+                <> "."
+                <> renderGen genName
+            )
+
+    ensureNonType ctorTables mode genName doc =
+      do
+        let isCtor =
+              isTypeDeclGenNameInTables
+                doc
+                ctorTables
+                mode
+                (ObjName (renderGen genName))
+        if isCtor
+        then
+          Left
+            ( "comprehension declaration expects term generator but got constructor-like generator "
+                <> renderMode mode
+                <> "."
+                <> renderGen genName
+            )
+        else Right ()
+
+    renderMode (ModeName n) = n
+    renderGen (GenName n) = n
 
 elabPolyItem :: ModuleEnv -> ElabState -> RawPolyItem -> Either Text ElabState
 elabPolyItem env st item =
@@ -492,6 +683,7 @@ elabPolyItem env st item =
                 { cdClassifier = classifier
                 , cdUniverse = pendingClassUniverse classifier (rcdUniverse rawClass)
                 , cdTag = rcdTag rawClass
+                , cdComp = Nothing
                 }
               mt0
       let acyclic' =
@@ -502,7 +694,13 @@ elabPolyItem env st item =
             case rmdClassifiedBy decl of
               Nothing -> esPendingClass st
               Just rawClass -> esPendingClass st <> [(mode, rawClass)]
-      pure st { esDoc = doc { dModes = mt', dAcyclicModes = acyclic' }, esPendingClass = pending' }
+      pure
+        st
+          { esDoc = doc { dModes = mt', dAcyclicModes = acyclic' }
+          , esPendingClass = pending'
+          }
+    RPComprehension compDecl ->
+      pure st { esPendingComp = esPendingComp st <> [compDecl] }
     RPModality decl -> do
       let modDecl =
             ModDecl
@@ -554,6 +752,8 @@ elabPolyItem env st item =
                   { obName = rodName decl
                   , obMode = mode
                   , obForGen = True
+                  , obForGenName = Nothing
+                  , obGenerated = False
                   , obTyVars = []
                   , obTmVars = []
                   , obDom = []
@@ -574,6 +774,8 @@ elabPolyItem env st item =
                   { obName = rodName decl
                   , obMode = mode
                   , obForGen = False
+                  , obForGenName = Nothing
+                  , obGenerated = False
                   , obTyVars = tyVars
                   , obTmVars = tmVars
                   , obDom = dom
@@ -859,76 +1061,76 @@ validateObligationExprMode doc mode allowGen = go mode
           go expected a >> go expected b
 
 data ImplementsCheckResult
-  = ImplementsCheckProved [(Text, JoinProof)]
+  = ImplementsCheckProved [(Text, ImplementsProof)]
   | ImplementsCheckUndecided Text SearchLimit
+  deriving (Eq, Show)
+
+data ImplementsProof
+  = ImplementsProofJoin JoinProof
+  | ImplementsProofDefEq
   deriving (Eq, Show)
 
 checkImplementsObligationsWithBudget :: SearchBudget -> ModuleEnv -> Doctrine -> Morphism -> Doctrine -> Either Text ImplementsCheckResult
 checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
   ttTgt <- doctrineTypeTheory tgtDoc
-  checkObligations ttTgt (dObligations ifaceDoc)
+  ttSrc <- doctrineTypeTheory (morSrc morph)
+  let tgtCtorTables = ttCtorTables ttTgt
+  slotsByGen <- extractDoctrineSlotsWithTables tgtDoc tgtCtorTables
+  checkObligations ttSrc ttTgt tgtCtorTables slotsByGen (dObligations ifaceDoc)
   where
-    checkObligations _ [] = Right (ImplementsCheckProved [])
-    checkObligations ttTgt (obl:rest) = do
-      result <- checkOne ttTgt obl
+    checkObligations _ _ _ _ [] = Right (ImplementsCheckProved [])
+    checkObligations ttSrc ttTgt tgtCtorTables slotsByGen (obl:rest) = do
+      result <- checkOne ttSrc ttTgt tgtCtorTables slotsByGen obl
       case result of
         ImplementsCheckUndecided{} -> Right result
         ImplementsCheckProved proofs -> do
-          restResult <- checkObligations ttTgt rest
+          restResult <- checkObligations ttSrc ttTgt tgtCtorTables slotsByGen rest
           case restResult of
             ImplementsCheckUndecided{} -> Right restResult
             ImplementsCheckProved restProofs ->
               Right (ImplementsCheckProved (proofs <> restProofs))
 
-    checkOne ttTgt obl
-      | obForGen obl = checkForGen ttTgt obl
-      | otherwise = checkPlain ttTgt obl
+    generatedCompRules = rulesFromPolicy UseOnlyComputationalLR (dCells2 tgtDoc)
 
-    checkPlain ttTgt obl = do
-      tyVarsTgt <- mapM (mapObligationTyVar morph) (obTyVars obl)
-      tmVarsTgt <- mapM (mapObligationTmVar morph) (obTmVars obl)
-      lhs0 <- evalObligationExprMapped env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obLHSExpr obl)
-      rhs0 <- evalObligationExprMapped env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obRHSExpr obl)
-      domTgt <- mapM (applyMorphismTy morph) (obDom obl)
-      codTgt <- mapM (applyMorphismTy morph) (obCod obl)
+    checkOne ttSrc ttTgt tgtCtorTables slotsByGen obl
+      | obForGen obl = checkForGen ttSrc ttTgt tgtCtorTables slotsByGen obl
+      | otherwise = checkPlain ttSrc ttTgt tgtCtorTables obl
+
+    checkPlain ttSrc ttTgt tgtCtorTables obl = do
+      tyVarsTgt <- mapM (mapObligationTyVar ttSrc ttTgt tgtCtorTables morph) (obTyVars obl)
+      tmVarsTgt <- mapM (mapObligationTmVar ttSrc ttTgt tgtCtorTables morph) (obTmVars obl)
+      lhs0 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obLHSExpr obl)
+      rhs0 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obRHSExpr obl)
+      domTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph) (obDom obl)
+      codTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph) (obCod obl)
       let rigidTy = S.fromList tyVarsTgt
       let rigidTm = S.fromList tmVarsTgt
       lhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt lhs0
       rhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt rhs0
       let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
-      proof <- autoJoinProof ttTgt budget rules lhs rhs
-      case proof of
-        SearchUndecided lim ->
-          Right (ImplementsCheckUndecided (obName obl) lim)
-        SearchProved witness -> do
-          checkJoinProof ttTgt rules witness
-          Right (ImplementsCheckProved [(obName obl, witness)])
+      checkObligationJoin ttTgt rules (obGenerated obl) (obName obl) lhs rhs
 
-    checkForGen ttTgt obl = do
+    checkForGen ttSrc ttTgt tgtCtorTables slotsByGen obl = do
       modeTgt <- applyMorphismMode morph (obMode obl)
-      let gens =
-            [ gd
-            | gd <- M.elems (M.findWithDefault M.empty modeTgt (dGens tgtDoc))
-            , not (isTypeDeclGenName tgtDoc modeTgt (gdName gd))
-            ]
-      checkForGens ttTgt modeTgt obl gens
+      gens <- resolveForGenTargets tgtCtorTables modeTgt obl
+      checkForGens ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl gens
 
-    checkForGens _ _ _ [] = Right (ImplementsCheckProved [])
-    checkForGens ttTgt modeTgt obl (gen:rest) = do
-      result <- checkForGenOne ttTgt modeTgt obl gen
+    checkForGens _ _ _ _ _ _ [] = Right (ImplementsCheckProved [])
+    checkForGens ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl (gen:rest) = do
+      result <- checkForGenOne ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl gen
       case result of
         ImplementsCheckUndecided{} -> Right result
         ImplementsCheckProved proofs -> do
-          restResult <- checkForGens ttTgt modeTgt obl rest
+          restResult <- checkForGens ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl rest
           case restResult of
             ImplementsCheckUndecided{} -> Right restResult
             ImplementsCheckProved restProofs ->
               Right (ImplementsCheckProved (proofs <> restProofs))
 
-    checkForGenOne ttTgt modeTgt obl gen = do
+    checkForGenOne ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl gen = do
       genDiag <- mkForGenDiag modeTgt gen
-      lhs0 <- evalObligationExprForGen env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obLHSExpr obl)
-      rhs0 <- evalObligationExprForGen env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obRHSExpr obl)
+      lhs0 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obLHSExpr obl)
+      rhs0 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obRHSExpr obl)
       dom <- diagramDom genDiag
       cod <- diagramCod genDiag
       let rigidTy = S.fromList (gdTyVars gen)
@@ -936,13 +1138,382 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
       lhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod lhs0
       rhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod rhs0
       let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
-      proof <- autoJoinProof ttTgt budget rules lhs rhs
+      let label = obName obl <> "[" <> renderGenName (gdName gen) <> "]"
+      generatedSlotOutcome <- checkGeneratedSlot ttTgt slotsByGen modeTgt gen obl label lhs rhs
+      case generatedSlotOutcome of
+        Just out -> Right out
+        Nothing -> checkObligationJoin ttTgt rules (obGenerated obl) label lhs rhs
+
+    resolveForGenTargets tgtCtorTables modeTgt obl =
+      case obForGenName obl of
+        Nothing -> Right allModeGens
+        Just srcGenName -> do
+          tgtGenName <- mapForGenName (obMode obl) srcGenName
+          case M.lookup modeTgt (dGens tgtDoc) >>= M.lookup tgtGenName of
+            Nothing ->
+              Left
+                ( "implements obligation "
+                    <> obName obl
+                    <> ": missing target generator "
+                    <> renderModeName modeTgt
+                    <> "."
+                    <> renderGenName tgtGenName
+                )
+            Just gd ->
+              if isTypeDeclGenNameInTables tgtDoc tgtCtorTables modeTgt (ObjName (renderGenName tgtGenName))
+                then
+                  Left
+                    ( "implements obligation "
+                        <> obName obl
+                        <> ": target generator "
+                        <> renderModeName modeTgt
+                        <> "."
+                        <> renderGenName tgtGenName
+                        <> " is constructor-like"
+                    )
+                else Right [gd]
+      where
+        compSupportNames =
+          case M.lookup modeTgt (mtClassifiedBy (dModes tgtDoc)) >>= cdComp of
+            Just comp ->
+              S.fromList [compCtxExt comp, compVar comp, compReindex comp]
+            Nothing -> S.empty
+        allModeGens =
+          [ gd
+          | gd <- M.elems (M.findWithDefault M.empty modeTgt (dGens tgtDoc))
+          , not (isTypeDeclGenNameInTables tgtDoc tgtCtorTables modeTgt (ObjName (renderGenName (gdName gd))))
+          , gdName gd `S.notMember` compSupportNames
+          ]
+
+    mapForGenName modeSrc srcGenName =
+      case M.lookup (modeSrc, srcGenName) (morGenMap morph) of
+        Nothing -> Right srcGenName
+        Just image ->
+          case singleGeneratorImageName (giDiagram image) of
+            Just tgtGenName -> Right tgtGenName
+            Nothing ->
+              Left
+                ( "implements obligation: source generator "
+                    <> renderModeName modeSrc
+                    <> "."
+                    <> renderGenName srcGenName
+                    <> " maps to a non-singleton generator image"
+                )
+
+    singleGeneratorImageName diag =
+      case IM.elems (dEdges diag) of
+        [edge] ->
+          case ePayload edge of
+            PGen g _ _ 
+              | eIns edge == dIn diag
+              , eOuts edge == dOut diag ->
+                  Just g
+            _ -> Nothing
+        _ -> Nothing
+
+    checkGeneratedSlot tt slotsByGen modeTgt gen obl label lhs rhs =
+      case generatedSlotFor slotsByGen modeTgt gen obl of
+        Nothing -> Right Nothing
+        Just slot -> do
+          case slotKind slot of
+            SlotCtorTmArg -> do
+              lhsTm <- extractCtorSlotTerm slot lhs
+              rhsTm <- extractCtorSlotTerm slot rhs
+              case slotSig slot of
+                SlotTermSig _ sortTy -> do
+                  let lhsCtx = dTmCtx (unTerm lhsTm)
+                  let rhsCtx = dTmCtx (unTerm rhsTm)
+                  case chooseHostTmCtx lhsCtx rhsCtx of
+                    Nothing ->
+                      Right Nothing
+                    Just hostCtx -> do
+                      ok <- defEqTermDiagram tt hostCtx sortTy lhsTm rhsTm
+                      if ok
+                        -- Slot-local ctor obligations are discharged on the designated term slot,
+                        -- not by a whole-diagram join witness.
+                        then Right (Just (ImplementsCheckProved [(label, ImplementsProofDefEq)]))
+                        else Right Nothing
+                SlotBinderSig _ ->
+                  Right Nothing
+            SlotBinder -> do
+              lhsArg <- extractBinderSlotArg gen slot lhs
+              rhsArg <- extractBinderSlotArg gen slot rhs
+              ok <- defEqBinderArg tt lhsArg rhsArg
+              if ok
+                -- Slot-local binder obligations are discharged on the designated binder slot.
+                then Right (Just (ImplementsCheckProved [(label, ImplementsProofDefEq)]))
+                else Right Nothing
+
+    chooseHostTmCtx lhsCtx rhsCtx
+      | lhsCtx == rhsCtx = Just lhsCtx
+      | lhsCtx `L.isPrefixOf` rhsCtx = Just rhsCtx
+      | rhsCtx `L.isPrefixOf` lhsCtx = Just lhsCtx
+      | otherwise = Nothing
+
+    generatedSlotFor slotsByGen modeTgt gen obl = do
+      slots <- M.lookup (modeTgt, gdName gen) slotsByGen
+      key <- generatedSlotKey (obName obl)
+      law <- generatedLawSuffix (obName obl)
+      let matches =
+            [ s
+            | s <- slots
+            , sanitizeGeneratedSlotPath (sidPath (slotId s)) == key
+            , generatedSlotLawAllowed obl law gen s
+            ]
+      case matches of
+        [slot] -> Just slot
+        _ -> Nothing
+
+    generatedSlotLawAllowed obl law gen slot =
+      if obGenerated obl && obForGen obl
+        then
+          case (slotKind slot, law) of
+            (SlotCtorTmArg, "id_dom") -> True
+            (SlotCtorTmArg, "id_cod") -> True
+            (SlotCtorTmArg, "comp_dom") -> True
+            (SlotCtorTmArg, "comp_cod") -> True
+            (SlotBinder, "id_dom") -> True
+            (SlotBinder, "id_cod") -> True
+            (SlotBinder, "comp_dom") -> True
+            (SlotBinder, "comp_cod") -> True
+            (SlotBinder, "nat") -> hasMixedDom (gdDom gen)
+            _ -> False
+        else False
+
+    hasMixedDom dom =
+      any isBinder dom && any isPlainPort dom
+
+    isPlainPort shape =
+      case shape of
+        InPort _ -> True
+        InBinder _ -> False
+
+    isBinder shape =
+      case shape of
+        InBinder _ -> True
+        InPort _ -> False
+
+    generatedLawSuffix name =
+      case reverse (T.splitOn "/" name) of
+        law : _ -> Just law
+        _ -> Nothing
+
+    generatedSlotKey name =
+      case T.splitOn "/" name of
+        (_prefix : _mode : _gen : slotKey : _law : []) -> Just slotKey
+        _ -> Nothing
+
+    sanitizeGeneratedSlotPath =
+      T.map (\c -> if isAlphaNum c || c == '/' || c == '_' || c == '-' then c else '_')
+
+    extractBinderSlotArg gen slot diag = do
+      (domIdx, pathTail) <- parseBinderSlotPath (sidPath (slotId slot))
+      if null pathTail
+        then Right ()
+        else Left "generated slot obligation: unsupported binder slot path"
+      binderIdx <- binderArgIndexForDomSlot gen domIdx
+      bargs <- uniqueGenBinderArgs (gdName gen) diag
+      nth "binder argument" binderIdx bargs
+
+    parseBinderSlotPath path =
+      case T.splitOn "." path of
+        [] ->
+          Left "generated slot obligation: empty slot path"
+        root : rest ->
+          case parseIndexed "dom[" root of
+            Just domIdx -> Right (domIdx, rest)
+            Nothing -> Left "generated slot obligation: binder slot root must be dom[...]"
+
+    binderArgIndexForDomSlot gen domIdx =
+      if domIdx < 0 || domIdx >= length (gdDom gen)
+        then Left "generated slot obligation: binder slot domain index out of bounds"
+        else
+          let before = take domIdx (gdDom gen)
+           in case gdDom gen !! domIdx of
+                InBinder _ ->
+                  Right (length [() | InBinder _ <- before])
+                InPort _ ->
+                  Left "generated slot obligation: slot path points to non-binder domain input"
+
+    uniqueGenBinderArgs g diag =
+      case
+        [ bargs
+        | edge <- IM.elems (dEdges diag)
+        , PGen g' _ bargs <- [ePayload edge]
+        , g' == g
+        ]
+      of
+        [bargs] -> Right bargs
+        [] -> Left "generated slot obligation: generator edge not found while extracting binder slot"
+        _ -> Left "generated slot obligation: multiple generator edges found while extracting binder slot"
+
+    defEqBinderArg tt lhsArg rhsArg =
+      case (lhsArg, rhsArg) of
+        (BAMeta l, BAMeta r) ->
+          Right (l == r)
+        (BAConcrete lhsDiag0, BAConcrete rhsDiag0) ->
+          case chooseHostTmCtx (dTmCtx lhsDiag0) (dTmCtx rhsDiag0) of
+            Nothing ->
+              Right False
+            Just hostCtx -> do
+              lhsDiag <- weakenDiagramTmCtxTo hostCtx lhsDiag0
+              rhsDiag <- weakenDiagramTmCtxTo hostCtx rhsDiag0
+              lhsSeed <- normalizeForGeneratedObligation tt [] lhsDiag
+              rhsSeed <- normalizeForGeneratedObligation tt [] rhsDiag
+              diagramIsoEq lhsSeed rhsSeed
+        _ ->
+          Right False
+
+    extractCtorSlotTerm slot diag = do
+      let parts = T.splitOn "." (sidPath (slotId slot))
+      case parts of
+        [] ->
+          Left "generated slot obligation: empty slot path"
+        root : rest -> do
+          rootObj <- extractRootObj root diag
+          extractObjPath rest rootObj
+
+    extractRootObj seg diag
+      | Just idx <- parseIndexed "dom[" seg = do
+          pid <- nth "domain" idx (dIn diag)
+          lookupPortTy "domain" pid diag
+      | Just idx <- parseIndexed "cod[" seg = do
+          pid <- nth "codomain" idx (dOut diag)
+          lookupPortTy "codomain" pid diag
+      | otherwise =
+          Left "generated slot obligation: unsupported root slot path"
+
+    extractObjPath segs obj =
+      case segs of
+        [] ->
+          Left "generated slot obligation: slot path does not end at a term argument"
+        seg : rest
+          | seg == "mod" ->
+              case objCode obj of
+                CTMod me inner ->
+                  extractObjPath rest (Obj { objOwnerMode = meSrc me, objCode = inner })
+                _ ->
+                  Left "generated slot obligation: expected modality wrapper in slot path"
+          | Just idx <- parseIndexed "arg[" seg ->
+              case objCode obj of
+                CTCon _ args -> do
+                  arg <- nth "constructor argument" idx args
+                  case arg of
+                    CATm tm ->
+                      if null rest
+                        then Right tm
+                        else extractTermPath rest tm
+                    CAObj ty ->
+                      extractObjPath rest ty
+                _ ->
+                  Left "generated slot obligation: expected constructor in slot path"
+          | otherwise ->
+              Left "generated slot obligation: unsupported object slot segment"
+
+    extractTermPath segs tm =
+      case segs of
+        "term" : rest -> stepTerm rest tm
+        _ -> Left "generated slot obligation: expected term segment in slot path"
+      where
+        stepTerm [] term = Right term
+        stepTerm (seg : rest) (TermDiagram termDiag)
+          | Just idx <- parseIndexed "port[" seg = do
+              ty <- nthIntMap "term port" idx (dPortObj termDiag)
+              extractObjPath rest ty
+          | Just idx <- parseIndexed "tmctx[" seg = do
+              ty <- nth "term context" idx (dTmCtx termDiag)
+              extractObjPath rest ty
+          | Just idx <- parseIndexed "edge[" seg =
+              case rest of
+                "sort" : rest' -> do
+                  edge <- nthIntMap "term edge" idx (dEdges termDiag)
+                  case ePayload edge of
+                    PTmMeta tv ->
+                      extractObjPath rest' (tmvSort tv)
+                    _ ->
+                      Left "generated slot obligation: expected PTmMeta edge at term slot sort path"
+                _ ->
+                  Left "generated slot obligation: expected .sort after term edge segment"
+          | otherwise =
+              Left "generated slot obligation: unsupported term slot segment"
+
+    parseIndexed prefix seg =
+      if prefix `T.isPrefixOf` seg && "]" `T.isSuffixOf` seg
+        then
+          let inner = T.dropEnd 1 (T.drop (T.length prefix) seg)
+           in case reads (T.unpack inner) of
+                [(n, "")] -> Just n
+                _ -> Nothing
+        else Nothing
+
+    nth label idx xs =
+      if idx >= 0 && idx < length xs
+        then Right (xs !! idx)
+        else Left ("generated slot obligation: " <> label <> " index out of bounds")
+
+    nthIntMap label idx table =
+      case IM.lookup idx table of
+        Just x -> Right x
+        Nothing -> Left ("generated slot obligation: " <> label <> " index out of bounds")
+
+    lookupPortTy label pid diag =
+      case diagramPortObj diag pid of
+        Just ty -> Right ty
+        Nothing -> Left ("generated slot obligation: missing " <> label <> " port type")
+
+    checkObligationJoin tt rules useGeneratedSeed label lhs rhs = do
+      generatedOutcome <-
+        if useGeneratedSeed
+          then tryGeneratedSeed tt rules label lhs rhs
+          else Right Nothing
+      case generatedOutcome of
+        Just out -> Right out
+        Nothing -> runJoin tt rules label lhs rhs
+
+    runJoin tt rules label lhs rhs = do
+      proof <- autoJoinProof tt budget rules lhs rhs
       case proof of
         SearchUndecided lim ->
-          Right (ImplementsCheckUndecided (obName obl <> "[" <> renderGenName (gdName gen) <> "]") lim)
+          Right (ImplementsCheckUndecided label lim)
         SearchProved witness -> do
-          checkJoinProof ttTgt rules witness
-          Right (ImplementsCheckProved [(obName obl <> "[" <> renderGenName (gdName gen) <> "]", witness)])
+          checkJoinProof tt rules witness
+          Right (ImplementsCheckProved [(label, ImplementsProofJoin witness)])
+
+    tryGeneratedSeed tt rules label lhs rhs = do
+      lhsSeed <- normalizeForGeneratedObligation tt rules lhs
+      rhsSeed <- normalizeForGeneratedObligation tt rules rhs
+      same <- diagramIsoEq lhsSeed rhsSeed
+      if same
+        then do
+          let witness =
+                JoinProof
+                  { jpLeft = RewritePath { rpStart = lhsSeed, rpSteps = [] }
+                  , jpRight = RewritePath { rpStart = rhsSeed, rpSteps = [] }
+                  }
+          checkJoinProof tt rules witness
+          Right (Just (ImplementsCheckProved [(label, ImplementsProofJoin witness)]))
+        else do
+          seedProof <- autoJoinProof tt budget rules lhsSeed rhsSeed
+          case seedProof of
+            SearchUndecided _ ->
+              Right Nothing
+            SearchProved witness -> do
+              checkJoinProof tt rules witness
+              Right (Just (ImplementsCheckProved [(label, ImplementsProofJoin witness)]))
+
+    normalizeForGeneratedObligation tt _rules diag =
+      case generatedCompRules of
+        [] -> Right diag
+        _ -> do
+          status <- normalize tt generatedSeedFuel generatedCompRules diag
+          pure $
+            case status of
+              Finished d -> d
+              OutOfFuel d -> d
+
+    generatedSeedFuel =
+      let depthFuel = max 1 (sbMaxDepth budget * 4)
+       in min 256 depthFuel
 
 checkImplementsObligations :: ModuleEnv -> Doctrine -> Morphism -> Doctrine -> Either Text ()
 checkImplementsObligations env tgtDoc morph ifaceDoc = do
@@ -959,20 +1530,23 @@ checkImplementsObligations env tgtDoc morph ifaceDoc = do
             <> ")"
         )
 
-mapObligationTyVar :: Morphism -> TmVar -> Either Text TmVar
-mapObligationTyVar morph v = do
+mapObligationTyVar :: TypeTheory -> TypeTheory -> CtorTables -> Morphism -> TmVar -> Either Text TmVar
+mapObligationTyVar ttSrc ttTgt tgtCtorTables morph v = do
   ownerSrc <- ownerModeForTypeMeta (morSrc morph) v
   ownerTgt <- applyMorphismMode morph ownerSrc
-  sort' <- applyMorphismTy morph (tmvSort v)
+  sort' <- applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph (tmvSort v)
   pure v { tmvSort = sort', tmvOwnerMode = Just ownerTgt }
 
-mapObligationTmVar :: Morphism -> TmVar -> Either Text TmVar
-mapObligationTmVar morph v = do
-  sort' <- applyMorphismTy morph (tmvSort v)
+mapObligationTmVar :: TypeTheory -> TypeTheory -> CtorTables -> Morphism -> TmVar -> Either Text TmVar
+mapObligationTmVar ttSrc ttTgt tgtCtorTables morph v = do
+  sort' <- applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph (tmvSort v)
   pure v { tmvSort = sort', tmvOwnerMode = Nothing }
 
 evalObligationExprMapped
-  :: ModuleEnv
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> ModuleEnv
   -> Doctrine
   -> Doctrine
   -> Morphism
@@ -981,18 +1555,18 @@ evalObligationExprMapped
   -> [TmVar]
   -> RawOblExpr
   -> Either Text Diagram
-evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars expr = do
+evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars expr = do
   modeTgt <- applyMorphismMode morph mode
   case expr of
     ROEDiag rawDiag -> do
       diagSrc <- elabObligationDiag env ifaceDoc mode [] tyVars tmVars rawDiag
-      diagTgt <- applyMorphismDiagram morph diagSrc
+      diagTgt <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables morph diagSrc
       if dMode diagTgt == modeTgt
         then Right diagTgt
         else Left "obligation: mapped diagram mode mismatch after morphism application"
     ROEMap rawMe innerExpr -> do
       me <- elabRawModExpr (dModes ifaceDoc) rawMe
-      inner <- evalObligationExprMapped env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars innerExpr
+      inner <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars innerExpr
       meTgt <- applyMorphismModExpr morph me
       mapped <- applyModExpr tgtDoc meTgt inner
       if dMode mapped == modeTgt
@@ -1005,13 +1579,12 @@ evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars expr = do
     ROELiftCod _ ->
       Left "obligation: lift_cod is only valid in for_gen obligations"
     ROEComp a b -> do
-      d1 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars a
-      d2 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars b
-      ttTgt <- doctrineTypeTheory tgtDoc
+      d1 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars a
+      d2 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars b
       compD ttTgt d2 d1
     ROETensor a b -> do
-      d1 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars a
-      d2 <- evalObligationExprMapped env ifaceDoc tgtDoc morph mode tyVars tmVars b
+      d1 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars a
+      d2 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars b
       tensorD d1 d2
 
 data LiftBoundary
@@ -1020,7 +1593,10 @@ data LiftBoundary
   deriving (Eq, Show)
 
 evalObligationExprForGen
-  :: ModuleEnv
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> ModuleEnv
   -> Doctrine
   -> Doctrine
   -> Morphism
@@ -1030,19 +1606,19 @@ evalObligationExprForGen
   -> Diagram
   -> RawOblExpr
   -> Either Text Diagram
-evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag expr = do
+evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag expr = do
   modeTgt <- applyMorphismMode morph mode
   case expr of
     ROEDiag rawDiag -> do
       diagSrc <- elabObligationDiag env ifaceDoc mode (dTmCtx genDiag) tyVars tmVars rawDiag
-      diagTgt0 <- applyMorphismDiagram morph diagSrc
+      diagTgt0 <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables morph diagSrc
       diagTgt <- weakenDiagramTmCtxTo (dTmCtx genDiag) diagTgt0
       if dMode diagTgt == modeTgt
         then Right diagTgt
         else Left "obligation: mapped diagram mode mismatch after morphism application"
     ROEMap rawMe innerExpr -> do
       me <- elabRawModExpr (dModes ifaceDoc) rawMe
-      inner <- evalObligationExprForGen env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars genDiag innerExpr
+      inner <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars genDiag innerExpr
       meTgt <- applyMorphismModExpr morph me
       mapped <- applyModExpr tgtDoc meTgt inner
       if dMode mapped == modeTgt
@@ -1053,21 +1629,23 @@ evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag ex
         then Right genDiag
         else Left "obligation: @gen mode mismatch"
     ROELiftDom rawOp ->
-      evalLiftedForGen env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverDom rawOp
+      evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverDom rawOp
     ROELiftCod rawOp ->
-      evalLiftedForGen env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverCod rawOp
+      evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverCod rawOp
     ROEComp a b -> do
-      d1 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
-      d2 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
-      ttTgt <- doctrineTypeTheory tgtDoc
+      d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+      d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
       compD ttTgt d2 d1
     ROETensor a b -> do
-      d1 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
-      d2 <- evalObligationExprForGen env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
+      d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+      d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
       tensorD d1 d2
 
 evalLiftedForGen
-  :: ModuleEnv
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> ModuleEnv
   -> Doctrine
   -> Doctrine
   -> Morphism
@@ -1079,8 +1657,8 @@ evalLiftedForGen
   -> LiftBoundary
   -> RawDiagExpr
   -> Either Text Diagram
-evalLiftedForGen env ifaceDoc tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag liftSide rawOp = do
-  ttDoc <- doctrineTypeTheory tgtDoc
+evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag liftSide rawOp = do
+  let ttDoc = ttTgt
   ctx <- case liftSide of
     LiftOverDom -> diagramDom genDiag
     LiftOverCod -> diagramCod genDiag
@@ -1098,7 +1676,7 @@ evalLiftedForGen env ifaceDoc tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag
 
     instantiateAt ttDoc tmCtx argTy = do
       opSrc <- elabObligationDiag env ifaceDoc modeSrc tmCtx tyVars tmVars rawOp
-      opTgt0 <- applyMorphismDiagram morph opSrc
+      opTgt0 <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables morph opSrc
       opTgt <- weakenDiagramTmCtxTo (dTmCtx genDiag) opTgt0
       if dMode opTgt == modeTgt
         then Right ()
@@ -1263,14 +1841,18 @@ resolveTyVarDecl doc defaultMode decl = do
 
 mkTypeMetaVar :: Doctrine -> ModeName -> Text -> Either Text TmVar
 mkTypeMetaVar doc ownerMode name = do
-  let universe =
-        fromMaybe
-          ( Obj
-              { objOwnerMode = ownerMode
-              , objCode = CTCon (ObjRef ownerMode (ObjName "_")) []
-              }
+  universe <-
+    case modeUniverseObj (dModes doc) ownerMode of
+      Nothing ->
+        Left
+          ( "type variable `"
+              <> name
+              <> "`: mode "
+              <> renderMode ownerMode
+              <> " missing classifiedBy universe"
           )
-          (modeUniverseObj (dModes doc) ownerMode)
+      Just u ->
+        Right u
   pure
     TmVar
       { tmvName = name
@@ -1279,6 +1861,8 @@ mkTypeMetaVar doc ownerMode name = do
       , tmvScope = 0
       , tmvOwnerMode = Just ownerMode
       }
+  where
+    renderMode (ModeName n) = n
 
 ownerModeForTypeMeta :: Doctrine -> TmVar -> Either Text ModeName
 ownerModeForTypeMeta doc v =
@@ -1319,8 +1903,7 @@ elabParamDecls doc defaultMode params = go 0 [] [] [] params
       case p of
         RPDType tvDecl -> do
           ownerMode <- resolveTyVarMode doc defaultMode tvDecl
-          tv0 <- mkTypeMetaVar doc ownerMode (rtvName tvDecl)
-          let tv = tv0 { tmvScope = i }
+          tv <- mkTypeMetaVar doc ownerMode (rtvName tvDecl)
           let name = ovName tv
           if name `elem` map ovName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
@@ -1330,8 +1913,7 @@ elabParamDecls doc defaultMode params = go 0 [] [] [] params
           if name `elem` map ovName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
             else do
-              tmVar0 <- elabTmDeclVar doc defaultMode tyAcc tmDecl
-              let tmVar = tmVar0 { tmvScope = negate (i + 1) }
+              tmVar <- elabTmDeclVar doc defaultMode tyAcc tmDecl
               go (i + 1) tyAcc (tmVar:tmAcc) (GP_Tm tmVar : paramAcc) rest
 
 buildTypeTemplateParams
@@ -1382,7 +1964,20 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
 
 elabContext :: Doctrine -> ModeName -> [TmVar] -> [TmVar] -> M.Map Text (Int, Obj) -> RawPolyContext -> Either Text Context
 elabContext doc expectedMode tyVars tmVars tmBound ctx = do
-  tys <- mapM (elabObjExpr doc tyVars tmVars tmBound expectedMode) ctx
+  ctorTables <- deriveCtorTables doc
+  elabContextWithTables doc ctorTables expectedMode tyVars tmVars tmBound ctx
+
+elabContextWithTables
+  :: Doctrine
+  -> CtorTables
+  -> ModeName
+  -> [TmVar]
+  -> [TmVar]
+  -> M.Map Text (Int, Obj)
+  -> RawPolyContext
+  -> Either Text Context
+elabContextWithTables doc ctorTables expectedMode tyVars tmVars tmBound ctx = do
+  tys <- mapM (elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedMode) ctx
   let bad = filter (\ty -> objOwnerMode ty /= expectedMode) tys
   if null bad
     then Right tys
@@ -1396,7 +1991,20 @@ elabObjExpr
   -> ModeName
   -> RawPolyObjExpr
   -> Either Text Obj
-elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
+elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr = do
+  ctorTables <- deriveCtorTables doc
+  elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode expr
+
+elabObjExprWithTables
+  :: Doctrine
+  -> CtorTables
+  -> [TmVar]
+  -> [TmVar]
+  -> M.Map Text (Int, Obj)
+  -> ModeName
+  -> RawPolyObjExpr
+  -> Either Text Obj
+elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode expr =
   case expr of
     RPTVar name -> do
       case [v | v <- tyVars, ovName v == name] of
@@ -1408,15 +2016,16 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
         (_:_:_) -> Left ("duplicate type variable name: " <> name)
         [] -> do
           ref <-
-            resolveTypeRefInClassifier
+            resolveTypeRefInClassifierInTables
               doc
+              ctorTables
               expectedOwnerMode
               classifierMode
               RawTypeRef
                 { rtrMode = Nothing
                 , rtrName = name
                 }
-          params <- lookupCtorSigForOwner doc expectedOwnerMode ref
+          params <- lookupCtorSigForOwnerInTables doc ctorTables expectedOwnerMode ref
           if null params
             then Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTCon ref [] }
             else Left "type constructor arity mismatch"
@@ -1425,7 +2034,7 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
       if meTgt me == expectedOwnerMode
         then Right ()
         else Left "modality application target/object mode mismatch"
-      inner <- elabObjExpr doc tyVars tmVars tmBound (meSrc me) innerRaw
+      inner <- elabObjExprWithTables doc ctorTables tyVars tmVars tmBound (meSrc me) innerRaw
       if objOwnerMode inner /= meSrc me
         then Left "modality application source/argument mode mismatch"
         else
@@ -1442,7 +2051,7 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
           if meTgt me == expectedOwnerMode
             then Right ()
             else Left "modality application target/object mode mismatch"
-          inner <- elabObjExpr doc tyVars tmVars tmBound (meSrc me) innerRaw
+          inner <- elabObjExprWithTables doc ctorTables tyVars tmVars tmBound (meSrc me) innerRaw
           if objOwnerMode inner /= meSrc me
             then Left "modality application source/argument mode mismatch"
             else
@@ -1453,8 +2062,8 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
                   , objCode = CTMod me (objCode inner)
                   }
         Nothing -> do
-          ref <- resolveTypeRefInClassifier doc expectedOwnerMode classifierMode rawRef
-          params <- lookupCtorSigForOwner doc expectedOwnerMode ref
+          ref <- resolveTypeRefInClassifierInTables doc ctorTables expectedOwnerMode classifierMode rawRef
+          params <- lookupCtorSigForOwnerInTables doc ctorTables expectedOwnerMode ref
           if length params /= length args
             then Left "type constructor arity mismatch"
             else do
@@ -1464,7 +2073,7 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
     classifierMode = modeClassifierMode (dModes doc) expectedOwnerMode
 
     elabOneArg _ (TPS_Ty m, rawArg) = do
-      argTy <- elabObjExpr doc tyVars tmVars tmBound m rawArg
+      argTy <- elabObjExprWithTables doc ctorTables tyVars tmVars tmBound m rawArg
       if objOwnerMode argTy == m
         then Right (CAObj argTy)
         else Left "type constructor argument mode mismatch"
@@ -1489,8 +2098,9 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
     hasModality tok = M.member (ModName tok) (mtDecls (dModes doc))
     hasQualifiedType modeTok tyTok =
       case
-        resolveTypeRefInClassifierMaybe
+        resolveTypeRefInClassifierMaybeInTables
           doc
+          ctorTables
           expectedOwnerMode
           classifierMode
           RawTypeRef
@@ -1508,7 +2118,19 @@ elabObjExprInferOwner
   -> M.Map Text (Int, Obj)
   -> RawPolyObjExpr
   -> Either Text Obj
-elabObjExprInferOwner doc tyVars tmVars tmBound expr =
+elabObjExprInferOwner doc tyVars tmVars tmBound expr = do
+  ctorTables <- deriveCtorTables doc
+  elabObjExprInferOwnerWithTables doc ctorTables tyVars tmVars tmBound expr
+
+elabObjExprInferOwnerWithTables
+  :: Doctrine
+  -> CtorTables
+  -> [TmVar]
+  -> [TmVar]
+  -> M.Map Text (Int, Obj)
+  -> RawPolyObjExpr
+  -> Either Text Obj
+elabObjExprInferOwnerWithTables doc ctorTables tyVars tmVars tmBound expr =
   case successes of
     [(_, obj)] -> Right obj
     [] ->
@@ -1519,7 +2141,7 @@ elabObjExprInferOwner doc tyVars tmVars tmBound expr =
       Left "ambiguous object expression mode (qualify constructors or use a variable with explicit mode)"
   where
     modes = M.keys (mtModes (dModes doc))
-    attempts = [ (m, elabObjExpr doc tyVars tmVars tmBound m expr) | m <- modes ]
+    attempts = [ (m, elabObjExprWithTables doc ctorTables tyVars tmVars tmBound m expr) | m <- modes ]
     successes = [ (m, obj) | (m, Right obj) <- attempts ]
     failures = [ err | (_, Left err) <- attempts ]
 
@@ -1534,12 +2156,13 @@ elabTmTerm
 elabTmTerm doc _tyVars tmVars tmBound mExpected raw =
   do
     ttDoc <- doctrineTypeTheory doc
-    (expr, inferredSort) <- elabExpr mExpected raw
+    ctorTables <- deriveCtorTables doc
+    (expr, inferredSort) <- elabExpr ctorTables mExpected raw
     let expectedSort = maybe inferredSort id mExpected
     tmCtx <- mkTmCtx
     termExprToDiagramChecked ttDoc tmCtx expectedSort expr
   where
-    elabExpr mExp tmRaw =
+    elabExpr ctorTables mExp tmRaw =
       case tmRaw of
         RPTMod _ _ -> Left "term arguments do not support modality application"
         RPTVar name ->
@@ -1552,10 +2175,10 @@ elabTmTerm doc _tyVars tmVars tmBound mExpected raw =
                 [] ->
                   case mExp of
                     Nothing -> do
-                      (funName, sig) <- lookupTmFunAny doc name 0
+                      (funName, sig) <- lookupTmFunAnyInTables doc ctorTables name 0
                       pure (TMFun funName [], tfsRes sig)
                     Just expected -> do
-                      (funName, sig) <- lookupTmFunByName doc expected name 0
+                      (funName, sig) <- lookupTmFunByNameInTables doc ctorTables expected name 0
                       pure (TMFun funName [], tfsRes sig)
         RPTCon rawRef args ->
           case rtrMode rawRef of
@@ -1563,9 +2186,9 @@ elabTmTerm doc _tyVars tmVars tmBound mExpected raw =
             Nothing -> do
               (funName, sig) <-
                 case mExp of
-                  Just expected -> lookupTmFunByName doc expected (rtrName rawRef) (length args)
-                  Nothing -> lookupTmFunAny doc (rtrName rawRef) (length args)
-              argExprs <- mapM (\(argSort, argRaw) -> fst <$> elabExpr (Just argSort) argRaw) (zip (tfsArgs sig) args)
+                  Just expected -> lookupTmFunByNameInTables doc ctorTables expected (rtrName rawRef) (length args)
+                  Nothing -> lookupTmFunAnyInTables doc ctorTables (rtrName rawRef) (length args)
+              argExprs <- mapM (\(argSort, argRaw) -> fst <$> elabExpr ctorTables (Just argSort) argRaw) (zip (tfsArgs sig) args)
               pure (TMFun funName argExprs, tfsRes sig)
 
     mkTmCtx =
@@ -1581,19 +2204,19 @@ elabTmTerm doc _tyVars tmVars tmBound mExpected raw =
                 Nothing -> Left "term argument uses sparse bound term context")
             [0 .. maxIdx]
 
-lookupTmFunByName :: Doctrine -> Obj -> Text -> Int -> Either Text (TmFunName, TmFunSig)
-lookupTmFunByName doc expectedSort name arity = do
+lookupTmFunByNameInTables :: Doctrine -> CtorTables -> Obj -> Text -> Int -> Either Text (TmFunName, TmFunSig)
+lookupTmFunByNameInTables doc ctorTables expectedSort name arity =
   let fname = TmFunName name
-  let sigs = gatherCandidates (objOwnerMode expectedSort)
-  case sigs of
-    [] -> Left ("unknown term function: " <> name)
-    [sig] ->
-      if length (tfsArgs sig) == arity
-        then Right (fname, sig)
-        else Left "term function arity mismatch"
-    _ -> Left ("ambiguous term function in mode: " <> name)
+      sigs = gatherCandidates ctorTables (objOwnerMode expectedSort)
+   in case sigs of
+        [] -> Left ("unknown term function: " <> name)
+        [sig] ->
+          if length (tfsArgs sig) == arity
+            then Right (fname, sig)
+            else Left "term function arity mismatch"
+        _ -> Left ("ambiguous term function in mode: " <> name)
   where
-    gatherCandidates mode =
+    gatherCandidates ctorTables' mode =
       let fromGens =
             [ TmFunSig
                 { tfsArgs = [ ty | InPort ty <- gdDom gd ]
@@ -1601,7 +2224,7 @@ lookupTmFunByName doc expectedSort name arity = do
                 }
             | gd <- maybe [] M.elems (M.lookup mode (dGens doc))
             , gdName gd == GenName name
-            , not (isTypeDeclGenName doc mode (gdName gd))
+            , not (isTypeDeclGenNameInTables doc ctorTables' mode (ObjName (renderGenName (gdName gd))))
             , null (gdTyVars gd)
             , null (gdTmVars gd)
             , null (gdAttrs gd)
@@ -1614,16 +2237,14 @@ lookupTmFunByName doc expectedSort name arity = do
         InPort _ -> True
         InBinder _ -> False
 
-lookupTmFunAny :: Doctrine -> Text -> Int -> Either Text (TmFunName, TmFunSig)
-lookupTmFunAny doc name arity =
-  case
-    genCandidates
-    of
-      [] -> Left ("unknown term function: " <> name)
-      [single] -> Right single
-      _ -> Left ("ambiguous term function: " <> name)
+lookupTmFunAnyInTables :: Doctrine -> CtorTables -> Text -> Int -> Either Text (TmFunName, TmFunSig)
+lookupTmFunAnyInTables doc ctorTables name arity =
+  case genCandidates ctorTables of
+    [] -> Left ("unknown term function: " <> name)
+    [single] -> Right single
+    _ -> Left ("ambiguous term function: " <> name)
   where
-    genCandidates =
+    genCandidates ctorTables' =
       [ ( TmFunName name
         , TmFunSig
             { tfsArgs = [ ty | InPort ty <- gdDom gd ]
@@ -1632,7 +2253,7 @@ lookupTmFunAny doc name arity =
         )
       | modeTable <- M.elems (dGens doc)
       , gd <- M.elems modeTable
-      , not (isTypeDeclGenName doc (gdMode gd) (gdName gd))
+      , not (isTypeDeclGenNameInTables doc ctorTables' (gdMode gd) (ObjName (renderGenName (gdName gd))))
       , gdName gd == GenName name
       , null (gdTyVars gd)
       , null (gdTmVars gd)
@@ -1647,21 +2268,30 @@ lookupTmFunAny doc name arity =
         InBinder _ -> False
 
 elabInputShapes :: Doctrine -> ModeName -> [TmVar] -> [TmVar] -> [RawInputShape] -> Either Text [InputShape]
-elabInputShapes doc mode tyVars tmVars = mapM (elabInputShape doc mode tyVars tmVars)
+elabInputShapes doc mode tyVars tmVars shapes = do
+  ctorTables <- deriveCtorTables doc
+  mapM (elabInputShapeWithTables doc ctorTables mode tyVars tmVars) shapes
 
-elabInputShape :: Doctrine -> ModeName -> [TmVar] -> [TmVar] -> RawInputShape -> Either Text InputShape
-elabInputShape doc mode tyVars tmVars shape =
+elabInputShapeWithTables
+  :: Doctrine
+  -> CtorTables
+  -> ModeName
+  -> [TmVar]
+  -> [TmVar]
+  -> RawInputShape
+  -> Either Text InputShape
+elabInputShapeWithTables doc ctorTables mode tyVars tmVars shape =
   case shape of
-    RIPort rawTy -> InPort <$> elabObjExpr doc tyVars tmVars M.empty mode rawTy
+    RIPort rawTy -> InPort <$> elabObjExprWithTables doc ctorTables tyVars tmVars M.empty mode rawTy
     RIBinder binders rawCod -> do
-      boundTys <- mapM (\b -> elabObjExprInferOwner doc tyVars tmVars M.empty (rbvType b)) binders
+      boundTys <- mapM (\b -> elabObjExprInferOwnerWithTables doc ctorTables tyVars tmVars M.empty (rbvType b)) binders
       let binderPairs = zip binders boundTys
       let tmBinders = [ (rbvName b, ty) | (b, ty) <- binderPairs, objOwnerMode ty /= mode ]
       let termBinders = [ b | (b, ty) <- binderPairs, objOwnerMode ty == mode ]
       let tmCtx = map snd tmBinders
       let tmBound = M.fromList (zipWith (\(nm, ty) idx -> (nm, (idx, ty))) tmBinders [0..])
-      bsDom <- mapM (\b -> elabObjExpr doc tyVars tmVars tmBound mode (rbvType b)) termBinders
-      bsCod <- elabContext doc mode tyVars tmVars tmBound rawCod
+      bsDom <- mapM (\b -> elabObjExprWithTables doc ctorTables tyVars tmVars tmBound mode (rbvType b)) termBinders
+      bsCod <- elabContextWithTables doc ctorTables mode tyVars tmVars tmBound rawCod
       pure (InBinder BinderSig { bsTmCtx = tmCtx, bsDom = bsDom, bsCod = bsCod })
 
 data BinderMetaMode
@@ -1738,12 +2368,13 @@ elabDiagExprWithFresh
   -> Fresh (Diagram, M.Map BinderMetaVar BinderSig)
 elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice expr = do
   ttDoc <- liftEither (doctrineTypeTheory doc)
-  build ttDoc tmCtx binderSigs0 expr
+  let ctorTables = ttCtorTables ttDoc
+  build ttDoc ctorTables tmCtx binderSigs0 expr
   where
     rigidTy = S.fromList tyVars
     rigidTm = S.fromList tmVars
 
-    elabOneParamArg ttDoc curTmCtx tyFreshMap tmFreshMap (tyAcc, tmAcc) (paramKind, rawArg) =
+    elabOneParamArg ttDoc ctorTables curTmCtx tyFreshMap tmFreshMap (tyAcc, tmAcc) (paramKind, rawArg) =
       case paramKind of
         GP_Ty tyVar0 -> do
           freshTyVar <-
@@ -1751,7 +2382,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
               Nothing -> liftEither (Left "internal error: missing fresh type parameter")
               Just v -> pure v
           ownerMode <- liftEither (ownerModeForTypeMeta doc freshTyVar)
-          tyArg <- liftEither (elabObjExpr doc tyVars tmVars M.empty ownerMode rawArg)
+          tyArg <- liftEither (elabObjExprWithTables doc ctorTables tyVars tmVars M.empty ownerMode rawArg)
           if objOwnerMode tyArg == ownerMode
             then pure ((freshTyVar, tyArg) : tyAcc, tmAcc)
             else liftEither (Left "generator type argument mode mismatch")
@@ -1763,10 +2394,10 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           tmArg <- elabTmArg ttDoc curTmCtx freshTmVar rawArg
           pure (tyAcc, (freshTmVar, tmArg) : tmAcc)
 
-    build ttDoc curTmCtx binderSigs e =
+    build ttDoc ctorTables curTmCtx binderSigs e =
       case e of
         RDId ctx -> do
-          ctx' <- liftEither (elabContext doc mode tyVars tmVars M.empty ctx)
+          ctx' <- liftEither (elabContextWithTables doc ctorTables mode tyVars tmVars M.empty ctx)
           pure (idDTm mode curTmCtx ctx', binderSigs)
         RDMetaVar name -> do
           (_, ty) <- freshTyVar doc ObjVar { ovName = "mv_" <> name, ovMode = mode }
@@ -1795,7 +2426,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                     let tmFreshMap = M.fromList (zip (gdTmVars gen) freshTmVars)
                     (tyBinds, tmBinds) <-
                       foldM
-                        (elabOneParamArg ttDoc curTmCtx tyFreshMap tmFreshMap)
+                        (elabOneParamArg ttDoc ctorTables curTmCtx tyFreshMap tmFreshMap)
                         ([], [])
                         (zip paramOrder args)
                     let argSubst =
@@ -1843,7 +2474,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
               pure (diag, binderSigs)
             else liftEither (Left "splice is only allowed in rule RHS")
         RDBox name innerExpr -> do
-          (inner, binderSigs') <- build ttDoc curTmCtx binderSigs innerExpr
+          (inner, binderSigs') <- build ttDoc ctorTables curTmCtx binderSigs innerExpr
           dom <- liftEither (diagramDom inner)
           cod <- liftEither (diagramCod inner)
           let (ins, diag0) = allocPorts dom (emptyDiagram mode curTmCtx)
@@ -1853,7 +2484,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           liftEither (validateDiagram diag3)
           pure (diag3, binderSigs')
         RDLoop innerExpr -> do
-          (inner, binderSigs') <- build ttDoc curTmCtx binderSigs innerExpr
+          (inner, binderSigs') <- build ttDoc ctorTables curTmCtx binderSigs innerExpr
           case (dIn inner, dOut inner) of
             ([pIn], pState:pOuts) -> do
               stateInTy <- liftEither (lookupPortTy inner pIn)
@@ -1887,13 +2518,13 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
             then pure (mapped, binderSigs')
             else liftEither (Left "map: mapped diagram mode does not match surrounding expression mode")
         RDComp a b -> do
-          (d1, binderSigs1) <- build ttDoc curTmCtx binderSigs a
-          (d2, binderSigs2) <- build ttDoc curTmCtx binderSigs1 b
+          (d1, binderSigs1) <- build ttDoc ctorTables curTmCtx binderSigs a
+          (d2, binderSigs2) <- build ttDoc ctorTables curTmCtx binderSigs1 b
           dComp <- liftEither (compD ttDoc d2 d1)
           pure (dComp, binderSigs2)
         RDTensor a b -> do
-          (d1, binderSigs1) <- build ttDoc curTmCtx binderSigs a
-          (d2, binderSigs2) <- build ttDoc curTmCtx binderSigs1 b
+          (d1, binderSigs1) <- build ttDoc ctorTables curTmCtx binderSigs a
+          (d2, binderSigs2) <- build ttDoc ctorTables curTmCtx binderSigs1 b
           dTen <- liftEither (tensorD d1 d2)
           pure (dTen, binderSigs2)
 

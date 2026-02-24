@@ -201,6 +201,7 @@ testCodeMetaScopeClassifierSlice = do
             { cdClassifier = ty
             , cdUniverse = uTy
             , cdTag = Nothing
+            , cdComp = Nothing
             }
           mt1
       let uTm = OVar ObjVar { ovName = "U_Tm", ovMode = ty }
@@ -210,5 +211,6 @@ testCodeMetaScopeClassifierSlice = do
           { cdClassifier = ty
           , cdUniverse = uTm
           , cdTag = Nothing
+          , cdComp = Nothing
           }
         mt2

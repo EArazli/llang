@@ -1,7 +1,15 @@
 doctrine UFCancel where {
   mode A classifiedBy A via A.U_A;
+  gen comp_ctx_ext(a@A) : [a] -> [a] @A;
+  gen comp_var(a@A) : [a] -> [a] @A;
+  gen comp_reindex(a@A) : [a] -> [a] @A;
+  comprehension A where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_A : [] -> [A.U_A] @A;
   mode B classifiedBy B via B.U_B;
+  gen comp_ctx_ext(a@B) : [a] -> [a] @B;
+  gen comp_var(a@B) : [a] -> [a] @B;
+  gen comp_reindex(a@B) : [a] -> [a] @B;
+  comprehension B where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_B : [] -> [B.U_B] @B;
   modality F : A -> B;
   modality U : B -> A;

@@ -21,11 +21,14 @@ import Strat.Poly.Graph
   , weakenDiagramTmCtxTo
   )
 import Strat.Poly.ModeTheory (ModeName, meSrc, meTgt)
+import Strat.Poly.ObjClassifier (modeUniverseObj)
 import Strat.Poly.Obj
   ( TermDiagram(..)
   , CodeArg(..)
   , CodeTerm(..)
   , Obj(..)
+  , ObjName(..)
+  , ObjRef(..)
   , objOwnerMode
   , normalizeObjExpr
   )
@@ -67,15 +70,27 @@ normalizeCodeTermDeepWithCtx tt tmCtx owner code =
               args' <- mapM normalizeArgBySig (zip params args)
               Right (CTCon ref args')
         Nothing ->
-          if M.null (ttObjParams tt)
-            then do
-              -- modeOnlyTypeTheory intentionally omits constructor signatures; normalize structurally.
-              args' <- mapM normalizeUnknownArg args
-              Right (CTCon ref args')
+          if not (ttStrictCtorLookup tt)
+            then
+              if M.null (ttObjParams tt)
+                then do
+                  -- modeOnlyTypeTheory intentionally omits constructor signatures; normalize structurally.
+                  args' <- mapM normalizeUnknownArg args
+                  Right (CTCon ref args')
+                else
+                  if null args
+                    then Right code
+                    else unknownCtor ref
             else
-              if null args
-                then Right code
-                else Left "normalizeCodeTermDeepWithCtx: unknown type constructor"
+              if M.null (ttObjParams tt) || not ownerRequiresCtorLookup
+                then do
+                  -- modeOnlyTypeTheory intentionally omits constructor signatures; normalize structurally.
+                  args' <- mapM normalizeUnknownArg args
+                  Right (CTCon ref args')
+                else
+                  if null args && isOpaqueNullary ref
+                    then Right code
+                    else unknownCtor ref
     CTMod me innerCode -> do
       if meTgt me /= owner
         then Left "normalizeCodeTermDeepWithCtx: modality target does not match object owner mode"
@@ -99,6 +114,38 @@ normalizeCodeTermDeepWithCtx tt tmCtx owner code =
       case arg of
         CAObj tyArg -> CAObj <$> normalizeObjDeepWithCtx tt tmCtx tyArg
         CATm tm -> Right (CATm tm)
+
+    ownerRequiresCtorLookup =
+      case modeUniverseObj (ttModes tt) owner of
+        Just universe ->
+          case objCode universe of
+            CTMeta _ -> False
+            _ -> True
+        Nothing -> False
+
+    renderRef ref = T.pack (show ref)
+    renderModeName m = T.pack (show m)
+
+    isOpaqueNullary ref =
+      case orName ref of
+        ObjName "__obj_meta_sort" -> True
+        _ -> False
+
+    unknownCtor ref =
+      Left
+        ( "normalizeCodeTermDeepWithCtx: unknown type constructor "
+            <> renderRef ref
+            <> " (owner mode "
+            <> renderModeName owner
+            <> "); available refs: "
+            <> renderAvailableRefs
+        )
+
+    renderAvailableRefs =
+      let refs = M.keys (ttObjParams tt)
+       in if null refs
+            then "(none)"
+            else T.intercalate ", " (map renderRef refs)
 
 normalizeObjDeepWithCtx :: TypeTheory -> [Obj] -> Obj -> Either Text Obj
 normalizeObjDeepWithCtx tt tmCtx ty = do

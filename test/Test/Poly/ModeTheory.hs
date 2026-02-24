@@ -8,10 +8,17 @@ import Test.Tasty.HUnit
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Data.Maybe (isJust)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (meDoctrines, meImplDefaults)
+import Strat.Poly.DSL.Elab
+  ( checkImplementsObligationsWithBudget
+  , ImplementsCheckResult(..)
+  , ImplementsProof(..)
+  , identityMorphismFor
+  )
 import Strat.Poly.ModeTheory
 import Strat.Poly.Obj
 import Strat.Poly.UnifyObj
@@ -30,6 +37,7 @@ import Strat.Poly.Diagram (genDTm, genD, diagramDom, diagramCod)
 import Strat.Poly.Graph (Diagram(..))
 import Strat.Poly.ModAction (applyAction)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
+import Strat.Poly.Proof (defaultSearchBudget)
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 
 
@@ -56,6 +64,18 @@ tests =
     , testCase "@gen outside for_gen is rejected" testGenOutsideForGenRejected
     , testCase "doctrine type theory builds definitional fragments for all modes" testDefFragmentsCoverModes
     , testCase "action coherence follows mod_eq" testActionModEqCoherence
+    , testCase "comprehension declaration elaborates into mode theory" testComprehensionDeclElab
+    , testCase "comprehension declaration requires classifiedBy mode" testComprehensionRequiresClassifiedMode
+    , testCase "comprehension declaration rejects unknown generator" testComprehensionUnknownGenerator
+    , testCase "comprehension declaration rejects constructor-like generators" testComprehensionRejectsCtorLike
+    , testCase "classified modes with binder inputs require comprehension declarations" testComprehensionBinderRequiresDecl
+    , testCase "classified modes without binder inputs still require comprehension declarations" testComprehensionRequiresDeclWithoutBinder
+    , testCase "comprehension declarations install generated obligations" testComprehensionGeneratedObligations
+    , testCase "mixed plain+binder generators produce full comprehension laws" testComprehensionMixedBinderFull
+    , testCase "constructor term slots generate boundary-side laws only" testComprehensionCtorSlotBoundarySide
+    , testCase "constructor term slots on multi-port plain domains generate dom-side laws" testComprehensionCtorSlotMultiPortDom
+    , testCase "cross-mode constructor slots elaborate and validate via generated slot-local checks" testComprehensionCrossModeCtorSlots
+    , testCase "generated comprehension obligations can require join proofs" testComprehensionGeneratedObligationJoinProof
     , testCase "implements fails when schema obligations are not provable" testAdjObligationFail
     , testCase "implements succeeds when schema obligations hold" testAdjObligationPass
     , testCase "implements monad schema with map[T] laws against target action" testMonadObligationPass
@@ -69,6 +89,10 @@ testSelfClassificationDeferred = do
         [ "doctrine SelfClass where {"
         , "  mode Ty classifiedBy Ty via Ty.U;"
         , "  gen U : [] -> [Ty.U] @Ty;"
+        , "  gen ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen var(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen reindex(a@Ty) : [a] -> [a] @Ty;"
+        , "  comprehension Ty where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "}"
         ]
   case parseRawFile src >>= elabRawFile of
@@ -103,8 +127,8 @@ testClassificationOrder = do
   let uTy2 = OVar ObjVar { ovName = "U2", ovMode = ty }
   mt0 <- requireEither (addMode ty (mkModes []))
   mt1 <- requireEither (addMode tm mt0)
-  mt2 <- requireEither (addClassification ty ClassificationDecl { cdClassifier = ty, cdUniverse = uTy, cdTag = Nothing } mt1)
-  mt3 <- requireEither (addClassification tm ClassificationDecl { cdClassifier = ty, cdUniverse = uTy2, cdTag = Nothing } mt2)
+  mt2 <- requireEither (addClassification ty ClassificationDecl { cdClassifier = ty, cdUniverse = uTy, cdTag = Nothing, cdComp = Nothing } mt1)
+  mt3 <- requireEither (addClassification tm ClassificationDecl { cdClassifier = ty, cdUniverse = uTy2, cdTag = Nothing, cdComp = Nothing } mt2)
   order <- requireEither (classificationOrder mt3)
   let pos mode = lookup mode (zip order [0 :: Int ..])
   assertBool "expected classificationOrder to include Ty and Tm" (maybe False (const True) (pos ty) && maybe False (const True) (pos tm))
@@ -120,7 +144,15 @@ testClassifiedModalityNormalization = do
         [ "doctrine ClassifiedModality where {"
         , "  mode Ty classifiedBy Ty via Ty.U_Ty;"
         , "  gen U_Ty : [] -> [Ty.U_Ty] @Ty;"
+        , "  gen ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen var(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen reindex(a@Ty) : [a] -> [a] @Ty;"
+        , "  comprehension Ty where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  mode Tm classifiedBy Ty via Ty.U;"
+        , "  gen ctx_ext(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen var(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen reindex(a@Tm) : [a] -> [a] @Tm;"
+        , "  comprehension Tm where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality mu : Tm -> Tm;"
         , "  gen U : [] -> [Ty.U_Ty] @Ty;"
         , "  gen X : [] -> [Ty.U] @Ty;"
@@ -184,8 +216,16 @@ testActionElab = do
         [ "doctrine Act where {"
         , "  mode A classifiedBy A via A.U_A;"
         , "  gen U_A : [] -> [A.U_A] @A;"
+        , "  gen ctx_ext(a@A) : [a] -> [a] @A;"
+        , "  gen var(a@A) : [a] -> [a] @A;"
+        , "  gen reindex(a@A) : [a] -> [a] @A;"
+        , "  comprehension A where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  mode B classifiedBy B via B.U_B;"
         , "  gen U_B : [] -> [B.U_B] @B;"
+        , "  gen ctx_ext(a@B) : [a] -> [a] @B;"
+        , "  gen var(a@B) : [a] -> [a] @B;"
+        , "  gen reindex(a@B) : [a] -> [a] @B;"
+        , "  comprehension B where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [A.U_A] @A;"
         , "  gen Y : [] -> [B.U_B] @B;"
         , "  modality F : A -> B;"
@@ -193,6 +233,9 @@ testActionElab = do
         , "  gen h : [B.Y] -> [B.Y] @B;"
         , "  action F where {"
         , "    gen g -> h"
+        , "    gen ctx_ext -> ctx_ext"
+        , "    gen var -> var"
+        , "    gen reindex -> reindex"
         , "  }"
         , "}"
         ]
@@ -212,8 +255,16 @@ testDefFragmentsCoverModes = do
         [ "doctrine DefFrags where {"
         , "  mode M classifiedBy M via M.U;"
         , "  gen U : [] -> [M.U] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  mode N classifiedBy N via N.V;"
         , "  gen V : [] -> [N.V] @N;"
+        , "  gen ctx_ext(a@N) : [a] -> [a] @N;"
+        , "  gen var(a@N) : [a] -> [a] @N;"
+        , "  gen reindex(a@N) : [a] -> [a] @N;"
+        , "  comprehension N where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen A : [] -> [M.U] @M;"
         , "  gen idA : [A] -> [A] @M;"
         , "}"
@@ -346,14 +397,25 @@ testMapCrossModeElab = do
         [ "doctrine CrossMap where {"
         , "  mode A classifiedBy A via A.U_A;"
         , "  gen U_A : [] -> [A.U_A] @A;"
+        , "  gen ctx_ext(a@A) : [a] -> [a] @A;"
+        , "  gen var(a@A) : [a] -> [a] @A;"
+        , "  gen reindex(a@A) : [a] -> [a] @A;"
+        , "  comprehension A where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  mode B classifiedBy B via B.U_B;"
         , "  gen U_B : [] -> [B.U_B] @B;"
+        , "  gen ctx_ext(a@B) : [a] -> [a] @B;"
+        , "  gen var(a@B) : [a] -> [a] @B;"
+        , "  gen reindex(a@B) : [a] -> [a] @B;"
+        , "  comprehension B where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality F : A -> B;"
         , "  gen X : [] -> [A.U_A] @A;"
         , "  gen g(a@A) : [a] -> [a] @A;"
         , "  gen h(a@A) : [F(a)] -> [F(a)] @B;"
         , "  action F where {"
         , "    gen g -> h"
+        , "    gen ctx_ext -> ctx_ext"
+        , "    gen var -> var"
+        , "    gen reindex -> reindex"
         , "  }"
         , "  obligation map_obl(a@A) : [F(a)] -> [F(a)] @B ="
         , "    map[F](g{a}) == h{a}"
@@ -368,6 +430,10 @@ testForGenObligationElab = do
         [ "doctrine ForGenLift where {"
         , "  mode M classifiedBy M via M.U_M;"
         , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [M.U_M] @M;"
         , "  gen op : [M.X] -> [M.X] @M;"
         , "  gen f : [M.X, M.X] -> [M.X] @M;"
@@ -386,6 +452,7 @@ testForGenObligationElab = do
     [obl] -> do
       obName obl @?= "naturality"
       assertBool "expected for_gen template obligation" (obForGen obl)
+      obForGenName obl @?= Nothing
     _ -> assertFailure "expected exactly one obligation template"
 
 testForGenImplementsQuantifiesTarget :: Assertion
@@ -394,6 +461,10 @@ testForGenImplementsQuantifiesTarget = do
         [ "doctrine FGSchema where {"
         , "  mode M classifiedBy M via M.U_M;"
         , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [M.U_M] @M;"
         , "  gen keep : [M.X] -> [M.X] @M;"
         , "  obligation all_id for_gen @M ="
@@ -402,6 +473,10 @@ testForGenImplementsQuantifiesTarget = do
         , "doctrine FGTgt where {"
         , "  mode M classifiedBy M via M.U_M;"
         , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [M.U_M] @M;"
         , "  gen keep : [M.X] -> [M.X] @M;"
         , "  gen bad : [M.X] -> [M.X] @M;"
@@ -410,6 +485,9 @@ testForGenImplementsQuantifiesTarget = do
         , "}"
         , "morphism fgInst : FGSchema -> FGTgt where {"
         , "  mode M -> M;"
+        , "  gen ctx_ext @M -> ctx_ext"
+        , "  gen var @M -> var"
+        , "  gen reindex @M -> reindex"
         , "  gen keep @M -> keep"
         , "  check none;"
         , "}"
@@ -430,6 +508,10 @@ testForGenSchemaRefsMapped = do
         [ "doctrine FGSchemaMap where {"
         , "  mode M classifiedBy M via M.U_M;"
         , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [M.U_M] @M;"
         , "  gen op(a@M) : [a] -> [a] @M;"
         , "  obligation mapped_op for_gen @M ="
@@ -438,6 +520,10 @@ testForGenSchemaRefsMapped = do
         , "doctrine FGTgtMap where {"
         , "  mode M classifiedBy M via M.U_M;"
         , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [M.U_M] @M;"
         , "  gen discard(a@M) : [a] -> [] @M;"
         , "  gen keep(a@M) : [a] -> [a] @M;"
@@ -445,6 +531,9 @@ testForGenSchemaRefsMapped = do
         , "}"
         , "morphism fgMapInst : FGSchemaMap -> FGTgtMap where {"
         , "  mode M -> M;"
+        , "  gen ctx_ext @M -> ctx_ext"
+        , "  gen var @M -> var"
+        , "  gen reindex @M -> reindex"
         , "  gen op @M -> op2"
         , "  check none;"
         , "}"
@@ -461,6 +550,10 @@ testForGenPolyLiftInstantiation = do
         [ "doctrine FGSchemaPolyLift where {"
         , "  mode M classifiedBy M via M.U_M;"
         , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [M.U_M] @M;"
         , "  gen op(a@M) : [a] -> [a] @M;"
         , "  obligation refl for_gen @M ="
@@ -469,12 +562,19 @@ testForGenPolyLiftInstantiation = do
         , "doctrine FGTgtPolyLift where {"
         , "  mode M classifiedBy M via M.U_M;"
         , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [M.U_M] @M;"
         , "  gen keep : [M.X] -> [M.X] @M;"
         , "  gen op2(a@M) : [a] -> [a] @M;"
         , "}"
         , "morphism inst : FGSchemaPolyLift -> FGTgtPolyLift where {"
         , "  mode M -> M;"
+        , "  gen ctx_ext @M -> ctx_ext"
+        , "  gen var @M -> var"
+        , "  gen reindex @M -> reindex"
         , "  gen op @M -> op2"
         , "  check none;"
         , "}"
@@ -491,6 +591,10 @@ testForGenLiftAllowsCodArityChange = do
         [ "doctrine FGSchemaDropLift where {"
         , "  mode M classifiedBy M via M.U_M;"
         , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [M.U_M] @M;"
         , "  gen drop(a@M) : [a] -> [] @M;"
         , "  obligation erased for_gen @M ="
@@ -499,11 +603,18 @@ testForGenLiftAllowsCodArityChange = do
         , "doctrine FGTgtDropLift where {"
         , "  mode M classifiedBy M via M.U_M;"
         , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [M.U_M] @M;"
         , "  gen discard(a@M) : [a] -> [] @M;"
         , "}"
         , "morphism fgDropInst : FGSchemaDropLift -> FGTgtDropLift where {"
         , "  mode M -> M;"
+        , "  gen ctx_ext @M -> ctx_ext"
+        , "  gen var @M -> var"
+        , "  gen reindex @M -> reindex"
         , "  gen drop @M -> discard"
         , "  check none;"
         , "}"
@@ -564,6 +675,10 @@ testActionModEqCoherence = do
         [ "doctrine BadAction where {"
         , "  mode A classifiedBy A via A.U_A;"
         , "  gen U_A : [] -> [A.U_A] @A;"
+        , "  gen ctx_ext(a@A) : [a] -> [a] @A;"
+        , "  gen var(a@A) : [a] -> [a] @A;"
+        , "  gen reindex(a@A) : [a] -> [a] @A;"
+        , "  comprehension A where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [A.U_A] @A;"
         , "  modality F : A -> A;"
         , "  mod_eq F -> id@A;"
@@ -572,6 +687,9 @@ testActionModEqCoherence = do
         , "  action F where {"
         , "    gen g -> h"
         , "    gen h -> h"
+        , "    gen ctx_ext -> ctx_ext"
+        , "    gen var -> var"
+        , "    gen reindex -> reindex"
         , "  }"
         , "}"
         ]
@@ -585,14 +703,385 @@ testActionModEqCoherence = do
     Right _ ->
       assertFailure "expected doctrine elaboration to reject incoherent action under mod_eq"
 
+testComprehensionDeclElab :: Assertion
+testComprehensionDeclElab = do
+  let src = T.unlines
+        [ "doctrine CompOk where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext : [M.U_M] -> [M.U_M] @M;"
+        , "  gen var : [M.U_M] -> [M.U_M] @M;"
+        , "  gen reindex : [M.U_M] -> [M.U_M] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "CompOk" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine CompOk" >> fail "unreachable"
+      Just d -> pure d
+  classDecl <-
+    case M.lookup (ModeName "M") (mtClassifiedBy (dModes doc)) of
+      Nothing -> assertFailure "missing classification for mode M" >> fail "unreachable"
+      Just decl -> pure decl
+  case cdComp classDecl of
+    Nothing -> assertFailure "expected comprehension declaration to be stored"
+    Just comp -> do
+      compCtxExt comp @?= GenName "ctx_ext"
+      compVar comp @?= GenName "var"
+      compReindex comp @?= GenName "reindex"
+
+testComprehensionRequiresClassifiedMode :: Assertion
+testComprehensionRequiresClassifiedMode = do
+  let src = T.unlines
+        [ "doctrine CompNeedsClass where {"
+        , "  mode M;"
+        , "  comprehension M where { ctx_ext = ctx; var = v; reindex = r; };"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected missing classifiedBy error, got: " <> T.unpack err)
+        ("requires classifiedBy" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected comprehension declaration to fail on non-classified mode"
+
+testComprehensionUnknownGenerator :: Assertion
+testComprehensionUnknownGenerator = do
+  let src = T.unlines
+        [ "doctrine CompUnknownGen where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext : [M.U_M] -> [M.U_M] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = missing; reindex = missing2; };"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected unknown generator error, got: " <> T.unpack err)
+        ("unknown generator" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected comprehension declaration with missing generator to fail"
+
+testComprehensionRejectsCtorLike :: Assertion
+testComprehensionRejectsCtorLike = do
+  let src = T.unlines
+        [ "doctrine CompCtorLike where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen var : [M.U_M] -> [M.U_M] @M;"
+        , "  gen reindex : [M.U_M] -> [M.U_M] @M;"
+        , "  comprehension M where { ctx_ext = U_M; var = var; reindex = reindex; };"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected constructor-like rejection, got: " <> T.unpack err)
+        ("constructor-like" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected comprehension declaration to reject constructor-like generators"
+
+testComprehensionBinderRequiresDecl :: Assertion
+testComprehensionBinderRequiresDecl = do
+  let src = T.unlines
+        [ "doctrine CompNeedsDecl where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen Nat : [] -> [M.U_M] @M;"
+        , "  gen Z : [] -> [Nat] @M;"
+        , "  gen Vec(n : Nat) : [] -> [M.U_M] @M;"
+        , "  gen Out : [] -> [M.U_M] @M;"
+        , "  gen wrap : [binder { tm n : Nat } : [Vec(Z)]] -> [Out] @M;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected missing comprehension declaration error, got: " <> T.unpack err)
+        ("requires a comprehension declaration" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected doctrine elaboration to reject binder generators without comprehension declaration"
+
+testComprehensionRequiresDeclWithoutBinder :: Assertion
+testComprehensionRequiresDeclWithoutBinder = do
+  let src = T.unlines
+        [ "doctrine CompOptional where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen Nat : [] -> [M.U_M] @M;"
+        , "  gen Z : [] -> [Nat] @M;"
+        , "  gen Vec(n : Nat) : [] -> [M.U_M] @M;"
+        , "  gen use(n : Nat) : [] -> [Vec(n)] @M;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected missing comprehension declaration error, got: " <> T.unpack err)
+        ("requires a comprehension declaration" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected doctrine elaboration to reject classified mode without comprehension declaration"
+
+testComprehensionGeneratedObligations :: Assertion
+testComprehensionGeneratedObligations = do
+  let src = T.unlines
+        [ "doctrine CompGenerated where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen Nat : [] -> [M.U_M] @M;"
+        , "  gen Z : [] -> [Nat] @M;"
+        , "  gen Vec(n : Nat) : [] -> [M.U_M] @M;"
+        , "  gen Out : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M ="
+        , "    ctx_ext{a} == id[a]"
+        , "  rule computational var_id -> (a@M) : [a] -> [a] @M ="
+        , "    var{a} == id[a]"
+        , "  rule computational reindex_id -> (a@M) : [a] -> [a] @M ="
+        , "    reindex{a} == id[a]"
+        , "  gen wrap : [binder { tm n : Nat } : [Vec(Z)]] -> [Out] @M;"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "CompGenerated" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine CompGenerated" >> fail "unreachable"
+      Just d -> pure d
+  let generated = [obl | obl <- dObligations doc, obGenerated obl]
+  assertBool "expected generated comprehension obligations" (not (null generated))
+  assertBool "expected generated comprehension obligations to target concrete generators" (all (isJust . obForGenName) generated)
+  assertBool "expected generated comprehension obligations to include composition laws" (any ("/comp_dom" `T.isSuffixOf`) (map obName generated))
+  assertBool "expected generated comprehension obligations to include naturality laws" (any ("/nat" `T.isSuffixOf`) (map obName generated))
+
+testComprehensionMixedBinderFull :: Assertion
+testComprehensionMixedBinderFull = do
+  let src = T.unlines
+        [ "doctrine CompMixedCodOnly where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen A : [] -> [M.U_M] @M;"
+        , "  gen B : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M ="
+        , "    ctx_ext{a} == id[a]"
+        , "  rule computational var_id -> (a@M) : [a] -> [a] @M ="
+        , "    var{a} == id[a]"
+        , "  rule computational reindex_id -> (a@M) : [a] -> [a] @M ="
+        , "    reindex{a} == id[a]"
+        , "  gen mixed : [A, binder { x : A } : [B]] -> [B] @M;"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "CompMixedCodOnly" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine CompMixedCodOnly" >> fail "unreachable"
+      Just d -> pure d
+  let generated =
+        [ obl
+        | obl <- dObligations doc
+        , obGenerated obl
+        , obForGenName obl == Just (GenName "mixed")
+        ]
+  assertBool "expected generated obligations for mixed generator" (not (null generated))
+  let names = map obName generated
+  assertBool "expected cod identity law for mixed generator" (any ("/id_cod" `T.isSuffixOf`) names)
+  assertBool "expected cod composition law for mixed generator" (any ("/comp_cod" `T.isSuffixOf`) names)
+  assertBool "expected dom identity law for mixed generator" (any ("/id_dom" `T.isSuffixOf`) names)
+  assertBool "expected dom composition law for mixed generator" (any ("/comp_dom" `T.isSuffixOf`) names)
+  assertBool "expected naturality law for mixed generator" (any ("/nat" `T.isSuffixOf`) names)
+
+testComprehensionCtorSlotBoundarySide :: Assertion
+testComprehensionCtorSlotBoundarySide = do
+  let src = T.unlines
+        [ "doctrine CompCtorSide where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen Nat : [] -> [M.U_M] @M;"
+        , "  gen Z : [] -> [Nat] @M;"
+        , "  gen Vec(n : Nat) : [] -> [M.U_M] @M;"
+        , "  gen Out : [] -> [M.U_M] @M;"
+        , "  gen use(n : Nat) : [] -> [Vec(n)] @M;"
+        , "  gen wrap : [Vec(Z)] -> [Out] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M ="
+        , "    ctx_ext{a} == id[a]"
+        , "  rule computational var_id -> (a@M) : [a] -> [a] @M ="
+        , "    var{a} == id[a]"
+        , "  rule computational reindex_id -> (a@M) : [a] -> [a] @M ="
+        , "    reindex{a} == id[a]"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "CompCtorSide" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine CompCtorSide" >> fail "unreachable"
+      Just d -> pure d
+  let generatedFor g =
+        [ obName obl
+        | obl <- dObligations doc
+        , obGenerated obl
+        , obForGenName obl == Just (GenName g)
+        ]
+  let useNames = generatedFor "use"
+  let wrapNames = generatedFor "wrap"
+  assertBool "expected generated obligations for use" (not (null useNames))
+  assertBool "expected generated obligations for wrap" (not (null wrapNames))
+  assertBool "expected cod laws for cod-side ctor slot (use)" (any ("/id_cod" `T.isSuffixOf`) useNames && any ("/comp_cod" `T.isSuffixOf`) useNames)
+  assertBool "expected no dom laws for cod-side ctor slot (use)" (not (any ("/id_dom" `T.isSuffixOf`) useNames) && not (any ("/comp_dom" `T.isSuffixOf`) useNames))
+  assertBool "expected dom laws for dom-side ctor slot (wrap)" (any ("/id_dom" `T.isSuffixOf`) wrapNames && any ("/comp_dom" `T.isSuffixOf`) wrapNames)
+  assertBool "expected no cod laws for dom-side ctor slot (wrap)" (not (any ("/id_cod" `T.isSuffixOf`) wrapNames) && not (any ("/comp_cod" `T.isSuffixOf`) wrapNames))
+
+testComprehensionCtorSlotMultiPortDom :: Assertion
+testComprehensionCtorSlotMultiPortDom = do
+  let src = T.unlines
+        [ "doctrine CompCtorMultiDom where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen Nat : [] -> [M.U_M] @M;"
+        , "  gen Z : [] -> [Nat] @M;"
+        , "  gen Vec(n : Nat) : [] -> [M.U_M] @M;"
+        , "  gen Out : [] -> [M.U_M] @M;"
+        , "  gen pairWrap : [Vec(Z), Vec(Z)] -> [Out] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M ="
+        , "    ctx_ext{a} == id[a]"
+        , "  rule computational var_id -> (a@M) : [a] -> [a] @M ="
+        , "    var{a} == id[a]"
+        , "  rule computational reindex_id -> (a@M) : [a] -> [a] @M ="
+        , "    reindex{a} == id[a]"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "CompCtorMultiDom" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine CompCtorMultiDom" >> fail "unreachable"
+      Just d -> pure d
+  let names =
+        [ obName obl
+        | obl <- dObligations doc
+        , obGenerated obl
+        , obForGenName obl == Just (GenName "pairWrap")
+        ]
+  assertBool "expected generated obligations for pairWrap" (not (null names))
+  assertBool "expected dom laws for dom-side ctor slots on multi-port domain" (any ("/id_dom" `T.isSuffixOf`) names && any ("/comp_dom" `T.isSuffixOf`) names)
+  assertBool "expected no cod laws for dom-side ctor slots on multi-port domain" (not (any ("/id_cod" `T.isSuffixOf`) names) && not (any ("/comp_cod" `T.isSuffixOf`) names))
+
+testComprehensionCrossModeCtorSlots :: Assertion
+testComprehensionCrossModeCtorSlots = do
+  let src = T.unlines
+        [ "doctrine CompCrossMode where {"
+        , "  mode G classifiedBy G via G.U_G;"
+        , "  gen U_G : [] -> [G.U_G] @G;"
+        , "  gen ctx_ext(a@G) : [a] -> [a] @G;"
+        , "  gen var(a@G) : [a] -> [a] @G;"
+        , "  gen reindex(a@G) : [a] -> [a] @G;"
+        , "  comprehension G where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  gen Count : [] -> [G.U_G] @G;"
+        , "  gen zero : [] -> [Count] @G;"
+        , "  gen succ : [Count] -> [Count] @G;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen A : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M ="
+        , "    ctx_ext{a} == id[a]"
+        , "  rule computational var_id -> (a@M) : [a] -> [a] @M ="
+        , "    var{a} == id[a]"
+        , "  rule computational reindex_id -> (a@M) : [a] -> [a] @M ="
+        , "    reindex{a} == id[a]"
+        , "  gen T(g : Count, a@M) : [] -> [M.U_M] @M;"
+        , "  gen expect1(a@M) : [T(succ(zero), a)] -> [a] @M;"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "CompCrossMode" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine CompCrossMode" >> fail "unreachable"
+      Just d -> pure d
+  let names =
+        [ obName obl
+        | obl <- dObligations doc
+        , obGenerated obl
+        , obForGenName obl == Just (GenName "expect1")
+        ]
+  assertBool "expected generated obligations for expect1" (not (null names))
+  assertBool "expected dom-side laws for cross-mode constructor slot" (any ("/id_dom" `T.isSuffixOf`) names && any ("/comp_dom" `T.isSuffixOf`) names)
+
+testComprehensionGeneratedObligationJoinProof :: Assertion
+testComprehensionGeneratedObligationJoinProof = do
+  let src = T.unlines
+        [ "doctrine CompJoinProof where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen Nat : [] -> [M.U_M] @M;"
+        , "  gen Z : [] -> [Nat] @M;"
+        , "  gen Vec(n : Nat) : [] -> [M.U_M] @M;"
+        , "  gen Out : [] -> [M.U_M] @M;"
+        , "  gen wrap : [binder { tm n : Nat } : [Vec(Z)]] -> [Out] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M ="
+        , "    ctx_ext{a} == id[a]"
+        , "  rule computational var_id -> (a@M) : [a] -> [a] @M ="
+        , "    var{a} == id[a]"
+        , "  rule computational reindex_id -> (a@M) : [a] -> [a] @M ="
+        , "    reindex{a} == id[a]"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "CompJoinProof" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine CompJoinProof" >> fail "unreachable"
+      Just d -> pure d
+  let generated = [obl | obl <- dObligations doc, obGenerated obl]
+  assertBool "expected generated obligations in CompJoinProof" (not (null generated))
+  let schemaDoc = doc { dObligations = generated }
+  identity <- requireEither (identityMorphismFor doc)
+  result <- requireEither (checkImplementsObligationsWithBudget defaultSearchBudget env doc identity schemaDoc)
+  case result of
+    ImplementsCheckUndecided label _ ->
+      assertFailure ("expected generated obligations to be decidable, got undecided: " <> T.unpack label)
+    ImplementsCheckProved proofs -> do
+      assertBool
+        "expected at least one generated obligation to be discharged via join proof"
+        (any (\(_, p) -> case p of ImplementsProofJoin _ -> True; _ -> False) proofs)
+
 testAdjObligationFail :: Assertion
 testAdjObligationFail = do
   let src = T.unlines
         [ "doctrine AdjSchema where {"
         , "  mode C classifiedBy C via C.U_C;"
         , "  gen U_C : [] -> [C.U_C] @C;"
+        , "  gen ctx_ext(a@C) : [a] -> [a] @C;"
+        , "  gen var(a@C) : [a] -> [a] @C;"
+        , "  gen reindex(a@C) : [a] -> [a] @C;"
+        , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  mode L classifiedBy L via L.U_L;"
         , "  gen U_L : [] -> [L.U_L] @L;"
+        , "  gen ctx_ext(a@L) : [a] -> [a] @L;"
+        , "  gen var(a@L) : [a] -> [a] @L;"
+        , "  gen reindex(a@L) : [a] -> [a] @L;"
+        , "  comprehension L where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -607,8 +1096,16 @@ testAdjObligationFail = do
         , "doctrine BadAdj where {"
         , "  mode C classifiedBy C via C.U_C;"
         , "  gen U_C : [] -> [C.U_C] @C;"
+        , "  gen ctx_ext(a@C) : [a] -> [a] @C;"
+        , "  gen var(a@C) : [a] -> [a] @C;"
+        , "  gen reindex(a@C) : [a] -> [a] @C;"
+        , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  mode L classifiedBy L via L.U_L;"
         , "  gen U_L : [] -> [L.U_L] @L;"
+        , "  gen ctx_ext(a@L) : [a] -> [a] @L;"
+        , "  gen var(a@L) : [a] -> [a] @L;"
+        , "  gen reindex(a@L) : [a] -> [a] @L;"
+        , "  comprehension L where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -616,9 +1113,15 @@ testAdjObligationFail = do
         , "  gen eta(a@C) : [a] -> [U(F(a))] @C;"
         , "  gen eps(b@L) : [F(U(b))] -> [b] @L;"
         , "  action F where {"
+        , "    gen ctx_ext -> ctx_ext"
+        , "    gen var -> var"
+        , "    gen reindex -> reindex"
         , "    gen eta -> eps"
         , "  }"
         , "  action U where {"
+        , "    gen ctx_ext -> ctx_ext"
+        , "    gen var -> var"
+        , "    gen reindex -> reindex"
         , "    gen eps -> eta"
         , "  }"
         , "}"
@@ -627,6 +1130,12 @@ testAdjObligationFail = do
         , "  mode L -> L;"
         , "  modality F -> F;"
         , "  modality U -> U;"
+        , "  gen ctx_ext @C -> ctx_ext"
+        , "  gen var @C -> var"
+        , "  gen reindex @C -> reindex"
+        , "  gen ctx_ext @L -> ctx_ext"
+        , "  gen var @L -> var"
+        , "  gen reindex @L -> reindex"
         , "  gen eta @C -> eta"
         , "  gen eps @L -> eps"
         , "  check none;"
@@ -648,8 +1157,16 @@ testAdjObligationPass = do
         [ "doctrine AdjSchema where {"
         , "  mode C classifiedBy C via C.U_C;"
         , "  gen U_C : [] -> [C.U_C] @C;"
+        , "  gen ctx_ext(a@C) : [a] -> [a] @C;"
+        , "  gen var(a@C) : [a] -> [a] @C;"
+        , "  gen reindex(a@C) : [a] -> [a] @C;"
+        , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  mode L classifiedBy L via L.U_L;"
         , "  gen U_L : [] -> [L.U_L] @L;"
+        , "  gen ctx_ext(a@L) : [a] -> [a] @L;"
+        , "  gen var(a@L) : [a] -> [a] @L;"
+        , "  gen reindex(a@L) : [a] -> [a] @L;"
+        , "  comprehension L where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -664,8 +1181,16 @@ testAdjObligationPass = do
         , "doctrine GoodAdj where {"
         , "  mode C classifiedBy C via C.U_C;"
         , "  gen U_C : [] -> [C.U_C] @C;"
+        , "  gen ctx_ext(a@C) : [a] -> [a] @C;"
+        , "  gen var(a@C) : [a] -> [a] @C;"
+        , "  gen reindex(a@C) : [a] -> [a] @C;"
+        , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  mode L classifiedBy L via L.U_L;"
         , "  gen U_L : [] -> [L.U_L] @L;"
+        , "  gen ctx_ext(a@L) : [a] -> [a] @L;"
+        , "  gen var(a@L) : [a] -> [a] @L;"
+        , "  gen reindex(a@L) : [a] -> [a] @L;"
+        , "  comprehension L where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -673,9 +1198,15 @@ testAdjObligationPass = do
         , "  gen eta(a@C) : [a] -> [U(F(a))] @C;"
         , "  gen eps(b@L) : [F(U(b))] -> [b] @L;"
         , "  action F where {"
+        , "    gen ctx_ext -> ctx_ext"
+        , "    gen var -> var"
+        , "    gen reindex -> reindex"
         , "    gen eta -> eps"
         , "  }"
         , "  action U where {"
+        , "    gen ctx_ext -> ctx_ext"
+        , "    gen var -> var"
+        , "    gen reindex -> reindex"
         , "    gen eps -> eta"
         , "  }"
         , "  rule computational eta_id -> (a@C) : [a] -> [a] @C ="
@@ -688,6 +1219,12 @@ testAdjObligationPass = do
         , "  mode L -> L;"
         , "  modality F -> F;"
         , "  modality U -> U;"
+        , "  gen ctx_ext @C -> ctx_ext"
+        , "  gen var @C -> var"
+        , "  gen reindex @C -> reindex"
+        , "  gen ctx_ext @L -> ctx_ext"
+        , "  gen var @L -> var"
+        , "  gen reindex @L -> reindex"
         , "  gen eta @C -> eta"
         , "  gen eps @L -> eps"
         , "  check none;"
@@ -705,6 +1242,10 @@ testMonadObligationPass = do
         [ "doctrine SchemaMonad where {"
         , "  mode C classifiedBy C via C.U_C;"
         , "  gen U_C : [] -> [C.U_C] @C;"
+        , "  gen ctx_ext(a@C) : [a] -> [a] @C;"
+        , "  gen var(a@C) : [a] -> [a] @C;"
+        , "  gen reindex(a@C) : [a] -> [a] @C;"
+        , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality T : C -> C;"
         , "  gen ret(x@C) : [x] -> [T(x)] @C;"
         , "  gen join(x@C) : [T(T(x))] -> [T(x)] @C;"
@@ -718,11 +1259,18 @@ testMonadObligationPass = do
         , "doctrine IdMonad where {"
         , "  mode C classifiedBy C via C.U_C;"
         , "  gen U_C : [] -> [C.U_C] @C;"
+        , "  gen ctx_ext(a@C) : [a] -> [a] @C;"
+        , "  gen var(a@C) : [a] -> [a] @C;"
+        , "  gen reindex(a@C) : [a] -> [a] @C;"
+        , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality T : C -> C;"
         , "  gen A : [] -> [C.U_C] @C;"
         , "  gen ret(a@C) : [a] -> [T(a)] @C;"
         , "  gen join(a@C) : [T(T(a))] -> [T(a)] @C;"
         , "  action T where {"
+        , "    gen ctx_ext -> ctx_ext"
+        , "    gen var -> var"
+        , "    gen reindex -> reindex"
         , "    gen ret -> ret"
         , "    gen join -> join"
         , "  }"
@@ -732,6 +1280,9 @@ testMonadObligationPass = do
         , "morphism monadInst : SchemaMonad -> IdMonad where {"
         , "  mode C -> C;"
         , "  modality T -> T;"
+        , "  gen ctx_ext @C -> ctx_ext"
+        , "  gen var @C -> var"
+        , "  gen reindex @C -> reindex"
         , "  gen ret @C -> ret"
         , "  gen join @C -> join"
         , "  check none;"

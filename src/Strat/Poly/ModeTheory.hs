@@ -4,6 +4,7 @@ module Strat.Poly.ModeTheory
   , ModName(..)
   , ModTransformName(..)
   , ModeInfo(..)
+  , CompDecl(..)
   , ModExpr(..)
   , ModDecl(..)
   , ModEqn(..)
@@ -29,16 +30,24 @@ import Data.Map.Strict (Map)
 import qualified Data.Set as S
 import Strat.Poly.ModeSyntax
 import Strat.Poly.Syntax (Obj(..))
+import Strat.Poly.Names (GenName)
 
 
 data ModeInfo = ModeInfo
   { miName :: ModeName
   } deriving (Eq, Show)
 
+data CompDecl = CompDecl
+  { compCtxExt :: GenName
+  , compVar :: GenName
+  , compReindex :: GenName
+  } deriving (Eq, Show)
+
 data ClassificationDecl = ClassificationDecl
   { cdClassifier :: ModeName
   , cdUniverse :: Obj
   , cdTag :: Maybe Text
+  , cdComp :: Maybe CompDecl
   } deriving (Eq, Show)
 
 data ModeTheory = ModeTheory

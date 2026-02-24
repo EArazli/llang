@@ -1,7 +1,15 @@
 doctrine ClassificationResolution where {
   mode Ty classifiedBy Ty via Ty.U_Ty;
+  gen comp_ctx_ext(a@Ty) : [a] -> [a] @Ty;
+  gen comp_var(a@Ty) : [a] -> [a] @Ty;
+  gen comp_reindex(a@Ty) : [a] -> [a] @Ty;
+  comprehension Ty where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_Ty : [] -> [Ty.U_Ty] @Ty;
   mode Tm classifiedBy Ty via Ty.U;
+  gen comp_ctx_ext(a@Tm) : [a] -> [a] @Tm;
+  gen comp_var(a@Tm) : [a] -> [a] @Tm;
+  gen comp_reindex(a@Tm) : [a] -> [a] @Tm;
+  comprehension Tm where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
 
   gen U : [] -> [Ty.U_Ty] @Ty;
   gen Unit : [] -> [Ty.U] @Ty;

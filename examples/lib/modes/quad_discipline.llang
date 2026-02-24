@@ -3,12 +3,28 @@ import "./struct_caps.llang";
 
 doctrine QuadDiscipline where {
   mode Lin classifiedBy Lin via Lin.U_Lin;
+  gen comp_ctx_ext(a@Lin) : [a] -> [a] @Lin;
+  gen comp_var(a@Lin) : [a] -> [a] @Lin;
+  gen comp_reindex(a@Lin) : [a] -> [a] @Lin;
+  comprehension Lin where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_Lin : [] -> [Lin.U_Lin] @Lin;
   mode Aff classifiedBy Aff via Aff.U_Aff;
+  gen comp_ctx_ext(a@Aff) : [a] -> [a] @Aff;
+  gen comp_var(a@Aff) : [a] -> [a] @Aff;
+  gen comp_reindex(a@Aff) : [a] -> [a] @Aff;
+  comprehension Aff where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_Aff : [] -> [Aff.U_Aff] @Aff;
   mode Rel classifiedBy Rel via Rel.U_Rel;
+  gen comp_ctx_ext(a@Rel) : [a] -> [a] @Rel;
+  gen comp_var(a@Rel) : [a] -> [a] @Rel;
+  gen comp_reindex(a@Rel) : [a] -> [a] @Rel;
+  comprehension Rel where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_Rel : [] -> [Rel.U_Rel] @Rel;
   mode Cart classifiedBy Cart via Cart.U_Cart;
+  gen comp_ctx_ext(a@Cart) : [a] -> [a] @Cart;
+  gen comp_var(a@Cart) : [a] -> [a] @Cart;
+  gen comp_reindex(a@Cart) : [a] -> [a] @Cart;
+  comprehension Cart where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_Cart : [] -> [Cart.U_Cart] @Cart;
   gen Base : [] -> [Lin.U_Lin] @Lin;
   gen Base : [] -> [Aff.U_Aff] @Aff;

@@ -146,6 +146,7 @@ library:
   source-dirs: src
   other-modules:
   - Strat.Frontend.Compile
+  - Strat.Poly.CompObligations
   - Strat.Poly.Kernel
   - Strat.Poly.ModeSyntax
   - Strat.Poly.ObjResolve
@@ -203,6 +204,7 @@ tests:
     - Test.Poly.UnifyObj
     - Test.Poly.ObjModes
     - Test.Poly.ClassificationResolution
+    - Test.Poly.Slots
     - Test.DSL.Functors
     - Test.Value.Doc
     - Test.Frontend.Pipeline

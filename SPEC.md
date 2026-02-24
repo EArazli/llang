@@ -122,6 +122,45 @@ For doctrine validation and later normalization/unification environment construc
 
 - if `M classifiedBy K` and `M != K`, then `K` appears before `M` in `order`.
 
+### 2.8 Comprehension Declarations (Current Cut)
+
+The DSL supports:
+
+- `comprehension M where { ctx_ext = g1; var = g2; reindex = g3; };`
+
+Current kernel checks:
+
+- `M` must already have `classifiedBy`.
+- each referenced generator must exist in mode `M`.
+- referenced generators must be term generators (not constructor-like declarations).
+- each referenced generator must have:
+  - no attrs,
+  - exactly one plain input port (no binder input),
+  - exactly one output.
+
+Current generated-obligation behavior:
+
+- generated comprehension obligations are installed only when a `comprehension` declaration is present.
+- in the current cut, obligations are generated for:
+  - binder slots on generators with binder inputs (including mixed plain+binder domains) generate full law families (`id_dom`, `id_cod`, `comp_dom`, `comp_cod`, `nat`),
+  - constructor term-argument slots only when:
+    - the slot's term sort owner mode equals the classified mode,
+    - the generator has a plain-port-only domain (no binder inputs),
+    - and the generated law side follows the slot boundary side:
+      - dom-side slots generate dom laws (`id_dom`, `comp_dom`) only,
+      - cod-side slots generate cod laws (`id_cod`, `comp_cod`) only.
+- generated obligation names use the `__comp/<mode>/<gen>/<slotpath>/...` scheme.
+- generated law families in the current cut are:
+  - `id_dom`
+  - `id_cod`
+  - `comp_dom`
+  - `comp_cod`
+  - `nat`
+
+Current policy note:
+
+- every classified mode must provide a `comprehension` declaration.
+
 ## 3. Definitional Fragment
 
 Every mode SHALL declare a definitional fragment used for kernel definitional equality.

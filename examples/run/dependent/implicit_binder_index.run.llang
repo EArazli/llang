@@ -2,12 +2,26 @@ doctrine ImplicitBinderIndex where {
   mode M classifiedBy M via M.U_M;
   gen U_M : [] -> [M.U_M] @M;
   mode I classifiedBy I via I.U_I;
+  gen comp_ctx_ext(a@I) : [a] -> [a] @I;
+  gen comp_var(a@I) : [a] -> [a] @I;
+  gen comp_reindex(a@I) : [a] -> [a] @I;
+  comprehension I where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_I : [] -> [I.U_I] @I;
   gen Nat : [] -> [I.U_I] @I;
   gen Z : [] -> [Nat] @I;
 
   gen Vec(n : Nat) : [] -> [M.U_M] @M;
   gen Out : [] -> [M.U_M] @M;
+  gen ctx_ext(a@M) : [a] -> [a] @M;
+  gen var(a@M) : [a] -> [a] @M;
+  gen reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };
+  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M =
+    ctx_ext{a} == id[a]
+  rule computational var_id -> (a@M) : [a] -> [a] @M =
+    var{a} == id[a]
+  rule computational reindex_id -> (a@M) : [a] -> [a] @M =
+    reindex{a} == id[a]
 
   gen use(n : Nat) : [] -> [Vec(n)] @M;
   gen wrap : [binder { tm n : Nat } : [Vec(n)]] -> [Out] @M;

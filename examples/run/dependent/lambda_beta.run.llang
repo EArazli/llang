@@ -2,6 +2,16 @@ doctrine LambdaBeta where {
   mode M classifiedBy M via M.U_M;
   gen U_M : [] -> [M.U_M] @M;
   gen A : [] -> [M.U_M] @M;
+  gen ctx_ext(a@M) : [a] -> [a] @M;
+  gen var(a@M) : [a] -> [a] @M;
+  gen reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };
+  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M =
+    ctx_ext{a} == id[a]
+  rule computational var_id -> (a@M) : [a] -> [a] @M =
+    var{a} == id[a]
+  rule computational reindex_id -> (a@M) : [a] -> [a] @M =
+    reindex{a} == id[a]
 
   gen lam : [binder { x : A } : [A]] -> [A] @M;
   gen app : [A, A] -> [A] @M;

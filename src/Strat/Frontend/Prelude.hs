@@ -108,6 +108,7 @@ selfClassifiedMode mode = do
       { cdClassifier = mode
       , cdUniverse = universeObj mode
       , cdTag = Nothing
+      , cdComp = Nothing
       }
     mt0
 

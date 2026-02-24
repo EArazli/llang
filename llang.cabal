@@ -165,6 +165,7 @@ library
       Strat.Poly.Proof
       Strat.Poly.Pushout
       Strat.Poly.Rewrite
+      Strat.Poly.Slots
       Strat.Poly.Surface
       Strat.Poly.Surface.Elab
       Strat.Poly.Surface.Parse
@@ -179,6 +180,7 @@ library
       Strat.Poly.UnifyObj
   other-modules:
       Strat.Frontend.Compile
+      Strat.Poly.CompObligations
       Strat.Poly.Kernel
       Strat.Poly.ModeSyntax
       Strat.Poly.ObjResolve
@@ -250,6 +252,7 @@ test-suite llang-test
       Test.Poly.UnifyObj
       Test.Poly.ObjModes
       Test.Poly.ClassificationResolution
+      Test.Poly.Slots
       Test.DSL.Functors
       Test.Value.Doc
       Test.Frontend.Pipeline

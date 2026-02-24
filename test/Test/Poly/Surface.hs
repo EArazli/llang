@@ -107,6 +107,7 @@ mkDoctrine hasDup hasDrop =
                   { cdClassifier = modeM
                   , cdUniverse = universe
                   , cdTag = Nothing
+                  , cdComp = Nothing
                   }
           }
       aVar = ObjVar "a" modeM
@@ -162,6 +163,7 @@ mkStructEnv target = do
                   { cdClassifier = modeM
                   , cdUniverse = universe
                   , cdTag = Nothing
+                  , cdComp = Nothing
                   }
           }
       aVar = ObjVar "a" modeM
@@ -306,12 +308,20 @@ testSurfaceStructImplements = do
         T.unlines
           [ "doctrine StructCartesian where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen dup (a@M) : [a] -> [a, a] @M;"
           , "  gen drop (a@M) : [a] -> [] @M;"
           , "}"
           , "doctrine Target where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen A : [] -> [M.U_M] @M;"
           , "  gen copy (a@M) : [a] -> [a, a] @M;"
@@ -376,12 +386,20 @@ testSurfaceStructMissing = do
         T.unlines
           [ "doctrine StructCartesian where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen dup (a@M) : [a] -> [a, a] @M;"
           , "  gen drop (a@M) : [a] -> [] @M;"
           , "}"
           , "doctrine Target where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen A : [] -> [M.U_M] @M;"
           , "  gen copy (a@M) : [a] -> [a, a] @M;"
@@ -453,8 +471,16 @@ testSurfaceModeEqComp = do
         T.unlines
           [ "doctrine SurfModes where {"
           , "  mode A classifiedBy A via A.U_A;"
+          , "  gen comp_ctx_ext(a@A) : [a] -> [a] @A;"
+          , "  gen comp_var(a@A) : [a] -> [a] @A;"
+          , "  gen comp_reindex(a@A) : [a] -> [a] @A;"
+          , "  comprehension A where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_A : [] -> [A.U_A] @A;"
           , "  mode B classifiedBy B via B.U_B;"
+          , "  gen comp_ctx_ext(a@B) : [a] -> [a] @B;"
+          , "  gen comp_var(a@B) : [a] -> [a] @B;"
+          , "  gen comp_reindex(a@B) : [a] -> [a] @B;"
+          , "  comprehension B where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_B : [] -> [B.U_B] @B;"
           , "  modality F : A -> B;"
           , "  modality U : B -> A;"
@@ -500,8 +526,16 @@ testSurfaceClassifiedTypeResolution = do
         T.unlines
           [ "doctrine SurfClassified where {"
           , "  mode Ty classifiedBy Ty via Ty.U_Ty;"
+          , "  gen comp_ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+          , "  gen comp_var(a@Ty) : [a] -> [a] @Ty;"
+          , "  gen comp_reindex(a@Ty) : [a] -> [a] @Ty;"
+          , "  comprehension Ty where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_Ty : [] -> [Ty.U_Ty] @Ty;"
           , "  mode Tm classifiedBy Ty via Ty.U;"
+          , "  gen comp_ctx_ext(a@Tm) : [a] -> [a] @Tm;"
+          , "  gen comp_var(a@Tm) : [a] -> [a] @Tm;"
+          , "  gen comp_reindex(a@Tm) : [a] -> [a] @Tm;"
+          , "  comprehension Tm where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U : [] -> [Ty.U_Ty] @Ty;"
           , "  gen Unit : [] -> [Ty.U] @Ty;"
           , "  gen Arr(a@Tm, b@Tm) : [] -> [Ty.U] @Ty;"
@@ -598,8 +632,16 @@ testSurfaceConstructorArgOwnerModes = do
         T.unlines
           [ "doctrine SurfCrossMode where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  mode N classifiedBy N via N.U_N;"
+          , "  gen comp_ctx_ext(a@N) : [a] -> [a] @N;"
+          , "  gen comp_var(a@N) : [a] -> [a] @N;"
+          , "  gen comp_reindex(a@N) : [a] -> [a] @N;"
+          , "  comprehension N where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_N : [] -> [N.U_N] @N;"
           , "  gen B : [] -> [N.U_N] @N;"
           , "  gen WrapN(x@N) : [] -> [M.U_M] @M;"
@@ -685,6 +727,10 @@ testSurfaceEliminatesToBaseDoctrine = do
         T.unlines
           [ "doctrine D where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen A : [] -> [M.U_M] @M;"
           , "  gen f : [] -> [A] @M;"

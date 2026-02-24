@@ -47,37 +47,38 @@ data ActionSemanticsResult
 validateActionSemanticsWithBudgetResult :: SearchBudget -> Doctrine -> Either Text ActionSemanticsResult
 validateActionSemanticsWithBudgetResult budget doc = do
   tt <- doctrineTypeTheory doc
-  actionResult <- checkActions tt (M.toList (dActions doc))
+  let ctorTables = ttCtorTables tt
+  actionResult <- checkActions tt ctorTables (M.toList (dActions doc))
   case actionResult of
     ActionSemanticsUndecided{} ->
       Right actionResult
     ActionSemanticsProved actionProofs -> do
-      eqnResult <- checkEqns tt (mtEqns (dModes doc))
+      eqnResult <- checkEqns tt ctorTables (mtEqns (dModes doc))
       case eqnResult of
         ActionSemanticsUndecided{} ->
           Right eqnResult
         ActionSemanticsProved eqnProofs ->
           Right (ActionSemanticsProved (actionProofs <> eqnProofs))
   where
-    checkActions _ [] = Right (ActionSemanticsProved [])
-    checkActions tt (decl:rest) = do
+    checkActions _ _ [] = Right (ActionSemanticsProved [])
+    checkActions tt ctorTables (decl:rest) = do
       result <- checkRulePreservation tt decl
       case result of
         ActionSemanticsUndecided{} -> Right result
         ActionSemanticsProved proofs -> do
-          restResult <- checkActions tt rest
+          restResult <- checkActions tt ctorTables rest
           case restResult of
             ActionSemanticsUndecided{} -> Right restResult
             ActionSemanticsProved restProofs ->
               Right (ActionSemanticsProved (proofs <> restProofs))
 
-    checkEqns _ [] = Right (ActionSemanticsProved [])
-    checkEqns tt (eqn:rest) = do
-      result <- checkModEqn tt eqn
+    checkEqns _ _ [] = Right (ActionSemanticsProved [])
+    checkEqns tt ctorTables (eqn:rest) = do
+      result <- checkModEqn tt ctorTables eqn
       case result of
         ActionSemanticsUndecided{} -> Right result
         ActionSemanticsProved proofs -> do
-          restResult <- checkEqns tt rest
+          restResult <- checkEqns tt ctorTables rest
           case restResult of
             ActionSemanticsUndecided{} -> Right restResult
             ActionSemanticsProved restProofs ->
@@ -121,7 +122,7 @@ validateActionSemanticsWithBudgetResult budget doc = do
           checkJoinProof tt rules witness
           Right (ActionSemanticsProved [("rule " <> c2Name cell, witness)])
 
-    checkModEqn tt eqn = do
+    checkModEqn tt ctorTables eqn = do
       let lhs = meLHS eqn
       let rhs = meRHS eqn
       let mods = mePath lhs <> mePath rhs
@@ -131,7 +132,7 @@ validateActionSemanticsWithBudgetResult budget doc = do
           let gens =
                 [ gd
                 | gd <- M.elems (M.findWithDefault M.empty srcMode (dGens doc))
-                , not (isTypeDeclGenName doc srcMode (gdName gd))
+                , not (isTypeDeclGenNameInTables doc ctorTables srcMode (ObjName (renderGenName (gdName gd))))
                 ]
           let policy = choosePolicy mods
           let rules = rulesFromPolicy policy (dCells2 doc)
@@ -293,6 +294,8 @@ applyAction doc mName diagSrc = do
           mappedBargs <- mapM (mapBinderArg mName) bargs
           img0raw <-
             case M.lookup (dMode diagSrc, g) (maGenMap action) of
+              Nothing
+                | isComprehensionSupportGen doc (dMode diagSrc) g -> implicitCompImage me g
               Nothing -> Left "map: missing generator image"
               Just d -> Right d
           img0 <- freshenImageTyVars tt diagTgt img0raw
@@ -321,6 +324,13 @@ applyAction doc mName diagSrc = do
           BAConcrete <$> applyAction doc modName inner
         BAMeta x ->
           Right (BAMeta x)
+
+    implicitCompImage me gName = do
+      targetGen <-
+        case M.lookup (meTgt me) (dGens doc) >>= M.lookup gName of
+          Nothing -> Left "map: missing generator image"
+          Just gd -> Right gd
+      genDWithAttrs (meTgt me) (gdPlainDom targetGen) (gdCod targetGen) (gdName targetGen) M.empty
 
     instantiateMappedBinders typeTheory me genDecl mappedBargs subst image = do
       let slots = [ bs | InBinder bs <- gdDom genDecl ]
@@ -365,6 +375,15 @@ applyAction doc mName diagSrc = do
            in if (mode, candidate) `S.member` used
                 then pickFresh used mode base (n + 1)
                 else candidate
+
+isComprehensionSupportGen :: Doctrine -> ModeName -> GenName -> Bool
+isComprehensionSupportGen doc mode genName =
+  case M.lookup mode (mtClassifiedBy (dModes doc)) >>= cdComp of
+    Nothing -> False
+    Just comp ->
+      genName == compCtxExt comp
+        || genName == compVar comp
+        || genName == compReindex comp
 
 genericGenDiagram :: GenDecl -> Either Text Diagram
 genericGenDiagram gd = do

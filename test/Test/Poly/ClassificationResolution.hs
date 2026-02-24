@@ -11,9 +11,10 @@ import Strat.Frontend.Env (ModuleEnv, meDoctrines)
 import Strat.Poly.Doctrine
   ( Doctrine(..)
   , GenDecl(..)
+  , deriveCtorTables
   , doctrineTypeTheory
   , gdPlainDom
-  , lookupCtorSigForOwner
+  , lookupCtorSigForOwnerInTables
   )
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
@@ -47,7 +48,15 @@ testClassifierResolution = do
   let src = T.unlines
         [ "doctrine ClassifyResolve where {"
         , "  mode Ty classifiedBy Ty via Ty.U;"
+        , "  gen comp_ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen comp_var(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen comp_reindex(a@Ty) : [a] -> [a] @Ty;"
+        , "  comprehension Ty where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
         , "  mode Tm classifiedBy Ty via Ty.U;"
+        , "  gen comp_ctx_ext(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen comp_var(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen comp_reindex(a@Tm) : [a] -> [a] @Tm;"
+        , "  comprehension Tm where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
         , "  gen U : [] -> [Ty.U] @Ty;"
         , "  gen Unit : [] -> [Ty.U] @Ty;"
         , "  gen Arr(a@Tm, b@Tm) : [] -> [Ty.U] @Ty;"
@@ -84,7 +93,15 @@ testWrongClassifierQualifier = do
   let src = T.unlines
         [ "doctrine WrongQualifier where {"
         , "  mode Ty classifiedBy Ty via Ty.U;"
+        , "  gen comp_ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen comp_var(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen comp_reindex(a@Ty) : [a] -> [a] @Ty;"
+        , "  comprehension Ty where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
         , "  mode Tm classifiedBy Ty via Ty.U;"
+        , "  gen comp_ctx_ext(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen comp_var(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen comp_reindex(a@Tm) : [a] -> [a] @Tm;"
+        , "  comprehension Tm where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
         , "  gen U : [] -> [Ty.U] @Ty;"
         , "  gen Unit : [] -> [Ty.U] @Ty;"
         , "  gen Arr(a@Tm, b@Tm) : [] -> [Ty.U] @Ty;"
@@ -104,7 +121,15 @@ testTermArgNormalization = do
   let src = T.unlines
         [ "doctrine ClassifyNormalize where {"
         , "  mode Ty classifiedBy Ty via Ty.U;"
+        , "  gen comp_ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen comp_var(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen comp_reindex(a@Ty) : [a] -> [a] @Ty;"
+        , "  comprehension Ty where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
         , "  mode Tm classifiedBy Ty via Ty.U;"
+        , "  gen comp_ctx_ext(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen comp_var(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen comp_reindex(a@Tm) : [a] -> [a] @Tm;"
+        , "  comprehension Tm where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
         , "  gen U : [] -> [Ty.U] @Ty;"
         , "  gen Nat : [] -> [Ty.U] @Ty;"
         , "  gen Unit : [] -> [Ty.U] @Ty;"
@@ -140,7 +165,8 @@ testTermArgNormalization = do
       assertFailure "expected Vec(term, obj) code shape"
   where
     lookupNatSort doc vecRef = do
-      params <- requireEither (lookupCtorSigForOwner doc (ModeName "Tm") vecRef)
+      ctorTables <- requireEither (deriveCtorTables doc)
+      params <- requireEither (lookupCtorSigForOwnerInTables doc ctorTables (ModeName "Tm") vecRef)
       case params of
         (TPS_Tm natSort : _) -> pure natSort
         _ -> assertFailure "expected Vec to have first term parameter" >> fail "unreachable"

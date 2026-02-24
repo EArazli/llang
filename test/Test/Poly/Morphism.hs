@@ -68,7 +68,7 @@ selfClassifiedModes modes =
   in mt
        { mtClassifiedBy =
            M.fromList
-             [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing })
+             [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing, cdComp = Just compDecl })
              | mode <- modes
              ]
        }
@@ -96,7 +96,7 @@ ctorDecl mode ctorName sig =
               TmVar
                 { tmvName = "a" <> T.pack (show pos)
                 , tmvSort = universeObj m
-                , tmvScope = pos
+                , tmvScope = 0
                 , tmvOwnerMode = Just m
                 }
       ]
@@ -107,7 +107,7 @@ ctorDecl mode ctorName sig =
               TmVar
                 { tmvName = "x" <> T.pack (show pos)
                 , tmvSort = sortTy
-                , tmvScope = negate (pos + 1)
+                , tmvScope = 0
                 , tmvOwnerMode = Just mode
                 }
       ]
@@ -133,7 +133,7 @@ addSelfClassifications modes mt =
               M.insertWith
                 (\_ old -> old)
                 mode
-                (ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing })
+                (ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing, cdComp = Just compDecl })
                 acc
           )
           (mtClassifiedBy mt)
@@ -159,8 +159,100 @@ withSelfClassifiedCtors :: [(ModeName, [(ObjName, [TypeParamSig])])] -> Doctrine
 withSelfClassifiedCtors entries doc =
   doc
     { dModes = addSelfClassifications (map fst entries) (dModes doc)
-    , dGens = foldl (\acc (mode, sigs) -> insertCtorDecls mode sigs acc) (dGens doc) entries
+    , dGens =
+        foldl
+          (\acc (mode, sigs) -> insertCompSupportGens mode (insertCtorDecls mode sigs acc))
+          (dGens doc)
+          entries
     }
+
+compCtxExtName :: GenName
+compCtxExtName = GenName "__ctx_ext"
+
+compVarName :: GenName
+compVarName = GenName "__var"
+
+compReindexName :: GenName
+compReindexName = GenName "__reindex"
+
+compDecl :: CompDecl
+compDecl =
+  CompDecl
+    { compCtxExt = compCtxExtName
+    , compVar = compVarName
+    , compReindex = compReindexName
+    }
+
+mkCompGen :: ModeName -> Obj -> GenName -> GenDecl
+mkCompGen mode aTy name =
+  GenDecl
+    { gdName = name
+    , gdMode = mode
+    , gdTyVars = []
+    , gdTmVars = []
+    , gdParams = []
+    , gdDom = [InPort aTy]
+    , gdCod = [aTy]
+    , gdAttrs = []
+    }
+
+insertCompSupportGens
+  :: ModeName
+  -> M.Map ModeName (M.Map GenName GenDecl)
+  -> M.Map ModeName (M.Map GenName GenDecl)
+insertCompSupportGens mode gens0 =
+  let modeGens = M.findWithDefault M.empty mode gens0
+      aTy = universeObj mode
+      support =
+        [ mkCompGen mode aTy compCtxExtName
+        , mkCompGen mode aTy compVarName
+        , mkCompGen mode aTy compReindexName
+        ]
+      modeGens' = foldl (\acc gd -> M.insertWith (\_ old -> old) (gdName gd) gd acc) modeGens support
+   in M.insert mode modeGens' gens0
+
+attachComprehensionFixture :: ModeName -> Obj -> Doctrine -> Doctrine
+attachComprehensionFixture mode aTy doc =
+  let modeGens0 = M.findWithDefault M.empty mode (dGens doc)
+      compGens =
+        [ mkCompGen mode aTy compCtxExtName
+        , mkCompGen mode aTy compVarName
+        , mkCompGen mode aTy compReindexName
+        ]
+      modeGens1 = foldl (\acc gd -> M.insert (gdName gd) gd acc) modeGens0 compGens
+      modes0 = dModes doc
+      classDecl0 = M.findWithDefault defaultClassDecl mode (mtClassifiedBy modes0)
+      classDecl1 =
+        classDecl0
+          { cdComp =
+              Just
+                CompDecl
+                  { compCtxExt = compCtxExtName
+                  , compVar = compVarName
+                  , compReindex = compReindexName
+                  }
+          }
+      modes1 = modes0 { mtClassifiedBy = M.insert mode classDecl1 (mtClassifiedBy modes0) }
+   in doc { dModes = modes1, dGens = M.insert mode modeGens1 (dGens doc) }
+  where
+    defaultClassDecl =
+      ClassificationDecl
+        { cdClassifier = mode
+        , cdUniverse = universeObj mode
+        , cdTag = Nothing
+        , cdComp = Just compDecl
+        }
+
+compIdentityImages :: ModeName -> Obj -> Either Text [((ModeName, GenName), GenImage)]
+compIdentityImages mode aTy = do
+  ctxExtImg <- plainImage <$> genD mode [aTy] [aTy] compCtxExtName
+  varImg <- plainImage <$> genD mode [aTy] [aTy] compVarName
+  reindexImg <- plainImage <$> genD mode [aTy] [aTy] compReindexName
+  pure
+    [ ((mode, compCtxExtName), ctxExtImg)
+    , ((mode, compVarName), varImg)
+    , ((mode, compReindexName), reindexImg)
+    ]
 
 tcon :: ModeName -> Text -> [Obj] -> Obj
 tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
@@ -298,7 +390,9 @@ testTypeMapReorder = do
         , dModes = selfClassifiedModes [mode]
         , dAcyclicModes = S.empty
         , dAttrSorts = M.empty
-        , dGens = M.fromList [(mode, M.fromList [(gdName prodCtor, prodCtor), (genName, genSrc)])]
+        , dGens =
+            insertCompSupportGens mode $
+              M.fromList [(mode, M.fromList [(gdName prodCtor, prodCtor), (genName, genSrc)])]
         , dCells2 = []
         , dActions = M.empty
         , dObligations = []
@@ -308,7 +402,9 @@ testTypeMapReorder = do
         , dModes = selfClassifiedModes [mode]
         , dAcyclicModes = S.empty
         , dAttrSorts = M.empty
-        , dGens = M.fromList [(mode, M.fromList [(gdName pairCtor, pairCtor), (genName, genTgt)])]
+        , dGens =
+            insertCompSupportGens mode $
+              M.fromList [(mode, M.fromList [(gdName pairCtor, pairCtor), (genName, genTgt)])]
         , dCells2 = []
         , dActions = M.empty
         , dObligations = []
@@ -697,18 +793,19 @@ testBinderIdentityMorphismPreservesBinders = do
           , gdAttrs = []
           }
   let doc =
-        withSelfClassifiedCtors
-          [(mode, [(ObjName "A", [])])]
-          Doctrine
-            { dName = "LamDoc"
-            , dModes = mkModes [mode]
-            , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
-            , dCells2 = []
-            , dActions = M.empty
-            , dObligations = []
-            }
+        attachComprehensionFixture mode aTy' $
+          withSelfClassifiedCtors
+            [(mode, [(ObjName "A", [])])]
+            Doctrine
+              { dName = "LamDoc"
+              , dModes = mkModes [mode]
+              , dAcyclicModes = S.empty
+              , dAttrSorts = M.empty
+              , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
+              , dCells2 = []
+              , dActions = M.empty
+              , dObligations = []
+              }
   doc' <- case validateDoctrineNormalized doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure doc
@@ -718,6 +815,7 @@ testBinderIdentityMorphismPreservesBinders = do
   img0 <- either (assertFailure . T.unpack) pure (genD mode [] [aTy'] lamName)
   let hole = BinderMetaVar "b0"
   img <- either (assertFailure . T.unpack) pure (setSingleEdgeBargs img0 [BAMeta hole])
+  compImgs <- either (assertFailure . T.unpack) pure (compIdentityImages mode aTy')
   let mor =
         Morphism
           { morName = "LamId"
@@ -728,7 +826,7 @@ testBinderIdentityMorphismPreservesBinders = do
           , morModMap = identityModMap doc'
           , morAttrSortMap = M.empty
           , morTypeMap = M.empty
-          , morGenMap = M.fromList [((mode, lamName), GenImage img (M.fromList [(hole, slotSig)]))]
+          , morGenMap = M.fromList ([((mode, lamName), GenImage img (M.fromList [(hole, slotSig)]))] <> compImgs)
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
@@ -767,18 +865,19 @@ testMorphismSpliceRenamesToBinderMeta = do
           , gdAttrs = []
           }
   let doc =
-        withSelfClassifiedCtors
-          [(mode, [(ObjName "A", [])])]
-          Doctrine
-            { dName = "SpliceMetaDoc"
-            , dModes = mkModes [mode]
-            , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
-            , dCells2 = []
-            , dActions = M.empty
-            , dObligations = []
-            }
+        attachComprehensionFixture mode aTy' $
+          withSelfClassifiedCtors
+            [(mode, [(ObjName "A", [])])]
+            Doctrine
+              { dName = "SpliceMetaDoc"
+              , dModes = mkModes [mode]
+              , dAcyclicModes = S.empty
+              , dAttrSorts = M.empty
+              , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
+              , dCells2 = []
+              , dActions = M.empty
+              , dObligations = []
+              }
   doc' <- case validateDoctrineNormalized doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure doc
@@ -788,6 +887,7 @@ testMorphismSpliceRenamesToBinderMeta = do
   srcDiag <- either (assertFailure . T.unpack) pure (setSingleEdgeBargs srcDiag0 [BAMeta xMeta])
   img0 <- either (assertFailure . T.unpack) pure (genD mode [aTy'] [aTy'] (GenName "tmp"))
   img <- either (assertFailure . T.unpack) pure (setSingleEdgePayload img0 (PSplice b0))
+  compImgs <- either (assertFailure . T.unpack) pure (compIdentityImages mode aTy')
   let mor =
         Morphism
           { morName = "SpliceRename"
@@ -798,7 +898,7 @@ testMorphismSpliceRenamesToBinderMeta = do
           , morModMap = identityModMap doc'
           , morAttrSortMap = M.empty
           , morTypeMap = M.empty
-          , morGenMap = M.fromList [((mode, gName), GenImage img (M.fromList [(b0, slotSig)]))]
+          , morGenMap = M.fromList ([((mode, gName), GenImage img (M.fromList [(b0, slotSig)]))] <> compImgs)
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
@@ -834,24 +934,26 @@ testMorphismRejectsBadBinderHoleSignatures = do
           , gdAttrs = []
           }
   let doc =
-        withSelfClassifiedCtors
-          [(mode, [(ObjName "A", [])])]
-          Doctrine
-            { dName = "BadBinderSigsDoc"
-            , dModes = mkModes [mode]
-            , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
-            , dCells2 = []
-            , dActions = M.empty
-            , dObligations = []
-            }
+        attachComprehensionFixture mode aTy' $
+          withSelfClassifiedCtors
+            [(mode, [(ObjName "A", [])])]
+            Doctrine
+              { dName = "BadBinderSigsDoc"
+              , dModes = mkModes [mode]
+              , dAcyclicModes = S.empty
+              , dAttrSorts = M.empty
+              , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
+              , dCells2 = []
+              , dActions = M.empty
+              , dObligations = []
+              }
   doc' <- case validateDoctrineNormalized doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure doc
   let hole = BinderMetaVar "b0"
   img0 <- either (assertFailure . T.unpack) pure (genD mode [] [aTy'] lamName)
   img <- either (assertFailure . T.unpack) pure (setSingleEdgeBargs img0 [BAMeta hole])
+  compImgs <- either (assertFailure . T.unpack) pure (compIdentityImages mode aTy')
   let mor =
         Morphism
           { morName = "BadBinderSigs"
@@ -862,7 +964,7 @@ testMorphismRejectsBadBinderHoleSignatures = do
           , morModMap = identityModMap doc'
           , morAttrSortMap = M.empty
           , morTypeMap = M.empty
-          , morGenMap = M.fromList [((mode, lamName), GenImage img (M.fromList [(hole, wrongSig)]))]
+          , morGenMap = M.fromList ([((mode, lamName), GenImage img (M.fromList [(hole, wrongSig)]))] <> compImgs)
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
@@ -1082,10 +1184,12 @@ testTermTypeTemplateInstantiation = do
           , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
           , dGens =
-              M.fromList
-                [ (modeI', M.fromList [(gdName natCtor, natCtor), (GenName "Z", zGen), (GenName "S", sGen)])
-                , (modeM', M.fromList [(gdName aCtor, aCtor), (gdName vecCtor, vecCtor)])
-                ]
+              insertCompSupportGens modeI' $
+                insertCompSupportGens modeM' $
+                  M.fromList
+                    [ (modeI', M.fromList [(gdName natCtor, natCtor), (GenName "Z", zGen), (GenName "S", sGen)])
+                    , (modeM', M.fromList [(gdName aCtor, aCtor), (gdName vecCtor, vecCtor)])
+                    ]
           , dCells2 = []
           , dActions = M.empty
           , dObligations = []
@@ -1097,10 +1201,12 @@ testTermTypeTemplateInstantiation = do
           , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
           , dGens =
-              M.fromList
-                [ (modeI', M.fromList [(gdName natCtor, natCtor), (GenName "Z", zGen), (GenName "S", sGen)])
-                , (modeM', M.fromList [(gdName aCtor, aCtor), (gdName vec2Ctor, vec2Ctor)])
-                ]
+              insertCompSupportGens modeI' $
+                insertCompSupportGens modeM' $
+                  M.fromList
+                    [ (modeI', M.fromList [(gdName natCtor, natCtor), (GenName "Z", zGen), (GenName "S", sGen)])
+                    , (modeM', M.fromList [(gdName aCtor, aCtor), (gdName vec2Ctor, vec2Ctor)])
+                    ]
           , dCells2 = []
           , dActions = M.empty
           , dObligations = []
@@ -1650,6 +1756,10 @@ morphismCheckAllProgram :: Text
 morphismCheckAllProgram =
   "doctrine S where {\n"
     <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
+    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
     <> "  gen U_M : [] -> [U_M] @M;\n"
     <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen f : [B] -> [B] @M;\n"
@@ -1658,6 +1768,10 @@ morphismCheckAllProgram =
     <> "}\n"
     <> "doctrine T where {\n"
     <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
+    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
     <> "  gen U_M : [] -> [U_M] @M;\n"
     <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen g : [B] -> [B] @M;\n"
@@ -1683,12 +1797,20 @@ morphismBadBoundaryProgram :: Text
 morphismBadBoundaryProgram =
   "doctrine S where {\n"
     <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
+    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
     <> "  gen U_M : [] -> [U_M] @M;\n"
     <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen and : [B, B] -> [B] @M;\n"
     <> "}\n"
     <> "doctrine T where {\n"
     <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
+    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
     <> "  gen U_M : [] -> [U_M] @M;\n"
     <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen true : [] -> [B] @M;\n"
@@ -1703,6 +1825,10 @@ wireMetaRuleProgram :: Text
 wireMetaRuleProgram =
   "doctrine D where {\n"
     <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
+    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
     <> "  gen U_M : [] -> [U_M] @M;\n"
     <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen true : [] -> [B] @M;\n"
@@ -1715,6 +1841,10 @@ wireMetaDuplicateProgram :: Text
 wireMetaDuplicateProgram =
   "doctrine D where {\n"
     <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
+    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
     <> "  gen U_M : [] -> [U_M] @M;\n"
     <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen true : [] -> [B] @M;\n"

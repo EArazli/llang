@@ -2,6 +2,7 @@ module Strat.Poly.DSL.AST
   ( RawPolyDoctrine(..)
   , RawPolyItem(..)
   , RawClassifiedByDecl(..)
+  , RawCompDecl(..)
   , RawModeDecl(..)
   , RawModExpr(..)
   , RawModalityDecl(..)
@@ -41,6 +42,7 @@ data RawPolyDoctrine = RawPolyDoctrine
 
 data RawPolyItem
   = RPMode RawModeDecl
+  | RPComprehension RawCompDecl
   | RPModality RawModalityDecl
   | RPModEq RawModEqDecl
   | RPModTransform RawModTransformDecl
@@ -51,6 +53,13 @@ data RawPolyItem
   | RPGen RawPolyGenDecl
   | RPRule RawPolyRuleDecl
   deriving (Eq, Show)
+
+data RawCompDecl = RawCompDecl
+  { rcmpMode :: Text
+  , rcmpCtxExt :: Text
+  , rcmpVar :: Text
+  , rcmpReindex :: Text
+  } deriving (Eq, Show)
 
 data RawModeDecl = RawModeDecl
   { rmdName :: Text

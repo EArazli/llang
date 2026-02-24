@@ -17,7 +17,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.Rewrite (RewriteRule(..))
 import Strat.Poly.CriticalPairs
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), InputShape(..), validateDoctrine)
 import Strat.Common.Rules (RewritePolicy(..), Orientation(..))
 import Test.Poly.Helpers (mkModes)
 
@@ -150,6 +150,13 @@ testCriticalPairsFailOnSubstFailure = do
                         { cdClassifier = mode
                         , cdUniverse = mkCon (ObjRef mode (ObjName "U")) []
                         , cdTag = Nothing
+                        , cdComp =
+                            Just
+                              CompDecl
+                                { compCtxExt = GenName "comp_ctx_ext"
+                                , compVar = GenName "comp_var"
+                                , compReindex = GenName "comp_reindex"
+                                }
                         }
                 }
           , dAcyclicModes = S.empty
@@ -157,18 +164,56 @@ testCriticalPairsFailOnSubstFailure = do
           , dGens =
               M.singleton
                 mode
-                ( M.singleton
-                    (GenName "A")
-                    GenDecl
-                      { gdName = GenName "A"
-                      , gdMode = mode
-                      , gdTyVars = []
-                      , gdTmVars = []
-                      , gdParams = []
-                      , gdDom = []
-                      , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
-                      , gdAttrs = []
-                      }
+                ( M.fromList
+                    [ ( GenName "A"
+                      , GenDecl
+                          { gdName = GenName "A"
+                          , gdMode = mode
+                          , gdTyVars = []
+                          , gdTmVars = []
+                          , gdParams = []
+                          , gdDom = []
+                          , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
+                          , gdAttrs = []
+                          }
+                      )
+                    , ( GenName "comp_ctx_ext"
+                      , GenDecl
+                          { gdName = GenName "comp_ctx_ext"
+                          , gdMode = mode
+                          , gdTyVars = []
+                          , gdTmVars = []
+                          , gdParams = []
+                          , gdDom = [InPort (mkCon (ObjRef mode (ObjName "U")) [])]
+                          , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
+                          , gdAttrs = []
+                          }
+                      )
+                    , ( GenName "comp_var"
+                      , GenDecl
+                          { gdName = GenName "comp_var"
+                          , gdMode = mode
+                          , gdTyVars = []
+                          , gdTmVars = []
+                          , gdParams = []
+                          , gdDom = [InPort (mkCon (ObjRef mode (ObjName "U")) [])]
+                          , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
+                          , gdAttrs = []
+                          }
+                      )
+                    , ( GenName "comp_reindex"
+                      , GenDecl
+                          { gdName = GenName "comp_reindex"
+                          , gdMode = mode
+                          , gdTyVars = []
+                          , gdTmVars = []
+                          , gdParams = []
+                          , gdDom = [InPort (mkCon (ObjRef mode (ObjName "U")) [])]
+                          , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
+                          , gdAttrs = []
+                          }
+                      )
+                    ]
                 )
           , dCells2 = [cell]
           , dActions = M.empty

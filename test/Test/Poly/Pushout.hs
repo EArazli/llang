@@ -20,6 +20,7 @@ import Strat.Poly.ModeTheory
   , ModEqn(..)
   , ModTransformName(..)
   , ModTransformDecl(..)
+  , CompDecl(..)
   , ClassificationDecl(..)
   , ModeTheory(..)
   , ModeInfo(..)
@@ -197,7 +198,7 @@ selfClassifiedModes modes =
   in mt
        { mtClassifiedBy =
            M.fromList
-             [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing })
+             [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing, cdComp = Just compDecl })
              | mode <- S.toList modes
              ]
        }
@@ -225,7 +226,7 @@ ctorDecl universeTy mode ctorName sig =
               TmVar
                 { tmvName = "a" <> T.pack (show pos)
                 , tmvSort = universeObj m
-                , tmvScope = pos
+                , tmvScope = 0
                 , tmvOwnerMode = Just m
                 }
       ]
@@ -236,7 +237,7 @@ ctorDecl universeTy mode ctorName sig =
               TmVar
                 { tmvName = "x" <> T.pack (show pos)
                 , tmvSort = sortTy
-                , tmvScope = negate (pos + 1)
+                , tmvScope = 0
                 , tmvOwnerMode = Just mode
                 }
       ]
@@ -262,7 +263,7 @@ addSelfClassifications modes mt =
               M.insertWith
                 (\_ old -> old)
                 mode
-                (ClassificationDecl { cdClassifier = mode, cdUniverse = defaultUniverseObj mode, cdTag = Nothing })
+                (ClassificationDecl { cdClassifier = mode, cdUniverse = defaultUniverseObj mode, cdTag = Nothing, cdComp = Just compDecl })
                 acc
           )
           (mtClassifiedBy mt)
@@ -296,10 +297,98 @@ withSelfClassifiedCtors entries doc =
         { dModes = modes'
         , dGens =
             foldl
-              (\acc (mode, sigs) -> insertCtorDecls mode (universeFor mode) sigs acc)
+              (\acc (mode, sigs) -> insertCompSupportGens mode (universeFor mode) (insertCtorDecls mode (universeFor mode) sigs acc))
               (dGens doc)
               entries
         }
+
+compCtxExtName :: GenName
+compCtxExtName = GenName "__ctx_ext"
+
+compVarName :: GenName
+compVarName = GenName "__var"
+
+compReindexName :: GenName
+compReindexName = GenName "__reindex"
+
+compDecl :: CompDecl
+compDecl =
+  CompDecl
+    { compCtxExt = compCtxExtName
+    , compVar = compVarName
+    , compReindex = compReindexName
+    }
+
+mkCompGen :: ModeName -> Obj -> GenName -> GenDecl
+mkCompGen mode aTy name =
+  GenDecl
+    { gdName = name
+    , gdMode = mode
+    , gdTyVars = []
+    , gdTmVars = []
+    , gdParams = []
+    , gdDom = [InPort aTy]
+    , gdCod = [aTy]
+    , gdAttrs = []
+    }
+
+insertCompSupportGens
+  :: ModeName
+  -> Obj
+  -> M.Map ModeName (M.Map GenName GenDecl)
+  -> M.Map ModeName (M.Map GenName GenDecl)
+insertCompSupportGens mode aTy gens0 =
+  let modeGens = M.findWithDefault M.empty mode gens0
+      support =
+        [ mkCompGen mode aTy compCtxExtName
+        , mkCompGen mode aTy compVarName
+        , mkCompGen mode aTy compReindexName
+        ]
+      modeGens' = foldl (\acc gd -> M.insertWith (\_ old -> old) (gdName gd) gd acc) modeGens support
+   in M.insert mode modeGens' gens0
+
+attachComprehensionFixture :: ModeName -> Obj -> Doctrine -> Doctrine
+attachComprehensionFixture mode aTy doc =
+  let modeGens0 = M.findWithDefault M.empty mode (dGens doc)
+      compGens =
+        [ mkCompGen mode aTy compCtxExtName
+        , mkCompGen mode aTy compVarName
+        , mkCompGen mode aTy compReindexName
+        ]
+      modeGens1 = foldl (\acc gd -> M.insert (gdName gd) gd acc) modeGens0 compGens
+      modes0 = dModes doc
+      classDecl0 = M.findWithDefault defaultClassDecl mode (mtClassifiedBy modes0)
+      classDecl1 =
+        classDecl0
+          { cdComp =
+              Just
+                CompDecl
+                  { compCtxExt = compCtxExtName
+                  , compVar = compVarName
+                  , compReindex = compReindexName
+                  }
+          }
+      modes1 = modes0 { mtClassifiedBy = M.insert mode classDecl1 (mtClassifiedBy modes0) }
+   in doc { dModes = modes1, dGens = M.insert mode modeGens1 (dGens doc) }
+  where
+    defaultClassDecl =
+      ClassificationDecl
+        { cdClassifier = mode
+        , cdUniverse = defaultUniverseObj mode
+        , cdTag = Nothing
+        , cdComp = Just compDecl
+        }
+
+compIdentityImages :: ModeName -> Obj -> Either Text [((ModeName, GenName), GenImage)]
+compIdentityImages mode aTy = do
+  ctxExtImg <- plainImage <$> genD mode [aTy] [aTy] compCtxExtName
+  varImg <- plainImage <$> genD mode [aTy] [aTy] compVarName
+  reindexImg <- plainImage <$> genD mode [aTy] [aTy] compReindexName
+  pure
+    [ ((mode, compCtxExtName), ctxExtImg)
+    , ((mode, compVarName), varImg)
+    , ((mode, compReindexName), reindexImg)
+    ]
 
 
 testPushoutDedupByBody :: Assertion
@@ -1651,6 +1740,7 @@ testPushoutClassificationUniverseFollowsTypeRename = do
           { cdClassifier = mode
           , cdUniverse = universe
           , cdTag = Nothing
+          , cdComp = Just compDecl
           }
   let src =
         withSelfClassifiedCtors
@@ -1841,10 +1931,12 @@ testPushoutTermTypeMaps = do
           , dModes = selfClassifiedModes modeSet
     , dAcyclicModes = S.empty
           , dGens =
-              M.fromList
-                [ (modeI, M.fromList [(gdName genNat, genNat)])
-                , (modeM, M.fromList [(gdName genVec, genVec)])
-                ]
+              insertCompSupportGens modeI universeI $
+                insertCompSupportGens modeM universeM $
+                  M.fromList
+                    [ (modeI, M.fromList [(gdName genNat, genNat)])
+                    , (modeM, M.fromList [(gdName genVec, genVec)])
+                    ]
           , dCells2 = []
       , dActions = M.empty
       , dObligations = []
@@ -1856,10 +1948,12 @@ testPushoutTermTypeMaps = do
           , dModes = selfClassifiedModes modeSet
     , dAcyclicModes = S.empty
           , dGens =
-              M.fromList
-                [ (modeI, M.fromList [(gdName genNat, genNat)])
-                , (modeM, M.fromList [(gdName genVec2, genVec2)])
-                ]
+              insertCompSupportGens modeI universeI $
+                insertCompSupportGens modeM universeM $
+                  M.fromList
+                    [ (modeI, M.fromList [(gdName genNat, genNat)])
+                    , (modeM, M.fromList [(gdName genVec2, genVec2)])
+                    ]
           , dCells2 = []
       , dActions = M.empty
       , dObligations = []
@@ -2007,10 +2101,12 @@ testPushoutTypePermutationSortRename = do
           , dModes = selfClassifiedModes modeSet
           , dAcyclicModes = S.empty
           , dGens =
-              M.fromList
-                [ (modeI, M.fromList [(gdName genNat, genNat)])
-                , (modeM, M.fromList [(gdName genVec, genVec)])
-                ]
+              insertCompSupportGens modeI universeI $
+                insertCompSupportGens modeM universeM $
+                  M.fromList
+                    [ (modeI, M.fromList [(gdName genNat, genNat)])
+                    , (modeM, M.fromList [(gdName genVec, genVec)])
+                    ]
           , dCells2 = []
           , dActions = M.empty
           , dObligations = []
@@ -2022,10 +2118,12 @@ testPushoutTypePermutationSortRename = do
           , dModes = selfClassifiedModes modeSet
           , dAcyclicModes = S.empty
           , dGens =
-              M.fromList
-                [ (modeI, M.fromList [(gdName genNatL, genNatL)])
-                , (modeM, M.fromList [(gdName genVec2, genVec2)])
-                ]
+              insertCompSupportGens modeI universeI $
+                insertCompSupportGens modeM universeM $
+                  M.fromList
+                    [ (modeI, M.fromList [(gdName genNatL, genNatL)])
+                    , (modeM, M.fromList [(gdName genVec2, genVec2)])
+                    ]
           , dCells2 = []
           , dActions = M.empty
           , dObligations = []
@@ -2143,6 +2241,8 @@ testCoproductObligationRenameElaborates = do
           { obName = "nat_refl"
           , obMode = mode
           , obForGen = False
+          , obForGenName = Nothing
+          , obGenerated = False
           , obTyVars = []
           , obTmVars = []
           , obDom = [natTy]
@@ -2260,6 +2360,8 @@ testCoproductObligationRawModalityRenameElaborates = do
           { obName = "raw_mod_refl"
           , obMode = mode
           , obForGen = False
+          , obForGenName = Nothing
+          , obGenerated = False
           , obTyVars = [aVar]
           , obTmVars = []
           , obDom = [OVar aVar, fa, ffa, ffa]
@@ -2936,12 +3038,13 @@ testPushoutInjectionPreservesBinderArgs = do
           , dAttrSorts = M.empty
           }
   let left =
-        withSelfClassifiedCtors
-          [(mode, [(ObjName "A", [])])]
-          iface
-            { dName = "LeftBinder"
-            , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
-            }
+        attachComprehensionFixture mode aTy $
+          withSelfClassifiedCtors
+            [(mode, [(ObjName "A", [])])]
+            iface
+              { dName = "LeftBinder"
+              , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
+              }
   let right = iface { dName = "RightBinder" }
   case validateDoctrine iface of
     Left err -> assertFailure (T.unpack err)
@@ -3015,31 +3118,33 @@ testPushoutAcceptsRenamingWithBinders = do
           , gdAttrs = []
           }
   let iface =
-        withSelfClassifiedCtors
-          [(mode, [(ObjName "A", [])])]
-          Doctrine
-            { dName = "IfaceRenameBinder"
-            , dModes = mkModes (S.singleton mode)
-            , dAcyclicModes = S.empty
-            , dGens = M.fromList [(mode, M.fromList [(gName, ifaceGen)])]
-            , dCells2 = []
-            , dActions = M.empty
-            , dObligations = []
-            , dAttrSorts = M.empty
-            }
+        attachComprehensionFixture mode aTy $
+          withSelfClassifiedCtors
+            [(mode, [(ObjName "A", [])])]
+            Doctrine
+              { dName = "IfaceRenameBinder"
+              , dModes = mkModes (S.singleton mode)
+              , dAcyclicModes = S.empty
+              , dGens = M.fromList [(mode, M.fromList [(gName, ifaceGen)])]
+              , dCells2 = []
+              , dActions = M.empty
+              , dObligations = []
+              , dAttrSorts = M.empty
+              }
   let left =
-        withSelfClassifiedCtors
-          [(mode, [(ObjName "A1", [])])]
-          Doctrine
-            { dName = "LeftRenameBinder"
-            , dModes = mkModes (S.singleton mode)
-            , dAcyclicModes = S.empty
-            , dGens = M.fromList [(mode, M.fromList [(g1Name, leftGen)])]
-            , dCells2 = []
-            , dActions = M.empty
-            , dObligations = []
-            , dAttrSorts = M.empty
-            }
+        attachComprehensionFixture mode a1Ty $
+          withSelfClassifiedCtors
+            [(mode, [(ObjName "A1", [])])]
+            Doctrine
+              { dName = "LeftRenameBinder"
+              , dModes = mkModes (S.singleton mode)
+              , dAcyclicModes = S.empty
+              , dGens = M.fromList [(mode, M.fromList [(g1Name, leftGen)])]
+              , dCells2 = []
+              , dActions = M.empty
+              , dObligations = []
+              , dAttrSorts = M.empty
+              }
   let right = iface { dName = "RightRenameBinder" }
   case validateDoctrine iface of
     Left err -> assertFailure (T.unpack err)
@@ -3055,6 +3160,8 @@ testPushoutAcceptsRenamingWithBinders = do
   imgLeft <- require (setSingleEdgeBargs imgLeft0 [BAMeta hole])
   imgRight0 <- require (genD mode [] [aTy] gName)
   imgRight <- require (setSingleEdgeBargs imgRight0 [BAMeta hole])
+  compImgsLeft <- require (compIdentityImages mode a1Ty)
+  compImgsRight <- require (compIdentityImages mode aTy)
   let morLeft =
         Morphism
           { morName = "fRenameBinder"
@@ -3064,7 +3171,10 @@ testPushoutAcceptsRenamingWithBinders = do
           , morModeMap = identityModeMap iface
           , morModMap = identityModMap iface
           , morTypeMap = M.fromList [(aRef, TypeTemplate [] a1Ty)]
-          , morGenMap = M.fromList [((mode, gName), GenImage imgLeft (M.fromList [(hole, slotSigTgt)]))]
+          , morGenMap =
+              M.fromList
+                ([((mode, gName), GenImage imgLeft (M.fromList [(hole, slotSigTgt)]))]
+                  <> compImgsLeft)
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
@@ -3078,7 +3188,10 @@ testPushoutAcceptsRenamingWithBinders = do
           , morModeMap = identityModeMap iface
           , morModMap = identityModMap iface
           , morTypeMap = M.empty
-          , morGenMap = M.fromList [((mode, gName), GenImage imgRight (M.fromList [(hole, slotSigSrc)]))]
+          , morGenMap =
+              M.fromList
+                ([((mode, gName), GenImage imgRight (M.fromList [(hole, slotSigSrc)]))]
+                  <> compImgsRight)
         , morCheck = CheckAll
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented

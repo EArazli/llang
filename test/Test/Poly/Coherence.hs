@@ -9,7 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ClassificationDecl(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ClassificationDecl(..), CompDecl(..))
 import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), mkCon)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD)
@@ -83,6 +83,36 @@ mkDoctrine cells =
             , gdCod = [universeObj modeName]
             , gdAttrs = []
             }
+        , GenDecl
+            { gdName = GenName "comp_ctx_ext"
+            , gdMode = modeName
+            , gdTyVars = []
+            , gdTmVars = []
+            , gdParams = []
+            , gdDom = [InPort (universeObj modeName)]
+            , gdCod = [universeObj modeName]
+            , gdAttrs = []
+            }
+        , GenDecl
+            { gdName = GenName "comp_var"
+            , gdMode = modeName
+            , gdTyVars = []
+            , gdTmVars = []
+            , gdParams = []
+            , gdDom = [InPort (universeObj modeName)]
+            , gdCod = [universeObj modeName]
+            , gdAttrs = []
+            }
+        , GenDecl
+            { gdName = GenName "comp_reindex"
+            , gdMode = modeName
+            , gdTyVars = []
+            , gdTmVars = []
+            , gdParams = []
+            , gdDom = [InPort (universeObj modeName)]
+            , gdCod = [universeObj modeName]
+            , gdAttrs = []
+            }
         , mkGenDecl "f"
         , mkGenDecl "g"
         , mkGenDecl "h"
@@ -108,7 +138,20 @@ mkModes modes =
     , mtTransforms = M.empty
     , mtClassifiedBy =
         M.fromList
-          [ (m, ClassificationDecl { cdClassifier = m, cdUniverse = universeObj m, cdTag = Nothing })
+          [ ( m
+            , ClassificationDecl
+                { cdClassifier = m
+                , cdUniverse = universeObj m
+                , cdTag = Nothing
+                , cdComp =
+                    Just
+                      CompDecl
+                        { compCtxExt = GenName "comp_ctx_ext"
+                        , compVar = GenName "comp_var"
+                        , compReindex = GenName "comp_reindex"
+                        }
+                }
+            )
           | m <- S.toList modes
           ]
     }

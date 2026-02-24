@@ -1,7 +1,15 @@
 doctrine D where {
   mode C classifiedBy C via C.U_C;
+  gen comp_ctx_ext(a@C) : [a] -> [a] @C;
+  gen comp_var(a@C) : [a] -> [a] @C;
+  gen comp_reindex(a@C) : [a] -> [a] @C;
+  comprehension C where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_C : [] -> [C.U_C] @C;
   mode V classifiedBy V via V.U_V;
+  gen comp_ctx_ext(a@V) : [a] -> [a] @V;
+  gen comp_var(a@V) : [a] -> [a] @V;
+  gen comp_reindex(a@V) : [a] -> [a] @V;
+  comprehension V where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_V : [] -> [V.U_V] @V;
   gen A : [] -> [C.U_C] @C;
   gen B : [] -> [V.U_V] @V;

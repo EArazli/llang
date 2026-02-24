@@ -1,7 +1,15 @@
 doctrine Staging where {
   mode RT classifiedBy RT via RT.U_RT;
+  gen comp_ctx_ext(a@RT) : [a] -> [a] @RT;
+  gen comp_var(a@RT) : [a] -> [a] @RT;
+  gen comp_reindex(a@RT) : [a] -> [a] @RT;
+  comprehension RT where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_RT : [] -> [RT.U_RT] @RT;
   mode CT classifiedBy CT via CT.U_CT;
+  gen comp_ctx_ext(a@CT) : [a] -> [a] @CT;
+  gen comp_var(a@CT) : [a] -> [a] @CT;
+  gen comp_reindex(a@CT) : [a] -> [a] @CT;
+  comprehension CT where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_CT : [] -> [CT.U_CT] @CT;
   modality quote : RT -> CT;
   modality splice : CT -> RT;
@@ -45,8 +53,16 @@ surface StageExprCT where {
 
 doctrine Staging2 where {
   mode R2 classifiedBy R2 via R2.U_R2;
+  gen comp_ctx_ext(a@R2) : [a] -> [a] @R2;
+  gen comp_var(a@R2) : [a] -> [a] @R2;
+  gen comp_reindex(a@R2) : [a] -> [a] @R2;
+  comprehension R2 where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_R2 : [] -> [R2.U_R2] @R2;
   mode C2 classifiedBy C2 via C2.U_C2;
+  gen comp_ctx_ext(a@C2) : [a] -> [a] @C2;
+  gen comp_var(a@C2) : [a] -> [a] @C2;
+  gen comp_reindex(a@C2) : [a] -> [a] @C2;
+  comprehension C2 where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_C2 : [] -> [C2.U_C2] @C2;
   modality Q : R2 -> C2;
   modality S : C2 -> R2;

@@ -27,9 +27,9 @@ import Strat.Poly.Obj
   , pattern OATm
   , objMode
   )
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ClassificationDecl(..), emptyModeTheory)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ClassificationDecl(..), CompDecl(..), emptyModeTheory)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Frontend.Env (emptyEnv)
@@ -72,7 +72,11 @@ mkDoctrine tables =
     , dAttrSorts = M.empty
     , dGens =
         foldl
-          (\acc (mode, sigs) -> M.insert mode (M.fromList [ (gdName g, g) | g <- map (uncurry (ctorDecl mode)) sigs ]) acc)
+          (\acc (mode, sigs) ->
+              let ctors = M.fromList [ (gdName g, g) | g <- map (uncurry (ctorDecl mode)) sigs ]
+                  support = M.fromList [ (gdName g, g) | g <- compSupportGens mode ]
+              in M.insert mode (M.union ctors support) acc
+          )
           M.empty
           tables
     , dCells2 = []
@@ -101,10 +105,48 @@ selfClassifiedModes modes =
                     { cdClassifier = mode
                     , cdUniverse = mkCon (ObjRef mode (ObjName "U")) []
                     , cdTag = Nothing
+                    , cdComp = Just compDecl
                     }
                 )
               | mode <- S.toList modes
               ]
+        }
+
+compCtxExtName :: GenName
+compCtxExtName = GenName "comp_ctx_ext"
+
+compVarName :: GenName
+compVarName = GenName "comp_var"
+
+compReindexName :: GenName
+compReindexName = GenName "comp_reindex"
+
+compDecl :: CompDecl
+compDecl =
+  CompDecl
+    { compCtxExt = compCtxExtName
+    , compVar = compVarName
+    , compReindex = compReindexName
+    }
+
+compSupportGens :: ModeName -> [GenDecl]
+compSupportGens mode =
+  [ mk mode compCtxExtName
+  , mk mode compVarName
+  , mk mode compReindexName
+  ]
+  where
+    uTy = mkCon (ObjRef mode (ObjName "U")) []
+    mk m name =
+      GenDecl
+        { gdName = name
+        , gdMode = m
+        , gdTyVars = []
+        , gdTmVars = []
+        , gdParams = []
+        , gdDom = [InPort uTy]
+        , gdCod = [uTy]
+        , gdAttrs = []
         }
 
 objNameText :: ObjName -> Text
@@ -130,7 +172,7 @@ ctorDecl mode ctorName sig =
               TmVar
                 { tmvName = "a" <> T.pack (show pos)
                 , tmvSort = mkCon (ObjRef m (ObjName "U")) []
-                , tmvScope = pos
+                , tmvScope = 0
                 , tmvOwnerMode = Just m
                 }
       ]
@@ -141,7 +183,7 @@ ctorDecl mode ctorName sig =
               TmVar
                 { tmvName = "x" <> T.pack (show pos)
                 , tmvSort = sortTy
-                , tmvScope = negate (pos + 1)
+                , tmvScope = 0
                 , tmvOwnerMode = Just mode
                 }
       ]

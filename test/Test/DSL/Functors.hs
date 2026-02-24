@@ -11,7 +11,13 @@ import qualified Data.Text as T
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile, elabRawFileWithEnv)
 import Strat.Frontend.Env (ModuleEnv(..), DoctrineFunctorDef(..))
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom, lookupCtorRefForOwner)
+import Strat.Poly.Doctrine
+  ( Doctrine(..)
+  , GenDecl(..)
+  , deriveCtorTables
+  , gdPlainDom
+  , lookupCtorRefForOwnerInTables
+  )
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), mkCon)
@@ -44,11 +50,19 @@ testApplyPreservesTargetNames = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine L where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen Box : [] -> [M.U_M] @M;"
           , "}"
@@ -64,13 +78,13 @@ testApplyPreservesTargetNames = do
   env <- expectElab src
   doc <- expectDoctrine env "R"
   let mode = ModeName "M"
-  boxRef <- case lookupCtorRefForOwner doc mode (ObjName "Box") of
+  ctorTables <- case deriveCtorTables doc of
     Left err -> assertFailure (T.unpack err)
-    Right Nothing -> assertFailure "expected Box constructor in R"
-    Right (Just ref) -> pure ref
-  xRef <- case lookupCtorRefForOwner doc mode (ObjName "X") of
-    Left err -> assertFailure (T.unpack err)
-    Right ref -> pure ref
+    Right tables -> pure tables
+  boxRef <- case lookupCtorRefForOwnerInTables doc ctorTables mode (ObjName "Box") of
+    Nothing -> assertFailure "expected Box constructor in R"
+    Just ref -> pure ref
+  let xRef = lookupCtorRefForOwnerInTables doc ctorTables mode (ObjName "X")
   assertBool "R should not expose X constructor" (xRef == Nothing)
   gens <- case M.lookup mode (dGens doc) of
     Nothing -> assertFailure "expected mode M generator table"
@@ -89,11 +103,19 @@ testApplyCollisionRename = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine L where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen Box : [] -> [M.U_M] @M;"
           , "  gen get : [] -> [Box] @M;"
@@ -122,9 +144,9 @@ testApplyMappingCoverage :: Assertion
 testApplyMappingCoverage = do
   let srcMissing =
         T.unlines
-          [ "doctrine SA where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen A : [] -> [U_M] @M; }"
-          , "doctrine SB where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen B : [] -> [U_M] @M; }"
-          , "doctrine T where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen TA : [] -> [U_M] @M; gen TB : [] -> [U_M] @M; }"
+          [ "doctrine SA where { mode M classifiedBy M via U_M; gen comp_ctx_ext(a@M) : [a] -> [a] @M; gen comp_var(a@M) : [a] -> [a] @M; gen comp_reindex(a@M) : [a] -> [a] @M; comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; }; gen U_M : [] -> [U_M] @M; gen A : [] -> [U_M] @M; }"
+          , "doctrine SB where { mode M classifiedBy M via U_M; gen comp_ctx_ext(a@M) : [a] -> [a] @M; gen comp_var(a@M) : [a] -> [a] @M; gen comp_reindex(a@M) : [a] -> [a] @M; comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; }; gen U_M : [] -> [U_M] @M; gen B : [] -> [U_M] @M; }"
+          , "doctrine T where { mode M classifiedBy M via U_M; gen comp_ctx_ext(a@M) : [a] -> [a] @M; gen comp_var(a@M) : [a] -> [a] @M; gen comp_reindex(a@M) : [a] -> [a] @M; comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; }; gen U_M : [] -> [U_M] @M; gen TA : [] -> [U_M] @M; gen TB : [] -> [U_M] @M; }"
           , "morphism implA : SA -> T where { mode M -> M; type A @M -> TA @M; }"
           , "morphism implB : SB -> T where { mode M -> M; type B @M -> TB @M; }"
           , "doctrine_functor F(A : SA, B : SB) where {"
@@ -138,9 +160,9 @@ testApplyMappingCoverage = do
 
   let srcExtra =
         T.unlines
-          [ "doctrine SA where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen A : [] -> [U_M] @M; }"
-          , "doctrine SB where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen B : [] -> [U_M] @M; }"
-          , "doctrine T where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen TA : [] -> [U_M] @M; gen TB : [] -> [U_M] @M; }"
+          [ "doctrine SA where { mode M classifiedBy M via U_M; gen comp_ctx_ext(a@M) : [a] -> [a] @M; gen comp_var(a@M) : [a] -> [a] @M; gen comp_reindex(a@M) : [a] -> [a] @M; comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; }; gen U_M : [] -> [U_M] @M; gen A : [] -> [U_M] @M; }"
+          , "doctrine SB where { mode M classifiedBy M via U_M; gen comp_ctx_ext(a@M) : [a] -> [a] @M; gen comp_var(a@M) : [a] -> [a] @M; gen comp_reindex(a@M) : [a] -> [a] @M; comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; }; gen U_M : [] -> [U_M] @M; gen B : [] -> [U_M] @M; }"
+          , "doctrine T where { mode M classifiedBy M via U_M; gen comp_ctx_ext(a@M) : [a] -> [a] @M; gen comp_var(a@M) : [a] -> [a] @M; gen comp_reindex(a@M) : [a] -> [a] @M; comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; }; gen U_M : [] -> [U_M] @M; gen TA : [] -> [U_M] @M; gen TB : [] -> [U_M] @M; }"
           , "morphism implA : SA -> T where { mode M -> M; type A @M -> TA @M; }"
           , "morphism implB : SB -> T where { mode M -> M; type B @M -> TB @M; }"
           , "doctrine_functor F(A : SA, B : SB) where {"
@@ -158,11 +180,19 @@ testApplyImplicitIdentityTypeMap = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "}"
@@ -193,11 +223,19 @@ testApplyImplicitIdentityTypeMapArity = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X(a@M) : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "}"
@@ -219,12 +257,20 @@ testApplyGeneratorModeMapping = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
@@ -251,12 +297,20 @@ testApplyMissingMappingDiagnostics = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  attrsort Str = string;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "}"
           , "morphism impl : S -> T where {"
@@ -278,12 +332,20 @@ testApplyMissingGenMappingDiagnostics = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
@@ -331,6 +393,10 @@ testNamespaceEnforcement = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "}"
@@ -348,12 +414,20 @@ testModeTheoryExtensionAllowed = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  modality mu : M -> M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode N classifiedBy N via N.U_N;"
+          , "  gen comp_ctx_ext(a@N) : [a] -> [a] @N;"
+          , "  gen comp_var(a@N) : [a] -> [a] @N;"
+          , "  gen comp_reindex(a@N) : [a] -> [a] @N;"
+          , "  comprehension N where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_N : [] -> [N.U_N] @N;"
           , "  modality nu : N -> N;"
           , "  gen Y : [] -> [N.U_N] @N;"
@@ -366,6 +440,10 @@ testModeTheoryExtensionAllowed = do
           , "}"
           , "doctrine_functor F(L : S) where {"
           , "  mode K classifiedBy K via K.U_K;"
+          , "  gen comp_ctx_ext(a@K) : [a] -> [a] @K;"
+          , "  gen comp_var(a@K) : [a] -> [a] @K;"
+          , "  gen comp_reindex(a@K) : [a] -> [a] @K;"
+          , "  comprehension K where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_K : [] -> [K.U_K] @K;"
           , "  modality up : L::M -> K;"
           , "  gen Z : [] -> [K.U_K] @K;"
@@ -374,12 +452,11 @@ testModeTheoryExtensionAllowed = do
           ]
   env <- expectElab src
   doc <- expectDoctrine env "R"
-  yRef <- case lookupCtorRefForOwner doc (ModeName "N") (ObjName "Y") of
+  ctorTables <- case deriveCtorTables doc of
     Left err -> assertFailure (T.unpack err)
-    Right ref -> pure ref
-  zRef <- case lookupCtorRefForOwner doc (ModeName "K") (ObjName "Z") of
-    Left err -> assertFailure (T.unpack err)
-    Right ref -> pure ref
+    Right tables -> pure tables
+  let yRef = lookupCtorRefForOwnerInTables doc ctorTables (ModeName "N") (ObjName "Y")
+  let zRef = lookupCtorRefForOwnerInTables doc ctorTables (ModeName "K") (ObjName "Z")
   assertBool "expected pushed mode N constructor Y" (yRef /= Nothing)
   assertBool "expected new body mode K constructor Z" (zRef /= Nothing)
 
@@ -390,6 +467,10 @@ testModEqPreservation = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  modality mu : M -> M;"
           , "  mod_eq mu . mu -> mu;"
@@ -398,6 +479,10 @@ testModEqPreservation = do
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  modality a : M -> M;"
           , "  modality b : M -> M;"
@@ -421,6 +506,10 @@ testFunctorInternalNames = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
           , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen X : [] -> [M.U_M] @M;"
           , "}"

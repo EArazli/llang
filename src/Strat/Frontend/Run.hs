@@ -28,6 +28,7 @@ import Strat.Poly.Graph
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Attr
 import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.TypeTheory (TypeTheory(..))
 import qualified Strat.Poly.Morphism as Morph
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Poly.Foliation (SSA(..), SSAStep(..), foliate, forgetSSA)
@@ -344,14 +345,15 @@ topologicalEdges diag =
 encodeSSAArtifact :: Doctrine -> SSA -> Either Text Diagram
 encodeSSAArtifact doc ssa = do
   tt <- doctrineTypeTheory doc
+  let ctorTables = ttCtorTables tt
   let mode = ssaMode ssa
       requireType0 tName = do
-        mRef <- lookupCtorRefForOwner doc mode (ObjName tName)
+        let mRef = lookupCtorRefForOwnerInTables doc ctorTables mode (ObjName tName)
         ref <-
           case mRef of
             Nothing -> Left ("pipeline: derived doctrine missing SSA constructor " <> tName)
             Just out -> Right out
-        sig <- lookupCtorSigForOwner doc mode ref
+        sig <- lookupCtorSigForOwnerInTables doc ctorTables mode ref
         if null sig
           then pure (mkCon ref [])
           else Left ("pipeline: SSA constructor " <> tName <> " must be nullary")
