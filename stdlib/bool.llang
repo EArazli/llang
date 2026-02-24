@@ -1,7 +1,7 @@
 import "./struct.cartesian.llang";
 
 doctrine Bool extends StructCartesian where {
-  type Bool @M;
+  gen Bool : [] -> [U_M] @M;
 
   gen T : [] -> [Bool] @M;
   gen F : [] -> [Bool] @M;

@@ -17,7 +17,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.Rewrite (RewriteRule(..))
 import Strat.Poly.CriticalPairs
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Poly.Doctrine (Doctrine(..), TypeSig(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), validateDoctrine)
 import Strat.Common.Rules (RewritePolicy(..), Orientation(..))
 import Test.Poly.Helpers (mkModes)
 
@@ -141,11 +141,35 @@ testCriticalPairsFailOnSubstFailure = do
   let doc =
         Doctrine
           { dName = "D"
-          , dModes = mkModes [mode]
+          , dModes =
+              (mkModes [mode])
+                { mtClassifiedBy =
+                    M.singleton
+                      mode
+                      ClassificationDecl
+                        { cdClassifier = mode
+                        , cdUniverse = mkCon (ObjRef mode (ObjName "U")) []
+                        , cdTag = Nothing
+                        }
+                }
           , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.empty
+          , dGens =
+              M.singleton
+                mode
+                ( M.singleton
+                    (GenName "A")
+                    GenDecl
+                      { gdName = GenName "A"
+                      , gdMode = mode
+                      , gdTyVars = []
+                      , gdTmVars = []
+                      , gdParams = []
+                      , gdDom = []
+                      , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
+                      , gdAttrs = []
+                      }
+                )
           , dCells2 = [cell]
           , dActions = M.empty
           , dObligations = []

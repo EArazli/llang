@@ -17,6 +17,7 @@ import Strat.Poly.Obj
   , mkCon
   , ObjName(..)
   , ObjRef(..)
+  , TmVar(..)
   , ObjVar
   , pattern ObjVar
   , ovName
@@ -26,15 +27,16 @@ import Strat.Poly.Obj
   , pattern OATm
   , objMode
   )
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), emptyModeTheory)
-import Strat.Poly.Doctrine (Doctrine(..), TypeSig(..), ParamSig(..), validateDoctrine)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ClassificationDecl(..), emptyModeTheory)
+import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Frontend.Env (emptyEnv)
 import Strat.Poly.Diagram (diagramDom)
 import Strat.Poly.UnifyObj (unifyObj)
 import Strat.Poly.Graph (Diagram(..), emptyDiagram, freshPort, validateDiagram)
-import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory (modeOnlyTypeTheory, TypeParamSig(..))
 
 
 tests :: TestTree
@@ -61,18 +63,21 @@ tvar mode name = ObjVar { ovName = name, ovMode = mode }
 tcon :: ModeName -> Text -> [Obj] -> Obj
 tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
 
-mkDoctrine :: [(ModeName, [(ObjName, TypeSig)])] -> Doctrine
+mkDoctrine :: [(ModeName, [(ObjName, [TypeParamSig])])] -> Doctrine
 mkDoctrine tables =
   Doctrine
     { dName = "D"
-    , dModes = mkModes (S.fromList (map fst tables))
+    , dModes = selfClassifiedModes (S.fromList (map fst tables))
     , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-    , dTypes = M.fromList [ (mode, M.fromList types) | (mode, types) <- tables ]
-    , dGens = M.empty
+    , dAttrSorts = M.empty
+    , dGens =
+        foldl
+          (\acc (mode, sigs) -> M.insert mode (M.fromList [ (gdName g, g) | g <- map (uncurry (ctorDecl mode)) sigs ]) acc)
+          M.empty
+          tables
     , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
+    , dActions = M.empty
+    , dObligations = []
     }
 
 mkModes :: S.Set ModeName -> ModeTheory
@@ -85,6 +90,74 @@ mkModes modes =
     , mtClassifiedBy = M.empty
     }
 
+selfClassifiedModes :: S.Set ModeName -> ModeTheory
+selfClassifiedModes modes =
+  let mt = mkModes modes
+   in mt
+        { mtClassifiedBy =
+            M.fromList
+              [ ( mode
+                , ClassificationDecl
+                    { cdClassifier = mode
+                    , cdUniverse = mkCon (ObjRef mode (ObjName "U")) []
+                    , cdTag = Nothing
+                    }
+                )
+              | mode <- S.toList modes
+              ]
+        }
+
+objNameText :: ObjName -> Text
+objNameText (ObjName n) = n
+
+ctorDecl :: ModeName -> ObjName -> [TypeParamSig] -> GenDecl
+ctorDecl mode ctorName sig =
+  GenDecl
+    { gdName = GenName (objNameText ctorName)
+    , gdMode = mode
+    , gdTyVars = tyVars
+    , gdTmVars = tmVars
+    , gdParams = params
+    , gdDom = []
+    , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
+    , gdAttrs = []
+    }
+  where
+    tyPos =
+      [ (pos, v)
+      | (pos, TPS_Ty m) <- zip [0 :: Int ..] sig
+      , let v =
+              TmVar
+                { tmvName = "a" <> T.pack (show pos)
+                , tmvSort = mkCon (ObjRef m (ObjName "U")) []
+                , tmvScope = pos
+                , tmvOwnerMode = Just m
+                }
+      ]
+    tmPos =
+      [ (pos, v)
+      | (pos, TPS_Tm sortTy) <- zip [0 :: Int ..] sig
+      , let v =
+              TmVar
+                { tmvName = "x" <> T.pack (show pos)
+                , tmvSort = sortTy
+                , tmvScope = negate (pos + 1)
+                , tmvOwnerMode = Just mode
+                }
+      ]
+    tyVars = map snd tyPos
+    tmVars = map snd tmPos
+    params =
+      [ case ps of
+          TPS_Ty _ -> GP_Ty (lookupByPos pos tyPos)
+          TPS_Tm _ -> GP_Tm (lookupByPos pos tmPos)
+      | (pos, ps) <- zip [0 :: Int ..] sig
+      ]
+    lookupByPos pos xs =
+      case lookup pos xs of
+        Just v -> v
+        Nothing -> error "ctorDecl: missing parameter position"
+
 requireDoc :: Doctrine -> IO Doctrine
 requireDoc doc =
   case validateDoctrine doc of
@@ -95,8 +168,8 @@ testElabCrossMode :: Assertion
 testElabCrossMode = do
   let doc0 =
         mkDoctrine
-          [ (modeC, [(ObjName "A", TypeSig [])])
-          , (modeV, [(ObjName "A", TypeSig []), (ObjName "Thunk", TypeSig [PS_Ty modeC])])
+          [ (modeC, [(ObjName "A", [])])
+          , (modeV, [(ObjName "A", []), (ObjName "Thunk", [TPS_Ty modeC])])
           ]
   doc <- requireDoc doc0
   raw <- case parseDiagExpr "id[V.Thunk(C.A)]" of
@@ -114,8 +187,8 @@ testUnqualifiedConstructorResolvesExpectedMode :: Assertion
 testUnqualifiedConstructorResolvesExpectedMode = do
   let doc0 =
         mkDoctrine
-          [ (modeC, [(ObjName "A", TypeSig [])])
-          , (modeV, [(ObjName "A", TypeSig [])])
+          [ (modeC, [(ObjName "A", [])])
+          , (modeV, [(ObjName "A", [])])
           ]
   doc <- requireDoc doc0
   raw <- case parseDiagExpr "id[A]" of
@@ -133,8 +206,8 @@ testArgWrongQualifier :: Assertion
 testArgWrongQualifier = do
   let doc0 =
         mkDoctrine
-          [ (modeC, [(ObjName "A", TypeSig [])])
-          , (modeV, [(ObjName "A", TypeSig []), (ObjName "Thunk", TypeSig [PS_Ty modeC])])
+          [ (modeC, [(ObjName "A", [])])
+          , (modeV, [(ObjName "A", []), (ObjName "Thunk", [TPS_Ty modeC])])
           ]
   doc <- requireDoc doc0
   raw <- case parseDiagExpr "id[V.Thunk(V.A)]" of

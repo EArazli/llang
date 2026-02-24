@@ -11,7 +11,7 @@ import qualified Data.Text as T
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile, elabRawFileWithEnv)
 import Strat.Frontend.Env (ModuleEnv(..), DoctrineFunctorDef(..))
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom, lookupCtorRefForOwner)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), mkCon)
@@ -44,13 +44,13 @@ testApplyPreservesTargetNames = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine L where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type Box @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen Box : [] -> [M.U_M] @M;"
           , "}"
           , "morphism impl : S -> L where {"
           , "  mode M -> M;"
@@ -64,16 +64,21 @@ testApplyPreservesTargetNames = do
   env <- expectElab src
   doc <- expectDoctrine env "R"
   let mode = ModeName "M"
-  let types = M.findWithDefault M.empty mode (dTypes doc)
-  assertBool "expected Box type in R" (M.member (ObjName "Box") types)
-  assertBool "R should not expose X type" (not (M.member (ObjName "X") types))
+  boxRef <- case lookupCtorRefForOwner doc mode (ObjName "Box") of
+    Left err -> assertFailure (T.unpack err)
+    Right Nothing -> assertFailure "expected Box constructor in R"
+    Right (Just ref) -> pure ref
+  xRef <- case lookupCtorRefForOwner doc mode (ObjName "X") of
+    Left err -> assertFailure (T.unpack err)
+    Right ref -> pure ref
+  assertBool "R should not expose X constructor" (xRef == Nothing)
   gens <- case M.lookup mode (dGens doc) of
     Nothing -> assertFailure "expected mode M generator table"
     Just table -> pure table
   flipGen <- case M.lookup (GenName "flip") gens of
     Nothing -> assertFailure "expected generator flip"
     Just g -> pure g
-  let expectedTy = mkCon (ObjRef mode (ObjName "Box")) []
+  let expectedTy = mkCon boxRef []
   gdPlainDom flipGen @?= [expectedTy]
   gdCod flipGen @?= [expectedTy]
 
@@ -84,13 +89,13 @@ testApplyCollisionRename = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine L where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type Box @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen Box : [] -> [M.U_M] @M;"
           , "  gen get : [] -> [Box] @M;"
           , "}"
           , "morphism impl : S -> L where {"
@@ -117,9 +122,9 @@ testApplyMappingCoverage :: Assertion
 testApplyMappingCoverage = do
   let srcMissing =
         T.unlines
-          [ "doctrine SA where { mode M; type A @M; }"
-          , "doctrine SB where { mode M; type B @M; }"
-          , "doctrine T where { mode M; type TA @M; type TB @M; }"
+          [ "doctrine SA where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen A : [] -> [U_M] @M; }"
+          , "doctrine SB where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen B : [] -> [U_M] @M; }"
+          , "doctrine T where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen TA : [] -> [U_M] @M; gen TB : [] -> [U_M] @M; }"
           , "morphism implA : SA -> T where { mode M -> M; type A @M -> TA @M; }"
           , "morphism implB : SB -> T where { mode M -> M; type B @M -> TB @M; }"
           , "doctrine_functor F(A : SA, B : SB) where {"
@@ -133,9 +138,9 @@ testApplyMappingCoverage = do
 
   let srcExtra =
         T.unlines
-          [ "doctrine SA where { mode M; type A @M; }"
-          , "doctrine SB where { mode M; type B @M; }"
-          , "doctrine T where { mode M; type TA @M; type TB @M; }"
+          [ "doctrine SA where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen A : [] -> [U_M] @M; }"
+          , "doctrine SB where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen B : [] -> [U_M] @M; }"
+          , "doctrine T where { mode M classifiedBy M via U_M; gen U_M : [] -> [U_M] @M; gen TA : [] -> [U_M] @M; gen TB : [] -> [U_M] @M; }"
           , "morphism implA : SA -> T where { mode M -> M; type A @M -> TA @M; }"
           , "morphism implB : SB -> T where { mode M -> M; type B @M -> TB @M; }"
           , "doctrine_functor F(A : SA, B : SB) where {"
@@ -153,13 +158,13 @@ testApplyImplicitIdentityTypeMap = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "morphism impl : S -> T where {"
           , "  mode M -> M;"
@@ -188,13 +193,13 @@ testApplyImplicitIdentityTypeMapArity = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X(a@M) @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X(a@M) : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "morphism impl : S -> T where {"
           , "  mode M -> M;"
@@ -214,14 +219,14 @@ testApplyGeneratorModeMapping = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
           , "}"
           , "morphism impl : S -> T where {"
@@ -246,13 +251,13 @@ testApplyMissingMappingDiagnostics = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
           , "  attrsort Str = string;"
-          , "  type X @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
           , "}"
           , "morphism impl : S -> T where {"
           , "  mode M -> M;"
@@ -273,14 +278,14 @@ testApplyMissingGenMappingDiagnostics = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "  gen f : [M.X] -> [M.X] @M;"
           , "}"
           , "morphism impl : S -> T where {"
@@ -326,8 +331,8 @@ testNamespaceEnforcement = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine_functor F(L : S) where {"
           , "  gen bad : [L::M.X] -> [L::M.X] @L::M;"
@@ -343,15 +348,15 @@ testModeTheoryExtensionAllowed = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
           , "  modality mu : M -> M;"
-          , "  type X @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode N classifiedBy N via N.U_N;"
-          , "  type U_N @N;"
+          , "  gen U_N : [] -> [N.U_N] @N;"
           , "  modality nu : N -> N;"
-          , "  type Y @N;"
+          , "  gen Y : [] -> [N.U_N] @N;"
           , "}"
           , "morphism impl : S -> T where {"
           , "  mode M -> N;"
@@ -361,16 +366,22 @@ testModeTheoryExtensionAllowed = do
           , "}"
           , "doctrine_functor F(L : S) where {"
           , "  mode K classifiedBy K via K.U_K;"
-          , "  type U_K @K;"
+          , "  gen U_K : [] -> [K.U_K] @K;"
           , "  modality up : L::M -> K;"
-          , "  type Z @K;"
+          , "  gen Z : [] -> [K.U_K] @K;"
           , "}"
           , "doctrine R = apply F to T using { L = impl; };"
           ]
   env <- expectElab src
   doc <- expectDoctrine env "R"
-  assertBool "expected pushed mode N" (M.member (ModeName "N") (dTypes doc))
-  assertBool "expected new body mode K" (M.member (ModeName "K") (dTypes doc))
+  yRef <- case lookupCtorRefForOwner doc (ModeName "N") (ObjName "Y") of
+    Left err -> assertFailure (T.unpack err)
+    Right ref -> pure ref
+  zRef <- case lookupCtorRefForOwner doc (ModeName "K") (ObjName "Z") of
+    Left err -> assertFailure (T.unpack err)
+    Right ref -> pure ref
+  assertBool "expected pushed mode N constructor Y" (yRef /= Nothing)
+  assertBool "expected new body mode K constructor Z" (zRef /= Nothing)
 
 
 testModEqPreservation :: Assertion
@@ -379,18 +390,18 @@ testModEqPreservation = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
           , "  modality mu : M -> M;"
           , "  mod_eq mu . mu -> mu;"
-          , "  type X @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "  gen g : [M.X] -> [M.X] @M;"
           , "}"
           , "doctrine T where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
           , "  modality a : M -> M;"
           , "  modality b : M -> M;"
-          , "  type X @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "  gen g : [M.X] -> [M.X] @M;"
           , "}"
           , "morphism bad : S -> T where {"
@@ -410,8 +421,8 @@ testFunctorInternalNames = do
         T.unlines
           [ "doctrine S where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type X @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen X : [] -> [M.U_M] @M;"
           , "}"
           , "doctrine_functor F(L : S) where {"
           , "  gen flip : [L::M.L::X] -> [L::M.L::X] @L::M;"

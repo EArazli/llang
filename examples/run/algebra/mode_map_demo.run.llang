@@ -1,10 +1,10 @@
 doctrine D where {
   mode C classifiedBy C via C.U_C;
-  type U_C @C;
+  gen U_C : [] -> [C.U_C] @C;
   mode V classifiedBy V via V.U_V;
-  type U_V @V;
-  type A @C;
-  type B @V;
+  gen U_V : [] -> [V.U_V] @V;
+  gen A : [] -> [C.U_C] @C;
+  gen B : [] -> [V.U_V] @V;
 
   gen f : [A] -> [A] @C;
   gen g : [B] -> [B] @V;

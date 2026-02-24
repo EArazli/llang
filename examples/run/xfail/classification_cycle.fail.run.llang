@@ -1,6 +1,6 @@
 doctrine BadCycle where {
   mode A classifiedBy B via B.U;
   mode B classifiedBy A via A.U;
-  type U @A;
-  type U @B;
+  gen U : [] -> [A.U] @A;
+  gen U : [] -> [B.U] @B;
 }

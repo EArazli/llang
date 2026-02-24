@@ -89,7 +89,15 @@ Current elaboration rule:
 
 - when elaborating an object expression with expected owner mode `M`, unqualified constructors are resolved only in classifier mode `K = classifier(M)`,
 - a qualified constructor `Q.C` is accepted only when `Q = K`; other qualifiers are rejected as wrong-classifier references.
-- in surface type annotations, constructor parameters of kind `PS_Tm` are currently not supported; term-indexed arguments must be expressed through core/kernel paths (not direct surface syntax).
+- in the current kernel cut, constructor-eligible generators must have:
+  - no attrs,
+  - no diagram-domain inputs,
+  - exactly one codomain object, definitionally equal to `U`.
+- if `U` normalizes to a nullary classifier constructor `K.C`, `C` is also included as an implicit zero-argument constructor.
+- constructor signatures are derived from the generator parameter telescope order (`gdParams`), not from split ty/tm lists.
+- constructor term-parameter sorts are currently required to be closed with respect to the generator's type parameters.
+- in surface type annotations, constructor parameters of kind `TPS_Tm` are currently not supported; term-indexed arguments must be expressed through core/kernel paths (not direct surface syntax).
+- legacy `dTypes`/`TypeSig` tables have been removed from kernel and tests; constructor resolution/typechecking is fully driven by derived constructor tables from classifier generators.
 
 ### 2.6 Example
 
@@ -158,7 +166,7 @@ Per-mode definitional data is represented by `DefFragment`:
 
 Key records:
 
-- object signatures are parameterized by mode and object parameters (`PS_Ty`, `PS_Tm`)
+- object signatures are parameterized by mode and object parameters (`TPS_Ty`, `TPS_Tm`)
 - `GenDecl` supports metavariables with two roles:
   - code metavariables (type-level) represented in object codes as `CTMeta`
   - term metavariables represented on term edges as `PTmMeta`
@@ -275,7 +283,7 @@ Doctrine items:
 
 - `mode`, `modality`, `mod_eq`, `mod_transform`
 - `action`, `obligation`
-- `attrsort`, `type`, `data`, `gen`, `rule`
+- `attrsort`, `data`, `gen`, `rule`
 
 Top-level functor/apply items:
 
@@ -286,7 +294,7 @@ Functor namespace/use rules:
 
 - parameter-provided names must be referenced as `Param::Name` inside functor bodies
 - parameter mapping keys in `using { ... }` must exactly match the functor parameter set
-- parameter schemas are signature-only: modes/modalities/`mod_eq`, attrsort/type/gen/data declarations only
+- parameter schemas are signature-only: modes/modalities/`mod_eq`, attrsort/gen/data declarations only
 
 Removed legacy items:
 

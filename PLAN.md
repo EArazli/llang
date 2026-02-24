@@ -251,6 +251,12 @@ This replaces:
 
 This is the doctrinal-control lever you want.
 
+Current implementation status:
+
+* classified modes use derived constructor tables from classifier generators (ordered parameter telescopes),
+* generator-call elaboration follows explicit parameter order metadata,
+* legacy `dTypes`/`TypeSig` constructor tables are removed; constructor resolution/typechecking is driven by derived classifier constructor tables.
+
 ---
 
 ### Phase 7 — Make binding/comprehension a required structure with generated obligations (your item 2)

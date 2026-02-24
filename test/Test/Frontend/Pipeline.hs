@@ -93,8 +93,9 @@ testForgetRejectsDiagramArtifact = do
 program :: Text
 program =
   "doctrine D where {\n"
-    <> "  mode M acyclic;\n"
-    <> "  type T @M;\n"
+    <> "  mode M acyclic classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen T : [] -> [U_M] @M;\n"
     <> "  gen a : [] -> [T] @M;\n"
     <> "  gen b : [T] -> [T] @M;\n"
     <> "}\n"
@@ -119,8 +120,9 @@ program =
 nonAcyclicDerivedProgram :: Text
 nonAcyclicDerivedProgram =
   "doctrine D where {\n"
-    <> "  mode M;\n"
-    <> "  type T @M;\n"
+    <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen T : [] -> [U_M] @M;\n"
     <> "  gen a : [] -> [T] @M;\n"
     <> "}\n"
     <> "derived doctrine D_SSA = foliated D mode M;\n"
@@ -129,8 +131,9 @@ nonAcyclicDerivedProgram =
 defaultPolicyProgram :: Text
 defaultPolicyProgram =
   "doctrine D where {\n"
-    <> "  mode M acyclic;\n"
-    <> "  type T @M;\n"
+    <> "  mode M acyclic classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen T : [] -> [U_M] @M;\n"
     <> "  gen a : [T] -> [T] @M;\n"
     <> "}\n"
     <> "derived doctrine D_SSA = foliated D mode M with {\n"
@@ -151,8 +154,9 @@ defaultPolicyProgram =
 derivedMaterializedProgram :: Text
 derivedMaterializedProgram =
   "doctrine D where {\n"
-    <> "  mode M acyclic;\n"
-    <> "  type T @M;\n"
+    <> "  mode M acyclic classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen T : [] -> [U_M] @M;\n"
     <> "  gen a : [] -> [T] @M;\n"
     <> "}\n"
     <> "derived doctrine D_SSA = foliated D mode M;\n"
@@ -161,8 +165,9 @@ derivedMaterializedProgram =
 forgetCollisionProgram :: Text
 forgetCollisionProgram =
   "doctrine D where {\n"
-    <> "  mode M acyclic;\n"
-    <> "  type T @M;\n"
+    <> "  mode M acyclic classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen T : [] -> [U_M] @M;\n"
     <> "  gen a : [] -> [T] @M;\n"
     <> "}\n"
     <> "morphism D_SSA.forget : D -> D where {\n"
@@ -176,8 +181,9 @@ forgetCollisionProgram =
 derivedSourceMorphismProgram :: Text
 derivedSourceMorphismProgram =
   "doctrine D where {\n"
-    <> "  mode M acyclic;\n"
-    <> "  type T @M;\n"
+    <> "  mode M acyclic classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen T : [] -> [U_M] @M;\n"
     <> "  gen a : [] -> [T] @M;\n"
     <> "  gen b : [T] -> [] @M;\n"
     <> "}\n"
@@ -216,8 +222,9 @@ derivedSourceMorphismProgram =
 forgetDiagramProgram :: Text
 forgetDiagramProgram =
   "doctrine D where {\n"
-    <> "  mode M acyclic;\n"
-    <> "  type T @M;\n"
+    <> "  mode M acyclic classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen T : [] -> [U_M] @M;\n"
     <> "  gen a : [] -> [T] @M;\n"
     <> "}\n"
     <> "derived doctrine D_SSA = foliated D mode M;\n"

@@ -128,7 +128,11 @@ validateActionSemanticsWithBudgetResult budget doc = do
       if all (`M.member` dActions doc) mods
         then do
           let srcMode = meSrc lhs
-          let gens = M.elems (M.findWithDefault M.empty srcMode (dGens doc))
+          let gens =
+                [ gd
+                | gd <- M.elems (M.findWithDefault M.empty srcMode (dGens doc))
+                , not (isTypeDeclGenName doc srcMode (gdName gd))
+                ]
           let policy = choosePolicy mods
           let rules = rulesFromPolicy policy (dCells2 doc)
           checkGens tt lhs rhs rules gens

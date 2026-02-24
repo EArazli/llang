@@ -45,13 +45,17 @@ import Strat.Poly.Obj
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrSort(..), AttrSortDecl(..), AttrLitKind(..))
 import Strat.Poly.Diagram (genD, idD)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), ModAction(..), ObligationDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), gdPlainDom, validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), ModAction(..), ObligationDecl(..), InputShape(..), BinderSig(..), gdPlainDom)
+import qualified Strat.Poly.Doctrine as PolyDoc
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..), TemplateParam(..), TypeTemplate(..), applyMorphismDiagram, applyMorphismTy)
-import Strat.Poly.Pushout (computePolyPushout, computePolyPushoutPreferRight, computePolyCoproduct, PolyPushoutResult(..))
+import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..), TemplateParam(..), TypeTemplate(..))
+import qualified Strat.Poly.Morphism as PolyMor
+import Strat.Poly.Pushout (PolyPushoutResult(..))
+import qualified Strat.Poly.Pushout as PolyPush
 import Strat.Poly.Graph (Diagram(..), BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..), emptyDiagram, freshPort, addEdgePayload)
 import Strat.Poly.DiagramIso (diagramIsoEq)
-import Strat.Poly.DSL.Elab (checkImplementsObligations)
+import qualified Strat.Poly.DSL.Elab as PolyElab
+import Strat.Poly.TypeTheory (TypeParamSig(..))
 import Strat.Frontend.Env (emptyEnv)
 import Strat.Common.Rules (RuleClass(..), Orientation(..), RewritePolicy(..))
 
@@ -134,6 +138,40 @@ identityModMap doc =
     | (name, decl) <- M.toList (mtDecls (dModes doc))
     ]
 
+normalizeDoctrine :: Doctrine -> Doctrine
+normalizeDoctrine = id
+
+normalizeMorphism :: Morphism -> Morphism
+normalizeMorphism mor =
+  mor
+    { morSrc = normalizeDoctrine (morSrc mor)
+    , morTgt = normalizeDoctrine (morTgt mor)
+    }
+
+validateDoctrine :: Doctrine -> Either Text ()
+validateDoctrine = PolyDoc.validateDoctrine . normalizeDoctrine
+
+applyMorphismDiagram :: Morphism -> Diagram -> Either Text Diagram
+applyMorphismDiagram mor = PolyMor.applyMorphismDiagram (normalizeMorphism mor)
+
+applyMorphismTy :: Morphism -> Obj -> Either Text Obj
+applyMorphismTy mor = PolyMor.applyMorphismTy (normalizeMorphism mor)
+
+computePolyPushout :: Text -> Morphism -> Morphism -> Either Text PolyPushoutResult
+computePolyPushout name morL morR =
+  PolyPush.computePolyPushout name (normalizeMorphism morL) (normalizeMorphism morR)
+
+computePolyPushoutPreferRight :: Text -> Text -> Morphism -> Morphism -> Either Text PolyPushoutResult
+computePolyPushoutPreferRight name tag morL morR =
+  PolyPush.computePolyPushoutPreferRight name tag (normalizeMorphism morL) (normalizeMorphism morR)
+
+computePolyCoproduct :: Text -> Doctrine -> Doctrine -> Either Text PolyPushoutResult
+computePolyCoproduct name a b =
+  PolyPush.computePolyCoproduct name (normalizeDoctrine a) (normalizeDoctrine b)
+
+checkImplementsObligations env schema impl target =
+  PolyElab.checkImplementsObligations env (normalizeDoctrine schema) (normalizeMorphism impl) (normalizeDoctrine target)
+
 mkModes :: S.Set ModeName -> ModeTheory
 mkModes modes =
   ModeTheory
@@ -150,6 +188,9 @@ universeName (ModeName n) = ObjName ("U_" <> n)
 universeObj :: ModeName -> Obj
 universeObj mode = mkCon (ObjRef mode (universeName mode)) []
 
+defaultUniverseObj :: ModeName -> Obj
+defaultUniverseObj mode = mkCon (ObjRef mode (ObjName "U")) []
+
 selfClassifiedModes :: S.Set ModeName -> ModeTheory
 selfClassifiedModes modes =
   let mt = mkModes modes
@@ -161,15 +202,104 @@ selfClassifiedModes modes =
              ]
        }
 
-insertUniverseTypes
-  :: S.Set ModeName
-  -> M.Map ModeName (M.Map ObjName TypeSig)
-  -> M.Map ModeName (M.Map ObjName TypeSig)
-insertUniverseTypes modes tys =
-  foldl
-    (\acc mode -> M.insertWith M.union mode (M.singleton (universeName mode) (TypeSig [])) acc)
-    tys
-    (S.toList modes)
+objNameText :: ObjName -> Text
+objNameText (ObjName n) = n
+
+ctorDecl :: Obj -> ModeName -> ObjName -> [TypeParamSig] -> GenDecl
+ctorDecl universeTy mode ctorName sig =
+  GenDecl
+    { gdName = GenName (objNameText ctorName)
+    , gdMode = mode
+    , gdTyVars = tyVars
+    , gdTmVars = tmVars
+    , gdParams = params
+    , gdDom = []
+    , gdCod = [universeTy]
+    , gdAttrs = []
+    }
+  where
+    tyPos =
+      [ (pos, v)
+      | (pos, TPS_Ty m) <- zip [0 :: Int ..] sig
+      , let v =
+              TmVar
+                { tmvName = "a" <> T.pack (show pos)
+                , tmvSort = universeObj m
+                , tmvScope = pos
+                , tmvOwnerMode = Just m
+                }
+      ]
+    tmPos =
+      [ (pos, v)
+      | (pos, TPS_Tm sortTy) <- zip [0 :: Int ..] sig
+      , let v =
+              TmVar
+                { tmvName = "x" <> T.pack (show pos)
+                , tmvSort = sortTy
+                , tmvScope = negate (pos + 1)
+                , tmvOwnerMode = Just mode
+                }
+      ]
+    tyVars = map snd tyPos
+    tmVars = map snd tmPos
+    params =
+      [ case ps of
+          TPS_Ty _ -> GP_Ty (lookupByPos pos tyPos)
+          TPS_Tm _ -> GP_Tm (lookupByPos pos tmPos)
+      | (pos, ps) <- zip [0 :: Int ..] sig
+      ]
+    lookupByPos pos xs =
+      case lookup pos xs of
+        Just v -> v
+        Nothing -> error "ctorDecl: missing parameter position"
+
+addSelfClassifications :: [ModeName] -> ModeTheory -> ModeTheory
+addSelfClassifications modes mt =
+  mt
+    { mtClassifiedBy =
+        foldl
+          (\acc mode ->
+              M.insertWith
+                (\_ old -> old)
+                mode
+                (ClassificationDecl { cdClassifier = mode, cdUniverse = defaultUniverseObj mode, cdTag = Nothing })
+                acc
+          )
+          (mtClassifiedBy mt)
+          modes
+    }
+
+insertCtorDecls
+  :: ModeName
+  -> Obj
+  -> [(ObjName, [TypeParamSig])]
+  -> M.Map ModeName (M.Map GenName GenDecl)
+  -> M.Map ModeName (M.Map GenName GenDecl)
+insertCtorDecls mode universeTy sigs gens0 =
+  let ctorMap =
+        M.fromList
+          [ (gdName gd, gd)
+          | (ctorName, sig) <- sigs
+          , let gd = ctorDecl universeTy mode ctorName sig
+          ]
+      modeMap = M.findWithDefault M.empty mode gens0
+   in M.insert mode (M.union modeMap ctorMap) gens0
+
+withSelfClassifiedCtors :: [(ModeName, [(ObjName, [TypeParamSig])])] -> Doctrine -> Doctrine
+withSelfClassifiedCtors entries doc =
+  let modes' = addSelfClassifications (map fst entries) (dModes doc)
+      universeFor mode =
+        case M.lookup mode (mtClassifiedBy modes') of
+          Just decl -> cdUniverse decl
+          Nothing -> defaultUniverseObj mode
+   in doc
+        { dModes = modes'
+        , dGens =
+            foldl
+              (\acc (mode, sigs) -> insertCtorDecls mode (universeFor mode) sigs acc)
+              (dGens doc)
+              entries
+        }
 
 
 testPushoutDedupByBody :: Assertion
@@ -199,7 +329,8 @@ mkDoctrine mode name tyVar cellName = do
         , gdMode = mode
         , gdTyVars = [tyVar]
         , gdTmVars = []
-    , gdDom = map InPort [OVar tyVar]
+        , gdParams = [GP_Ty tyVar]
+        , gdDom = map InPort [OVar tyVar]
         , gdCod = [OVar tyVar]
         , gdAttrs = []
         }
@@ -220,7 +351,6 @@ mkDoctrine mode name tyVar cellName = do
         { dName = name
         , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-        , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
       , dActions = M.empty
@@ -298,12 +428,12 @@ testPushoutNameConflict = do
 
 mkCellDoctrine :: ModeName -> Text -> RuleClass -> Orientation -> Either Text Doctrine
 mkCellDoctrine mode name cls orient = do
-  let aName = ObjName "A"
   let genF = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
         , gdTmVars = []
+        , gdParams = []
         , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
@@ -313,6 +443,7 @@ mkCellDoctrine mode name cls orient = do
         , gdMode = mode
         , gdTyVars = []
         , gdTmVars = []
+        , gdParams = []
         , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
@@ -328,30 +459,32 @@ mkCellDoctrine mode name cls orient = do
         , c2LHS = lhs
         , c2RHS = rhs
         }
-  let doc = Doctrine
-        { dName = name
-        , dModes = mkModes (S.singleton mode)
-        , dAcyclicModes = S.empty
-        , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
-        , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
-        , dCells2 = [cell]
-        , dActions = M.empty
-        , dObligations = []
-        , dAttrSorts = M.empty
-        }
+  let doc =
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = name
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
+            , dCells2 = [cell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   case validateDoctrine doc of
     Left err -> Left err
     Right () -> Right doc
 
 mkCellDoctrineWithAlt :: ModeName -> Text -> RuleClass -> Orientation -> Either Text Doctrine
 mkCellDoctrineWithAlt mode name cls orient = do
-  let aName = ObjName "A"
   let genF = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
         , gdTyVars = []
         , gdTmVars = []
-    , gdDom = map InPort [tcon mode "A" []]
+        , gdParams = []
+        , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
         }
@@ -360,6 +493,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
         , gdMode = mode
         , gdTyVars = []
         , gdTmVars = []
+        , gdParams = []
         , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
@@ -375,17 +509,19 @@ mkCellDoctrineWithAlt mode name cls orient = do
         , c2LHS = lhs
         , c2RHS = rhs
         }
-  let doc = Doctrine
-        { dName = name
-        , dModes = mkModes (S.singleton mode)
-        , dAcyclicModes = S.empty
-        , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
-        , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
-        , dCells2 = [cell]
-        , dActions = M.empty
-        , dObligations = []
-        , dAttrSorts = M.empty
-        }
+  let doc =
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = name
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
+            , dCells2 = [cell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   case validateDoctrine doc of
     Left err -> Left err
     Right () -> Right doc
@@ -486,7 +622,6 @@ testPushoutAcceptsModeMap = do
         { dName = "Base"
         , dModes = modes
     , dAcyclicModes = S.empty
-        , dTypes = M.empty
         , dGens = M.empty
         , dCells2 = []
       , dActions = M.empty
@@ -535,17 +670,18 @@ testPushoutTypeRefsStayInPushoutModes = do
   let modeL = ModeName "L"
   let modeM = ModeName "M"
   let mkTypeDoc name mode =
-        Doctrine
-          { dName = name
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (ObjName "A") (TypeSig []))
-          , dGens = M.empty
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = name
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let src = mkTypeDoc "SrcTypeMode" modeI
   let left = mkTypeDoc "LeftTypeMode" modeL
   let right = mkTypeDoc "RightTypeMode" modeM
@@ -584,7 +720,10 @@ testPushoutTypeRefsStayInPushoutModes = do
   case validateDoctrine (poDoctrine res) of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  assertBool "expected no type table under source mode I" (M.notMember modeI (dTypes (poDoctrine res)))
+  ctorTables <- require (PolyDoc.deriveCtorTables (poDoctrine res))
+  assertBool
+    "expected no derived ctor table under source mode I"
+    (M.notMember modeI ctorTables || M.null (M.findWithDefault M.empty modeI ctorTables))
 
 testPushoutDisjointCellRenameUsesOriginalModeKey :: Assertion
 testPushoutDisjointCellRenameUsesOriginalModeKey = do
@@ -597,7 +736,6 @@ testPushoutDisjointCellRenameUsesOriginalModeKey = do
           { dName = "SrcCellModeMap"
           , dModes = mkModes (S.singleton modeI)
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -617,30 +755,30 @@ testPushoutDisjointCellRenameUsesOriginalModeKey = do
           , c2RHS = rhs
           }
   let left =
-        Doctrine
-          { dName = "LeftCellModeMap"
-          , dModes = mkModes (S.singleton modeL)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton modeL (M.singleton (ObjName "A") (TypeSig []))
-          , dGens =
-              M.singleton
-                modeL
-                ( M.fromList
-                    [ (GenName "f", GenDecl (GenName "f") modeL [] [] [InPort tyL] [tyL] [])
-                    , (GenName "g", GenDecl (GenName "g") modeL [] [] [InPort tyL] [tyL] [])
-                    ]
-                )
-          , dCells2 = [leftCell]
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(modeL, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "LeftCellModeMap"
+            , dModes = mkModes (S.singleton modeL)
+            , dAcyclicModes = S.empty
+            , dGens =
+                M.singleton
+                  modeL
+                  ( M.fromList
+                      [ (GenName "f", GenDecl (GenName "f") modeL [] [] [] [InPort tyL] [tyL] [])
+                      , (GenName "g", GenDecl (GenName "g") modeL [] [] [] [InPort tyL] [tyL] [])
+                      ]
+                  )
+            , dCells2 = [leftCell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let right =
         Doctrine
           { dName = "RightCellModeMap"
           , dModes = mkModes (S.singleton modeM)
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -702,7 +840,6 @@ testPushoutDisjointRenamesAfterModeCollapse = do
           { dName = "SrcCollapse"
           , dModes = mkModes (S.fromList [modeI1, modeI2])
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -710,44 +847,42 @@ testPushoutDisjointRenamesAfterModeCollapse = do
           , dAttrSorts = M.empty
           }
   let left =
-        Doctrine
-          { dName = "LeftCollapse"
-          , dModes = mkModes (S.fromList [modeL1, modeL2])
-          , dAcyclicModes = S.empty
-          , dTypes =
-              M.fromList
-                [ (modeL1, M.singleton (ObjName "B") (TypeSig []))
-                , (modeL2, M.singleton (ObjName "B") (TypeSig []))
+        withSelfClassifiedCtors
+          [ (modeL1, [(ObjName "B", [])])
+          , (modeL2, [(ObjName "B", [])])
+          ]
+          Doctrine
+            { dName = "LeftCollapse"
+            , dModes = mkModes (S.fromList [modeL1, modeL2])
+            , dAcyclicModes = S.empty
+            , dGens =
+                M.fromList
+                  [ ( modeL1
+                    , M.fromList
+                        [ (GenName "f", GenDecl (GenName "f") modeL1 [] [] [] [InPort tyL1] [tyL1] [])
+                        , (GenName "g", GenDecl (GenName "g") modeL1 [] [] [] [InPort tyL1] [tyL1] [])
+                        ]
+                    )
+                  , ( modeL2
+                    , M.fromList
+                        [ (GenName "f", GenDecl (GenName "f") modeL2 [] [] [] [InPort tyL2] [tyL2] [])
+                        , (GenName "g", GenDecl (GenName "g") modeL2 [] [] [] [InPort tyL2] [tyL2] [])
+                        ]
+                    )
+                  ]
+            , dCells2 =
+                [ Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsL1, c2RHS = rhsL1 }
+                , Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsL2, c2RHS = rhsL2 }
                 ]
-          , dGens =
-              M.fromList
-                [ ( modeL1
-                  , M.fromList
-                      [ (GenName "f", GenDecl (GenName "f") modeL1 [] [] [InPort tyL1] [tyL1] [])
-                      , (GenName "g", GenDecl (GenName "g") modeL1 [] [] [InPort tyL1] [tyL1] [])
-                      ]
-                  )
-                , ( modeL2
-                  , M.fromList
-                      [ (GenName "f", GenDecl (GenName "f") modeL2 [] [] [InPort tyL2] [tyL2] [])
-                      , (GenName "g", GenDecl (GenName "g") modeL2 [] [] [InPort tyL2] [tyL2] [])
-                      ]
-                  )
-                ]
-          , dCells2 =
-              [ Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsL1, c2RHS = rhsL1 }
-              , Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsL2, c2RHS = rhsL2 }
-              ]
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let right =
         Doctrine
           { dName = "RightCollapse"
           , dModes = mkModes (S.singleton modeM)
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -789,14 +924,20 @@ testPushoutDisjointRenamesAfterModeCollapse = do
   case validateDoctrine (poDoctrine res) of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  let typeNames = [ t | ObjName t <- M.keys (M.findWithDefault M.empty modeM (dTypes (poDoctrine res))) ]
-  assertBool "expected two collapsed-mode type names" (length typeNames == 2)
-  assertBool "expected freshened collapsed-mode type names" (all ("LeftCollapse_inl_B" `T.isPrefixOf`) typeNames)
+  ctorTables <- require (PolyDoc.deriveCtorTables (poDoctrine res))
+  let typeNames = [ t | ObjName t <- M.keys (M.findWithDefault M.empty modeM ctorTables) ]
+  let bTypeNames = filter ("LeftCollapse_inl_B" `T.isPrefixOf`) typeNames
+  assertBool "expected two collapsed-mode B type names" (length bTypeNames == 2)
+  assertBool "expected freshened collapsed-mode type names" (all ("LeftCollapse_inl_B" `T.isPrefixOf`) bTypeNames)
   let genNames = [ g | GenName g <- M.keys (M.findWithDefault M.empty modeM (dGens (poDoctrine res))) ]
-  assertBool "expected four collapsed-mode generator names" (length genNames == 4)
+  let fgGenNames =
+        filter
+          (\g -> "LeftCollapse_inl_f" `T.isPrefixOf` g || "LeftCollapse_inl_g" `T.isPrefixOf` g)
+          genNames
+  assertBool "expected four collapsed-mode f/g generator names" (length fgGenNames == 4)
   assertBool
     "expected freshened collapsed-mode generator names"
-    (all (\g -> "LeftCollapse_inl_f" `T.isPrefixOf` g || "LeftCollapse_inl_g" `T.isPrefixOf` g) genNames)
+    (all (\g -> "LeftCollapse_inl_f" `T.isPrefixOf` g || "LeftCollapse_inl_g" `T.isPrefixOf` g) fgGenNames)
   let cellNames = [ c2Name cell | cell <- dCells2 (poDoctrine res), dMode (c2LHS cell) == modeM ]
   assertBool "expected two collapsed-mode cell names" (length cellNames == 2)
   assertBool "expected freshened collapsed-mode cell names" (all ("LeftCollapse_inl_eq" `T.isPrefixOf`) cellNames)
@@ -812,7 +953,6 @@ testPushoutCellNamesArePerMode = do
           { dName = "SrcPerMode"
           , dModes = mkModes (S.fromList [modeI1, modeI2])
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -826,44 +966,42 @@ testPushoutCellNamesArePerMode = do
   lhsR <- require (genD modeR [tyR] [tyR] (GenName "f"))
   rhsR <- require (genD modeR [tyR] [tyR] (GenName "g"))
   let left =
-        Doctrine
-          { dName = "LeftPerMode"
-          , dModes = mkModes (S.fromList [modeL, modeR])
-          , dAcyclicModes = S.empty
-          , dTypes =
-              M.fromList
-                [ (modeL, M.singleton (ObjName "A") (TypeSig []))
-                , (modeR, M.singleton (ObjName "A") (TypeSig []))
+        withSelfClassifiedCtors
+          [ (modeL, [(ObjName "A", [])])
+          , (modeR, [(ObjName "A", [])])
+          ]
+          Doctrine
+            { dName = "LeftPerMode"
+            , dModes = mkModes (S.fromList [modeL, modeR])
+            , dAcyclicModes = S.empty
+            , dGens =
+                M.fromList
+                  [ ( modeL
+                    , M.fromList
+                        [ (GenName "f", GenDecl (GenName "f") modeL [] [] [] [InPort tyL] [tyL] [])
+                        , (GenName "g", GenDecl (GenName "g") modeL [] [] [] [InPort tyL] [tyL] [])
+                        ]
+                    )
+                  , ( modeR
+                    , M.fromList
+                        [ (GenName "f", GenDecl (GenName "f") modeR [] [] [] [InPort tyR] [tyR] [])
+                        , (GenName "g", GenDecl (GenName "g") modeR [] [] [] [InPort tyR] [tyR] [])
+                        ]
+                    )
+                  ]
+            , dCells2 =
+                [ Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsL, c2RHS = rhsL }
+                , Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsR, c2RHS = rhsR }
                 ]
-          , dGens =
-              M.fromList
-                [ ( modeL
-                  , M.fromList
-                      [ (GenName "f", GenDecl (GenName "f") modeL [] [] [InPort tyL] [tyL] [])
-                      , (GenName "g", GenDecl (GenName "g") modeL [] [] [InPort tyL] [tyL] [])
-                      ]
-                  )
-                , ( modeR
-                  , M.fromList
-                      [ (GenName "f", GenDecl (GenName "f") modeR [] [] [InPort tyR] [tyR] [])
-                      , (GenName "g", GenDecl (GenName "g") modeR [] [] [InPort tyR] [tyR] [])
-                      ]
-                  )
-                ]
-          , dCells2 =
-              [ Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsL, c2RHS = rhsL }
-              , Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsR, c2RHS = rhsR }
-              ]
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let right =
         Doctrine
           { dName = "RightPerMode"
           , dModes = mkModes (S.fromList [modeL, modeR])
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -911,20 +1049,21 @@ testPushoutNonInjectiveTypeCompatible :: Assertion
 testPushoutNonInjectiveTypeCompatible = do
   let mode = ModeName "M"
   let mkDoc name typeNames =
-        Doctrine
-          { dName = name
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.fromList [ (ObjName n, TypeSig []) | n <- typeNames ])
-          , dGens = M.empty
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [ (ObjName n, []) | n <- typeNames ])]
+          Doctrine
+            { dName = name
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let src = mkDoc "SrcNI" ["X", "Y"]
   let left = mkDoc "LeftNI" ["T"]
-  let right = mkDoc "RightNI" ["U", "V"]
+  let right = mkDoc "RightNI" ["U1", "V1"]
   mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
   let tmpl tgtName = TypeTemplate [] (mkCon (ObjRef mode (ObjName tgtName)) [])
   let morF =
@@ -955,8 +1094,8 @@ testPushoutNonInjectiveTypeCompatible = do
           , morModMap = identityModMap src
           , morTypeMap =
               M.fromList
-                [ (ObjRef mode (ObjName "X"), tmpl "U")
-                , (ObjRef mode (ObjName "Y"), tmpl "V")
+                [ (ObjRef mode (ObjName "X"), tmpl "U1")
+                , (ObjRef mode (ObjName "Y"), tmpl "V1")
                 ]
           , morGenMap = M.empty
           , morCheck = CheckAll
@@ -966,8 +1105,10 @@ testPushoutNonInjectiveTypeCompatible = do
   res <- case computePolyPushout "PNIType" morF morG of
     Left err -> assertFailure (T.unpack err) >> error "unreachable"
     Right out -> pure out
-  let typesAtM = M.findWithDefault M.empty mode (dTypes (poDoctrine res))
-  M.size typesAtM @?= 1
+  ctorTables <- require (PolyDoc.deriveCtorTables (poDoctrine res))
+  let ctorsAtM = M.findWithDefault M.empty mode ctorTables
+  let nonUniverse = [ name | name <- M.keys ctorsAtM, name /= ObjName "U" ]
+  length nonUniverse @?= 1
 
 testPushoutNonInjectiveAttrSortIncompatible :: Assertion
 testPushoutNonInjectiveAttrSortIncompatible = do
@@ -977,7 +1118,6 @@ testPushoutNonInjectiveAttrSortIncompatible = do
           { dName = name
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -995,7 +1135,6 @@ testPushoutNonInjectiveAttrSortIncompatible = do
           { dName = "LeftAttrNI"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -1007,7 +1146,6 @@ testPushoutNonInjectiveAttrSortIncompatible = do
           { dName = "RightAttrNI"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -1060,6 +1198,7 @@ testPushoutNonInjectiveGenCompatible = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = []
           , gdCod = []
           , gdAttrs = []
@@ -1069,7 +1208,6 @@ testPushoutNonInjectiveGenCompatible = do
           { dName = name
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.singleton mode (M.fromList [ (GenName g, mkNullary g) | g <- genNames ])
           , dCells2 = []
           , dActions = M.empty
@@ -1135,6 +1273,7 @@ testPushoutNonInjectiveGenIncompatible = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = []
           , gdCod = []
           , gdAttrs = []
@@ -1145,6 +1284,7 @@ testPushoutNonInjectiveGenIncompatible = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort aTy]
           , gdCod = []
           , gdAttrs = []
@@ -1155,53 +1295,57 @@ testPushoutNonInjectiveGenIncompatible = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = []
           , gdCod = []
           , gdAttrs = []
           }
   let src =
-        Doctrine
-          { dName = "SrcGenBadNI"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (ObjName "A") (TypeSig []))
-          , dGens = M.singleton mode (M.fromList [(GenName "g1", gen1), (GenName "g2", gen2)])
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "SrcGenBadNI"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.singleton mode (M.fromList [(GenName "g1", gen1), (GenName "g2", gen2)])
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let left =
-        Doctrine
-          { dName = "LeftGenBadNI"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (ObjName "A") (TypeSig []))
-          , dGens = M.singleton mode (M.singleton (GenName "h") (mkNullary "h"))
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "LeftGenBadNI"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.singleton mode (M.singleton (GenName "h") (mkNullary "h"))
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let right =
-        Doctrine
-          { dName = "RightGenBadNI"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (ObjName "A") (TypeSig []))
-          , dGens =
-              M.singleton
-                mode
-                ( M.fromList
-                    [ (GenName "u", mkNullary "u")
-                    , (GenName "v", mkNullary "v")
-                    ]
-                )
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "RightGenBadNI"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens =
+                M.singleton
+                  mode
+                  ( M.fromList
+                      [ (GenName "u", mkNullary "u")
+                      , (GenName "v", mkNullary "v")
+                      ]
+                  )
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
   imgH <- require (genD mode [] [] (GenName "h"))
   imgU <- require (genD mode [] [] (GenName "u"))
@@ -1261,6 +1405,7 @@ testPushoutGlueComposesThroughInr = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort xTy]
           , gdCod = [xTy]
           , gdAttrs = []
@@ -1271,35 +1416,38 @@ testPushoutGlueComposesThroughInr = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort yTy]
           , gdCod = [yTy]
           , gdAttrs = []
           }
   let src =
-        Doctrine
-          { dName = "SrcGlueCompose"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (ObjName "X") (TypeSig []))
-          , dGens = M.singleton mode (M.singleton (GenName "f") genF)
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "X", [])])]
+          Doctrine
+            { dName = "SrcGlueCompose"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.singleton mode (M.singleton (GenName "f") genF)
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let left = src { dName = "LeftGlueCompose" }
   let right =
-        Doctrine
-          { dName = "RightGlueCompose"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton (ObjName "Y") (TypeSig []))
-          , dGens = M.singleton mode (M.singleton (GenName "h") genH)
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "Y", [])])]
+          Doctrine
+            { dName = "RightGlueCompose"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.singleton mode (M.singleton (GenName "h") genH)
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
   imgF <- require (genD mode [xTy] [xTy] (GenName "f"))
   imgH <- require (genD mode [yTy] [yTy] (GenName "h"))
@@ -1357,6 +1505,7 @@ testPushoutGenInjectiveByMode = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = []
           , gdCod = []
           , gdAttrs = []
@@ -1366,7 +1515,6 @@ testPushoutGenInjectiveByMode = do
           { dName = name
           , dModes = modes
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens =
               M.fromList
                 [ (modeL, M.singleton (GenName genName) (mkNullaryGen modeL genName))
@@ -1430,17 +1578,18 @@ testPushoutTypeRenameDefaultUsesModeMap = do
   let modeM = ModeName "M"
   let modeN = ModeName "N"
   let mkDoc name modeForType =
-        Doctrine
-          { dName = name
-          , dModes = mkModes (S.singleton modeForType)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton modeForType (M.singleton (ObjName "X") (TypeSig []))
-          , dGens = M.empty
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(modeForType, [(ObjName "X", [])])]
+          Doctrine
+            { dName = name
+            , dModes = mkModes (S.singleton modeForType)
+            , dAcyclicModes = S.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let src = mkDoc "SrcTypeRename" modeM
   let body = mkDoc "BodyTypeRename" modeN
   let target = mkDoc "TargetTypeRename" modeN
@@ -1477,14 +1626,26 @@ testPushoutTypeRenameDefaultUsesModeMap = do
   res <- case computePolyPushoutPreferRight "PTypeRenameDefault" "TypeRename" incl impl of
     Left err -> assertFailure (T.unpack err) >> error "unreachable"
     Right out -> pure out
-  let typesAtN = M.findWithDefault M.empty modeN (dTypes (poDoctrine res))
-  assertBool "expected type X at mapped target mode N" (M.member (ObjName "X") typesAtN)
+  ctorTables <- require (PolyDoc.deriveCtorTables (poDoctrine res))
+  let ctorsAtN = M.findWithDefault M.empty modeN ctorTables
+  assertBool "expected type X at mapped target mode N" (M.member (ObjName "X") ctorsAtN)
 
 testPushoutClassificationUniverseFollowsTypeRename :: Assertion
 testPushoutClassificationUniverseFollowsTypeRename = do
   let mode = ModeName "M"
   let typeName = ObjName "U"
   let universe = mkCon (ObjRef mode typeName) []
+  let uGen =
+        GenDecl
+          { gdName = GenName "U"
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [universe]
+          , gdAttrs = []
+          }
   let classDecl =
         ClassificationDecl
           { cdClassifier = mode
@@ -1492,44 +1653,50 @@ testPushoutClassificationUniverseFollowsTypeRename = do
           , cdTag = Nothing
           }
   let src =
-        Doctrine
-          { dName = "SrcClassRename"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.empty
-          , dGens = M.empty
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(typeName, [])])]
+          Doctrine
+            { dName = "SrcClassRename"
+            , dModes =
+                (mkModes (S.singleton mode))
+                  { mtClassifiedBy = M.singleton mode classDecl
+                  }
+            , dAcyclicModes = S.empty
+            , dGens = M.singleton mode (M.singleton (gdName uGen) uGen)
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let left =
-        Doctrine
-          { dName = "LeftClassRename"
-          , dModes =
-              (mkModes (S.singleton mode))
-                { mtClassifiedBy = M.singleton mode classDecl
-                }
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton typeName (TypeSig []))
-          , dGens = M.empty
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(typeName, [])])]
+          Doctrine
+            { dName = "LeftClassRename"
+            , dModes =
+                (mkModes (S.singleton mode))
+                  { mtClassifiedBy = M.singleton mode classDecl
+                  }
+            , dAcyclicModes = S.empty
+            , dGens = M.singleton mode (M.singleton (gdName uGen) uGen)
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let right =
-        Doctrine
-          { dName = "RightClassRename"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton mode (M.singleton typeName (TypeSig []))
-          , dGens = M.empty
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(typeName, [])])]
+          Doctrine
+            { dName = "RightClassRename"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.singleton mode (M.singleton (gdName uGen) uGen)
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, left, right]
   let inl =
         Morphism
@@ -1601,21 +1768,83 @@ testPushoutTermTypeMaps = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
   let modeSet = S.fromList [modeM, modeI]
+  let universeM = universeObj modeM
+  let universeI = universeObj modeI
   let natRef = ObjRef modeI (ObjName "Nat")
   let vecRef = ObjRef modeM (ObjName "Vec")
   let vec2Ref = ObjRef modeM (ObjName "Vec2")
   let natTy = mkCon natRef []
+  let genNat =
+        GenDecl
+          { gdName = GenName "Nat"
+          , gdMode = modeI
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [universeI]
+          , gdAttrs = []
+          }
+  let vecTyVar =
+        TmVar
+          { tmvName = "a"
+          , tmvSort = universeM
+          , tmvScope = 1
+          , tmvOwnerMode = Just modeM
+          }
+  let vecTmVar =
+        TmVar
+          { tmvName = "n"
+          , tmvSort = natTy
+          , tmvScope = -1
+          , tmvOwnerMode = Just modeM
+          }
+  let genVec =
+        GenDecl
+          { gdName = GenName "Vec"
+          , gdMode = modeM
+          , gdTyVars = [vecTyVar]
+          , gdTmVars = [vecTmVar]
+          , gdParams = [GP_Tm vecTmVar, GP_Ty vecTyVar]
+          , gdDom = []
+          , gdCod = [universeM]
+          , gdAttrs = []
+          }
+  let vec2TyVar =
+        TmVar
+          { tmvName = "a"
+          , tmvSort = universeM
+          , tmvScope = 1
+          , tmvOwnerMode = Just modeM
+          }
+  let vec2TmVar =
+        TmVar
+          { tmvName = "n"
+          , tmvSort = natTy
+          , tmvScope = -1
+          , tmvOwnerMode = Just modeM
+          }
+  let genVec2 =
+        GenDecl
+          { gdName = GenName "Vec2"
+          , gdMode = modeM
+          , gdTyVars = [vec2TyVar]
+          , gdTmVars = [vec2TmVar]
+          , gdParams = [GP_Tm vec2TmVar, GP_Ty vec2TyVar]
+          , gdDom = []
+          , gdCod = [universeM]
+          , gdAttrs = []
+          }
   let src =
         Doctrine
           { dName = "SrcIdx"
           , dModes = selfClassifiedModes modeSet
     , dAcyclicModes = S.empty
-          , dTypes = insertUniverseTypes modeSet $
+          , dGens =
               M.fromList
-                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM])])
+                [ (modeI, M.fromList [(gdName genNat, genNat)])
+                , (modeM, M.fromList [(gdName genVec, genVec)])
                 ]
-          , dGens = M.empty
           , dCells2 = []
       , dActions = M.empty
       , dObligations = []
@@ -1626,12 +1855,11 @@ testPushoutTermTypeMaps = do
           { dName = "LeftIdx"
           , dModes = selfClassifiedModes modeSet
     , dAcyclicModes = S.empty
-          , dTypes = insertUniverseTypes modeSet $
+          , dGens =
               M.fromList
-                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(ObjName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM])])
+                [ (modeI, M.fromList [(gdName genNat, genNat)])
+                , (modeM, M.fromList [(gdName genVec2, genVec2)])
                 ]
-          , dGens = M.empty
           , dCells2 = []
       , dActions = M.empty
       , dObligations = []
@@ -1693,23 +1921,96 @@ testPushoutTypePermutationSortRename = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
   let modeSet = S.fromList [modeM, modeI]
+  let universeM = universeObj modeM
+  let universeI = universeObj modeI
   let natRef = ObjRef modeI (ObjName "Nat")
   let natLRef = ObjRef modeI (ObjName "NatL")
   let vecRef = ObjRef modeM (ObjName "Vec")
   let vec2Ref = ObjRef modeM (ObjName "Vec2")
   let natTy = mkCon natRef []
   let natLTy = mkCon natLRef []
+  let genNat =
+        GenDecl
+          { gdName = GenName "Nat"
+          , gdMode = modeI
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [universeI]
+          , gdAttrs = []
+          }
+  let genNatL =
+        GenDecl
+          { gdName = GenName "NatL"
+          , gdMode = modeI
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [universeI]
+          , gdAttrs = []
+          }
+  let vecTyVar =
+        TmVar
+          { tmvName = "a"
+          , tmvSort = universeM
+          , tmvScope = 1
+          , tmvOwnerMode = Just modeM
+          }
+  let vecTmVar =
+        TmVar
+          { tmvName = "n"
+          , tmvSort = natTy
+          , tmvScope = -1
+          , tmvOwnerMode = Just modeM
+          }
+  let genVec =
+        GenDecl
+          { gdName = GenName "Vec"
+          , gdMode = modeM
+          , gdTyVars = [vecTyVar]
+          , gdTmVars = [vecTmVar]
+          , gdParams = [GP_Tm vecTmVar, GP_Ty vecTyVar]
+          , gdDom = []
+          , gdCod = [universeM]
+          , gdAttrs = []
+          }
+  let vec2TyVar =
+        TmVar
+          { tmvName = "a"
+          , tmvSort = universeM
+          , tmvScope = 0
+          , tmvOwnerMode = Just modeM
+          }
+  let vec2TmVar =
+        TmVar
+          { tmvName = "n"
+          , tmvSort = natLTy
+          , tmvScope = -2
+          , tmvOwnerMode = Just modeM
+          }
+  let genVec2 =
+        GenDecl
+          { gdName = GenName "Vec2"
+          , gdMode = modeM
+          , gdTyVars = [vec2TyVar]
+          , gdTmVars = [vec2TmVar]
+          , gdParams = [GP_Ty vec2TyVar, GP_Tm vec2TmVar]
+          , gdDom = []
+          , gdCod = [universeM]
+          , gdAttrs = []
+          }
   let src =
         Doctrine
           { dName = "SrcIdxSwap"
           , dModes = selfClassifiedModes modeSet
           , dAcyclicModes = S.empty
-          , dTypes = insertUniverseTypes modeSet $
+          , dGens =
               M.fromList
-                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM])])
+                [ (modeI, M.fromList [(gdName genNat, genNat)])
+                , (modeM, M.fromList [(gdName genVec, genVec)])
                 ]
-          , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
           , dObligations = []
@@ -1720,12 +2021,11 @@ testPushoutTypePermutationSortRename = do
           { dName = "LeftIdxSwap"
           , dModes = selfClassifiedModes modeSet
           , dAcyclicModes = S.empty
-          , dTypes = insertUniverseTypes modeSet $
+          , dGens =
               M.fromList
-                [ (modeI, M.fromList [(ObjName "NatL", TypeSig [])])
-                , (modeM, M.fromList [(ObjName "Vec2", TypeSig [PS_Ty modeM, PS_Tm natLTy])])
+                [ (modeI, M.fromList [(gdName genNatL, genNatL)])
+                , (modeM, M.fromList [(gdName genVec2, genVec2)])
                 ]
-          , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
           , dObligations = []
@@ -1779,43 +2079,46 @@ testPushoutTypePermutationSortRename = do
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
           }
-  res <- case computePolyPushout "PIdxSwap" morF morG of
+  res <- case PolyPush.computePolyPushout "PIdxSwap" morF morG of
     Left err -> assertFailure (T.unpack err)
     Right out -> pure out
-  let modeTypes = M.findWithDefault M.empty modeM (dTypes (poDoctrine res))
-  sig <- case M.lookup (ObjName "Vec") modeTypes of
-    Nothing -> assertFailure "expected merged Vec type in pushout result" >> error "unreachable"
-    Just out -> pure out
-  tsParams sig @?= [PS_Tm natTy, PS_Ty modeM]
+  ctorTables <- require (PolyDoc.deriveCtorTables (poDoctrine res))
+  let modeCtors = M.findWithDefault M.empty modeM ctorTables
+  let expectedSig = [TPS_Tm natTy, TPS_Ty modeM]
+  assertBool
+    "expected merged Vec-type constructor signature in pushout result"
+    (expectedSig `elem` M.elems modeCtors)
 
 testCoproductMergesDistinctModeTheories :: Assertion
 testCoproductMergesDistinctModeTheories = do
   let modeM = ModeName "M"
   let modeN = ModeName "N"
   let docA =
-        Doctrine
-          { dName = "CopA"
-          , dModes = mkModes (S.singleton modeM)
-          , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(modeM, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.empty
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(modeM, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "CopA"
+            , dModes = mkModes (S.singleton modeM)
+            , dAcyclicModes = S.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let docB =
-        Doctrine
-          { dName = "CopB"
-          , dModes = mkModes (S.singleton modeN)
-          , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(modeN, M.fromList [(ObjName "B", TypeSig [])])]
-          , dGens = M.empty
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(modeN, [(ObjName "B", [])])]
+          Doctrine
+            { dName = "CopB"
+            , dModes = mkModes (S.singleton modeN)
+            , dAcyclicModes = S.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   case validateDoctrine docA of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
@@ -1826,8 +2129,8 @@ testCoproductMergesDistinctModeTheories = do
     Left err -> assertFailure (T.unpack err)
     Right out -> pure out
   let outDoc = poDoctrine res
-  assertBool "expected left mode in coproduct result" (M.member modeM (dTypes outDoc))
-  assertBool "expected right mode in coproduct result" (M.member modeN (dTypes outDoc))
+  assertBool "expected left mode in coproduct result" (M.member modeM (mtModes (dModes outDoc)))
+  assertBool "expected right mode in coproduct result" (M.member modeN (mtModes (dModes outDoc)))
 
 testCoproductObligationRenameElaborates :: Assertion
 testCoproductObligationRenameElaborates = do
@@ -1849,23 +2152,23 @@ testCoproductObligationRenameElaborates = do
           , obPolicy = UseAllOriented
           }
   let docA =
-        Doctrine
-          { dName = "DocA"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "Nat", TypeSig [])])]
-          , dGens = M.empty
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = [obl]
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "Nat", [])])]
+          Doctrine
+            { dName = "DocA"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = [obl]
+            , dAttrSorts = M.empty
+            }
   let docB =
         Doctrine
           { dName = "DocB"
           , dModes = mkModes (S.singleton mode)
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -1911,6 +2214,7 @@ testCoproductObligationRawModalityRenameElaborates = do
           , gdMode = mode
           , gdTyVars = [aVar]
           , gdTmVars = []
+          , gdParams = [GP_Ty aVar]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = [OVar aVar]
           , gdAttrs = []
@@ -1980,7 +2284,6 @@ testCoproductObligationRawModalityRenameElaborates = do
           { dName = "DocRawA"
           , dModes = mt
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.singleton mode (M.singleton (GenName "k") genK)
           , dCells2 = []
           , dActions = M.singleton modF actionF
@@ -1992,7 +2295,6 @@ testCoproductObligationRawModalityRenameElaborates = do
           { dName = "DocRawB"
           , dModes = mt
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -2049,6 +2351,7 @@ testCoproductTransformCollisionRenames = do
           , gdMode = mode
           , gdTyVars = [aVar]
           , gdTmVars = []
+          , gdParams = [GP_Ty aVar]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = [OVar aVar]
           , gdAttrs = []
@@ -2070,7 +2373,6 @@ testCoproductTransformCollisionRenames = do
           { dName = name
           , dModes = mt
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.singleton mode (M.singleton (GenName "w") witness)
           , dCells2 = []
           , dActions = M.empty
@@ -2111,6 +2413,7 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort aTy]
           , gdCod = [aTy]
           , gdAttrs = []
@@ -2127,51 +2430,55 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
           , c2RHS = idD mode [aTy]
           }
   let src =
-        Doctrine
-          { dName = "SchemaApply"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(GenName "f", genSrc)])]
-          , dCells2 = [srcCell]
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "SchemaApply"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.fromList [(mode, M.fromList [(GenName "f", genSrc)])]
+            , dCells2 = [srcCell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let body =
-        Doctrine
-          { dName = "BodyApply"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(GenName "f", genSrc)])]
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "BodyApply"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.fromList [(mode, M.fromList [(GenName "f", genSrc)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let genTgt =
         GenDecl
           { gdName = GenName "g"
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort aTy]
           , gdCod = [aTy]
           , gdAttrs = []
           }
   let target =
-        Doctrine
-          { dName = "TargetApply"
-          , dModes = mkModes (S.singleton mode)
-          , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(GenName "g", genTgt)])]
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "TargetApply"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.fromList [(mode, M.fromList [(GenName "g", genTgt)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   case validateDoctrine src of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
@@ -2228,7 +2535,6 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
           { dName = "SrcTypeGenCollapse"
           , dModes = mkModes (S.fromList [modeI1, modeI2])
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -2242,6 +2548,7 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
           , gdMode = modeL1
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = []
           , gdCod = []
           , gdAttrs = []
@@ -2252,36 +2559,35 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
           , gdMode = modeL2
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort cL2]
           , gdCod = [cL2]
           , gdAttrs = []
           }
   let body =
-        Doctrine
-          { dName = "BodyTypeGenCollapse"
-          , dModes = mkModes (S.fromList [modeL1, modeL2])
-          , dAcyclicModes = S.empty
-          , dTypes =
-              M.fromList
-                [ (modeL1, M.singleton (ObjName "B") (TypeSig []))
-                , (modeL2, M.fromList [(ObjName "B", TypeSig []), (ObjName "C", TypeSig [])])
-                ]
-          , dGens =
-              M.fromList
-                [ (modeL1, M.singleton (GenName "g") genL1)
-                , (modeL2, M.singleton (GenName "g") genL2)
-                ]
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [ (modeL1, [(ObjName "B", [])])
+          , (modeL2, [(ObjName "B", []), (ObjName "C", [])])
+          ]
+          Doctrine
+            { dName = "BodyTypeGenCollapse"
+            , dModes = mkModes (S.fromList [modeL1, modeL2])
+            , dAcyclicModes = S.empty
+            , dGens =
+                M.fromList
+                  [ (modeL1, M.singleton (GenName "g") genL1)
+                  , (modeL2, M.singleton (GenName "g") genL2)
+                  ]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let target =
         Doctrine
           { dName = "TargetTypeGenCollapse"
           , dModes = mkModes (S.singleton modeM)
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -2320,7 +2626,8 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
   res <- case computePolyPushoutPreferRight "PTypeGenCollapse" "TypeGenFocus" incl impl of
     Left err -> assertFailure (T.unpack err) >> error "unreachable"
     Right out -> pure out
-  let modeTypes = M.findWithDefault M.empty modeM (dTypes (poDoctrine res))
+  ctorTables <- require (PolyDoc.deriveCtorTables (poDoctrine res))
+  let modeTypes = M.findWithDefault M.empty modeM ctorTables
   assertBool "expected unrenamed type B to remain" (M.member (ObjName "B") modeTypes)
   let renamedTypes = [ t | ObjName t <- M.keys modeTypes, "TypeGenFocus_B" `T.isPrefixOf` t ]
   assertBool "expected renamed B after mode-collapse collision" (not (null renamedTypes))
@@ -2341,7 +2648,6 @@ testApplyPushoutCellCollisionAfterModeRename = do
           { dName = "IfaceModeRename"
           , dModes = mkModes (S.singleton modeI)
           , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
           , dActions = M.empty
@@ -2361,24 +2667,25 @@ testApplyPushoutCellCollisionAfterModeRename = do
           , c2RHS = bodyG
           }
   let body =
-        Doctrine
-          { dName = "BodyModeRename"
-          , dModes = mkModes (S.singleton modeL)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton modeL (M.singleton (ObjName "A") (TypeSig []))
-          , dGens =
-              M.singleton
-                modeL
-                ( M.fromList
-                    [ (GenName "f", GenDecl (GenName "f") modeL [] [] [InPort tyL] [tyL] [])
-                    , (GenName "g", GenDecl (GenName "g") modeL [] [] [InPort tyL] [tyL] [])
-                    ]
-                )
-          , dCells2 = [bodyCell]
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(modeL, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "BodyModeRename"
+            , dModes = mkModes (S.singleton modeL)
+            , dAcyclicModes = S.empty
+            , dGens =
+                M.singleton
+                  modeL
+                  ( M.fromList
+                      [ (GenName "f", GenDecl (GenName "f") modeL [] [] [] [InPort tyL] [tyL] [])
+                      , (GenName "g", GenDecl (GenName "g") modeL [] [] [] [InPort tyL] [tyL] [])
+                      ]
+                  )
+            , dCells2 = [bodyCell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   targetF <- require (genD modeM [tyM] [tyM] (GenName "f"))
   targetG <- require (genD modeM [tyM] [tyM] (GenName "g"))
   let targetCell =
@@ -2392,24 +2699,25 @@ testApplyPushoutCellCollisionAfterModeRename = do
           , c2RHS = targetF
           }
   let target =
-        Doctrine
-          { dName = "TargetModeRename"
-          , dModes = mkModes (S.singleton modeM)
-          , dAcyclicModes = S.empty
-          , dTypes = M.singleton modeM (M.singleton (ObjName "A") (TypeSig []))
-          , dGens =
-              M.singleton
-                modeM
-                ( M.fromList
-                    [ (GenName "f", GenDecl (GenName "f") modeM [] [] [InPort tyM] [tyM] [])
-                    , (GenName "g", GenDecl (GenName "g") modeM [] [] [InPort tyM] [tyM] [])
-                    ]
-                )
-          , dCells2 = [targetCell]
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(modeM, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "TargetModeRename"
+            , dModes = mkModes (S.singleton modeM)
+            , dAcyclicModes = S.empty
+            , dGens =
+                M.singleton
+                  modeM
+                  ( M.fromList
+                      [ (GenName "f", GenDecl (GenName "f") modeM [] [] [] [InPort tyM] [tyM] [])
+                      , (GenName "g", GenDecl (GenName "g") modeM [] [] [] [InPort tyM] [tyM] [])
+                      ]
+                  )
+            , dCells2 = [targetCell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [src, body, target]
   let incl =
         Morphism
@@ -2465,6 +2773,7 @@ testPushoutCellTmAlphaEq = do
           , gdMode = modeI
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = []
           , gdCod = [natTy]
           , gdAttrs = []
@@ -2475,6 +2784,7 @@ testPushoutCellTmAlphaEq = do
           , gdMode = modeM
           , gdTyVars = []
           , gdTmVars = [srcTm]
+          , gdParams = [GP_Tm srcTm]
           , gdDom = [InPort (vecTy srcTm)]
           , gdCod = [vecTy srcTm]
           , gdAttrs = []
@@ -2485,6 +2795,7 @@ testPushoutCellTmAlphaEq = do
           , gdMode = modeM
           , gdTyVars = []
           , gdTmVars = [leftTm]
+          , gdParams = [GP_Tm leftTm]
           , gdDom = [InPort (vecTy leftTm)]
           , gdCod = [vecTy leftTm]
           , gdAttrs = []
@@ -2495,6 +2806,7 @@ testPushoutCellTmAlphaEq = do
           , gdMode = modeM
           , gdTyVars = []
           , gdTmVars = [rightTm]
+          , gdParams = [GP_Tm rightTm]
           , gdDom = [InPort (vecTy rightTm)]
           , gdCod = [vecTy rightTm]
           , gdAttrs = []
@@ -2522,25 +2834,24 @@ testPushoutCellTmAlphaEq = do
           , c2RHS = idD modeM [vecTy rightTm]
           }
   let commonDoc name gen cell =
-        Doctrine
-          { dName = name
-          , dModes = mkModes (S.fromList [modeM, modeI])
-    , dAcyclicModes = S.empty
-          , dTypes =
-              M.fromList
-                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy])])
-                ]
-          , dGens =
-              M.fromList
-                [ (modeI, M.fromList [(GenName "Z", zDecl)])
-                , (modeM, M.fromList [(genName, gen)])
-                ]
-          , dCells2 = cell
-        , dActions = M.empty
-        , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [ (modeI, [(ObjName "Nat", [])])
+          , (modeM, [(ObjName "Vec", [TPS_Tm natTy])])
+          ]
+          Doctrine
+            { dName = name
+            , dModes = mkModes (S.fromList [modeM, modeI])
+            , dAcyclicModes = S.empty
+            , dGens =
+                M.fromList
+                  [ (modeI, M.fromList [(GenName "Z", zDecl)])
+                  , (modeM, M.fromList [(genName, gen)])
+                  ]
+            , dCells2 = cell
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let src = commonDoc "SrcTmAlpha" srcGen []
   let left = commonDoc "LeftTmAlpha" leftGen [leftCell]
   let right = commonDoc "RightTmAlpha" rightGen [rightCell]
@@ -2608,6 +2919,7 @@ testPushoutInjectionPreservesBinderArgs = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy]
           , gdAttrs = []
@@ -2617,7 +2929,6 @@ testPushoutInjectionPreservesBinderArgs = do
           { dName = "IfaceBinder"
           , dModes = mkModes (S.singleton mode)
     , dAcyclicModes = S.empty
-          , dTypes = M.empty
           , dGens = M.empty
           , dCells2 = []
       , dActions = M.empty
@@ -2625,11 +2936,12 @@ testPushoutInjectionPreservesBinderArgs = do
           , dAttrSorts = M.empty
           }
   let left =
-        iface
-          { dName = "LeftBinder"
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          iface
+            { dName = "LeftBinder"
+            , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
+            }
   let right = iface { dName = "RightBinder" }
   case validateDoctrine iface of
     Left err -> assertFailure (T.unpack err)
@@ -2686,6 +2998,7 @@ testPushoutAcceptsRenamingWithBinders = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InBinder slotSigSrc]
           , gdCod = [aTy]
           , gdAttrs = []
@@ -2696,34 +3009,37 @@ testPushoutAcceptsRenamingWithBinders = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InBinder slotSigTgt]
           , gdCod = [a1Ty]
           , gdAttrs = []
           }
   let iface =
-        Doctrine
-          { dName = "IfaceRenameBinder"
-          , dModes = mkModes (S.singleton mode)
-    , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(gName, ifaceGen)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "IfaceRenameBinder"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.fromList [(mode, M.fromList [(gName, ifaceGen)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let left =
-        Doctrine
-          { dName = "LeftRenameBinder"
-          , dModes = mkModes (S.singleton mode)
-    , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A1", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(g1Name, leftGen)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A1", [])])]
+          Doctrine
+            { dName = "LeftRenameBinder"
+            , dModes = mkModes (S.singleton mode)
+            , dAcyclicModes = S.empty
+            , dGens = M.fromList [(mode, M.fromList [(g1Name, leftGen)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   let right = iface { dName = "RightRenameBinder" }
   case validateDoctrine iface of
     Left err -> assertFailure (T.unpack err)
@@ -2845,7 +3161,8 @@ mkModeEqDoctrine name mt varName useUF = do
         , gdMode = mode
         , gdTyVars = [v]
         , gdTmVars = []
-    , gdDom = map InPort [OVar v]
+        , gdParams = [GP_Ty v]
+        , gdDom = map InPort [OVar v]
         , gdCod = [OVar v]
         , gdAttrs = []
         }
@@ -2854,7 +3171,8 @@ mkModeEqDoctrine name mt varName useUF = do
         , gdMode = mode
         , gdTyVars = [v]
         , gdTmVars = []
-    , gdDom = map InPort [modalTy]
+        , gdParams = [GP_Ty v]
+        , gdDom = map InPort [modalTy]
         , gdCod = [modalTy]
         , gdAttrs = []
         }
@@ -2862,7 +3180,6 @@ mkModeEqDoctrine name mt varName useUF = do
         { dName = name
         , dModes = mt
     , dAcyclicModes = S.empty
-        , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(GenName "h", genH), (GenName "modal", genModal)])]
         , dCells2 = [cell]
       , dActions = M.empty
@@ -2875,19 +3192,21 @@ mkModeEqDoctrine name mt varName useUF = do
 
 mkTypeDoctrine :: ModeName -> Text -> [(ObjName, Int)] -> Either Text Doctrine
 mkTypeDoctrine mode name types = do
-  let types' = M.fromList [ (tname, TypeSig (replicate arity (PS_Ty mode))) | (tname, arity) <- types ]
+  let sigs = [ (tname, replicate arity (TPS_Ty mode)) | (tname, arity) <- types ]
   let modeSet = S.singleton mode
-  let doc = Doctrine
-        { dName = name
-        , dModes = selfClassifiedModes modeSet
-    , dAcyclicModes = S.empty
-        , dTypes = insertUniverseTypes modeSet (M.fromList [(mode, types')])
-        , dGens = M.empty
-        , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-        , dAttrSorts = M.empty
-        }
+  let doc =
+        withSelfClassifiedCtors
+          [(mode, sigs)]
+          Doctrine
+            { dName = name
+            , dModes = selfClassifiedModes modeSet
+            , dAcyclicModes = S.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   case validateDoctrine doc of
     Left err -> Left err
     Right () -> Right doc

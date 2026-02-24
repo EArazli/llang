@@ -1,6 +1,6 @@
 doctrine SchemaMonad where {
   mode C classifiedBy C via C.U_C;
-  type U_C @C;
+  gen U_C : [] -> [C.U_C] @C;
   modality T : C -> C;
 
   gen ret(x@C) : [x] -> [T(x)] @C;

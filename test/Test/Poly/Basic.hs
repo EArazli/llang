@@ -21,6 +21,7 @@ import Strat.Poly.Obj
   , pattern ObjVar
   , ovName
   , ovMode
+  , TmVar(..)
   , ObjArg
   , pattern OAObj
   , pattern OATm
@@ -30,10 +31,10 @@ import Strat.Poly.UnifyObj (Subst, applySubstObj, mkSubst, normalizeSubst, codeB
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Names (BoxName(..))
 import Strat.Poly.Diagram
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
-import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory (TypeParamSig(..), modeOnlyTypeTheory)
 import Strat.Poly.Graph
   ( Diagram(..)
   , EdgeId(..)
@@ -49,7 +50,7 @@ import Strat.Poly.Graph
   , unEdgeId
   )
 import Strat.Poly.DiagramIso (diagramIsoEq)
-import Test.Poly.Helpers (mkModes)
+import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 
 
 tests :: TestTree
@@ -79,6 +80,8 @@ tests =
     , testCase "validateDoctrine accepts RHS vars from LHS" testAcceptRHSTyVars
     , testCase "validateDoctrine rejects empty LHS rule" testRejectEmptyLHS
     , testCase "validateDoctrine checks cell boundaries with diagram term-context" testCellBoundaryUsesDiagramTmCtx
+    , testCase "validateDoctrine allows gen term-var sorts mentioning declared tyvars" testGenTmVarSortUsesTyVarScope
+    , testCase "validateDoctrine allows cell term-var sorts mentioning declared tyvars" testCellTmVarSortUsesTyVarScope
     ]
 
 require :: Either Text a -> IO a
@@ -317,7 +320,8 @@ testDuplicateGenTyVars = do
         , gdMode = mode
         , gdTyVars = [a, a]
         , gdTmVars = []
-    , gdDom = map InPort [OVar a]
+        , gdParams = [GP_Ty a, GP_Ty a]
+        , gdDom = map InPort [OVar a]
         , gdCod = [OVar a]
         , gdAttrs = []
         }
@@ -325,7 +329,6 @@ testDuplicateGenTyVars = do
         { dName = "DupGenTyVars"
         , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-        , dTypes = M.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = []
       , dActions = M.empty
@@ -354,7 +357,6 @@ testDuplicateCellTyVars = do
         { dName = "DupCellTyVars"
         , dModes = mkModes [mode]
     , dAcyclicModes = S.empty
-        , dTypes = M.empty
         , dGens = M.empty
         , dCells2 = [cell]
         , dAttrSorts = M.empty
@@ -373,7 +375,8 @@ testRejectRHSTyVars = do
         , gdMode = mode
         , gdTyVars = []
         , gdTmVars = []
-    , gdDom = map InPort [tcon mode "A" []]
+        , gdParams = []
+        , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
         , gdAttrs = []
         }
@@ -388,17 +391,19 @@ testRejectRHSTyVars = do
         , c2LHS = lhs
         , c2RHS = rhs
         }
-  let doc = Doctrine
-        { dName = "D"
-        , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
-        , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
-        , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
-        , dCells2 = [cell]
-      , dActions = M.empty
-      , dObligations = []
-        , dAttrSorts = M.empty
-        }
+  let doc =
+        withSelfClassifiedCtors
+          [(mode, [(aName, [])])]
+          Doctrine
+            { dName = "D"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
+            , dCells2 = [cell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   case validateDoctrine doc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected RHS fresh tyvars to be rejected"
@@ -413,7 +418,8 @@ testAcceptRHSTyVars = do
         , gdMode = mode
         , gdTyVars = [aVar]
         , gdTmVars = []
-    , gdDom = map InPort [OVar aVar]
+        , gdParams = [GP_Ty aVar]
+        , gdDom = map InPort [OVar aVar]
         , gdCod = [OVar aVar]
         , gdAttrs = []
         }
@@ -428,17 +434,19 @@ testAcceptRHSTyVars = do
         , c2LHS = lhs
         , c2RHS = rhs
         }
-  let doc = Doctrine
-        { dName = "D"
-        , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
-        , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
-        , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
-        , dCells2 = [cell]
-      , dActions = M.empty
-      , dObligations = []
-        , dAttrSorts = M.empty
-        }
+  let doc =
+        withSelfClassifiedCtors
+          [(mode, [(aName, [])])]
+          Doctrine
+            { dName = "D"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
+            , dCells2 = [cell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   case validateDoctrine doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
@@ -458,17 +466,19 @@ testRejectEmptyLHS = do
         , c2LHS = lhs
         , c2RHS = rhs
         }
-  let doc = Doctrine
-        { dName = "D"
-        , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
-        , dTypes = M.fromList [(mode, M.fromList [(aName, TypeSig [])])]
-        , dGens = M.empty
-        , dCells2 = [cell]
-      , dActions = M.empty
-      , dObligations = []
-        , dAttrSorts = M.empty
-        }
+  let doc =
+        withSelfClassifiedCtors
+          [(mode, [(aName, [])])]
+          Doctrine
+            { dName = "D"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dGens = M.empty
+            , dCells2 = [cell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   case validateDoctrine doc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected empty LHS rule to be rejected"
@@ -495,21 +505,20 @@ testCellBoundaryUsesDiagramTmCtx = do
           , c2RHS = rhs
           }
   let doc =
-        Doctrine
-          { dName = "CellTmCtx"
-          , dModes = mkModes [modeM, modeI]
-          , dAcyclicModes = S.empty
-          , dTypes =
-              M.fromList
-                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
-                , (modeM, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy])])
-                ]
-          , dGens = M.empty
-          , dCells2 = [cell]
-          , dActions = M.empty
-          , dObligations = []
-          , dAttrSorts = M.empty
-          }
+        withSelfClassifiedCtors
+          [ (modeI, [(ObjName "Nat", [])])
+          , (modeM, [(ObjName "Vec", [TPS_Tm natTy])])
+          ]
+          Doctrine
+            { dName = "CellTmCtx"
+            , dModes = mkModes [modeM, modeI]
+            , dAcyclicModes = S.empty
+            , dGens = M.empty
+            , dCells2 = [cell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
   case validateDoctrine doc of
     Left err -> assertFailure ("expected doctrine to validate with matching tmctx: " <> T.unpack err)
     Right () -> pure ()
@@ -518,6 +527,115 @@ testCellBoundaryUsesDiagramTmCtx = do
   case validateDoctrine badDoc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected doctrine to reject mismatched cell tmctx"
+
+testGenTmVarSortUsesTyVarScope :: Assertion
+testGenTmVarSortUsesTyVarScope = do
+  let mode = ModeName "M"
+  let aVar =
+        TmVar
+          { tmvName = "a"
+          , tmvSort = tcon mode "U" []
+          , tmvScope = 0
+          , tmvOwnerMode = Just mode
+          }
+  let xVar =
+        TmVar
+          { tmvName = "x"
+          , tmvSort = OVar aVar
+          , tmvScope = 1
+          , tmvOwnerMode = Nothing
+          }
+  let gen =
+        GenDecl
+          { gdName = GenName "foo"
+          , gdMode = mode
+          , gdTyVars = [aVar]
+          , gdTmVars = [xVar]
+          , gdParams = [GP_Ty aVar, GP_Tm xVar]
+          , gdDom = []
+          , gdCod = []
+          , gdAttrs = []
+          }
+  let doc =
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "U", [])])]
+          Doctrine
+            { dName = "GenTmVarSortScope"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dGens = M.singleton mode (M.singleton (gdName gen) gen)
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
+  case validateDoctrine doc of
+    Left err ->
+      assertFailure
+        ( "expected doctrine to validate when term-var sort references declared tyvar; got: "
+            <> T.unpack err
+        )
+    Right () -> pure ()
+
+testCellTmVarSortUsesTyVarScope :: Assertion
+testCellTmVarSortUsesTyVarScope = do
+  let mode = ModeName "M"
+  let aVar =
+        TmVar
+          { tmvName = "a"
+          , tmvSort = tcon mode "U" []
+          , tmvScope = 0
+          , tmvOwnerMode = Just mode
+          }
+  let xVar =
+        TmVar
+          { tmvName = "x"
+          , tmvSort = OVar aVar
+          , tmvScope = 1
+          , tmvOwnerMode = Nothing
+          }
+  markerDiag <- require (genD mode [] [] (GenName "marker"))
+  let markerDecl =
+        GenDecl
+          { gdName = GenName "marker"
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = []
+          , gdAttrs = []
+          }
+  let cell =
+        Cell2
+          { c2Name = "tmvar_scope_cell"
+          , c2Class = Structural
+          , c2Orient = LR
+          , c2TyVars = [aVar]
+          , c2TmVars = [xVar]
+          , c2LHS = markerDiag
+          , c2RHS = markerDiag
+          }
+  let doc =
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "U", [])])]
+          Doctrine
+            { dName = "CellTmVarSortScope"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dGens = M.singleton mode (M.singleton (gdName markerDecl) markerDecl)
+            , dCells2 = [cell]
+            , dActions = M.empty
+            , dObligations = []
+            , dAttrSorts = M.empty
+            }
+  case validateDoctrine doc of
+    Left err ->
+      assertFailure
+        ( "expected doctrine to validate when cell term-var sort references declared tyvar; got: "
+            <> T.unpack err
+        )
+    Right () -> pure ()
 
 buildIsoDiagram :: ModeName -> Obj -> Either Text Diagram
 buildIsoDiagram mode a = do

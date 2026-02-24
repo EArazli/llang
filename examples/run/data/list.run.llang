@@ -1,7 +1,7 @@
 import "../../../stdlib/data/list.llang"
 
 doctrine ListWithA extends ListData where {
-  type A @M;
+  gen A : [] -> [U_M] @M;
 }
 
 pipeline main where {

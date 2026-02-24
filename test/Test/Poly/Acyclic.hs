@@ -17,7 +17,7 @@ import Strat.Poly.Graph (EdgePayload(..), addEdgePayload, emptyDiagram, freshPor
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
-import Test.Poly.Helpers (mkModes)
+import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 
 
 tests :: TestTree
@@ -45,17 +45,18 @@ testRejectCycle = do
 
 mkDoctrine :: Doctrine
 mkDoctrine =
-  Doctrine
-    { dName = "D"
-    , dModes = mkModes [modeM]
-    , dAcyclicModes = S.singleton modeM
-    , dAttrSorts = M.empty
-    , dTypes = M.fromList [(modeM, M.fromList [(ObjName "T", TypeSig [])])]
-    , dGens = M.empty
-    , dCells2 = []
+  withSelfClassifiedCtors
+    [(modeM, [(ObjName "T", [])])]
+    Doctrine
+      { dName = "D"
+      , dModes = mkModes [modeM]
+      , dAcyclicModes = S.singleton modeM
+      , dAttrSorts = M.empty
+      , dGens = M.empty
+      , dCells2 = []
       , dActions = M.empty
       , dObligations = []
-    }
+      }
 
 
 modeM :: ModeName

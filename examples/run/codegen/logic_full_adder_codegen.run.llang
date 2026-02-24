@@ -1,10 +1,10 @@
 doctrine LogicJS where {
   mode M acyclic classifiedBy M via M.U_M;
-  type U_M @M;
+  gen U_M : [] -> [M.U_M] @M;
   attrsort Str = string;
 
-  type B @M;
-  type P @M;
+  gen B : [] -> [M.U_M] @M;
+  gen P : [] -> [M.U_M] @M;
 
   gen true  : [] -> [B] @M;
   gen false : [] -> [B] @M;

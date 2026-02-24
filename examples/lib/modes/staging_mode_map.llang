@@ -1,13 +1,13 @@
 doctrine Staging where {
   mode RT classifiedBy RT via RT.U_RT;
-  type U_RT @RT;
+  gen U_RT : [] -> [RT.U_RT] @RT;
   mode CT classifiedBy CT via CT.U_CT;
-  type U_CT @CT;
+  gen U_CT : [] -> [CT.U_CT] @CT;
   modality quote : RT -> CT;
   modality splice : CT -> RT;
   mod_eq splice.quote -> id@RT;
 
-  type Nat @RT;
+  gen Nat : [] -> [RT.U_RT] @RT;
 
   gen stage : [splice(quote(RT.Nat))] -> [splice(quote(RT.Nat))] @RT;
   gen stageq : [quote(RT.Nat)] -> [quote(RT.Nat)] @CT;
@@ -45,14 +45,14 @@ surface StageExprCT where {
 
 doctrine Staging2 where {
   mode R2 classifiedBy R2 via R2.U_R2;
-  type U_R2 @R2;
+  gen U_R2 : [] -> [R2.U_R2] @R2;
   mode C2 classifiedBy C2 via C2.U_C2;
-  type U_C2 @C2;
+  gen U_C2 : [] -> [C2.U_C2] @C2;
   modality Q : R2 -> C2;
   modality S : C2 -> R2;
   mod_eq S.Q -> id@R2;
 
-  type Nat @R2;
+  gen Nat : [] -> [R2.U_R2] @R2;
 
   gen stage2 : [S(Q(R2.Nat))] -> [S(Q(R2.Nat))] @R2;
   gen stageq2 : [Q(R2.Nat)] -> [Q(R2.Nat)] @C2;

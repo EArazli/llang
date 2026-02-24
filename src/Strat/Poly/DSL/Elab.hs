@@ -18,8 +18,10 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.List as L
 import qualified Data.Set as S
 import Data.Maybe (catMaybes, fromMaybe)
+import Data.Ord (comparing)
 import Control.Monad (foldM, when)
 import Strat.DSL.AST (RawPolyMorphism(..), RawPolyMorphismItem(..), RawPolyTypeMap(..), RawPolyGenMap(..), RawPolyModeMap(..), RawPolyModalityMap(..), RawPolyAttrSortMap(..))
 import Strat.Poly.DSL.AST
@@ -30,9 +32,9 @@ import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.Obj
 import Strat.Poly.ObjClassifier (modeClassifierMode, modeUniverseObj)
-import Strat.Poly.ObjResolve (resolveTypeRefInClassifier)
+import Strat.Poly.ObjResolve (resolveTypeRefInClassifier, resolveTypeRefInClassifierMaybe)
 import qualified Strat.Poly.UnifyObj as U
-import Strat.Poly.TypeTheory (TypeTheory, TmFunSig(..))
+import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..), TmFunSig(..))
 import Strat.Poly.DefEq (normalizeObjDeep, termExprToDiagramChecked)
 import Strat.Poly.Attr
 import Strat.Poly.Morphism
@@ -247,17 +249,20 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
         then Left "morphism: target mode does not match mode map"
         else Right ()
       let name = ObjName (rpmtSrcType decl)
-      let ref = ObjRef modeSrc name
-      sig <- lookupTypeSig src ref
-      (tmplParams, tyVarsTgt, tmVarsTgt) <- buildTypeTemplateParams tgt modeMap (tsParams sig) (rpmtParams decl)
+      mRef <- lookupCtorRefForOwner src modeSrc name
+      srcRef <-
+        case mRef of
+          Nothing -> Left "morphism: unknown source type in type map"
+          Just ref -> Right ref
+      srcParams <- lookupCtorSigForOwner src modeSrc srcRef
+      (tmplParams, tyVarsTgt, tmVarsTgt) <- buildTypeTemplateParams tgt modeMap srcParams (rpmtParams decl)
       tgtExpr <- elabObjExpr tgt tyVarsTgt tmVarsTgt M.empty modeTgtDecl (rpmtTgtType decl)
       if objOwnerMode tgtExpr /= modeTgtDecl
         then Left ("morphism: target type expression mode mismatch (expected " <> rpmtTgtMode decl <> ")")
         else Right ()
-      let key = ObjRef modeSrc name
-      if M.member key mp
+      if M.member srcRef mp
         then Left "morphism: duplicate type mapping"
-        else Right (M.insert key (TypeTemplate tmplParams tgtExpr) mp)
+        else Right (M.insert srcRef (TypeTemplate tmplParams tgtExpr) mp)
     addGenMap src tgt modeMap mor0 mp decl = do
       let modeSrc = ModeName (rpmgMode decl)
       ensureMode src modeSrc
@@ -306,7 +311,12 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       pure (hole, sig { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' })
     -- no template restriction; any target type expression using only params is allowed
     ensureAllGenMapped src mp = do
-      let gens = [ (mode, gdName g) | (mode, table) <- M.toList (dGens src), g <- M.elems table ]
+      let gens =
+            [ (mode, gdName g)
+            | (mode, table) <- M.toList (dGens src)
+            , g <- M.elems table
+            , not (isTypeDeclGenName src mode (gdName g))
+            ]
       case [ (m, g) | (m, g) <- gens, M.notMember (m, g) mp ] of
         [] -> Right ()
         _ -> Left "morphism: missing generator mapping"
@@ -412,7 +422,6 @@ seedDoctrine name base =
       , dModes = emptyModeTheory
       , dAcyclicModes = S.empty
       , dAttrSorts = M.empty
-      , dTypes = M.empty
       , dGens = M.empty
       , dCells2 = []
       , dActions = M.empty
@@ -428,7 +437,19 @@ applyPendingClassifications st =
       ensureMode doc mode
       let classifier = ModeName (rcdClassifier rawClass)
       ensureMode doc classifier
-      universe <- elabObjExpr doc [] [] M.empty classifier (rcdUniverse rawClass)
+      let existingUniverse =
+            case M.lookup mode (mtClassifiedBy (dModes doc)) of
+              Just existing -> Just (cdUniverse existing)
+              Nothing -> Nothing
+      universe <-
+        case elabObjExpr doc [] [] M.empty classifier (rcdUniverse rawClass) of
+          Right u -> Right u
+          Left err ->
+            case existingUniverse of
+              Just u
+                | not (isPendingUniverseObj u) ->
+                    Right u
+              _ -> Left err
       if objOwnerMode universe == classifier
         then Right ()
         else Left "classifiedBy universe mode mismatch"
@@ -469,12 +490,7 @@ elabPolyItem env st item =
               mode
               ClassificationDecl
                 { cdClassifier = classifier
-                , cdUniverse =
-                    OVar
-                      ObjVar
-                        { ovName = "__pending_universe"
-                        , ovMode = classifier
-                        }
+                , cdUniverse = pendingClassUniverse classifier (rcdUniverse rawClass)
                 , cdTag = rcdTag rawClass
                 }
               mt0
@@ -575,61 +591,93 @@ elabPolyItem env st item =
         else do
           let sortDecl = AttrSortDecl { asName = sortName, asLitKind = litKind }
           pure st { esDoc = doc { dAttrSorts = M.insert sortName sortDecl (dAttrSorts doc) } }
-    RPType decl -> do
-      let mode = ModeName (rptMode decl)
-      ensureMode doc mode
-      let tname = ObjName (rptName decl)
-      (_tyVars, _ixVars, sigParams) <- elabParamDecls doc mode (rptVars decl)
-      let sig = TypeSig { tsParams = sigParams }
-      let table = M.findWithDefault M.empty mode (dTypes doc)
-      if M.member tname table
-        then Left "duplicate type name"
-        else do
-          let table' = M.insert tname sig table
-          let types' = M.insert mode table' (dTypes doc)
-          pure st { esDoc = doc { dTypes = types' } }
     RPGen decl -> do
       let mode = ModeName (rpgMode decl)
       ensureMode doc mode
       let gname = GenName (rpgName decl)
-      (tyVars, tmVars, _sigParams) <- elabParamDecls doc mode (rpgVars decl)
+      (tyVars, tmVars, params) <- elabParamDecls doc mode (rpgVars decl)
+      let table0 = M.findWithDefault M.empty mode (dGens doc)
+      if M.member gname table0
+        then Left "duplicate generator name"
+        else Right ()
+      let provisional =
+            GenDecl
+              { gdName = gname
+              , gdMode = mode
+              , gdTyVars = tyVars
+              , gdTmVars = tmVars
+              , gdParams = params
+              , gdDom = []
+              , gdCod = [provisionalCtorSort doc mode]
+              , gdAttrs = []
+              }
+      let docForElab =
+            doc
+              { dGens = M.insert mode (M.insert gname provisional table0) (dGens doc)
+              }
       attrs <- mapM (resolveAttrField doc) (rpgAttrs decl)
       ensureDistinct "duplicate generator attribute field name" (map fst attrs)
-      dom <- elabInputShapes doc mode tyVars tmVars (rpgDom decl)
-      cod <- elabContext doc mode tyVars tmVars M.empty (rpgCod decl)
+      dom <- elabInputShapes docForElab mode tyVars tmVars (rpgDom decl)
+      cod <- elabContext docForElab mode tyVars tmVars M.empty (rpgCod decl)
       let gen = GenDecl
             { gdName = gname
             , gdMode = mode
             , gdTyVars = tyVars
             , gdTmVars = tmVars
+            , gdParams = params
             , gdDom = dom
             , gdCod = cod
             , gdAttrs = attrs
             }
-      let table = M.findWithDefault M.empty mode (dGens doc)
-      if M.member gname table
-        then Left "duplicate generator name"
-        else do
-          let table' = M.insert gname gen table
-          let gens' = M.insert mode table' (dGens doc)
-          pure st { esDoc = doc { dGens = gens' } }
+      let table' = M.insert gname gen table0
+      let gens' = M.insert mode table' (dGens doc)
+      pure st { esDoc = doc { dGens = gens' } }
     RPData decl -> do
       let modeName = rpdTyMode decl
-      let mode = ModeName modeName
-      ensureMode doc mode
+      let ownerMode = ModeName modeName
+      ensureMode doc ownerMode
+      let classifierMode = modeClassifierMode (dModes doc) ownerMode
+      ensureMode doc classifierMode
+      universe <-
+        case modeUniverseObj (dModes doc) ownerMode of
+          Nothing ->
+            Left
+              ( "data: mode "
+                  <> modeName
+                  <> " is missing a classifiedBy universe"
+              )
+          Just u -> Right u
       let ctorNames = map rpdCtorName (rpdCtors decl)
       ensureDistinct "data: duplicate constructor name" ctorNames
-      let existing = M.findWithDefault M.empty mode (dGens doc)
-      case [c | c <- ctorNames, M.member (GenName c) existing] of
+      let typeName = rpdTyName decl
+      let existingOwner = M.findWithDefault M.empty ownerMode (dGens doc)
+      let existingClassifier = M.findWithDefault M.empty classifierMode (dGens doc)
+      case [c | c <- ctorNames, M.member (GenName c) existingOwner] of
         (c:_) -> Left ("data: constructor name conflicts with generator " <> c)
         [] -> Right ()
-      let typeDecl = RawPolyTypeDecl
-            { rptName = rpdTyName decl
-            , rptVars = map RPDType (rpdTyVars decl)
-            , rptMode = modeName
-            }
-      let ctors = map (mkCtor modeName (rpdTyName decl) (rpdTyVars decl)) (rpdCtors decl)
-      foldM (elabPolyItem env) st (RPType typeDecl : map RPGen ctors)
+      if M.member (GenName typeName) existingClassifier
+        then Left ("data: type constructor name conflicts with classifier generator " <> typeName)
+        else Right ()
+      (tyVars, tmVars, params) <- elabParamDecls doc classifierMode (map RPDType (rpdTyVars decl))
+      let typeCtorGen =
+            GenDecl
+              { gdName = GenName typeName
+              , gdMode = classifierMode
+              , gdTyVars = tyVars
+              , gdTmVars = tmVars
+              , gdParams = params
+              , gdDom = []
+              , gdCod = [universe]
+              , gdAttrs = []
+              }
+      let classifierTable' = M.insert (gdName typeCtorGen) typeCtorGen existingClassifier
+      let doc' =
+            doc
+              { dGens = M.insert classifierMode classifierTable' (dGens doc)
+              }
+      let st' = st { esDoc = doc' }
+      let ctors = map (mkCtor modeName typeName (rpdTyVars decl)) (rpdCtors decl)
+      foldM (elabPolyItem env) st' (map RPGen ctors)
     RPRule decl -> do
       let mode = ModeName (rprMode decl)
       ensureMode doc mode
@@ -746,7 +794,7 @@ rpdCtorName = rpcName
 
 mkCtor :: Text -> Text -> [RawTyVarDecl] -> RawPolyCtorDecl -> RawPolyGenDecl
 mkCtor modeName tyName vars ctor =
-  let typeRef = RawTypeRef { rtrMode = Just modeName, rtrName = tyName }
+  let typeRef = RawTypeRef { rtrMode = Nothing, rtrName = tyName }
       args = map (RPTVar . rtvName) vars
       cod = [RPTCon typeRef args]
   in RawPolyGenDecl
@@ -858,7 +906,11 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
 
     checkForGen ttTgt obl = do
       modeTgt <- applyMorphismMode morph (obMode obl)
-      let gens = M.elems (M.findWithDefault M.empty modeTgt (dGens tgtDoc))
+      let gens =
+            [ gd
+            | gd <- M.elems (M.findWithDefault M.empty modeTgt (dGens tgtDoc))
+            , not (isTypeDeclGenName tgtDoc modeTgt (gdName gd))
+            ]
       checkForGens ttTgt modeTgt obl gens
 
     checkForGens _ _ _ [] = Right (ImplementsCheckProved [])
@@ -1115,6 +1167,83 @@ ensureMode doc mode =
     then Right ()
     else Left "unknown mode"
 
+renderModeName :: ModeName -> Text
+renderModeName (ModeName name) = name
+
+provisionalCtorSort :: Doctrine -> ModeName -> Obj
+provisionalCtorSort doc mode =
+  case modeUniverseObj (dModes doc) mode of
+    Just u -> u
+    Nothing ->
+      case classifierUniverse of
+        Just u -> u
+        Nothing ->
+          Obj
+            { objOwnerMode = mode
+            , objCode =
+                CTCon
+                  ObjRef
+                    { orMode = mode
+                    , orName = ObjName "__provisional_universe"
+                    }
+                  []
+            }
+  where
+    classifierUniverse =
+      case
+        [ cdUniverse decl
+        | decl <- M.elems (mtClassifiedBy (dModes doc))
+        , cdClassifier decl == mode
+        , not (isPendingUniverseObj (cdUniverse decl))
+        ]
+      of
+        (u:_) -> Just u
+        [] -> Nothing
+
+pendingClassUniverse :: ModeName -> RawPolyObjExpr -> Obj
+pendingClassUniverse classifier raw =
+  case raw of
+    RPTVar name ->
+      Obj
+        { objOwnerMode = classifier
+        , objCode =
+            CTCon
+              ObjRef
+                { orMode = classifier
+                , orName = ObjName name
+                }
+              []
+        }
+    RPTCon ref []
+      | qualifierOk ref ->
+          Obj
+            { objOwnerMode = classifier
+            , objCode =
+                CTCon
+                  ObjRef
+                    { orMode = classifier
+                    , orName = ObjName (rtrName ref)
+                    }
+                  []
+            }
+    _ ->
+      OVar
+        ObjVar
+          { ovName = "__pending_universe"
+          , ovMode = classifier
+          }
+  where
+    qualifierOk ref =
+      case rtrMode ref of
+        Nothing -> True
+        Just q -> ModeName q == classifier
+
+isPendingUniverseObj :: Obj -> Bool
+isPendingUniverseObj obj =
+  case objCode obj of
+    CTMeta v -> tmvName v == "__pending_universe"
+    _ -> False
+
 ensureAttrSort :: Doctrine -> AttrSort -> Either Text ()
 ensureAttrSort doc sortName =
   if M.member sortName (dAttrSorts doc)
@@ -1134,19 +1263,14 @@ resolveTyVarDecl doc defaultMode decl = do
 
 mkTypeMetaVar :: Doctrine -> ModeName -> Text -> Either Text TmVar
 mkTypeMetaVar doc ownerMode name = do
-  universe <-
-    case modeUniverseObj (dModes doc) ownerMode of
-      Nothing ->
-        Left
-          ( "type metavariable `"
-              <> name
-              <> "@"
-              <> renderMode ownerMode
-              <> "` requires `mode "
-              <> renderMode ownerMode
-              <> " classifiedBy ... via ...;` with a declared universe"
+  let universe =
+        fromMaybe
+          ( Obj
+              { objOwnerMode = ownerMode
+              , objCode = CTCon (ObjRef ownerMode (ObjName "_")) []
+              }
           )
-      Just u -> Right u
+          (modeUniverseObj (dModes doc) ownerMode)
   pure
     TmVar
       { tmvName = name
@@ -1155,8 +1279,6 @@ mkTypeMetaVar doc ownerMode name = do
       , tmvScope = 0
       , tmvOwnerMode = Just ownerMode
       }
-  where
-    renderMode (ModeName n) = n
 
 ownerModeForTypeMeta :: Doctrine -> TmVar -> Either Text ModeName
 ownerModeForTypeMeta doc v =
@@ -1189,31 +1311,33 @@ elabTmDeclVar doc defaultMode tyVars decl = do
       Left _ -> elabObjExprInferOwner doc tyVars [] M.empty (rtvdSort decl)
   pure TmVar { tmvName = rtvdName decl, tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
 
-elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text ([TmVar], [TmVar], [ParamSig])
-elabParamDecls doc defaultMode params = go [] [] [] params
+elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text ([TmVar], [TmVar], [GenParam])
+elabParamDecls doc defaultMode params = go 0 [] [] [] params
   where
-    go tyAcc tmAcc sigAcc [] = Right (reverse tyAcc, reverse tmAcc, reverse sigAcc)
-    go tyAcc tmAcc sigAcc (p:rest) =
+    go _ tyAcc tmAcc paramAcc [] = Right (reverse tyAcc, reverse tmAcc, reverse paramAcc)
+    go i tyAcc tmAcc paramAcc (p:rest) =
       case p of
         RPDType tvDecl -> do
           ownerMode <- resolveTyVarMode doc defaultMode tvDecl
-          tv <- mkTypeMetaVar doc ownerMode (rtvName tvDecl)
+          tv0 <- mkTypeMetaVar doc ownerMode (rtvName tvDecl)
+          let tv = tv0 { tmvScope = i }
           let name = ovName tv
           if name `elem` map ovName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
-            else go (tv:tyAcc) tmAcc (PS_Ty ownerMode : sigAcc) rest
+            else go (i + 1) (tv:tyAcc) tmAcc (GP_Ty tv : paramAcc) rest
         RPDTerm tmDecl -> do
           let name = rtvdName tmDecl
           if name `elem` map ovName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
             else do
-              tmVar <- elabTmDeclVar doc defaultMode tyAcc tmDecl
-              go tyAcc (tmVar:tmAcc) (PS_Tm (tmvSort tmVar) : sigAcc) rest
+              tmVar0 <- elabTmDeclVar doc defaultMode tyAcc tmDecl
+              let tmVar = tmVar0 { tmvScope = negate (i + 1) }
+              go (i + 1) tyAcc (tmVar:tmAcc) (GP_Tm tmVar : paramAcc) rest
 
 buildTypeTemplateParams
   :: Doctrine
   -> M.Map ModeName ModeName
-  -> [ParamSig]
+  -> [TypeParamSig]
   -> [RawParamDecl]
   -> Either Text ([TemplateParam], [TmVar], [TmVar])
 buildTypeTemplateParams tgt modeMap sigParams decls = do
@@ -1225,12 +1349,12 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
       Right (reverse tmplAcc, reverse tyAcc, reverse tmAcc)
     go tyAcc tmAcc tmplAcc ((sigParam, decl):rest) =
       case (sigParam, decl) of
-        (PS_Ty srcMode, RPDType tyDecl) -> do
+        (TPS_Ty srcMode, RPDType tyDecl) -> do
           expectedMode <- lookupMappedMode srcMode
           tyVar <- resolveTyVarDecl tgt expectedMode tyDecl
           ensureFreshName tyAcc tmAcc (ovName tyVar)
           go (tyVar:tyAcc) tmAcc (TPType tyVar:tmplAcc) rest
-        (PS_Tm srcSort, RPDTerm tmDecl) -> do
+        (TPS_Tm srcSort, RPDTerm tmDecl) -> do
           expectedMode <- lookupMappedMode (objOwnerMode srcSort)
           tmSort <- elabObjExpr tgt (reverse tyAcc) (reverse tmAcc) M.empty expectedMode (rtvdSort tmDecl)
           if objOwnerMode tmSort /= expectedMode
@@ -1239,9 +1363,9 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
           ensureFreshName tyAcc tmAcc (rtvdName tmDecl)
           let tmVar = TmVar { tmvName = rtvdName tmDecl, tmvSort = tmSort, tmvScope = 0, tmvOwnerMode = Nothing }
           go tyAcc (tmVar:tmAcc) (TPTm tmVar:tmplAcc) rest
-        (PS_Ty _, _) ->
+        (TPS_Ty _, _) ->
           Left "morphism: type mapping binder kind mismatch"
-        (PS_Tm _, _) ->
+        (TPS_Tm _, _) ->
           Left "morphism: type mapping binder kind mismatch"
 
     ensureFreshName tyAcc tmAcc name =
@@ -1292,8 +1416,8 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
                 { rtrMode = Nothing
                 , rtrName = name
                 }
-          sig <- lookupTypeSig doc ref
-          if null (tsParams sig)
+          params <- lookupCtorSigForOwner doc expectedOwnerMode ref
+          if null params
             then Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTCon ref [] }
             else Left "type constructor arity mismatch"
     RPTMod rawMe innerRaw -> do
@@ -1330,8 +1454,7 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
                   }
         Nothing -> do
           ref <- resolveTypeRefInClassifier doc expectedOwnerMode classifierMode rawRef
-          sig <- lookupTypeSig doc ref
-          let params = tsParams sig
+          params <- lookupCtorSigForOwner doc expectedOwnerMode ref
           if length params /= length args
             then Left "type constructor arity mismatch"
             else do
@@ -1340,12 +1463,12 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
   where
     classifierMode = modeClassifierMode (dModes doc) expectedOwnerMode
 
-    elabOneArg _ (PS_Ty m, rawArg) = do
+    elabOneArg _ (TPS_Ty m, rawArg) = do
       argTy <- elabObjExpr doc tyVars tmVars tmBound m rawArg
       if objOwnerMode argTy == m
         then Right (CAObj argTy)
         else Left "type constructor argument mode mismatch"
-    elabOneArg _ (PS_Tm sortTy, rawArg) = do
+    elabOneArg _ (TPS_Tm sortTy, rawArg) = do
       tmArg <- elabTmTerm doc tyVars tmVars tmBound (Just sortTy) rawArg
       Right (CATm tmArg)
 
@@ -1365,11 +1488,18 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr =
         _ -> Nothing
     hasModality tok = M.member (ModName tok) (mtDecls (dModes doc))
     hasQualifiedType modeTok tyTok =
-      let mode = ModeName modeTok
-          tyName = ObjName tyTok
-       in case M.lookup mode (dTypes doc) of
-            Nothing -> False
-            Just table -> M.member tyName table
+      case
+        resolveTypeRefInClassifierMaybe
+          doc
+          expectedOwnerMode
+          classifierMode
+          RawTypeRef
+            { rtrMode = Just modeTok
+            , rtrName = tyTok
+            }
+      of
+        Right (Just _) -> True
+        _ -> False
 
 elabObjExprInferOwner
   :: Doctrine
@@ -1471,6 +1601,7 @@ lookupTmFunByName doc expectedSort name arity = do
                 }
             | gd <- maybe [] M.elems (M.lookup mode (dGens doc))
             , gdName gd == GenName name
+            , not (isTypeDeclGenName doc mode (gdName gd))
             , null (gdTyVars gd)
             , null (gdTmVars gd)
             , null (gdAttrs gd)
@@ -1501,6 +1632,7 @@ lookupTmFunAny doc name arity =
         )
       | modeTable <- M.elems (dGens doc)
       , gd <- M.elems modeTable
+      , not (isTypeDeclGenName doc (gdMode gd) (gdName gd))
       , gdName gd == GenName name
       , null (gdTyVars gd)
       , null (gdTmVars gd)
@@ -1611,6 +1743,26 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
     rigidTy = S.fromList tyVars
     rigidTm = S.fromList tmVars
 
+    elabOneParamArg ttDoc curTmCtx tyFreshMap tmFreshMap (tyAcc, tmAcc) (paramKind, rawArg) =
+      case paramKind of
+        GP_Ty tyVar0 -> do
+          freshTyVar <-
+            case M.lookup tyVar0 tyFreshMap of
+              Nothing -> liftEither (Left "internal error: missing fresh type parameter")
+              Just v -> pure v
+          ownerMode <- liftEither (ownerModeForTypeMeta doc freshTyVar)
+          tyArg <- liftEither (elabObjExpr doc tyVars tmVars M.empty ownerMode rawArg)
+          if objOwnerMode tyArg == ownerMode
+            then pure ((freshTyVar, tyArg) : tyAcc, tmAcc)
+            else liftEither (Left "generator type argument mode mismatch")
+        GP_Tm tmVar0 -> do
+          freshTmVar <-
+            case M.lookup tmVar0 tmFreshMap of
+              Nothing -> liftEither (Left "internal error: missing fresh term parameter")
+              Just v -> pure v
+          tmArg <- elabTmArg ttDoc curTmCtx freshTmVar rawArg
+          pure (tyAcc, (freshTmVar, tmArg) : tmAcc)
+
     build ttDoc curTmCtx binderSigs e =
       case e of
         RDId ctx -> do
@@ -1633,29 +1785,23 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
             case mArgs of
               Nothing -> pure (dom0, cod0, binderSlots0)
               Just args -> do
-                let tyArity = length (gdTyVars gen)
-                let tmArity = length (gdTmVars gen)
-                if length args /= tyArity + tmArity
+                let paramOrder = gdParams gen
+                if length args /= length paramOrder
                   then liftEither (Left "generator type/term argument mismatch")
                   else do
-                    let (tyRawArgs, tmRawArgs) = splitAt tyArity args
                     freshTyVars <- liftEither (extractFreshTyVars (gdTyVars gen) tyRename)
-                    freshTyOwners <- mapM (liftEither . ownerModeForTypeMeta doc) freshTyVars
-                    tyArgs <-
-                      mapM
-                        ( \((_, ownerMode), rawTyArg) ->
-                            liftEither (elabObjExpr doc tyVars tmVars M.empty ownerMode rawTyArg)
-                        )
-                        (zip (zip freshTyVars freshTyOwners) tyRawArgs)
-                    case and (zipWith (\ownerMode t -> ownerMode == objOwnerMode t) freshTyOwners tyArgs) of
-                      False -> liftEither (Left "generator type argument mode mismatch")
-                      True -> pure ()
                     freshTmVars <- liftEither (extractFreshTmVars (gdTmVars gen) tmRename)
-                    tmArgs <- mapM (uncurry (elabTmArg ttDoc curTmCtx)) (zip freshTmVars tmRawArgs)
+                    let tyFreshMap = M.fromList (zip (gdTyVars gen) freshTyVars)
+                    let tmFreshMap = M.fromList (zip (gdTmVars gen) freshTmVars)
+                    (tyBinds, tmBinds) <-
+                      foldM
+                        (elabOneParamArg ttDoc curTmCtx tyFreshMap tmFreshMap)
+                        ([], [])
+                        (zip paramOrder args)
                     let argSubst =
                           U.mkSubst
-                            (M.fromList (zip freshTyVars tyArgs))
-                            (M.fromList (zip freshTmVars tmArgs))
+                            (M.fromList (reverse tyBinds))
+                            (M.fromList (reverse tmBinds))
                     dom1 <- applySubstCtxDoc ttDoc argSubst dom0
                     cod1 <- applySubstCtxDoc ttDoc argSubst cod0
                     binderSlots1 <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0

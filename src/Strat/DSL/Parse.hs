@@ -259,7 +259,6 @@ polyItem =
     <|> polyActionDecl
     <|> polyObligationDecl
     <|> polyAttrSortDecl
-    <|> (PolyAST.RPType <$> polyTypeDecl)
     <|> (PolyAST.RPData <$> polyDataDecl)
     <|> (PolyAST.RPGen <$> polyGenDecl)
     <|> (PolyAST.RPRule <$> polyRuleDecl)
@@ -417,20 +416,6 @@ polyAttrSortDecl = do
   pure (PolyAST.RPAttrSort (PolyAST.RawAttrSortDecl name mKind))
   where
     attrKind = symbol "int" <|> symbol "string" <|> symbol "bool"
-
-polyTypeDecl :: Parser PolyAST.RawPolyTypeDecl
-polyTypeDecl = do
-  _ <- symbol "type"
-  name <- ident
-  vars <- polyParamList
-  _ <- symbol "@"
-  mode <- ident
-  optionalSemi
-  pure PolyAST.RawPolyTypeDecl
-    { PolyAST.rptName = name
-    , PolyAST.rptVars = vars
-    , PolyAST.rptMode = mode
-    }
 
 polyDataDecl :: Parser PolyAST.RawPolyDataDecl
 polyDataDecl = do

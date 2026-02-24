@@ -346,8 +346,15 @@ encodeSSAArtifact doc ssa = do
   tt <- doctrineTypeTheory doc
   let mode = ssaMode ssa
       requireType0 tName = do
-        _ <- lookupTypeSig doc (ObjRef mode (ObjName tName))
-        pure (mkCon (ObjRef mode (ObjName tName)) [])
+        mRef <- lookupCtorRefForOwner doc mode (ObjName tName)
+        ref <-
+          case mRef of
+            Nothing -> Left ("pipeline: derived doctrine missing SSA constructor " <> tName)
+            Just out -> Right out
+        sig <- lookupCtorSigForOwner doc mode ref
+        if null sig
+          then pure (mkCon ref [])
+          else Left ("pipeline: SSA constructor " <> tName <> " must be nullary")
       requireGen gName =
         case M.lookup mode (dGens doc) >>= M.lookup (GenName gName) of
           Nothing -> Left ("pipeline: derived doctrine missing SSA generator " <> gName)

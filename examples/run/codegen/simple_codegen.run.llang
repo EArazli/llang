@@ -1,7 +1,7 @@
 doctrine IR where {
   mode M acyclic classifiedBy M via M.U_M;
-  type U_M @M;
-  type I @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen I : [] -> [M.U_M] @M;
   gen lit1 : [] -> [I] @M;
   gen lit2 : [] -> [I] @M;
   gen add : [I, I] -> [I] @M;

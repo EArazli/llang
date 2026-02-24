@@ -13,7 +13,6 @@ module Strat.Poly.DSL.AST
   , RawAttrSortDecl(..)
   , RawParamDecl(..)
   , RawTmVarDecl(..)
-  , RawPolyTypeDecl(..)
   , RawPolyCtorDecl(..)
   , RawPolyDataDecl(..)
   , RawPolyGenDecl(..)
@@ -48,7 +47,6 @@ data RawPolyItem
   | RPAction RawActionDecl
   | RPObligation RawObligationDecl
   | RPAttrSort RawAttrSortDecl
-  | RPType RawPolyTypeDecl
   | RPData RawPolyDataDecl
   | RPGen RawPolyGenDecl
   | RPRule RawPolyRuleDecl
@@ -128,12 +126,6 @@ data RawParamDecl
 data RawTmVarDecl = RawTmVarDecl
   { rtvdName :: Text
   , rtvdSort :: RawPolyObjExpr
-  } deriving (Eq, Show)
-
-data RawPolyTypeDecl = RawPolyTypeDecl
-  { rptName :: Text
-  , rptVars :: [RawParamDecl]
-  , rptMode :: Text
   } deriving (Eq, Show)
 
 data RawPolyCtorDecl = RawPolyCtorDecl

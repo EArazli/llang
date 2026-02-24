@@ -1,10 +1,10 @@
 doctrine ClassificationForwardRef where {
   mode Tm classifiedBy Ty via Ty.U;
   mode Ty classifiedBy Ty via Ty.U_Ty;
-  type U_Ty @Ty;
-  type U @Ty;
-  type Unit @Ty;
-  type Arr(a@Tm, b@Tm) @Ty;
+  gen U_Ty : [] -> [Ty.U_Ty] @Ty;
+  gen U : [] -> [Ty.U_Ty] @Ty;
+  gen Unit : [] -> [Ty.U] @Ty;
+  gen Arr(a@Tm, b@Tm) : [] -> [Ty.U] @Ty;
 
   gen idArr : [Arr(Unit, Unit)] -> [Arr(Unit, Unit)] @Tm;
 }

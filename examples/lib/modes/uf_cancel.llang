@@ -1,13 +1,13 @@
 doctrine UFCancel where {
   mode A classifiedBy A via A.U_A;
-  type U_A @A;
+  gen U_A : [] -> [A.U_A] @A;
   mode B classifiedBy B via B.U_B;
-  type U_B @B;
+  gen U_B : [] -> [B.U_B] @B;
   modality F : A -> B;
   modality U : B -> A;
   mod_eq U.F -> id@A;
 
-  type Base @A;
+  gen Base : [] -> [A.U_A] @A;
 
   gen foo : [U(F(A.Base))] -> [U(F(A.Base))] @A;
 

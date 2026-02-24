@@ -25,23 +25,23 @@ docDoctrine :: Doctrine
 docDoctrine =
   Doctrine
     { dName = "Doc"
-    , dModes = singleMode docMode
+    , dModes = singleSelfClassifiedMode docMode
     , dAcyclicModes = S.singleton docMode
     , dAttrSorts =
         M.fromList
           [ (strSort, AttrSortDecl strSort (Just LKString))
           , (intSort, AttrSortDecl intSort (Just LKInt))
           ]
-    , dTypes = M.singleton docMode (M.singleton (ObjName "Doc") (TypeSig []))
     , dGens = M.singleton docMode gens
     , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
+    , dActions = M.empty
+    , dObligations = []
     }
   where
     gens =
       M.fromList
-        [ (GenName "empty", simpleGen "empty" [] [docTy] [])
+        [ (GenName "Doc", ctorGen docMode "Doc")
+        , (GenName "empty", simpleGen "empty" [] [docTy] [])
         , (GenName "text", simpleGen "text" [] [docTy] [("s", strSort)])
         , (GenName "line", simpleGen "line" [] [docTy] [])
         , (GenName "cat", simpleGen "cat" [docTy, docTy] [docTy] [])
@@ -54,32 +54,26 @@ artifactDoctrine :: Doctrine
 artifactDoctrine =
   Doctrine
     { dName = "Artifact"
-    , dModes = singleMode artifactMode
+    , dModes = singleSelfClassifiedMode artifactMode
     , dAcyclicModes = S.singleton artifactMode
     , dAttrSorts =
         M.fromList
           [ (strSort, AttrSortDecl strSort (Just LKString))
           , (intSort, AttrSortDecl intSort (Just LKInt))
           ]
-    , dTypes =
-        M.singleton
-          artifactMode
-          ( M.fromList
-              [ (ObjName "Doc", TypeSig [])
-              , (ObjName "FileTree", TypeSig [])
-              ]
-          )
     , dGens = M.singleton artifactMode gens
     , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
+    , dActions = M.empty
+    , dObligations = []
     }
   where
     docTy = mkCon (ObjRef artifactMode (ObjName "Doc")) []
     ftTy = mkCon (ObjRef artifactMode (ObjName "FileTree")) []
     gens =
       M.fromList
-        [ (GenName "empty", simpleGen "empty" [] [docTy] [])
+        [ (GenName "Doc", ctorGen artifactMode "Doc")
+        , (GenName "FileTree", ctorGen artifactMode "FileTree")
+        , (GenName "empty", simpleGen "empty" [] [docTy] [])
         , (GenName "text", simpleGen "text" [] [docTy] [("s", strSort)])
         , (GenName "line", simpleGen "line" [] [docTy] [])
         , (GenName "cat", simpleGen "cat" [docTy, docTy] [docTy] [])
@@ -105,12 +99,42 @@ intSort :: AttrSort
 intSort = AttrSort "Int"
 
 
-singleMode :: ModeName -> ModeTheory
-singleMode mode =
-  case addMode mode emptyModeTheory of
-    Left err -> error ("prelude singleMode: " <> show err)
+selfClassifiedMode :: ModeName -> Either Text ModeTheory
+selfClassifiedMode mode = do
+  mt0 <- addMode mode emptyModeTheory
+  addClassification
+    mode
+    ClassificationDecl
+      { cdClassifier = mode
+      , cdUniverse = universeObj mode
+      , cdTag = Nothing
+      }
+    mt0
+
+singleSelfClassifiedMode :: ModeName -> ModeTheory
+singleSelfClassifiedMode mode =
+  case selfClassifiedMode mode of
+    Left err -> error ("prelude singleSelfClassifiedMode: " <> show err)
     Right mt -> mt
 
+universeName :: ModeName -> ObjName
+universeName (ModeName n) = ObjName ("U_" <> n)
+
+universeObj :: ModeName -> Obj
+universeObj mode = mkCon (ObjRef mode (universeName mode)) []
+
+ctorGen :: ModeName -> Text -> GenDecl
+ctorGen mode name =
+  GenDecl
+    { gdName = GenName name
+    , gdMode = mode
+    , gdTyVars = []
+    , gdTmVars = []
+    , gdParams = []
+    , gdDom = []
+    , gdCod = [universeObj mode]
+    , gdAttrs = []
+    }
 
 simpleGen :: Text -> Context -> Context -> [(AttrName, AttrSort)] -> GenDecl
 simpleGen name dom cod attrs =
@@ -119,6 +143,7 @@ simpleGen name dom cod attrs =
     , gdMode = modeFromCtx cod
     , gdTyVars = []
     , gdTmVars = []
+    , gdParams = []
     , gdDom = map InPort dom
     , gdCod = cod
     , gdAttrs = attrs

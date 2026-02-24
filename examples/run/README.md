@@ -17,3 +17,5 @@ If you have the `llang` executable on your PATH, you can also run:
 Notes:
 - Pipelines are explicit (`pipeline ...`) and runs bind a pipeline via
   `run ... using ... where { source ... }`.
+- Some files define multiple `run` blocks. For those, pass `--run <name>`:
+  `stack run -- <path-to-run-file> --run <name>`.

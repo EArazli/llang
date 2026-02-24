@@ -21,6 +21,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.List as L
 import qualified Data.Set as S
 import Control.Monad (foldM)
 import Data.Functor.Identity (runIdentity)
@@ -33,11 +34,11 @@ import Strat.Poly.Diagram
 import Strat.Poly.Names
 import Strat.Poly.Obj
 import Strat.Poly.UnifyObj hiding (applySubstDiagram)
-import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..))
 import Strat.Poly.DefEq (normalizeObjDeep)
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
-import Strat.Poly.ObjClassifier (modeUniverseObj)
+import Strat.Poly.ObjClassifier (modeUniverseObj, modeClassifierMode)
 import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Proof
   ( JoinProof
@@ -683,11 +684,7 @@ validateTypeMap mor = do
   mapM_ (checkEntry ttTgt) (M.toList (morTypeMap mor))
   where
     checkEntry ttTgt (srcRef, tmpl) = do
-      srcSig <-
-        case lookupTypeSig (morSrc mor) srcRef of
-          Left _ -> Left "checkMorphism: unknown source type in type map"
-          Right sig -> Right sig
-      let srcParams = tsParams srcSig
+      srcParams <- lookupCtorSigByRef (morSrc mor) srcRef
       let tmplParams = ttParams tmpl
       if length tmplParams /= length srcParams
         then Left "checkMorphism: type template arity mismatch"
@@ -711,7 +708,7 @@ validateTypeMap mor = do
 
     checkParam ttTgt srcParam tmplParam =
       case (srcParam, tmplParam) of
-        (PS_Ty srcMode, TPType v) -> do
+        (TPS_Ty srcMode, TPType v) -> do
           expectedMode <- mapMode mor srcMode
           expectedUniverse <-
             case modeUniverseObj (dModes (morTgt mor)) expectedMode of
@@ -725,7 +722,7 @@ validateTypeMap mor = do
           if sortOk
             then Right ()
             else Left "checkMorphism: type template type-parameter universe mismatch"
-        (PS_Tm srcSort, TPTm tmParam) -> do
+        (TPS_Tm srcSort, TPTm tmParam) -> do
           expectedMode <- mapMode mor (objMode srcSort)
           if objMode (tmvSort tmParam) == expectedMode
             then do
@@ -735,9 +732,9 @@ validateTypeMap mor = do
                 then Right ()
                 else Left "checkMorphism: type template term-parameter sort mismatch"
             else Left "checkMorphism: type template term-parameter mode mismatch"
-        (PS_Ty _, _) ->
+        (TPS_Ty _, _) ->
           Left "checkMorphism: type template kind mismatch"
-        (PS_Tm _, _) ->
+        (TPS_Tm _, _) ->
           Left "checkMorphism: type template kind mismatch"
       where
         renderMode (ModeName n) = n
@@ -1032,7 +1029,7 @@ cellKey cell = (dMode (c2LHS cell), c2Name cell)
 buildTypeRenaming :: Morphism -> Maybe (M.Map ObjRef ObjRef)
 buildTypeRenaming mor = do
   let src = morSrc mor
-  mp <- foldl step (Just M.empty) (allTypes src)
+  mp <- foldl step (Just M.empty) (allCtors src)
   if injective (M.elems mp)
     then Just mp
     else Nothing
@@ -1043,13 +1040,13 @@ buildTypeRenaming mor = do
       let mapped =
             case M.lookup ref (morTypeMap mor) of
               Nothing -> Just ref
-              Just tmpl -> renamingTarget tmpl (length (tsParams sig))
+              Just tmpl -> renamingTarget tmpl (length sig)
       case mapped of
         Nothing -> Nothing
         Just tgtRef ->
-          case lookupTypeSig tgt tgtRef of
+          case lookupCtorSigByRef tgt tgtRef of
             Right sigTgt
-              | length (tsParams sigTgt) == length (tsParams sig) ->
+              | length sigTgt == length sig ->
                   Just (M.insert ref tgtRef mp)
             _ -> Nothing
 
@@ -1218,14 +1215,47 @@ allM f (x:xs) = do
 
 allGens :: Doctrine -> [GenDecl]
 allGens doc =
-  concatMap M.elems (M.elems (dGens doc))
-
-allTypes :: Doctrine -> [(ObjRef, TypeSig)]
-allTypes doc =
-  [ (ObjRef mode name, sig)
-  | (mode, table) <- M.toList (dTypes doc)
-  , (name, sig) <- M.toList table
+  [ gd
+  | (mode, table) <- M.toList (dGens doc)
+  , gd <- M.elems table
+  , not (isTypeDeclGenName doc mode (gdName gd))
   ]
+
+allCtors :: Doctrine -> [(ObjRef, [TypeParamSig])]
+allCtors doc =
+  case deriveCtorTables doc of
+    Left _ -> []
+    Right tables ->
+      M.toList
+        ( foldl insertOwner M.empty (M.toList tables)
+        )
+  where
+    insertOwner acc (ownerMode, table) =
+      let classifierMode = modeClassifierMode (dModes doc) ownerMode
+       in foldl (insertCtor classifierMode) acc (M.toList table)
+
+    insertCtor classifierMode acc (ctorName, sig) =
+      let ref = ObjRef classifierMode ctorName
+       in M.insertWith prefer ref sig acc
+
+    prefer new old =
+      if new == old
+        then old
+        else old
+
+lookupCtorSigByRef :: Doctrine -> ObjRef -> Either Text [TypeParamSig]
+lookupCtorSigByRef doc ref = do
+  tables <- deriveCtorTables doc
+  let sigs =
+        [ sig
+        | (ownerMode, table) <- M.toList tables
+        , modeClassifierMode (dModes doc) ownerMode == orMode ref
+        , Just sig <- [M.lookup (orName ref) table]
+        ]
+  case L.nub sigs of
+    [] -> Left "checkMorphism: unknown source type in type map"
+    [sig] -> Right sig
+    _ -> Left "checkMorphism: ambiguous constructor signature across owner modes"
 
 lookupGenInMode :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupGenInMode doc mode name =

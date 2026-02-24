@@ -18,7 +18,7 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.ModeTheory (ModeName(..), ClassificationDecl(..), ModeTheory(..))
 import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), pattern ObjVar, CodeArg(..), CodeTerm(..), mkCon)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), InputShape(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..))
 import Strat.Poly.Surface.Parse (parseSurfaceSpec)
 import Strat.Poly.Surface (PolySurfaceDef, elabPolySurfaceDecl)
@@ -116,16 +116,19 @@ mkDoctrine hasDup hasDrop =
           , gdMode = modeM
           , gdTyVars = tyVars
           , gdTmVars = []
+          , gdParams = []
           , gdDom = map InPort dom
           , gdCod = cod
           , gdAttrs = []
           }
       genDup = mkGen "dup" [aVar] [OVar aVar] [OVar aVar, OVar aVar]
       genDrop = mkGen "drop" [aVar] [OVar aVar] []
+      genA = mkGen "A" [] [] [universe]
       genF = mkGen "f" [] [typeA, typeA] [typeA]
       genUnit = mkGen "unit" [] [] [typeA]
       gens =
-        [ (GenName "f", genF)
+        [ (GenName "A", genA)
+        , (GenName "f", genF)
         , (GenName "unit", genUnit)
         ]
           <> [ (GenName "dup", genDup) | hasDup ]
@@ -134,11 +137,10 @@ mkDoctrine hasDup hasDrop =
         { dName = "TestDoc"
         , dModes = classifiedModes
         , dAcyclicModes = S.empty
-        , dTypes = M.fromList [(modeM, M.fromList [(ObjName "U_M", TypeSig []), (ObjName "A", TypeSig [])])]
         , dGens = M.fromList [(modeM, M.fromList gens)]
         , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
+        , dActions = M.empty
+        , dObligations = []
         , dAttrSorts = M.empty
         }
 
@@ -169,6 +171,7 @@ mkStructEnv target = do
           , gdMode = modeM
           , gdTyVars = [aVar]
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort (OVar aVar)]
           , gdCod = cod
           , gdAttrs = []
@@ -178,7 +181,6 @@ mkStructEnv target = do
           { dName = "StructCartesian"
           , dModes = classifiedModes
           , dAcyclicModes = S.empty
-          , dTypes = M.fromList [(modeM, M.singleton (ObjName "U_M") (TypeSig []))]
           , dGens =
               M.fromList
                 [ ( modeM
@@ -304,14 +306,14 @@ testSurfaceStructImplements = do
         T.unlines
           [ "doctrine StructCartesian where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen dup (a@M) : [a] -> [a, a] @M;"
           , "  gen drop (a@M) : [a] -> [] @M;"
           , "}"
           , "doctrine Target where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type A @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen A : [] -> [M.U_M] @M;"
           , "  gen copy (a@M) : [a] -> [a, a] @M;"
           , "  gen kill (a@M) : [a] -> [] @M;"
           , "  gen f : [A, A] -> [A] @M;"
@@ -374,14 +376,14 @@ testSurfaceStructMissing = do
         T.unlines
           [ "doctrine StructCartesian where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
           , "  gen dup (a@M) : [a] -> [a, a] @M;"
           , "  gen drop (a@M) : [a] -> [] @M;"
           , "}"
           , "doctrine Target where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type A @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen A : [] -> [M.U_M] @M;"
           , "  gen copy (a@M) : [a] -> [a, a] @M;"
           , "  gen kill (a@M) : [a] -> [] @M;"
           , "  gen f : [A, A] -> [A] @M;"
@@ -451,13 +453,13 @@ testSurfaceModeEqComp = do
         T.unlines
           [ "doctrine SurfModes where {"
           , "  mode A classifiedBy A via A.U_A;"
-          , "  type U_A @A;"
+          , "  gen U_A : [] -> [A.U_A] @A;"
           , "  mode B classifiedBy B via B.U_B;"
-          , "  type U_B @B;"
+          , "  gen U_B : [] -> [B.U_B] @B;"
           , "  modality F : A -> B;"
           , "  modality U : B -> A;"
           , "  mod_eq U.F -> id@A;"
-          , "  type Base @A;"
+          , "  gen Base : [] -> [A.U_A] @A;"
           , "  gen lift : [] -> [U(F(A.Base))] @A;"
           , "}"
           , "surface Seq where {"
@@ -498,11 +500,11 @@ testSurfaceClassifiedTypeResolution = do
         T.unlines
           [ "doctrine SurfClassified where {"
           , "  mode Ty classifiedBy Ty via Ty.U_Ty;"
-          , "  type U_Ty @Ty;"
+          , "  gen U_Ty : [] -> [Ty.U_Ty] @Ty;"
           , "  mode Tm classifiedBy Ty via Ty.U;"
-          , "  type U @Ty;"
-          , "  type Unit @Ty;"
-          , "  type Arr(a@Tm, b@Tm) @Ty;"
+          , "  gen U : [] -> [Ty.U_Ty] @Ty;"
+          , "  gen Unit : [] -> [Ty.U] @Ty;"
+          , "  gen Arr(a@Tm, b@Tm) : [] -> [Ty.U] @Ty;"
           , "}"
           , "surface Surf where {"
           , "  doctrine SurfClassified;"
@@ -596,11 +598,11 @@ testSurfaceConstructorArgOwnerModes = do
         T.unlines
           [ "doctrine SurfCrossMode where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
           , "  mode N classifiedBy N via N.U_N;"
-          , "  type U_N @N;"
-          , "  type B @N;"
-          , "  type WrapN(x@N) @M;"
+          , "  gen U_N : [] -> [N.U_N] @N;"
+          , "  gen B : [] -> [N.U_N] @N;"
+          , "  gen WrapN(x@N) : [] -> [M.U_M] @M;"
           , "}"
           , "surface Surf where {"
           , "  doctrine SurfCrossMode;"
@@ -683,8 +685,8 @@ testSurfaceEliminatesToBaseDoctrine = do
         T.unlines
           [ "doctrine D where {"
           , "  mode M classifiedBy M via M.U_M;"
-          , "  type U_M @M;"
-          , "  type A @M;"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen A : [] -> [M.U_M] @M;"
           , "  gen f : [] -> [A] @M;"
           , "}"
           , "doctrine S extends D where {"

@@ -1,11 +1,11 @@
 doctrine HasDup where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
+  gen U_M : [] -> [M.U_M] @M;
   gen dup(a@M) : [a] -> [a, a] @M;
 }
 
 doctrine HasDrop where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
+  gen U_M : [] -> [M.U_M] @M;
   gen drop(a@M) : [a] -> [] @M;
 }

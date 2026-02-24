@@ -1,7 +1,7 @@
 import "../../../stdlib/struct.cartesian.llang";
 
 doctrine CartMonoid extends StructCartesian where {
-  type A @M;
+  gen A : [] -> [U_M] @M;
 
   gen unit : [] -> [A] @M;
   gen mul : [A, A] -> [A] @M;

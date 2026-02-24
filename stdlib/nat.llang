@@ -1,7 +1,7 @@
 import "./struct.cartesian.llang";
 
 doctrine Nat extends StructCartesian where {
-  type Nat @M;
+  gen Nat : [] -> [U_M] @M;
 
   gen Z : [] -> [Nat] @M;
   gen S : [Nat] -> [Nat] @M;

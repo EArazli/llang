@@ -1,11 +1,11 @@
 doctrine ClassificationWrongClassifier where {
   mode Ty classifiedBy Ty via Ty.U_Ty;
-  type U_Ty @Ty;
+  gen U_Ty : [] -> [Ty.U_Ty] @Ty;
   mode Tm classifiedBy Ty via Ty.U;
 
-  type U @Ty;
-  type Unit @Ty;
-  type Arr(a@Tm, b@Tm) @Ty;
+  gen U : [] -> [Ty.U_Ty] @Ty;
+  gen Unit : [] -> [Ty.U] @Ty;
+  gen Arr(a@Tm, b@Tm) : [] -> [Ty.U] @Ty;
 
   gen bad : [Tm.Arr(Unit, Unit)] -> [Tm.Arr(Unit, Unit)] @Tm;
 }

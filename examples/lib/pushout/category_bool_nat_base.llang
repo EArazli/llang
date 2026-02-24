@@ -1,7 +1,7 @@
 doctrine Category where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type Obj @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen Obj : [] -> [M.U_M] @M;
   gen a : [] -> [Obj] @M;
   gen f : [Obj] -> [Obj] @M;
 }

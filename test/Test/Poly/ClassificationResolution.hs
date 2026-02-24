@@ -11,11 +11,9 @@ import Strat.Frontend.Env (ModuleEnv, meDoctrines)
 import Strat.Poly.Doctrine
   ( Doctrine(..)
   , GenDecl(..)
-  , ParamSig(..)
-  , TypeSig(..)
   , doctrineTypeTheory
   , gdPlainDom
-  , lookupTypeSig
+  , lookupCtorSigForOwner
   )
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
@@ -29,6 +27,7 @@ import Strat.Poly.Obj
   )
 import Strat.Poly.DefEq (diagramToTermExprChecked, normalizeObjDeepWithCtx)
 import Strat.Poly.TermExpr (TermExpr(..))
+import Strat.Poly.TypeTheory (TypeParamSig(..))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit
 
@@ -47,11 +46,11 @@ testClassifierResolution :: Assertion
 testClassifierResolution = do
   let src = T.unlines
         [ "doctrine ClassifyResolve where {"
-        , "  mode Ty;"
+        , "  mode Ty classifiedBy Ty via Ty.U;"
         , "  mode Tm classifiedBy Ty via Ty.U;"
-        , "  type U @Ty;"
-        , "  type Unit @Ty;"
-        , "  type Arr(a@Tm, b@Tm) @Ty;"
+        , "  gen U : [] -> [Ty.U] @Ty;"
+        , "  gen Unit : [] -> [Ty.U] @Ty;"
+        , "  gen Arr(a@Tm, b@Tm) : [] -> [Ty.U] @Ty;"
         , "  gen idArr : [Arr(Unit, Unit)] -> [Arr(Unit, Unit)] @Tm;"
         , "}"
         ]
@@ -84,11 +83,11 @@ testWrongClassifierQualifier :: Assertion
 testWrongClassifierQualifier = do
   let src = T.unlines
         [ "doctrine WrongQualifier where {"
-        , "  mode Ty;"
+        , "  mode Ty classifiedBy Ty via Ty.U;"
         , "  mode Tm classifiedBy Ty via Ty.U;"
-        , "  type U @Ty;"
-        , "  type Unit @Ty;"
-        , "  type Arr(a@Tm, b@Tm) @Ty;"
+        , "  gen U : [] -> [Ty.U] @Ty;"
+        , "  gen Unit : [] -> [Ty.U] @Ty;"
+        , "  gen Arr(a@Tm, b@Tm) : [] -> [Ty.U] @Ty;"
         , "  gen bad : [Tm.Arr(Unit, Unit)] -> [Tm.Arr(Unit, Unit)] @Tm;"
         , "}"
         ]
@@ -104,14 +103,14 @@ testTermArgNormalization :: Assertion
 testTermArgNormalization = do
   let src = T.unlines
         [ "doctrine ClassifyNormalize where {"
-        , "  mode Ty;"
+        , "  mode Ty classifiedBy Ty via Ty.U;"
         , "  mode Tm classifiedBy Ty via Ty.U;"
-        , "  type U @Ty;"
-        , "  type Nat @Ty;"
-        , "  type Unit @Ty;"
+        , "  gen U : [] -> [Ty.U] @Ty;"
+        , "  gen Nat : [] -> [Ty.U] @Ty;"
+        , "  gen Unit : [] -> [Ty.U] @Ty;"
         , "  gen Z : [] -> [Nat] @Ty;"
         , "  gen S : [Nat] -> [Nat] @Ty;"
-        , "  type Vec(n : Nat, a@Tm) @Ty;"
+        , "  gen Vec(n : Nat, a@Tm) : [] -> [Ty.U] @Ty;"
         , "  gen mk : [] -> [Vec(S(Z), Unit)] @Tm;"
         , "}"
         ]
@@ -141,9 +140,9 @@ testTermArgNormalization = do
       assertFailure "expected Vec(term, obj) code shape"
   where
     lookupNatSort doc vecRef = do
-      sig <- requireEither (lookupTypeSig doc vecRef)
-      case tsParams sig of
-        (PS_Tm natSort : _) -> pure natSort
+      params <- requireEither (lookupCtorSigForOwner doc (ModeName "Tm") vecRef)
+      case params of
+        (TPS_Tm natSort : _) -> pure natSort
         _ -> assertFailure "expected Vec to have first term parameter" >> fail "unreachable"
 
 

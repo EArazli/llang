@@ -11,8 +11,10 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.List as L
 import qualified Data.Set as S
 import Data.Map.Strict (Map)
+import Data.Ord (comparing)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
 import Strat.Frontend.Env
@@ -51,13 +53,13 @@ import Strat.Poly.Doctrine
   ( Doctrine(..)
   , BinderSig(..)
   , GenDecl(..)
+  , GenParam(..)
   , InputShape(..)
   , ObligationDecl(..)
-  , ParamSig(..)
-  , TypeSig(..)
+  , deriveCtorTables
   , doctrineTypeTheory
   , gdPlainDom
-  , lookupTypeSig
+  , isTypeDeclGenName
   , validateDoctrine
   )
 import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
@@ -88,9 +90,10 @@ import Strat.Poly.Pushout
 import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 import Strat.Poly.Proof (SearchBudget, defaultSearchBudget, renderSearchLimit)
+import Strat.Poly.TypeTheory (TypeParamSig(..))
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.DefEq (termExprToDiagramChecked)
-import Strat.Poly.ObjClassifier (modeUniverseObj)
+import Strat.Poly.ObjClassifier (modeUniverseObj, modeClassifierMode)
 
 
 elabRawFile :: RawFile -> Either Text ModuleEnv
@@ -337,6 +340,39 @@ lookupFunctor env name =
     Nothing -> Left ("Unknown doctrine_functor: " <> name)
     Just def -> Right def
 
+allTypeDeclsForDoc :: Doctrine -> [(ObjRef, [TypeParamSig])]
+allTypeDeclsForDoc doc =
+  case deriveCtorTables doc of
+    Left _ -> []
+    Right tables ->
+      M.toList (foldl insertOwner M.empty (M.toList tables))
+  where
+    insertOwner acc (ownerMode, table) =
+      let classifierMode = modeClassifierMode (dModes doc) ownerMode
+      in foldl (insertCtor classifierMode) acc (M.toList table)
+
+    insertCtor classifierMode acc (ctorName, sig) =
+      let ref = ObjRef classifierMode ctorName
+      in M.insertWith keepExisting ref sig acc
+
+    keepExisting new old
+      | new == old = old
+      | otherwise = old
+
+lookupCtorSigByRef :: Doctrine -> ObjRef -> Either Text [TypeParamSig]
+lookupCtorSigByRef doc ref = do
+  tables <- deriveCtorTables doc
+  let sigs =
+        [ sig
+        | (ownerMode, table) <- M.toList tables
+        , modeClassifierMode (dModes doc) ownerMode == orMode ref
+        , Just sig <- [M.lookup (orName ref) table]
+        ]
+  case L.nub sigs of
+    [] -> Left "apply: type constructor missing"
+    [sig] -> Right sig
+    _ -> Left "apply: ambiguous constructor signature across owner modes"
+
 resolveApplyMorphisms
   :: ModuleEnv
   -> DoctrineFunctorDef
@@ -488,7 +524,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
 
     completeTypeMap mor = do
       tt <- doctrineTypeTheory (PolyMorph.morTgt mor)
-      foldM (addType tt) M.empty (allTypeDecls (PolyMorph.morSrc mor))
+      foldM (addType tt) M.empty (allTypeDeclsForDoc (PolyMorph.morSrc mor))
       where
         explicit = PolyMorph.morTypeMap mor
         addType tt mp (srcRef, sig) =
@@ -501,13 +537,13 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     identityTemplate tt mor srcRef sig = do
       tgtMode <- PolyMorph.applyMorphismMode mor (orMode srcRef)
       let tgtRef = srcRef { orMode = tgtMode }
-      params <- mapM (mkParam mor) (zip [0 :: Int ..] (tsParams sig))
-      args <- mapM (paramArg tt) (zip (tsParams sig) params)
+      params <- mapM (mkParam mor) (zip [0 :: Int ..] sig)
+      args <- mapM (paramArg tt) (zip sig params)
       pure (PolyMorph.TypeTemplate params (mkCon tgtRef args))
 
     mkParam mor (i, param) =
       case param of
-        PS_Ty srcMode -> do
+        TPS_Ty srcMode -> do
           tgtMode <- PolyMorph.applyMorphismMode mor srcMode
           case modeUniverseObj (dModes (PolyMorph.morTgt mor)) tgtMode of
             Just universe -> do
@@ -529,7 +565,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
                     <> renderMode tgtMode
                     <> " classifiedBy ... via ...;` with a declared universe"
                 )
-        PS_Tm srcSort -> do
+        TPS_Tm srcSort -> do
           tgtSort <- PolyMorph.applyMorphismTy mor srcSort
           Right (PolyMorph.TPTm TmVar { tmvName = "t" <> T.pack (show i), tmvSort = tgtSort, tmvScope = 0, tmvOwnerMode = Nothing })
       where
@@ -537,26 +573,20 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
 
     paramArg tt (srcParam, param) =
       case (srcParam, param) of
-        (PS_Ty _, PolyMorph.TPType v) ->
+        (TPS_Ty _, PolyMorph.TPType v) ->
           Right (OAObj Obj { objOwnerMode = maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v), objCode = CTMeta v })
-        (PS_Tm _, PolyMorph.TPType _) ->
+        (TPS_Tm _, PolyMorph.TPType _) ->
           Left "apply: internal kind mismatch for type template argument"
         (_, PolyMorph.TPTm v) -> do
           tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMVar v)
           Right (OATm tm)
-
-    allTypeDecls doc =
-      [ (ObjRef mode typeName, sig)
-      | (mode, table) <- M.toList (dTypes doc)
-      , (typeName, sig) <- M.toList table
-      ]
 
     validateApplyCoverage paramName mor = do
       let srcDoc = PolyMorph.morSrc mor
       let tgtDoc = PolyMorph.morTgt mor
       let typeIssues =
             [ (srcRef, issue)
-            | (srcRef, srcSig) <- allTypeDecls srcDoc
+            | (srcRef, srcSig) <- allTypeDeclsForDoc srcDoc
             , Just issue <- [typeMappingIssue srcRef srcSig tgtDoc mor]
             ]
       let missingTypes = [ srcRef | (srcRef, isMissing) <- typeIssues, isMissing ]
@@ -590,10 +620,10 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
             Left _ -> Just True
             Right tgtMode ->
               let tgtRef = srcRef { orMode = tgtMode }
-              in case lookupTypeSig tgtDoc tgtRef of
+              in case lookupCtorSigByRef tgtDoc tgtRef of
                   Left _ -> Just True
                   Right tgtSig ->
-                    if length (tsParams srcSig) == length (tsParams tgtSig)
+                    if length srcSig == length tgtSig
                       then Nothing
                       else Just False
 
@@ -606,6 +636,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
       [ (mode, gdName genDecl)
       | (mode, table) <- M.toList (dGens doc)
       , genDecl <- M.elems table
+      , not (isTypeDeclGenName doc mode (gdName genDecl))
       ]
 
     renderMissing label vals =
@@ -668,7 +699,6 @@ validateFunctorSchema schema = do
 namespaceDoctrineWithParam :: Text -> Doctrine -> Either Text Doctrine
 namespaceDoctrineWithParam param doc = do
   modeTheory' <- renameModeTheory modeRenMap modRenMap typeRenMap (dModes doc)
-  types' <- renameTypeTables (dTypes doc)
   gens' <- renameGenTables (dGens doc)
   let attrSorts' =
         M.fromList
@@ -686,7 +716,6 @@ namespaceDoctrineWithParam param doc = do
       , dModes = modeTheory'
       , dAcyclicModes = acyclic'
       , dAttrSorts = attrSorts'
-      , dTypes = renameOuterModeMap modeRenMap types'
       , dGens = gens'
       }
   where
@@ -696,9 +725,8 @@ namespaceDoctrineWithParam param doc = do
     sortRenMap = M.fromList [ (s, renameSort s) | s <- M.keys (dAttrSorts doc) ]
     typeRenMap =
       M.fromList
-        [ (ObjRef mode tname, renameTypeRef (ObjRef mode tname))
-        | (mode, table) <- M.toList (dTypes doc)
-        , tname <- M.keys table
+        [ (ref, renameTypeRef ref)
+        | (ref, _) <- allTypeDeclsForDoc doc
         ]
     genRenMap =
       M.fromList
@@ -706,8 +734,6 @@ namespaceDoctrineWithParam param doc = do
         | (mode, table) <- M.toList (dGens doc)
         , gd <- M.elems table
         ]
-    renameOuterModeMap ren mp =
-      M.fromList [ (M.findWithDefault mode mode ren, table) | (mode, table) <- M.toList mp ]
     renameMode (ModeName t) = ModeName (prefix t)
     renameMod (ModName t) = ModName (prefix t)
     renameSort (AttrSort t) = AttrSort (prefix t)
@@ -718,21 +744,6 @@ namespaceDoctrineWithParam param doc = do
         , orName = renameTypeName (orName ref)
         }
     renameGenName (GenName t) = GenName (prefix t)
-
-    renameTypeTables tables =
-      foldM addType M.empty
-        [ (mode, tname, sig)
-        | (mode, table) <- M.toList tables
-        , (tname, sig) <- M.toList table
-        ]
-      where
-        addType acc (mode, tname, sig) = do
-          sig' <- renameTypeSig modeRenMap modRenMap typeRenMap sig
-          let mode' = M.findWithDefault mode mode modeRenMap
-          let tname' = renameTypeName tname
-          let table0 = M.findWithDefault M.empty mode' acc
-          let table' = M.insert tname' sig' table0
-          Right (M.insert mode' table' acc)
 
     renameGenTables tables =
       foldM addGen M.empty
@@ -771,7 +782,6 @@ mergeIface left right = do
   transforms <- unionByEq "mod_transform" (mtTransforms (dModes left)) (mtTransforms (dModes right))
   classified <- unionByEq "classifiedBy" (mtClassifiedBy (dModes left)) (mtClassifiedBy (dModes right))
   attrSorts <- unionByEq "attrsort" (dAttrSorts left) (dAttrSorts right)
-  types <- mergeModeTables "type" (dTypes left) (dTypes right)
   gens <- mergeModeTables "generator" (dGens left) (dGens right)
   cells <- mergeCellsWithAlphaRename (dCells2 left) (dCells2 right)
   actions <- unionByEq "action" (dActions left) (dActions right)
@@ -788,7 +798,6 @@ mergeIface left right = do
             }
       , dAcyclicModes = S.union (dAcyclicModes left) (dAcyclicModes right)
       , dAttrSorts = attrSorts
-      , dTypes = types
       , dGens = gens
       , dCells2 = cells
       , dActions = actions
@@ -937,20 +946,6 @@ renameModeTheory modeRen modRen typeRen mt = do
           | existing == decl' -> Right acc
           | otherwise -> Left "namespace: classifiedBy collision after renaming"
 
-renameTypeSig
-  :: Map ModeName ModeName
-  -> Map ModName ModName
-  -> Map ObjRef ObjRef
-  -> TypeSig
-  -> Either Text TypeSig
-renameTypeSig modeRen modRen typeRen sig =
-  TypeSig <$> mapM renParam (tsParams sig)
-  where
-    renParam p =
-      case p of
-        PS_Ty mode -> Right (PS_Ty (M.findWithDefault mode mode modeRen))
-        PS_Tm ty -> PS_Tm <$> renameObjExpr modeRen modRen typeRen ty
-
 renameGenDecl
   :: Map ModeName ModeName
   -> Map ModName ModName
@@ -963,6 +958,7 @@ renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
   let mode0 = gdMode gen
   tyVars' <- mapM renTyVar (gdTyVars gen)
   tmVars' <- mapM renTmVar (gdTmVars gen)
+  params' <- rebuildParams (gdParams gen) tyVars' tmVars'
   dom' <- mapM renInput (gdDom gen)
   cod' <- mapM (renameObjExpr modeRen modRen typeRen) (gdCod gen)
   let attrs' = [ (field, M.findWithDefault sortName sortName sortRen) | (field, sortName) <- gdAttrs gen ]
@@ -973,17 +969,51 @@ renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
       , gdMode = M.findWithDefault mode0 mode0 modeRen
       , gdTyVars = tyVars'
       , gdTmVars = tmVars'
+      , gdParams = params'
       , gdDom = dom'
       , gdCod = cod'
       , gdAttrs = attrs'
       }
   where
+    rebuildParams [] tyVars tmVars = Right (orderedParams tyVars tmVars)
+    rebuildParams params tyVars tmVars = mapM rebuildOne params
+      where
+        rebuildOne gp =
+          case gp of
+            GP_Ty v ->
+              GP_Ty <$> findVar "type" v tyVars
+            GP_Tm v ->
+              GP_Tm <$> findVar "term" v tmVars
+
+    findVar label needle hay =
+      case [ v | v <- hay, sameVarId v needle ] of
+        [v] -> Right v
+        _ -> Left ("namespace: failed to rebuild " <> label <> " parameter metadata")
+
+    sameVarId a b = tmvName a == tmvName b && tmvScope a == tmvScope b
+
+    orderedParams tyVars tmVars =
+      map snd (L.sortBy (comparing fst) tagged)
+      where
+        tagged =
+          [ ((tyPos v, 0 :: Int, i), GP_Ty v)
+          | (i, v) <- zip [0 :: Int ..] tyVars
+          ]
+            <> [ ((tmPos v, 1 :: Int, i), GP_Tm v)
+               | (i, v) <- zip [0 :: Int ..] tmVars
+               ]
+        tyPos v =
+          if tmvScope v >= 0 then tmvScope v else 0
+        tmPos v =
+          if tmvScope v < 0 then negate (tmvScope v) - 1 else tmvScope v
+
     renTyVar tv = do
       sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tv)
-      Right tv { tmvSort = sort' }
+      Right tv { tmvSort = sort', tmvOwnerMode = renVarOwner (tmvOwnerMode tv) }
     renTmVar tm = do
       sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tm)
-      Right tm { tmvSort = sort' }
+      Right tm { tmvSort = sort', tmvOwnerMode = renVarOwner (tmvOwnerMode tm) }
+    renVarOwner owner = fmap (\m -> M.findWithDefault m m modeRen) owner
     renInput shape =
       case shape of
         InPort ty -> InPort <$> renameObjExpr modeRen modRen typeRen ty
@@ -1010,7 +1040,7 @@ renameObjExpr modeRen modRen typeRen ty = do
       case code of
         CTMeta tv -> do
           sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tv)
-          Right (CTMeta tv { tmvSort = sort' })
+          Right (CTMeta tv { tmvSort = sort', tmvOwnerMode = fmap renMode (tmvOwnerMode tv) })
         CTMod me inner -> do
           inner' <- renCode inner
           Right
@@ -1056,7 +1086,8 @@ renameTermDiagram modeRen modRen typeRen (TermDiagram diag) = do
       case ePayload edge of
         PTmMeta tm -> do
           sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tm)
-          pure edge { ePayload = PTmMeta tm { tmvSort = sort' } }
+          let owner' = fmap (\m -> M.findWithDefault m m modeRen) (tmvOwnerMode tm)
+          pure edge { ePayload = PTmMeta tm { tmvSort = sort', tmvOwnerMode = owner' } }
         _ -> pure edge
 
 
@@ -1140,6 +1171,16 @@ insertDerivedDoctrine env raw = do
 buildFoliatedDoctrine :: Text -> Doctrine -> ModeName -> Either Text Doctrine
 buildFoliatedDoctrine name baseDoc mode = do
   mt0 <- addMode mode emptyModeTheory
+  let ModeName modeTok = mode
+      universeName = "U_" <> modeTok
+      universeTy = mkCon (ObjRef mode (ObjName universeName)) []
+      classDecl =
+        ClassificationDecl
+          { cdClassifier = mode
+          , cdUniverse = universeTy
+          , cdTag = Nothing
+          }
+      mt = mt0 { mtClassifiedBy = M.singleton mode classDecl }
   let strSort = AttrSort "Str"
       portTy = ty "PortRef"
       portsTy = ty "PortList"
@@ -1147,7 +1188,7 @@ buildFoliatedDoctrine name baseDoc mode = do
       stepsTy = ty "StepList"
       ssaTy = ty "SSA"
       ty tName = mkCon (ObjRef mode (ObjName tName)) []
-      mkType tName = (ObjName tName, TypeSig [])
+      mkCtor cName = mkGen cName [] [universeTy] []
       mkGen gName dom cod attrs =
         ( GenName gName
         , GenDecl
@@ -1155,6 +1196,7 @@ buildFoliatedDoctrine name baseDoc mode = do
             , gdMode = mode
             , gdTyVars = []
             , gdTmVars = []
+            , gdParams = []
             , gdDom = map InPort dom
             , gdCod = cod
             , gdAttrs = attrs
@@ -1162,7 +1204,13 @@ buildFoliatedDoctrine name baseDoc mode = do
         )
       gens =
         M.fromList
-          [ mkGen "portRef" [] [portTy] [("name", strSort)]
+          [ mkCtor universeName
+          , mkCtor "PortRef"
+          , mkCtor "PortList"
+          , mkCtor "Step"
+          , mkCtor "StepList"
+          , mkCtor "SSA"
+          , mkGen "portRef" [] [portTy] [("name", strSort)]
           , mkGen "portsNil" [] [portsTy] []
           , mkGen "portsCons" [portTy, portsTy] [portsTy] []
           , mkGen "stepGen" [portsTy, portsTy] [stepTy] [("name", strSort)]
@@ -1175,20 +1223,9 @@ buildFoliatedDoctrine name baseDoc mode = do
   pure
     Doctrine
       { dName = name
-      , dModes = mt0
+      , dModes = mt
       , dAcyclicModes = S.singleton mode
       , dAttrSorts = M.singleton strSort (AttrSortDecl strSort (Just LKString))
-      , dTypes =
-          M.singleton
-            mode
-            ( M.fromList
-                [ mkType "PortRef"
-                , mkType "PortList"
-                , mkType "Step"
-                , mkType "StepList"
-                , mkType "SSA"
-                ]
-            )
       , dGens = M.singleton mode gens
       , dCells2 = []
       , dActions = M.empty
@@ -1434,6 +1471,7 @@ buildPolyFromBase budget baseName newName env newDoc = do
       [ (mode, gen)
       | (mode, table) <- M.toList (dGens doc)
       , gen <- M.elems table
+      , not (isTypeDeclGenName doc mode (gdName gen))
       ]
 
     genImage (mode, gen) = do

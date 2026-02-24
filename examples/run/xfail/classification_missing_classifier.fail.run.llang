@@ -1,9 +1,9 @@
 doctrine ClassificationMissingClassifier where {
   mode Tm classifiedBy Ty via Ty.U;
 
-  type U @Ty;
-  type Unit @Ty;
-  type Arr(a@Tm, b@Tm) @Ty;
+  gen U : [] -> [Ty.U] @Ty;
+  gen Unit : [] -> [Ty.U] @Ty;
+  gen Arr(a@Tm, b@Tm) : [] -> [Ty.U] @Ty;
 
   gen bad : [Arr(Unit, Unit)] -> [Arr(Unit, Unit)] @Tm;
 }

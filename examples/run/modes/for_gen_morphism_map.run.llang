@@ -1,7 +1,7 @@
 doctrine ForGenSchemaMap where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type X @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen X : [] -> [M.U_M] @M;
 
   gen op(a@M) : [a] -> [a] @M;
 
@@ -11,8 +11,8 @@ doctrine ForGenSchemaMap where {
 
 doctrine ForGenTargetMap where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type X @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen X : [] -> [M.U_M] @M;
 
   gen discard(a@M) : [a] -> [] @M;
   gen keep(a@M) : [a] -> [a] @M;

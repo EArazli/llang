@@ -1,7 +1,7 @@
 import "../../../stdlib/struct.symmetric.llang";
 
 doctrine Semigroup extends StructSymmetric where {
-  type Obj @M;
+  gen Obj : [] -> [U_M] @M;
   gen m : [Obj, Obj] -> [Obj] @M;
 
   rule structural assoc = : [Obj, Obj, Obj] -> [Obj] @M =

@@ -4,8 +4,8 @@ import "../../../stdlib/struct.cartesian.llang";
 -- For a fuller CCC/STLC-oriented axiomatization, see:
 --   examples/lib/surfaces/ccc_surface/ccc.llang
 doctrine CCC extends StructCartesian where {
-  type A @M;
-  type B @M;
+  gen A : [] -> [U_M] @M;
+  gen B : [] -> [U_M] @M;
 
   gen eval : [A, B] -> [A] @M;
 }

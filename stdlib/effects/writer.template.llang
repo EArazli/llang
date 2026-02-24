@@ -1,7 +1,7 @@
 doctrine WriterSchema where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type W @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen W : [] -> [M.U_M] @M;
 }
 
 doctrine_functor Writer(L : WriterSchema) where {

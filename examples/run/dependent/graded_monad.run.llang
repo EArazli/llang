@@ -1,10 +1,10 @@
 doctrine GradedMonad where {
   mode G classifiedBy G via G.U_G;
-  type U_G @G;
+  gen U_G : [] -> [G.U_G] @G;
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
+  gen U_M : [] -> [M.U_M] @M;
   -- Grade monoid: natural numbers with zero, successor, and addition
-  type Count @G;
+  gen Count : [] -> [G.U_G] @G;
 
   gen zero : [] -> [Count] @G;
   gen succ : [Count] -> [Count] @G;
@@ -20,11 +20,11 @@ doctrine GradedMonad where {
 
 
   -- Computation types
-  type A @M;
-  type B @M;
+  gen A : [] -> [M.U_M] @M;
+  gen B : [] -> [M.U_M] @M;
 
   -- T(g, a) — a computation producing `a` that costs `g` resources
-  type T(g : Count, a@M) @M;
+  gen T(g : Count, a@M) : [] -> [M.U_M] @M;
 
   -- Return: zero-cost
   gen gret(a@M) : [a] -> [T(zero, a)] @M;

@@ -1,20 +1,29 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.ObjResolve
   ( resolveTypeRef
+  , resolveTypeRefMaybe
   , resolveTypeRefInClassifier
+  , resolveTypeRefInClassifierMaybe
   ) where
 
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import Strat.Poly.DSL.AST (RawTypeRef(..))
-import Strat.Poly.Doctrine (Doctrine(..))
+import Strat.Poly.Doctrine (Doctrine(..), lookupCtorRefForOwner)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Obj (ObjName(..), ObjRef(..))
 import Strat.Poly.ObjClassifier (modeClassifierMode)
 
+renderMode :: ModeName -> Text
+renderMode (ModeName name) = name
+
 resolveTypeRef :: Doctrine -> ModeName -> RawTypeRef -> Either Text ObjRef
 resolveTypeRef doc ownerMode =
   resolveTypeRefInClassifier doc ownerMode (modeClassifierMode (dModes doc) ownerMode)
+
+resolveTypeRefMaybe :: Doctrine -> ModeName -> RawTypeRef -> Either Text (Maybe ObjRef)
+resolveTypeRefMaybe doc ownerMode =
+  resolveTypeRefInClassifierMaybe doc ownerMode (modeClassifierMode (dModes doc) ownerMode)
 
 resolveTypeRefInClassifier
   :: Doctrine
@@ -22,7 +31,30 @@ resolveTypeRefInClassifier
   -> ModeName
   -> RawTypeRef
   -> Either Text ObjRef
-resolveTypeRefInClassifier doc ownerMode classifierMode raw =
+resolveTypeRefInClassifier doc ownerMode classifierMode raw = do
+  mRef <- resolveTypeRefInClassifierMaybe doc ownerMode classifierMode raw
+  case mRef of
+    Just ref -> Right ref
+    Nothing ->
+      Left
+        ( "unknown type constructor: "
+            <> rtrName raw
+            <> " (object mode "
+            <> renderMode ownerMode
+            <> " is classified by "
+            <> renderMode classifierMode
+            <> "; looked in classifier mode "
+            <> renderMode classifierMode
+            <> ")"
+        )
+
+resolveTypeRefInClassifierMaybe
+  :: Doctrine
+  -> ModeName
+  -> ModeName
+  -> RawTypeRef
+  -> Either Text (Maybe ObjRef)
+resolveTypeRefInClassifierMaybe doc ownerMode classifierMode raw =
   case rtrMode raw of
     Just modeName -> do
       let qualifier = ModeName modeName
@@ -49,20 +81,11 @@ resolveTypeRefInClassifier doc ownerMode classifierMode raw =
         then Right ()
         else Left ("unknown mode: " <> renderMode mode)
 
-    lookupQualified mode =
-      case M.lookup mode (dTypes doc) >>= M.lookup tname of
-        Nothing ->
-          Left
-            ( "unknown type constructor: "
-                <> rtrName raw
-                <> " (object mode "
-                <> renderMode ownerMode
-                <> " is classified by "
-                <> renderMode classifierMode
-                <> "; looked in classifier mode "
-                <> renderMode mode
-                <> ")"
-            )
-        Just _ -> Right (ObjRef mode tname)
-
-    renderMode (ModeName name) = name
+    lookupQualified mode = do
+      mRef <- lookupCtorRefForOwner doc ownerMode tname
+      pure
+        ( case mRef of
+            Just ref
+              | orMode ref == mode -> Just ref
+            _ -> Nothing
+        )

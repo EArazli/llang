@@ -1,10 +1,10 @@
 doctrine Cat where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type A @M;
-  type B @M;
-  type C @M;
-  type D @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen A : [] -> [M.U_M] @M;
+  gen B : [] -> [M.U_M] @M;
+  gen C : [] -> [M.U_M] @M;
+  gen D : [] -> [M.U_M] @M;
 
   gen f : [A] -> [B] @M;
   gen g : [B] -> [C] @M;

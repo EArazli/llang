@@ -1,7 +1,7 @@
 doctrine Monoid where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type A @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen A : [] -> [M.U_M] @M;
 
   gen unit : [] -> [A] @M;
   gen mul : [A, A] -> [A] @M;
@@ -12,8 +12,8 @@ doctrine Monoid where {
 
 doctrine StringMonoid where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type Str @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen Str : [] -> [M.U_M] @M;
 
   gen empty : [] -> [Str] @M;
   gen append : [Str, Str] -> [Str] @M;

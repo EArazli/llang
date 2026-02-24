@@ -20,7 +20,7 @@ import Strat.Poly.Graph (EdgePayload(..), ePayload)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
-import Test.Poly.Helpers (mkModes)
+import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 
 
 tests :: TestTree
@@ -58,17 +58,18 @@ hasFeedback diag =
 
 mkDoctrine :: Doctrine
 mkDoctrine =
-  Doctrine
-    { dName = "D"
-    , dModes = mkModes [modeM]
-    , dAcyclicModes = S.singleton modeM
-    , dAttrSorts = M.empty
-    , dTypes = M.fromList [(modeM, M.fromList [(ObjName "T", TypeSig [])])]
-    , dGens = M.fromList [(modeM, M.fromList [(GenName "step", genStep)])]
-    , dCells2 = []
+  withSelfClassifiedCtors
+    [(modeM, [(ObjName "T", [])])]
+    Doctrine
+      { dName = "D"
+      , dModes = mkModes [modeM]
+      , dAcyclicModes = S.singleton modeM
+      , dAttrSorts = M.empty
+      , dGens = M.fromList [(modeM, M.fromList [(GenName "step", genStep)])]
+      , dCells2 = []
       , dActions = M.empty
       , dObligations = []
-    }
+      }
 
 
 genStep :: GenDecl
@@ -78,6 +79,7 @@ genStep =
     , gdMode = modeM
     , gdTyVars = []
     , gdTmVars = []
+    , gdParams = []
     , gdDom = [InPort tyT]
     , gdCod = [tyT, tyT]
     , gdAttrs = []

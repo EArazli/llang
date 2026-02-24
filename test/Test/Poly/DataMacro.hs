@@ -12,7 +12,7 @@ import qualified Data.Text as T
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (meDoctrines)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), gdPlainDom, lookupCtorRefForOwner)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
@@ -43,7 +43,7 @@ testDataMacroElab = do
   let src = T.unlines
         [ "doctrine D where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
         , "  data List (a@M) @M where {"
         , "    Nil : [];"
         , "    Cons : [a, List(a)];"
@@ -60,10 +60,10 @@ testDataMacroElab = do
     Nothing -> assertFailure "expected doctrine D"
     Just d -> pure d
   let mode = ModeName "M"
-  types <- case M.lookup mode (dTypes doc) of
-    Nothing -> assertFailure "expected type table"
-    Just t -> pure t
-  assertBool "expected List type" (M.member (ObjName "List") types)
+  listRef <- case lookupCtorRefForOwner doc mode (ObjName "List") of
+    Left err -> assertFailure (T.unpack err)
+    Right Nothing -> assertFailure "expected List constructor in derived constructor table"
+    Right (Just ref) -> pure ref
   gens <- case M.lookup mode (dGens doc) of
     Nothing -> assertFailure "expected generator table"
     Just g -> pure g
@@ -76,7 +76,7 @@ testDataMacroElab = do
   aVar <- case gdTyVars nilGen of
     [v] -> pure v
     _ -> assertFailure "expected Nil constructor to carry one type metavariable"
-  let listTy = mkCon (ObjRef mode (ObjName "List")) [OAObj (OVar aVar)]
+  let listTy = mkCon listRef [OAObj (OVar aVar)]
   gdPlainDom nilGen @?= []
   gdCod nilGen @?= [listTy]
   gdPlainDom consGen @?= [OVar aVar, listTy]
@@ -87,7 +87,7 @@ testDataMacroCollision = do
   let src = T.unlines
         [ "doctrine D where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
         , "  gen Nil : [] -> [] @M;"
         , "  data List (a@M) @M where {"
         , "    Nil : [];"

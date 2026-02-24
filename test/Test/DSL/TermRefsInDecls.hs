@@ -44,8 +44,9 @@ buildBaseEnv :: IO ModuleEnv
 buildBaseEnv = do
   let src = T.unlines
         [ "doctrine D where {"
-        , "  mode M;"
-        , "  type A @M;"
+        , "  mode M classifiedBy M via U_M;"
+        , "  gen U_M : [] -> [U_M] @M;"
+        , "  gen A : [] -> [U_M] @M;"
         , "  gen f : [A] -> [A] @M;"
         , "}"
         ]

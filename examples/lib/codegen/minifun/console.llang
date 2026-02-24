@@ -1,8 +1,8 @@
 doctrine ConsoleExpr where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type Str @M;
-  type Unit @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen Str : [] -> [M.U_M] @M;
+  gen Unit : [] -> [M.U_M] @M;
 
   gen readLine : [] -> [Str] @M;
   gen concat : [Str, Str] -> [Str] @M;

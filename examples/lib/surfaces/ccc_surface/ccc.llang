@@ -1,13 +1,13 @@
 import "../../../../stdlib/struct.cartesian.llang";
 
 doctrine CCC_Bool extends StructCartesian where {
-  type Obj @M;
-  type Hom (a@M, b@M) @M;
+  gen Obj : [] -> [U_M] @M;
+  gen Hom (a@M, b@M) : [] -> [U_M] @M;
 
-  type Unit @M;
-  type Bool @M;
-  type prod (a@M, b@M) @M;
-  type exp (a@M, b@M) @M;
+  gen Unit : [] -> [U_M] @M;
+  gen Bool : [] -> [U_M] @M;
+  gen prod (a@M, b@M) : [] -> [U_M] @M;
+  gen exp (a@M, b@M) : [] -> [U_M] @M;
 
   gen id (a@M) : [] -> [Hom(a, a)] @M;
   gen comp (a@M, b@M, c@M) : [Hom(b, c), Hom(a, b)] -> [Hom(a, c)] @M;

@@ -22,7 +22,7 @@ import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Cell2
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
-import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory (modeOnlyTypeTheory, TypeParamSig(..))
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Test.Poly.Helpers (mkModes, identityModeMap, identityModMap)
 
@@ -73,6 +73,95 @@ selfClassifiedModes modes =
              ]
        }
 
+objNameText :: ObjName -> Text
+objNameText (ObjName n) = n
+
+ctorDecl :: ModeName -> ObjName -> [TypeParamSig] -> GenDecl
+ctorDecl mode ctorName sig =
+  GenDecl
+    { gdName = GenName (objNameText ctorName)
+    , gdMode = mode
+    , gdTyVars = tyVars
+    , gdTmVars = tmVars
+    , gdParams = params
+    , gdDom = []
+    , gdCod = [universeObj mode]
+    , gdAttrs = []
+    }
+  where
+    tyPos =
+      [ (pos, v)
+      | (pos, TPS_Ty m) <- zip [0 :: Int ..] sig
+      , let v =
+              TmVar
+                { tmvName = "a" <> T.pack (show pos)
+                , tmvSort = universeObj m
+                , tmvScope = pos
+                , tmvOwnerMode = Just m
+                }
+      ]
+    tmPos =
+      [ (pos, v)
+      | (pos, TPS_Tm sortTy) <- zip [0 :: Int ..] sig
+      , let v =
+              TmVar
+                { tmvName = "x" <> T.pack (show pos)
+                , tmvSort = sortTy
+                , tmvScope = negate (pos + 1)
+                , tmvOwnerMode = Just mode
+                }
+      ]
+    tyVars = map snd tyPos
+    tmVars = map snd tmPos
+    params =
+      [ case ps of
+          TPS_Ty _ -> GP_Ty (lookupByPos pos tyPos)
+          TPS_Tm _ -> GP_Tm (lookupByPos pos tmPos)
+      | (pos, ps) <- zip [0 :: Int ..] sig
+      ]
+    lookupByPos pos xs =
+      case lookup pos xs of
+        Just v -> v
+        Nothing -> error "ctorDecl: missing parameter position"
+
+addSelfClassifications :: [ModeName] -> ModeTheory -> ModeTheory
+addSelfClassifications modes mt =
+  mt
+    { mtClassifiedBy =
+        foldl
+          (\acc mode ->
+              M.insertWith
+                (\_ old -> old)
+                mode
+                (ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing })
+                acc
+          )
+          (mtClassifiedBy mt)
+          modes
+    }
+
+insertCtorDecls
+  :: ModeName
+  -> [(ObjName, [TypeParamSig])]
+  -> M.Map ModeName (M.Map GenName GenDecl)
+  -> M.Map ModeName (M.Map GenName GenDecl)
+insertCtorDecls mode sigs gens0 =
+  let ctorMap =
+        M.fromList
+          [ (gdName gd, gd)
+          | (ctorName, sig) <- sigs
+          , let gd = ctorDecl mode ctorName sig
+          ]
+      modeMap = M.findWithDefault M.empty mode gens0
+   in M.insert mode (M.union modeMap ctorMap) gens0
+
+withSelfClassifiedCtors :: [(ModeName, [(ObjName, [TypeParamSig])])] -> Doctrine -> Doctrine
+withSelfClassifiedCtors entries doc =
+  doc
+    { dModes = addSelfClassifications (map fst entries) (dModes doc)
+    , dGens = foldl (\acc (mode, sigs) -> insertCtorDecls mode sigs acc) (dGens doc) entries
+    }
+
 tcon :: ModeName -> Text -> [Obj] -> Obj
 tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
 
@@ -105,6 +194,27 @@ tmMeta v =
           Right d -> d
   in TermDiagram d1 { dOut = [outPid] }
 
+normalizeDoctrine :: Doctrine -> Doctrine
+normalizeDoctrine = id
+
+normalizeMorphism :: Morphism -> Morphism
+normalizeMorphism mor =
+  mor
+    { morSrc = normalizeDoctrine (morSrc mor)
+    , morTgt = normalizeDoctrine (morTgt mor)
+    }
+
+validateDoctrineNormalized :: Doctrine -> Either Text ()
+validateDoctrineNormalized = validateDoctrine . normalizeDoctrine
+
+checkMorphismNormalized mor = checkMorphism (normalizeMorphism mor)
+
+applyMorphismDiagramNormalized :: Morphism -> Diagram -> Either Text Diagram
+applyMorphismDiagramNormalized mor = applyMorphismDiagram (normalizeMorphism mor)
+
+applyMorphismTyNormalized :: Morphism -> Obj -> Either Text Obj
+applyMorphismTyNormalized mor = applyMorphismTy (normalizeMorphism mor)
+
 testMonoidMorphism :: Assertion
 testMonoidMorphism = do
   docSrc <- either (assertFailure . T.unpack) pure mkMonoid
@@ -126,7 +236,7 @@ testMonoidMorphism = do
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err -> assertFailure (show err)
     Right () -> pure ()
 
@@ -145,6 +255,7 @@ testTypeMapReorder = do
           , gdMode = mode
           , gdTyVars = [a, b]
           , gdTmVars = []
+          , gdParams = [GP_Ty a, GP_Ty b]
           , gdDom = map InPort [mkCon (ObjRef mode prod) [OAObj (OVar a), OAObj (OVar b)]]
           , gdCod = [mkCon (ObjRef mode prod) [OAObj (OVar a), OAObj (OVar b)]]
           , gdAttrs = []
@@ -155,36 +266,57 @@ testTypeMapReorder = do
           , gdMode = mode
           , gdTyVars = [a, b]
           , gdTmVars = []
+          , gdParams = [GP_Ty a, GP_Ty b]
           , gdDom = map InPort [mkCon (ObjRef mode pair) [OAObj (OVar a), OAObj (OVar b)]]
           , gdCod = [mkCon (ObjRef mode pair) [OAObj (OVar a), OAObj (OVar b)]]
+          , gdAttrs = []
+          }
+  let prodCtor =
+        GenDecl
+          { gdName = GenName "Prod"
+          , gdMode = mode
+          , gdTyVars = [a, b]
+          , gdTmVars = []
+          , gdParams = [GP_Ty a, GP_Ty b]
+          , gdDom = []
+          , gdCod = [uTy]
+          , gdAttrs = []
+          }
+  let pairCtor =
+        GenDecl
+          { gdName = GenName "Pair"
+          , gdMode = mode
+          , gdTyVars = [a, b]
+          , gdTmVars = []
+          , gdParams = [GP_Ty a, GP_Ty b]
+          , gdDom = []
+          , gdCod = [uTy]
           , gdAttrs = []
           }
   let docSrc = Doctrine
         { dName = "Src"
         , dModes = selfClassifiedModes [mode]
-    , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-        , dTypes = M.fromList [(mode, M.fromList [(universeName mode, TypeSig []), (prod, TypeSig [PS_Ty mode, PS_Ty mode])])]
-        , dGens = M.fromList [(mode, M.fromList [(genName, genSrc)])]
+        , dAcyclicModes = S.empty
+        , dAttrSorts = M.empty
+        , dGens = M.fromList [(mode, M.fromList [(gdName prodCtor, prodCtor), (genName, genSrc)])]
         , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
+        , dActions = M.empty
+        , dObligations = []
         }
   let docTgt = Doctrine
         { dName = "Tgt"
         , dModes = selfClassifiedModes [mode]
-    , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-        , dTypes = M.fromList [(mode, M.fromList [(universeName mode, TypeSig []), (pair, TypeSig [PS_Ty mode, PS_Ty mode])])]
-        , dGens = M.fromList [(mode, M.fromList [(genName, genTgt)])]
+        , dAcyclicModes = S.empty
+        , dAttrSorts = M.empty
+        , dGens = M.fromList [(mode, M.fromList [(gdName pairCtor, pairCtor), (genName, genTgt)])]
         , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
+        , dActions = M.empty
+        , dObligations = []
         }
-  docSrc' <- case validateDoctrine docSrc of
+  docSrc' <- case validateDoctrineNormalized docSrc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docSrc
-  docTgt' <- case validateDoctrine docTgt of
+  docTgt' <- case validateDoctrineNormalized docTgt of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
   img <- either (assertFailure . T.unpack) pure (genD mode [mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] [mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] genName)
@@ -202,7 +334,7 @@ testTypeMapReorder = do
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err -> assertFailure (show err)
     Right () -> pure ()
 
@@ -220,6 +352,7 @@ testCrossModeMorphism = do
           , gdMode = modeC
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
           , gdAttrs = []
@@ -230,36 +363,41 @@ testCrossModeMorphism = do
           , gdMode = modeV
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = map InPort [bTy]
           , gdCod = [bTy]
           , gdAttrs = []
           }
-  let docSrc = Doctrine
-        { dName = "Src"
-        , dModes = mkModes [modeC]
-    , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-        , dTypes = M.fromList [(modeC, M.fromList [(ObjName "A", TypeSig [])])]
-        , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
-        , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-        }
-  let docTgt = Doctrine
-        { dName = "Tgt"
-        , dModes = mkModes [modeV]
-    , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-        , dTypes = M.fromList [(modeV, M.fromList [(ObjName "B", TypeSig [])])]
-        , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
-        , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-        }
-  docSrc' <- case validateDoctrine docSrc of
+  let docSrc =
+        withSelfClassifiedCtors
+          [(modeC, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "Src"
+            , dModes = mkModes [modeC]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  let docTgt =
+        withSelfClassifiedCtors
+          [(modeV, [(ObjName "B", [])])]
+          Doctrine
+            { dName = "Tgt"
+            , dModes = mkModes [modeV]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  docSrc' <- case validateDoctrineNormalized docSrc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docSrc
-  docTgt' <- case validateDoctrine docTgt of
+  docTgt' <- case validateDoctrineNormalized docTgt of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
   img <- either (assertFailure . T.unpack) pure (genD modeV [bTy] [bTy] (GenName "g"))
@@ -276,11 +414,11 @@ testCrossModeMorphism = do
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
   srcDiag <- either (assertFailure . T.unpack) pure (genD modeC [aTy] [aTy] (GenName "f"))
-  tgtDiag <- either (assertFailure . T.unpack) pure (applyMorphismDiagram mor srcDiag)
+  tgtDiag <- either (assertFailure . T.unpack) pure (applyMorphismDiagramNormalized mor srcDiag)
   dMode tgtDiag @?= modeV
   dom <- either (assertFailure . T.unpack) pure (diagramDom tgtDiag)
   cod <- either (assertFailure . T.unpack) pure (diagramCod tgtDiag)
@@ -346,6 +484,7 @@ testModalityMapRewritesTypeModalities = do
           , gdMode = modeB
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = map InPort [fBaseSrc]
           , gdCod = [fBaseSrc]
           , gdAttrs = []
@@ -356,6 +495,7 @@ testModalityMapRewritesTypeModalities = do
           , gdMode = modeB
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = map InPort [hfBaseSrc]
           , gdCod = [hfBaseSrc]
           , gdAttrs = []
@@ -366,6 +506,7 @@ testModalityMapRewritesTypeModalities = do
           , gdMode = modeD
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = map InPort [gBaseTgt]
           , gdCod = [gBaseTgt]
           , gdAttrs = []
@@ -376,36 +517,41 @@ testModalityMapRewritesTypeModalities = do
           , gdMode = modeD
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = map InPort [kgBaseTgt]
           , gdCod = [kgBaseTgt]
           , gdAttrs = []
           }
-  let docSrc = Doctrine
-        { dName = "SrcModal"
-        , dModes = modeTheorySrc
-    , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-        , dTypes = M.fromList [(modeA, M.fromList [(ObjName "Base", TypeSig [])])]
-        , dGens = M.fromList [(modeB, M.fromList [(GenName "g", genGSrc), (GenName "gg", genGGSrc)])]
-        , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-        }
-  let docTgt = Doctrine
-        { dName = "TgtModal"
-        , dModes = modeTheoryTgt
-    , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-        , dTypes = M.fromList [(modeC, M.fromList [(ObjName "Base", TypeSig [])])]
-        , dGens = M.fromList [(modeD, M.fromList [(GenName "g", genGTgt), (GenName "gg", genGGTgt)])]
-        , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-        }
-  docSrc' <- case validateDoctrine docSrc of
+  let docSrc =
+        withSelfClassifiedCtors
+          [(modeA, [(ObjName "Base", [])])]
+          Doctrine
+            { dName = "SrcModal"
+            , dModes = modeTheorySrc
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(modeB, M.fromList [(GenName "g", genGSrc), (GenName "gg", genGGSrc)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  let docTgt =
+        withSelfClassifiedCtors
+          [(modeC, [(ObjName "Base", [])])]
+          Doctrine
+            { dName = "TgtModal"
+            , dModes = modeTheoryTgt
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(modeD, M.fromList [(GenName "g", genGTgt), (GenName "gg", genGGTgt)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  docSrc' <- case validateDoctrineNormalized docSrc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docSrc
-  docTgt' <- case validateDoctrine docTgt of
+  docTgt' <- case validateDoctrineNormalized docTgt of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
   imgG <- either (assertFailure . T.unpack) pure (genD modeD [gBaseTgt] [gBaseTgt] (GenName "g"))
@@ -423,12 +569,12 @@ testModalityMapRewritesTypeModalities = do
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
 
   srcDiagG <- either (assertFailure . T.unpack) pure (genD modeB [fBaseSrc] [fBaseSrc] (GenName "g"))
-  tgtDiagG <- either (assertFailure . T.unpack) pure (applyMorphismDiagram mor srcDiagG)
+  tgtDiagG <- either (assertFailure . T.unpack) pure (applyMorphismDiagramNormalized mor srcDiagG)
   dMode tgtDiagG @?= modeD
   domG <- either (assertFailure . T.unpack) pure (diagramDom tgtDiagG)
   codG <- either (assertFailure . T.unpack) pure (diagramCod tgtDiagG)
@@ -437,7 +583,7 @@ testModalityMapRewritesTypeModalities = do
   assertSingleGenEdge "g" tgtDiagG
 
   srcDiagGG <- either (assertFailure . T.unpack) pure (genD modeB [hfBaseSrc] [hfBaseSrc] (GenName "gg"))
-  tgtDiagGG <- either (assertFailure . T.unpack) pure (applyMorphismDiagram mor srcDiagGG)
+  tgtDiagGG <- either (assertFailure . T.unpack) pure (applyMorphismDiagramNormalized mor srcDiagGG)
   dMode tgtDiagGG @?= modeD
   domGG <- either (assertFailure . T.unpack) pure (diagramDom tgtDiagGG)
   codGG <- either (assertFailure . T.unpack) pure (diagramCod tgtDiagGG)
@@ -464,6 +610,7 @@ testMorphismInstantiationSubstFailure = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
           , gdAttrs = []
@@ -474,38 +621,41 @@ testMorphismInstantiationSubstFailure = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
           , gdAttrs = []
           }
   let srcDoc =
-        Doctrine
-          { dName = "SrcSubstFail"
-          , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(GenName "f", srcGen)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "SrcSubstFail"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(mode, M.fromList [(GenName "f", srcGen)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
   let tgtDoc =
-        Doctrine
-          { dName = "TgtSubstFail"
-          , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(GenName "g", tgtGen)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
-  src <- case validateDoctrine srcDoc of
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "TgtSubstFail"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(mode, M.fromList [(GenName "g", tgtGen)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  src <- case validateDoctrineNormalized srcDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure srcDoc
-  tgt <- case validateDoctrine tgtDoc of
+  tgt <- case validateDoctrineNormalized tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
   srcDiag <- either (assertFailure . T.unpack) pure (genD mode [aTy] [aTy] (GenName "f"))
@@ -525,7 +675,7 @@ testMorphismInstantiationSubstFailure = do
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
-  case applyMorphismDiagram mor srcDiag of
+  case applyMorphismDiagramNormalized mor srcDiag of
     Left _ -> pure ()
     Right _ -> assertFailure "expected applyMorphismDiagram to fail on substitution error"
 
@@ -541,23 +691,25 @@ testBinderIdentityMorphismPreservesBinders = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy']
           , gdAttrs = []
           }
   let doc =
-        Doctrine
-          { dName = "LamDoc"
-          , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
-  doc' <- case validateDoctrine doc of
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "LamDoc"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  doc' <- case validateDoctrineNormalized doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure doc
   let body = idD mode [aTy']
@@ -580,10 +732,10 @@ testBinderIdentityMorphismPreservesBinders = do
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  mapped <- case applyMorphismDiagram mor srcDiag of
+  mapped <- case applyMorphismDiagramNormalized mor srcDiag of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   case IM.elems (dEdges mapped) of
@@ -609,23 +761,25 @@ testMorphismSpliceRenamesToBinderMeta = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort aTy', InBinder slotSig]
           , gdCod = [aTy']
           , gdAttrs = []
           }
   let doc =
-        Doctrine
-          { dName = "SpliceMetaDoc"
-          , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
-  doc' <- case validateDoctrine doc of
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "SpliceMetaDoc"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  doc' <- case validateDoctrineNormalized doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure doc
   let xMeta = BinderMetaVar "X"
@@ -648,10 +802,10 @@ testMorphismSpliceRenamesToBinderMeta = do
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
-  mapped <- case applyMorphismDiagram mor srcDiag of
+  mapped <- case applyMorphismDiagramNormalized mor srcDiag of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   let metas = binderMetaVarsDiagram mapped
@@ -674,23 +828,25 @@ testMorphismRejectsBadBinderHoleSignatures = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy']
           , gdAttrs = []
           }
   let doc =
-        Doctrine
-          { dName = "BadBinderSigsDoc"
-          , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig [])])]
-          , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
-  doc' <- case validateDoctrine doc of
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "BadBinderSigsDoc"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  doc' <- case validateDoctrineNormalized doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure doc
   let hole = BinderMetaVar "b0"
@@ -710,7 +866,7 @@ testMorphismRejectsBadBinderHoleSignatures = do
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err ->
       assertBool
         "expected binder-hole signature mismatch"
@@ -724,18 +880,19 @@ testTypeTemplateCycleRejected = do
   let aRef = ObjRef mode (ObjName "A")
   let bRef = ObjRef mode (ObjName "B")
   let doc =
-        Doctrine
-          { dName = "CycleDoc"
-          , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes = M.fromList [(mode, M.fromList [(ObjName "A", TypeSig []), (ObjName "B", TypeSig [])])]
-          , dGens = M.empty
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
-  doc' <- case validateDoctrine doc of
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", []), (ObjName "B", [])])]
+          Doctrine
+            { dName = "CycleDoc"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  doc' <- case validateDoctrineNormalized doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure doc
   let mor =
@@ -756,7 +913,7 @@ testTypeTemplateCycleRejected = do
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err ->
       assertBool "expected cyclic type template rejection" ("cyclic type template map" `T.isInfixOf` err)
     Right () ->
@@ -772,41 +929,39 @@ testTermTemplateSortMismatch = do
   let natTy = mkCon natRef []
   let boolTy = mkCon boolRef []
   let srcDoc =
-        Doctrine
-          { dName = "SrcSortMismatch"
-          , dModes = mkModes [modeM', modeI']
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ (modeI', M.fromList [(ObjName "Nat", TypeSig []), (ObjName "Bool", TypeSig [])])
-                , (modeM', M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
-                ]
-          , dGens = M.empty
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
+        withSelfClassifiedCtors
+          [ (modeI', [(ObjName "Nat", []), (ObjName "Bool", [])])
+          , (modeM', [(ObjName "Vec", [TPS_Tm natTy, TPS_Ty modeM'])])
+          ]
+          Doctrine
+            { dName = "SrcSortMismatch"
+            , dModes = mkModes [modeM', modeI']
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
   let tgtDoc =
-        Doctrine
-          { dName = "TgtSortMismatch"
-          , dModes = mkModes [modeM', modeI']
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ (modeI', M.fromList [(ObjName "Nat", TypeSig []), (ObjName "Bool", TypeSig [])])
-                , (modeM', M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
-                ]
-          , dGens = M.empty
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
-  src <- case validateDoctrine srcDoc of
+        withSelfClassifiedCtors
+          [ (modeI', [(ObjName "Nat", []), (ObjName "Bool", [])])
+          , (modeM', [(ObjName "Vec", [TPS_Tm natTy, TPS_Ty modeM'])])
+          ]
+          Doctrine
+            { dName = "TgtSortMismatch"
+            , dModes = mkModes [modeM', modeI']
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  src <- case validateDoctrineNormalized srcDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure srcDoc
-  tgt <- case validateDoctrine tgtDoc of
+  tgt <- case validateDoctrineNormalized tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
   let nWrong = TmVar { tmvName = "n", tmvSort = boolTy, tmvScope = 0, tmvOwnerMode = Nothing }
@@ -832,7 +987,7 @@ testTermTemplateSortMismatch = do
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err ->
       assertBool
         "expected term-parameter sort mismatch"
@@ -858,6 +1013,7 @@ testTermTypeTemplateInstantiation = do
           , gdMode = modeI'
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = []
           , gdCod = [natTy]
           , gdAttrs = []
@@ -868,58 +1024,91 @@ testTermTypeTemplateInstantiation = do
           , gdMode = modeI'
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort natTy]
           , gdCod = [natTy]
+          , gdAttrs = []
+          }
+  let natCtor =
+        GenDecl
+          { gdName = GenName "Nat"
+          , gdMode = modeI'
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [universeObj modeI']
+          , gdAttrs = []
+          }
+  let aCtor =
+        GenDecl
+          { gdName = GenName "A"
+          , gdMode = modeM'
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [universeObj modeM']
+          , gdAttrs = []
+          }
+  let nIx = TmVar { tmvName = "n_ix", tmvSort = natTy, tmvScope = -1, tmvOwnerMode = Nothing }
+  let aIx = TmVar { tmvName = "a_ix", tmvSort = universeObj modeM', tmvScope = 1, tmvOwnerMode = Just modeM' }
+  let vecCtor =
+        GenDecl
+          { gdName = GenName "Vec"
+          , gdMode = modeM'
+          , gdTyVars = [aIx]
+          , gdTmVars = [nIx]
+          , gdParams = [GP_Tm nIx, GP_Ty aIx]
+          , gdDom = []
+          , gdCod = [universeObj modeM']
+          , gdAttrs = []
+          }
+  let vec2Ctor =
+        GenDecl
+          { gdName = GenName "Vec2"
+          , gdMode = modeM'
+          , gdTyVars = [aIx]
+          , gdTmVars = [nIx]
+          , gdParams = [GP_Tm nIx, GP_Ty aIx]
+          , gdDom = []
+          , gdCod = [universeObj modeM']
           , gdAttrs = []
           }
   let srcDoc =
         Doctrine
           { dName = "SrcTermTemplate"
           , dModes = selfClassifiedModes [modeM', modeI']
-    , dAcyclicModes = S.empty
+          , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes =
+          , dGens =
               M.fromList
-                [ (modeI', M.fromList [(universeName modeI', TypeSig []), (ObjName "Nat", TypeSig [])])
-                , ( modeM'
-                  , M.fromList
-                      [ (universeName modeM', TypeSig [])
-                      , (ObjName "A", TypeSig [])
-                      , (ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])
-                      ]
-                  )
+                [ (modeI', M.fromList [(gdName natCtor, natCtor), (GenName "Z", zGen), (GenName "S", sGen)])
+                , (modeM', M.fromList [(gdName aCtor, aCtor), (gdName vecCtor, vecCtor)])
                 ]
-          , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen), (GenName "S", sGen)])]
           , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
+          , dActions = M.empty
+          , dObligations = []
           }
   let tgtDoc =
         Doctrine
           { dName = "TgtTermTemplate"
           , dModes = selfClassifiedModes [modeM', modeI']
-    , dAcyclicModes = S.empty
+          , dAcyclicModes = S.empty
           , dAttrSorts = M.empty
-          , dTypes =
+          , dGens =
               M.fromList
-                [ (modeI', M.fromList [(universeName modeI', TypeSig []), (ObjName "Nat", TypeSig [])])
-                , ( modeM'
-                  , M.fromList
-                      [ (universeName modeM', TypeSig [])
-                      , (ObjName "A", TypeSig [])
-                      , (ObjName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM'])
-                      ]
-                  )
+                [ (modeI', M.fromList [(gdName natCtor, natCtor), (GenName "Z", zGen), (GenName "S", sGen)])
+                , (modeM', M.fromList [(gdName aCtor, aCtor), (gdName vec2Ctor, vec2Ctor)])
                 ]
-          , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen), (GenName "S", sGen)])]
           , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
+          , dActions = M.empty
+          , dObligations = []
           }
-  src <- case validateDoctrine srcDoc of
+  src <- case validateDoctrineNormalized srcDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure srcDoc
-  tgt <- case validateDoctrine tgtDoc of
+  tgt <- case validateDoctrineNormalized tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
   ttSrc <- case doctrineTypeTheory src of
@@ -967,11 +1156,11 @@ testTermTypeTemplateInstantiation = do
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
   let srcDiag = idD modeM' [mkCon vecRef [OATm zTm, OAObj aTy']]
-  tgtDiag <- case applyMorphismDiagram mor srcDiag of
+  tgtDiag <- case applyMorphismDiagramNormalized mor srcDiag of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   dom <- case diagramDom tgtDiag of
@@ -1004,46 +1193,45 @@ testTermTemplateKindMismatch = do
           , gdMode = modeI'
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = []
           , gdCod = [natTy]
           , gdAttrs = []
           }
   let srcDoc =
-        Doctrine
-          { dName = "SrcTermTemplateBad"
-          , dModes = mkModes [modeM', modeI']
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
-                , (modeM', M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
-                ]
-          , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
+        withSelfClassifiedCtors
+          [ (modeI', [(ObjName "Nat", [])])
+          , (modeM', [(ObjName "Vec", [TPS_Tm natTy, TPS_Ty modeM'])])
+          ]
+          Doctrine
+            { dName = "SrcTermTemplateBad"
+            , dModes = mkModes [modeM', modeI']
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
   let tgtDoc =
-        Doctrine
-          { dName = "TgtTermTemplateBad"
-          , dModes = mkModes [modeM', modeI']
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
-                , (modeM', M.fromList [(ObjName "Vec2", TypeSig [PS_Tm natTy, PS_Ty modeM'])])
-                ]
-          , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
-  src <- case validateDoctrine srcDoc of
+        withSelfClassifiedCtors
+          [ (modeI', [(ObjName "Nat", [])])
+          , (modeM', [(ObjName "Vec2", [TPS_Tm natTy, TPS_Ty modeM'])])
+          ]
+          Doctrine
+            { dName = "TgtTermTemplateBad"
+            , dModes = mkModes [modeM', modeI']
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  src <- case validateDoctrineNormalized srcDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure srcDoc
-  tgt <- case validateDoctrine tgtDoc of
+  tgt <- case validateDoctrineNormalized tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
@@ -1070,7 +1258,7 @@ testTermTemplateKindMismatch = do
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
-  case checkMorphism mor of
+  case checkMorphismNormalized mor of
     Left err ->
       assertBool "expected template kind mismatch" ("kind mismatch" `T.isInfixOf` err)
     Right () ->
@@ -1091,47 +1279,46 @@ testMorphismMapsStructuredTermArgs = do
           , gdMode = modeI'
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort natTy]
           , gdCod = [natTy]
           , gdAttrs = []
           }
   let dblDecl = succDecl { gdName = dblName }
   let srcDoc =
-        Doctrine
-          { dName = "SrcStructuredTm"
-          , dModes = mkModes [modeM', modeI']
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
-                , (modeM', M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy])])
-                ]
-          , dGens = M.fromList [(modeI', M.fromList [(succName, succDecl)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
+        withSelfClassifiedCtors
+          [ (modeI', [(ObjName "Nat", [])])
+          , (modeM', [(ObjName "Vec", [TPS_Tm natTy])])
+          ]
+          Doctrine
+            { dName = "SrcStructuredTm"
+            , dModes = mkModes [modeM', modeI']
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(modeI', M.fromList [(succName, succDecl)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
   let tgtDoc =
-        Doctrine
-          { dName = "TgtStructuredTm"
-          , dModes = mkModes [modeM', modeI']
-    , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ (modeI', M.fromList [(ObjName "Nat", TypeSig [])])
-                , (modeM', M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy])])
-                ]
-          , dGens = M.fromList [(modeI', M.fromList [(dblName, dblDecl)])]
-          , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
-          }
-  src <- case validateDoctrine srcDoc of
+        withSelfClassifiedCtors
+          [ (modeI', [(ObjName "Nat", [])])
+          , (modeM', [(ObjName "Vec", [TPS_Tm natTy])])
+          ]
+          Doctrine
+            { dName = "TgtStructuredTm"
+            , dModes = mkModes [modeM', modeI']
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(modeI', M.fromList [(dblName, dblDecl)])]
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  src <- case validateDoctrineNormalized srcDoc of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right () -> pure srcDoc
-  tgt <- case validateDoctrine tgtDoc of
+  tgt <- case validateDoctrineNormalized tgtDoc of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right () -> pure tgtDoc
   dblImg <- case genD modeI' [natTy] [natTy] dblName of
@@ -1162,7 +1349,7 @@ testMorphismMapsStructuredTermArgs = do
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
   let tySrc = mkCon vecRef [OATm tmSrc]
-  tyTgt <- case applyMorphismTy mor tySrc of
+  tyTgt <- case applyMorphismTyNormalized mor tySrc of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right ty -> pure ty
   case tyTgt of
@@ -1187,38 +1374,41 @@ testMorphismWeakenImageTmCtx = do
           , gdMode = mode
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort tyX]
           , gdCod = [tyX]
           , gdAttrs = []
           }
   let srcDoc =
-        Doctrine
-          { dName = "SrcWeakenMorph"
-          , dModes = mkModes [mode]
-          , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes = M.singleton mode (M.singleton (ObjName "X") (TypeSig []))
-          , dGens = M.singleton mode (M.singleton srcName (mkGen srcName))
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          }
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "X", [])])]
+          Doctrine
+            { dName = "SrcWeakenMorph"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.singleton mode (M.singleton srcName (mkGen srcName))
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
   let tgtDoc =
-        Doctrine
-          { dName = "TgtWeakenMorph"
-          , dModes = mkModes [mode]
-          , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes = M.singleton mode (M.singleton (ObjName "X") (TypeSig []))
-          , dGens = M.singleton mode (M.singleton tgtName (mkGen tgtName))
-          , dCells2 = []
-          , dActions = M.empty
-          , dObligations = []
-          }
-  src <- case validateDoctrine srcDoc of
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "X", [])])]
+          Doctrine
+            { dName = "TgtWeakenMorph"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.singleton mode (M.singleton tgtName (mkGen tgtName))
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  src <- case validateDoctrineNormalized srcDoc of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right () -> pure srcDoc
-  tgt <- case validateDoctrine tgtDoc of
+  tgt <- case validateDoctrineNormalized tgtDoc of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right () -> pure tgtDoc
   img <- case genD mode [tyX] [tyX] tgtName of
@@ -1241,7 +1431,7 @@ testMorphismWeakenImageTmCtx = do
   srcDiag <- case genDTm mode [tyX] [tyX] [tyX] srcName of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right d -> pure d
-  mapped <- case applyMorphismDiagram mor srcDiag of
+  mapped <- case applyMorphismDiagramNormalized mor srcDiag of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right d -> pure d
   dTmCtx mapped @?= [tyX]
@@ -1258,7 +1448,6 @@ strTy = mkCon (ObjRef modeM (ObjName "Str")) []
 mkMonoid :: Either Text Doctrine
 mkMonoid = do
   let mt = mkModes [modeM]
-  let types = M.fromList [(modeM, M.fromList [(ObjName "A", TypeSig [])])]
   assoc <- assocRule "assoc" aTy (GenName "mul")
   unitL <- unitRule "unitL" aTy (GenName "unit") (GenName "mul") True
   unitR <- unitRule "unitR" aTy (GenName "unit") (GenName "mul") False
@@ -1272,6 +1461,7 @@ mkMonoid = do
                       , gdMode = modeM
                       , gdTyVars = []
                       , gdTmVars = []
+                      , gdParams = []
                       , gdDom = map InPort []
                       , gdCod = [aTy]
                       , gdAttrs = []
@@ -1283,6 +1473,7 @@ mkMonoid = do
                       , gdMode = modeM
                       , gdTyVars = []
                       , gdTmVars = []
+                      , gdParams = []
                       , gdDom = map InPort [aTy, aTy]
                       , gdCod = [aTy]
                       , gdAttrs = []
@@ -1291,25 +1482,26 @@ mkMonoid = do
                 ]
             )
           ]
-  let doc = Doctrine
-        { dName = "Monoid"
-        , dModes = mt
-    , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-        , dTypes = types
-        , dGens = gens
-        , dCells2 = [assoc { c2Class = Structural }, unitL, unitR]
-      , dActions = M.empty
-      , dObligations = []
-        }
-  case validateDoctrine doc of
+  let doc =
+        withSelfClassifiedCtors
+          [(modeM, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "Monoid"
+            , dModes = mt
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = gens
+            , dCells2 = [assoc { c2Class = Structural }, unitL, unitR]
+            , dActions = M.empty
+            , dObligations = []
+            }
+  case validateDoctrineNormalized doc of
     Left err -> Left err
     Right () -> Right doc
 
 mkStringMonoid :: Either Text Doctrine
 mkStringMonoid = do
   let mt = mkModes [modeM]
-  let types = M.fromList [(modeM, M.fromList [(ObjName "Str", TypeSig [])])]
   assoc <- assocRule "assoc" strTy (GenName "append")
   unitL <- unitRule "unitL" strTy (GenName "empty") (GenName "append") True
   unitR <- unitRule "unitR" strTy (GenName "empty") (GenName "append") False
@@ -1323,6 +1515,7 @@ mkStringMonoid = do
                       , gdMode = modeM
                       , gdTyVars = []
                       , gdTmVars = []
+                      , gdParams = []
                       , gdDom = map InPort []
                       , gdCod = [strTy]
                       , gdAttrs = []
@@ -1334,6 +1527,7 @@ mkStringMonoid = do
                       , gdMode = modeM
                       , gdTyVars = []
                       , gdTmVars = []
+                      , gdParams = []
                       , gdDom = map InPort [strTy, strTy]
                       , gdCod = [strTy]
                       , gdAttrs = []
@@ -1342,18 +1536,20 @@ mkStringMonoid = do
                 ]
             )
           ]
-  let doc = Doctrine
-        { dName = "StringMonoid"
-        , dModes = mt
-    , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-        , dTypes = types
-        , dGens = gens
-        , dCells2 = [assoc { c2Class = Structural }, unitL, unitR]
-      , dActions = M.empty
-      , dObligations = []
-        }
-  case validateDoctrine doc of
+  let doc =
+        withSelfClassifiedCtors
+          [(modeM, [(ObjName "Str", [])])]
+          Doctrine
+            { dName = "StringMonoid"
+            , dModes = mt
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = gens
+            , dCells2 = [assoc { c2Class = Structural }, unitL, unitR]
+            , dActions = M.empty
+            , dObligations = []
+            }
+  case validateDoctrineNormalized doc of
     Left err -> Left err
     Right () -> Right doc
 
@@ -1453,15 +1649,17 @@ elabProgram src = do
 morphismCheckAllProgram :: Text
 morphismCheckAllProgram =
   "doctrine S where {\n"
-    <> "  mode M;\n"
-    <> "  type B @M;\n"
+    <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen f : [B] -> [B] @M;\n"
     <> "  rule computational f_id -> : [B] -> [B] @M =\n"
     <> "    f == id[B]\n"
     <> "}\n"
     <> "doctrine T where {\n"
-    <> "  mode M;\n"
-    <> "  type B @M;\n"
+    <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen g : [B] -> [B] @M;\n"
     <> "}\n"
     <> "morphism m : S -> T where {\n"
@@ -1484,13 +1682,15 @@ morphismCheckNoneProgram =
 morphismBadBoundaryProgram :: Text
 morphismBadBoundaryProgram =
   "doctrine S where {\n"
-    <> "  mode M;\n"
-    <> "  type B @M;\n"
+    <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen and : [B, B] -> [B] @M;\n"
     <> "}\n"
     <> "doctrine T where {\n"
-    <> "  mode M;\n"
-    <> "  type B @M;\n"
+    <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen true : [] -> [B] @M;\n"
     <> "}\n"
     <> "morphism bad : S -> T where {\n"
@@ -1502,8 +1702,9 @@ morphismBadBoundaryProgram =
 wireMetaRuleProgram :: Text
 wireMetaRuleProgram =
   "doctrine D where {\n"
-    <> "  mode M;\n"
-    <> "  type B @M;\n"
+    <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen true : [] -> [B] @M;\n"
     <> "  gen and : [B, B] -> [B] @M;\n"
     <> "  rule computational and_true_r -> : [B] -> [B] @M =\n"
@@ -1513,8 +1714,9 @@ wireMetaRuleProgram =
 wireMetaDuplicateProgram :: Text
 wireMetaDuplicateProgram =
   "doctrine D where {\n"
-    <> "  mode M;\n"
-    <> "  type B @M;\n"
+    <> "  mode M classifiedBy M via U_M;\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen B : [] -> [U_M] @M;\n"
     <> "  gen true : [] -> [B] @M;\n"
     <> "  gen and : [B, B] -> [B] @M;\n"
     <> "  rule computational and_bad -> : [B] -> [B] @M =\n"

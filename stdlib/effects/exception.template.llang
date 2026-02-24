@@ -1,7 +1,7 @@
 doctrine ExceptionSchema where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type E @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen E : [] -> [M.U_M] @M;
 }
 
 doctrine_functor Exception(L : ExceptionSchema) where {

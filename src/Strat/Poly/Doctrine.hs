@@ -1,17 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Doctrine
   ( InputShape(..)
+  , GenParam(..)
   , BinderSig(..)
   , GenDecl(..)
   , ModAction(..)
   , ObligationDecl(..)
-  , ParamSig(..)
-  , TypeSig(..)
   , Doctrine(..)
   , gdPlainDom
+  , isTypeDeclGenName
   , mkTypeTheory
   , doctrineTypeTheory
-  , lookupTypeSig
+  , deriveCtorTables
+  , lookupCtorSigForOwner
+  , lookupCtorRefForOwner
   , checkType
   , checkModTransformWitness
   , validateDoctrine
@@ -24,9 +26,12 @@ import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import qualified Data.Text as T
+import Data.Ord (comparing)
 import Data.Maybe (mapMaybe)
+import Control.Monad (foldM)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Obj
+import Strat.Poly.ObjClassifier (modeClassifierMode, modeUniverseObj)
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
   , DefFragment(..)
@@ -51,16 +56,6 @@ import Strat.Poly.Term.AST (TermExpr(..))
 import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
 import qualified Strat.Poly.Term.RewriteSystem as RS
 
-
-data ParamSig
-  = PS_Ty ModeName
-  | PS_Tm Obj
-  deriving (Eq, Ord, Show)
-
-newtype TypeSig = TypeSig
-  { tsParams :: [ParamSig]
-  } deriving (Eq, Ord, Show)
-
 data BinderSig = BinderSig
   { bsTmCtx :: [Obj]
   , bsDom :: Context
@@ -72,11 +67,17 @@ data InputShape
   | InBinder BinderSig
   deriving (Eq, Ord, Show)
 
+data GenParam
+  = GP_Ty TmVar
+  | GP_Tm TmVar
+  deriving (Eq, Ord, Show)
+
 data GenDecl = GenDecl
   { gdName :: GenName
   , gdMode :: ModeName
   , gdTyVars :: [TmVar]
   , gdTmVars :: [TmVar]
+  , gdParams :: [GenParam]
   , gdDom :: [InputShape]
   , gdCod :: Context
   , gdAttrs :: [(AttrName, AttrSort)]
@@ -107,12 +108,23 @@ gdPlainDom gd =
   | InPort ty <- gdDom gd
   ]
 
+isTypeDeclGenName :: Doctrine -> ModeName -> GenName -> Bool
+isTypeDeclGenName doc classifierMode (GenName name) =
+  case deriveCtorTables doc of
+    Left _ -> False
+    Right tables ->
+      any
+        (\(ownerMode, table) ->
+            modeClassifierMode (dModes doc) ownerMode == classifierMode
+              && M.member (ObjName name) table
+        )
+        (M.toList tables)
+
 data Doctrine = Doctrine
   { dName :: Text
   , dModes :: ModeTheory
   , dAcyclicModes :: S.Set ModeName
   , dAttrSorts :: M.Map AttrSort AttrSortDecl
-  , dTypes :: M.Map ModeName (M.Map ObjName TypeSig)
   , dGens :: M.Map ModeName (M.Map GenName GenDecl)
   , dCells2 :: [Cell2]
   , dActions :: M.Map ModName ModAction
@@ -124,34 +136,47 @@ doctrineTypeTheory = mkTypeTheory
 
 mkTypeTheory :: Doctrine -> Either Text TypeTheory
 mkTypeTheory doc = do
-  let tt0 = doctrineTypeTheoryBase doc
+  tt0 <- doctrineTypeTheoryBase doc
   trs <- compileAllTermRules tt0
   let fragments = setFragmentTRS (dModes doc) (ttDefFragments tt0) trs
   mapM_ checkFragmentTermination (M.elems fragments)
   mapM_ checkFragmentConfluence (M.elems fragments)
   pure tt0 { ttDefFragments = fragments }
 
-doctrineTypeTheoryBase :: Doctrine -> TypeTheory
+doctrineTypeTheoryBase :: Doctrine -> Either Text TypeTheory
 doctrineTypeTheoryBase doc =
   let tmFuns = derivedTmFuns doc
       tmRules = derivedTmRules doc tmFuns
       fragments0 = mkDefFragments (dModes doc) tmFuns tmRules M.empty
-   in
-    TypeTheory
-      { ttModes = dModes doc
-      , ttObjParams =
-          M.fromList
-            [ (ObjRef mode tyName, map toTParam (tsParams sig))
-            | (mode, typeTable) <- M.toList (dTypes doc)
-            , (tyName, sig) <- M.toList typeTable
-            ]
-      , ttDefFragments = fragments0
-      }
+   in do
+        ctorTables <- deriveCtorTables doc
+        ctorObjParams <- ctorObjParamsFromTables doc ctorTables
+        pure
+          TypeTheory
+            { ttModes = dModes doc
+            , ttObjParams = ctorObjParams
+            , ttDefFragments = fragments0
+            }
   where
-    toTParam ps =
-      case ps of
-        PS_Ty m -> TPS_Ty m
-        PS_Tm sortTy -> TPS_Tm sortTy
+    ctorObjParamsFromTables d tables =
+      foldM insertOwner M.empty (M.toList tables)
+      where
+        insertOwner acc (ownerMode, table) =
+          foldM (insertOne ownerMode) acc (M.toList table)
+        insertOne ownerMode acc (ctorName, sig) =
+          let classifierMode = modeClassifierMode (dModes d) ownerMode
+              ref = ObjRef classifierMode ctorName
+           in case M.lookup ref acc of
+                Nothing -> Right (M.insert ref sig acc)
+                Just sig0
+                  | sig0 == sig -> Right acc
+                  | otherwise ->
+                      Left
+                        ( "constructor `"
+                            <> unObjName ctorName
+                            <> "` has conflicting signatures across owner modes for classifier "
+                            <> renderMode classifierMode
+                        )
 
 mkDefFragments
   :: ModeTheory
@@ -239,6 +264,7 @@ derivedTmFuns doc =
               [ (TmFunName gName, TmFunSig { tfsArgs = [ ty | InPort ty <- gdDom gd ], tfsRes = res })
               | gd <- M.elems table
               , let GenName gName = gdName gd
+              , not (isTypeDeclGenName doc mode (gdName gd))
               , null (gdTyVars gd)
               , null (gdTmVars gd)
               , null (gdAttrs gd)
@@ -313,7 +339,6 @@ validateDoctrine doc = do
     else Left "validateDoctrine: acyclic mode references unknown mode"
   tt <- mkTypeTheory doc
   mapM_ checkAttrSortDecl (M.toList (dAttrSorts doc))
-  mapM_ (checkTypeTable doc tt) (M.toList (dTypes doc))
   mapM_ (checkGenTable doc tt) (M.toList (dGens doc))
   mapM_ (checkCell doc tt) (dCells2 doc)
   mapM_ (checkAction doc) (M.toList (dActions doc))
@@ -324,33 +349,163 @@ validateDoctrine doc = do
 modeIsAcyclic :: Doctrine -> ModeName -> Bool
 modeIsAcyclic doc mode = mode `S.member` dAcyclicModes doc
 
-lookupTypeSig :: Doctrine -> ObjRef -> Either Text TypeSig
-lookupTypeSig doc ref =
-  case M.lookup (orMode ref) (dTypes doc) of
-    Nothing -> Left "lookupTypeSig: unknown mode for type"
-    Just table ->
-      case M.lookup (orName ref) table of
-        Nothing -> Left "lookupTypeSig: unknown type constructor"
-        Just sig -> Right sig
+deriveCtorTables :: Doctrine -> Either Text (M.Map ModeName (M.Map ObjName [TypeParamSig]))
+deriveCtorTables doc = do
+  pairs <- mapM deriveForOwner (M.keys (mtModes (dModes doc)))
+  pure (M.fromList pairs)
+  where
+    deriveForOwner ownerMode = do
+      let classifierMode = modeClassifierMode (dModes doc) ownerMode
+      table <-
+        case modeUniverseObj (dModes doc) ownerMode of
+          Just universe
+            | not (isPendingUniverse universe) -> do
+                universeNorm <- normalizeObjExpr (dModes doc) universe
+                fromGens <- deriveFromGens classifierMode universeNorm
+                implicit <- implicitUniverseCtor classifierMode universeNorm
+                mergeCtorTables fromGens implicit
+          _ -> Right M.empty
+      pure (ownerMode, table)
+
+    implicitUniverseCtor classifierMode universeNorm =
+      case universeNorm of
+        Obj _ (CTCon ref [])
+          | orMode ref == classifierMode ->
+              Right (M.singleton (orName ref) [])
+        _ -> Right M.empty
+
+    deriveFromGens classifierMode universeNorm =
+      foldM addCtor M.empty (M.elems (M.findWithDefault M.empty classifierMode (dGens doc)))
+      where
+        addCtor acc gd
+          | not (isCtorLike gd) = Right acc
+          | otherwise =
+              case gdCod gd of
+                [codTy] -> do
+                  codNorm <- normalizeObjExpr (dModes doc) codTy
+                  let include = codNorm == universeNorm
+                  if include
+                    then do
+                      sig <- ctorSigFromGen gd
+                      insertCtorSig (genToObjName (gdName gd)) sig acc
+                    else Right acc
+                _ -> Right acc
+
+    isCtorLike gd =
+      null (gdAttrs gd) && null (gdDom gd)
+
+    mergeCtorTables a b =
+      foldM
+        (\acc (name, sig) -> insertCtorSig name sig acc)
+        a
+        (M.toList b)
+
+    ctorSigFromGen gd = do
+      let tyVars = gdTyVars gd
+      let tmVars = gdTmVars gd
+      let tySet = S.fromList tyVars
+      mapM_ (ensureClosedTmSort tySet) tmVars
+      pure
+        [ case gp of
+            GP_Ty v -> TPS_Ty (tyVarOwnerMode v)
+            GP_Tm v -> TPS_Tm (tmvSort v)
+        | gp <- gdParams gd
+        ]
+      where
+        ensureClosedTmSort tySet tmVar =
+          let bad = S.intersection (freeObjVarsObj (tmvSort tmVar)) tySet
+           in if S.null bad
+                then Right ()
+                else
+                  Left
+                    ( "constructor generator `"
+                        <> renderGen (gdName gd)
+                        <> "` has term parameter `"
+                        <> tmvName tmVar
+                        <> "` whose sort mentions type parameters; this is not supported in this Phase 6 cut"
+                    )
+
+    insertCtorSig name sig acc =
+      case M.lookup name acc of
+        Nothing -> Right (M.insert name sig acc)
+        Just sig0
+          | sig0 == sig -> Right acc
+          | otherwise ->
+              Left
+                ( "duplicate constructor `"
+                    <> unObjName name
+                    <> "` with incompatible signatures in classifier vocabulary"
+                )
+
+    genToObjName (GenName name) = ObjName name
+    isPendingUniverse obj =
+      case objCode obj of
+        CTMeta v -> tmvName v == "__pending_universe"
+        _ -> False
+
+orderedGenParams :: [TmVar] -> [TmVar] -> [GenParam]
+orderedGenParams tyVars tmVars =
+  map snd (L.sortBy (comparing fst) tagged)
+  where
+    tagged =
+      [ ((tyParamPos v, 0 :: Int, i), GP_Ty v)
+      | (i, v) <- zip [0 :: Int ..] tyVars
+      ]
+        <> [ ((tmParamPos v, 1 :: Int, i), GP_Tm v)
+           | (i, v) <- zip [0 :: Int ..] tmVars
+           ]
+    tyParamPos v =
+      if tmvScope v >= 0 then tmvScope v else 0
+    tmParamPos v =
+      if tmvScope v < 0 then negate (tmvScope v) - 1 else tmvScope v
+
+lookupCtorRefForOwner :: Doctrine -> ModeName -> ObjName -> Either Text (Maybe ObjRef)
+lookupCtorRefForOwner doc ownerMode ctorName = do
+  table <- lookupCtorTableForOwner doc ownerMode
+  let classifierMode = modeClassifierMode (dModes doc) ownerMode
+  pure
+    ( case M.lookup ctorName table of
+        Nothing -> Nothing
+        Just _ -> Just (ObjRef classifierMode ctorName)
+    )
+
+lookupCtorSigForOwner :: Doctrine -> ModeName -> ObjRef -> Either Text [TypeParamSig]
+lookupCtorSigForOwner doc ownerMode ref = do
+  let classifierMode = modeClassifierMode (dModes doc) ownerMode
+  if orMode ref == classifierMode
+    then Right ()
+    else
+      Left
+        ( "constructor qualifier mode mismatch: owner mode "
+            <> renderMode ownerMode
+            <> " is classified by "
+            <> renderMode classifierMode
+        )
+  table <- lookupCtorTableForOwner doc ownerMode
+  case M.lookup (orName ref) table of
+    Nothing ->
+      Left
+        ( "unknown constructor `"
+            <> unObjName (orName ref)
+            <> "` for owner mode "
+            <> renderMode ownerMode
+            <> " (classifier "
+            <> renderMode classifierMode
+            <> "); available: "
+            <> renderCtorNames (M.keys table)
+        )
+    Just sig -> Right sig
+  where
+    renderCtorNames [] = "(none)"
+    renderCtorNames names = T.intercalate ", " (map unObjName names)
+
+lookupCtorTableForOwner :: Doctrine -> ModeName -> Either Text (M.Map ObjName [TypeParamSig])
+lookupCtorTableForOwner doc ownerMode = do
+  tables <- deriveCtorTables doc
+  pure (M.findWithDefault M.empty ownerMode tables)
 
 checkModeTheory :: ModeTheory -> Either Text ()
 checkModeTheory = checkWellFormed
-
-checkTypeTable :: Doctrine -> TypeTheory -> (ModeName, M.Map ObjName TypeSig) -> Either Text ()
-checkTypeTable doc tt (mode, table)
-  | M.member mode (mtModes (dModes doc)) = mapM_ checkSig (M.toList table)
-  | otherwise = Left "validateDoctrine: types for unknown mode"
-  where
-    checkSig (_name, sig) = mapM_ checkParam (tsParams sig)
-    checkParam ps =
-      case ps of
-        PS_Ty m ->
-          if M.member m (mtModes (dModes doc))
-            then Right ()
-            else Left "validateDoctrine: type signature uses unknown mode"
-        PS_Tm sortTy -> do
-          checkType doc tt [] [] [] sortTy
-          Right ()
 
 checkGenTable :: Doctrine -> TypeTheory -> (ModeName, M.Map GenName GenDecl) -> Either Text ()
 checkGenTable doc tt (mode, gens)
@@ -361,8 +516,12 @@ checkGen :: Doctrine -> TypeTheory -> ModeName -> GenDecl -> Either Text ()
 checkGen doc tt mode gd
   | gdMode gd /= mode = Left "validateDoctrine: generator stored under wrong mode"
   | otherwise = do
+      let expectedParams = orderedGenParams (gdTyVars gd) (gdTmVars gd)
+      if gdParams gd == expectedParams
+        then Right ()
+        else Left "validateDoctrine: generator parameter order metadata mismatch"
       checkTyVarModes doc (gdTyVars gd)
-      checkTmVarModes doc tt (gdTmVars gd)
+      checkTmVarModes doc tt (gdTyVars gd) (gdTmVars gd)
       ensureDistinctTyVars ("validateDoctrine: duplicate generator tyvars in " <> renderGen (gdName gd)) (gdTyVars gd)
       ensureDistinctTmVars ("validateDoctrine: duplicate generator term vars in " <> renderGen (gdName gd)) (gdTmVars gd)
       mapM_ (checkInputShape doc tt mode (gdTyVars gd) (gdTmVars gd)) (gdDom gd)
@@ -401,7 +560,7 @@ checkCell doc tt cell = do
     then Left "validateDoctrine: empty LHS rules are disallowed (use an explicit marker generator if you need insertion)"
     else Right ()
   checkTyVarModes doc (c2TyVars cell)
-  checkTmVarModes doc tt (c2TmVars cell)
+  checkTmVarModes doc tt (c2TyVars cell) (c2TmVars cell)
   ensureDistinctTyVars ("validateDoctrine: duplicate cell tyvars in " <> c2Name cell) (c2TyVars cell)
   ensureDistinctTmVars ("validateDoctrine: duplicate cell term vars in " <> c2Name cell) (c2TmVars cell)
   if dMode (c2LHS cell) /= dMode (c2RHS cell)
@@ -474,8 +633,7 @@ checkType doc tt tyvars tmvars tmCtx ty =
             else Left "validateDoctrine: type variable has unknown mode"
         else Left "validateDoctrine: unknown type variable"
     OCon ref args -> do
-      sig <- lookupTypeSig doc ref
-      let params = tsParams sig
+      params <- lookupCtorSigForOwner doc (objOwnerMode ty) ref
       if length params /= length args
         then Left "validateDoctrine: type constructor arity mismatch"
         else mapM_ (checkArg ref) (zip params args)
@@ -484,12 +642,12 @@ checkType doc tt tyvars tmvars tmCtx ty =
       _ <- normalizeObjExpr (dModes doc) ty
       Right ()
   where
-    checkArg _ (PS_Ty m, OAObj argTy) = do
+    checkArg _ (TPS_Ty m, OAObj argTy) = do
       checkType doc tt tyvars tmvars tmCtx argTy
       if objOwnerMode argTy == m
         then Right ()
         else Left "validateDoctrine: type constructor argument mode mismatch"
-    checkArg _ (PS_Tm sortTy, OATm tmTerm) = do
+    checkArg _ (TPS_Tm sortTy, OATm tmTerm) = do
       checkType doc tt tyvars tmvars tmCtx sortTy
       checkTmTerm doc tt tyvars tmvars tmCtx sortTy tmTerm
     checkArg _ _ = Left "validateDoctrine: type argument kind mismatch"
@@ -530,12 +688,12 @@ checkTyVarModes doc vars =
     then Right ()
     else Left "validateDoctrine: type variable has unknown mode"
 
-checkTmVarModes :: Doctrine -> TypeTheory -> [TmVar] -> Either Text ()
-checkTmVarModes doc tt vars =
+checkTmVarModes :: Doctrine -> TypeTheory -> [TmVar] -> [TmVar] -> Either Text ()
+checkTmVarModes doc tt tyVars vars =
   mapM_ checkOne vars
   where
     checkOne v = do
-      checkType doc tt [] vars [] (tmvSort v)
+      checkType doc tt tyVars vars [] (tmvSort v)
       Right ()
 
 checkAttrSortDecl :: (AttrSort, AttrSortDecl) -> Either Text ()
@@ -565,7 +723,10 @@ checkAction doc (name, action) = do
       Just d -> Right d
   let srcMode = mdSrc decl
   let tgtMode = mdTgt decl
-  let srcGens = M.findWithDefault M.empty srcMode (dGens doc)
+  let srcGens =
+        M.filterWithKey
+          (\gName _ -> not (isTypeDeclGenName doc srcMode gName))
+          (M.findWithDefault M.empty srcMode (dGens doc))
   let checkGenImage g = do
         img <-
           case M.lookup (srcMode, g) (maGenMap action) of
@@ -671,3 +832,9 @@ tyVarOwnerMode v =
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
+
+unObjName :: ObjName -> Text
+unObjName (ObjName t) = t
+
+renderMode :: ModeName -> Text
+renderMode (ModeName t) = t

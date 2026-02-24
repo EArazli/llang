@@ -14,7 +14,15 @@ import qualified Data.Set as S
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
 import Strat.Poly.Attr
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), ParamSig(..), InputShape(..), BinderSig(..), lookupTypeSig, gdPlainDom, doctrineTypeTheory)
+import Strat.Poly.Doctrine
+  ( Doctrine(..)
+  , GenDecl(..)
+  , InputShape(..)
+  , BinderSig(..)
+  , lookupCtorSigForOwner
+  , gdPlainDom
+  , doctrineTypeTheory
+  )
 import Strat.Poly.DSL.AST (RawPolyObjExpr(..), RawTypeRef(..), RawModExpr(..))
 import Strat.Poly.Diagram (Diagram(..), idD, genD, unionDiagram, diagramDom, diagramCod, freeObjVarsDiagram, freeTmVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
 import Strat.Poly.Graph
@@ -41,9 +49,9 @@ import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurface
 import Strat.Poly.Surface.Spec
 import Strat.Poly.Obj (Obj(Obj, objOwnerMode, objCode), ObjName(..), ObjVar, ovName, ovMode, TmVar, Context, CodeArg(..), CodeTerm(..), objMode, freeObjVarsObj, freeTmVarsObj)
 import Strat.Poly.ObjClassifier (modeUniverseObj)
-import Strat.Poly.ObjResolve (resolveTypeRef)
+import Strat.Poly.ObjResolve (resolveTypeRef, resolveTypeRefMaybe)
 import qualified Strat.Poly.Obj as Ty
-import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..), modeOnlyTypeTheory)
 import qualified Strat.Poly.UnifyObj as U
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Util.List (dedupe)
@@ -280,8 +288,7 @@ elabSurfaceObjExpr doc mode expr =
                   }
         Nothing -> do
           ref <- resolveTypeRef doc mode rawRef
-          sig <- lookupTypeSig doc ref
-          let params = tsParams sig
+          params <- lookupCtorSigForOwner doc mode ref
           if length params /= length args
             then Left "surface: type constructor arity mismatch"
             else do
@@ -291,12 +298,12 @@ elabSurfaceObjExpr doc mode expr =
   where
     elabOneArg ctorName (argIx, param, rawArg) =
       case param of
-        PS_Ty m -> do
+        TPS_Ty m -> do
           argTy <- elabSurfaceObjExpr doc m rawArg
           if objOwnerMode argTy == m
             then Right (CAObj argTy)
             else Left "surface: type constructor argument mode mismatch"
-        PS_Tm _ ->
+        TPS_Tm _ ->
           Left
             ( "surface: constructor `"
                 <> ctorName
@@ -306,26 +313,24 @@ elabSurfaceObjExpr doc mode expr =
             )
 
     resolveNullaryCtor rawRef =
-      case resolveTypeRef doc mode rawRef of
-        Right ref -> do
-          sig <- lookupTypeSig doc ref
-          if null (tsParams sig)
-            then Right (Just ref)
-            else
-              Left
-                ( "surface: constructor `"
-                    <> rtrName rawRef
-                    <> "` resolves in classifier mode "
-                    <> renderMode (Ty.orMode ref)
-                    <> " with arity "
-                    <> T.pack (show (length (tsParams sig)))
-                    <> "; use explicit constructor arguments"
-                )
-        Left err
-          | "unknown type constructor" `T.isPrefixOf` err ->
-              Right Nothing
-          | otherwise ->
-              Left err
+      do
+        mRef <- resolveTypeRefMaybe doc mode rawRef
+        case mRef of
+          Nothing -> Right Nothing
+          Just ref -> do
+            params <- lookupCtorSigForOwner doc mode ref
+            if null params
+              then Right (Just ref)
+              else
+                Left
+                  ( "surface: constructor `"
+                      <> rtrName rawRef
+                      <> "` resolves in classifier mode "
+                      <> renderMode (Ty.orMode ref)
+                      <> " with arity "
+                      <> T.pack (show (length params))
+                      <> "; use explicit constructor arguments"
+                  )
 
     asModalityCall rawRef0 args0 =
       case (rtrMode rawRef0, rtrName rawRef0, args0) of
@@ -345,11 +350,17 @@ elabSurfaceObjExpr doc mode expr =
     hasModality tok = M.member (ModName tok) (mtDecls (dModes doc))
 
     hasQualifiedType modeTok tyTok =
-      let mode' = ModeName modeTok
-          tyName = ObjName tyTok
-       in case M.lookup mode' (dTypes doc) of
-            Nothing -> False
-            Just table -> M.member tyName table
+      case
+        resolveTypeRefMaybe
+          doc
+          mode
+          RawTypeRef
+            { rtrMode = Just modeTok
+            , rtrName = tyTok
+            }
+      of
+        Right (Just _) -> True
+        _ -> False
 
     renderMode (ModeName n) = n
 

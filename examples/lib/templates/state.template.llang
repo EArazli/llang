@@ -1,14 +1,14 @@
 doctrine Base where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type Nat @M;
-  type Bool @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen Nat : [] -> [M.U_M] @M;
+  gen Bool : [] -> [M.U_M] @M;
 }
 
 doctrine StateSchema where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type S @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen S : [] -> [M.U_M] @M;
 }
 
 morphism chooseNat : StateSchema -> Base where {

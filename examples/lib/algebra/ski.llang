@@ -1,7 +1,7 @@
 import "../../../stdlib/struct.cartesian.llang";
 
 doctrine SKI extends StructCartesian where {
-  type T @M;
+  gen T : [] -> [U_M] @M;
 
   gen s : [] -> [T] @M;
   gen k : [] -> [T] @M;

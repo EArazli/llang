@@ -3,17 +3,17 @@ import "./struct_caps.llang";
 
 doctrine QuadDiscipline where {
   mode Lin classifiedBy Lin via Lin.U_Lin;
-  type U_Lin @Lin;
+  gen U_Lin : [] -> [Lin.U_Lin] @Lin;
   mode Aff classifiedBy Aff via Aff.U_Aff;
-  type U_Aff @Aff;
+  gen U_Aff : [] -> [Aff.U_Aff] @Aff;
   mode Rel classifiedBy Rel via Rel.U_Rel;
-  type U_Rel @Rel;
+  gen U_Rel : [] -> [Rel.U_Rel] @Rel;
   mode Cart classifiedBy Cart via Cart.U_Cart;
-  type U_Cart @Cart;
-  type Base @Lin;
-  type Base @Aff;
-  type Base @Rel;
-  type Base @Cart;
+  gen U_Cart : [] -> [Cart.U_Cart] @Cart;
+  gen Base : [] -> [Lin.U_Lin] @Lin;
+  gen Base : [] -> [Aff.U_Aff] @Aff;
+  gen Base : [] -> [Rel.U_Rel] @Rel;
+  gen Base : [] -> [Cart.U_Cart] @Cart;
 
   gen pair : [Lin.Base, Lin.Base] -> [Lin.Base] @Lin;
   gen pair : [Aff.Base, Aff.Base] -> [Aff.Base] @Aff;

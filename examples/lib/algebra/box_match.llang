@@ -1,7 +1,7 @@
 doctrine BoxMatch where {
   mode M classifiedBy M via M.U_M;
-  type U_M @M;
-  type A @M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen A : [] -> [M.U_M] @M;
 
   gen f : [A] -> [A] @M;
   gen g : [A] -> [A] @M;

@@ -9,12 +9,12 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ClassificationDecl(..))
 import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), mkCon)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD)
 import Strat.Poly.Graph (Diagram)
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), TypeSig(..), InputShape(..), validateDoctrine)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), InputShape(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Coherence (checkCoherence, ObligationResult(..))
 import Strat.Poly.CriticalPairs (CPMode(..))
@@ -39,6 +39,12 @@ modeName = ModeName "M"
 aTy :: Obj
 aTy = mkCon (ObjRef modeName (ObjName "A")) []
 
+universeName :: ModeName -> ObjName
+universeName (ModeName n) = ObjName ("U_" <> n)
+
+universeObj :: ModeName -> Obj
+universeObj mode = mkCon (ObjRef mode (universeName mode)) []
+
 mkGenDecl :: Text -> GenDecl
 mkGenDecl name =
   GenDecl
@@ -46,6 +52,7 @@ mkGenDecl name =
     , gdMode = modeName
     , gdTyVars = []
     , gdTmVars = []
+    , gdParams = []
     , gdDom = map InPort [aTy]
     , gdCod = [aTy]
     , gdAttrs = []
@@ -66,7 +73,17 @@ mkCell name lhs rhs =
 mkDoctrine :: [Cell2] -> Doctrine
 mkDoctrine cells =
   let gens =
-        [ mkGenDecl "f"
+        [ GenDecl
+            { gdName = GenName "A"
+            , gdMode = modeName
+            , gdTyVars = []
+            , gdTmVars = []
+            , gdParams = []
+            , gdDom = []
+            , gdCod = [universeObj modeName]
+            , gdAttrs = []
+            }
+        , mkGenDecl "f"
         , mkGenDecl "g"
         , mkGenDecl "h"
         , mkGenDecl "k"
@@ -75,7 +92,6 @@ mkDoctrine cells =
       { dName = "D"
       , dModes = mkModes (S.singleton modeName)
       , dAcyclicModes = S.empty
-      , dTypes = M.fromList [(modeName, M.fromList [(ObjName "A", TypeSig [])])]
       , dGens = M.fromList [(modeName, M.fromList [(gdName g, g) | g <- gens])]
       , dCells2 = cells
       , dAttrSorts = M.empty
@@ -90,7 +106,11 @@ mkModes modes =
     , mtDecls = M.empty
     , mtEqns = []
     , mtTransforms = M.empty
-    , mtClassifiedBy = M.empty
+    , mtClassifiedBy =
+        M.fromList
+          [ (m, ClassificationDecl { cdClassifier = m, cdUniverse = universeObj m, cdTag = Nothing })
+          | m <- S.toList modes
+          ]
     }
 
 testCoherenceJoinable :: Assertion

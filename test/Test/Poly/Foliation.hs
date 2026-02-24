@@ -15,7 +15,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
-import Test.Poly.Helpers (mkModes)
+import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 
 
 tests :: TestTree
@@ -104,17 +104,18 @@ mkTwoStepDiag doc = do
 
 mkDoctrine :: Doctrine
 mkDoctrine =
-  Doctrine
-    { dName = "D"
-    , dModes = mkModes [modeM]
-    , dAcyclicModes = S.singleton modeM
-    , dAttrSorts = M.empty
-    , dTypes = M.fromList [(modeM, M.fromList [(ObjName "T", TypeSig [])])]
-    , dGens = M.fromList [(modeM, M.fromList [(GenName "a", genA), (GenName "b", genB), (GenName "c", genC)])]
-    , dCells2 = []
+  withSelfClassifiedCtors
+    [(modeM, [(ObjName "T", [])])]
+    Doctrine
+      { dName = "D"
+      , dModes = mkModes [modeM]
+      , dAcyclicModes = S.singleton modeM
+      , dAttrSorts = M.empty
+      , dGens = M.fromList [(modeM, M.fromList [(GenName "a", genA), (GenName "b", genB), (GenName "c", genC)])]
+      , dCells2 = []
       , dActions = M.empty
       , dObligations = []
-    }
+      }
 
 
 genA :: GenDecl
@@ -124,6 +125,7 @@ genA =
     , gdMode = modeM
     , gdTyVars = []
     , gdTmVars = []
+    , gdParams = []
     , gdDom = []
     , gdCod = [tyT]
     , gdAttrs = []
@@ -137,6 +139,7 @@ genB =
     , gdMode = modeM
     , gdTyVars = []
     , gdTmVars = []
+    , gdParams = []
     , gdDom = [InPort tyT]
     , gdCod = [tyT]
     , gdAttrs = []
@@ -150,6 +153,7 @@ genC =
     , gdMode = modeM
     , gdTyVars = []
     , gdTmVars = []
+    , gdParams = []
     , gdDom = [InPort tyT]
     , gdCod = []
     , gdAttrs = []

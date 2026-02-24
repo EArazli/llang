@@ -2,10 +2,10 @@ import "../../../stdlib/schema.monad.llang";
 
 doctrine IdMonad where {
   mode C classifiedBy C via C.U_C;
-  type U_C @C;
+  gen U_C : [] -> [C.U_C] @C;
   modality T : C -> C;
 
-  type A @C;
+  gen A : [] -> [C.U_C] @C;
 
   gen ret(a@C) : [a] -> [T(a)] @C;
   gen join(a@C) : [T(T(a))] -> [T(a)] @C;

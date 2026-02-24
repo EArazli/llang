@@ -2,17 +2,17 @@ import "../../../stdlib/schema.adjunction.llang";
 
 doctrine AdjReal where {
   mode C classifiedBy C via C.U_C;
-  type U_C @C;
+  gen U_C : [] -> [C.U_C] @C;
   mode L classifiedBy L via L.U_L;
-  type U_L @L;
+  gen U_L : [] -> [L.U_L] @L;
   modality F : C -> L;
   modality U : L -> C;
 
   mod_eq U.F -> id@C;
   mod_eq F.U -> id@L;
 
-  type X @C;
-  type Y @L;
+  gen X : [] -> [C.U_C] @C;
+  gen Y : [] -> [L.U_L] @L;
 
   gen eta(a@C) : [a] -> [U(F(a))] @C;
   gen eps(b@L) : [F(U(b))] -> [b] @L;

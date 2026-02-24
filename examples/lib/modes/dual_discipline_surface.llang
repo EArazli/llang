@@ -2,11 +2,11 @@ import "./struct_caps.llang";
 
 doctrine DualDiscipline where {
   mode Lin classifiedBy Lin via Lin.U_Lin;
-  type U_Lin @Lin;
+  gen U_Lin : [] -> [Lin.U_Lin] @Lin;
   mode Cart classifiedBy Cart via Cart.U_Cart;
-  type U_Cart @Cart;
-  type Num @Lin;
-  type Num @Cart;
+  gen U_Cart : [] -> [Cart.U_Cart] @Cart;
+  gen Num : [] -> [Lin.U_Lin] @Lin;
+  gen Num : [] -> [Cart.U_Cart] @Cart;
 
   gen one : [] -> [Lin.Num] @Lin;
   gen sink : [Lin.Num, Lin.Num] -> [] @Lin;

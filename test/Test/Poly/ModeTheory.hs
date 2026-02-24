@@ -21,18 +21,16 @@ import Strat.Poly.Doctrine
   , ObligationDecl(..)
   , GenDecl(..)
   , InputShape(..)
-  , TypeSig(..)
-  , ParamSig(..)
   , doctrineTypeTheory
   , gdPlainDom
   )
-import Strat.Poly.TypeTheory (TypeTheory(..), modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), modeOnlyTypeTheory)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genDTm, genD, diagramDom, diagramCod)
 import Strat.Poly.Graph (Diagram(..))
 import Strat.Poly.ModAction (applyAction)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
-import Test.Poly.Helpers (mkModes)
+import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 
 
 tests :: TestTree
@@ -70,7 +68,7 @@ testSelfClassificationDeferred = do
   let src = T.unlines
         [ "doctrine SelfClass where {"
         , "  mode Ty classifiedBy Ty via Ty.U;"
-        , "  type U @Ty;"
+        , "  gen U : [] -> [Ty.U] @Ty;"
         , "}"
         ]
   case parseRawFile src >>= elabRawFile of
@@ -83,8 +81,8 @@ testClassificationCycleRejected = do
         [ "doctrine BadCycle where {"
         , "  mode A classifiedBy B via B.U;"
         , "  mode B classifiedBy A via B.U;"
-        , "  type U @A;"
-        , "  type U @B;"
+        , "  gen U : [] -> [B.U] @A;"
+        , "  gen U : [] -> [B.U] @B;"
         , "}"
         ]
   case parseRawFile src >>= elabRawFile of
@@ -121,11 +119,11 @@ testClassifiedModalityNormalization = do
   let src = T.unlines
         [ "doctrine ClassifiedModality where {"
         , "  mode Ty classifiedBy Ty via Ty.U_Ty;"
-        , "  type U_Ty @Ty;"
+        , "  gen U_Ty : [] -> [Ty.U_Ty] @Ty;"
         , "  mode Tm classifiedBy Ty via Ty.U;"
         , "  modality mu : Tm -> Tm;"
-        , "  type U @Ty;"
-        , "  type X @Ty;"
+        , "  gen U : [] -> [Ty.U_Ty] @Ty;"
+        , "  gen X : [] -> [Ty.U] @Ty;"
         , "  gen idMu : [mu(X)] -> [mu(X)] @Tm;"
         , "}"
         ]
@@ -185,11 +183,11 @@ testActionElab = do
   let src = T.unlines
         [ "doctrine Act where {"
         , "  mode A classifiedBy A via A.U_A;"
-        , "  type U_A @A;"
+        , "  gen U_A : [] -> [A.U_A] @A;"
         , "  mode B classifiedBy B via B.U_B;"
-        , "  type U_B @B;"
-        , "  type X @A;"
-        , "  type Y @B;"
+        , "  gen U_B : [] -> [B.U_B] @B;"
+        , "  gen X : [] -> [A.U_A] @A;"
+        , "  gen Y : [] -> [B.U_B] @B;"
         , "  modality F : A -> B;"
         , "  gen g : [A.X] -> [A.X] @A;"
         , "  gen h : [B.Y] -> [B.Y] @B;"
@@ -213,10 +211,10 @@ testDefFragmentsCoverModes = do
   let src = T.unlines
         [ "doctrine DefFrags where {"
         , "  mode M classifiedBy M via M.U;"
-        , "  type U @M;"
+        , "  gen U : [] -> [M.U] @M;"
         , "  mode N classifiedBy N via N.V;"
-        , "  type V @N;"
-        , "  type A @M;"
+        , "  gen V : [] -> [N.V] @N;"
+        , "  gen A : [] -> [M.U] @M;"
         , "  gen idA : [A] -> [A] @M;"
         , "}"
         ]
@@ -256,30 +254,30 @@ testApplyActionUsesDiagramTmCtx = do
           , gdMode = modeC
           , gdTyVars = []
           , gdTmVars = [tmParam]
+          , gdParams = []
           , gdDom = [InPort vecParam]
           , gdCod = [vecParam]
           , gdAttrs = []
           }
   image <- requireEither (genDTm modeC tmCtx [vecParam] [vecParam] genName)
   let doc =
-        Doctrine
-          { dName = "ActTmCtx"
-          , dModes = mt
-          , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes =
-              M.fromList
-                [ (modeI, M.fromList [(ObjName "Nat", TypeSig [])])
-                , (modeC, M.fromList [(ObjName "Vec", TypeSig [PS_Tm natTy])])
-                ]
-          , dGens = M.fromList [(modeC, M.fromList [(genName, genDecl)])]
-          , dCells2 = []
-          , dActions =
-              M.fromList
-                [ (modF, ModAction { maMod = modF, maGenMap = M.fromList [((modeC, genName), image)], maPolicy = UseOnlyComputationalLR})
-                ]
-          , dObligations = []
-          }
+        withSelfClassifiedCtors
+          [ (modeI, [(ObjName "Nat", [])])
+          , (modeC, [(ObjName "Vec", [TPS_Tm natTy])])
+          ]
+          Doctrine
+            { dName = "ActTmCtx"
+            , dModes = mt
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.fromList [(modeC, M.fromList [(genName, genDecl)])]
+            , dCells2 = []
+            , dActions =
+                M.fromList
+                  [ (modF, ModAction { maMod = modF, maGenMap = M.fromList [((modeC, genName), image)], maPolicy = UseOnlyComputationalLR})
+                  ]
+            , dObligations = []
+            }
   tt <- requireEither (doctrineTypeTheory doc)
   srcDiag <- requireEither (genDTm modeC tmCtx [vecBound] [vecBound] genName)
   mapped <- requireEither (applyAction doc modF srcDiag)
@@ -312,30 +310,32 @@ testApplyActionWeakenImageTmCtx = do
           , gdMode = modeM
           , gdTyVars = []
           , gdTmVars = []
+          , gdParams = []
           , gdDom = [InPort tyX]
           , gdCod = [tyX]
           , gdAttrs = []
           }
   img <- requireEither (genD modeM [tyX] [tyX] genH)
   let doc =
-        Doctrine
-          { dName = "ActWeaken"
-          , dModes = mt
-          , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dTypes = M.singleton modeM (M.singleton (ObjName "X") (TypeSig []))
-          , dGens = M.singleton modeM (M.fromList [(genG, mkGen genG), (genH, mkGen genH)])
-          , dCells2 = []
-          , dActions =
-              M.singleton
-                modF
-                ModAction
-                  { maMod = modF
-                  , maGenMap = M.singleton (modeM, genG) img
-                  , maPolicy = UseOnlyComputationalLR
-                  }
-          , dObligations = []
-          }
+        withSelfClassifiedCtors
+          [(modeM, [(ObjName "X", [])])]
+          Doctrine
+            { dName = "ActWeaken"
+            , dModes = mt
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.singleton modeM (M.fromList [(genG, mkGen genG), (genH, mkGen genH)])
+            , dCells2 = []
+            , dActions =
+                M.singleton
+                  modF
+                  ModAction
+                    { maMod = modF
+                    , maGenMap = M.singleton (modeM, genG) img
+                    , maPolicy = UseOnlyComputationalLR
+                    }
+            , dObligations = []
+            }
   srcDiag <- requireEither (genDTm modeM [tyX] [tyX] [tyX] genG)
   mapped <- requireEither (applyAction doc modF srcDiag)
   dTmCtx mapped @?= [tyX]
@@ -345,11 +345,11 @@ testMapCrossModeElab = do
   let src = T.unlines
         [ "doctrine CrossMap where {"
         , "  mode A classifiedBy A via A.U_A;"
-        , "  type U_A @A;"
+        , "  gen U_A : [] -> [A.U_A] @A;"
         , "  mode B classifiedBy B via B.U_B;"
-        , "  type U_B @B;"
+        , "  gen U_B : [] -> [B.U_B] @B;"
         , "  modality F : A -> B;"
-        , "  type X @A;"
+        , "  gen X : [] -> [A.U_A] @A;"
         , "  gen g(a@A) : [a] -> [a] @A;"
         , "  gen h(a@A) : [F(a)] -> [F(a)] @B;"
         , "  action F where {"
@@ -367,8 +367,8 @@ testForGenObligationElab = do
   let src = T.unlines
         [ "doctrine ForGenLift where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
-        , "  type X @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen X : [] -> [M.U_M] @M;"
         , "  gen op : [M.X] -> [M.X] @M;"
         , "  gen f : [M.X, M.X] -> [M.X] @M;"
         , "  obligation naturality for_gen @M ="
@@ -393,16 +393,16 @@ testForGenImplementsQuantifiesTarget = do
   let src = T.unlines
         [ "doctrine FGSchema where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
-        , "  type X @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen X : [] -> [M.U_M] @M;"
         , "  gen keep : [M.X] -> [M.X] @M;"
         , "  obligation all_id for_gen @M ="
         , "    @gen == id[M.X]"
         , "}"
         , "doctrine FGTgt where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
-        , "  type X @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen X : [] -> [M.U_M] @M;"
         , "  gen keep : [M.X] -> [M.X] @M;"
         , "  gen bad : [M.X] -> [M.X] @M;"
         , "  rule computational keep_id -> : [M.X] -> [M.X] @M ="
@@ -429,16 +429,16 @@ testForGenSchemaRefsMapped = do
   let src = T.unlines
         [ "doctrine FGSchemaMap where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
-        , "  type X @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen X : [] -> [M.U_M] @M;"
         , "  gen op(a@M) : [a] -> [a] @M;"
         , "  obligation mapped_op for_gen @M ="
         , "    @gen ; lift_cod(op) == @gen ; lift_cod(op)"
         , "}"
         , "doctrine FGTgtMap where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
-        , "  type X @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen X : [] -> [M.U_M] @M;"
         , "  gen discard(a@M) : [a] -> [] @M;"
         , "  gen keep(a@M) : [a] -> [a] @M;"
         , "  gen op2(a@M) : [a] -> [a] @M;"
@@ -460,16 +460,16 @@ testForGenPolyLiftInstantiation = do
   let src = T.unlines
         [ "doctrine FGSchemaPolyLift where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
-        , "  type X @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen X : [] -> [M.U_M] @M;"
         , "  gen op(a@M) : [a] -> [a] @M;"
         , "  obligation refl for_gen @M ="
         , "    @gen ; lift_cod(op) == @gen ; lift_cod(op)"
         , "}"
         , "doctrine FGTgtPolyLift where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
-        , "  type X @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen X : [] -> [M.U_M] @M;"
         , "  gen keep : [M.X] -> [M.X] @M;"
         , "  gen op2(a@M) : [a] -> [a] @M;"
         , "}"
@@ -490,16 +490,16 @@ testForGenLiftAllowsCodArityChange = do
   let src = T.unlines
         [ "doctrine FGSchemaDropLift where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
-        , "  type X @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen X : [] -> [M.U_M] @M;"
         , "  gen drop(a@M) : [a] -> [] @M;"
         , "  obligation erased for_gen @M ="
         , "    lift_dom(drop) == lift_dom(drop)"
         , "}"
         , "doctrine FGTgtDropLift where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
-        , "  type X @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen X : [] -> [M.U_M] @M;"
         , "  gen discard(a@M) : [a] -> [] @M;"
         , "}"
         , "morphism fgDropInst : FGSchemaDropLift -> FGTgtDropLift where {"
@@ -519,12 +519,12 @@ testForGenGenPlacementRejected = do
   let src = T.unlines
         [ "doctrine BadForGenPlacement where {"
         , "  mode A classifiedBy A via A.U_A;"
-        , "  type U_A @A;"
+        , "  gen U_A : [] -> [A.U_A] @A;"
         , "  mode B classifiedBy B via B.U_B;"
-        , "  type U_B @B;"
+        , "  gen U_B : [] -> [B.U_B] @B;"
         , "  modality F : A -> B;"
-        , "  type X @A;"
-        , "  type Y @B;"
+        , "  gen X : [] -> [A.U_A] @A;"
+        , "  gen Y : [] -> [B.U_B] @B;"
         , "  gen g(b@B) : [b] -> [b] @B;"
         , "  obligation bad for_gen @B ="
         , "    map[F](@gen) == map[F](@gen)"
@@ -543,8 +543,8 @@ testGenOutsideForGenRejected = do
   let src = T.unlines
         [ "doctrine BadGenObl where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
-        , "  type X @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen X : [] -> [M.U_M] @M;"
         , "  gen g : [M.X] -> [M.X] @M;"
         , "  obligation bad : [M.X] -> [M.X] @M ="
         , "    @gen == @gen"
@@ -563,8 +563,8 @@ testActionModEqCoherence = do
   let src = T.unlines
         [ "doctrine BadAction where {"
         , "  mode A classifiedBy A via A.U_A;"
-        , "  type U_A @A;"
-        , "  type X @A;"
+        , "  gen U_A : [] -> [A.U_A] @A;"
+        , "  gen X : [] -> [A.U_A] @A;"
         , "  modality F : A -> A;"
         , "  mod_eq F -> id@A;"
         , "  gen g : [A.X] -> [A.X] @A;"
@@ -590,9 +590,9 @@ testAdjObligationFail = do
   let src = T.unlines
         [ "doctrine AdjSchema where {"
         , "  mode C classifiedBy C via C.U_C;"
-        , "  type U_C @C;"
+        , "  gen U_C : [] -> [C.U_C] @C;"
         , "  mode L classifiedBy L via L.U_L;"
-        , "  type U_L @L;"
+        , "  gen U_L : [] -> [L.U_L] @L;"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -606,9 +606,9 @@ testAdjObligationFail = do
         , "}"
         , "doctrine BadAdj where {"
         , "  mode C classifiedBy C via C.U_C;"
-        , "  type U_C @C;"
+        , "  gen U_C : [] -> [C.U_C] @C;"
         , "  mode L classifiedBy L via L.U_L;"
-        , "  type U_L @L;"
+        , "  gen U_L : [] -> [L.U_L] @L;"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -647,9 +647,9 @@ testAdjObligationPass = do
   let src = T.unlines
         [ "doctrine AdjSchema where {"
         , "  mode C classifiedBy C via C.U_C;"
-        , "  type U_C @C;"
+        , "  gen U_C : [] -> [C.U_C] @C;"
         , "  mode L classifiedBy L via L.U_L;"
-        , "  type U_L @L;"
+        , "  gen U_L : [] -> [L.U_L] @L;"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -663,9 +663,9 @@ testAdjObligationPass = do
         , "}"
         , "doctrine GoodAdj where {"
         , "  mode C classifiedBy C via C.U_C;"
-        , "  type U_C @C;"
+        , "  gen U_C : [] -> [C.U_C] @C;"
         , "  mode L classifiedBy L via L.U_L;"
-        , "  type U_L @L;"
+        , "  gen U_L : [] -> [L.U_L] @L;"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  mod_eq U.F -> id@C;"
@@ -704,7 +704,7 @@ testMonadObligationPass = do
   let src = T.unlines
         [ "doctrine SchemaMonad where {"
         , "  mode C classifiedBy C via C.U_C;"
-        , "  type U_C @C;"
+        , "  gen U_C : [] -> [C.U_C] @C;"
         , "  modality T : C -> C;"
         , "  gen ret(x@C) : [x] -> [T(x)] @C;"
         , "  gen join(x@C) : [T(T(x))] -> [T(x)] @C;"
@@ -717,9 +717,9 @@ testMonadObligationPass = do
         , "}"
         , "doctrine IdMonad where {"
         , "  mode C classifiedBy C via C.U_C;"
-        , "  type U_C @C;"
+        , "  gen U_C : [] -> [C.U_C] @C;"
         , "  modality T : C -> C;"
-        , "  type A @C;"
+        , "  gen A : [] -> [C.U_C] @C;"
         , "  gen ret(a@C) : [a] -> [T(a)] @C;"
         , "  gen join(a@C) : [T(T(a))] -> [T(a)] @C;"
         , "  action T where {"
@@ -748,9 +748,9 @@ testAdjunctionKeywordRejected = do
   let src = T.unlines
         [ "doctrine BadAdj where {"
         , "  mode C classifiedBy C via C.U_C;"
-        , "  type U_C @C;"
+        , "  gen U_C : [] -> [C.U_C] @C;"
         , "  mode L classifiedBy L via L.U_L;"
-        , "  type U_L @L;"
+        , "  gen U_L : [] -> [L.U_L] @L;"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
         , "  " <> "adju" <> "nction F dashv U;"
@@ -765,7 +765,7 @@ testStructureKeywordRejected = do
   let src = T.unlines
         [ "doctrine BadStruct where {"
         , "  mode M classifiedBy M via M.U_M;"
-        , "  type U_M @M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
         , "  " <> "stru" <> "cture M = cartesian;"
         , "}"
         ]
