@@ -82,6 +82,7 @@ tests =
     , testCase "validateDoctrine checks cell boundaries with diagram term-context" testCellBoundaryUsesDiagramTmCtx
     , testCase "validateDoctrine allows gen term-var sorts mentioning declared tyvars" testGenTmVarSortUsesTyVarScope
     , testCase "validateDoctrine allows cell term-var sorts mentioning declared tyvars" testCellTmVarSortUsesTyVarScope
+    , testCase "validateDoctrine rejects constructor usage in unclassified mode with direct diagnostic" testUnclassifiedModeCtorUsageDiagnostic
     ]
 
 require :: Either Text a -> IO a
@@ -338,6 +339,42 @@ testDuplicateGenTyVars = do
   case validateDoctrine doc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected duplicate gen tyvars to be rejected"
+
+testUnclassifiedModeCtorUsageDiagnostic :: Assertion
+testUnclassifiedModeCtorUsageDiagnostic = do
+  let mode = ModeName "M"
+      gen =
+        GenDecl
+          { gdName = GenName "u"
+          , gdMode = mode
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
+          , gdAttrs = []
+          }
+      doc =
+        Doctrine
+          { dName = "UnclassifiedCtorUsage"
+          , dModes = mkModes [mode]
+          , dAcyclicModes = S.empty
+          , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  case validateDoctrine doc of
+    Left err -> do
+      assertBool
+        ("expected unclassified mode mention, got: " <> T.unpack err)
+        ("mode M is unclassified" `T.isInfixOf` err)
+      assertBool
+        ("expected constructor mention, got: " <> T.unpack err)
+        ("constructor M.U" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected constructor usage in unclassified mode to be rejected"
 
 testDuplicateCellTyVars :: Assertion
 testDuplicateCellTyVars = do

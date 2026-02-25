@@ -1,17 +1,34 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.ObjClassifier
   ( classifierOfMode
+  , classifierModeForCtorUse
   , modeClassifierMode
   , modeUniverseObj
   , objCodeMode
   ) where
 
 import qualified Data.Map.Strict as M
-import Strat.Poly.ModeTheory (ClassificationDecl(..), ModeName, ModeTheory(..))
+import Data.Text (Text)
+import Strat.Poly.ModeTheory (ClassificationDecl(..), ModeName(..), ModeTheory(..))
 import Strat.Poly.Obj (Obj(..), codeMode0, objOwnerMode)
 
 classifierOfMode :: ModeTheory -> ModeName -> Maybe ClassificationDecl
 classifierOfMode mt mode = M.lookup mode (mtClassifiedBy mt)
+
+classifierModeForCtorUse :: ModeTheory -> ModeName -> Either Text ModeName
+classifierModeForCtorUse mt ownerMode =
+  case classifierOfMode mt ownerMode of
+    Just decl -> Right (cdClassifier decl)
+    Nothing ->
+      Left
+        ( "mode "
+            <> renderMode ownerMode
+            <> " is unclassified; add `mode "
+            <> renderMode ownerMode
+            <> " classifiedBy ... via ...;` before using object constructors"
+        )
+  where
+    renderMode (ModeName m) = m
 
 modeClassifierMode :: ModeTheory -> ModeName -> ModeName
 modeClassifierMode mt mode =

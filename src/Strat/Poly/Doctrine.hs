@@ -33,7 +33,7 @@ import Data.Maybe (mapMaybe)
 import Control.Monad (foldM)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Obj
-import Strat.Poly.ObjClassifier (modeClassifierMode, modeUniverseObj)
+import Strat.Poly.ObjClassifier (classifierOfMode, classifierModeForCtorUse, modeClassifierMode, modeUniverseObj)
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
   , DefFragment(..)
@@ -119,8 +119,11 @@ isTypeDeclGenNameInTables :: Doctrine -> CtorTables -> ModeName -> ObjName -> Bo
 isTypeDeclGenNameInTables doc tables classifierMode ctorName =
   any
     (\(ownerMode, table) ->
-        modeClassifierMode (dModes doc) ownerMode == classifierMode
-          && M.member ctorName table
+        case classifierOfMode (dModes doc) ownerMode of
+          Just decl ->
+            cdClassifier decl == classifierMode
+              && M.member ctorName table
+          Nothing -> False
     )
     (M.toList tables)
 
@@ -731,14 +734,20 @@ deriveCtorTables doc = do
       pure tt0 { ttDefFragments = fragments }
 
     seedForOwner ownerMode = do
-      let classifierMode = modeClassifierMode (dModes doc) ownerMode
-      implicit <- implicitForOwner classifierMode ownerMode
-      pure (ownerMode, implicit)
+      case ownerClassifier ownerMode of
+        -- Policy: unclassified modes are allowed, but they never get constructor tables.
+        Nothing -> pure (ownerMode, M.empty)
+        Just classifierMode -> do
+          implicit <- implicitForOwner classifierMode ownerMode
+          pure (ownerMode, implicit)
 
     growOwnerOrdered acc ownerMode =
-      if modeClassifierMode (dModes doc) ownerMode == ownerMode
-        then growOwnerSelfFixedPoint acc ownerMode
-        else growOwnerOnce acc ownerMode
+      case ownerClassifier ownerMode of
+        Nothing -> Right acc
+        Just classifierMode ->
+          if classifierMode == ownerMode
+            then growOwnerSelfFixedPoint acc ownerMode
+            else growOwnerOnce acc ownerMode
 
     growOwnerOnce acc ownerMode = do
       tt <- buildTypeTheory acc
@@ -773,19 +782,23 @@ deriveCtorTables doc = do
         _ -> Right M.empty
 
     eligibleForOwner tt ownerMode = do
-      let classifierMode = modeClassifierMode (dModes doc) ownerMode
-      case modeUniverseObj (dModes doc) ownerMode of
-        Just universe
-          | not (isPendingUniverse universe) -> do
-              universeNorm <- normalizeObjExpr (dModes doc) universe
-              fromGens <- foldM (addCtor tt ownerMode universeNorm) M.empty (candidateCtors ownerMode)
-              implicit <- implicitUniverseCtor classifierMode universeNorm
-              mergeCtorTables fromGens implicit
-        _ -> Right M.empty
+      case ownerClassifier ownerMode of
+        Nothing -> Right M.empty
+        Just classifierMode ->
+          case modeUniverseObj (dModes doc) ownerMode of
+            Just universe
+              | not (isPendingUniverse universe) -> do
+                  universeNorm <- normalizeObjExpr (dModes doc) universe
+                  fromGens <- foldM (addCtor tt ownerMode universeNorm) M.empty (candidateCtors ownerMode)
+                  implicit <- implicitUniverseCtor classifierMode universeNorm
+                  mergeCtorTables fromGens implicit
+            _ -> Right M.empty
 
     candidateCtors ownerMode =
-      let classifierMode = modeClassifierMode (dModes doc) ownerMode
-       in [ gd
+      case ownerClassifier ownerMode of
+        Nothing -> []
+        Just classifierMode ->
+          [ gd
           | gd <- M.elems (M.findWithDefault M.empty classifierMode (dGens doc))
           , isCtorLikeGen gd
           ]
@@ -837,6 +850,7 @@ deriveCtorTables doc = do
 
     genToObjName (GenName name) = ObjName name
     isPendingUniverse = isPendingUniverseObj
+    ownerClassifier mode = cdClassifier <$> classifierOfMode (dModes doc) mode
 
 deriveCtorTablesForElab :: Doctrine -> Either Text CtorTables
 deriveCtorTablesForElab doc = do
@@ -875,13 +889,16 @@ deriveCtorTablesForElab doc = do
       pure (M.insert ownerMode merged acc)
 
     provisionalForOwner ownerMode = do
-      let classifierMode = modeClassifierMode (dModes doc) ownerMode
-      let candidates =
-            [ gd
-            | gd <- M.elems (M.findWithDefault M.empty classifierMode (dGens doc))
-            , isCtorLikeGen gd
-            ]
-      foldM addCtor M.empty candidates
+      case classifierOfMode (dModes doc) ownerMode of
+        Nothing -> Right M.empty
+        Just decl -> do
+          let classifierMode = cdClassifier decl
+          let candidates =
+                [ gd
+                | gd <- M.elems (M.findWithDefault M.empty classifierMode (dGens doc))
+                , isCtorLikeGen gd
+                ]
+          foldM addCtor M.empty candidates
 
     addCtor acc gd = do
       sig <- ctorSigFromGen gd
@@ -957,16 +974,27 @@ genParamsMatchDecls gd =
 
 lookupCtorRefForOwnerInTables :: Doctrine -> CtorTables -> ModeName -> ObjName -> Maybe ObjRef
 lookupCtorRefForOwnerInTables doc tables ownerMode ctorName =
-  case M.lookup ctorName table of
+  case classifierOfMode (dModes doc) ownerMode of
     Nothing -> Nothing
-    Just _ -> Just (ObjRef classifierMode ctorName)
-  where
-    classifierMode = modeClassifierMode (dModes doc) ownerMode
-    table = M.findWithDefault M.empty ownerMode tables
+    Just decl ->
+      case M.lookup ctorName ownerTable of
+        Nothing -> Nothing
+        Just _ -> Just (ObjRef (cdClassifier decl) ctorName)
+      where
+        ownerTable = M.findWithDefault M.empty ownerMode tables
 
 lookupCtorSigForOwnerInTables :: Doctrine -> CtorTables -> ModeName -> ObjRef -> Either Text [TypeParamSig]
 lookupCtorSigForOwnerInTables doc tables ownerMode ref = do
-  let classifierMode = modeClassifierMode (dModes doc) ownerMode
+  classifierMode <-
+    case classifierModeForCtorUse (dModes doc) ownerMode of
+      Right mode -> Right mode
+      Left err ->
+        Left
+          ( err
+              <> " (while checking constructor "
+              <> renderCtorRef ref
+              <> ")"
+          )
   if orMode ref == classifierMode
     then Right ()
     else
@@ -991,6 +1019,7 @@ lookupCtorSigForOwnerInTables doc tables ownerMode ref = do
         )
     Just sig -> Right sig
   where
+    renderCtorRef ref' = renderMode (orMode ref') <> "." <> unObjName (orName ref')
     renderCtorNames [] = "(none)"
     renderCtorNames names = T.intercalate ", " (map unObjName names)
 

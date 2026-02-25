@@ -77,6 +77,8 @@ tests =
     , testCase "comprehension declaration requires classifiedBy mode" testComprehensionRequiresClassifiedMode
     , testCase "comprehension declaration rejects unknown generator" testComprehensionUnknownGenerator
     , testCase "comprehension declaration rejects constructor-like generators" testComprehensionRejectsCtorLike
+    , testCase "unclassified mode allows doctrines without constructor usage" testUnclassifiedModeNoCtorUsageAllowed
+    , testCase "unclassified mode rejects constructor usage with direct diagnostic" testUnclassifiedModeCtorUsageRejected
     , testCase "classified modes with binder inputs require comprehension declarations" testComprehensionBinderRequiresDecl
     , testCase "classified modes without binder inputs still require comprehension declarations" testComprehensionRequiresDeclWithoutBinder
     , testCase "comprehension declarations install generated obligations" testComprehensionGeneratedObligations
@@ -182,6 +184,35 @@ testMultiplePendingUniversesDeferred = do
       case objCode obj of
         CTMeta v -> tmvName v == "__pending_universe"
         _ -> False
+
+testUnclassifiedModeNoCtorUsageAllowed :: Assertion
+testUnclassifiedModeNoCtorUsageAllowed = do
+  let src = T.unlines
+        [ "doctrine UnclassifiedNoCtors where {"
+        , "  mode M;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()
+
+testUnclassifiedModeCtorUsageRejected :: Assertion
+testUnclassifiedModeCtorUsageRejected = do
+  let src = T.unlines
+        [ "doctrine UnclassifiedCtor where {"
+        , "  mode M;"
+        , "  gen U : [] -> [M.U] @M;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err -> do
+      assertBool
+        ("expected unclassified mode diagnostic, got: " <> T.unpack err)
+        ("mode M is unclassified" `T.isInfixOf` err)
+      assertBool
+        ("expected constructor mention in diagnostic, got: " <> T.unpack err)
+        ("constructor `M.U`" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected elaboration failure for constructor usage in unclassified mode"
 
 testClassificationCycleRejected :: Assertion
 testClassificationCycleRejected = do

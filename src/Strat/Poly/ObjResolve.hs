@@ -19,18 +19,20 @@ import Strat.Poly.Doctrine
   )
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Obj (ObjName(..), ObjRef(..))
-import Strat.Poly.ObjClassifier (modeClassifierMode)
+import Strat.Poly.ObjClassifier (classifierModeForCtorUse)
 
 renderMode :: ModeName -> Text
 renderMode (ModeName name) = name
 
 resolveTypeRef :: Doctrine -> ModeName -> RawTypeRef -> Either Text ObjRef
-resolveTypeRef doc ownerMode =
-  resolveTypeRefInClassifier doc ownerMode (modeClassifierMode (dModes doc) ownerMode)
+resolveTypeRef doc ownerMode raw = do
+  classifierMode <- requireClassifierForRawCtor doc ownerMode raw
+  resolveTypeRefInClassifier doc ownerMode classifierMode raw
 
 resolveTypeRefMaybe :: Doctrine -> ModeName -> RawTypeRef -> Either Text (Maybe ObjRef)
-resolveTypeRefMaybe doc ownerMode =
-  resolveTypeRefInClassifierMaybe doc ownerMode (modeClassifierMode (dModes doc) ownerMode)
+resolveTypeRefMaybe doc ownerMode raw = do
+  classifierMode <- requireClassifierForRawCtor doc ownerMode raw
+  resolveTypeRefInClassifierMaybe doc ownerMode classifierMode raw
 
 resolveTypeRefInClassifier
   :: Doctrine
@@ -97,7 +99,19 @@ resolveTypeRefInClassifierMaybeInTables
   -> ModeName
   -> RawTypeRef
   -> Either Text (Maybe ObjRef)
-resolveTypeRefInClassifierMaybeInTables doc tables ownerMode classifierMode raw =
+resolveTypeRefInClassifierMaybeInTables doc tables ownerMode classifierMode raw = do
+  expectedClassifier <- requireClassifierForRawCtor doc ownerMode raw
+  if classifierMode == expectedClassifier
+    then pure ()
+    else
+      Left
+        ( "object of mode "
+            <> renderMode ownerMode
+            <> " is classified by "
+            <> renderMode expectedClassifier
+            <> "; resolver was asked to use "
+            <> renderMode classifierMode
+        )
   case rtrMode raw of
     Just modeName -> do
       let qualifier = ModeName modeName
@@ -132,3 +146,20 @@ resolveTypeRefInClassifierMaybeInTables doc tables ownerMode classifierMode raw 
               | orMode ref == mode -> Just ref
             _ -> Nothing
         )
+
+requireClassifierForRawCtor :: Doctrine -> ModeName -> RawTypeRef -> Either Text ModeName
+requireClassifierForRawCtor doc ownerMode raw =
+  case classifierModeForCtorUse (dModes doc) ownerMode of
+    Right mode -> Right mode
+    Left err ->
+      Left
+        ( err
+            <> " (while resolving constructor `"
+            <> renderRawCtor raw
+            <> "`)"
+        )
+  where
+    renderRawCtor ref =
+      case rtrMode ref of
+        Just qualifier -> qualifier <> "." <> rtrName ref
+        Nothing -> rtrName ref
