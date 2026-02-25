@@ -40,7 +40,7 @@ import Strat.Poly.Names
 import Strat.Poly.Obj
 import Strat.Poly.UnifyObj hiding (applySubstDiagram)
 import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..))
-import Strat.Poly.DefEq (normalizeObjDeep)
+import Strat.Poly.DefEq (normalizeObjDeep, defEqObj)
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.ObjClassifier (modeUniverseObj, modeClassifierMode)
@@ -65,6 +65,8 @@ import Strat.Poly.ModeTheory
   , CompDecl(..)
   , composeMod
   , normalizeModExpr
+  , classifierLiftForModality
+  , classifierLiftForModExpr
   )
 import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.Traversal (traverseDiagram)
@@ -610,6 +612,7 @@ checkMorphismResultWithBudget budget mor = do
   validateModeMap mor
   validateModMap mor
   validateModEqPreservation mor
+  validateClassificationPreservation tgtCtorTables ttSrc ttTgt mor
   validateAttrSortMap mor
   validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor
   mapM_ (checkGenMapping tgtCtorTables ttSrc ttTgt mor) srcGens
@@ -719,6 +722,138 @@ validateModEqPreservation mor =
             <> " -> "
             <> renderMode (meTgt me)
     renderMode (ModeName name) = name
+    renderMod (ModName name) = name
+
+validateClassificationPreservation :: CtorTables -> TypeTheory -> TypeTheory -> Morphism -> Either Text ()
+validateClassificationPreservation tgtCtorTables ttSrc ttTgt mor = do
+  mapM_ checkClassificationEdge (M.toList (mtClassifiedBy srcMt))
+  mapM_ checkLiftCoherence (M.toList (mtDecls srcMt))
+  where
+    srcMt = dModes (morSrc mor)
+    tgtMt = dModes (morTgt mor)
+
+    checkClassificationEdge (modeSrc, srcDecl) = do
+      modeTgt <- mapMode mor modeSrc
+      tgtDecl <-
+        case M.lookup modeTgt (mtClassifiedBy tgtMt) of
+          Nothing ->
+            Left
+              ( "checkMorphism: mapped mode "
+                  <> renderMode modeSrc
+                  <> " -> "
+                  <> renderMode modeTgt
+                  <> " is not classified in target"
+              )
+          Just decl -> Right decl
+      mappedClassifier <- mapMode mor (cdClassifier srcDecl)
+      if cdClassifier tgtDecl == mappedClassifier
+        then Right ()
+        else
+          Left
+            ( "checkMorphism: classifier edge mismatch for mode "
+                <> renderMode modeSrc
+                <> " (expected "
+                <> renderMode mappedClassifier
+                <> ", got "
+                <> renderMode (cdClassifier tgtDecl)
+                <> ")"
+            )
+      srcUniverseMapped <- applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables mor (cdUniverse srcDecl)
+      universeOk <- defEqObj ttTgt [] srcUniverseMapped (cdUniverse tgtDecl)
+      if universeOk
+        then Right ()
+        else
+          Left
+            ( "checkMorphism: universe mismatch for classified mode "
+                <> renderMode modeSrc
+                <> " after mapping"
+            )
+      case cdComp srcDecl of
+        Nothing -> Right ()
+        Just compSrc -> do
+          compTgt <-
+            case cdComp tgtDecl of
+              Nothing ->
+                Left
+                  ( "checkMorphism: mapped classified mode "
+                      <> renderMode modeSrc
+                      <> " is missing comprehension witnesses in target"
+                  )
+              Just comp -> Right comp
+          ctxExt' <- mappedWitnessName modeSrc modeTgt (compCtxExt compSrc)
+          var' <- mappedWitnessName modeSrc modeTgt (compVar compSrc)
+          reindex' <- mappedWitnessName modeSrc modeTgt (compReindex compSrc)
+          if ctxExt' == compCtxExt compTgt && var' == compVar compTgt && reindex' == compReindex compTgt
+            then Right ()
+            else
+              Left
+                ( "checkMorphism: comprehension witness mismatch for mode "
+                    <> renderMode modeSrc
+                )
+
+    mappedWitnessName modeSrc modeTgt witnessName =
+      case M.lookup (modeSrc, witnessName) (morGenMap mor) of
+        Just image -> do
+          mapped <- singleGeneratorWitnessName modeTgt image
+          _ <- lookupGenInMode (morTgt mor) modeTgt mapped
+          Right mapped
+        Nothing ->
+          if isComprehensionSupportGen (morSrc mor) modeSrc witnessName
+            then do
+              _ <- lookupGenInMode (morTgt mor) modeTgt witnessName
+              Right witnessName
+            else
+              Left
+                ( "checkMorphism: missing generator mapping for comprehension witness "
+                    <> renderMode modeSrc
+                    <> "."
+                    <> renderGen witnessName
+                )
+
+    singleGeneratorWitnessName modeTgt image =
+      let diag = giDiagram image
+       in if dMode diag /= modeTgt
+            then Left "checkMorphism: comprehension witness image mode mismatch"
+            else
+              case IM.elems (dEdges diag) of
+                [edge] ->
+                  case ePayload edge of
+                    PGen genName _ binderArgs
+                      | null binderArgs -> Right genName
+                      | otherwise -> Left "checkMorphism: comprehension witness image cannot use binder arguments"
+                    _ -> Left "checkMorphism: comprehension witness image must be a single generator edge"
+                _ -> Left "checkMorphism: comprehension witness image must be a single-edge generator diagram"
+
+    checkLiftCoherence (modName, decl)
+      | not (isClassifiedMode (mdSrc decl) && isClassifiedMode (mdTgt decl)) = Right ()
+      | otherwise = do
+          mappedModality <-
+            case M.lookup modName (morModMap mor) of
+              Nothing -> Left "checkMorphism: missing modality mapping"
+              Just me -> Right me
+          srcLift <-
+            case classifierLiftForModality srcMt modName of
+              Left err -> Left ("checkMorphism: " <> err)
+              Right me -> Right me
+          liftMapped <- applyMorphismModExpr mor srcLift
+          liftExpected <-
+            case classifierLiftForModExpr tgtMt mappedModality of
+              Left err -> Left ("checkMorphism: " <> err)
+              Right me -> Right me
+          let liftMappedNorm = normalizeModExpr tgtMt liftMapped
+          let liftExpectedNorm = normalizeModExpr tgtMt liftExpected
+          if liftMappedNorm == liftExpectedNorm
+            then Right ()
+            else
+              Left
+                ( "checkMorphism: classifier lift coherence mismatch for modality "
+                    <> renderMod modName
+                )
+
+    isClassifiedMode mode = M.member mode (mtClassifiedBy srcMt)
+
+    renderMode (ModeName name) = name
+    renderGen (GenName name) = name
     renderMod (ModName name) = name
 
 checkModExprWellTyped :: ModeTheory -> ModExpr -> Either Text ()
@@ -927,6 +1062,8 @@ typeRefsInType ty =
     OCon ref args ->
       S.insert ref (S.unions (map typeRefsInArg args))
     OMod _ inner ->
+      typeRefsInType inner
+    OLift _ inner ->
       typeRefsInType inner
   where
     typeRefsInArg arg =

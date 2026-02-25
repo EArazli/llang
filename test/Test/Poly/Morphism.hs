@@ -48,6 +48,7 @@ tests =
     , testCase "morphism check all enforces computational equations" testMorphismCheckAllEnforcesComputational
     , testCase "morphism check structural ignores computational equations" testMorphismCheckStructuralIgnoresComputational
     , testCase "morphism check none skips structural equations" testMorphismCheckNoneSkipsStructural
+    , testCase "morphism rejects classifier-edge mismatch" testMorphismRejectsClassifierEdgeMismatch
     , testCase "morphism elaboration rejects generator images with wrong boundaries" testMorphismRejectsBadGenImageBoundaryAtElab
     , testCase "wire metavariable rules elaborate" testWireMetaRuleElaborates
     , testCase "wire metavariables reject duplicate names in one diagram" testWireMetaRuleRejectsDuplicateName
@@ -1722,6 +1723,16 @@ testMorphismCheckNoneSkipsStructural =
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()
 
+testMorphismRejectsClassifierEdgeMismatch :: Assertion
+testMorphismRejectsClassifierEdgeMismatch =
+  case elabProgram morphismClassifierMismatchProgram of
+    Left err ->
+      assertBool
+        "expected classifier-edge mismatch rejection"
+        ("classifier edge mismatch" `T.isInfixOf` err || "is not classified in target" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected morphism elaboration to reject classifier-edge mismatch"
+
 testMorphismRejectsBadGenImageBoundaryAtElab :: Assertion
 testMorphismRejectsBadGenImageBoundaryAtElab =
   case elabProgram morphismBadBoundaryProgram of
@@ -1821,6 +1832,42 @@ morphismBadBoundaryProgram =
     <> "  check none;\n"
     <> "  mode M -> M;\n"
     <> "  gen and @M -> true\n"
+    <> "}\n"
+
+morphismClassifierMismatchProgram :: Text
+morphismClassifierMismatchProgram =
+  "doctrine S where {\n"
+    <> "  mode Ty classifiedBy Ty via U_Ty;\n"
+    <> "  gen comp_ctx_ext(a@Ty) : [a] -> [a] @Ty;\n"
+    <> "  gen comp_var(a@Ty) : [a] -> [a] @Ty;\n"
+    <> "  gen comp_reindex(a@Ty) : [a] -> [a] @Ty;\n"
+    <> "  comprehension Ty where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
+    <> "  gen U_Ty : [] -> [U_Ty] @Ty;\n"
+    <> "  gen U : [] -> [U_Ty] @Ty;\n"
+    <> "  mode Tm classifiedBy Ty via U;\n"
+    <> "  gen t_ctx_ext(a@Tm) : [a] -> [a] @Tm;\n"
+    <> "  gen t_var(a@Tm) : [a] -> [a] @Tm;\n"
+    <> "  gen t_reindex(a@Tm) : [a] -> [a] @Tm;\n"
+    <> "  comprehension Tm where { ctx_ext = t_ctx_ext; var = t_var; reindex = t_reindex; };\n"
+    <> "}\n"
+    <> "doctrine T where {\n"
+    <> "  mode Ty2 classifiedBy Ty2 via U_Ty2;\n"
+    <> "  gen comp_ctx_ext(a@Ty2) : [a] -> [a] @Ty2;\n"
+    <> "  gen comp_var(a@Ty2) : [a] -> [a] @Ty2;\n"
+    <> "  gen comp_reindex(a@Ty2) : [a] -> [a] @Ty2;\n"
+    <> "  comprehension Ty2 where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
+    <> "  gen U_Ty2 : [] -> [U_Ty2] @Ty2;\n"
+    <> "  mode Tm2 classifiedBy Tm2 via U_Tm2;\n"
+    <> "  gen t_ctx_ext(a@Tm2) : [a] -> [a] @Tm2;\n"
+    <> "  gen t_var(a@Tm2) : [a] -> [a] @Tm2;\n"
+    <> "  gen t_reindex(a@Tm2) : [a] -> [a] @Tm2;\n"
+    <> "  comprehension Tm2 where { ctx_ext = t_ctx_ext; var = t_var; reindex = t_reindex; };\n"
+    <> "  gen U_Tm2 : [] -> [U_Tm2] @Tm2;\n"
+    <> "}\n"
+    <> "morphism bad : S -> T where {\n"
+    <> "  check none;\n"
+    <> "  mode Ty -> Ty2;\n"
+    <> "  mode Tm -> Tm2;\n"
     <> "}\n"
 
 wireMetaRuleProgram :: Text

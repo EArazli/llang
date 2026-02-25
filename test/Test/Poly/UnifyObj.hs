@@ -9,12 +9,13 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Data.Text (isInfixOf)
+import Data.Text (Text, isInfixOf)
 import Strat.Poly.ModeTheory
   ( ModeName(..)
   , ModName(..)
   , ModExpr(..)
   , ModDecl(..)
+  , ModeTheory
   , ClassificationDecl(..)
   , emptyModeTheory
   , addMode
@@ -54,8 +55,36 @@ tests =
     , testCase "scope-0 code metavariables reject bound term indices in object bindings" testRejectsCodeMetaScopeEscape
     , testCase "expandModSpine handles nested CTMod using inner source owner" testExpandModSpineNestedOwner
     , testCase "expandModSpine rejects CTMod owner/target mismatch" testExpandModSpineOwnerMismatch
+    , testCase "unification under CTMod binds inner metavariables" testUnifyUnderCTModBindsMeta
+    , testCase "unification under CTLift binds inner metavariables" testUnifyUnderCTLiftBindsMeta
     , testCase "code metavariable scope uses classifier slice of term context" testCodeMetaScopeClassifierSlice
     ]
+
+buildClassifiedModes :: ModeName -> ModeName -> Either Text ModeTheory
+buildClassifiedModes ty tm = do
+  mt0 <- addMode ty emptyModeTheory
+  mt1 <- addMode tm mt0
+  let uTy = OVar ObjVar { ovName = "U_Ty", ovMode = ty }
+  mt2 <-
+    addClassification
+      ty
+      ClassificationDecl
+        { cdClassifier = ty
+        , cdUniverse = uTy
+        , cdTag = Nothing
+        , cdComp = Nothing
+        }
+      mt1
+  let uTm = OVar ObjVar { ovName = "U_Tm", ovMode = ty }
+  addClassification
+    tm
+    ClassificationDecl
+      { cdClassifier = ty
+      , cdUniverse = uTm
+      , cdTag = Nothing
+      , cdComp = Nothing
+      }
+    mt2
 
 testSeesObjVarInTermArg :: Assertion
 testSeesObjVarInTermArg = do
@@ -155,6 +184,46 @@ testExpandModSpineOwnerMismatch = do
     Right _ ->
       assertFailure "expected malformed CTMod owner/target mismatch to be rejected"
 
+testUnifyUnderCTModBindsMeta :: Assertion
+testUnifyUnderCTModBindsMeta = do
+  let modeA = ModeName "A"
+      modeB = ModeName "B"
+      modF = ModName "f"
+      aVar = ObjVar { ovName = "a", ovMode = modeA }
+      me = ModExpr { meSrc = modeA, meTgt = modeB, mePath = [modF] }
+      lhs = Obj { objOwnerMode = modeB, objCode = CTMod me (objCode (OVar aVar)) }
+      rhs = Obj { objOwnerMode = modeB, objCode = CTMod me (objCode (mkCon (ObjRef modeA (ObjName "Unit")) [])) }
+  mt <- either (assertFailure . show) pure $
+    addModDecl ModDecl { mdName = modF, mdSrc = modeA, mdTgt = modeB } (mkModes [modeA, modeB])
+  let tt = modeOnlyTypeTheory mt
+  subst <- case U.unifyObjFlex tt [] (S.singleton aVar) U.emptySubst lhs rhs of
+    Left err -> assertFailure ("expected CTMod unification to succeed: " <> show err) >> pure U.emptySubst
+    Right s -> pure s
+  case U.lookupCodeMeta subst aVar of
+    Just bound ->
+      bound @?= mkCon (ObjRef modeA (ObjName "Unit")) []
+    Nothing ->
+      assertFailure "expected unification to bind the inner code metavariable under CTMod"
+
+testUnifyUnderCTLiftBindsMeta :: Assertion
+testUnifyUnderCTLiftBindsMeta = do
+  let modeTy = ModeName "Ty"
+      modeTm = ModeName "Tm"
+      aVar = ObjVar { ovName = "a", ovMode = modeTy }
+      liftId = ModExpr { meSrc = modeTy, meTgt = modeTy, mePath = [] }
+      lhs = Obj { objOwnerMode = modeTm, objCode = CTLift liftId (objCode (OVar aVar)) }
+      rhs = Obj { objOwnerMode = modeTm, objCode = CTLift liftId (objCode (mkCon (ObjRef modeTy (ObjName "UnitTy")) [])) }
+  mt <- either (assertFailure . show) pure (buildClassifiedModes modeTy modeTm)
+  let tt = modeOnlyTypeTheory mt
+  subst <- case U.unifyObjFlex tt [] (S.singleton aVar) U.emptySubst lhs rhs of
+    Left err -> assertFailure ("expected CTLift unification to succeed: " <> show err) >> pure U.emptySubst
+    Right s -> pure s
+  case U.lookupCodeMeta subst aVar of
+    Just bound ->
+      bound @?= mkCon (ObjRef modeTy (ObjName "UnitTy")) []
+    Nothing ->
+      assertFailure "expected unification to bind the inner code metavariable under CTLift"
+
 testCodeMetaScopeClassifierSlice :: Assertion
 testCodeMetaScopeClassifierSlice = do
   let modeTy = ModeName "Ty"
@@ -189,28 +258,3 @@ testCodeMetaScopeClassifierSlice = do
         ("escape from bound term-variable scope" `isInfixOf` err)
     Right _ ->
       assertFailure "expected owner-slice bound index to be rejected for classifier-scoped code metavariable"
-  where
-    buildClassifiedModes ty tm = do
-      mt0 <- addMode ty emptyModeTheory
-      mt1 <- addMode tm mt0
-      let uTy = OVar ObjVar { ovName = "U_Ty", ovMode = ty }
-      mt2 <-
-        addClassification
-          ty
-          ClassificationDecl
-            { cdClassifier = ty
-            , cdUniverse = uTy
-            , cdTag = Nothing
-            , cdComp = Nothing
-            }
-          mt1
-      let uTm = OVar ObjVar { ovName = "U_Tm", ovMode = ty }
-      addClassification
-        tm
-        ClassificationDecl
-          { cdClassifier = ty
-          , cdUniverse = uTm
-          , cdTag = Nothing
-          , cdComp = Nothing
-          }
-        mt2

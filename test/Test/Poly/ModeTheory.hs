@@ -9,6 +9,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Maybe (isJust)
+import Control.Monad (foldM)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
@@ -51,6 +52,8 @@ tests =
     , testCase "multiple pending universes resolve after pending pass" testMultiplePendingUniversesDeferred
     , testCase "classification cycle (non-self) is rejected" testClassificationCycleRejected
     , testCase "classificationOrder places classifier before classified mode" testClassificationOrder
+    , testCase "classifier lift for identity modality expression is identity on classifier" testClassifierLiftForIdentityExpr
+    , testCase "classifier lift for composed modality expression composes step lifts" testClassifierLiftForComposedExpr
     , testCase "classified modality over classifier-headed code normalizes" testClassifiedModalityNormalization
     , testCase "classified non-self modality requires explicit classifier lift" testClassifiedModalityMissingLiftRejected
     , testCase "explicit classifier lift universe compatibility is enforced" testClassifierLiftUniverseMismatchRejected
@@ -218,6 +221,62 @@ testClassificationOrder = do
       assertBool "expected Ty to appear before Tm in classification order" (i < j)
     _ ->
       assertFailure "classificationOrder missing expected modes"
+
+testClassifierLiftForIdentityExpr :: Assertion
+testClassifierLiftForIdentityExpr = do
+  let modeTy = ModeName "Ty"
+      modeTm = ModeName "Tm"
+      uTy = OVar ObjVar { ovName = "U_Ty", ovMode = modeTy }
+      uTm = OVar ObjVar { ovName = "U_Tm", ovMode = modeTy }
+  mt0 <- requireEither (addMode modeTy emptyModeTheory)
+  mt1 <- requireEither (addMode modeTm mt0)
+  mt2 <- requireEither (addClassification modeTy ClassificationDecl { cdClassifier = modeTy, cdUniverse = uTy, cdTag = Nothing, cdComp = Nothing } mt1)
+  mt3 <- requireEither (addClassification modeTm ClassificationDecl { cdClassifier = modeTy, cdUniverse = uTm, cdTag = Nothing, cdComp = Nothing } mt2)
+  let expr = ModExpr { meSrc = modeTm, meTgt = modeTm, mePath = [] }
+  liftExpr <- requireEither (classifierLiftForModExpr mt3 expr)
+  liftExpr @?= ModExpr { meSrc = modeTy, meTgt = modeTy, mePath = [] }
+
+testClassifierLiftForComposedExpr :: Assertion
+testClassifierLiftForComposedExpr = do
+  let modeA = ModeName "A"
+      modeB = ModeName "B"
+      modeC = ModeName "C"
+      classA = ModeName "TyA"
+      classB = ModeName "TyB"
+      classC = ModeName "TyC"
+      modF = ModName "f"
+      modG = ModName "g"
+      liftF = ModName "liftF"
+      liftG = ModName "liftG"
+      modes = [modeA, modeB, modeC, classA, classB, classC]
+      u mode = OVar ObjVar { ovName = "U_" <> renderMode mode, ovMode = mode }
+      classify owner classifier =
+        addClassification
+          owner
+          ClassificationDecl
+            { cdClassifier = classifier
+            , cdUniverse = u classifier
+            , cdTag = Nothing
+            , cdComp = Nothing
+            }
+      addDecl name src tgt = addModDecl ModDecl { mdName = name, mdSrc = src, mdTgt = tgt }
+      renderMode (ModeName n) = n
+  mt0 <- requireEither (foldM (flip addMode) emptyModeTheory modes)
+  mt1 <- requireEither (classify classA classA mt0)
+  mt2 <- requireEither (classify classB classB mt1)
+  mt3 <- requireEither (classify classC classC mt2)
+  mt4 <- requireEither (classify modeA classA mt3)
+  mt5 <- requireEither (classify modeB classB mt4)
+  mt6 <- requireEither (classify modeC classC mt5)
+  mt7 <- requireEither (addDecl modF modeA modeB mt6)
+  mt8 <- requireEither (addDecl modG modeB modeC mt7)
+  mt9 <- requireEither (addDecl liftF classA classB mt8)
+  mt10 <- requireEither (addDecl liftG classB classC mt9)
+  mt11 <- requireEither (addClassifierLift modF ModExpr { meSrc = classA, meTgt = classB, mePath = [liftF] } mt10)
+  mt12 <- requireEither (addClassifierLift modG ModExpr { meSrc = classB, meTgt = classC, mePath = [liftG] } mt11)
+  let composed = ModExpr { meSrc = modeA, meTgt = modeC, mePath = [modF, modG] }
+  liftExpr <- requireEither (classifierLiftForModExpr mt12 composed)
+  liftExpr @?= ModExpr { meSrc = classA, meTgt = classC, mePath = [liftF, liftG] }
 
 testClassifiedModalityNormalization :: Assertion
 testClassifiedModalityNormalization = do

@@ -28,6 +28,7 @@ import qualified Test.Value.Doc as ValueDoc
 import qualified Test.Frontend.Pipeline as FrontendPipeline
 import qualified Test.Frontend.ExampleCodegen as FrontendExampleCodegen
 import qualified Test.Frontend.ExamplesSmoke as FrontendExamplesSmoke
+import qualified Test.Frontend.StdlibIntegration as FrontendStdlibIntegration
 
 main :: IO ()
 main =
@@ -61,4 +62,5 @@ main =
       , FrontendPipeline.tests
       , FrontendExampleCodegen.tests
       , FrontendExamplesSmoke.tests
+      , FrontendStdlibIntegration.tests
       ]

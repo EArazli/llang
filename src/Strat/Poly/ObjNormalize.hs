@@ -21,7 +21,7 @@ import Strat.Poly.Graph
   , weakenDiagramTmCtxTo
   )
 import Strat.Poly.ModeTheory (ModeName, meSrc, meTgt)
-import Strat.Poly.ObjClassifier (modeUniverseObj)
+import Strat.Poly.ObjClassifier (modeUniverseObj, modeClassifierMode)
 import Strat.Poly.Obj
   ( TermDiagram(..)
   , CodeArg(..)
@@ -99,7 +99,7 @@ normalizeCodeTermDeepWithCtx tt tmCtx owner code =
       merged <- normalizeObjExpr (ttModes tt) Obj { objOwnerMode = owner, objCode = CTMod me inner' }
       pure (objCode merged)
     CTLift me innerCode -> do
-      if meTgt me /= owner
+      if meTgt me /= modeClassifierMode (ttModes tt) owner
         then Left "normalizeCodeTermDeepWithCtx: lift target does not match object owner mode"
         else Right ()
       inner' <- normalizeCodeTermDeepWithCtx tt tmCtx (meSrc me) innerCode

@@ -118,6 +118,7 @@ data-files:
     stdlib/effects/writer.template.llang
     stdlib/nat.llang
     stdlib/schema.adjunction.llang
+    stdlib/schema.monad.llang
     stdlib/struct.cartesian.llang
     stdlib/struct.planar.llang
     stdlib/struct.symmetric.llang
@@ -260,6 +261,7 @@ test-suite llang-test
       Test.Frontend.Pipeline
       Test.Frontend.ExampleCodegen
       Test.Frontend.ExamplesSmoke
+      Test.Frontend.StdlibIntegration
       Paths_llang
   autogen-modules:
       Paths_llang

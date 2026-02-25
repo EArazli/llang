@@ -32,6 +32,7 @@ import Strat.Poly.Obj
   , pattern OVar
   , pattern OCon
   , pattern OMod
+  , pattern OLift
   , pattern OAObj
   , pattern OATm
   )
@@ -121,6 +122,8 @@ extractGenSlotsWithTables doc ctorTables gd = do
           Right []
         OMod _ inner ->
           slotsInObj (path <> ".mod") inner
+        OLift _ inner ->
+          slotsInObj (path <> ".lift") inner
         OCon ref args -> do
           sig <- lookupCtorSigForOwnerInTables doc ctorTables (objOwnerMode ty) ref
           if length sig /= length args

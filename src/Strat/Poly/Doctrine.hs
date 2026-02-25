@@ -403,7 +403,7 @@ checkClassifierLiftUniverseCompatibility doc tt =
     liftUniverse liftExpr universe =
       Obj
         { objOwnerMode = meTgt liftExpr
-        , objCode = CTLift liftExpr (objCode universe)
+        , objCode = CTMod liftExpr (objCode universe)
         }
 
     renderMod (ModName n) = n
@@ -898,6 +898,18 @@ checkType doc tt tyvars tmvars tmCtx ty =
         then Left "validateDoctrine: type constructor arity mismatch"
         else mapM_ (checkArg ref) (zip params args)
     OMod _ inner -> do
+      checkType doc tt tyvars tmvars tmCtx inner
+      _ <- normalizeObjExpr (dModes doc) ty
+      Right ()
+    OLift me inner -> do
+      let owner = objOwnerMode ty
+      let expectedClassifier = modeClassifierMode (dModes doc) owner
+      if meTgt me == expectedClassifier
+        then Right ()
+        else Left "validateDoctrine: classifier lift target does not match owner classifier mode"
+      if objOwnerMode inner == meSrc me
+        then Right ()
+        else Left "validateDoctrine: classifier lift source does not match inner owner mode"
       checkType doc tt tyvars tmvars tmCtx inner
       _ <- normalizeObjExpr (dModes doc) ty
       Right ()

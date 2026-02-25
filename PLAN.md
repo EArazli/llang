@@ -365,6 +365,12 @@ Check these obligations by definitional equality or join proofs.
 
 **Exit criterion:** if a modality connects classified modes but the classifier translation is missing or incoherent, the doctrine is rejected (or marked as requiring proof, depending on policy).
 
+**Current implementation status:**
+
+* classifier-lift requirements are enforced for classified modalities, including explicit lift requirements for non-self-classified crossings.
+* classifier-lift universe compatibility is checked via definitional equality in classifier mode.
+* Beck-Chevalley obligations are generated under the required structure and validated through existing obligation checking.
+
 (Gratzer’s MTT normalization result is relevant because it shows conversion/typechecking can be reduced to deciding modality equalities in a general multimodal setting; BC coherence is exactly the extra condition you need when adding typed transport. ([arXiv][4])
 Uemura’s MCwR framing is relevant because it treats multimode type theories with representable maps as the semantic substrate where BC-style stability is natural. ([Taichi Uemura][6]))
 
@@ -391,6 +397,12 @@ Update:
 
 **Exit criterion:** the “λ-cube by composing features” story works at the doctrine level without kernel changes.
 
+**Current implementation status:**
+
+* `checkMorphism` enforces classifier-edge commutation, universe preservation up to definitional equality, comprehension witness preservation, and classifier-lift coherence for mapped modalities.
+* pushout/apply reconciliation rejects classification conflicts unless classifier/comprehension data match and universes are definitionally equal in the merged classifier theory.
+* silent classification-overwrite behavior has been removed from pushout merge paths.
+
 ---
 
 ### Phase 11 — Rebuild the standard library + regression suite around classification
@@ -412,6 +424,11 @@ Provide canonical doctrines (or doctrine functors) that realize:
 * BC obligations aren’t generated/checked.
 
 **Exit criterion:** changes to kernel semantics produce immediate, local test failures in the intended area.
+
+**Current implementation status:**
+
+* regression coverage includes loading and elaborating all `stdlib/**/*.llang` files.
+* regression coverage includes curated doctrine-functor/apply compositions that exercise pushout-based composition paths (`examples/lib/effects/combined.llang`, `examples/lib/templates/state.template.llang`).
 
 (Use CwF/CwR literature as the semantic yardstick for what “comprehension exists + substitution functorial” means. ([arXiv][3]))
 

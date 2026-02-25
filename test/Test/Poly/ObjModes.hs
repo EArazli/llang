@@ -14,6 +14,7 @@ import qualified Data.IntMap.Strict as IM
 
 import Strat.Poly.Obj
   ( Obj(..)
+  , CodeTerm(..)
   , mkCon
   , ObjName(..)
   , ObjRef(..)
@@ -26,8 +27,9 @@ import Strat.Poly.Obj
   , pattern OAObj
   , pattern OATm
   , objMode
+  , normalizeObjExpr
   )
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ClassificationDecl(..), CompDecl(..), emptyModeTheory)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ModExpr(..), ClassificationDecl(..), CompDecl(..), emptyModeTheory)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
@@ -49,6 +51,7 @@ tests =
     , testCase "unify rejects mode mismatch" testUnifyModeMismatch
     , testCase "validateDiagram rejects port mode mismatch" testValidateDiagramModeMismatch
     , testCase "diagram ports store Obj in the diagram mode" testDiagramPortsStoreObj
+    , testCase "normalizeObjExpr accepts classifier-targeted CTLift on non-self owner" testNormalizeClassifierLiftTarget
     ]
 
 modeC :: ModeName
@@ -294,3 +297,51 @@ testDiagramPortsStoreObj = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
   mapM_ (\o -> objMode o @?= dMode diag) (IM.elems (dPortObj diag))
+
+testNormalizeClassifierLiftTarget :: Assertion
+testNormalizeClassifierLiftTarget = do
+  let modeTy = ModeName "Ty"
+      modeTm = ModeName "Tm"
+      universeTy = mkCon (ObjRef modeTy (ObjName "U_Ty")) []
+      universeTm = mkCon (ObjRef modeTy (ObjName "U_Tm")) []
+      mt =
+        ModeTheory
+          { mtModes =
+              M.fromList
+                [ (modeTy, ModeInfo modeTy)
+                , (modeTm, ModeInfo modeTm)
+                ]
+          , mtDecls = M.empty
+          , mtEqns = []
+          , mtTransforms = M.empty
+          , mtClassifiedBy =
+              M.fromList
+                [ ( modeTy
+                  , ClassificationDecl
+                      { cdClassifier = modeTy
+                      , cdUniverse = universeTy
+                      , cdTag = Nothing
+                      , cdComp = Nothing
+                      }
+                  )
+                , ( modeTm
+                  , ClassificationDecl
+                      { cdClassifier = modeTy
+                      , cdUniverse = universeTm
+                      , cdTag = Nothing
+                      , cdComp = Nothing
+                      }
+                  )
+                ]
+          , mtClassifierLifts = M.empty
+          }
+      innerTy = mkCon (ObjRef modeTy (ObjName "A")) []
+      liftExpr = ModExpr { meSrc = modeTy, meTgt = modeTy, mePath = [] }
+      lifted =
+        Obj
+          { objOwnerMode = modeTm
+          , objCode = CTLift liftExpr (objCode innerTy)
+          }
+  case normalizeObjExpr mt lifted of
+    Left err -> assertFailure ("expected CTLift normalization to succeed: " <> T.unpack err)
+    Right _ -> pure ()

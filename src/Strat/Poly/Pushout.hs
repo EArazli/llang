@@ -44,7 +44,7 @@ import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.DefEq (termExprToDiagramChecked)
+import Strat.Poly.DefEq (termExprToDiagramChecked, defEqObj)
 import Strat.Poly.TypeTheory (TypeParamSig(..))
 import qualified Strat.Poly.DSL.AST as PolyAST
 
@@ -181,7 +181,10 @@ computePolyPushout name f g = do
       permTypesB0
       renameGensB
       (dModes (morTgt f))
-  let class0 = mergeClassifiedByPreferRight classFromRight classFromLeft
+  let (classRight, rightOverlaps) = classFromRight
+  let (classLeft, leftOverlaps) = classFromLeft
+  (class0, classOverlapsMerged) <- mergeClassifiedByPreferRight classRight classLeft
+  let classOverlaps = classOverlapsMerged <> rightOverlaps <> leftOverlaps
   let modeTheory' =
         (mpoModeTheory modePushout)
           { mtTransforms = modeTransforms'
@@ -216,6 +219,7 @@ computePolyPushout name f g = do
   let b'' = b' { dModes = mpoModeTheory modePushout' }
   let c'' = c' { dModes = mpoModeTheory modePushout' }
   merged <- mergeDoctrineList (mpoModeTheory modePushout') [b'', c'']
+  reconcileMergedClassificationUniverses "poly pushout" classOverlaps merged
   let pres = merged { dName = name }
   inl <-
     buildInj
@@ -274,7 +278,7 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
   genMapImpl <- requireGenRenameMap impl
   interfaceAttrRen <- mkInterfaceAttrSortRenameMap attrMapIncl attrMapImpl
   (interfaceTypeRen, interfacePermRen) <- mkInterfaceTypeRenameMap src srcCtorTables typeMapIncl permMapIncl typeMapImpl permMapImpl
-  interfaceGenRen <- mkInterfaceGenRenameMap genMapIncl genMapImpl
+  interfaceGenRen <- mkInterfaceGenRenameMap incl impl genMapIncl genMapImpl
   let prefix = sanitizePrefix leftPrefix
   let renameAttrSorts =
         M.union interfaceAttrRen
@@ -323,7 +327,10 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
       interfacePermRen
       renameGens
       (dModes body)
-  let class0 = mergeClassifiedByPreferRight classFromRight classFromLeft
+  let (classRight, rightOverlaps) = classFromRight
+  let (classLeft, leftOverlaps) = classFromLeft
+  (class0, classOverlapsMerged) <- mergeClassifiedByPreferRight classRight classLeft
+  let classOverlaps = classOverlapsMerged <> rightOverlaps <> leftOverlaps
   let modeTheory' =
         (mpoModeTheory modePushout)
           { mtTransforms = modeTransforms'
@@ -358,6 +365,7 @@ computePolyPushoutPreferRight newName leftPrefix incl impl = do
   let body'' = body' { dModes = mpoModeTheory modePushout' }
   let target'' = target' { dModes = mpoModeTheory modePushout' }
   merged <- mergeDoctrine (mpoModeTheory modePushout') target'' body''
+  reconcileMergedClassificationUniverses "poly apply pushout" classOverlaps merged
   let pres = merged { dName = newName }
   inr <-
     buildInj
@@ -726,8 +734,51 @@ mergeNamedMapsByEq errMsg leftMap rightMap =
 mergeClassifiedByPreferRight
   :: M.Map ModeName ClassificationDecl
   -> M.Map ModeName ClassificationDecl
-  -> M.Map ModeName ClassificationDecl
-mergeClassifiedByPreferRight rightMap leftMap = M.union rightMap leftMap
+  -> Either Text (M.Map ModeName ClassificationDecl, [(ModeName, ClassificationDecl, ClassificationDecl)])
+mergeClassifiedByPreferRight rightMap leftMap =
+  foldM step (rightMap, []) (M.toList leftMap)
+  where
+    step (acc, overlaps) (mode, declLeft) =
+      case M.lookup mode acc of
+        Nothing -> Right (M.insert mode declLeft acc, overlaps)
+        Just declRight
+          | cdClassifier declRight /= cdClassifier declLeft ->
+              Left
+                ( "poly pushout: classifier mismatch while reconciling classifications for mode "
+                    <> renderMode mode
+                )
+          | cdComp declRight /= cdComp declLeft ->
+              Left
+                ( "poly pushout: comprehension witness mismatch while reconciling classifications for mode "
+                    <> renderMode mode
+                )
+          | otherwise ->
+              Right (acc, (mode, declRight, declLeft) : overlaps)
+
+    renderMode (ModeName name) = name
+
+reconcileMergedClassificationUniverses
+  :: Text
+  -> [(ModeName, ClassificationDecl, ClassificationDecl)]
+  -> Doctrine
+  -> Either Text ()
+reconcileMergedClassificationUniverses _ [] _ = Right ()
+reconcileMergedClassificationUniverses label overlaps merged = do
+  tt <- doctrineTypeTheory merged
+  mapM_ (checkUniverse tt) overlaps
+  where
+    checkUniverse tt (mode, rightDecl, leftDecl) = do
+      ok <- defEqObj tt [] (cdUniverse rightDecl) (cdUniverse leftDecl)
+      if ok
+        then Right ()
+        else
+          Left
+            ( label
+                <> ": universe mismatch while reconciling classifications for mode "
+                <> renderMode mode
+            )
+
+    renderMode (ModeName name) = name
 
 renamedClassifiedByMap
   :: M.Map ModeName ModeName
@@ -736,11 +787,11 @@ renamedClassifiedByMap
   -> TypePermMap
   -> GenRenameMap
   -> ModeTheory
-  -> Either Text (M.Map ModeName ClassificationDecl)
+  -> Either Text (M.Map ModeName ClassificationDecl, [(ModeName, ClassificationDecl, ClassificationDecl)])
 renamedClassifiedByMap modeRen modRen tyRen permRen genRen mt =
-  foldM addOne M.empty (M.toList (mtClassifiedBy mt))
+  foldM addOne (M.empty, []) (M.toList (mtClassifiedBy mt))
   where
-    addOne acc (mode, decl) = do
+    addOne (acc, overlaps) (mode, decl) = do
       universe' <- renameObjExpr modeRen modRen tyRen permRen (cdUniverse decl)
       comp' <- traverse (renameComp mode) (cdComp decl)
       let mode' = renameModeName modeRen mode
@@ -751,10 +802,10 @@ renamedClassifiedByMap modeRen modRen tyRen permRen genRen mt =
               , cdComp = comp'
               }
       case M.lookup mode' acc of
-        Nothing -> Right (M.insert mode' decl' acc)
-        Just existing
-          | existing == decl' -> Right acc
-          | otherwise -> Right acc
+        Nothing -> Right (M.insert mode' decl' acc, overlaps)
+        Just existing -> do
+          ensureClassificationCompatible mode' existing decl'
+          Right (acc, (mode', existing, decl') : overlaps)
 
     renameComp mode comp =
       let renameGen g = M.findWithDefault g (mode, g) genRen
@@ -764,6 +815,21 @@ renamedClassifiedByMap modeRen modRen tyRen permRen genRen mt =
               , compVar = renameGen (compVar comp)
               , compReindex = renameGen (compReindex comp)
               }
+
+    renderMode (ModeName name) = name
+
+    ensureClassificationCompatible mode existing incoming
+      | cdClassifier existing /= cdClassifier incoming =
+          Left
+            ( "poly pushout: classifier mismatch in renamed classifications for mode "
+                <> renderMode mode
+            )
+      | cdComp existing /= cdComp incoming =
+          Left
+            ( "poly pushout: comprehension witness mismatch in renamed classifications for mode "
+                <> renderMode mode
+            )
+      | otherwise = Right ()
 
 computePolyCoproduct :: Text -> Doctrine -> Doctrine -> Either Text PolyPushoutResult
 computePolyCoproduct name a b = do
@@ -1392,10 +1458,12 @@ mkInterfaceTypeRenameMap src srcCtorTables leftMap leftPerm rightMap rightPerm =
             else Left "apply pushout: interface permutation arity mismatch"
 
 mkInterfaceGenRenameMap
-  :: M.Map (ModeName, GenName) GenName
+  :: Morphism
+  -> Morphism
+  -> M.Map (ModeName, GenName) GenName
   -> M.Map (ModeName, GenName) GenName
   -> Either Text (M.Map (ModeName, GenName) GenName)
-mkInterfaceGenRenameMap leftMap rightMap =
+mkInterfaceGenRenameMap leftMor rightMor leftMap rightMap =
   foldM add M.empty (M.toList leftMap)
   where
     add acc (srcKey, imgLeft) = do
@@ -1403,7 +1471,9 @@ mkInterfaceGenRenameMap leftMap rightMap =
         case M.lookup srcKey rightMap of
           Nothing -> Left "apply pushout: missing interface generator mapping on right morphism"
           Just out -> Right out
-      let outKey = (fst srcKey, imgLeft)
+      leftMode <- applyMorphismMode leftMor (fst srcKey)
+      _ <- applyMorphismMode rightMor (fst srcKey)
+      let outKey = (leftMode, imgLeft)
       case M.lookup outKey acc of
         Nothing -> Right (M.insert outKey imgRight acc)
         Just existing
@@ -1745,9 +1815,9 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
                   }
           case M.lookup mode' acc of
             Nothing -> Right (M.insert mode' decl' acc)
-            Just existing
-              | existing == decl' -> Right acc
-              | otherwise -> Right acc
+            Just existing -> do
+              ensureClassificationCompatible mode' existing decl'
+              Right acc
           where
             renameUniverse decl0 = do
               universe1 <- renameObjExpr modeRen modRen tyRen permRen (cdUniverse decl0)
@@ -1778,6 +1848,21 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
                       }
 
             objNameText (ObjName t) = t
+
+            renderMode (ModeName name) = name
+
+            ensureClassificationCompatible mode existing incoming
+              | cdClassifier existing /= cdClassifier incoming =
+                  Left
+                    ( "poly pushout: classifier mismatch after doctrine rename for mode "
+                        <> renderMode mode
+                    )
+              | cdComp existing /= cdComp incoming =
+                  Left
+                    ( "poly pushout: comprehension witness mismatch after doctrine rename for mode "
+                        <> renderMode mode
+                    )
+              | otherwise = Right ()
 
         addClassifierLiftRenamed acc (name, me) =
           let name' = renameModName modRen name

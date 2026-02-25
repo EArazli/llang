@@ -169,14 +169,14 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
             then Right ()
             else Left "unifyObjFlex: modality target does not match object owner mode in CTMod spine"
           inner' <- expandModSpine (mkObj (meSrc me) innerCode)
-          code' <- expandPath CTMod me (objCode inner')
+          code' <- expandPath CTMod True me (objCode inner')
           Right ty { objCode = code' }
         CTLift me innerCode -> do
-          if objOwnerMode ty == meTgt me
+          if modeClassifierMode (ttModes tt) (objOwnerMode ty) == meTgt me
             then Right ()
             else Left "unifyObjFlex: lift target does not match object owner mode in CTLift spine"
           inner' <- expandModSpine (mkObj (meSrc me) innerCode)
-          code' <- expandPath CTLift me (objCode inner')
+          code' <- expandPath CTLift False me (objCode inner')
           Right ty { objCode = code' }
 
     expandArg arg =
@@ -184,11 +184,14 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
         CAObj ty -> CAObj <$> expandModSpine ty
         CATm tm -> Right (CATm tm)
 
-    expandPath wrap me innerCode =
+    expandPath wrap dropIdentity me innerCode =
       case mePath me of
         [] ->
           if meSrc me == meTgt me
-            then Right innerCode
+            then
+              if dropIdentity
+                then Right innerCode
+                else Right (wrap me innerCode)
             else Left "unifyObjFlex: ill-typed empty modality path"
         _ -> do
           (cur, outCode) <- foldM step (meSrc me, innerCode) (mePath me)
@@ -236,12 +239,12 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
               Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
         (CTMod me1 innerA, CTMod me2 innerB)
           | me1 == me2 ->
-              unifyCode s owner innerA innerB
+              unifyCode s (meSrc me1) innerA innerB
           | otherwise ->
               Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
         (CTLift me1 innerA, CTLift me2 innerB)
           | me1 == me2 ->
-              unifyCode s owner innerA innerB
+              unifyCode s (meSrc me1) innerA innerB
           | otherwise ->
               Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
         _ ->
@@ -635,8 +638,8 @@ applySubstObj tt subst ty = do
     needsTmCtxType expr =
       case objCode expr of
         CTMeta _ -> False
-        CTMod _ innerCode -> needsTmCtxType (mkObj (objOwnerMode expr) innerCode)
-        CTLift _ innerCode -> needsTmCtxType (mkObj (objOwnerMode expr) innerCode)
+        CTMod me innerCode -> needsTmCtxType (mkObj (meSrc me) innerCode)
+        CTLift me innerCode -> needsTmCtxType (mkObj (meSrc me) innerCode)
         CTCon _ args -> any needsTmCtxArg args
 
     needsTmCtxArg arg =

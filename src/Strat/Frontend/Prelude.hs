@@ -41,6 +41,9 @@ docDoctrine =
     gens =
       M.fromList
         [ (GenName "Doc", ctorGen docMode "Doc")
+        , (compCtxExtName, simpleGen "comp_ctx_ext" [docTy] [docTy] [])
+        , (compVarName, simpleGen "comp_var" [docTy] [docTy] [])
+        , (compReindexName, simpleGen "comp_reindex" [docTy] [docTy] [])
         , (GenName "empty", simpleGen "empty" [] [docTy] [])
         , (GenName "text", simpleGen "text" [] [docTy] [("s", strSort)])
         , (GenName "line", simpleGen "line" [] [docTy] [])
@@ -73,6 +76,9 @@ artifactDoctrine =
       M.fromList
         [ (GenName "Doc", ctorGen artifactMode "Doc")
         , (GenName "FileTree", ctorGen artifactMode "FileTree")
+        , (compCtxExtName, simpleGen "comp_ctx_ext" [docTy] [docTy] [])
+        , (compVarName, simpleGen "comp_var" [docTy] [docTy] [])
+        , (compReindexName, simpleGen "comp_reindex" [docTy] [docTy] [])
         , (GenName "empty", simpleGen "empty" [] [docTy] [])
         , (GenName "text", simpleGen "text" [] [docTy] [("s", strSort)])
         , (GenName "line", simpleGen "line" [] [docTy] [])
@@ -98,6 +104,23 @@ strSort = AttrSort "Str"
 intSort :: AttrSort
 intSort = AttrSort "Int"
 
+compCtxExtName :: GenName
+compCtxExtName = GenName "comp_ctx_ext"
+
+compVarName :: GenName
+compVarName = GenName "comp_var"
+
+compReindexName :: GenName
+compReindexName = GenName "comp_reindex"
+
+preludeCompDecl :: CompDecl
+preludeCompDecl =
+  CompDecl
+    { compCtxExt = compCtxExtName
+    , compVar = compVarName
+    , compReindex = compReindexName
+    }
+
 
 selfClassifiedMode :: ModeName -> Either Text ModeTheory
 selfClassifiedMode mode = do
@@ -108,7 +131,7 @@ selfClassifiedMode mode = do
       { cdClassifier = mode
       , cdUniverse = universeObj mode
       , cdTag = Nothing
-      , cdComp = Nothing
+      , cdComp = Just preludeCompDecl
       }
     mt0
 

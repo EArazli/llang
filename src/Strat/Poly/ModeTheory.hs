@@ -19,6 +19,7 @@ module Strat.Poly.ModeTheory
   , addClassification
   , addClassifierLift
   , classifierLiftForModality
+  , classifierLiftForModExpr
   , classificationDeps
   , classificationOrder
   , composeMod
@@ -30,6 +31,7 @@ import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import Data.Map.Strict (Map)
 import qualified Data.Set as S
+import Control.Monad (foldM)
 import Strat.Poly.ModeSyntax
 import Strat.Poly.Syntax (Obj(..))
 import Strat.Poly.Names (GenName)
@@ -162,6 +164,29 @@ classifierLiftForModality mt modName = do
               , mePath = [modName]
               }
         else Left "mode theory: missing explicit classifier lift for modality"
+
+classifierLiftForModExpr :: ModeTheory -> ModExpr -> Either Text ModExpr
+classifierLiftForModExpr mt me = do
+  validateModExpr mt me
+  let srcClass = modeClassifierMode (meSrc me)
+  let tgtClass = modeClassifierMode (meTgt me)
+  let start =
+        ModExpr
+          { meSrc = srcClass
+          , meTgt = srcClass
+          , mePath = []
+          }
+  stepLifts <- mapM (classifierLiftForModality mt) (mePath me)
+  composed <- foldM (composeMod mt) start stepLifts
+  let normalized = normalizeModExpr mt composed
+  if meSrc normalized == srcClass && meTgt normalized == tgtClass
+    then Right normalized
+    else Left "mode theory: classifier lift composition has wrong endpoints"
+  where
+    modeClassifierMode mode =
+      case M.lookup mode (mtClassifiedBy mt) of
+        Nothing -> mode
+        Just decl -> cdClassifier decl
 
 classificationDeps :: ModeTheory -> Map ModeName [ModeName]
 classificationDeps mt =

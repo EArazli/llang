@@ -418,6 +418,22 @@ Mode-theory compatibility is checked via morphism law preservation:
 
 - each source `mod_eq` must remain equal after morphism mapping/normalization in the target mode theory
 
+Classification-preserving morphism checks are strict:
+
+- for each source classified mode `M`, if `M' = morModeMap(M)`, target classification must exist for `M'` and satisfy classifier-edge commutation:
+  `classifier(M') = morModeMap(classifier(M))`
+- mapped universes must be definitionally equal in the target classifier theory
+- comprehension witness generators (`ctx_ext`, `var`, `reindex`) must be preserved exactly under `morGenMap`
+- classifier-lift coherence must hold for each mapped modality:
+  mapped source lift and target-computed lift of the mapped modality expression must normalize to the same `ModExpr`
+
+Pushout classification reconciliation is strict:
+
+- if both branches classify the same merged mode, classifiers must agree after renaming
+- comprehension declarations must match (or both be absent)
+- universes must be definitionally equal in the merged classifier theory
+- otherwise pushout/apply fails with an explicit classification-conflict error (no silent overwrite path)
+
 `apply` also inserts coercion morphisms:
 
 - `New.inl : Body -> New`

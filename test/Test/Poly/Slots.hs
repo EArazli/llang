@@ -10,11 +10,13 @@ import Strat.DSL.Elab (elabRawFile)
 import Strat.DSL.Parse (parseRawFile)
 import Strat.Frontend.Env (meDoctrines)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), deriveCtorTables)
-import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModExpr(..))
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Obj
-  ( ObjName(..)
+  ( Obj(..)
+  , ObjName(..)
   , ObjRef(..)
+  , CodeTerm(..)
   , TermDiagram(..)
   , mkCon
   , pattern OATm
@@ -33,6 +35,7 @@ tests =
     [ testCase "extract slots from ctor term arguments in generator boundaries" testExtractCtorTmSlots
     , testCase "extract slots from binder signatures and nested term arguments" testExtractBinderSlots
     , testCase "extract slots from nested box diagrams inside term arguments" testExtractNestedTermDiagramSlots
+    , testCase "extract slots through classifier lifts" testExtractSlotsThroughClassifierLift
     ]
 
 testExtractCtorTmSlots :: Assertion
@@ -148,6 +151,61 @@ testExtractNestedTermDiagramSlots = do
   assertBool
     "expected nested slots from term diagram box payload"
     (any (\s -> ".box." `T.isInfixOf` sidPath (slotId s)) tmSlots)
+
+testExtractSlotsThroughClassifierLift :: Assertion
+testExtractSlotsThroughClassifierLift = do
+  doc <- requireDoctrine "SlotLift"
+    [ "doctrine SlotLift where {"
+    , "  mode Ty classifiedBy Ty via Ty.U_Ty;"
+    , "  gen U_Ty : [] -> [Ty.U_Ty] @Ty;"
+    , "  gen U : [] -> [Ty.U_Ty] @Ty;"
+    , "  gen Nat : [] -> [Ty.U_Ty] @Ty;"
+    , "  gen Z : [] -> [Nat] @Ty;"
+    , "  gen Holder(n : Nat) : [] -> [Ty.U_Ty] @Ty;"
+    , "  gen ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+    , "  gen var(a@Ty) : [a] -> [a] @Ty;"
+    , "  gen reindex(a@Ty) : [a] -> [a] @Ty;"
+    , "  comprehension Ty where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+    , "  rule computational ctx_ext_id -> (a@Ty) : [a] -> [a] @Ty ="
+    , "    ctx_ext{a} == id[a]"
+    , "  rule computational var_id -> (a@Ty) : [a] -> [a] @Ty ="
+    , "    var{a} == id[a]"
+    , "  rule computational reindex_id -> (a@Ty) : [a] -> [a] @Ty ="
+    , "    reindex{a} == id[a]"
+    , "  mode Tm classifiedBy Ty via Ty.U;"
+    , "  gen t_ctx_ext(a@Tm) : [a] -> [a] @Tm;"
+    , "  gen t_var(a@Tm) : [a] -> [a] @Tm;"
+    , "  gen t_reindex(a@Tm) : [a] -> [a] @Tm;"
+    , "  comprehension Tm where { ctx_ext = t_ctx_ext; var = t_var; reindex = t_reindex; };"
+    , "  rule computational t_ctx_ext_id -> (a@Tm) : [a] -> [a] @Tm ="
+    , "    t_ctx_ext{a} == id[a]"
+    , "  rule computational t_var_id -> (a@Tm) : [a] -> [a] @Tm ="
+    , "    t_var{a} == id[a]"
+    , "  rule computational t_reindex_id -> (a@Tm) : [a] -> [a] @Tm ="
+    , "    t_reindex{a} == id[a]"
+    , "  modality mu : Tm -> Tm;"
+    , "  lift_classifier mu = id@Ty;"
+    , "  gen mk : [] -> [Ty.U] @Tm;"
+    , "}"
+    ]
+  ctorTables <- requireEither (deriveCtorTables doc)
+  mkGen <- lookupGen doc (ModeName "Tm") (GenName "mk")
+  let modeTy = ModeName "Ty"
+      modeTm = ModeName "Tm"
+      nat = mkCon (ObjRef modeTy (ObjName "Nat")) []
+      innerTy = mkCon (ObjRef modeTy (ObjName "Holder")) [OATm (TermDiagram (idD modeTy [nat]))]
+      liftExpr = ModExpr { meSrc = modeTy, meTgt = modeTy, mePath = [] }
+      liftedTy = Obj { objOwnerMode = modeTm, objCode = CTLift liftExpr (objCode innerTy) }
+      mkGen' = mkGen { gdCod = [liftedTy] }
+  slots <- requireEither (extractGenSlotsWithTables doc ctorTables mkGen')
+  let termPaths =
+        [ sidPath (slotId s)
+        | s <- slots
+        , slotKind s == SlotCtorTmArg
+        ]
+  assertBool
+    "expected term-argument slot under lift path"
+    ("cod[0].lift.arg[0]" `elem` termPaths)
 
 lookupGen :: Doctrine -> ModeName -> GenName -> IO GenDecl
 lookupGen doc mode name =

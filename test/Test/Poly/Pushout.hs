@@ -73,7 +73,7 @@ tests =
     , testCase "pushout accepts non-identity mode maps" testPushoutAcceptsModeMap
     , testCase "pushout keeps type refs in image modes under mode maps" testPushoutTypeRefsStayInPushoutModes
     , testCase "pushout disjoint cell renaming works with nontrivial mode renaming" testPushoutDisjointCellRenameUsesOriginalModeKey
-    , testCase "pushout disjoint renames freshen after mode collapse" testPushoutDisjointRenamesAfterModeCollapse
+    , testCase "pushout rejects mode collapse when comprehension witnesses diverge" testPushoutDisjointRenamesAfterModeCollapse
     , testCase "pushout allows same cell names in different modes" testPushoutCellNamesArePerMode
     , testCase "pushout allows compatible non-injective type maps" testPushoutNonInjectiveTypeCompatible
     , testCase "pushout rejects incompatible non-injective attrsort maps" testPushoutNonInjectiveAttrSortIncompatible
@@ -83,6 +83,8 @@ tests =
     , testCase "pushout generator injectivity is mode-aware" testPushoutGenInjectiveByMode
     , testCase "pushout default type rename follows mode map" testPushoutTypeRenameDefaultUsesModeMap
     , testCase "pushout classifiedBy universes follow type renames" testPushoutClassificationUniverseFollowsTypeRename
+    , testCase "pushout rejects incompatible classified universes" testPushoutRejectsIncompatibleClassifiedUniverses
+    , testCase "pushout accepts definitional-equal classified universes" testPushoutAcceptsDefEqClassifiedUniverses
     , testCase "pushout handles alpha-renaming with mode equations" testPushoutAlphaRenameWithModeEq
     , testCase "pushout supports term-parameterized type maps" testPushoutTermTypeMaps
     , testCase "pushout permutes mixed type/term parameters and renames term sorts" testPushoutTypePermutationSortRename
@@ -94,8 +96,9 @@ tests =
     , testCase "coproduct renames raw modality obligation syntax under collisions" testCoproductObligationRawModalityRenameElaborates
     , testCase "coproduct renames colliding modality transforms" testCoproductTransformCollisionRenames
     , testCase "apply pushout accepts implementation morphisms with non-CheckAll checks" testApplyPushoutAcceptsNonCheckAllGlue
-    , testCase "apply pushout type/gen collisions are resolved after mode collapse" testApplyPushoutTypeGenCollisionAfterModeRename
-    , testCase "apply pushout renames colliding cells after mode renaming" testApplyPushoutCellCollisionAfterModeRename
+    , testCase "apply pushout rejects mode collapse when comprehension witnesses diverge" testApplyPushoutTypeGenCollisionAfterModeRename
+    , testCase "apply pushout rejects colliding mode renames with comprehension mismatch" testApplyPushoutCellCollisionAfterModeRename
+    , testCase "apply pushout accepts mode-collapse universes equal up to defeq" testApplyPushoutModeCollapseUniverseDefEq
     ]
 
 require :: Either Text a -> IO a
@@ -1008,29 +1011,13 @@ testPushoutDisjointRenamesAfterModeCollapse = do
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
           }
-  res <- case computePolyPushout "PCollapse" morF morG of
-    Left err -> assertFailure (T.unpack err) >> error "unreachable"
-    Right out -> pure out
-  case validateDoctrine (poDoctrine res) of
-    Left err -> assertFailure (T.unpack err)
-    Right () -> pure ()
-  ctorTables <- require (PolyDoc.deriveCtorTables (poDoctrine res))
-  let typeNames = [ t | ObjName t <- M.keys (M.findWithDefault M.empty modeM ctorTables) ]
-  let bTypeNames = filter ("LeftCollapse_inl_B" `T.isPrefixOf`) typeNames
-  assertBool "expected two collapsed-mode B type names" (length bTypeNames == 2)
-  assertBool "expected freshened collapsed-mode type names" (all ("LeftCollapse_inl_B" `T.isPrefixOf`) bTypeNames)
-  let genNames = [ g | GenName g <- M.keys (M.findWithDefault M.empty modeM (dGens (poDoctrine res))) ]
-  let fgGenNames =
-        filter
-          (\g -> "LeftCollapse_inl_f" `T.isPrefixOf` g || "LeftCollapse_inl_g" `T.isPrefixOf` g)
-          genNames
-  assertBool "expected four collapsed-mode f/g generator names" (length fgGenNames == 4)
-  assertBool
-    "expected freshened collapsed-mode generator names"
-    (all (\g -> "LeftCollapse_inl_f" `T.isPrefixOf` g || "LeftCollapse_inl_g" `T.isPrefixOf` g) fgGenNames)
-  let cellNames = [ c2Name cell | cell <- dCells2 (poDoctrine res), dMode (c2LHS cell) == modeM ]
-  assertBool "expected two collapsed-mode cell names" (length cellNames == 2)
-  assertBool "expected freshened collapsed-mode cell names" (all ("LeftCollapse_inl_eq" `T.isPrefixOf`) cellNames)
+  case computePolyPushout "PCollapse" morF morG of
+    Left err ->
+      assertBool
+        ("expected comprehension-witness mismatch under mode collapse, got: " <> T.unpack err)
+        ("comprehension witness mismatch" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected strict pushout to reject mode collapse with divergent comprehension witnesses"
 
 testPushoutCellNamesArePerMode :: Assertion
 testPushoutCellNamesArePerMode = do
@@ -2726,18 +2713,13 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
           }
-  res <- case computePolyPushoutPreferRight "PTypeGenCollapse" "TypeGenFocus" incl impl of
-    Left err -> assertFailure (T.unpack err) >> error "unreachable"
-    Right out -> pure out
-  ctorTables <- require (PolyDoc.deriveCtorTables (poDoctrine res))
-  let modeTypes = M.findWithDefault M.empty modeM ctorTables
-  assertBool "expected unrenamed type B to remain" (M.member (ObjName "B") modeTypes)
-  let renamedTypes = [ t | ObjName t <- M.keys modeTypes, "TypeGenFocus_B" `T.isPrefixOf` t ]
-  assertBool "expected renamed B after mode-collapse collision" (not (null renamedTypes))
-  let modeGens = M.findWithDefault M.empty modeM (dGens (poDoctrine res))
-  assertBool "expected unrenamed generator g to remain" (M.member (GenName "g") modeGens)
-  let renamedGens = [ g | GenName g <- M.keys modeGens, "TypeGenFocus_g" `T.isPrefixOf` g ]
-  assertBool "expected renamed g after mode-collapse collision" (not (null renamedGens))
+  case computePolyPushoutPreferRight "PTypeGenCollapse" "TypeGenFocus" incl impl of
+    Left err ->
+      assertBool
+        ("expected comprehension-witness mismatch under apply mode collapse, got: " <> T.unpack err)
+        ("comprehension witness mismatch" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected strict apply pushout to reject mode collapse with divergent comprehension witnesses"
 
 testApplyPushoutCellCollisionAfterModeRename :: Assertion
 testApplyPushoutCellCollisionAfterModeRename = do
@@ -2850,13 +2832,104 @@ testApplyPushoutCellCollisionAfterModeRename = do
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
           }
-  res <- case computePolyPushoutPreferRight "PApplyModeCell" "FunctorF" incl impl of
-    Left err -> assertFailure (T.unpack err) >> error "unreachable"
-    Right out -> pure out
-  let names = map c2Name (dCells2 (poDoctrine res))
-  assertBool "expected target cell name eq to stay" ("eq" `elem` names)
-  let renamed = [ name | name <- names, "FunctorF_eq" `T.isPrefixOf` name ]
-  assertBool "expected body cell to be renamed after mode collapse" (not (null renamed))
+  case computePolyPushoutPreferRight "PApplyModeCell" "FunctorF" incl impl of
+    Left err ->
+      assertBool
+        ("expected comprehension-witness mismatch under colliding mode rename, got: " <> T.unpack err)
+        ("comprehension witness mismatch" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected strict apply pushout to reject colliding mode renames with divergent comprehension witnesses"
+
+testApplyPushoutModeCollapseUniverseDefEq :: Assertion
+testApplyPushoutModeCollapseUniverseDefEq = do
+  let modeI1 = ModeName "I1"
+      modeI2 = ModeName "I2"
+      modeL1 = ModeName "L1"
+      modeL2 = ModeName "L2"
+      modeM = ModeName "M"
+      mkCompOnlySelfClassified name modes =
+        let mt0 = mkModes (S.fromList modes)
+            mt1 =
+              mt0
+                { mtClassifiedBy =
+                    M.fromList
+                      [ ( mode
+                        , ClassificationDecl
+                            { cdClassifier = mode
+                            , cdUniverse = defaultUniverseObj mode
+                            , cdTag = Nothing
+                            , cdComp = Just compDecl
+                            }
+                        )
+                      | mode <- modes
+                      ]
+                }
+            gens =
+              foldl
+                (\acc mode -> insertCompSupportGens mode (defaultUniverseObj mode) acc)
+                M.empty
+                modes
+         in Doctrine
+              { dName = name
+              , dModes = mt1
+              , dAcyclicModes = S.empty
+              , dGens = gens
+              , dCells2 = []
+              , dActions = M.empty
+              , dObligations = []
+              , dAttrSorts = M.empty
+              }
+      source = mkCompOnlySelfClassified "SrcCollapseDefEq" [modeI1, modeI2]
+      body0 = mkCompOnlySelfClassified "BodyCollapseDefEq" [modeL1, modeL2]
+      modeTheoryBody0 = dModes body0
+      classDeclsBody0 = mtClassifiedBy modeTheoryBody0
+      idL2 = ModExpr { meSrc = modeL2, meTgt = modeL2, mePath = [] }
+      l2UniverseWrapped = OMod idL2 (defaultUniverseObj modeL2)
+      body =
+        body0
+          { dModes =
+              modeTheoryBody0
+                { mtClassifiedBy =
+                    M.adjust (\decl -> decl { cdUniverse = l2UniverseWrapped }) modeL2 classDeclsBody0
+                }
+          }
+      target = mkCompOnlySelfClassified "TargetCollapseDefEq" [modeM]
+  mapM_ (either (assertFailure . T.unpack) pure . validateDoctrine) [source, body, target]
+  let incl =
+        Morphism
+          { morName = "inclCollapseDefEq"
+          , morSrc = source
+          , morTgt = body
+          , morIsCoercion = False
+          , morModeMap = M.fromList [(modeI1, modeL1), (modeI2, modeL2)]
+          , morModMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+      impl =
+        Morphism
+          { morName = "implCollapseDefEq"
+          , morSrc = source
+          , morTgt = target
+          , morIsCoercion = False
+          , morModeMap = M.fromList [(modeI1, modeM), (modeI2, modeM)]
+          , morModMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckAll
+          , morAttrSortMap = M.empty
+          , morPolicy = UseAllOriented
+          }
+  case computePolyPushoutPreferRight "PApplyModeCollapseUniverseDefEq" "FunctorF" incl impl of
+    Left err ->
+      assertFailure
+        ( "expected apply pushout to accept defeq universes under mode collapse, got: "
+            <> T.unpack err
+        )
+    Right _ -> pure ()
 
 testPushoutCellTmAlphaEq :: Assertion
 testPushoutCellTmAlphaEq = do
@@ -3304,6 +3377,145 @@ mkModeEqDoctrine name mt varName useUF = do
   case validateDoctrine doc of
     Left err -> Left err
     Right () -> Right doc
+
+testPushoutRejectsIncompatibleClassifiedUniverses :: Assertion
+testPushoutRejectsIncompatibleClassifiedUniverses = do
+  let modeTy = ModeName "Ty"
+      leftUniverse = mkCon (ObjRef modeTy (ObjName "U_TM_L")) []
+      rightUniverse = mkCon (ObjRef modeTy (ObjName "U_TM_R")) []
+  left <- require (mkClassifiedPushoutDoctrine "LeftClass" leftUniverse (ObjName "U_TM_L"))
+  right <- require (mkClassifiedPushoutDoctrine "RightClass" rightUniverse (ObjName "U_TM_R"))
+  let iface = mkClassifiedPushoutInterface
+      morL = mkClassifiedPushoutMorph "leftIncl" iface left
+      morR = mkClassifiedPushoutMorph "rightIncl" iface right
+  case computePolyPushout "PClassUniverseConflict" morL morR of
+    Left err ->
+      assertBool
+        ("expected universe mismatch rejection, got: " <> T.unpack err)
+        ("universe mismatch" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected pushout to reject incompatible classified universes"
+
+testPushoutAcceptsDefEqClassifiedUniverses :: Assertion
+testPushoutAcceptsDefEqClassifiedUniverses = do
+  let modeTy = ModeName "Ty"
+      tmCtor = ObjName "U_TM_BASE"
+      baseUniverse = mkCon (ObjRef modeTy tmCtor) []
+      liftedUniverse = OMod ModExpr { meSrc = modeTy, meTgt = modeTy, mePath = [] } baseUniverse
+  left <- require (mkClassifiedPushoutDoctrine "LeftDefEq" liftedUniverse tmCtor)
+  right <- require (mkClassifiedPushoutDoctrine "RightDefEq" baseUniverse tmCtor)
+  let iface = mkClassifiedPushoutInterface
+      morL = mkClassifiedPushoutMorph "leftInclDefEq" iface left
+      morR = mkClassifiedPushoutMorph "rightInclDefEq" iface right
+  case computePolyPushout "PClassUniverseDefEq" morL morR of
+    Left err ->
+      assertFailure ("expected pushout with defeq classified universes to succeed: " <> T.unpack err)
+    Right _ -> pure ()
+
+mkClassifiedPushoutInterface :: Doctrine
+mkClassifiedPushoutInterface =
+  case mkClassifiedPushoutDoctrine "IfaceClass" baseUniverse (ObjName "U_TM_BASE") of
+    Left err -> error ("mkClassifiedPushoutInterface: " <> T.unpack err)
+    Right doc -> doc
+  where
+    modeTy = ModeName "Ty"
+    baseUniverse = mkCon (ObjRef modeTy (ObjName "U_TM_BASE")) []
+
+mkClassifiedPushoutDoctrine :: Text -> Obj -> ObjName -> Either Text Doctrine
+mkClassifiedPushoutDoctrine name tmUniverse tmCtorName = do
+  let modeTy = ModeName "Ty"
+      modeTm = ModeName "Tm"
+      uTy = mkCon (ObjRef modeTy (ObjName "U_TY")) []
+      modeTheory =
+        (mkModes (S.fromList [modeTy, modeTm]))
+          { mtClassifiedBy =
+              M.fromList
+                [ ( modeTy
+                  , ClassificationDecl
+                      { cdClassifier = modeTy
+                      , cdUniverse = uTy
+                      , cdTag = Nothing
+                      , cdComp = Just compDecl
+                      }
+                  )
+                , ( modeTm
+                  , ClassificationDecl
+                      { cdClassifier = modeTy
+                      , cdUniverse = tmUniverse
+                      , cdTag = Nothing
+                      , cdComp = Just compDecl
+                      }
+                  )
+                ]
+          }
+      tyCtorNames =
+        S.toList (S.fromList [ObjName "U_TY", ObjName "U_TM_BASE", tmCtorName])
+      tyCtorDecls =
+        [ ctorDecl uTy modeTy ctorName []
+        | ctorName <- tyCtorNames
+        ]
+      tySupport =
+        [ mkPolyCompGen modeTy uTy compCtxExtName
+        , mkPolyCompGen modeTy uTy compVarName
+        , mkPolyCompGen modeTy uTy compReindexName
+        ]
+      tmSupport =
+        [ mkPolyCompGen modeTm tmUniverse compCtxExtName
+        , mkPolyCompGen modeTm tmUniverse compVarName
+        , mkPolyCompGen modeTm tmUniverse compReindexName
+        ]
+      tyTable = M.fromList [ (gdName gd, gd) | gd <- tyCtorDecls <> tySupport ]
+      tmTable = M.fromList [ (gdName gd, gd) | gd <- tmSupport ]
+      doc =
+        Doctrine
+          { dName = name
+          , dModes = modeTheory
+          , dAcyclicModes = S.empty
+          , dGens = M.fromList [(modeTy, tyTable), (modeTm, tmTable)]
+          , dCells2 = []
+          , dActions = M.empty
+          , dObligations = []
+          , dAttrSorts = M.empty
+          }
+  case validateDoctrine doc of
+    Left err -> Left err
+    Right () -> Right doc
+
+mkPolyCompGen :: ModeName -> Obj -> GenName -> GenDecl
+mkPolyCompGen mode sortTy name =
+  let a =
+        TmVar
+          { tmvName = "a"
+          , tmvSort = sortTy
+          , tmvScope = 0
+          , tmvOwnerMode = Just mode
+          }
+   in GenDecl
+        { gdName = name
+        , gdMode = mode
+        , gdTyVars = [a]
+        , gdTmVars = []
+        , gdParams = [GP_Ty a]
+        , gdDom = [InPort (OVar a)]
+        , gdCod = [OVar a]
+        , gdAttrs = []
+        }
+
+mkClassifiedPushoutMorph :: Text -> Doctrine -> Doctrine -> Morphism
+mkClassifiedPushoutMorph name src tgt =
+  Morphism
+    { morName = name
+    , morSrc = src
+    , morTgt = tgt
+    , morIsCoercion = False
+    , morModeMap = identityModeMap src
+    , morModMap = identityModMap src
+    , morAttrSortMap = M.empty
+    , morTypeMap = M.empty
+    , morGenMap = M.empty
+    , morCheck = CheckNone
+    , morPolicy = UseAllOriented
+    }
 
 mkTypeDoctrine :: ModeName -> Text -> [(ObjName, Int)] -> Either Text Doctrine
 mkTypeDoctrine mode name types = do

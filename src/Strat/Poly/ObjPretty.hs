@@ -26,6 +26,8 @@ renderType ty =
       renderTypeRef ref <> "(" <> T.intercalate ", " (map renderTypeArg args) <> ")"
     OMod me inner ->
       renderModExpr me <> "(" <> renderType inner <> ")"
+    OLift me inner ->
+      "lift[" <> renderModExpr me <> "](" <> renderType inner <> ")"
 
 renderTypeArg :: ObjArg -> Text
 renderTypeArg arg =
