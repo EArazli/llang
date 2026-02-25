@@ -557,6 +557,7 @@ testModalityMapRewritesTypeModalities = do
           , mtEqns = []
           , mtTransforms = M.empty
           , mtClassifiedBy = M.empty
+          , mtClassifierLifts = M.empty
           }
   let modeTheoryTgt =
         ModeTheory
@@ -573,6 +574,7 @@ testModalityMapRewritesTypeModalities = do
           , mtEqns = []
           , mtTransforms = M.empty
           , mtClassifiedBy = M.empty
+          , mtClassifierLifts = M.empty
           }
   let genGSrc =
         GenDecl

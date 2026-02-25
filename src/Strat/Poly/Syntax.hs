@@ -12,7 +12,7 @@ module Strat.Poly.Syntax
   , TmVar(..)
   , TermDiagram(..)
   , CodeArg(..)
-  , CodeTerm(CTMeta, CTCon, CTMod)
+  , CodeTerm(CTMeta, CTCon, CTMod, CTLift)
   , Obj(..)
   , Context
   , PortId(..)
@@ -103,6 +103,7 @@ data CodeTerm
   = CTMeta TmVar
   | CTCon ObjRef [CodeArg]
   | CTMod ModExpr CodeTerm
+  | CTLift ModExpr CodeTerm
   deriving (Eq, Ord, Show)
 
 data Obj = Obj

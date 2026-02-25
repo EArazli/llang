@@ -5,14 +5,15 @@ doctrine SchemaAdjunction where {
   gen comp_reindex(a@C) : [a] -> [a] @C;
   comprehension C where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_C : [] -> [C.U_C] @C;
-  mode L classifiedBy L via L.U_L;
+  mode L classifiedBy L via F(C.U_C);
   gen comp_ctx_ext(a@L) : [a] -> [a] @L;
   gen comp_var(a@L) : [a] -> [a] @L;
   gen comp_reindex(a@L) : [a] -> [a] @L;
   comprehension L where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
-  gen U_L : [] -> [L.U_L] @L;
   modality F : C -> L;
   modality U : L -> C;
+  lift_classifier F = F;
+  lift_classifier U = U;
 
   mod_eq U.F -> id@C;
   mod_eq F.U -> id@L;

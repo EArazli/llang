@@ -1,0 +1,38 @@
+doctrine ClassificationLayered3 where {
+  mode Kd classifiedBy Kd via Kd.U_Kd;
+  gen U_Kd : [] -> [Kd.U_Kd] @Kd;
+  gen kd_ctx_ext(a@Kd) : [a] -> [a] @Kd;
+  gen kd_var(a@Kd) : [a] -> [a] @Kd;
+  gen kd_reindex(a@Kd) : [a] -> [a] @Kd;
+  comprehension Kd where { ctx_ext = kd_ctx_ext; var = kd_var; reindex = kd_reindex; };
+  gen Star : [] -> [Kd.U_Kd] @Kd;
+
+  mode Ty classifiedBy Kd via Kd.Star;
+  gen ty_ctx_ext(a@Ty) : [a] -> [a] @Ty;
+  gen ty_var(a@Ty) : [a] -> [a] @Ty;
+  gen ty_reindex(a@Ty) : [a] -> [a] @Ty;
+  comprehension Ty where { ctx_ext = ty_ctx_ext; var = ty_var; reindex = ty_reindex; };
+  gen U_Ty : [] -> [Kd.Star] @Kd;
+
+  mode Tm classifiedBy Ty via Kd.U_Ty;
+  gen tm_ctx_ext(a@Tm) : [a] -> [a] @Tm;
+  gen tm_var(a@Tm) : [a] -> [a] @Tm;
+  gen tm_reindex(a@Tm) : [a] -> [a] @Tm;
+  comprehension Tm where { ctx_ext = tm_ctx_ext; var = tm_var; reindex = tm_reindex; };
+
+  gen Unit : [] -> [Kd.U_Ty] @Ty;
+  gen idUnit : [Unit] -> [Unit] @Tm;
+}
+
+pipeline main where {
+  normalize;
+  extract diagram;
+}
+
+run main using main where {
+  source doctrine ClassificationLayered3;
+  source mode Tm;
+}
+---
+idUnit
+---

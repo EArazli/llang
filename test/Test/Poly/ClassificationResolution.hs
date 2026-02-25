@@ -16,7 +16,7 @@ import Strat.Poly.Doctrine
   , gdPlainDom
   , lookupCtorSigForOwnerInTables
   )
-import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ClassificationDecl(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
   ( CodeArg(..)
@@ -40,6 +40,7 @@ tests =
     [ testCase "classifier mode drives constructor resolution" testClassifierResolution
     , testCase "wrong constructor qualifier is rejected for classified objects" testWrongClassifierQualifier
     , testCase "normalizeObjDeep preserves and normalizes term arguments under Obj wrapper" testTermArgNormalization
+    , testCase "layered 3-level classification elaborates with constructor tables" testLayeredClassification3
     ]
 
 
@@ -170,6 +171,52 @@ testTermArgNormalization = do
       case params of
         (TPS_Tm natSort : _) -> pure natSort
         _ -> assertFailure "expected Vec to have first term parameter" >> fail "unreachable"
+
+testLayeredClassification3 :: Assertion
+testLayeredClassification3 = do
+  let src = T.unlines
+        [ "doctrine ClassifyLayered3 where {"
+        , "  mode Kd classifiedBy Kd via Kd.U_Kd;"
+        , "  gen U_Kd : [] -> [Kd.U_Kd] @Kd;"
+        , "  gen kd_ctx_ext(a@Kd) : [a] -> [a] @Kd;"
+        , "  gen kd_var(a@Kd) : [a] -> [a] @Kd;"
+        , "  gen kd_reindex(a@Kd) : [a] -> [a] @Kd;"
+        , "  comprehension Kd where { ctx_ext = kd_ctx_ext; var = kd_var; reindex = kd_reindex; };"
+        , "  gen Star : [] -> [Kd.U_Kd] @Kd;"
+        , "  mode Ty classifiedBy Kd via Kd.Star;"
+        , "  gen ty_ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen ty_var(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen ty_reindex(a@Ty) : [a] -> [a] @Ty;"
+        , "  comprehension Ty where { ctx_ext = ty_ctx_ext; var = ty_var; reindex = ty_reindex; };"
+        , "  gen U_Ty : [] -> [Kd.Star] @Kd;"
+        , "  mode Tm classifiedBy Ty via Kd.U_Ty;"
+        , "  gen tm_ctx_ext(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen tm_var(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen tm_reindex(a@Tm) : [a] -> [a] @Tm;"
+        , "  comprehension Tm where { ctx_ext = tm_ctx_ext; var = tm_var; reindex = tm_reindex; };"
+        , "  gen Unit : [] -> [Kd.U_Ty] @Ty;"
+        , "  gen idUnit : [Unit] -> [Unit] @Tm;"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <- lookupDoctrine env "ClassifyLayered3"
+  case M.lookup (ModeName "Ty") (mtClassifiedBy (dModes doc)) of
+    Nothing ->
+      assertFailure "missing Ty classification declaration"
+    Just decl ->
+      cdClassifier decl @?= ModeName "Kd"
+  case M.lookup (ModeName "Tm") (mtClassifiedBy (dModes doc)) of
+    Nothing ->
+      assertFailure "missing Tm classification declaration"
+    Just decl ->
+      cdClassifier decl @?= ModeName "Ty"
+  ctorTables <- requireEither (deriveCtorTables doc)
+  assertBool
+    "expected non-empty constructor table for Ty owner mode"
+    (not (M.null (M.findWithDefault M.empty (ModeName "Ty") ctorTables)))
+  assertBool
+    "expected non-empty constructor table for Tm owner mode"
+    (not (M.null (M.findWithDefault M.empty (ModeName "Tm") ctorTables)))
 
 
 lookupDoctrine :: ModuleEnv -> T.Text -> IO Doctrine

@@ -422,6 +422,13 @@ pushoutModeTheoryPreferRight prefixRaw leftMor rightMor = do
       "mode pushout: conflicting modality declarations"
       declsFromRight
       declsFromLeft
+  liftsFromRight <- renamedLiftMap inrModeRen inrModRen mtRight
+  liftsFromLeft <- renamedLiftMap inlModeRen inlModRen mtLeft
+  lifts0 <-
+    mergeNamedMapsByEq
+      "mode pushout: conflicting classifier lifts"
+      liftsFromRight
+      liftsFromLeft
   let eqns0 =
         map (renameModEqn inrModeRen inrModRen) (mtEqns mtRight)
           <> map (renameModEqn inlModeRen inlModRen) (mtEqns mtLeft)
@@ -448,6 +455,7 @@ pushoutModeTheoryPreferRight prefixRaw leftMor rightMor = do
           , mtEqns = eqns0 <> glueEqns
           , mtTransforms = transforms
           , mtClassifiedBy = M.empty
+          , mtClassifierLifts = lifts0
           }
   _ <- checkWellFormed mtOut
   pure
@@ -539,6 +547,15 @@ pushoutModeTheoryPreferRight prefixRaw leftMor rightMor = do
         ( M.fromList
             [ (name', renameDecl modeRen modRen decl)
             | (name, decl) <- M.toList (mtDecls mt)
+            , let name' = renameModName modRen name
+            ]
+        )
+
+    renamedLiftMap modeRen modRen mt =
+      pure
+        ( M.fromList
+            [ (name', renameModExpr modeRen modRen me)
+            | (name, me) <- M.toList (mtClassifierLifts mt)
             , let name' = renameModName modRen name
             ]
         )
@@ -1679,6 +1696,7 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
     renameModeTransforms transRen mt0 = do
       transforms' <- foldM addTransform M.empty (M.toList (mtTransforms mt0))
       classifiedBy' <- foldM addClassification M.empty (M.toList (mtClassifiedBy mt0))
+      classifierLifts' <- foldM addClassifierLiftRenamed M.empty (M.toList (mtClassifierLifts mt0))
       let modes' =
             M.fromList
               [ (mode', info { miName = mode' })
@@ -1692,7 +1710,15 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
               , let name' = renameModName modRen name
               ]
       let eqns' = map (renameModEqn modeRen modRen) (mtEqns mt0)
-      Right mt0 { mtModes = modes', mtDecls = decls', mtEqns = eqns', mtTransforms = transforms', mtClassifiedBy = classifiedBy' }
+      Right
+        mt0
+          { mtModes = modes'
+          , mtDecls = decls'
+          , mtEqns = eqns'
+          , mtTransforms = transforms'
+          , mtClassifiedBy = classifiedBy'
+          , mtClassifierLifts = classifierLifts'
+          }
       where
         addTransform acc (name, decl) = do
           let name' = M.findWithDefault name name transRen
@@ -1752,6 +1778,15 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
                       }
 
             objNameText (ObjName t) = t
+
+        addClassifierLiftRenamed acc (name, me) =
+          let name' = renameModName modRen name
+              me' = renameModExpr modeRen modRen me
+           in case M.lookup name' acc of
+                Nothing -> Right (M.insert name' me' acc)
+                Just existing
+                  | existing == me' -> Right acc
+                  | otherwise -> Left "poly pushout: classifier lift collision"
 
     renameAttrSorts ren table =
       foldl add (Right M.empty) (M.elems table)
@@ -2279,6 +2314,9 @@ renameObjExpr modeRen modRen ren permRen ty = do
         CTMod me inner -> do
           inner' <- renameCode inner
           Right (CTMod (renameModExpr modeRen modRen me) inner')
+        CTLift me inner -> do
+          inner' <- renameCode inner
+          Right (CTLift (renameModExpr modeRen modRen me) inner')
         CTCon ref args -> do
           args' <- mapM renameArg args
           let ref1 = M.findWithDefault ref ref ren
@@ -2641,6 +2679,9 @@ normalizeDiagramModes mt diag = do
         CTMod me innerCode -> do
           inner' <- goType Obj { objOwnerMode = meSrc me, objCode = innerCode }
           Right ty { objCode = CTMod me (objCode inner') }
+        CTLift me innerCode -> do
+          inner' <- goType Obj { objOwnerMode = meSrc me, objCode = innerCode }
+          Right ty { objCode = CTLift me (objCode inner') }
 
     goArg arg =
       case arg of

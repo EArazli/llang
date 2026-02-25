@@ -154,6 +154,7 @@ mkModes modes =
             )
           | m <- S.toList modes
           ]
+    , mtClassifierLifts = M.empty
     }
 
 testCoherenceJoinable :: Assertion

@@ -181,6 +181,7 @@ mkModes modes =
     , mtEqns = []
     , mtTransforms = M.empty
     , mtClassifiedBy = M.empty
+    , mtClassifierLifts = M.empty
     }
 
 universeName :: ModeName -> ObjName
@@ -3216,6 +3217,7 @@ mkModeEqTheory mode modF modU =
         ]
     , mtTransforms = M.empty
     , mtClassifiedBy = M.empty
+    , mtClassifierLifts = M.empty
     }
 
 mkModeEqMorph :: Text -> Doctrine -> Doctrine -> Text -> Morphism

@@ -386,7 +386,14 @@ mergePorts diag keep drop
       labelKeep <- requireLabel keep
       labelDrop <- requireLabel drop
       if tyKeep /= tyDrop
-        then Left "mergePorts: type mismatch"
+        then
+          Left
+            ( "mergePorts: type mismatch (keep="
+                <> T.pack (show tyKeep)
+                <> ", drop="
+                <> T.pack (show tyDrop)
+                <> ")"
+            )
         else do
           let prodKeep = IM.lookup (unPortId keep) (dProd diag)
           let prodDrop = IM.lookup (unPortId drop) (dProd diag)

@@ -1,20 +1,25 @@
 import "../../../stdlib/schema.monad.llang";
 
 doctrine IdMonad where {
-  mode C classifiedBy C via C.U_C;
+  mode C classifiedBy C via T(C.U_C);
   gen comp_ctx_ext(a@C) : [a] -> [a] @C;
   gen comp_var(a@C) : [a] -> [a] @C;
   gen comp_reindex(a@C) : [a] -> [a] @C;
   comprehension C where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
-  gen U_C : [] -> [C.U_C] @C;
   modality T : C -> C;
+  lift_classifier T = T;
+  mod_eq T.T -> T;
+  gen U_C : [] -> [T(C.U_C)] @C;
 
-  gen A : [] -> [C.U_C] @C;
+  gen A : [] -> [T(C.U_C)] @C;
 
   gen ret(a@C) : [a] -> [T(a)] @C;
   gen join(a@C) : [T(T(a))] -> [T(a)] @C;
 
   action T where {
+    gen comp_ctx_ext -> comp_ctx_ext
+    gen comp_var -> comp_var
+    gen comp_reindex -> comp_reindex
     gen ret -> ret
     gen join -> join
   }

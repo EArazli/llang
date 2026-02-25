@@ -41,7 +41,7 @@ import Data.Text (Text)
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
-import Strat.Poly.ModeTheory (ModeName, ModExpr(..), ModeTheory, composeMod, normalizeModExpr)
+import Strat.Poly.ModeTheory (ModeName, ModExpr(..), ModeTheory(..), ClassificationDecl(..), composeMod, normalizeModExpr)
 import Strat.Poly.Syntax
   ( ObjVar
   , pattern ObjVar
@@ -119,6 +119,9 @@ mapObjExpr fTy fTm = goObj
         CTMod me inner ->
           let innerObj = goObj Obj { objOwnerMode = meSrc me, objCode = inner }
           in CTMod me (objCode innerObj)
+        CTLift me inner ->
+          let innerObj = goObj Obj { objOwnerMode = meSrc me, objCode = inner }
+           in CTLift me (objCode innerObj)
     goArg arg =
       case arg of
         CAObj ty -> CAObj (goObj ty)
@@ -133,6 +136,7 @@ freeObjVarsObj obj =
         CTMeta v -> S.singleton v
         CTCon _ args -> S.unions (map freeObjVarsArg args)
         CTMod _ inner -> freeObjVarsCode inner
+        CTLift _ inner -> freeObjVarsCode inner
     freeObjVarsArg arg =
       case arg of
         CAObj innerObj -> freeObjVarsObj innerObj
@@ -173,6 +177,7 @@ freeTmVarsObj obj =
         CTMeta _ -> S.empty
         CTCon _ args -> S.unions (map freeTmVarsArg args)
         CTMod _ inner -> freeTmVarsCode inner
+        CTLift _ inner -> freeTmVarsCode inner
     freeTmVarsArg arg =
       case arg of
         CAObj innerObj -> freeTmVarsObj innerObj
@@ -187,6 +192,7 @@ occursObjVar v obj =
         CTMeta v' -> v == v'
         CTCon _ args -> any occursArg args
         CTMod _ inner -> occursInCode inner
+        CTLift _ inner -> occursInCode inner
     occursArg arg =
       case arg of
         CAObj innerObj -> occursObjVar v innerObj
@@ -243,6 +249,7 @@ boundTmIndicesObj obj =
         CTMeta _ -> S.empty
         CTCon _ args -> S.unions (map boundTmIndicesArg args)
         CTMod _ inner -> boundInCode inner
+        CTLift _ inner -> boundInCode inner
     boundTmIndicesArg arg =
       case arg of
         CAObj innerObj -> boundTmIndicesObj innerObj
@@ -264,6 +271,7 @@ codeMode0 code =
         Nothing -> objOwnerMode (tmvSort v)
     CTCon r _ -> orMode r
     CTMod me _ -> meTgt me
+    CTLift me _ -> meTgt me
 
 objMode :: Obj -> ModeName
 objMode = objOwnerMode
@@ -287,11 +295,44 @@ normalizeCodeTerm mt code =
       if null (mePath meNorm)
         then Right innerBase
         else Right (CTMod meNorm innerBase)
+    CTLift me inner0 -> do
+      inner <- normalizeCodeTerm mt inner0
+      (meComposed, innerBase) <-
+        case inner of
+          CTLift me2 inner2 -> do
+            me' <- composeMod mt me2 me
+            Right (me', inner2)
+          _ -> Right (me, inner)
+      let meNorm = normalizeModExpr mt meComposed
+      if null (mePath meNorm)
+        then Right innerBase
+        else
+          if liftMayReuseMod meNorm
+            then collapseModLike meNorm innerBase
+            else Right (CTLift meNorm innerBase)
   where
     normalizeArg arg =
       case arg of
         CAObj innerTy -> CAObj <$> normalizeObjExpr mt innerTy
         CATm tm -> Right (CATm tm)
+
+    liftMayReuseMod me =
+      modeIsSelfClassified (meSrc me) && modeIsSelfClassified (meTgt me)
+
+    modeIsSelfClassified mode =
+      case M.lookup mode (mtClassifiedBy mt) of
+        Just decl -> cdClassifier decl == mode
+        Nothing -> False
+
+    collapseModLike me code =
+      case code of
+        CTMod me2 inner2 -> do
+          me' <- composeMod mt me2 me
+          let meNorm = normalizeModExpr mt me'
+          if null (mePath meNorm)
+            then Right inner2
+            else Right (CTMod meNorm inner2)
+        _ -> Right (CTMod me code)
 
 normalizeObjExpr :: ModeTheory -> Obj -> Either Text Obj
 normalizeObjExpr mt obj =
@@ -306,6 +347,12 @@ normalizeObjExpr mt obj =
         else Right ()
       inner <- normalizeObjExpr mt Obj { objOwnerMode = meSrc me, objCode = innerCode }
       collapse me (objCode inner)
+    CTLift me innerCode -> do
+      if meTgt me /= objOwnerMode obj
+        then Left "normalizeObjExpr: lift target does not match object owner mode"
+        else Right ()
+      inner <- normalizeObjExpr mt Obj { objOwnerMode = meSrc me, objCode = innerCode }
+      collapseLift me (objCode inner)
   where
     normalizeArg arg =
       case arg of
@@ -322,3 +369,25 @@ normalizeObjExpr mt obj =
           if null (mePath meNorm)
             then Right obj { objCode = code }
             else Right obj { objCode = CTMod meNorm code }
+
+    collapseLift me code =
+      case code of
+        CTLift me2 inner2 -> do
+          me' <- composeMod mt me2 me
+          collapseLift me' inner2
+        _ -> do
+          let meNorm = normalizeModExpr mt me
+          if null (mePath meNorm)
+            then Right obj { objCode = code }
+            else
+              if liftMayReuseMod meNorm
+                then collapse meNorm code
+                else Right obj { objCode = CTLift meNorm code }
+
+    liftMayReuseMod me =
+      modeIsSelfClassified (meSrc me) && modeIsSelfClassified (meTgt me)
+
+    modeIsSelfClassified mode =
+      case M.lookup mode (mtClassifiedBy mt) of
+        Just decl -> cdClassifier decl == mode
+        Nothing -> False

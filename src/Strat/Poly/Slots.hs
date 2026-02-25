@@ -36,7 +36,7 @@ import Strat.Poly.Obj
   , pattern OATm
   )
 import Strat.Poly.TypeTheory (TypeParamSig(..))
-import Strat.Poly.Syntax (Diagram(..), Edge(..), EdgePayload(..), TmVar(..))
+import Strat.Poly.Syntax (Diagram(..), Edge(..), EdgePayload(..), BinderArg(..), TmVar(..))
 
 data SlotKind
   = SlotBinder
@@ -153,17 +153,40 @@ extractGenSlotsWithTables doc ctorTables gd = do
             (TPS_Ty _, OATm _) ->
               Left ("slot extraction: expected type argument at " <> renderGen (gdName gd) <> "." <> path')
 
-    slotsInTerm path (TermDiagram diag) = do
-      portSlots <- fmap concat (mapM (\(i, ty) -> slotsInObj (path <> ".term.port[" <> tshow i <> "]") ty) (zip [0 :: Int ..] (IM.elems (dPortObj diag))))
-      tmCtxSlots <- fmap concat (mapM (\(i, ty) -> slotsInObj (path <> ".term.tmctx[" <> tshow i <> "]") ty) (zip [0 :: Int ..] (dTmCtx diag)))
-      edgeSlots <- fmap concat (mapM edgeOne (IM.toList (dEdges diag)))
+    slotsInTerm path (TermDiagram diag) =
+      slotsInDiagram path diag
+
+    slotsInDiagram path diag = do
+      portSlots <- fmap concat (mapM portOne (zip [0 :: Int ..] (IM.toAscList (dPortObj diag))))
+      tmCtxSlots <- fmap concat (mapM tmCtxOne (zip [0 :: Int ..] (dTmCtx diag)))
+      edgeSlots <- fmap concat (mapM edgeOne (IM.toAscList (dEdges diag)))
       pure (portSlots <> tmCtxSlots <> edgeSlots)
       where
+        portOne (i, (_, ty)) =
+          slotsInObj (path <> ".term.port[" <> tshow i <> "]") ty
+
+        tmCtxOne (i, ty) =
+          slotsInObj (path <> ".term.tmctx[" <> tshow i <> "]") ty
+
         edgeOne (eid, edge) =
           case ePayload edge of
             PTmMeta tv ->
               slotsInObj (path <> ".term.edge[" <> tshow eid <> "].sort") (tmvSort tv)
+            PGen _ _ bargs ->
+              fmap concat (mapM (binderArgOne eid) (zip [0 :: Int ..] bargs))
+            PBox _ inner ->
+              slotsInDiagram (path <> ".term.edge[" <> tshow eid <> "].box") inner
+            PFeedback inner ->
+              slotsInDiagram (path <> ".term.edge[" <> tshow eid <> "].feedback") inner
             _ -> Right []
+
+        binderArgOne eid (i, barg) =
+          case barg of
+            BAConcrete inner ->
+              slotsInDiagram
+                (path <> ".term.edge[" <> tshow eid <> "].barg[" <> tshow i <> "]")
+                inner
+            BAMeta _ -> Right []
 
     tshow :: Show a => a -> Text
     tshow = T.pack . show

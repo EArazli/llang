@@ -92,6 +92,7 @@ mkModes modes =
     , mtEqns = []
     , mtTransforms = M.empty
     , mtClassifiedBy = M.empty
+    , mtClassifierLifts = M.empty
     }
 
 selfClassifiedModes :: S.Set ModeName -> ModeTheory

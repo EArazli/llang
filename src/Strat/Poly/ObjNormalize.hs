@@ -98,6 +98,13 @@ normalizeCodeTermDeepWithCtx tt tmCtx owner code =
       inner' <- normalizeCodeTermDeepWithCtx tt tmCtx (meSrc me) innerCode
       merged <- normalizeObjExpr (ttModes tt) Obj { objOwnerMode = owner, objCode = CTMod me inner' }
       pure (objCode merged)
+    CTLift me innerCode -> do
+      if meTgt me /= owner
+        then Left "normalizeCodeTermDeepWithCtx: lift target does not match object owner mode"
+        else Right ()
+      inner' <- normalizeCodeTermDeepWithCtx tt tmCtx (meSrc me) innerCode
+      merged <- normalizeObjExpr (ttModes tt) Obj { objOwnerMode = owner, objCode = CTLift me inner' }
+      pure (objCode merged)
   where
     normalizeArgBySig (TPS_Ty _, CAObj tyArg) =
       CAObj <$> normalizeObjDeepWithCtx tt tmCtx tyArg

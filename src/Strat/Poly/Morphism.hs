@@ -213,6 +213,15 @@ applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor ty = do
               { objOwnerMode = owner'
               , objCode = CTMod me' (objCode inner')
               }
+        CTLift me innerCode -> do
+          inner' <- go Obj { objOwnerMode = meSrc me, objCode = innerCode }
+          me' <- mapModExpr mor me
+          normalizeObjExpr
+            (dModes (morTgt mor))
+            Obj
+              { objOwnerMode = owner'
+              , objCode = CTLift me' (objCode inner')
+              }
         CTCon ref args -> do
           args' <- mapM mapArg args
           case M.lookup ref (morTypeMap mor) of
@@ -1308,6 +1317,8 @@ renameObjExpr ren ty =
           in CTCon ref' (map renameArg args)
         CTMod me inner ->
           CTMod me (renameCode inner)
+        CTLift me inner ->
+          CTLift me (renameCode inner)
 
     renameArg arg =
       case arg of

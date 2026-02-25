@@ -27,6 +27,7 @@ mkModes modes =
     , mtEqns = []
     , mtTransforms = M.empty
     , mtClassifiedBy = M.empty
+    , mtClassifierLifts = M.empty
     }
 
 mkModesFromSet :: S.Set ModeName -> ModeTheory

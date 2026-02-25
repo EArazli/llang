@@ -44,7 +44,8 @@ import Strat.Poly.DefEq (normalizeObjDeep, termExprToDiagramChecked, defEqTermDi
 import Strat.Poly.Attr
 import Strat.Poly.Morphism
 import Strat.Poly.ModAction (ActionSemanticsResult(..), applyModExpr, validateActionSemanticsWithBudgetResult)
-import Strat.Poly.CompObligations (installGeneratedCompObligations)
+import Strat.Poly.CompObligations (installGeneratedCompObligations, isGeneratedCompObligation)
+import Strat.Poly.BeckChevalleyObligations (installGeneratedBeckChevalleyObligations, isGeneratedBeckChevalleyObligation)
 import Strat.Poly.Slots
   ( Slot(..)
   , SlotId(..)
@@ -411,11 +412,13 @@ elabPolyDoctrineWithBudgetResult budget env raw = do
   let start = ElabState { esDoc = seedDoctrine (rpdName raw) base, esPendingClass = [], esPendingComp = [] }
   st <- foldM (elabPolyItem env) start (rpdItems raw)
   doc0 <- applyPendingDeclarations st
-  doc <- installGeneratedCompObligations doc0
+  docComp <- installGeneratedCompObligations doc0
+  doc <- installGeneratedBeckChevalleyObligations docComp
   validateDoctrine doc
   actionProofCount <- validateActionSemanticsProofCount budget doc
   compProofCount <- validateCompSemanticsProofCount budget env doc
-  pure (doc, actionProofCount + compProofCount)
+  bcProofCount <- validateBCSemanticsProofCount budget env doc
+  pure (doc, actionProofCount + compProofCount + bcProofCount)
 
 elabPolyDoctrineFromBaseWithBudgetResult
   :: SearchBudget
@@ -427,11 +430,13 @@ elabPolyDoctrineFromBaseWithBudgetResult budget env baseDoc raw = do
   let start = ElabState { esDoc = seedDoctrine (rpdName raw) (Just baseDoc), esPendingClass = [], esPendingComp = [] }
   st <- foldM (elabPolyItem env) start (rpdItems raw)
   doc0 <- applyPendingDeclarations st
-  doc <- installGeneratedCompObligations doc0
+  docComp <- installGeneratedCompObligations doc0
+  doc <- installGeneratedBeckChevalleyObligations docComp
   validateDoctrine doc
   actionProofCount <- validateActionSemanticsProofCount budget doc
   compProofCount <- validateCompSemanticsProofCount budget env doc
-  pure (doc, actionProofCount + compProofCount)
+  bcProofCount <- validateBCSemanticsProofCount budget env doc
+  pure (doc, actionProofCount + compProofCount + bcProofCount)
 
 validateActionSemanticsProofCount :: SearchBudget -> Doctrine -> Either Text Int
 validateActionSemanticsProofCount budget doc = do
@@ -450,7 +455,7 @@ validateActionSemanticsProofCount budget doc = do
 
 validateCompSemanticsProofCount :: SearchBudget -> ModuleEnv -> Doctrine -> Either Text Int
 validateCompSemanticsProofCount budget env doc = do
-  let generated = [obl | obl <- dObligations doc, obGenerated obl]
+  let generated = [obl | obl <- dObligations doc, isGeneratedCompObligation obl]
   if null generated
     then Right 0
     else do
@@ -463,6 +468,27 @@ validateCompSemanticsProofCount budget env doc = do
         ImplementsCheckUndecided label lim ->
           Left
             ( "validateDoctrine: comprehension semantics undecided for "
+                <> label
+                <> " ("
+                <> renderSearchLimit lim
+                <> ")"
+            )
+
+validateBCSemanticsProofCount :: SearchBudget -> ModuleEnv -> Doctrine -> Either Text Int
+validateBCSemanticsProofCount budget env doc = do
+  let generated = [obl | obl <- dObligations doc, isGeneratedBeckChevalleyObligation obl]
+  if null generated
+    then Right 0
+    else do
+      let schemaDoc = doc { dObligations = generated }
+      identityMor <- identityMorphismFor doc
+      result <- checkImplementsObligationsWithBudget budget env doc identityMor schemaDoc
+      case result of
+        ImplementsCheckProved proofs ->
+          Right (length proofs)
+        ImplementsCheckUndecided label lim ->
+          Left
+            ( "validateDoctrine: Beck-Chevalley semantics undecided for "
                 <> label
                 <> " ("
                 <> renderSearchLimit lim
@@ -556,12 +582,13 @@ applyPendingClassifications st =
       ensureMode doc mode
       let classifier = ModeName (rcdClassifier rawClass)
       ensureMode doc classifier
+      ctorTables <- deriveCtorTablesForElab doc
       let existingUniverse =
             case M.lookup mode (mtClassifiedBy (dModes doc)) of
               Just existing -> Just (cdUniverse existing)
               Nothing -> Nothing
       universe <-
-        case elabObjExpr doc [] [] M.empty classifier (rcdUniverse rawClass) of
+        case elabObjExprWithTables doc ctorTables [] [] M.empty classifier (rcdUniverse rawClass) of
           Right u -> Right u
           Left err ->
             case existingUniverse of
@@ -701,6 +728,11 @@ elabPolyItem env st item =
           }
     RPComprehension compDecl ->
       pure st { esPendingComp = esPendingComp st <> [compDecl] }
+    RPClassifierLift decl -> do
+      let modName = ModName (rclModality decl)
+      liftExpr <- elabRawModExpr (dModes doc) (rclLift decl)
+      mt' <- addClassifierLift modName liftExpr (dModes doc)
+      pure st { esDoc = doc { dModes = mt' } }
     RPModality decl -> do
       let modDecl =
             ModDecl
@@ -1217,32 +1249,40 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
         Just slot -> do
           case slotKind slot of
             SlotCtorTmArg -> do
-              lhsTm <- extractCtorSlotTerm slot lhs
-              rhsTm <- extractCtorSlotTerm slot rhs
-              case slotSig slot of
-                SlotTermSig _ sortTy -> do
-                  let lhsCtx = dTmCtx (unTerm lhsTm)
-                  let rhsCtx = dTmCtx (unTerm rhsTm)
-                  case chooseHostTmCtx lhsCtx rhsCtx of
-                    Nothing ->
+              let lhsTmE = extractCtorSlotTerm gen slot lhs
+              let rhsTmE = extractCtorSlotTerm gen slot rhs
+              case (lhsTmE, rhsTmE) of
+                (Right lhsTm, Right rhsTm) ->
+                  case slotSig slot of
+                    SlotTermSig _ sortTy -> do
+                      let lhsCtx = dTmCtx (unTerm lhsTm)
+                      let rhsCtx = dTmCtx (unTerm rhsTm)
+                      case chooseHostTmCtx lhsCtx rhsCtx of
+                        Nothing ->
+                          Right Nothing
+                        Just hostCtx -> do
+                          ok <- defEqTermDiagram tt hostCtx sortTy lhsTm rhsTm
+                          if ok
+                            -- Slot-local ctor obligations are discharged on the designated term slot,
+                            -- not by a whole-diagram join witness.
+                            then Right (Just (ImplementsCheckProved [(label, ImplementsProofDefEq)]))
+                            else Right Nothing
+                    SlotBinderSig _ ->
                       Right Nothing
-                    Just hostCtx -> do
-                      ok <- defEqTermDiagram tt hostCtx sortTy lhsTm rhsTm
-                      if ok
-                        -- Slot-local ctor obligations are discharged on the designated term slot,
-                        -- not by a whole-diagram join witness.
-                        then Right (Just (ImplementsCheckProved [(label, ImplementsProofDefEq)]))
-                        else Right Nothing
-                SlotBinderSig _ ->
+                _ ->
                   Right Nothing
             SlotBinder -> do
-              lhsArg <- extractBinderSlotArg gen slot lhs
-              rhsArg <- extractBinderSlotArg gen slot rhs
-              ok <- defEqBinderArg tt lhsArg rhsArg
-              if ok
-                -- Slot-local binder obligations are discharged on the designated binder slot.
-                then Right (Just (ImplementsCheckProved [(label, ImplementsProofDefEq)]))
-                else Right Nothing
+              let lhsArgE = extractBinderSlotArg gen slot lhs
+              let rhsArgE = extractBinderSlotArg gen slot rhs
+              case (lhsArgE, rhsArgE) of
+                (Right lhsArg, Right rhsArg) -> do
+                  ok <- defEqBinderArg tt lhsArg rhsArg
+                  if ok
+                    -- Slot-local binder obligations are discharged on the designated binder slot.
+                    then Right (Just (ImplementsCheckProved [(label, ImplementsProofDefEq)]))
+                    else Right Nothing
+                _ ->
+                  Right Nothing
 
     chooseHostTmCtx lhsCtx rhsCtx
       | lhsCtx == rhsCtx = Just lhsCtx
@@ -1276,22 +1316,9 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
             (SlotBinder, "id_cod") -> True
             (SlotBinder, "comp_dom") -> True
             (SlotBinder, "comp_cod") -> True
-            (SlotBinder, "nat") -> hasMixedDom (gdDom gen)
+            (SlotBinder, "nat") -> True
             _ -> False
         else False
-
-    hasMixedDom dom =
-      any isBinder dom && any isPlainPort dom
-
-    isPlainPort shape =
-      case shape of
-        InPort _ -> True
-        InBinder _ -> False
-
-    isBinder shape =
-      case shape of
-        InBinder _ -> True
-        InPort _ -> False
 
     generatedLawSuffix name =
       case reverse (T.splitOn "/" name) of
@@ -1364,24 +1391,60 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
         _ ->
           Right False
 
-    extractCtorSlotTerm slot diag = do
+    extractCtorSlotTerm gen slot diag = do
       let parts = T.splitOn "." (sidPath (slotId slot))
       case parts of
         [] ->
           Left "generated slot obligation: empty slot path"
         root : rest -> do
-          rootObj <- extractRootObj root diag
-          extractObjPath rest rootObj
+          (rootObj, tailSegs) <- extractRootObj gen root rest diag
+          extractObjPath tailSegs rootObj
 
-    extractRootObj seg diag
-      | Just idx <- parseIndexed "dom[" seg = do
-          pid <- nth "domain" idx (dIn diag)
-          lookupPortTy "domain" pid diag
+    extractRootObj gen seg rest diag
+      | Just idx <- parseIndexed "dom[" seg =
+          extractDomRootObj gen idx rest diag
       | Just idx <- parseIndexed "cod[" seg = do
           pid <- nth "codomain" idx (dOut diag)
-          lookupPortTy "codomain" pid diag
+          ty <- lookupPortTy "codomain" pid diag
+          Right (ty, rest)
       | otherwise =
           Left "generated slot obligation: unsupported root slot path"
+
+    extractDomRootObj gen domIdx rest diag =
+      if domIdx < 0 || domIdx >= length (gdDom gen)
+        then Left "generated slot obligation: domain index out of bounds"
+        else
+          case gdDom gen !! domIdx of
+            InPort _ -> do
+              let domPortIdx = length [() | InPort _ <- take domIdx (gdDom gen)]
+              pid <- nth "domain" domPortIdx (dIn diag)
+              ty <- lookupPortTy "domain" pid diag
+              Right (ty, rest)
+            InBinder _ -> do
+              bdiag <- binderArgDiagramForDomSlot gen domIdx diag
+              case rest of
+                seg' : rest'
+                  | Just idx <- parseIndexed "binderDom[" seg' -> do
+                      pid <- nth "binder domain" idx (dIn bdiag)
+                      ty <- lookupPortTy "binder domain" pid bdiag
+                      Right (ty, rest')
+                  | Just idx <- parseIndexed "binderCod[" seg' -> do
+                      pid <- nth "binder codomain" idx (dOut bdiag)
+                      ty <- lookupPortTy "binder codomain" pid bdiag
+                      Right (ty, rest')
+                  | Just idx <- parseIndexed "tmctx[" seg' -> do
+                      ty <- nth "binder term context" idx (dTmCtx bdiag)
+                      Right (ty, rest')
+                _ ->
+                  Left "generated slot obligation: binder ctor slot path must continue with binderDom/binderCod/tmctx"
+
+    binderArgDiagramForDomSlot gen domIdx diag = do
+      binderIdx <- binderArgIndexForDomSlot gen domIdx
+      bargs <- uniqueGenBinderArgs (gdName gen) diag
+      barg <- nth "binder argument" binderIdx bargs
+      case barg of
+        BAConcrete bdiag -> Right bdiag
+        BAMeta _ -> Left "generated slot obligation: expected concrete binder argument for binder ctor slot path"
 
     extractObjPath segs obj =
       case segs of
@@ -1432,8 +1495,35 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
                       extractObjPath rest' (tmvSort tv)
                     _ ->
                       Left "generated slot obligation: expected PTmMeta edge at term slot sort path"
+                "box" : rest' -> do
+                  edge <- nthIntMap "term edge" idx (dEdges termDiag)
+                  case ePayload edge of
+                    PBox _ inner ->
+                      extractTermPath rest' (TermDiagram inner)
+                    _ ->
+                      Left "generated slot obligation: expected PBox edge at term slot box path"
+                "feedback" : rest' -> do
+                  edge <- nthIntMap "term edge" idx (dEdges termDiag)
+                  case ePayload edge of
+                    PFeedback inner ->
+                      extractTermPath rest' (TermDiagram inner)
+                    _ ->
+                      Left "generated slot obligation: expected PFeedback edge at term slot feedback path"
+                bargSeg : rest'
+                  | Just bargIdx <- parseIndexed "barg[" bargSeg -> do
+                      edge <- nthIntMap "term edge" idx (dEdges termDiag)
+                      case ePayload edge of
+                        PGen _ _ bargs -> do
+                          barg <- nth "term binder argument" bargIdx bargs
+                          case barg of
+                            BAConcrete inner ->
+                              extractTermPath rest' (TermDiagram inner)
+                            BAMeta _ ->
+                              Left "generated slot obligation: expected concrete term binder argument path"
+                        _ ->
+                          Left "generated slot obligation: expected PGen edge at term slot binder-arg path"
                 _ ->
-                  Left "generated slot obligation: expected .sort after term edge segment"
+                  Left "generated slot obligation: expected .sort/.box/.feedback/.barg[...] after term edge segment"
           | otherwise =
               Left "generated slot obligation: unsupported term slot segment"
 
@@ -1964,7 +2054,7 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
 
 elabContext :: Doctrine -> ModeName -> [TmVar] -> [TmVar] -> M.Map Text (Int, Obj) -> RawPolyContext -> Either Text Context
 elabContext doc expectedMode tyVars tmVars tmBound ctx = do
-  ctorTables <- deriveCtorTables doc
+  ctorTables <- deriveCtorTablesForElab doc
   elabContextWithTables doc ctorTables expectedMode tyVars tmVars tmBound ctx
 
 elabContextWithTables
@@ -1992,7 +2082,7 @@ elabObjExpr
   -> RawPolyObjExpr
   -> Either Text Obj
 elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr = do
-  ctorTables <- deriveCtorTables doc
+  ctorTables <- deriveCtorTablesForElab doc
   elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode expr
 
 elabObjExprWithTables
@@ -2078,7 +2168,7 @@ elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode exp
         then Right (CAObj argTy)
         else Left "type constructor argument mode mismatch"
     elabOneArg _ (TPS_Tm sortTy, rawArg) = do
-      tmArg <- elabTmTerm doc tyVars tmVars tmBound (Just sortTy) rawArg
+      tmArg <- elabTmTermWithTables doc ctorTables tyVars tmVars tmBound (Just sortTy) rawArg
       Right (CATm tmArg)
 
     asModalityCall rawRef0 args0 =
@@ -2119,7 +2209,7 @@ elabObjExprInferOwner
   -> RawPolyObjExpr
   -> Either Text Obj
 elabObjExprInferOwner doc tyVars tmVars tmBound expr = do
-  ctorTables <- deriveCtorTables doc
+  ctorTables <- deriveCtorTablesForElab doc
   elabObjExprInferOwnerWithTables doc ctorTables tyVars tmVars tmBound expr
 
 elabObjExprInferOwnerWithTables
@@ -2153,10 +2243,22 @@ elabTmTerm
   -> Maybe Obj
   -> RawPolyObjExpr
   -> Either Text TermDiagram
-elabTmTerm doc _tyVars tmVars tmBound mExpected raw =
+elabTmTerm doc tyVars tmVars tmBound mExpected raw = do
+  ctorTables <- deriveCtorTablesForElab doc
+  elabTmTermWithTables doc ctorTables tyVars tmVars tmBound mExpected raw
+
+elabTmTermWithTables
+  :: Doctrine
+  -> CtorTables
+  -> [TmVar]
+  -> [TmVar]
+  -> M.Map Text (Int, Obj)
+  -> Maybe Obj
+  -> RawPolyObjExpr
+  -> Either Text TermDiagram
+elabTmTermWithTables doc ctorTables _tyVars tmVars tmBound mExpected raw =
   do
-    ttDoc <- doctrineTypeTheory doc
-    ctorTables <- deriveCtorTables doc
+    ttDoc <- doctrineTypeTheoryFromTables doc ctorTables
     (expr, inferredSort) <- elabExpr ctorTables mExpected raw
     let expectedSort = maybe inferredSort id mExpected
     tmCtx <- mkTmCtx
@@ -2269,7 +2371,7 @@ lookupTmFunAnyInTables doc ctorTables name arity =
 
 elabInputShapes :: Doctrine -> ModeName -> [TmVar] -> [TmVar] -> [RawInputShape] -> Either Text [InputShape]
 elabInputShapes doc mode tyVars tmVars shapes = do
-  ctorTables <- deriveCtorTables doc
+  ctorTables <- deriveCtorTablesForElab doc
   mapM (elabInputShapeWithTables doc ctorTables mode tyVars tmVars) shapes
 
 elabInputShapeWithTables

@@ -842,6 +842,7 @@ mergeIface left right = do
   decls <- unionByEq "modality" (mtDecls (dModes left)) (mtDecls (dModes right))
   transforms <- unionByEq "mod_transform" (mtTransforms (dModes left)) (mtTransforms (dModes right))
   classified <- unionByEq "classifiedBy" (mtClassifiedBy (dModes left)) (mtClassifiedBy (dModes right))
+  classifierLifts <- unionByEq "classifier_lift" (mtClassifierLifts (dModes left)) (mtClassifierLifts (dModes right))
   attrSorts <- unionByEq "attrsort" (dAttrSorts left) (dAttrSorts right)
   gens <- mergeModeTables "generator" (dGens left) (dGens right)
   cells <- mergeCellsWithAlphaRename (dCells2 left) (dCells2 right)
@@ -856,6 +857,7 @@ mergeIface left right = do
             , mtEqns = mtEqns (dModes left) <> mtEqns (dModes right)
             , mtTransforms = transforms
             , mtClassifiedBy = classified
+            , mtClassifierLifts = classifierLifts
             }
       , dAcyclicModes = S.union (dAcyclicModes left) (dAcyclicModes right)
       , dAttrSorts = attrSorts
@@ -956,6 +958,7 @@ renameModeTheory
   -> Either Text ModeTheory
 renameModeTheory modeRen modRen typeRen genRen mt = do
   classifiedBy <- foldM addClassification M.empty (M.toList (mtClassifiedBy mt))
+  classifierLifts <- foldM addClassifierLiftRenamed M.empty (M.toList (mtClassifierLifts mt))
   Right
     ModeTheory
       { mtModes =
@@ -983,6 +986,7 @@ renameModeTheory modeRen modRen typeRen genRen mt = do
             | (name, decl) <- M.toList (mtTransforms mt)
             ]
       , mtClassifiedBy = classifiedBy
+      , mtClassifierLifts = classifierLifts
       }
   where
     renMode mode = M.findWithDefault mode mode modeRen
@@ -1009,6 +1013,15 @@ renameModeTheory modeRen modRen typeRen genRen mt = do
         Just existing
           | existing == decl' -> Right acc
           | otherwise -> Left "namespace: classifiedBy collision after renaming"
+
+    addClassifierLiftRenamed acc (name, me) =
+      let name' = renMod name
+          me' = renExpr me
+       in case M.lookup name' acc of
+            Nothing -> Right (M.insert name' me' acc)
+            Just existing
+              | existing == me' -> Right acc
+              | otherwise -> Left "namespace: classifier_lift collision after renaming"
 
     renameComp mode comp =
       let renameGen g = M.findWithDefault g (mode, g) genRen
@@ -1103,6 +1116,17 @@ renameObjExpr modeRen modRen typeRen ty = do
           inner' <- renCode inner
           Right
             ( CTMod
+                me
+                  { meSrc = renMode (meSrc me)
+                  , meTgt = renMode (meTgt me)
+                  , mePath = map (\m -> M.findWithDefault m m modRen) (mePath me)
+                  }
+                inner'
+            )
+        CTLift me inner -> do
+          inner' <- renCode inner
+          Right
+            ( CTLift
                 me
                   { meSrc = renMode (meSrc me)
                   , meTgt = renMode (meTgt me)

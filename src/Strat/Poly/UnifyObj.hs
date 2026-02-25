@@ -169,7 +169,14 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
             then Right ()
             else Left "unifyObjFlex: modality target does not match object owner mode in CTMod spine"
           inner' <- expandModSpine (mkObj (meSrc me) innerCode)
-          code' <- expandPath me (objCode inner')
+          code' <- expandPath CTMod me (objCode inner')
+          Right ty { objCode = code' }
+        CTLift me innerCode -> do
+          if objOwnerMode ty == meTgt me
+            then Right ()
+            else Left "unifyObjFlex: lift target does not match object owner mode in CTLift spine"
+          inner' <- expandModSpine (mkObj (meSrc me) innerCode)
+          code' <- expandPath CTLift me (objCode inner')
           Right ty { objCode = code' }
 
     expandArg arg =
@@ -177,7 +184,7 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
         CAObj ty -> CAObj <$> expandModSpine ty
         CATm tm -> Right (CATm tm)
 
-    expandPath me innerCode =
+    expandPath wrap me innerCode =
       case mePath me of
         [] ->
           if meSrc me == meTgt me
@@ -197,7 +204,7 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
                 then
                   Right
                     ( mdTgt decl
-                    , CTMod
+                    , wrap
                         ModExpr
                           { meSrc = mdSrc decl
                           , meTgt = mdTgt decl
@@ -228,6 +235,11 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
           | otherwise ->
               Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
         (CTMod me1 innerA, CTMod me2 innerB)
+          | me1 == me2 ->
+              unifyCode s owner innerA innerB
+          | otherwise ->
+              Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
+        (CTLift me1 innerA, CTLift me2 innerB)
           | me1 == me2 ->
               unifyCode s owner innerA innerB
           | otherwise ->
@@ -624,6 +636,7 @@ applySubstObj tt subst ty = do
       case objCode expr of
         CTMeta _ -> False
         CTMod _ innerCode -> needsTmCtxType (mkObj (objOwnerMode expr) innerCode)
+        CTLift _ innerCode -> needsTmCtxType (mkObj (objOwnerMode expr) innerCode)
         CTCon _ args -> any needsTmCtxArg args
 
     needsTmCtxArg arg =
@@ -654,6 +667,9 @@ applySubstObj tt subst ty = do
         CTMod me innerCode -> do
           inner' <- goTy seen (mkObj (meSrc me) innerCode)
           Right expr { objCode = CTMod me (objCode inner') }
+        CTLift me innerCode -> do
+          inner' <- goTy seen (mkObj (meSrc me) innerCode)
+          Right expr { objCode = CTLift me (objCode inner') }
 
     goArgBySig seen (param, arg) =
       case (param, arg) of
@@ -949,6 +965,7 @@ renderObj ty =
         CTCon ref args ->
           renderTypeRef ref <> "(" <> T.intercalate ", " (map renderArg args) <> ")"
         CTMod me inner -> renderModExpr me <> "(" <> renderCode inner <> ")"
+        CTLift me inner -> "lift[" <> renderModExpr me <> "](" <> renderCode inner <> ")"
 
     renderArg arg =
       case arg of

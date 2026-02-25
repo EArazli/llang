@@ -265,25 +265,42 @@ applyAction doc mName diagSrc = do
     else pure ()
   tt <- doctrineTypeTheory doc
   let me = ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [mName] }
-  dTmCtx' <- mapM (mapTypeIfSource me) (dTmCtx diagSrc)
-  dPortObj' <- mapM (mapType me) (dPortObj diagSrc)
+  let classMap = mtClassifiedBy (dModes doc)
+  mClassifierLift <-
+    case (M.lookup (mdSrc decl) classMap, M.lookup (mdTgt decl) classMap) of
+      (Just _, Just _) ->
+        Just <$> classifierLiftForModality (dModes doc) mName
+      _ ->
+        Right Nothing
+  dTmCtx' <- mapM (mapTypeIfSource me mClassifierLift) (dTmCtx diagSrc)
+  dPortObj' <- mapM (mapType me mClassifierLift) (dPortObj diagSrc)
   let diag0 = diagSrc { dMode = mdTgt decl, dTmCtx = dTmCtx', dPortObj = dPortObj' }
   let edgeKeys = IM.keys (dEdges diagSrc)
-  diag1 <- foldM (step tt action me) diag0 edgeKeys
+  diag1 <- foldM (step tt action me mClassifierLift) diag0 edgeKeys
   validateDiagram diag1
   pure diag1
   where
-    mapType me ty = do
+    mapType me mClassifierLift ty = do
       if objOwnerMode ty /= meSrc me
         then Left "map: type mode does not match action source"
-        else normalizeObjExpr (dModes doc) (OMod me ty)
+        else
+          case mClassifierLift of
+            Just liftExpr ->
+              normalizeObjExpr
+                (dModes doc)
+                Obj
+                  { objOwnerMode = meTgt me
+                  , objCode = CTLift liftExpr (objCode ty)
+                  }
+            Nothing ->
+              normalizeObjExpr (dModes doc) (OMod me ty)
 
-    mapTypeIfSource me ty =
+    mapTypeIfSource me mClassifierLift ty =
       if objOwnerMode ty == meSrc me
-        then mapType me ty
+        then mapType me mClassifierLift ty
         else pure ty
 
-    step tt action me diagTgt edgeKey = do
+    step tt action me mClassifierLift diagTgt edgeKey = do
       edgeSrc <-
         case IM.lookup edgeKey (dEdges diagSrc) of
           Nothing -> Left "map: missing source edge"
@@ -294,16 +311,16 @@ applyAction doc mName diagSrc = do
           mappedBargs <- mapM (mapBinderArg mName) bargs
           img0raw <-
             case M.lookup (dMode diagSrc, g) (maGenMap action) of
-              Nothing
-                | isComprehensionSupportGen doc (dMode diagSrc) g -> implicitCompImage me g
               Nothing -> Left "map: missing generator image"
               Just d -> Right d
           img0 <- freshenImageTyVars tt diagTgt img0raw
           (img1, subst) <- instantiateImage tt diagTgt edgeKey img0
           let img2 = applyAttrSubstDiagram (actionAttrSubst genDecl attrs) img1
-          img3 <- instantiateMappedBinders tt me genDecl mappedBargs subst img2
+          img3 <- instantiateMappedBinders tt me mClassifierLift genDecl mappedBargs subst img2
           img4 <- weakenDiagramTmCtxTo (dTmCtx diagTgt) img3
-          spliceEdge diagTgt edgeKey img4
+          diagTgtNorm <- normalizeBoundaryPorts (eIns edgeSrc <> eOuts edgeSrc) diagTgt
+          img4Norm <- normalizeDiagramObjExprs (dModes doc) img4
+          spliceEdge diagTgtNorm edgeKey img4Norm
         PBox name inner -> do
           inner' <- applyAction doc mName inner
           updateEdgePayload diagTgt edgeKey (PBox name inner')
@@ -313,7 +330,7 @@ applyAction doc mName diagSrc = do
         PSplice x ->
           updateEdgePayload diagTgt edgeKey (PSplice x)
         PTmMeta v -> do
-          sort' <- mapTypeIfSource me (tmvSort v)
+          sort' <- mapTypeIfSource me mClassifierLift (tmvSort v)
           updateEdgePayload diagTgt edgeKey (PTmMeta v { tmvSort = sort' })
         PInternalDrop ->
           updateEdgePayload diagTgt edgeKey PInternalDrop
@@ -325,14 +342,7 @@ applyAction doc mName diagSrc = do
         BAMeta x ->
           Right (BAMeta x)
 
-    implicitCompImage me gName = do
-      targetGen <-
-        case M.lookup (meTgt me) (dGens doc) >>= M.lookup gName of
-          Nothing -> Left "map: missing generator image"
-          Just gd -> Right gd
-      genDWithAttrs (meTgt me) (gdPlainDom targetGen) (gdCod targetGen) (gdName targetGen) M.empty
-
-    instantiateMappedBinders typeTheory me genDecl mappedBargs subst image = do
+    instantiateMappedBinders typeTheory me mClassifierLift genDecl mappedBargs subst image = do
       let slots = [ bs | InBinder bs <- gdDom genDecl ]
       if length slots /= length mappedBargs
         then Left "map: source binder argument arity mismatch"
@@ -348,9 +358,9 @@ applyAction doc mName diagSrc = do
         else Left "map: uninstantiated binder holes in action image"
       where
         mapBinderSig sig = do
-          tmCtx <- mapM (mapTypeIfSource me) (bsTmCtx sig)
-          dom <- mapM (mapType me) (bsDom sig)
-          cod <- mapM (mapType me) (bsCod sig)
+          tmCtx <- mapM (mapTypeIfSource me mClassifierLift) (bsTmCtx sig)
+          dom <- mapM (mapType me mClassifierLift) (bsDom sig)
+          cod <- mapM (mapType me mClassifierLift) (bsCod sig)
           pure sig { bsTmCtx = tmCtx, bsDom = dom, bsCod = cod }
 
     freshenImageTyVars typeTheory host image = do
@@ -376,14 +386,16 @@ applyAction doc mName diagSrc = do
                 then pickFresh used mode base (n + 1)
                 else candidate
 
-isComprehensionSupportGen :: Doctrine -> ModeName -> GenName -> Bool
-isComprehensionSupportGen doc mode genName =
-  case M.lookup mode (mtClassifiedBy (dModes doc)) >>= cdComp of
-    Nothing -> False
-    Just comp ->
-      genName == compCtxExt comp
-        || genName == compVar comp
-        || genName == compReindex comp
+    normalizeBoundaryPorts pids diag = do
+      portObj' <- foldM normalizeOne (dPortObj diag) pids
+      pure diag { dPortObj = portObj' }
+      where
+        normalizeOne mp pid =
+          case IM.lookup (unPortId pid) mp of
+            Nothing -> Left "map: missing boundary port while normalizing action image splice"
+            Just ty -> do
+              ty' <- normalizeObjExpr (dModes doc) ty
+              pure (IM.insert (unPortId pid) ty' mp)
 
 genericGenDiagram :: GenDecl -> Either Text Diagram
 genericGenDiagram gd = do
@@ -447,13 +459,48 @@ instantiateImage tt diag edgeKey img = do
   sCod <- unifyCtxDiagram tt diag flex codImg1 codEdge1
   s <- composeSubst tt sCod sDom
   img' <- applySubstDiagram tt s img
-  pure (img', s)
+  imgNorm <- normalizeDiagramObjExprs (ttModes tt) img'
+  pure (imgNorm, s)
 
 requirePortType :: Diagram -> PortId -> Either Text Obj
 requirePortType diag pid =
   case diagramPortObj diag pid of
     Nothing -> Left "map: missing port type"
     Just ty -> Right ty
+
+normalizeDiagramObjExprs :: ModeTheory -> Diagram -> Either Text Diagram
+normalizeDiagramObjExprs mt diag = do
+  portObj' <- mapM (normalizeObjExpr mt) (dPortObj diag)
+  tmCtx' <- mapM (normalizeObjExpr mt) (dTmCtx diag)
+  edges' <- mapM normalizeEdge (dEdges diag)
+  pure diag { dPortObj = portObj', dTmCtx = tmCtx', dEdges = edges' }
+  where
+    normalizeEdge edge = do
+      payload' <- normalizePayload (ePayload edge)
+      pure edge { ePayload = payload' }
+
+    normalizePayload payload =
+      case payload of
+        PGen g attrs bargs ->
+          PGen g attrs <$> mapM normalizeBinderArg bargs
+        PBox name inner ->
+          PBox name <$> normalizeDiagramObjExprs mt inner
+        PFeedback inner ->
+          PFeedback <$> normalizeDiagramObjExprs mt inner
+        PTmMeta v -> do
+          sort' <- normalizeObjExpr mt (tmvSort v)
+          pure (PTmMeta v { tmvSort = sort' })
+        PSplice x ->
+          pure (PSplice x)
+        PInternalDrop ->
+          pure PInternalDrop
+
+    normalizeBinderArg barg =
+      case barg of
+        BAConcrete inner ->
+          BAConcrete <$> normalizeDiagramObjExprs mt inner
+        BAMeta v ->
+          pure (BAMeta v)
 
 spliceEdge :: Diagram -> Int -> Diagram -> Either Text Diagram
 spliceEdge diag edgeKey image = do

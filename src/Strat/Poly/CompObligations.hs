@@ -2,6 +2,7 @@
 module Strat.Poly.CompObligations
   ( generateCompObligations
   , installGeneratedCompObligations
+  , isGeneratedCompObligation
   ) where
 
 import Data.Char (isAlphaNum)
@@ -31,6 +32,10 @@ import Strat.Poly.Slots
   , extractDoctrineSlots
   )
 
+isGeneratedCompObligation :: ObligationDecl -> Bool
+isGeneratedCompObligation obl =
+  obGenerated obl && "__comp/" `T.isPrefixOf` obName obl
+
 data SlotLawProfile
   = SlotLawsFull
   | SlotLawsDomOnly
@@ -45,8 +50,8 @@ data SlotBoundarySide
 installGeneratedCompObligations :: Doctrine -> Either Text Doctrine
 installGeneratedCompObligations doc = do
   generated <- generateCompObligations doc
-  let explicit = [ obl | obl <- dObligations doc, not (obGenerated obl) ]
-  pure doc { dObligations = explicit <> generated }
+  let keep = [ obl | obl <- dObligations doc, not (isGeneratedCompObligation obl) ]
+  pure doc { dObligations = keep <> generated }
 
 generateCompObligations :: Doctrine -> Either Text [ObligationDecl]
 generateCompObligations doc = do
@@ -247,29 +252,28 @@ generateCompObligations doc = do
 
     slotLawProfile mode genName slot =
       case M.lookup mode (dGens doc) >>= M.lookup genName of
-        Just gd -> slotProfileByGen gd slot
+        Just gd -> slotProfileByGen mode gd slot
         Nothing -> SlotLawsNone
 
-    slotProfileByGen gd slot =
+    slotProfileByGen mode gd slot =
       case slotKind slot of
         SlotBinder
           | hasOnlyBinderDom gd -> SlotLawsFull
           | hasMixedDom gd -> SlotLawsFull
           | otherwise -> SlotLawsNone
         SlotCtorTmArg ->
-          ctorSlotLawProfile gd slot
+          ctorSlotLawProfile mode slot
 
-    ctorSlotLawProfile gd slot =
-      if all isPlainPort (gdDom gd)
-        then
-          case slotSig slot of
-            SlotTermSig _ _ ->
+    ctorSlotLawProfile mode slot =
+      case slotSig slot of
+        SlotTermSig ownerMode _
+          | ownerMode == mode ->
               case slotBoundarySide slot of
                 SlotOnDom -> SlotLawsDomOnly
                 SlotOnCod -> SlotLawsCodOnly
                 SlotSideUnknown -> SlotLawsNone
-            SlotBinderSig _ -> SlotLawsNone
-        else SlotLawsNone
+          | otherwise -> SlotLawsNone
+        SlotBinderSig _ -> SlotLawsNone
 
     slotBoundarySide slot =
       let path = sidPath (slotId slot)
@@ -283,9 +287,7 @@ generateCompObligations doc = do
     startsWith prefix txt = prefix `T.isPrefixOf` txt
 
     hasOnlyBinderDom gd =
-      case gdDom gd of
-        [InBinder _] -> True
-        _ -> False
+      any isBinder (gdDom gd) && all isBinder (gdDom gd)
 
     hasMixedDom gd =
       any isBinder (gdDom gd) && any isPlainPort (gdDom gd)

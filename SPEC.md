@@ -78,6 +78,7 @@ Algorithmic rule:
 ### 2.4 Allowed Classification Graphs
 
 - self-classification edges (`K classifiedBy K via U`) are permitted;
+- layered classification is permitted (for example `Tm classifiedBy Ty` and `Ty classifiedBy Kd`);
 - classification graphs MUST NOT contain cycles of length greater than 1;
 - longer cycles are rejected unless explicit universe levels are provided.
 
@@ -99,18 +100,28 @@ Current elaboration rule:
 - in surface type annotations, constructor parameters of kind `TPS_Tm` are currently not supported; term-indexed arguments must be expressed through core/kernel paths (not direct surface syntax).
 - legacy `dTypes`/`TypeSig` tables have been removed from kernel and tests; constructor resolution/typechecking is fully driven by derived constructor tables from classifier generators.
 
-### 2.6 Example
+### 2.6 Worked Examples
 
-For `Tm classifiedBy Ty via U`:
+Two-layer example (`Ty` classifies `Tm`):
 
 - codes in `Ty`: `Unit : U`, `Arr : U × U -> U`,
 - objects of `Tm` include codes such as `Arr(Unit, Unit)`,
 - `Tm`-object equality is checked by normalizing those `Ty` codes and comparing normal forms.
 
-Allowed:
+Three-layer example (`Kd` classifies `Ty`, `Ty` classifies `Tm`):
+
+- `mode Kd classifiedBy Kd via Kd.U_Kd;`
+- `mode Ty classifiedBy Kd via Kd.Star;`
+- `mode Tm classifiedBy Ty via Kd.U_Ty;`
+- classifier dependency order is `Kd` before `Ty` before `Tm`;
+- constructor lookup for `Tm` resolves in classifier mode `Ty`,
+- constructor lookup for `Ty` resolves in classifier mode `Kd`.
+
+Allowed patterns include:
 
 - `Ty classifiedBy Ty via Ty.U;`
 - `Tm classifiedBy Ty via Ty.U;`
+- layered chains such as `Kd -> Ty -> Tm` (acyclic except self edges).
 
 Rejected:
 
@@ -122,7 +133,20 @@ For doctrine validation and later normalization/unification environment construc
 
 - if `M classifiedBy K` and `M != K`, then `K` appears before `M` in `order`.
 
-### 2.8 Comprehension Declarations (Current Cut)
+### 2.8 Pending Universe Resolution (Current)
+
+During elaboration, a `classifiedBy ... via ...` universe expression can be temporarily unresolved.
+
+Current behavior:
+
+- if the raw universe is not immediately classifiable as a simple name/nullary constructor, elaboration stores a temporary pending universe marker;
+- pending universes are resolved after initial mode/generator collection, using object elaboration with constructor tables from `deriveCtorTablesForElab`;
+- this elaboration-time constructor-table path derives tables for resolvable classifier dependencies first, tolerates forward references to not-yet-declared classifier modes, then adds provisional tables for owner modes whose universes are still pending;
+- after pending resolution, normal doctrine validation still uses full constructor-table derivation and rejects unresolved or inconsistent universes.
+
+This means complex universe expressions (including constructor applications with arguments) are supported in the current elaboration pipeline; they are not restricted to names/nullary constructors.
+
+### 2.9 Comprehension Declarations (Current Cut)
 
 The DSL supports:
 
@@ -145,7 +169,6 @@ Current generated-obligation behavior:
   - binder slots on generators with binder inputs (including mixed plain+binder domains) generate full law families (`id_dom`, `id_cod`, `comp_dom`, `comp_cod`, `nat`),
   - constructor term-argument slots only when:
     - the slot's term sort owner mode equals the classified mode,
-    - the generator has a plain-port-only domain (no binder inputs),
     - and the generated law side follows the slot boundary side:
       - dom-side slots generate dom laws (`id_dom`, `comp_dom`) only,
       - cod-side slots generate cod laws (`id_cod`, `comp_cod`) only.
@@ -293,6 +316,18 @@ Current witness constraints:
 
 `map[<ModExpr>](<DiagExpr>)` elaborates by applying declared actions along the composed modality expression.
 
+### 6.1 Classified Modalities (Current Cut)
+
+Classifier lift requirement:
+
+- for every modality `mu : M -> N` where both `M` and `N` are classified modes, a classifier lift must be available from `classifier(M)` to `classifier(N)`;
+- an explicit `lift_classifier mu = <modexpr>;` declaration is required unless both modes are self-classified along `mu` (in that case the same modality path is used implicitly).
+
+Universe compatibility rule:
+
+- let `U_M` be the universe of `M`, `U_N` the universe of `N`, and `lift(mu)` the classifier lift for `mu`;
+- doctrine validation requires `lift(mu)(U_M) ≡ U_N` by classifier-mode definitional equality.
+
 ## 7. Schemas and Obligations
 
 A schema is an ordinary doctrine used as an interface.
@@ -315,6 +350,25 @@ For morphism law checking, action semantics, obligation discharge, and coherence
 
 Budgets are tooling-level search parameters (`SearchBudget`), not doctrine/morphism/obligation data.
 `sbTimeoutMs` is interpreted as a real wall-clock timeout for auto-proof search.
+
+## 7.2 Generated Beck-Chevalley Obligations (Current Cut)
+
+Generated Beck-Chevalley obligations are installed for modalities that satisfy all of:
+
+- source/target modes are classified and both have comprehension declarations,
+- a classifier lift exists for the modality,
+- an action is declared for the modality.
+
+For each relevant slot on each source-mode generator (using the same slot-profile gating as comprehension obligations), the kernel generates:
+
+- dom-side equation:
+  - `map[mu](lift_dom(reindex_src) ; @gen) == lift_dom(reindex_tgt) ; map[mu](@gen)`
+- cod-side equation:
+  - `map[mu](@gen ; lift_cod(reindex_src)) == map[mu](@gen) ; lift_cod(reindex_tgt)`
+
+Current naming scheme:
+
+- generated names are `__bc/<mod>/<srcMode>/<gen>/<slotpath>/dom` or `.../cod`.
 
 ## 8. DSL Summary
 

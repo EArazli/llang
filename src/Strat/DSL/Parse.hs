@@ -254,6 +254,7 @@ polyItem :: Parser PolyAST.RawPolyItem
 polyItem =
   polyModeDecl
     <|> polyComprehensionDecl
+    <|> polyClassifierLiftDecl
     <|> polyModalityDecl
     <|> polyModEqDecl
     <|> polyModTransformDecl
@@ -327,6 +328,21 @@ polyComprehensionDecl = do
         [v] -> pure v
         [] -> fail ("missing comprehension field: " <> T.unpack key)
         _ -> fail ("duplicate comprehension field: " <> T.unpack key)
+
+polyClassifierLiftDecl :: Parser PolyAST.RawPolyItem
+polyClassifierLiftDecl = do
+  _ <- symbol "lift_classifier"
+  modName <- ident
+  _ <- symbol "="
+  liftExpr <- rawModExpr
+  optionalSemi
+  pure
+    ( PolyAST.RPClassifierLift
+        PolyAST.RawClassifierLiftDecl
+          { PolyAST.rclModality = modName
+          , PolyAST.rclLift = liftExpr
+          }
+    )
 
 polyModalityDecl :: Parser PolyAST.RawPolyItem
 polyModalityDecl = do

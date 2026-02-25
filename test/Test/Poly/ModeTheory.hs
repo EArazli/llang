@@ -28,6 +28,7 @@ import Strat.Poly.Doctrine
   , ObligationDecl(..)
   , GenDecl(..)
   , InputShape(..)
+  , deriveCtorTables
   , doctrineTypeTheory
   , gdPlainDom
   )
@@ -46,9 +47,14 @@ tests =
   testGroup
     "Poly.ModeTheory"
     [ testCase "self-classification allows universe declared later" testSelfClassificationDeferred
+    , testCase "classified mode with complex universe resolves after pending pass" testClassifiedComplexUniverseDeferred
+    , testCase "multiple pending universes resolve after pending pass" testMultiplePendingUniversesDeferred
     , testCase "classification cycle (non-self) is rejected" testClassificationCycleRejected
     , testCase "classificationOrder places classifier before classified mode" testClassificationOrder
     , testCase "classified modality over classifier-headed code normalizes" testClassifiedModalityNormalization
+    , testCase "classified non-self modality requires explicit classifier lift" testClassifiedModalityMissingLiftRejected
+    , testCase "explicit classifier lift universe compatibility is enforced" testClassifierLiftUniverseMismatchRejected
+    , testCase "beck-chevalley obligations are generated and discharged" testBeckChevalleyGeneratedObligations
     , testCase "modality rewrite normalizes nested modality type" testNormalizeObjExprByModEq
     , testCase "substitution re-normalizes modality type" testSubstReNormalizes
     , testCase "action declarations elaborate and validate" testActionElab
@@ -72,9 +78,11 @@ tests =
     , testCase "classified modes without binder inputs still require comprehension declarations" testComprehensionRequiresDeclWithoutBinder
     , testCase "comprehension declarations install generated obligations" testComprehensionGeneratedObligations
     , testCase "mixed plain+binder generators produce full comprehension laws" testComprehensionMixedBinderFull
+    , testCase "binder-only multi-binder generators produce full comprehension laws" testComprehensionMultiBinderOnlyFull
     , testCase "constructor term slots generate boundary-side laws only" testComprehensionCtorSlotBoundarySide
     , testCase "constructor term slots on multi-port plain domains generate dom-side laws" testComprehensionCtorSlotMultiPortDom
-    , testCase "cross-mode constructor slots elaborate and validate via generated slot-local checks" testComprehensionCrossModeCtorSlots
+    , testCase "constructor term slots on binder domains still generate boundary-side laws" testComprehensionCtorSlotBinderDomain
+    , testCase "cross-mode constructor slots are ignored by owner-mode gating" testComprehensionCrossModeCtorSlots
     , testCase "generated comprehension obligations can require join proofs" testComprehensionGeneratedObligationJoinProof
     , testCase "implements fails when schema obligations are not provable" testAdjObligationFail
     , testCase "implements succeeds when schema obligations hold" testAdjObligationPass
@@ -98,6 +106,79 @@ testSelfClassificationDeferred = do
   case parseRawFile src >>= elabRawFile of
     Left err -> assertFailure (T.unpack err)
     Right _ -> pure ()
+
+testClassifiedComplexUniverseDeferred :: Assertion
+testClassifiedComplexUniverseDeferred = do
+  let src = T.unlines
+        [ "doctrine ComplexUniverseDeferred where {"
+        , "  mode Ty classifiedBy Ty via Ty.U;"
+        , "  gen U : [] -> [Ty.U] @Ty;"
+        , "  gen Wrap(a@Ty) : [] -> [Ty.U] @Ty;"
+        , "  gen ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen var(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen reindex(a@Ty) : [a] -> [a] @Ty;"
+        , "  comprehension Ty where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  mode Tm classifiedBy Ty via Ty.Wrap(Ty.U);"
+        , "  gen t_ctx_ext(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen t_var(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen t_reindex(a@Tm) : [a] -> [a] @Tm;"
+        , "  comprehension Tm where { ctx_ext = t_ctx_ext; var = t_var; reindex = t_reindex; };"
+        , "  gen keep(a@Tm) : [a] -> [a] @Tm;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err -> assertFailure (T.unpack err)
+    Right _ -> pure ()
+
+testMultiplePendingUniversesDeferred :: Assertion
+testMultiplePendingUniversesDeferred = do
+  let src = T.unlines
+        [ "doctrine TwoPendingUniversesDeferred where {"
+        , "  mode Ty classifiedBy Ty via Ty.U_Ty;"
+        , "  gen U_Ty : [] -> [Ty.U_Ty] @Ty;"
+        , "  gen U : [] -> [Ty.U_Ty] @Ty;"
+        , "  gen Wrap(a@Ty) : [] -> [Ty.U_Ty] @Ty;"
+        , "  gen TmTy : [] -> [Ty.Wrap(Ty.U)] @Ty;"
+        , "  gen ElTy : [] -> [Ty.Wrap(Ty.Wrap(Ty.U))] @Ty;"
+        , "  gen ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen var(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen reindex(a@Ty) : [a] -> [a] @Ty;"
+        , "  comprehension Ty where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  mode Tm classifiedBy Ty via Ty.Wrap(Ty.U);"
+        , "  gen t_ctx_ext(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen t_var(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen t_reindex(a@Tm) : [a] -> [a] @Tm;"
+        , "  comprehension Tm where { ctx_ext = t_ctx_ext; var = t_var; reindex = t_reindex; };"
+        , "  mode El classifiedBy Ty via Ty.Wrap(Ty.Wrap(Ty.U));"
+        , "  gen e_ctx_ext(a@El) : [a] -> [a] @El;"
+        , "  gen e_var(a@El) : [a] -> [a] @El;"
+        , "  gen e_reindex(a@El) : [a] -> [a] @El;"
+        , "  comprehension El where { ctx_ext = e_ctx_ext; var = e_var; reindex = e_reindex; };"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "TwoPendingUniversesDeferred" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine TwoPendingUniversesDeferred" >> fail "unreachable"
+      Just d -> pure d
+  let classes = mtClassifiedBy (dModes doc)
+  let tmUniverse = cdUniverse <$> M.lookup (ModeName "Tm") classes
+  let elUniverse = cdUniverse <$> M.lookup (ModeName "El") classes
+  case (tmUniverse, elUniverse) of
+    (Just tmU, Just elU) -> do
+      assertBool "expected Tm universe to resolve from pending placeholder" (not (isPendingUniverse tmU))
+      assertBool "expected El universe to resolve from pending placeholder" (not (isPendingUniverse elU))
+    _ -> assertFailure "expected classified universes for Tm and El"
+  ctorTables <- requireEither (deriveCtorTables doc)
+  let tmTable = M.findWithDefault M.empty (ModeName "Tm") ctorTables
+  let elTable = M.findWithDefault M.empty (ModeName "El") ctorTables
+  assertBool "expected non-empty constructor table for Tm after pending resolution" (not (M.null tmTable))
+  assertBool "expected non-empty constructor table for El after pending resolution" (not (M.null elTable))
+  where
+    isPendingUniverse obj =
+      case objCode obj of
+        CTMeta v -> tmvName v == "__pending_universe"
+        _ -> False
 
 testClassificationCycleRejected :: Assertion
 testClassificationCycleRejected = do
@@ -154,6 +235,7 @@ testClassifiedModalityNormalization = do
         , "  gen reindex(a@Tm) : [a] -> [a] @Tm;"
         , "  comprehension Tm where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality mu : Tm -> Tm;"
+        , "  lift_classifier mu = id@Ty;"
         , "  gen U : [] -> [Ty.U_Ty] @Ty;"
         , "  gen X : [] -> [Ty.U] @Ty;"
         , "  gen idMu : [mu(X)] -> [mu(X)] @Tm;"
@@ -181,6 +263,109 @@ testClassifiedModalityNormalization = do
             _ -> assertFailure "expected modality body to be Ty.X code"
         _ -> assertFailure "expected modality code for idMu boundary"
     _ -> assertFailure "expected one boundary object for idMu"
+
+testClassifiedModalityMissingLiftRejected :: Assertion
+testClassifiedModalityMissingLiftRejected = do
+  let src = T.unlines
+        [ "doctrine MissingLift where {"
+        , "  mode Ty classifiedBy Ty via Ty.U_Ty;"
+        , "  gen U_Ty : [] -> [Ty.U_Ty] @Ty;"
+        , "  gen ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen var(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen reindex(a@Ty) : [a] -> [a] @Ty;"
+        , "  comprehension Ty where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  mode Tm classifiedBy Ty via Ty.U;"
+        , "  gen ctx_ext(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen var(a@Tm) : [a] -> [a] @Tm;"
+        , "  gen reindex(a@Tm) : [a] -> [a] @Tm;"
+        , "  comprehension Tm where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  modality mu : Tm -> Tm;"
+        , "  gen U : [] -> [Ty.U_Ty] @Ty;"
+        , "  gen X : [] -> [Ty.U] @Ty;"
+        , "  gen f : [mu(X)] -> [mu(X)] @Tm;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected missing classifier lift error, got: " <> T.unpack err)
+        ("missing explicit classifier lift" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected doctrine elaboration to reject missing explicit classifier lift"
+
+testClassifierLiftUniverseMismatchRejected :: Assertion
+testClassifierLiftUniverseMismatchRejected = do
+  let src = T.unlines
+        [ "doctrine LiftUniverseMismatch where {"
+        , "  mode Ty classifiedBy Ty via Ty.U_Ty;"
+        , "  gen U_Ty : [] -> [Ty.U_Ty] @Ty;"
+        , "  gen ctx_ext(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen var(a@Ty) : [a] -> [a] @Ty;"
+        , "  gen reindex(a@Ty) : [a] -> [a] @Ty;"
+        , "  comprehension Ty where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  mode M classifiedBy Ty via Ty.U;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  mode N classifiedBy Ty via Ty.V;"
+        , "  gen ctx_ext(a@N) : [a] -> [a] @N;"
+        , "  gen var(a@N) : [a] -> [a] @N;"
+        , "  gen reindex(a@N) : [a] -> [a] @N;"
+        , "  comprehension N where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  modality mu : M -> N;"
+        , "  lift_classifier mu = id@Ty;"
+        , "  gen U : [] -> [Ty.U_Ty] @Ty;"
+        , "  gen V : [] -> [Ty.U_Ty] @Ty;"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected classifier lift universe mismatch, got: " <> T.unpack err)
+        ("classifier lift universe mismatch" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected doctrine elaboration to reject classifier lift universe mismatch"
+
+testBeckChevalleyGeneratedObligations :: Assertion
+testBeckChevalleyGeneratedObligations = do
+  let src = T.unlines
+        [ "doctrine BeckChevalley where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen Nat : [] -> [M.U_M] @M;"
+        , "  gen Z : [] -> [Nat] @M;"
+        , "  gen Vec(n : Nat) : [] -> [M.U_M] @M;"
+        , "  gen use(n : Nat) : [] -> [Vec(n)] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  modality T : M -> M;"
+        , "  mod_eq T -> id@M;"
+        , "  action T where {"
+        , "    gen ctx_ext -> ctx_ext"
+        , "    gen var -> var"
+        , "    gen reindex -> reindex"
+        , "    gen Z -> Z"
+        , "    gen use -> use"
+        , "  }"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "BeckChevalley" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine BeckChevalley" >> fail "unreachable"
+      Just d -> pure d
+  let bcObligations =
+        [ ob
+        | ob <- dObligations doc
+        , "__bc/" `T.isPrefixOf` obName ob
+        ]
+  assertBool "expected generated Beck-Chevalley obligations" (not (null bcObligations))
+  assertBool
+    "expected codomain-side BC equations for ctor-term slots"
+    (any (\obl -> "/cod" `T.isSuffixOf` obName obl) bcObligations)
 
 testNormalizeObjExprByModEq :: Assertion
 testNormalizeObjExprByModEq = do
@@ -220,17 +405,17 @@ testActionElab = do
         , "  gen var(a@A) : [a] -> [a] @A;"
         , "  gen reindex(a@A) : [a] -> [a] @A;"
         , "  comprehension A where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
-        , "  mode B classifiedBy B via B.U_B;"
-        , "  gen U_B : [] -> [B.U_B] @B;"
+        , "  mode B classifiedBy A via A.U_A;"
+        , "  gen U_B : [] -> [A.U_A] @B;"
         , "  gen ctx_ext(a@B) : [a] -> [a] @B;"
         , "  gen var(a@B) : [a] -> [a] @B;"
         , "  gen reindex(a@B) : [a] -> [a] @B;"
         , "  comprehension B where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  gen X : [] -> [A.U_A] @A;"
-        , "  gen Y : [] -> [B.U_B] @B;"
         , "  modality F : A -> B;"
+        , "  lift_classifier F = id@A;"
         , "  gen g : [A.X] -> [A.X] @A;"
-        , "  gen h : [B.Y] -> [B.Y] @B;"
+        , "  gen h : [A.X] -> [A.X] @B;"
         , "  action F where {"
         , "    gen g -> h"
         , "    gen ctx_ext -> ctx_ext"
@@ -401,13 +586,14 @@ testMapCrossModeElab = do
         , "  gen var(a@A) : [a] -> [a] @A;"
         , "  gen reindex(a@A) : [a] -> [a] @A;"
         , "  comprehension A where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
-        , "  mode B classifiedBy B via B.U_B;"
-        , "  gen U_B : [] -> [B.U_B] @B;"
+        , "  mode B classifiedBy A via A.U_A;"
+        , "  gen U_B : [] -> [A.U_A] @B;"
         , "  gen ctx_ext(a@B) : [a] -> [a] @B;"
         , "  gen var(a@B) : [a] -> [a] @B;"
         , "  gen reindex(a@B) : [a] -> [a] @B;"
         , "  comprehension B where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality F : A -> B;"
+        , "  lift_classifier F = id@A;"
         , "  gen X : [] -> [A.U_A] @A;"
         , "  gen g(a@A) : [a] -> [a] @A;"
         , "  gen h(a@A) : [F(a)] -> [F(a)] @B;"
@@ -899,6 +1085,45 @@ testComprehensionMixedBinderFull = do
   assertBool "expected dom composition law for mixed generator" (any ("/comp_dom" `T.isSuffixOf`) names)
   assertBool "expected naturality law for mixed generator" (any ("/nat" `T.isSuffixOf`) names)
 
+testComprehensionMultiBinderOnlyFull :: Assertion
+testComprehensionMultiBinderOnlyFull = do
+  let src = T.unlines
+        [ "doctrine CompMultiBinderOnly where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen A : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M ="
+        , "    ctx_ext{a} == id[a]"
+        , "  rule computational var_id -> (a@M) : [a] -> [a] @M ="
+        , "    var{a} == id[a]"
+        , "  rule computational reindex_id -> (a@M) : [a] -> [a] @M ="
+        , "    reindex{a} == id[a]"
+        , "  gen mbind : [binder { x : A } : [A], binder { y : A } : [A]] -> [A] @M;"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "CompMultiBinderOnly" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine CompMultiBinderOnly" >> fail "unreachable"
+      Just d -> pure d
+  let names =
+        [ obName obl
+        | obl <- dObligations doc
+        , obGenerated obl
+        , obForGenName obl == Just (GenName "mbind")
+        ]
+  assertBool "expected generated obligations for mbind" (not (null names))
+  assertBool "expected full dom identity laws for multi-binder generator" (any ("/id_dom" `T.isSuffixOf`) names)
+  assertBool "expected full cod identity laws for multi-binder generator" (any ("/id_cod" `T.isSuffixOf`) names)
+  assertBool "expected full dom composition laws for multi-binder generator" (any ("/comp_dom" `T.isSuffixOf`) names)
+  assertBool "expected full cod composition laws for multi-binder generator" (any ("/comp_cod" `T.isSuffixOf`) names)
+  assertBool "expected naturality laws for multi-binder generator" (any ("/nat" `T.isSuffixOf`) names)
+  assertBool "expected per-slot law expansion for both binder slots" (length names >= 10)
+
 testComprehensionCtorSlotBoundarySide :: Assertion
 testComprehensionCtorSlotBoundarySide = do
   let src = T.unlines
@@ -981,6 +1206,46 @@ testComprehensionCtorSlotMultiPortDom = do
   assertBool "expected dom laws for dom-side ctor slots on multi-port domain" (any ("/id_dom" `T.isSuffixOf`) names && any ("/comp_dom" `T.isSuffixOf`) names)
   assertBool "expected no cod laws for dom-side ctor slots on multi-port domain" (not (any ("/id_cod" `T.isSuffixOf`) names) && not (any ("/comp_cod" `T.isSuffixOf`) names))
 
+testComprehensionCtorSlotBinderDomain :: Assertion
+testComprehensionCtorSlotBinderDomain = do
+  let src = T.unlines
+        [ "doctrine CompCtorBinderDom where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen Nat : [] -> [M.U_M] @M;"
+        , "  gen Z : [] -> [Nat] @M;"
+        , "  gen Vec(n : Nat) : [] -> [M.U_M] @M;"
+        , "  gen A : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M ="
+        , "    ctx_ext{a} == id[a]"
+        , "  rule computational var_id -> (a@M) : [a] -> [a] @M ="
+        , "    var{a} == id[a]"
+        , "  rule computational reindex_id -> (a@M) : [a] -> [a] @M ="
+        , "    reindex{a} == id[a]"
+        , "  gen bctor : [binder { x : A } : [A]] -> [Vec(Z)] @M;"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "CompCtorBinderDom" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine CompCtorBinderDom" >> fail "unreachable"
+      Just d -> pure d
+  let names =
+        [ obName obl
+        | obl <- dObligations doc
+        , obGenerated obl
+        , obForGenName obl == Just (GenName "bctor")
+        ]
+  assertBool "expected generated obligations for bctor" (not (null names))
+  let ctorNames = filter ("arg" `T.isInfixOf`) names
+  assertBool "expected ctor-slot laws to be generated even with binder domains" (not (null ctorNames))
+  assertBool "expected cod-side ctor laws in binder-domain generator" (any ("/id_cod" `T.isSuffixOf`) ctorNames && any ("/comp_cod" `T.isSuffixOf`) ctorNames)
+  assertBool "expected no dom-side ctor laws for cod-side ctor slot" (not (any ("/id_dom" `T.isSuffixOf`) ctorNames) && not (any ("/comp_dom" `T.isSuffixOf`) ctorNames))
+
 testComprehensionCrossModeCtorSlots :: Assertion
 testComprehensionCrossModeCtorSlots = do
   let src = T.unlines
@@ -1022,8 +1287,7 @@ testComprehensionCrossModeCtorSlots = do
         , obGenerated obl
         , obForGenName obl == Just (GenName "expect1")
         ]
-  assertBool "expected generated obligations for expect1" (not (null names))
-  assertBool "expected dom-side laws for cross-mode constructor slot" (any ("/id_dom" `T.isSuffixOf`) names && any ("/comp_dom" `T.isSuffixOf`) names)
+  assertBool "expected cross-mode ctor slots to be ignored by owner-mode gating" (null names)
 
 testComprehensionGeneratedObligationJoinProof :: Assertion
 testComprehensionGeneratedObligationJoinProof = do
@@ -1076,14 +1340,15 @@ testAdjObligationFail = do
         , "  gen var(a@C) : [a] -> [a] @C;"
         , "  gen reindex(a@C) : [a] -> [a] @C;"
         , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
-        , "  mode L classifiedBy L via L.U_L;"
-        , "  gen U_L : [] -> [L.U_L] @L;"
+        , "  mode L classifiedBy L via F(C.U_C);"
         , "  gen ctx_ext(a@L) : [a] -> [a] @L;"
         , "  gen var(a@L) : [a] -> [a] @L;"
         , "  gen reindex(a@L) : [a] -> [a] @L;"
         , "  comprehension L where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
+        , "  lift_classifier F = F;"
+        , "  lift_classifier U = U;"
         , "  mod_eq U.F -> id@C;"
         , "  mod_eq F.U -> id@L;"
         , "  gen eta(a@C) : [a] -> [U(F(a))] @C;"
@@ -1100,14 +1365,15 @@ testAdjObligationFail = do
         , "  gen var(a@C) : [a] -> [a] @C;"
         , "  gen reindex(a@C) : [a] -> [a] @C;"
         , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
-        , "  mode L classifiedBy L via L.U_L;"
-        , "  gen U_L : [] -> [L.U_L] @L;"
+        , "  mode L classifiedBy L via F(C.U_C);"
         , "  gen ctx_ext(a@L) : [a] -> [a] @L;"
         , "  gen var(a@L) : [a] -> [a] @L;"
         , "  gen reindex(a@L) : [a] -> [a] @L;"
         , "  comprehension L where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
+        , "  lift_classifier F = F;"
+        , "  lift_classifier U = U;"
         , "  mod_eq U.F -> id@C;"
         , "  mod_eq F.U -> id@L;"
         , "  gen eta(a@C) : [a] -> [U(F(a))] @C;"
@@ -1161,14 +1427,15 @@ testAdjObligationPass = do
         , "  gen var(a@C) : [a] -> [a] @C;"
         , "  gen reindex(a@C) : [a] -> [a] @C;"
         , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
-        , "  mode L classifiedBy L via L.U_L;"
-        , "  gen U_L : [] -> [L.U_L] @L;"
+        , "  mode L classifiedBy L via F(C.U_C);"
         , "  gen ctx_ext(a@L) : [a] -> [a] @L;"
         , "  gen var(a@L) : [a] -> [a] @L;"
         , "  gen reindex(a@L) : [a] -> [a] @L;"
         , "  comprehension L where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
+        , "  lift_classifier F = F;"
+        , "  lift_classifier U = U;"
         , "  mod_eq U.F -> id@C;"
         , "  mod_eq F.U -> id@L;"
         , "  gen eta(a@C) : [a] -> [U(F(a))] @C;"
@@ -1185,14 +1452,15 @@ testAdjObligationPass = do
         , "  gen var(a@C) : [a] -> [a] @C;"
         , "  gen reindex(a@C) : [a] -> [a] @C;"
         , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
-        , "  mode L classifiedBy L via L.U_L;"
-        , "  gen U_L : [] -> [L.U_L] @L;"
+        , "  mode L classifiedBy L via F(C.U_C);"
         , "  gen ctx_ext(a@L) : [a] -> [a] @L;"
         , "  gen var(a@L) : [a] -> [a] @L;"
         , "  gen reindex(a@L) : [a] -> [a] @L;"
         , "  comprehension L where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  modality F : C -> L;"
         , "  modality U : L -> C;"
+        , "  lift_classifier F = F;"
+        , "  lift_classifier U = U;"
         , "  mod_eq U.F -> id@C;"
         , "  mod_eq F.U -> id@L;"
         , "  gen eta(a@C) : [a] -> [U(F(a))] @C;"
@@ -1240,13 +1508,15 @@ testMonadObligationPass :: Assertion
 testMonadObligationPass = do
   let src = T.unlines
         [ "doctrine SchemaMonad where {"
-        , "  mode C classifiedBy C via C.U_C;"
-        , "  gen U_C : [] -> [C.U_C] @C;"
+        , "  mode C classifiedBy C via T(C.U_C);"
+        , "  modality T : C -> C;"
+        , "  lift_classifier T = T;"
+        , "  mod_eq T.T -> T;"
+        , "  gen U_C : [] -> [T(C.U_C)] @C;"
         , "  gen ctx_ext(a@C) : [a] -> [a] @C;"
         , "  gen var(a@C) : [a] -> [a] @C;"
         , "  gen reindex(a@C) : [a] -> [a] @C;"
         , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
-        , "  modality T : C -> C;"
         , "  gen ret(x@C) : [x] -> [T(x)] @C;"
         , "  gen join(x@C) : [T(T(x))] -> [T(x)] @C;"
         , "  obligation leftUnit(a@C) : [T(a)] -> [T(a)] @C ="
@@ -1257,14 +1527,15 @@ testMonadObligationPass = do
         , "    map[T](join{a}) ; join{a} == join{T(a)} ; join{a}"
         , "}"
         , "doctrine IdMonad where {"
-        , "  mode C classifiedBy C via C.U_C;"
-        , "  gen U_C : [] -> [C.U_C] @C;"
+        , "  mode C classifiedBy C via T(C.U_C);"
+        , "  modality T : C -> C;"
+        , "  lift_classifier T = T;"
+        , "  mod_eq T.T -> T;"
+        , "  gen U_C : [] -> [T(C.U_C)] @C;"
         , "  gen ctx_ext(a@C) : [a] -> [a] @C;"
         , "  gen var(a@C) : [a] -> [a] @C;"
         , "  gen reindex(a@C) : [a] -> [a] @C;"
         , "  comprehension C where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
-        , "  modality T : C -> C;"
-        , "  gen A : [] -> [C.U_C] @C;"
         , "  gen ret(a@C) : [a] -> [T(a)] @C;"
         , "  gen join(a@C) : [T(T(a))] -> [T(a)] @C;"
         , "  action T where {"

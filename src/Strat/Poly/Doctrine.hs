@@ -14,6 +14,7 @@ module Strat.Poly.Doctrine
   , doctrineTypeTheory
   , doctrineTypeTheoryFromTables
   , deriveCtorTables
+  , deriveCtorTablesForElab
   , lookupCtorSigForOwnerInTables
   , lookupCtorRefForOwnerInTables
   , checkType
@@ -49,7 +50,7 @@ import Strat.Poly.Cell2
 import Strat.Poly.DSL.AST (RawOblExpr(..))
 import Strat.Poly.UnifyObj (unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
-import Strat.Poly.DefEq (termToDiagram, validateTermDiagram, defEqObj)
+import Strat.Poly.DefEq (termToDiagram, validateTermDiagram, normalizeObjDeep, defEqObj)
 import Strat.Poly.Term.RewriteCompile (compileAllTermRules)
 import Strat.Poly.Term.Termination (checkTerminatingSCT)
 import Strat.Poly.Term.Confluence (checkConfluent)
@@ -356,6 +357,7 @@ validateDoctrine doc = do
   ctorTables <- deriveCtorTables doc
   tt <- mkTypeTheoryFromTables doc ctorTables
   checkComprehensionDecls doc ctorTables
+  checkClassifierLiftUniverseCompatibility doc tt
   mapM_ checkAttrSortDecl (M.toList (dAttrSorts doc))
   mapM_ (checkGenTable doc tt) (M.toList (dGens doc))
   mapM_ (checkCell doc tt) (dCells2 doc)
@@ -363,6 +365,48 @@ validateDoctrine doc = do
   mapM_ (checkModeTransform doc) (M.elems (mtTransforms (dModes doc)))
   mapM_ (checkObligation doc tt) (dObligations doc)
   pure ()
+
+checkClassifierLiftUniverseCompatibility :: Doctrine -> TypeTheory -> Either Text ()
+checkClassifierLiftUniverseCompatibility doc tt =
+  mapM_ checkOne classifiedModalities
+  where
+    classDecl mode = M.lookup mode (mtClassifiedBy (dModes doc))
+
+    classifiedModalities =
+      [ (modName, srcClass, tgtClass)
+      | (modName, decl) <- M.toList (mtDecls (dModes doc))
+      , Just srcClass <- [classDecl (mdSrc decl)]
+      , Just tgtClass <- [classDecl (mdTgt decl)]
+      ]
+
+    checkOne (modName, srcClass, tgtClass) = do
+      liftExpr <-
+        case classifierLiftForModality (dModes doc) modName of
+          Left err -> Left ("validateDoctrine: " <> err)
+          Right me -> Right me
+      transportedNorm <- normalizeObjDeep tt (liftUniverse liftExpr (cdUniverse srcClass))
+      targetNorm <- normalizeObjDeep tt (cdUniverse tgtClass)
+      ok <- defEqObj tt [] transportedNorm targetNorm
+      if ok
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: classifier lift universe mismatch for modality "
+                <> renderMod modName
+                <> " (expected "
+                <> T.pack (show targetNorm)
+                <> ", got "
+                <> T.pack (show transportedNorm)
+                <> ")"
+            )
+
+    liftUniverse liftExpr universe =
+      Obj
+        { objOwnerMode = meTgt liftExpr
+        , objCode = CTLift liftExpr (objCode universe)
+        }
+
+    renderMod (ModName n) = n
 
 checkComprehensionDecls :: Doctrine -> CtorTables -> Either Text ()
 checkComprehensionDecls doc ctorTables =
@@ -463,28 +507,11 @@ modeIsAcyclic doc mode = mode `S.member` dAcyclicModes doc
 
 deriveCtorTables :: Doctrine -> Either Text (M.Map ModeName (M.Map ObjName [TypeParamSig]))
 deriveCtorTables doc = do
-  let ownerModes = M.keys (mtModes (dModes doc))
+  ownerModes <- classificationOrder (dModes doc)
   seedPairs <- mapM seedForOwner ownerModes
   let seed = M.fromList seedPairs
-  iterateFixedPoint (maxIterations ownerModes) seed
+  foldM growOwnerOrdered seed ownerModes
   where
-    maxIterations ownerModes =
-      1
-        + sum
-          [ length (candidateCtors ownerMode)
-          | ownerMode <- ownerModes
-          ]
-
-    iterateFixedPoint remaining tables
-      | remaining <= (0 :: Int) =
-          Left "deriveCtorTables: fixed-point eligibility did not converge"
-      | otherwise = do
-          tt <- buildTypeTheory tables
-          tables' <- foldM (growOwner tt) tables (M.keys (mtModes (dModes doc)))
-          if tables' == tables
-            then Right tables
-            else iterateFixedPoint (remaining - 1) tables'
-
     buildTypeTheory tables = do
       tt0 <- doctrineTypeTheoryBaseFromTables doc tables
       trs <- compileAllTermRules tt0
@@ -495,11 +522,34 @@ deriveCtorTables doc = do
       implicit <- implicitForOwner classifierMode ownerMode
       pure (ownerMode, implicit)
 
-    growOwner tt acc ownerMode = do
+    growOwnerOrdered acc ownerMode =
+      if modeClassifierMode (dModes doc) ownerMode == ownerMode
+        then growOwnerSelfFixedPoint acc ownerMode
+        else growOwnerOnce acc ownerMode
+
+    growOwnerOnce acc ownerMode = do
+      tt <- buildTypeTheory acc
       let existing = M.findWithDefault M.empty ownerMode acc
       discovered <- eligibleForOwner tt ownerMode
       merged <- mergeCtorTables existing discovered
       pure (M.insert ownerMode merged acc)
+
+    growOwnerSelfFixedPoint acc0 ownerMode =
+      iterateSelf (maxIterations ownerMode) acc0
+      where
+        iterateSelf remaining acc
+          | remaining <= (0 :: Int) =
+              Left "deriveCtorTables: self-classified constructor table did not converge"
+          | otherwise = do
+              acc' <- growOwnerOnce acc ownerMode
+              let oldTable = M.findWithDefault M.empty ownerMode acc
+              let newTable = M.findWithDefault M.empty ownerMode acc'
+              if newTable == oldTable
+                then Right acc'
+                else iterateSelf (remaining - 1) acc'
+
+    maxIterations ownerMode =
+      1 + length (candidateCtors ownerMode)
 
     implicitForOwner classifierMode ownerMode =
       case modeUniverseObj (dModes doc) ownerMode of
@@ -524,7 +574,7 @@ deriveCtorTables doc = do
       let classifierMode = modeClassifierMode (dModes doc) ownerMode
        in [ gd
           | gd <- M.elems (M.findWithDefault M.empty classifierMode (dGens doc))
-          , isCtorLike gd
+          , isCtorLikeGen gd
           ]
 
     implicitUniverseCtor classifierMode universeNorm =
@@ -550,57 +600,116 @@ deriveCtorTables doc = do
         Right ok -> Right ok
         Left _ -> Right False
 
-    isCtorLike gd =
-      null (gdAttrs gd) && null (gdDom gd)
-
     mergeCtorTables a b =
       foldM
         (\acc (name, sig) -> insertCtorSig name sig acc)
         a
         (M.toList b)
 
-    ctorSigFromGen gd = do
-      let tyVars = gdTyVars gd
-      let tmVars = gdTmVars gd
-      let tySet = S.fromList tyVars
-      mapM_ (ensureClosedTmSort tySet) tmVars
-      pure
-        [ case gp of
-            GP_Ty v -> TPS_Ty (tyVarOwnerMode v)
-            GP_Tm v -> TPS_Tm (tmvSort v)
-        | gp <- gdParams gd
-        ]
-      where
-        ensureClosedTmSort tySet tmVar =
-          let bad = S.intersection (freeObjVarsObj (tmvSort tmVar)) tySet
-           in if S.null bad
-                then Right ()
-                else
-                  Left
-                    ( "constructor generator `"
-                        <> renderGen (gdName gd)
-                        <> "` has term parameter `"
-                        <> tmvName tmVar
-                        <> "` whose sort mentions type parameters; this is not supported in this Phase 6 cut"
-                    )
+    genToObjName (GenName name) = ObjName name
+    isPendingUniverse = isPendingUniverseObj
 
-    insertCtorSig name sig acc =
-      case M.lookup name acc of
-        Nothing -> Right (M.insert name sig acc)
-        Just sig0
-          | sig0 == sig -> Right acc
-          | otherwise ->
+deriveCtorTablesForElab :: Doctrine -> Either Text CtorTables
+deriveCtorTablesForElab doc = do
+  tables0 <-
+    case deriveCtorTables doc of
+      Right tables -> Right tables
+      Left err
+        | "classification order incomplete" `T.isInfixOf` err
+            && not (null unresolvedClassifiers) ->
+            deriveCtorTables docWithoutUnresolvedClassifiers
+        | otherwise -> Left err
+  foldM addPendingOwner tables0 pendingOwners
+  where
+    unresolvedClassifiers =
+      [ ownerMode
+      | (ownerMode, decl) <- M.toList (mtClassifiedBy (dModes doc))
+      , not (M.member (cdClassifier decl) (mtModes (dModes doc)))
+      ]
+
+    docWithoutUnresolvedClassifiers =
+      let mt = dModes doc
+          keepDecl _ decl = M.member (cdClassifier decl) (mtModes mt)
+          mt' = mt { mtClassifiedBy = M.filterWithKey keepDecl (mtClassifiedBy mt) }
+       in doc { dModes = mt' }
+
+    pendingOwners =
+      [ ownerMode
+      | (ownerMode, decl) <- M.toList (mtClassifiedBy (dModes doc))
+      , isPendingUniverseObj (cdUniverse decl)
+      ]
+
+    addPendingOwner acc ownerMode = do
+      provisional <- provisionalForOwner ownerMode
+      let existing = M.findWithDefault M.empty ownerMode acc
+      merged <- foldM (\tbl (name, sig) -> insertCtorSig name sig tbl) existing (M.toList provisional)
+      pure (M.insert ownerMode merged acc)
+
+    provisionalForOwner ownerMode = do
+      let classifierMode = modeClassifierMode (dModes doc) ownerMode
+      let candidates =
+            [ gd
+            | gd <- M.elems (M.findWithDefault M.empty classifierMode (dGens doc))
+            , isCtorLikeGen gd
+            ]
+      foldM addCtor M.empty candidates
+
+    addCtor acc gd = do
+      sig <- ctorSigFromGen gd
+      insertCtorSig (ObjName (renderGen (gdName gd))) sig acc
+
+isCtorLikeGen :: GenDecl -> Bool
+isCtorLikeGen gd =
+  null (gdAttrs gd) && null (gdDom gd)
+
+ctorSigFromGen :: GenDecl -> Either Text [TypeParamSig]
+ctorSigFromGen gd = do
+  let tyVars = gdTyVars gd
+  let tmVars = gdTmVars gd
+  let tySet = S.fromList tyVars
+  mapM_ (ensureClosedTmSort tySet) tmVars
+  pure
+    [ case gp of
+        GP_Ty v -> TPS_Ty (tyVarOwnerMode v)
+        GP_Tm v -> TPS_Tm (tmvSort v)
+    | gp <- gdParams gd
+    ]
+  where
+    ensureClosedTmSort tySet tmVar =
+      let bad = S.intersection (freeObjVarsObj (tmvSort tmVar)) tySet
+       in if S.null bad
+            then Right ()
+            else
               Left
-                ( "duplicate constructor `"
-                    <> unObjName name
-                    <> "` with incompatible signatures in classifier vocabulary"
+                ( "constructor generator `"
+                    <> renderGen (gdName gd)
+                    <> "` has term parameter `"
+                    <> tmvName tmVar
+                    <> "` whose sort mentions type parameters; this is not supported in this Phase 6 cut"
                 )
 
-    genToObjName (GenName name) = ObjName name
-    isPendingUniverse obj =
-      case objCode obj of
-        CTMeta v -> tmvName v == "__pending_universe"
-        _ -> False
+insertCtorSig
+  :: ObjName
+  -> [TypeParamSig]
+  -> M.Map ObjName [TypeParamSig]
+  -> Either Text (M.Map ObjName [TypeParamSig])
+insertCtorSig name sig acc =
+  case M.lookup name acc of
+    Nothing -> Right (M.insert name sig acc)
+    Just sig0
+      | sig0 == sig -> Right acc
+      | otherwise ->
+          Left
+            ( "duplicate constructor `"
+                <> unObjName name
+                <> "` with incompatible signatures in classifier vocabulary"
+            )
+
+isPendingUniverseObj :: Obj -> Bool
+isPendingUniverseObj obj =
+  case objCode obj of
+    CTMeta v -> tmvName v == "__pending_universe"
+    _ -> False
 
 genParamsMatchDecls :: GenDecl -> Bool
 genParamsMatchDecls gd =
@@ -874,22 +983,16 @@ checkAction doc ctorTables (name, action) = do
       Just d -> Right d
   let srcMode = mdSrc decl
   let tgtMode = mdTgt decl
-  let compSupportNames =
-        case M.lookup srcMode (mtClassifiedBy (dModes doc)) >>= cdComp of
-          Just comp ->
-            S.fromList [compCtxExt comp, compVar comp, compReindex comp]
-          Nothing -> S.empty
   let srcGens =
         M.filterWithKey
           ( \gName _ ->
-              gName `S.notMember` compSupportNames
-                && not
-                  ( isTypeDeclGenNameInTables
-                      doc
-                      ctorTables
-                      srcMode
-                      (ObjName (renderGen gName))
-                  )
+              not
+                ( isTypeDeclGenNameInTables
+                    doc
+                    ctorTables
+                    srcMode
+                    (ObjName (renderGen gName))
+                )
           )
           (M.findWithDefault M.empty srcMode (dGens doc))
   let checkGenImage g = do
