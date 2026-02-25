@@ -36,7 +36,6 @@ This SHALL mean:
 Current kernel restriction:
 
 - each mode has at most one `classifiedBy` edge.
-- `cdTag` is parsed and stored but has no kernel semantics in the current implementation (reserved for a later phase).
 
 ### 2.2 Objects and Codes
 
@@ -80,7 +79,6 @@ Algorithmic rule:
 - self-classification edges (`K classifiedBy K via U`) are permitted;
 - layered classification is permitted (for example `Tm classifiedBy Ty` and `Ty classifiedBy Kd`);
 - classification graphs MUST NOT contain cycles of length greater than 1;
-- longer cycles are rejected unless explicit universe levels are provided.
 
 ### 2.5 Constructor Source
 
@@ -96,8 +94,6 @@ Current elaboration rule:
   - exactly one codomain object, definitionally equal to `U`.
 - if `U` normalizes to a nullary classifier constructor `K.C`, `C` is also included as an implicit zero-argument constructor.
 - constructor signatures are derived from the generator parameter telescope order (`gdParams`), not from split ty/tm lists.
-- constructor term-parameter sorts are currently required to be closed with respect to the generator's type parameters.
-- in surface type annotations, constructor parameters of kind `TPS_Tm` are currently not supported; term-indexed arguments must be expressed through core/kernel paths (not direct surface syntax).
 - legacy `dTypes`/`TypeSig` tables have been removed from kernel and tests; constructor resolution/typechecking is fully driven by derived constructor tables from classifier generators.
 
 ### 2.6 Worked Examples
@@ -242,7 +238,7 @@ Per-mode definitional data is represented by `DefFragment`:
   - `dfMode`: mode name
   - `dfFuns`: admissible term symbols in that mode
   - `dfRules`: admissible computational rules in that mode
-  - `dfNBE`: NbE configuration (currently fixed primitive names: `lam`, `app`, `Arr`)
+  - `dfNBE`: NbE configuration
 
 `normalizeCodeTermDeepWithCtx` and `normalizeTermDiagram` are the shared normalization services used by object equality (`defEqObj`) and term equality (`defEqTermDiagram`). `normalizeTermDiagram` dispatches by mode fragment (`TRS` vs `NbE`).
 
@@ -316,7 +312,7 @@ Canonicalization reduces a diagram to a colored graph encoding:
 
 Canonical labeling picks a deterministic representative and rebuilds the diagram with canonical `PortId`/`EdgeId` assignment. Canonization is recursive through payload-contained diagrams (`PBox`, `PFeedback`, `BAConcrete`).
 
-Port labels are currently treated as metadata for structural isomorphism/canonization by default (ignored as equality keys), while still being stored on diagrams.
+Port labels are treated as metadata for structural isomorphism/canonization by default (ignored as equality keys), while still being stored on diagrams.
 
 ## 6. Modalities
 
@@ -485,6 +481,6 @@ Surface elaboration is capability-driven:
 
 No discipline lattice is consulted.
 
-## 11. Temporary Restrictions
+## 11. Restrictions
 
 See `RESTRICTIONS.md`.

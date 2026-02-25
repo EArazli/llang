@@ -1,4 +1,4 @@
-# Restrictions (Temporary)
+# Restrictions
 
 ## 1. Term Diagram Fragment
 
@@ -64,3 +64,13 @@ Current NbE normalization targets a strict lambda-calculus fragment for definiti
 Unsupported constructs (for now) include structural diagram features such as splice/feedback/box/tensor/comp/symmetry in definitional normalization paths.
 This is a scope restriction, not a fundamental limitation, and should be revisited after core NbE stability and soundness are locked in.
 Follow-up work item: expand supported definitional fragment after NbE core stability/soundness are established.
+
+## 11. Classification Metadata and Graph Limits
+
+- `cdTag` on `classifiedBy` declarations is parsed/stored but has no kernel semantics yet.
+- Non-self classification cycles are rejected. Allowing longer cycles would require an explicit universe-level stratification design and implementation.
+
+## 12. Constructor/Surface Caveats
+
+- Constructor term-parameter sorts are required to be closed with respect to the generator's type parameters.
+- Surface type annotations do not support constructor parameters of kind `TPS_Tm`; term-indexed arguments must be expressed through core/kernel paths.
