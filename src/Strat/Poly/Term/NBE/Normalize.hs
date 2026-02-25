@@ -38,6 +38,8 @@ import Strat.Poly.Names (GenName(..))
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.Term.NBE.Config (NbeConfig(..))
 
+type SortEq = [Obj] -> Obj -> Obj -> Either Text Bool
+
 data BTm = BTm
   { btSort :: Obj
   , btExpr :: BTmExpr
@@ -69,11 +71,12 @@ data Neu
 normalizeDiagramNBE
   :: NbeConfig
   -> TypeTheory
+  -> SortEq
   -> [Obj]
   -> Obj
   -> Diagram
   -> Either Text TermDiagram
-normalizeDiagramNBE cfg tt tmCtx expectedSort src = do
+normalizeDiagramNBE cfg tt sortEq tmCtx expectedSort src = do
   rejectUnsupportedDiagram cfg src
   case dOut src of
     [_] -> Right ()
@@ -85,7 +88,7 @@ normalizeDiagramNBE cfg tt tmCtx expectedSort src = do
     then Right ()
     else Left "NbE: boundary input prefix exceeds mode-local context"
   srcInSorts <- mapM (requirePortSort src "NbE: missing boundary input sort") (dIn src)
-  tm <- diagramToBTm cfg src [nIn - 1, nIn - 2 .. 0] expectedSort
+  tm <- diagramToBTm cfg sortEq src [nIn - 1, nIn - 2 .. 0] expectedSort
   let lvl0 = nIn
   env <- mkInitialEnv lvl0 srcInSorts
   val <- evalBTm cfg tt env tm
@@ -101,13 +104,15 @@ normalizeDiagramNBE cfg tt tmCtx expectedSort src = do
   validateDiagram outCanon
   pure (TermDiagram outCanon)
 
-diagramToBTm :: NbeConfig -> Diagram -> [Int] -> Obj -> Either Text BTm
-diagramToBTm cfg diag boundaryVars expectedSort = do
+diagramToBTm :: NbeConfig -> SortEq -> Diagram -> [Int] -> Obj -> Either Text BTm
+diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
   validateDiagram diag
   case dOut diag of
     [out] -> do
       outTy <- requirePortSort diag "NbE: missing output sort" out
-      if outTy == expectedSort
+      boundarySorts <- boundarySortsForDiag
+      sortMatches <- sortEq boundarySorts outTy expectedSort
+      if sortMatches
         then termAt S.empty out
         else
           Left
@@ -120,6 +125,9 @@ diagramToBTm cfg diag boundaryVars expectedSort = do
     _ -> Left "NbE: term diagram must have exactly one output"
   where
     inMap = M.fromList (zip (dIn diag) [0 :: Int ..])
+
+    boundarySortsForDiag =
+      mapM (requirePortSort diag "NbE: missing boundary input sort") (dIn diag)
 
     termAt seen pid =
       case M.lookup pid inMap of
@@ -198,11 +206,13 @@ diagramToBTm cfg diag boundaryVars expectedSort = do
                   (p:_) -> Right p
                   [] -> Left "NbE: lambda binder body must have at least one input"
               firstBodyTy <- requirePortSort bodyDiag "NbE: lambda binder body missing bound-variable sort" firstBodyIn
-              if firstBodyTy == domTy
+              let bodyBoundaryVars = take bodyInCount bodyAvailable
+              bodyInSorts <- mapM (requirePortSort bodyDiag "NbE: missing boundary input sort") (dIn bodyDiag)
+              bodyDomMatches <- sortEq bodyInSorts firstBodyTy domTy
+              if bodyDomMatches
                 then Right ()
                 else Left "NbE: lambda binder body bound-variable sort mismatch"
-              let bodyBoundaryVars = take bodyInCount bodyAvailable
-              body <- diagramToBTm cfg bodyDiag bodyBoundaryVars codTy
+              body <- diagramToBTm cfg sortEq bodyDiag bodyBoundaryVars codTy
               pure BTm { btSort = lamSort, btExpr = BLam body }
         _ ->
           Left "NbE: lam node must have no plain inputs, one output, and one concrete binder body"
@@ -215,11 +225,13 @@ diagramToBTm cfg diag boundaryVars expectedSort = do
               aTm <- termAt seen aIn
               outTy <- requirePortSort diag "NbE: missing app output sort" outPid
               case splitArr cfg (btSort fTm) of
-                Just (domTy, codTy)
-                  | domTy == btSort aTm && codTy == outTy ->
-                      pure BTm { btSort = outTy, btExpr = BApp fTm aTm }
-                  | otherwise ->
-                      Left "NbE: app node type mismatch against Arr(domain, codomain)"
+                Just (domTy, codTy) -> do
+                  boundarySorts <- boundarySortsForDiag
+                  domMatches <- sortEq boundarySorts domTy (btSort aTm)
+                  codMatches <- sortEq boundarySorts codTy outTy
+                  if domMatches && codMatches
+                    then pure BTm { btSort = outTy, btExpr = BApp fTm aTm }
+                    else Left "NbE: app node type mismatch against Arr(domain, codomain)"
                 Nothing ->
                   Left "NbE: app function input does not have Arr type"
         _ ->

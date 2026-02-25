@@ -175,7 +175,7 @@ normalizeTermDiagram tt tmCtx expectedSort term = do
   let mode = objOwnerMode expectedSort'
   case defFragmentForMode tt mode of
     Just DefFragmentNBE { dfNBE = cfg } -> do
-      out <- wrap "nbe-normalize" (normalizeDiagramNBE cfg tt tmCtx expectedSort' src)
+      out <- wrap "nbe-normalize" (normalizeDiagramNBE cfg tt nbeSortEq tmCtx expectedSort' src)
       let outGraph = unTerm out
       wrap "validate-output-graph" (validateDiagram outGraph)
       wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' outGraph)
@@ -192,6 +192,11 @@ normalizeTermDiagram tt tmCtx expectedSort term = do
       exprCanon <- wrap "roundtrip-diagram-to-termexpr" (diagramGraphToTermExprUnchecked outGraph)
       wrap "roundtrip-termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' exprCanon)
   where
+    nbeSortEq sortCtx tyA tyB = do
+      tyA' <- normalizeObjDeepWithCtx tt sortCtx tyA
+      tyB' <- normalizeObjDeepWithCtx tt sortCtx tyB
+      pure (tyA' == tyB')
+
     wrap stage =
       mapLeft
         ( \err ->

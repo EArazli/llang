@@ -364,15 +364,58 @@ validateNbeConfigForMode
   -> Either Text NbeConfig
 validateNbeConfigForMode doc tt arrValidation mode cfg =
   case arrValidation of
-    NbeArrFromDeclaredCtors -> Right cfg
     NbeArrFromDerivedTables -> do
-      lamDecl <- requireGen "lam" (nbeLamGen cfg)
-      appDecl <- requireGen "app" (nbeAppGen cfg)
+      (lamDecl, appDecl) <- requireLamAppDecls
       checkLamShape lamDecl
       checkAppShape appDecl
-      checkArrCtor
+      checkArrCtorFromDerivedTables
       pure cfg
+    NbeArrFromDeclaredCtors ->
+      case lookupDeclaredArrCtor of
+        Nothing ->
+          -- During elaboration we may validate with incomplete generator tables.
+          -- Defer NbE shape checks until Arr is declared for this mode.
+          Right cfg
+        Just arrDecl ->
+          case lookupLamAppDecls of
+            Nothing ->
+              -- During elaboration, Arr can be declared before lam/app.
+              -- Defer NbE shape checks until the full primitive set is present.
+              Right cfg
+            Just (lamDecl, appDecl) ->
+              if primitivesReady lamDecl appDecl
+                then do
+                  checkLamShape lamDecl
+                  checkAppShape appDecl
+                  checkArrCtorFromDeclaredDecl arrDecl
+                  pure cfg
+                else
+                  -- Generator elaboration uses provisional declarations while
+                  -- checking signatures. Delay NbE shape checks until those
+                  -- provisional codomains are resolved.
+                  Right cfg
   where
+    requireLamAppDecls = do
+      lamDecl <- requireGen "lam" (nbeLamGen cfg)
+      appDecl <- requireGen "app" (nbeAppGen cfg)
+      pure (lamDecl, appDecl)
+
+    lookupLamAppDecls = do
+      table <- M.lookup mode (dGens doc)
+      lamDecl <- M.lookup (nbeLamGen cfg) table
+      appDecl <- M.lookup (nbeAppGen cfg) table
+      pure (lamDecl, appDecl)
+
+    primitivesReady lamDecl appDecl =
+      not (declLooksProvisional lamDecl) && not (declLooksProvisional appDecl)
+        && not (declHasPendingCod lamDecl) && not (declHasPendingCod appDecl)
+
+    declHasPendingCod gd =
+      any isPendingUniverseObj (gdCod gd)
+
+    declLooksProvisional gd =
+      null (gdDom gd) && length (gdCod gd) == 1 && null (gdAttrs gd)
+
     requireGen label genName =
       case M.lookup mode (dGens doc) >>= M.lookup genName of
         Just gd -> Right gd
@@ -427,8 +470,8 @@ validateNbeConfigForMode doc tt arrValidation mode cfg =
                 <> "` to have exactly two plain inputs, zero binder args, and one output"
             )
 
-    checkArrCtor =
-      case lookupArrSig of
+    checkArrCtorFromDerivedTables =
+      case M.lookup mode (ttCtorTables tt) >>= M.lookup (nbeArrTyCon cfg) of
         Nothing ->
           Left
             ( "validateDoctrine: NbE mode "
@@ -437,26 +480,38 @@ validateNbeConfigForMode doc tt arrValidation mode cfg =
                 <> unObjName (nbeArrTyCon cfg)
                 <> "`"
             )
-        Just sig ->
-          if length sig == 2 && all isTyParam sig
-            then Right ()
-            else
-              Left
-                ( "validateDoctrine: NbE mode "
-                    <> renderMode mode
-                    <> " requires `"
-                    <> unObjName (nbeArrTyCon cfg)
-                    <> "` to take exactly two type arguments"
-                )
+        Just sig -> checkArrSig sig
 
-    lookupArrSig =
-      case arrValidation of
-        NbeArrFromDerivedTables ->
-          M.lookup mode (ttCtorTables tt) >>= M.lookup (nbeArrTyCon cfg)
-        NbeArrFromDeclaredCtors ->
-          let classifierMode = modeClassifierMode (dModes doc) mode
-              ref = ObjRef classifierMode (nbeArrTyCon cfg)
-           in M.lookup ref (ttObjParams tt)
+    checkArrCtorFromDeclaredDecl arrDecl = do
+      if isCtorLikeGen arrDecl
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: NbE mode "
+                <> renderMode mode
+                <> " requires declared arrow constructor `"
+                <> unObjName (nbeArrTyCon cfg)
+                <> "` to have zero inputs and no attributes"
+            )
+      sig <- ctorSigFromGen arrDecl
+      checkArrSig sig
+
+    lookupDeclaredArrCtor =
+      let classifierMode = modeClassifierMode (dModes doc) mode
+          arrGen = GenName (unObjName (nbeArrTyCon cfg))
+       in M.lookup classifierMode (dGens doc) >>= M.lookup arrGen
+
+    checkArrSig sig =
+      if length sig == 2 && all isTyParam sig
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: NbE mode "
+                <> renderMode mode
+                <> " requires `"
+                <> unObjName (nbeArrTyCon cfg)
+                <> "` to take exactly two type arguments"
+            )
 
     isTyParam param =
       case param of
@@ -931,7 +986,7 @@ ctorSigFromGen gd = do
                     <> renderGen (gdName gd)
                     <> "` has term parameter `"
                     <> tmvName tmVar
-                    <> "` whose sort mentions type parameters; this is not supported in this Phase 6 cut"
+                    <> "` whose sort mentions type parameters; this is not currently supported"
                 )
 
 insertCtorSig

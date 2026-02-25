@@ -71,7 +71,9 @@ tests =
     , testCase "NbE rejects splice payloads in definitional normalization" testNBERejectsSplice
     , testCase "deriveCtorTables uses NbE for constructor eligibility" testCtorEligibilityUsesNBE
     , testCase "deriveCtorTables surfaces eligibility defeq failures with context" testCtorEligibilityDefEqErrorContext
+    , testCase "deriveCtorTables rejects malformed NbE lam config at eligibility validation time" testCtorEligibilityLamShapeRejected
     , testCase "doctrineTypeTheory rejects NbE mode missing Arr constructor" testCtorEligibilityMissingArrRejected
+    , testCase "NbE normalization accepts definitionally equal output sorts" testNBEOutputSortDefEq
     , testCase "TRS mode still enforces termination checks" testTRSStillChecked
     ]
 
@@ -550,6 +552,38 @@ testCtorEligibilityDefEqErrorContext = do
     Right _ ->
       assertFailure "expected deriveCtorTables to surface eligibility defeq failure for Bad constructor"
 
+mkEligibilityDoctrineMalformedLam :: Either Text Doctrine
+mkEligibilityDoctrineMalformedLam = do
+  doc <- mkEligibilityDoctrine False
+  let natTy = mkCon (ObjRef modeTy (ObjName "Nat")) []
+  let arrNatNat = mkCon (ObjRef modeTy (ObjName "Arr")) [CAObj natTy, CAObj natTy]
+  modeGens <-
+    case M.lookup modeTy (dGens doc) of
+      Just gs -> Right gs
+      Nothing -> Left "missing Ty mode generator table"
+  lamDecl <-
+    case M.lookup (GenName "lam") modeGens of
+      Just gd -> Right gd
+      Nothing -> Left "missing lam generator declaration"
+  let badLam =
+        lamDecl
+          { gdDom = [InPort natTy]
+          , gdCod = [arrNatNat]
+          }
+  let modeGens' = M.insert (GenName "lam") badLam modeGens
+  pure doc { dGens = M.insert modeTy modeGens' (dGens doc) }
+
+testCtorEligibilityLamShapeRejected :: Assertion
+testCtorEligibilityLamShapeRejected = do
+  doc <- require mkEligibilityDoctrineMalformedLam
+  case deriveCtorTables doc of
+    Left err ->
+      assertBool
+        ("expected malformed lam config error during ctor eligibility validation, got: " <> T.unpack err)
+        ("requires `lam` to have exactly one binder arg" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected deriveCtorTables to reject malformed NbE lam config"
+
 testCtorEligibilityMissingArrRejected :: Assertion
 testCtorEligibilityMissingArrRejected = do
   doc <- require mkMissingArrDoctrine
@@ -562,6 +596,25 @@ testCtorEligibilityMissingArrRejected = do
         )
     Right _ ->
       assertFailure "expected doctrineTypeTheory to reject NbE mode without Arr constructor"
+
+testNBEOutputSortDefEq :: Assertion
+testNBEOutputSortDefEq = do
+  doc <- require (mkEligibilityDoctrine False)
+  tt <- require (doctrineTypeTheory doc)
+  let natTy = mkCon (ObjRef modeTy (ObjName "Nat")) []
+  let arrNatNat = mkCon (ObjRef modeTy (ObjName "Arr")) [CAObj natTy, CAObj natTy]
+  let wrapRef = ObjRef modeTy (ObjName "Wrap")
+  zTm <- require (mkConstClosedTerm modeTy natTy (GenName "z"))
+  betaTm <- require (mkClosedBetaTerm modeTy natTy arrNatNat (GenName "lam") (GenName "app") (GenName "z"))
+  let expectedSort = mkCon wrapRef [CATm zTm]
+  let metaSort = mkCon wrapRef [CATm betaTm]
+  let v = TmVar { tmvName = "w", tmvSort = metaSort, tmvScope = 0, tmvOwnerMode = Just modeTy }
+  let (out, d0) = freshPort metaSort (emptyDiagram modeTy [])
+  d1 <- require (addEdgePayload (PTmMeta v) [] [out] d0)
+  let diag = d1 { dIn = [], dOut = [out] }
+  _ <- require (validateDiagram diag)
+  _ <- require (normalizeTermDiagram tt [] expectedSort (TermDiagram diag))
+  pure ()
 
 nbeDoctrineSrc :: Text
 nbeDoctrineSrc =

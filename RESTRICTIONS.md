@@ -2,14 +2,22 @@
 
 ## 1. Term Diagram Fragment
 
-Term arguments (`TATm`) normalize through a restricted diagram fragment:
+Term arguments (`TATm`) normalize through restricted diagram fragments that depend on the mode's defeq engine:
 
-- one output
-- only `PGen`, `PTmMeta`, and internal `PInternalDrop` payloads
-- no boxes, feedback, or splice nodes
-- no generator attrs/binder args inside term diagrams
-- `PTmMeta` inputs must be the canonical prefix determined by `tmvScope`
-- `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
+- `TRS` defeq term-argument fragment:
+  - one output
+  - no boxes, feedback, or splice nodes
+  - no generator attrs or binder args
+  - `PTmMeta` inputs must be the canonical prefix determined by `tmvScope`
+  - `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
+
+- `NbE` defeq term-argument fragment:
+  - one output
+  - no boxes, feedback, or splice nodes
+  - no generator attrs
+  - binder args are allowed only for `lam`, and only as the enforced concrete binder-body form used by NbE (`BAConcrete`, bound var first, then outer-prefix inputs)
+  - `PTmMeta` inputs must be the canonical prefix determined by `tmvScope`
+  - `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
 
 ## 2. Context-sensitive Normalization
 
