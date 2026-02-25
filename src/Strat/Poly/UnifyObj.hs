@@ -174,7 +174,7 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
         CTLift me innerCode -> do
           if modeClassifierMode (ttModes tt) (objOwnerMode ty) == meTgt me
             then Right ()
-            else Left "unifyObjFlex: lift target does not match object owner mode in CTLift spine"
+            else Left "unifyObjFlex: CTLift spine requires lift target == classifier(owner mode)"
           inner' <- expandModSpine (mkObj (meSrc me) innerCode)
           code' <- expandPath CTLift False me (objCode inner')
           Right ty { objCode = code' }

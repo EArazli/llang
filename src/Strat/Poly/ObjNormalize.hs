@@ -18,6 +18,7 @@ import Strat.Poly.Graph
   ( Diagram(..)
   , PortId
   , diagramPortObj
+  , validateDiagram
   , weakenDiagramTmCtxTo
   )
 import Strat.Poly.ModeTheory (ModeName, meSrc, meTgt)
@@ -33,8 +34,10 @@ import Strat.Poly.Obj
   , normalizeObjExpr
   )
 import Strat.Poly.TypeTheory
-  ( TypeParamSig(..)
+  ( DefFragment(..)
+  , TypeParamSig(..)
   , TypeTheory(..)
+  , defFragmentForMode
   , termTRSForMode
   , lookupTmFunSig
   )
@@ -47,6 +50,7 @@ import Strat.Poly.TermExpr
   , validateTermGraph
   )
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
+import Strat.Poly.Term.NBE.Normalize (normalizeDiagramNBE)
 
 
 normalizeObjDeep :: TypeTheory -> Obj -> Either Text Obj
@@ -100,7 +104,7 @@ normalizeCodeTermDeepWithCtx tt tmCtx owner code =
       pure (objCode merged)
     CTLift me innerCode -> do
       if meTgt me /= modeClassifierMode (ttModes tt) owner
-        then Left "normalizeCodeTermDeepWithCtx: lift target does not match object owner mode"
+        then Left "normalizeCodeTermDeepWithCtx: CTLift requires lift target == classifier(owner mode)"
         else Right ()
       inner' <- normalizeCodeTermDeepWithCtx tt tmCtx (meSrc me) innerCode
       merged <- normalizeObjExpr (ttModes tt) Obj { objOwnerMode = owner, objCode = CTLift me inner' }
@@ -168,16 +172,25 @@ normalizeTermDiagram
 normalizeTermDiagram tt tmCtx expectedSort term = do
   expectedSort' <- wrap "normalize-sort" (normalizeObjDeepWithCtx tt tmCtx expectedSort)
   src <- wrap "term-to-diagram" (termToDiagram tt tmCtx expectedSort' term)
-  let trs = termTRSForMode tt (objOwnerMode expectedSort')
-  expr0 <- wrap "diagram-to-termexpr" (diagramGraphToTermExprUnchecked src)
-  let expr = normalizeTermExpr trs expr0
-  out <- wrap "termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' expr)
-  let outGraph = unTerm out
-  wrap "validate-output-graph" (validateTermGraph outGraph)
-  wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' outGraph)
-  -- Normalize output graph layout by a deterministic structural roundtrip.
-  exprCanon <- wrap "roundtrip-diagram-to-termexpr" (diagramGraphToTermExprUnchecked outGraph)
-  wrap "roundtrip-termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' exprCanon)
+  let mode = objOwnerMode expectedSort'
+  case defFragmentForMode tt mode of
+    Just DefFragmentNBE { dfNBE = cfg } -> do
+      out <- wrap "nbe-normalize" (normalizeDiagramNBE cfg tt tmCtx expectedSort' src)
+      let outGraph = unTerm out
+      wrap "validate-output-graph" (validateDiagram outGraph)
+      wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' outGraph)
+      pure out
+    _ -> do
+      let trs = termTRSForMode tt mode
+      expr0 <- wrap "diagram-to-termexpr" (diagramGraphToTermExprUnchecked src)
+      let expr = normalizeTermExpr trs expr0
+      out <- wrap "termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' expr)
+      let outGraph = unTerm out
+      wrap "validate-output-graph" (validateTermGraph outGraph)
+      wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' outGraph)
+      -- Normalize output graph layout by a deterministic structural roundtrip.
+      exprCanon <- wrap "roundtrip-diagram-to-termexpr" (diagramGraphToTermExprUnchecked outGraph)
+      wrap "roundtrip-termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' exprCanon)
   where
     wrap stage =
       mapLeft
@@ -207,7 +220,9 @@ termToDiagram
 termToDiagram tt tmCtx expectedSort (TermDiagram term0) = do
   expectedSort' <- wrap "normalize-sort" (normalizeObjDeepWithCtx tt tmCtx expectedSort)
   term <- wrap "weaken-tmctx" (weakenDiagramTmCtxTo tmCtx term0)
-  wrap "validate-term-graph" (validateTermGraph term)
+  case defFragmentForMode tt (objOwnerMode expectedSort') of
+    Just DefFragmentNBE {} -> wrap "validate-diagram" (validateDiagram term)
+    _ -> wrap "validate-term-graph" (validateTermGraph term)
   if dMode term == objOwnerMode expectedSort'
     then Right ()
     else wrapFail "mode-mismatch" "term mode differs from expected sort mode"
@@ -259,7 +274,9 @@ diagramToTerm
 diagramToTerm tt tmCtx expectedSort term0 = do
   expectedSort' <- normalizeObjDeepWithCtx tt tmCtx expectedSort
   let term = term0 { dTmCtx = tmCtx }
-  validateTermGraph term
+  case defFragmentForMode tt (objOwnerMode expectedSort') of
+    Just DefFragmentNBE {} -> validateDiagram term
+    _ -> validateTermGraph term
   if dMode term == objOwnerMode expectedSort'
     then Right ()
     else Left "diagramToTerm: mode mismatch"

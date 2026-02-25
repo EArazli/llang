@@ -41,9 +41,9 @@ docDoctrine =
     gens =
       M.fromList
         [ (GenName "Doc", ctorGen docMode "Doc")
-        , (compCtxExtName, simpleGen "comp_ctx_ext" [docTy] [docTy] [])
-        , (compVarName, simpleGen "comp_var" [docTy] [docTy] [])
-        , (compReindexName, simpleGen "comp_reindex" [docTy] [docTy] [])
+        , (compCtxExtName, compGen docMode compCtxExtName)
+        , (compVarName, compGen docMode compVarName)
+        , (compReindexName, compGen docMode compReindexName)
         , (GenName "empty", simpleGen "empty" [] [docTy] [])
         , (GenName "text", simpleGen "text" [] [docTy] [("s", strSort)])
         , (GenName "line", simpleGen "line" [] [docTy] [])
@@ -76,9 +76,9 @@ artifactDoctrine =
       M.fromList
         [ (GenName "Doc", ctorGen artifactMode "Doc")
         , (GenName "FileTree", ctorGen artifactMode "FileTree")
-        , (compCtxExtName, simpleGen "comp_ctx_ext" [docTy] [docTy] [])
-        , (compVarName, simpleGen "comp_var" [docTy] [docTy] [])
-        , (compReindexName, simpleGen "comp_reindex" [docTy] [docTy] [])
+        , (compCtxExtName, compGen artifactMode compCtxExtName)
+        , (compVarName, compGen artifactMode compVarName)
+        , (compReindexName, compGen artifactMode compReindexName)
         , (GenName "empty", simpleGen "empty" [] [docTy] [])
         , (GenName "text", simpleGen "text" [] [docTy] [("s", strSort)])
         , (GenName "line", simpleGen "line" [] [docTy] [])
@@ -178,3 +178,25 @@ simpleGen name dom cod attrs =
         (ty:_) -> objMode ty
         [] -> error "prelude simpleGen: empty domain and codomain"
     modeFromCtx (ty:_) = objMode ty
+
+compGen :: ModeName -> GenName -> GenDecl
+compGen mode name =
+  GenDecl
+    { gdName = name
+    , gdMode = mode
+    , gdTyVars = [aVar]
+    , gdTmVars = []
+    , gdParams = [GP_Ty aVar]
+    , gdDom = [InPort aTy]
+    , gdCod = [aTy]
+    , gdAttrs = []
+    }
+  where
+    aVar =
+      TmVar
+        { tmvName = "a"
+        , tmvSort = universeObj mode
+        , tmvScope = 0
+        , tmvOwnerMode = Just mode
+        }
+    aTy = OVar aVar

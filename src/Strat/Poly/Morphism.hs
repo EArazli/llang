@@ -145,14 +145,38 @@ mapTypeRef :: CtorTables -> Morphism -> ModeName -> ModeName -> ObjRef -> Either
 mapTypeRef tgtCtorTables mor ownerSrc ownerTgt ref = do
   classifierTgt <- mapMode mor (orMode ref)
   let mapped = ref { orMode = classifierTgt }
-  case lookupCtorSigForOwnerInTables (morTgt mor) tgtCtorTables ownerTgt mapped of
-    Right _ ->
-      Right mapped
-    Left _ ->
-      case fallbackUniverseRef of
-        Just uRef -> Right uRef
-        Nothing -> Right mapped
+  if isOpaqueMetaSort ref
+    then Right mapped
+    else
+      case lookupCtorSigForOwnerInTables (morTgt mor) tgtCtorTables ownerTgt mapped of
+        Right _ ->
+          Right mapped
+        Left _ ->
+          case fallbackUniverseRef of
+            Just uRef ->
+              case lookupCtorSigForOwnerInTables (morTgt mor) tgtCtorTables ownerTgt uRef of
+                Right _ -> Right uRef
+                Left _ -> missingCtor mapped
+            Nothing -> missingCtor mapped
   where
+    isOpaqueMetaSort r =
+      case orName r of
+        ObjName "__obj_meta_sort" -> True
+        _ -> False
+
+    missingCtor mapped =
+      Left
+        ( "morphism: missing mapped constructor "
+            <> renderRef mapped
+            <> " for owner mode "
+            <> renderMode ownerTgt
+            <> " (source ref "
+            <> renderRef ref
+            <> ", source owner "
+            <> renderMode ownerSrc
+            <> "). Add a type_map entry or declare the constructor in the target doctrine."
+        )
+
     fallbackUniverseRef =
       case modeUniverseObj (dModes (morSrc mor)) ownerSrc of
         Just srcUniverse ->
@@ -168,6 +192,9 @@ mapTypeRef tgtCtorTables mor ownerSrc ownerTgt ref = do
               | otherwise -> Nothing
             _ -> Nothing
         Nothing -> Nothing
+
+    renderMode (ModeName name) = name
+    renderRef (ObjRef mode (ObjName name)) = renderMode mode <> "." <> name
 
 applyMorphismAttrTerm :: Morphism -> AttrTerm -> Either Text AttrTerm
 applyMorphismAttrTerm mor term =
@@ -324,14 +351,6 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
                 substTgt <- mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor substSrc
                 mappedBargs <- mapM (applyMorphismBinderArgWithTheories srcTheory tgtTheory tgtCtorTables mor) bargsSrc
                 case M.lookup (modeSrc, genName) (morGenMap mor) of
-                  Nothing
-                    | isComprehensionSupportGen (morSrc mor) modeSrc genName -> do
-                        tgtGen <- lookupGenInMode (morTgt mor) modeTgt genName
-                        if null mappedBargs
-                          then
-                            updateEdgePayload diagTgt edgeKey (PGen (gdName tgtGen) attrsSrc [])
-                          else
-                            Left "applyMorphismDiagram: implicit comprehension generator mapping does not support binder arguments"
                   Nothing -> Left "applyMorphismDiagram: missing generator mapping"
                   Just image0 -> do
                     let image = giDiagram image0
@@ -798,17 +817,12 @@ validateClassificationPreservation tgtCtorTables ttSrc ttTgt mor = do
           _ <- lookupGenInMode (morTgt mor) modeTgt mapped
           Right mapped
         Nothing ->
-          if isComprehensionSupportGen (morSrc mor) modeSrc witnessName
-            then do
-              _ <- lookupGenInMode (morTgt mor) modeTgt witnessName
-              Right witnessName
-            else
-              Left
-                ( "checkMorphism: missing generator mapping for comprehension witness "
-                    <> renderMode modeSrc
-                    <> "."
-                    <> renderGen witnessName
-                )
+          Left
+            ( "checkMorphism: missing generator mapping for comprehension witness "
+                <> renderMode modeSrc
+                <> "."
+                <> renderGen witnessName
+            )
 
     singleGeneratorWitnessName modeTgt image =
       let diag = giDiagram image
@@ -1119,12 +1133,6 @@ checkGenMapping tgtCtorTables ttSrc ttTgt mor gen = do
   dom <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables mor) (gdPlainDom gen)
   cod <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables mor) (gdCod gen)
   case M.lookup (modeSrc, gdName gen) (morGenMap mor) of
-    Nothing
-      | isComprehensionSupportGen (morSrc mor) modeSrc (gdName gen) -> do
-          tgtGen <- lookupGenInMode (morTgt mor) modeTgt (gdName gen)
-          _ <- unifyCtxCompat ttTgt [] dom (gdPlainDom tgtGen)
-          _ <- unifyCtxCompat ttTgt [] cod (gdCod tgtGen)
-          pure ()
     Nothing ->
       Left "checkMorphism: missing generator mapping"
     Just image0 -> do
@@ -1494,7 +1502,6 @@ allGensInTables doc tables =
   [ gd
   | (mode, table) <- M.toList (dGens doc)
   , gd <- M.elems table
-  , not (isComprehensionSupportGen doc mode (gdName gd))
   , let GenName gName = gdName gd
   , let ctorNames = M.findWithDefault S.empty mode ctorNamesByClassifier
   , ObjName gName `S.notMember` ctorNames
@@ -1505,15 +1512,6 @@ allGensInTables doc tables =
         [ (modeClassifierMode (dModes doc) ownerMode, S.fromList (M.keys table))
         | (ownerMode, table) <- M.toList tables
         ]
-
-isComprehensionSupportGen :: Doctrine -> ModeName -> GenName -> Bool
-isComprehensionSupportGen doc mode genName =
-  case M.lookup mode (mtClassifiedBy (dModes doc)) >>= cdComp of
-    Just comp ->
-      genName == compCtxExt comp
-        || genName == compVar comp
-        || genName == compReindex comp
-    Nothing -> False
 
 allCtorsInTables :: Doctrine -> CtorTables -> Either Text [(ObjRef, [TypeParamSig])]
 allCtorsInTables doc tables = do

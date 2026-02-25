@@ -24,6 +24,7 @@ import Strat.Poly.ModeTheory
   , ClassificationDecl(..)
   , ModeTheory(..)
   , ModeInfo(..)
+  , DefEqEngine(..)
   , mtModes
   , mtDecls
   )
@@ -161,13 +162,50 @@ applyMorphismDiagram mor = PolyMor.applyMorphismDiagram (normalizeMorphism mor)
 applyMorphismTy :: Morphism -> Obj -> Either Text Obj
 applyMorphismTy mor = PolyMor.applyMorphismTy (normalizeMorphism mor)
 
+completeCompSupportMappings :: Morphism -> Either Text Morphism
+completeCompSupportMappings mor = do
+  additions <- fmap concat (mapM witnessMappings (M.toList (mtClassifiedBy (dModes (morSrc mor)))))
+  pure mor { morGenMap = M.union (morGenMap mor) (M.fromList additions) }
+  where
+    witnessMappings (modeSrc, classDecl) =
+      case cdComp classDecl of
+        Nothing -> Right []
+        Just comp -> do
+          maybePairs <- mapM (mkWitness modeSrc) [compCtxExt comp, compVar comp, compReindex comp]
+          pure [pair | Just pair <- maybePairs]
+
+    mkWitness modeSrc witnessName
+      | M.member (modeSrc, witnessName) (morGenMap mor) = Right Nothing
+      | otherwise =
+          case M.lookup modeSrc (dGens (morSrc mor)) >>= M.lookup witnessName of
+            Nothing -> Right Nothing
+            Just srcGen -> do
+              modeTgt <- PolyMor.applyMorphismMode mor modeSrc
+              case M.lookup modeTgt (dGens (morTgt mor)) >>= M.lookup witnessName of
+                Nothing -> Right Nothing
+                Just _ -> do
+                  domTgt <- mapM (applyMorphismTy mor) (gdPlainDom srcGen)
+                  codTgt <- mapM (applyMorphismTy mor) (gdCod srcGen)
+                  img <- plainImage <$> genD modeTgt domTgt codTgt witnessName
+                  pure (Just ((modeSrc, witnessName), img))
+
 computePolyPushout :: Text -> Morphism -> Morphism -> Either Text PolyPushoutResult
 computePolyPushout name morL morR =
-  PolyPush.computePolyPushout name (normalizeMorphism morL) (normalizeMorphism morR)
+  let morL' = normalizeMorphism morL
+      morR' = normalizeMorphism morR
+   in do
+        morL'' <- completeCompSupportMappings morL'
+        morR'' <- completeCompSupportMappings morR'
+        PolyPush.computePolyPushout name morL'' morR''
 
 computePolyPushoutPreferRight :: Text -> Text -> Morphism -> Morphism -> Either Text PolyPushoutResult
 computePolyPushoutPreferRight name tag morL morR =
-  PolyPush.computePolyPushoutPreferRight name tag (normalizeMorphism morL) (normalizeMorphism morR)
+  let morL' = normalizeMorphism morL
+      morR' = normalizeMorphism morR
+   in do
+        morL'' <- completeCompSupportMappings morL'
+        morR'' <- completeCompSupportMappings morR'
+        PolyPush.computePolyPushoutPreferRight name tag morL'' morR''
 
 computePolyCoproduct :: Text -> Doctrine -> Doctrine -> Either Text PolyPushoutResult
 computePolyCoproduct name a b =
@@ -179,7 +217,7 @@ checkImplementsObligations env schema impl target =
 mkModes :: S.Set ModeName -> ModeTheory
 mkModes modes =
   ModeTheory
-    { mtModes = M.fromList [ (m, ModeInfo m) | m <- S.toList modes ]
+    { mtModes = M.fromList [ (m, ModeInfo { miName = m, miDefEqEngine = DefEqTRS }) | m <- S.toList modes ]
     , mtDecls = M.empty
     , mtEqns = []
     , mtTransforms = M.empty
@@ -2165,7 +2203,7 @@ testPushoutTypePermutationSortRename = do
           , morAttrSortMap = M.empty
           , morPolicy = UseAllOriented
           }
-  res <- case PolyPush.computePolyPushout "PIdxSwap" morF morG of
+  res <- case computePolyPushout "PIdxSwap" morF morG of
     Left err -> assertFailure (T.unpack err)
     Right out -> pure out
   ctorTables <- require (PolyDoc.deriveCtorTables (poDoctrine res))
@@ -3277,7 +3315,7 @@ testPushoutAcceptsRenamingWithBinders = do
 mkModeEqTheory :: ModeName -> ModName -> ModName -> ModeTheory
 mkModeEqTheory mode modF modU =
   ModeTheory
-    { mtModes = M.singleton mode (ModeInfo mode)
+    { mtModes = M.singleton mode (ModeInfo { miName = mode, miDefEqEngine = DefEqTRS })
     , mtDecls =
         M.fromList
           [ (modF, ModDecl modF mode mode)

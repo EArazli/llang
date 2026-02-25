@@ -196,6 +196,7 @@ tests:
     - Test.Poly.Coherence
     - Test.Poly.DataMacro
     - Test.Poly.Dependent
+    - Test.Poly.NBE
     - Test.Poly.Helpers
     - Test.Poly.Foliation
     - Test.Poly.Acyclic

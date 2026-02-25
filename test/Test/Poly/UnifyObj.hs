@@ -209,7 +209,7 @@ testUnifyUnderCTLiftBindsMeta :: Assertion
 testUnifyUnderCTLiftBindsMeta = do
   let modeTy = ModeName "Ty"
       modeTm = ModeName "Tm"
-      aVar = ObjVar { ovName = "a", ovMode = modeTy }
+      aVar = ObjVar { ovName = "a", ovMode = modeTm }
       liftId = ModExpr { meSrc = modeTy, meTgt = modeTy, mePath = [] }
       lhs = Obj { objOwnerMode = modeTm, objCode = CTLift liftId (objCode (OVar aVar)) }
       rhs = Obj { objOwnerMode = modeTm, objCode = CTLift liftId (objCode (mkCon (ObjRef modeTy (ObjName "UnitTy")) [])) }
@@ -220,7 +220,7 @@ testUnifyUnderCTLiftBindsMeta = do
     Right s -> pure s
   case U.lookupCodeMeta subst aVar of
     Just bound ->
-      bound @?= mkCon (ObjRef modeTy (ObjName "UnitTy")) []
+      bound @?= Obj { objOwnerMode = modeTm, objCode = CTCon (ObjRef modeTy (ObjName "UnitTy")) [] }
     Nothing ->
       assertFailure "expected unification to bind the inner code metavariable under CTLift"
 

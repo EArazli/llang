@@ -57,6 +57,7 @@ import Strat.Poly.Term.Confluence (checkConfluent)
 import Strat.Poly.Term.AST (TermExpr(..))
 import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
 import qualified Strat.Poly.Term.RewriteSystem as RS
+import Strat.Poly.Term.NBE.Config (NbeConfig(..), defaultNbeConfig)
 
 data BinderSig = BinderSig
   { bsTmCtx :: [Obj]
@@ -154,9 +155,7 @@ mkTypeTheoryFromTables :: Doctrine -> CtorTables -> Either Text TypeTheory
 mkTypeTheoryFromTables doc ctorTables = do
   tt0 <- doctrineTypeTheoryBaseFromTables doc ctorTables
   trs <- compileAllTermRules tt0
-  let fragments = setFragmentTRS (dModes doc) (ttDefFragments tt0) trs
-  mapM_ checkFragmentTermination (M.elems fragments)
-  mapM_ checkFragmentConfluence (M.elems fragments)
+  fragments <- buildCompiledFragments doc tt0 trs
   pure tt0 { ttDefFragments = fragments }
 
 doctrineTypeTheoryBaseFromTables :: Doctrine -> CtorTables -> Either Text TypeTheory
@@ -203,16 +202,26 @@ mkDefFragments
   -> M.Map ModeName DefFragment
 mkDefFragments mt tmFuns tmRules tmTRS =
   M.fromList
-    [ ( mode
-      , DefFragment
-          { dfMode = mode
-          , dfFuns = M.findWithDefault M.empty mode tmFuns
-          , dfRules = M.findWithDefault [] mode tmRules
-          , dfTRS = M.findWithDefault (mkTRS mode []) mode tmTRS
-          }
-      )
+    [ (mode, mkOne mode)
     | mode <- M.keys (mtModes mt)
     ]
+  where
+    mkOne mode =
+      case modeDefEqEngine mt mode of
+        DefEqTRS ->
+          DefFragmentTRS
+            { dfMode = mode
+            , dfFuns = M.findWithDefault M.empty mode tmFuns
+            , dfRules = M.findWithDefault [] mode tmRules
+            , dfTRS = M.findWithDefault (mkTRS mode []) mode tmTRS
+            }
+        DefEqNBE ->
+          DefFragmentNBE
+            { dfMode = mode
+            , dfFuns = M.findWithDefault M.empty mode tmFuns
+            , dfRules = M.findWithDefault [] mode tmRules
+            , dfNBE = defaultNbeConfig
+            }
 
 setFragmentTRS
   :: ModeTheory
@@ -226,27 +235,192 @@ setFragmentTRS mt fragments tmTRS =
     ]
   where
     fragmentFor mode =
-      let base = M.findWithDefault (emptyDefFragment mode) mode fragments
-       in base
-            { dfTRS = M.findWithDefault (mkTRS mode []) mode tmTRS
-            }
+      let base =
+            M.findWithDefault
+              (case modeDefEqEngine mt mode of
+                 DefEqNBE -> DefFragmentNBE mode M.empty [] defaultNbeConfig
+                 DefEqTRS -> emptyDefFragment mode
+              )
+              mode
+              fragments
+       in case base of
+            trs@DefFragmentTRS {} ->
+              trs { dfTRS = M.findWithDefault (mkTRS mode []) mode tmTRS }
+            nbe@DefFragmentNBE {} ->
+              nbe
 
 checkFragmentTermination :: DefFragment -> Either Text ()
 checkFragmentTermination fragment =
-  case checkTerminatingSCT (dfTRS fragment) of
-    Right () -> Right ()
-    Left err ->
-      Left
-        ( err
-            <> "\n  root symbols: "
-            <> renderRootSymbols (dfTRS fragment)
-            <> "\n  fragment rules:\n"
-            <> renderFragmentRules (dfTRS fragment)
-        )
+  case fragment of
+    DefFragmentNBE {} -> Right ()
+    DefFragmentTRS { dfTRS = trs } ->
+      case checkTerminatingSCT trs of
+        Right () -> Right ()
+        Left err ->
+          Left
+            ( err
+                <> "\n  root symbols: "
+                <> renderRootSymbols trs
+                <> "\n  fragment rules:\n"
+                <> renderFragmentRules trs
+            )
 
 checkFragmentConfluence :: DefFragment -> Either Text ()
 checkFragmentConfluence fragment =
-  checkConfluent (dfTRS fragment)
+  case fragment of
+    DefFragmentNBE {} -> Right ()
+    DefFragmentTRS { dfTRS = trs } -> checkConfluent trs
+
+buildCompiledFragments
+  :: Doctrine
+  -> TypeTheory
+  -> M.Map ModeName TRS
+  -> Either Text (M.Map ModeName DefFragment)
+buildCompiledFragments doc tt0 trsByMode =
+  fmap M.fromList (mapM buildOne modes)
+  where
+    modes = M.keys (mtModes (dModes doc))
+    fragments0 = ttDefFragments tt0
+
+    buildOne mode = do
+      let base =
+            M.findWithDefault
+              (case modeDefEqEngine (dModes doc) mode of
+                 DefEqNBE -> DefFragmentNBE mode M.empty [] defaultNbeConfig
+                 DefEqTRS -> emptyDefFragment mode
+              )
+              mode
+              fragments0
+      case modeDefEqEngine (dModes doc) mode of
+        DefEqTRS -> do
+          let trs = M.findWithDefault (mkTRS mode []) mode trsByMode
+          let fragment =
+                case base of
+                  trsFrag@DefFragmentTRS {} ->
+                    trsFrag { dfTRS = trs }
+                  nbeFrag@DefFragmentNBE {} ->
+                    DefFragmentTRS
+                      { dfMode = dfMode nbeFrag
+                      , dfFuns = dfFuns nbeFrag
+                      , dfRules = dfRules nbeFrag
+                      , dfTRS = trs
+                      }
+          checkFragmentTermination fragment
+          checkFragmentConfluence fragment
+          pure (mode, fragment)
+        DefEqNBE -> do
+          cfg <- validateNbeConfigForMode doc tt0 mode defaultNbeConfig
+          let fragment =
+                case base of
+                  trsFrag@DefFragmentTRS {} ->
+                    DefFragmentNBE
+                      { dfMode = dfMode trsFrag
+                      , dfFuns = dfFuns trsFrag
+                      , dfRules = dfRules trsFrag
+                      , dfNBE = cfg
+                      }
+                  nbeFrag@DefFragmentNBE {} ->
+                    nbeFrag { dfNBE = cfg }
+          pure (mode, fragment)
+
+validateNbeConfigForMode
+  :: Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> NbeConfig
+  -> Either Text NbeConfig
+validateNbeConfigForMode doc tt mode cfg = do
+  lamDecl <- requireGen "lam" (nbeLamGen cfg)
+  appDecl <- requireGen "app" (nbeAppGen cfg)
+  checkLamShape lamDecl
+  checkAppShape appDecl
+  checkArrCtor
+  pure cfg
+  where
+    requireGen label genName =
+      case M.lookup mode (dGens doc) >>= M.lookup genName of
+        Just gd -> Right gd
+        Nothing ->
+          Left
+            ( "validateDoctrine: NbE mode "
+                <> renderMode mode
+                <> " is missing required "
+                <> label
+                <> " generator `"
+                <> renderGen genName
+                <> "`"
+            )
+
+    checkLamShape gd = do
+      let plainIns = [ () | InPort _ <- gdDom gd ]
+      let binderIns = [ bs | InBinder bs <- gdDom gd ]
+      if null plainIns && length binderIns == 1 && length (gdCod gd) == 1
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: NbE mode "
+                <> renderMode mode
+                <> " requires `"
+                <> renderGen (gdName gd)
+                <> "` to have exactly one binder arg, zero plain inputs, and one output"
+            )
+      case binderIns of
+        [slot]
+          | length (bsDom slot) == 1 && length (bsCod slot) == 1 -> Right ()
+          | otherwise ->
+              Left
+                ( "validateDoctrine: NbE mode "
+                    <> renderMode mode
+                    <> " requires `"
+                    <> renderGen (gdName gd)
+                    <> "` binder slot shape [x] -> [body]"
+                )
+        _ -> Right ()
+
+    checkAppShape gd = do
+      let plainIns = [ () | InPort _ <- gdDom gd ]
+      let binderIns = [ () | InBinder _ <- gdDom gd ]
+      if length plainIns == 2 && null binderIns && length (gdCod gd) == 1
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: NbE mode "
+                <> renderMode mode
+                <> " requires `"
+                <> renderGen (gdName gd)
+                <> "` to have exactly two plain inputs, zero binder args, and one output"
+            )
+
+    checkArrCtor =
+      case M.lookup mode (ttCtorTables tt) >>= M.lookup (nbeArrTyCon cfg) of
+        Nothing ->
+          Left
+            ( "validateDoctrine: NbE mode "
+                <> renderMode mode
+                <> " is missing arrow type constructor `"
+                <> renderObjName (nbeArrTyCon cfg)
+                <> "`"
+            )
+        Just sig ->
+          if length sig == 2 && all isTyParam sig
+            then Right ()
+            else
+              Left
+                ( "validateDoctrine: NbE mode "
+                    <> renderMode mode
+                    <> " requires `"
+                    <> renderObjName (nbeArrTyCon cfg)
+                    <> "` to take exactly two type arguments"
+                )
+
+    isTyParam param =
+      case param of
+        TPS_Ty _ -> True
+        TPS_Tm _ -> False
+
+    renderMode (ModeName name) = name
+    renderGen (GenName name) = name
+    renderObjName (ObjName name) = name
 
 renderRootSymbols :: TRS -> Text
 renderRootSymbols trs =

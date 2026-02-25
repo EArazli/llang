@@ -57,6 +57,9 @@ doctrine LNL where {
 
 morphism cartInst : StructCartesian -> LNL where {
   mode M -> C;
+  gen comp_ctx_ext @M -> comp_ctx_ext
+  gen comp_var @M -> comp_var
+  gen comp_reindex @M -> comp_reindex
   gen swap @M -> swap
   gen dup @M -> dup
   gen drop @M -> drop

@@ -15,6 +15,9 @@ derived doctrine IR_SSA = foliated IR mode M;
 
 morphism emitDoc : IR -> Doc where {
   mode M -> Doc;
+  gen comp_ctx_ext @M -> comp_ctx_ext
+  gen comp_var @M -> comp_var
+  gen comp_reindex @M -> comp_reindex
   type I @M -> Doc @Doc;
   gen lit1 @M -> text(s = "1")
   gen lit2 @M -> text(s = "2")

@@ -270,6 +270,10 @@ polyModeDecl = do
   _ <- symbol "mode"
   name <- ident
   acyclic <- option False (True <$ symbol "acyclic")
+  mDefEq <- optional $ do
+    _ <- symbol "defeq"
+    (PolyAST.RDETRS <$ symbol "trs")
+      <|> (PolyAST.RDENBE <$ symbol "nbe")
   mClass <- optional $ do
     _ <- symbol "classifiedBy"
     cls <- ident
@@ -283,7 +287,7 @@ polyModeDecl = do
         , PolyAST.rcdTag = mTag
         }
   optionalSemi
-  pure (PolyAST.RPMode (PolyAST.RawModeDecl name acyclic mClass))
+  pure (PolyAST.RPMode (PolyAST.RawModeDecl name acyclic mDefEq mClass))
 
 polyComprehensionDecl :: Parser PolyAST.RawPolyItem
 polyComprehensionDecl = do

@@ -30,6 +30,9 @@ doctrine IdMonad where {
 
 morphism monadInst : SchemaMonad -> IdMonad where {
   mode C -> C;
+  gen comp_ctx_ext @C -> comp_ctx_ext
+  gen comp_var @C -> comp_var
+  gen comp_reindex @C -> comp_reindex
   modality T -> T;
   gen ret @C -> ret
   gen join @C -> join

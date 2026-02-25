@@ -541,14 +541,20 @@ pushoutModeTheoryPreferRight prefixRaw leftMor rightMor = do
     buildModesFinal inlRen inrRen leftMt rightMt =
       let rightModes =
             M.fromList
-              [ (renameModeName inrRen mode, ModeInfo { miName = renameModeName inrRen mode })
-              | mode <- M.keys (mtModes rightMt)
+              [ ( renameModeName inrRen mode
+                , info { miName = renameModeName inrRen mode }
+                )
+              | (mode, info) <- M.toList (mtModes rightMt)
               ]
       in foldl addLeft rightModes (M.keys (mtModes leftMt))
       where
         addLeft mp mode =
           let mode' = renameModeName inlRen mode
-          in M.insertWith (\_ old -> old) mode' (ModeInfo { miName = mode' }) mp
+          in case M.lookup mode (mtModes leftMt) of
+              Just info ->
+                M.insertWith (\_ old -> old) mode' (info { miName = mode' }) mp
+              Nothing ->
+                mp
 
     renamedDeclMap modeRen modRen mt =
       pure
@@ -995,11 +1001,6 @@ requireGenRenameMap mor = do
   where
     genImage m (mode, gen) = do
       img <- case M.lookup (mode, gdName gen) (morGenMap m) of
-        Nothing
-          | isComprehensionSupportGenInDoc (morSrc m) mode (gdName gen) -> do
-              tgtMode <- applyMorphismMode m mode
-              ensureGenExists (morTgt m) tgtMode (gdName gen)
-              Right (gdName gen)
         Nothing -> Left "poly pushout requires explicit generator mappings"
         Just d -> do
           imgName <- singleGenName m gen d
@@ -1007,15 +1008,6 @@ requireGenRenameMap mor = do
           ensureGenExists (morTgt m) tgtMode imgName
           Right imgName
       pure ((mode, gdName gen), img)
-
-isComprehensionSupportGenInDoc :: Doctrine -> ModeName -> GenName -> Bool
-isComprehensionSupportGenInDoc doc mode genName =
-  case M.lookup mode (mtClassifiedBy (dModes doc)) >>= cdComp of
-    Just comp ->
-      genName == compCtxExt comp
-        || genName == compVar comp
-        || genName == compReindex comp
-    Nothing -> False
 
 singleGenName :: Morphism -> GenDecl -> GenImage -> Either Text GenName
 singleGenName mor srcGen image0 = do

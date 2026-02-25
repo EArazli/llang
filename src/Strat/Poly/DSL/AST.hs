@@ -3,6 +3,7 @@ module Strat.Poly.DSL.AST
   , RawPolyItem(..)
   , RawClassifiedByDecl(..)
   , RawCompDecl(..)
+  , RawDefEqEngine(..)
   , RawModeDecl(..)
   , RawClassifierLiftDecl(..)
   , RawModExpr(..)
@@ -63,9 +64,15 @@ data RawCompDecl = RawCompDecl
   , rcmpReindex :: Text
   } deriving (Eq, Show)
 
+data RawDefEqEngine
+  = RDETRS
+  | RDENBE
+  deriving (Eq, Show)
+
 data RawModeDecl = RawModeDecl
   { rmdName :: Text
   , rmdAcyclic :: Bool
+  , rmdDefEqEngine :: Maybe RawDefEqEngine
   , rmdClassifiedBy :: Maybe RawClassifiedByDecl
   } deriving (Eq, Show)
 

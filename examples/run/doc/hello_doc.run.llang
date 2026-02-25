@@ -11,6 +11,9 @@ doctrine HelloWorld where {
 
 morphism helloToDoc : HelloWorld -> Doc where {
   mode M -> Doc;
+  gen comp_ctx_ext @M -> comp_ctx_ext
+  gen comp_var @M -> comp_var
+  gen comp_reindex @M -> comp_reindex
   type Unit @M -> Doc @Doc;
   gen hello @M -> text(s = "hello, world")
 }

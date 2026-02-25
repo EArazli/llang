@@ -452,19 +452,6 @@ Use **normalization by gluing** as the meta-theory that explains why this is mod
 
 **Exit criterion:** a classifier mode can express and normalize β/η-style computation with binders in definitional equality without breaking the rest of the kernel.
 
-### Phase 13 — Optional deepest unification: “types are full diagrams” with extrinsic typing
-
-**Goal:** if you want to go all the way and make port objects themselves represented by general diagrams (not just code-term ASTs), you will almost certainly move to:
-
-* **untyped/raw diagram syntax** + typing judgments (extrinsic typing),
-* conversion checks that are either:
-
-  * algorithmic only for declared normalizing fragments, or
-  * proof-relevant elsewhere (explicit coercions).
-
-This is a big step; it is compatible with the foundation above because classification, comprehension, and BC obligations already push you toward a CwR/MCwR semantics where “typing is structure, not a datatype”. ([pure.uva.nl][5])
-
----
 
 ## Summary of the plan in one sentence
 

@@ -32,6 +32,9 @@ doctrine SurfaceTarget where {
 
 morphism cartInst : CartLaws -> SurfaceTarget where {
   mode M -> M;
+  gen comp_ctx_ext @M -> comp_ctx_ext
+  gen comp_var @M -> comp_var
+  gen comp_reindex @M -> comp_reindex
   gen dup @M -> copy
   gen drop @M -> kill
   check none;

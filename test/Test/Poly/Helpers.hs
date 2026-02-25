@@ -22,7 +22,7 @@ import Strat.Poly.TypeTheory (TypeParamSig(..))
 mkModes :: [ModeName] -> ModeTheory
 mkModes modes =
   ModeTheory
-    { mtModes = M.fromList [ (m, ModeInfo { miName = m }) | m <- modes ]
+    { mtModes = M.fromList [ (m, ModeInfo { miName = m, miDefEqEngine = DefEqTRS }) | m <- modes ]
     , mtDecls = M.empty
     , mtEqns = []
     , mtTransforms = M.empty

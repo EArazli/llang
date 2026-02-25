@@ -330,18 +330,10 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       pure (hole, sig { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' })
     -- no template restriction; any target type expression using only params is allowed
     ensureAllGenMapped src srcCtorTables mp = do
-      let isCompSupport mode gName =
-            case M.lookup mode (mtClassifiedBy (dModes src)) >>= cdComp of
-              Just comp ->
-                gName == compCtxExt comp
-                  || gName == compVar comp
-                  || gName == compReindex comp
-              Nothing -> False
       let gens =
             [ (mode, gdName g)
             | (mode, table) <- M.toList (dGens src)
             , g <- M.elems table
-            , not (isCompSupport mode (gdName g))
             , not (isTypeDeclGenNameInTables src srcCtorTables mode (ObjName (renderGenName (gdName g))))
             ]
       case [ (m, g) | (m, g) <- gens, M.notMember (m, g) mp ] of
@@ -698,7 +690,12 @@ elabPolyItem env st item =
   case item of
     RPMode decl -> do
       let mode = ModeName (rmdName decl)
-      mt0 <- addMode mode (dModes doc)
+      mtAdded <- addMode mode (dModes doc)
+      mt0 <-
+        case rmdDefEqEngine decl of
+          Nothing -> Right mtAdded
+          Just RDETRS -> setModeDefEqEngine mode DefEqTRS mtAdded
+          Just RDENBE -> setModeDefEqEngine mode DefEqNBE mtAdded
       mt' <-
         case rmdClassifiedBy decl of
           Nothing -> Right mt0

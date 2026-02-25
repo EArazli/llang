@@ -45,7 +45,7 @@ testCriticalPairsRespectModeEq = do
   let ufBaseTy = OMod uExpr (OMod fExpr baseTy)
   let mt =
         ModeTheory
-          { mtModes = M.singleton mode (ModeInfo mode)
+          { mtModes = M.singleton mode (ModeInfo { miName = mode, miDefEqEngine = DefEqTRS })
           , mtDecls =
               M.fromList
                 [ (modF, ModDecl modF mode mode)

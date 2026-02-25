@@ -9,7 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ClassificationDecl(..), CompDecl(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), DefEqEngine(..), ClassificationDecl(..), CompDecl(..))
 import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), mkCon)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genD)
@@ -132,7 +132,7 @@ mkDoctrine cells =
 mkModes :: S.Set ModeName -> ModeTheory
 mkModes modes =
   ModeTheory
-    { mtModes = M.fromList [ (m, ModeInfo m) | m <- S.toList modes ]
+    { mtModes = M.fromList [ (m, ModeInfo { miName = m, miDefEqEngine = DefEqTRS }) | m <- S.toList modes ]
     , mtDecls = M.empty
     , mtEqns = []
     , mtTransforms = M.empty

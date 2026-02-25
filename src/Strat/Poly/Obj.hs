@@ -329,7 +329,7 @@ normalizeObjExpr mt obj =
       collapse me (objCode inner)
     CTLift me innerCode -> do
       if meTgt me /= modeClassifierModeLocal (objOwnerMode obj)
-        then Left "normalizeObjExpr: lift target does not match object owner mode"
+        then Left "normalizeObjExpr: CTLift requires lift target == classifier(owner mode)"
         else Right ()
       inner <- normalizeObjExpr mt Obj { objOwnerMode = meSrc me, objCode = innerCode }
       collapseLift me (objCode inner)
@@ -357,7 +357,7 @@ normalizeObjExpr mt obj =
           collapseLift me' inner2
         _ -> do
           let meNorm = normalizeModExpr mt me
-          if null (mePath meNorm) && meTgt meNorm == objOwnerMode obj
+          if null (mePath meNorm)
             then Right obj { objCode = code }
             else
               if liftMayReuseMod meNorm && meTgt meNorm == objOwnerMode obj

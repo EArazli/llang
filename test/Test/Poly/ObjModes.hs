@@ -29,7 +29,7 @@ import Strat.Poly.Obj
   , objMode
   , normalizeObjExpr
   )
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ModExpr(..), ClassificationDecl(..), CompDecl(..), emptyModeTheory)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), DefEqEngine(..), ModExpr(..), ClassificationDecl(..), CompDecl(..), emptyModeTheory)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
@@ -52,6 +52,7 @@ tests =
     , testCase "validateDiagram rejects port mode mismatch" testValidateDiagramModeMismatch
     , testCase "diagram ports store Obj in the diagram mode" testDiagramPortsStoreObj
     , testCase "normalizeObjExpr accepts classifier-targeted CTLift on non-self owner" testNormalizeClassifierLiftTarget
+    , testCase "normalizeObjExpr collapses identity CTLift on non-self owner" testNormalizeClassifierLiftIdentityCollapse
     ]
 
 modeC :: ModeName
@@ -90,7 +91,7 @@ mkDoctrine tables =
 mkModes :: S.Set ModeName -> ModeTheory
 mkModes modes =
   ModeTheory
-    { mtModes = M.fromList [ (m, ModeInfo m) | m <- S.toList modes ]
+    { mtModes = M.fromList [ (m, ModeInfo { miName = m, miDefEqEngine = DefEqTRS }) | m <- S.toList modes ]
     , mtDecls = M.empty
     , mtEqns = []
     , mtTransforms = M.empty
@@ -308,8 +309,8 @@ testNormalizeClassifierLiftTarget = do
         ModeTheory
           { mtModes =
               M.fromList
-                [ (modeTy, ModeInfo modeTy)
-                , (modeTm, ModeInfo modeTm)
+                [ (modeTy, ModeInfo { miName = modeTy, miDefEqEngine = DefEqTRS })
+                , (modeTm, ModeInfo { miName = modeTm, miDefEqEngine = DefEqTRS })
                 ]
           , mtDecls = M.empty
           , mtEqns = []
@@ -345,3 +346,52 @@ testNormalizeClassifierLiftTarget = do
   case normalizeObjExpr mt lifted of
     Left err -> assertFailure ("expected CTLift normalization to succeed: " <> T.unpack err)
     Right _ -> pure ()
+
+testNormalizeClassifierLiftIdentityCollapse :: Assertion
+testNormalizeClassifierLiftIdentityCollapse = do
+  let modeTy = ModeName "Ty"
+      modeTm = ModeName "Tm"
+      universeTy = mkCon (ObjRef modeTy (ObjName "U_Ty")) []
+      universeTm = mkCon (ObjRef modeTy (ObjName "U_Tm")) []
+      mt =
+        ModeTheory
+          { mtModes =
+              M.fromList
+                [ (modeTy, ModeInfo { miName = modeTy, miDefEqEngine = DefEqTRS })
+                , (modeTm, ModeInfo { miName = modeTm, miDefEqEngine = DefEqTRS })
+                ]
+          , mtDecls = M.empty
+          , mtEqns = []
+          , mtTransforms = M.empty
+          , mtClassifiedBy =
+              M.fromList
+                [ ( modeTy
+                  , ClassificationDecl
+                      { cdClassifier = modeTy
+                      , cdUniverse = universeTy
+                      , cdTag = Nothing
+                      , cdComp = Nothing
+                      }
+                  )
+                , ( modeTm
+                  , ClassificationDecl
+                      { cdClassifier = modeTy
+                      , cdUniverse = universeTm
+                      , cdTag = Nothing
+                      , cdComp = Nothing
+                      }
+                  )
+                ]
+          , mtClassifierLifts = M.empty
+          }
+      innerTy = mkCon (ObjRef modeTy (ObjName "A")) []
+      liftExpr = ModExpr { meSrc = modeTy, meTgt = modeTy, mePath = [] }
+      lifted =
+        Obj
+          { objOwnerMode = modeTm
+          , objCode = CTLift liftExpr (objCode innerTy)
+          }
+  normalized <- case normalizeObjExpr mt lifted of
+    Left err -> assertFailure ("expected CTLift identity collapse to succeed: " <> T.unpack err) >> pure lifted
+    Right obj -> pure obj
+  normalized @?= Obj { objOwnerMode = modeTm, objCode = objCode innerTy }

@@ -35,6 +35,8 @@ tests =
     , testCase "type map can reorder parameters" testTypeMapReorder
     , testCase "cross-mode morphism applies mode map" testCrossModeMorphism
     , testCase "modality map rewrites modality applications in types" testModalityMapRewritesTypeModalities
+    , testCase "morphism type mapping rejects missing target constructor" testMorphismRejectsMissingTargetCtor
+    , testCase "morphism requires explicit mappings for comprehension support generators" testMorphismRequiresExplicitComprehensionMappings
     , testCase "morphism instantiation fails on dependent substitution errors" testMorphismInstantiationSubstFailure
     , testCase "binder generator identity morphism preserves binder arguments" testBinderIdentityMorphismPreservesBinders
     , testCase "morphism rewrites splice binder holes to substituted binder metas" testMorphismSpliceRenamesToBinderMeta
@@ -244,16 +246,19 @@ attachComprehensionFixture mode aTy doc =
         , cdComp = Just compDecl
         }
 
-compIdentityImages :: ModeName -> Obj -> Either Text [((ModeName, GenName), GenImage)]
-compIdentityImages mode aTy = do
-  ctxExtImg <- plainImage <$> genD mode [aTy] [aTy] compCtxExtName
-  varImg <- plainImage <$> genD mode [aTy] [aTy] compVarName
-  reindexImg <- plainImage <$> genD mode [aTy] [aTy] compReindexName
+compIdentityImagesMapped :: ModeName -> ModeName -> Obj -> Either Text [((ModeName, GenName), GenImage)]
+compIdentityImagesMapped srcMode tgtMode aTy = do
+  ctxExtImg <- plainImage <$> genD tgtMode [aTy] [aTy] compCtxExtName
+  varImg <- plainImage <$> genD tgtMode [aTy] [aTy] compVarName
+  reindexImg <- plainImage <$> genD tgtMode [aTy] [aTy] compReindexName
   pure
-    [ ((mode, compCtxExtName), ctxExtImg)
-    , ((mode, compVarName), varImg)
-    , ((mode, compReindexName), reindexImg)
+    [ ((srcMode, compCtxExtName), ctxExtImg)
+    , ((srcMode, compVarName), varImg)
+    , ((srcMode, compReindexName), reindexImg)
     ]
+
+compIdentityImages :: ModeName -> Obj -> Either Text [((ModeName, GenName), GenImage)]
+compIdentityImages mode = compIdentityImagesMapped mode mode
 
 tcon :: ModeName -> Text -> [Obj] -> Obj
 tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
@@ -313,6 +318,7 @@ testMonoidMorphism = do
   docSrc <- either (assertFailure . T.unpack) pure mkMonoid
   docTgt <- either (assertFailure . T.unpack) pure mkStringMonoid
   let modeMap = identityModeMap docSrc
+  compImgs <- either (assertFailure . T.unpack) pure (compIdentityImages modeM (universeObj modeM))
   let typeMap = M.fromList [(ObjRef modeM (ObjName "A"), TypeTemplate [] (tcon modeM "Str" []))]
   unitImg <- either (assertFailure . T.unpack) pure (genD modeM [] [tcon modeM "Str" []] (GenName "empty"))
   mulImg <- either (assertFailure . T.unpack) pure (genD modeM [tcon modeM "Str" [], tcon modeM "Str" []] [tcon modeM "Str" []] (GenName "append"))
@@ -325,7 +331,13 @@ testMonoidMorphism = do
         , morModMap = identityModMap docSrc
         , morAttrSortMap = M.empty
         , morTypeMap = typeMap
-        , morGenMap = M.fromList [((modeM, GenName "unit"), plainImage unitImg), ((modeM, GenName "mul"), plainImage mulImg)]
+        , morGenMap =
+            M.fromList
+              ( [ ((modeM, GenName "unit"), plainImage unitImg)
+                , ((modeM, GenName "mul"), plainImage mulImg)
+                ]
+                  <> compImgs
+              )
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         }
@@ -416,6 +428,7 @@ testTypeMapReorder = do
   docTgt' <- case validateDoctrineNormalized docTgt of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
+  compImgs <- either (assertFailure . T.unpack) pure (compIdentityImages mode (universeObj mode))
   img <- either (assertFailure . T.unpack) pure (genD mode [mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] [mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] genName)
   let typeMap = M.fromList [(ObjRef mode prod, TypeTemplate [TPType a, TPType b] (mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]))]
   let mor = Morphism
@@ -427,7 +440,7 @@ testTypeMapReorder = do
         , morModMap = identityModMap docSrc'
         , morAttrSortMap = M.empty
         , morTypeMap = typeMap
-        , morGenMap = M.fromList [((mode, genName), plainImage img)]
+        , morGenMap = M.fromList (((mode, genName), plainImage img) : compImgs)
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         }
@@ -497,6 +510,7 @@ testCrossModeMorphism = do
   docTgt' <- case validateDoctrineNormalized docTgt of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
+  compImgs <- either (assertFailure . T.unpack) pure (compIdentityImagesMapped modeC modeV (universeObj modeV))
   img <- either (assertFailure . T.unpack) pure (genD modeV [bTy] [bTy] (GenName "g"))
   let mor = Morphism
         { morName = "CtoV"
@@ -507,7 +521,7 @@ testCrossModeMorphism = do
         , morModMap = identityModMap docSrc'
         , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(aRef, TypeTemplate [] bTy)]
-        , morGenMap = M.fromList [((modeC, GenName "f"), plainImage img)]
+        , morGenMap = M.fromList (((modeC, GenName "f"), plainImage img) : compImgs)
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         }
@@ -547,8 +561,8 @@ testModalityMapRewritesTypeModalities = do
         ModeTheory
           { mtModes =
               M.fromList
-                [ (modeA, ModeInfo modeA)
-                , (modeB, ModeInfo modeB)
+                [ (modeA, ModeInfo { miName = modeA, miDefEqEngine = DefEqTRS })
+                , (modeB, ModeInfo { miName = modeB, miDefEqEngine = DefEqTRS })
                 ]
           , mtDecls =
               M.fromList
@@ -564,8 +578,8 @@ testModalityMapRewritesTypeModalities = do
         ModeTheory
           { mtModes =
               M.fromList
-                [ (modeC, ModeInfo modeC)
-                , (modeD, ModeInfo modeD)
+                [ (modeC, ModeInfo { miName = modeC, miDefEqEngine = DefEqTRS })
+                , (modeD, ModeInfo { miName = modeD, miDefEqEngine = DefEqTRS })
                 ]
           , mtDecls =
               M.fromList
@@ -653,6 +667,7 @@ testModalityMapRewritesTypeModalities = do
   docTgt' <- case validateDoctrineNormalized docTgt of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
+  compImgs <- either (assertFailure . T.unpack) pure (compIdentityImagesMapped modeA modeC (universeObj modeC))
   imgG <- either (assertFailure . T.unpack) pure (genD modeD [gBaseTgt] [gBaseTgt] (GenName "g"))
   imgGG <- either (assertFailure . T.unpack) pure (genD modeD [kgBaseTgt] [kgBaseTgt] (GenName "gg"))
   let mor = Morphism
@@ -664,7 +679,13 @@ testModalityMapRewritesTypeModalities = do
         , morModMap = M.fromList [(modF, gTgt), (modH, kTgt)]
         , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(ObjRef modeA (ObjName "Base"), TypeTemplate [] baseTgt)]
-        , morGenMap = M.fromList [((modeB, GenName "g"), plainImage imgG), ((modeB, GenName "gg"), plainImage imgGG)]
+        , morGenMap =
+            M.fromList
+              ( [ ((modeB, GenName "g"), plainImage imgG)
+                , ((modeB, GenName "gg"), plainImage imgGG)
+                ]
+                  <> compImgs
+              )
         , morCheck = CheckAll
         , morPolicy = UseAllOriented
         }
@@ -697,6 +718,113 @@ testModalityMapRewritesTypeModalities = do
           attrs @?= M.empty
           bargs @?= []
         _ -> assertFailure "expected exactly one generator edge"
+
+testMorphismRejectsMissingTargetCtor :: Assertion
+testMorphismRejectsMissingTargetCtor = do
+  let mode = ModeName "M"
+  let srcDoc =
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "T", [])])]
+          Doctrine
+            { dName = "SrcMissingCtor"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  let tgtDoc =
+        withSelfClassifiedCtors
+          [(mode, [])]
+          Doctrine
+            { dName = "TgtMissingCtor"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  srcDoc' <- case validateDoctrineNormalized srcDoc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure srcDoc
+  tgtDoc' <- case validateDoctrineNormalized tgtDoc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure tgtDoc
+  let mor =
+        Morphism
+          { morName = "MissingCtor"
+          , morSrc = srcDoc'
+          , morTgt = tgtDoc'
+          , morIsCoercion = False
+          , morModeMap = identityModeMap srcDoc'
+          , morModMap = identityModMap srcDoc'
+          , morAttrSortMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckNone
+          , morPolicy = UseAllOriented
+          }
+  case applyMorphismTyNormalized mor (tcon mode "T" []) of
+    Left err -> assertBool "expected strict mapped-constructor failure" ("missing mapped constructor" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected applyMorphismTy to fail when mapped constructor is missing in target"
+
+testMorphismRequiresExplicitComprehensionMappings :: Assertion
+testMorphismRequiresExplicitComprehensionMappings = do
+  let mode = ModeName "M"
+  let srcDoc =
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "SrcCompStrict"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  let tgtDoc =
+        withSelfClassifiedCtors
+          [(mode, [(ObjName "A", [])])]
+          Doctrine
+            { dName = "TgtCompStrict"
+            , dModes = mkModes [mode]
+            , dAcyclicModes = S.empty
+            , dAttrSorts = M.empty
+            , dGens = M.empty
+            , dCells2 = []
+            , dActions = M.empty
+            , dObligations = []
+            }
+  srcDoc' <- case validateDoctrineNormalized srcDoc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure srcDoc
+  tgtDoc' <- case validateDoctrineNormalized tgtDoc of
+    Left err -> assertFailure (T.unpack err)
+    Right () -> pure tgtDoc
+  let mor =
+        Morphism
+          { morName = "CompStrict"
+          , morSrc = srcDoc'
+          , morTgt = tgtDoc'
+          , morIsCoercion = False
+          , morModeMap = identityModeMap srcDoc'
+          , morModMap = identityModMap srcDoc'
+          , morAttrSortMap = M.empty
+          , morTypeMap = M.empty
+          , morGenMap = M.empty
+          , morCheck = CheckNone
+          , morPolicy = UseAllOriented
+          }
+  srcDiag <- either (assertFailure . T.unpack) pure (genD mode [universeObj mode] [universeObj mode] compCtxExtName)
+  case applyMorphismDiagramNormalized mor srcDiag of
+    Left err -> assertBool "expected missing generator mapping for comprehension support gen" ("missing generator mapping" `T.isInfixOf` err)
+    Right _ -> assertFailure "expected explicit comprehension support generator mapping to be required"
 
 testMorphismInstantiationSubstFailure :: Assertion
 testMorphismInstantiationSubstFailure = do
@@ -1000,6 +1128,7 @@ testTypeTemplateCycleRejected = do
   doc' <- case validateDoctrineNormalized doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure doc
+  compImgs <- either (assertFailure . T.unpack) pure (compIdentityImages mode (universeObj mode))
   let mor =
         Morphism
           { morName = "CycleTypeMap"
@@ -1014,7 +1143,7 @@ testTypeTemplateCycleRejected = do
                 [ (aRef, TypeTemplate [] (mkCon bRef []))
                 , (bRef, TypeTemplate [] (mkCon aRef []))
                 ]
-          , morGenMap = M.empty
+          , morGenMap = M.fromList compImgs
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
@@ -1069,6 +1198,8 @@ testTermTemplateSortMismatch = do
   tgt <- case validateDoctrineNormalized tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
+  compImgsI <- either (assertFailure . T.unpack) pure (compIdentityImages modeI' (universeObj modeI'))
+  compImgsM <- either (assertFailure . T.unpack) pure (compIdentityImages modeM' (universeObj modeM'))
   let nWrong = TmVar { tmvName = "n", tmvSort = boolTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let aVar = ObjVar { ovName = "a", ovMode = modeM' }
   let mor =
@@ -1088,7 +1219,7 @@ testTermTemplateSortMismatch = do
                       (OVar aVar)
                   )
                 ]
-          , morGenMap = M.empty
+          , morGenMap = M.fromList (compImgsI <> compImgsM)
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
@@ -1240,6 +1371,8 @@ testTermTypeTemplateInstantiation = do
   sImg <- case genD modeI' [natTy] [natTy] (GenName "S") of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
+  compImgsI <- either (assertFailure . T.unpack) pure (compIdentityImages modeI' (universeObj modeI'))
+  compImgsM <- either (assertFailure . T.unpack) pure (compIdentityImages modeM' (universeObj modeM'))
   let mor =
         Morphism
           { morName = "MapVec"
@@ -1259,9 +1392,12 @@ testTermTypeTemplateInstantiation = do
                 ]
           , morGenMap =
               M.fromList
-                [ ((modeI', GenName "Z"), plainImage zImg)
-                , ((modeI', GenName "S"), plainImage sImg)
-                ]
+                ( [ ((modeI', GenName "Z"), plainImage zImg)
+                  , ((modeI', GenName "S"), plainImage sImg)
+                  ]
+                    <> compImgsI
+                    <> compImgsM
+                )
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
@@ -1343,6 +1479,8 @@ testTermTemplateKindMismatch = do
   tgt <- case validateDoctrineNormalized tgtDoc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure tgtDoc
+  compImgsI <- either (assertFailure . T.unpack) pure (compIdentityImages modeI' (universeObj modeI'))
+  compImgsM <- either (assertFailure . T.unpack) pure (compIdentityImages modeM' (universeObj modeM'))
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let aVar = ObjVar { ovName = "a", ovMode = modeM' }
   let nVarTm = tmMeta nVar
@@ -1363,7 +1501,7 @@ testTermTemplateKindMismatch = do
                       (mkCon vec2Ref [OATm nVarTm, OAObj (OVar aVar)])
                   )
                 ]
-          , morGenMap = M.empty
+          , morGenMap = M.fromList (compImgsI <> compImgsM)
         , morCheck = CheckAll
           , morPolicy = UseAllOriented
           }
@@ -1727,9 +1865,9 @@ testMorphismRejectsClassifierEdgeMismatch :: Assertion
 testMorphismRejectsClassifierEdgeMismatch =
   case elabProgram morphismClassifierMismatchProgram of
     Left err ->
-      assertBool
-        "expected classifier-edge mismatch rejection"
-        ("classifier edge mismatch" `T.isInfixOf` err || "is not classified in target" `T.isInfixOf` err)
+      if "classifier edge mismatch" `T.isInfixOf` err || "is not classified in target" `T.isInfixOf` err
+        then pure ()
+        else assertFailure ("unexpected morphism classifier-mismatch error: " <> T.unpack err)
     Right _ ->
       assertFailure "expected morphism elaboration to reject classifier-edge mismatch"
 
@@ -1792,6 +1930,9 @@ morphismCheckAllProgram =
     <> "morphism m : S -> T where {\n"
     <> "  check all;\n"
     <> "  mode M -> M;\n"
+    <> "  gen comp_ctx_ext @M -> comp_ctx_ext\n"
+    <> "  gen comp_var @M -> comp_var\n"
+    <> "  gen comp_reindex @M -> comp_reindex\n"
     <> "  gen f @M -> g\n"
     <> "}\n"
 
@@ -1831,6 +1972,9 @@ morphismBadBoundaryProgram =
     <> "morphism bad : S -> T where {\n"
     <> "  check none;\n"
     <> "  mode M -> M;\n"
+    <> "  gen comp_ctx_ext @M -> comp_ctx_ext\n"
+    <> "  gen comp_var @M -> comp_var\n"
+    <> "  gen comp_reindex @M -> comp_reindex\n"
     <> "  gen and @M -> true\n"
     <> "}\n"
 
@@ -1868,6 +2012,13 @@ morphismClassifierMismatchProgram =
     <> "  check none;\n"
     <> "  mode Ty -> Ty2;\n"
     <> "  mode Tm -> Tm2;\n"
+    <> "  type U @Ty -> U_Ty2 @Ty2;\n"
+    <> "  gen comp_ctx_ext @Ty -> comp_ctx_ext\n"
+    <> "  gen comp_var @Ty -> comp_var\n"
+    <> "  gen comp_reindex @Ty -> comp_reindex\n"
+    <> "  gen t_ctx_ext @Tm -> t_ctx_ext\n"
+    <> "  gen t_var @Tm -> t_var\n"
+    <> "  gen t_reindex @Tm -> t_reindex\n"
     <> "}\n"
 
 wireMetaRuleProgram :: Text

@@ -186,24 +186,40 @@ Current policy note:
 
 ## 3. Definitional Fragment
 
-Every mode SHALL declare a definitional fragment used for kernel definitional equality.
+Every mode has a definitional-equality engine used by kernel normalization/equality.
 
-Current required fragment:
+Mode declaration supports:
 
-- first-order TRS normalization compiled from admissible computational rules and eligible generators.
+- `mode M ... defeq trs ...;`
+- `mode M ... defeq nbe ...;`
 
-Admissibility requirements:
+If `defeq` is omitted, the mode defaults to `trs`.
 
-- rewrite compilation must remain in the first-order term fragment,
-- termination MUST be proven (SCT),
-- critical pairs MUST be joinable by normalization.
+Implemented fragments:
 
-A doctrine MUST either:
+- `TRS` fragment:
+  - first-order TRS normalization compiled from admissible computational rules and eligible generators.
+  - admissibility requirements:
+    - rewrite compilation remains in the first-order term fragment,
+    - termination MUST be proven (SCT),
+    - critical pairs MUST be joinable by normalization.
+- `NbE` fragment:
+  - binder-aware normalization for a lambda fragment in term diagrams.
+  - normalization is beta-normal and eta-long at function sorts (`Arr`), with eta enabled by default.
+  - required primitives per NbE mode:
+    - term generators `lam` and `app`,
+    - type constructor `Arr` with two object arguments.
+  - required shape checks:
+    - `lam`: exactly one binder arg, zero plain inputs, one output.
+    - `app`: exactly two plain inputs, zero binder args, one output.
+    - `Arr`: arity two with object/type parameters.
+  - unsupported constructs are rejected during definitional normalization in NbE modes:
+    - box/feedback/splice payloads,
+    - generator attrs,
+    - binder metavariables,
+    - non-`lam` generators carrying binder args.
 
-- declare the fragment explicitly per mode, or
-- satisfy kernel derivation rules (computational rules + eligible generators) and pass admissibility checks.
-
-Future fragments (for example NbE) are permitted by this spec but are not required in the current implementation.
+Termination/confluence checks apply to `TRS` fragments only; `NbE` fragments skip TRS compilation checks.
 
 ### 3.1 Kernel DefEq API (Current)
 
@@ -217,12 +233,18 @@ Current implementation centralizes normalization/equality entrypoints in `Strat.
 
 Per-mode definitional data is represented by `DefFragment`:
 
-- `dfMode`: mode name
-- `dfFuns`: admissible term symbols in that mode
-- `dfRules`: admissible computational rules in that mode
-- `dfTRS`: compiled TRS used by normalization/equality
+- `DefFragmentTRS`:
+  - `dfMode`: mode name
+  - `dfFuns`: admissible term symbols in that mode
+  - `dfRules`: admissible computational rules in that mode
+  - `dfTRS`: compiled TRS used by normalization/equality
+- `DefFragmentNBE`:
+  - `dfMode`: mode name
+  - `dfFuns`: admissible term symbols in that mode
+  - `dfRules`: admissible computational rules in that mode
+  - `dfNBE`: NbE configuration (currently fixed primitive names: `lam`, `app`, `Arr`)
 
-`normalizeCodeTermDeepWithCtx` and `normalizeTermDiagram` are the shared normalization services used by object equality (`defEqObj`) and term equality (`defEqTermDiagram`).
+`normalizeCodeTermDeepWithCtx` and `normalizeTermDiagram` are the shared normalization services used by object equality (`defEqObj`) and term equality (`defEqTermDiagram`). `normalizeTermDiagram` dispatches by mode fragment (`TRS` vs `NbE`).
 
 ## 4. Doctrine Layer
 
@@ -377,6 +399,10 @@ Doctrine items:
 - `mode`, `modality`, `mod_eq`, `mod_transform`
 - `action`, `obligation`
 - `attrsort`, `data`, `gen`, `rule`
+
+Mode declaration supports optional engine selection:
+
+- `mode M [acyclic] [defeq trs|nbe] [classifiedBy K via U [as tag]];`
 
 Top-level functor/apply items:
 

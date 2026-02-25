@@ -3,6 +3,7 @@ module Strat.Poly.ModeTheory
   ( ModeName(..)
   , ModName(..)
   , ModTransformName(..)
+  , DefEqEngine(..)
   , ModeInfo(..)
   , CompDecl(..)
   , ModExpr(..)
@@ -13,6 +14,7 @@ module Strat.Poly.ModeTheory
   , ModeTheory(..)
   , emptyModeTheory
   , addMode
+  , setModeDefEqEngine
   , addModDecl
   , addModEqn
   , addModTransformDecl
@@ -24,6 +26,7 @@ module Strat.Poly.ModeTheory
   , classificationOrder
   , composeMod
   , normalizeModExpr
+  , modeDefEqEngine
   , checkWellFormed
   ) where
 
@@ -37,8 +40,14 @@ import Strat.Poly.Syntax (Obj(..))
 import Strat.Poly.Names (GenName)
 
 
+data DefEqEngine
+  = DefEqTRS
+  | DefEqNBE
+  deriving (Eq, Ord, Show)
+
 data ModeInfo = ModeInfo
   { miName :: ModeName
+  , miDefEqEngine :: DefEqEngine
   } deriving (Eq, Show)
 
 data CompDecl = CompDecl
@@ -72,8 +81,19 @@ addMode :: ModeName -> ModeTheory -> Either Text ModeTheory
 addMode name mt
   | M.member name (mtModes mt) = Left "duplicate mode name"
   | otherwise =
-      let info = ModeInfo { miName = name }
+      let info = ModeInfo { miName = name, miDefEqEngine = DefEqTRS }
       in Right mt { mtModes = M.insert name info (mtModes mt) }
+
+setModeDefEqEngine :: ModeName -> DefEqEngine -> ModeTheory -> Either Text ModeTheory
+setModeDefEqEngine mode engine mt =
+  case M.lookup mode (mtModes mt) of
+    Nothing -> Left "mode theory: defeq engine set for unknown mode"
+    Just info ->
+      Right
+        mt
+          { mtModes =
+              M.insert mode (info { miDefEqEngine = engine }) (mtModes mt)
+          }
 
 addModDecl :: ModDecl -> ModeTheory -> Either Text ModeTheory
 addModDecl decl mt
@@ -334,6 +354,12 @@ validateModExpr mt me = do
       if mdSrc decl == cur
         then walk (mdTgt decl) ms
         else Left "mode theory: modality composition type mismatch"
+
+modeDefEqEngine :: ModeTheory -> ModeName -> DefEqEngine
+modeDefEqEngine mt mode =
+  case M.lookup mode (mtModes mt) of
+    Just info -> miDefEqEngine info
+    Nothing -> DefEqTRS
 
 validateModEqn :: ModeTheory -> ModEqn -> Either Text ()
 validateModEqn mt eqn = do

@@ -49,6 +49,12 @@ doctrine AdjReal where {
 morphism adjInst : SchemaAdjunction -> AdjReal where {
   mode C -> C;
   mode L -> L;
+  gen comp_ctx_ext @C -> comp_ctx_ext
+  gen comp_var @C -> comp_var
+  gen comp_reindex @C -> comp_reindex
+  gen comp_ctx_ext @L -> comp_ctx_ext
+  gen comp_var @L -> comp_var
+  gen comp_reindex @L -> comp_reindex
   modality F -> F;
   modality U -> U;
   gen eta @C -> eta

@@ -51,3 +51,16 @@ Disconnected dead subgraphs do not contribute to reported bound indices.
 - The witness must be a generator with exactly one type variable, no term vars, no attrs, one input port, and one output type.
 - Witness shape is constrained to `mu(A) -> nu(A)` (checked after modality/type normalization).
 - No automatic transform coercion insertion is performed; witnesses must be used explicitly.
+
+## 9. NbE Primitive Selection Is Currently Fixed
+
+For NbE modes, the required primitive names are currently fixed in the kernel (`lam`, `app`, and `Arr`).
+This is temporary and should be revisited so NbE primitive/operator names can be configured per mode.
+Follow-up work item: replace hardcoded names with per-mode NbE configuration.
+
+## 10. NbE Fragment Coverage Is Intentionally Narrow
+
+Current NbE normalization targets a strict lambda-calculus fragment for definitional equality.
+Unsupported constructs (for now) include structural diagram features such as splice/feedback/box/tensor/comp/symmetry in definitional normalization paths.
+This is a scope restriction, not a fundamental limitation, and should be revisited after core NbE stability and soundness are locked in.
+Follow-up work item: expand supported definitional fragment after NbE core stability/soundness are established.
