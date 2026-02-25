@@ -7,6 +7,7 @@ This directory is split into libraries and runnable entrypoints:
 - `examples/run/xfail/**`: runnable files that are expected to fail.
 
 See `examples/run/README.md` for execution details.
+For explicit canonical-target coverage mapping, see `docs/CANONICAL_COVERAGE.md`.
 
 Quick index (non-exhaustive):
 

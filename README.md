@@ -2,7 +2,7 @@
 
 Typed doctrine kernel with rewriting, modular doctrine composition, a DSL, and a small CLI.
 
-See `SPEC.md` for the kernel semantics and `examples/README.md` for runnable examples.
+See `SPEC.md` for the kernel semantics, `examples/README.md` for runnable examples, and `docs/CANONICAL_COVERAGE.md` for explicit canonical-target coverage artifacts.
 
 Examples:
 - JS codegen output:

@@ -123,6 +123,10 @@ Rejected:
 
 - `A classifiedBy B via B.U;` with `B classifiedBy A via A.U;` (non-self cycle).
 
+Traceability note:
+
+- canonical doctrine coverage claims are intentionally scoped to the named artifacts in `docs/CANONICAL_COVERAGE.md`.
+
 ### 2.7 Classifier Dependency Order
 
 For doctrine validation and later normalization/unification environment construction, the kernel SHALL compute a classifier dependency order `order : [ModeName]` such that:

@@ -30,6 +30,7 @@ import qualified Test.Frontend.Pipeline as FrontendPipeline
 import qualified Test.Frontend.ExampleCodegen as FrontendExampleCodegen
 import qualified Test.Frontend.ExamplesSmoke as FrontendExamplesSmoke
 import qualified Test.Frontend.StdlibIntegration as FrontendStdlibIntegration
+import qualified Test.Frontend.CanonicalCoverage as FrontendCanonicalCoverage
 
 main :: IO ()
 main =
@@ -63,6 +64,7 @@ main =
       , ValueDoc.tests
       , FrontendPipeline.tests
       , FrontendExampleCodegen.tests
+      , FrontendCanonicalCoverage.tests
       , FrontendExamplesSmoke.tests
       , FrontendStdlibIntegration.tests
       ]

@@ -263,6 +263,7 @@ test-suite llang-test
       Test.Value.Doc
       Test.Frontend.Pipeline
       Test.Frontend.ExampleCodegen
+      Test.Frontend.CanonicalCoverage
       Test.Frontend.ExamplesSmoke
       Test.Frontend.StdlibIntegration
       Paths_llang
