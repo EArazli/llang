@@ -223,32 +223,6 @@ mkDefFragments mt tmFuns tmRules tmTRS =
             , dfNBE = defaultNbeConfig
             }
 
-setFragmentTRS
-  :: ModeTheory
-  -> M.Map ModeName DefFragment
-  -> M.Map ModeName TRS
-  -> M.Map ModeName DefFragment
-setFragmentTRS mt fragments tmTRS =
-  M.fromList
-    [ (mode, fragmentFor mode)
-    | mode <- M.keys (mtModes mt)
-    ]
-  where
-    fragmentFor mode =
-      let base =
-            M.findWithDefault
-              (case modeDefEqEngine mt mode of
-                 DefEqNBE -> DefFragmentNBE mode M.empty [] defaultNbeConfig
-                 DefEqTRS -> emptyDefFragment mode
-              )
-              mode
-              fragments
-       in case base of
-            trs@DefFragmentTRS {} ->
-              trs { dfTRS = M.findWithDefault (mkTRS mode []) mode tmTRS }
-            nbe@DefFragmentNBE {} ->
-              nbe
-
 checkFragmentTermination :: DefFragment -> Either Text ()
 checkFragmentTermination fragment =
   case fragment of
@@ -270,6 +244,11 @@ checkFragmentConfluence fragment =
   case fragment of
     DefFragmentNBE {} -> Right ()
     DefFragmentTRS { dfTRS = trs } -> checkConfluent trs
+
+data NbeArrValidation
+  = NbeArrFromDerivedTables
+  | NbeArrFromDeclaredCtors
+  deriving (Eq, Show)
 
 buildCompiledFragments
   :: Doctrine
@@ -309,7 +288,57 @@ buildCompiledFragments doc tt0 trsByMode =
           checkFragmentConfluence fragment
           pure (mode, fragment)
         DefEqNBE -> do
-          cfg <- validateNbeConfigForMode doc tt0 mode defaultNbeConfig
+          cfg <- validateNbeConfigForMode doc tt0 NbeArrFromDerivedTables mode defaultNbeConfig
+          let fragment =
+                case base of
+                  trsFrag@DefFragmentTRS {} ->
+                    DefFragmentNBE
+                      { dfMode = dfMode trsFrag
+                      , dfFuns = dfFuns trsFrag
+                      , dfRules = dfRules trsFrag
+                      , dfNBE = cfg
+                      }
+                  nbeFrag@DefFragmentNBE {} ->
+                    nbeFrag { dfNBE = cfg }
+          pure (mode, fragment)
+
+buildCtorEligibilityFragments
+  :: Doctrine
+  -> TypeTheory
+  -> M.Map ModeName TRS
+  -> Either Text (M.Map ModeName DefFragment)
+buildCtorEligibilityFragments doc tt0 trsByMode =
+  fmap M.fromList (mapM buildOne modes)
+  where
+    modes = M.keys (mtModes (dModes doc))
+    fragments0 = ttDefFragments tt0
+
+    buildOne mode = do
+      let base =
+            M.findWithDefault
+              (case modeDefEqEngine (dModes doc) mode of
+                 DefEqNBE -> DefFragmentNBE mode M.empty [] defaultNbeConfig
+                 DefEqTRS -> emptyDefFragment mode
+              )
+              mode
+              fragments0
+      case modeDefEqEngine (dModes doc) mode of
+        DefEqTRS -> do
+          let trs = M.findWithDefault (mkTRS mode []) mode trsByMode
+          let fragment =
+                case base of
+                  trsFrag@DefFragmentTRS {} ->
+                    trsFrag { dfTRS = trs }
+                  nbeFrag@DefFragmentNBE {} ->
+                    DefFragmentTRS
+                      { dfMode = dfMode nbeFrag
+                      , dfFuns = dfFuns nbeFrag
+                      , dfRules = dfRules nbeFrag
+                      , dfTRS = trs
+                      }
+          pure (mode, fragment)
+        DefEqNBE -> do
+          cfg <- validateNbeConfigForMode doc tt0 NbeArrFromDeclaredCtors mode defaultNbeConfig
           let fragment =
                 case base of
                   trsFrag@DefFragmentTRS {} ->
@@ -326,16 +355,20 @@ buildCompiledFragments doc tt0 trsByMode =
 validateNbeConfigForMode
   :: Doctrine
   -> TypeTheory
+  -> NbeArrValidation
   -> ModeName
   -> NbeConfig
   -> Either Text NbeConfig
-validateNbeConfigForMode doc tt mode cfg = do
-  lamDecl <- requireGen "lam" (nbeLamGen cfg)
-  appDecl <- requireGen "app" (nbeAppGen cfg)
-  checkLamShape lamDecl
-  checkAppShape appDecl
-  checkArrCtor
-  pure cfg
+validateNbeConfigForMode doc tt arrValidation mode cfg =
+  case arrValidation of
+    NbeArrFromDeclaredCtors -> Right cfg
+    NbeArrFromDerivedTables -> do
+      lamDecl <- requireGen "lam" (nbeLamGen cfg)
+      appDecl <- requireGen "app" (nbeAppGen cfg)
+      checkLamShape lamDecl
+      checkAppShape appDecl
+      checkArrCtor
+      pure cfg
   where
     requireGen label genName =
       case M.lookup mode (dGens doc) >>= M.lookup genName of
@@ -392,13 +425,13 @@ validateNbeConfigForMode doc tt mode cfg = do
             )
 
     checkArrCtor =
-      case M.lookup mode (ttCtorTables tt) >>= M.lookup (nbeArrTyCon cfg) of
+      case lookupArrSig of
         Nothing ->
           Left
             ( "validateDoctrine: NbE mode "
                 <> renderMode mode
                 <> " is missing arrow type constructor `"
-                <> renderObjName (nbeArrTyCon cfg)
+                <> unObjName (nbeArrTyCon cfg)
                 <> "`"
             )
         Just sig ->
@@ -409,18 +442,23 @@ validateNbeConfigForMode doc tt mode cfg = do
                 ( "validateDoctrine: NbE mode "
                     <> renderMode mode
                     <> " requires `"
-                    <> renderObjName (nbeArrTyCon cfg)
+                    <> unObjName (nbeArrTyCon cfg)
                     <> "` to take exactly two type arguments"
                 )
+
+    lookupArrSig =
+      case arrValidation of
+        NbeArrFromDerivedTables ->
+          M.lookup mode (ttCtorTables tt) >>= M.lookup (nbeArrTyCon cfg)
+        NbeArrFromDeclaredCtors ->
+          let classifierMode = modeClassifierMode (dModes doc) mode
+              ref = ObjRef classifierMode (nbeArrTyCon cfg)
+           in M.lookup ref (ttObjParams tt)
 
     isTyParam param =
       case param of
         TPS_Ty _ -> True
         TPS_Tm _ -> False
-
-    renderMode (ModeName name) = name
-    renderGen (GenName name) = name
-    renderObjName (ObjName name) = name
 
 renderRootSymbols :: TRS -> Text
 renderRootSymbols trs =
@@ -689,7 +727,8 @@ deriveCtorTables doc = do
     buildTypeTheory tables = do
       tt0 <- doctrineTypeTheoryBaseFromTables doc tables
       trs <- compileAllTermRules tt0
-      pure tt0 { ttDefFragments = setFragmentTRS (dModes doc) (ttDefFragments tt0) trs }
+      fragments <- buildCtorEligibilityFragments doc tt0 trs
+      pure tt0 { ttDefFragments = fragments }
 
     seedForOwner ownerMode = do
       let classifierMode = modeClassifierMode (dModes doc) ownerMode
@@ -739,7 +778,7 @@ deriveCtorTables doc = do
         Just universe
           | not (isPendingUniverse universe) -> do
               universeNorm <- normalizeObjExpr (dModes doc) universe
-              fromGens <- foldM (addCtor tt universeNorm) M.empty (candidateCtors ownerMode)
+              fromGens <- foldM (addCtor tt ownerMode universeNorm) M.empty (candidateCtors ownerMode)
               implicit <- implicitUniverseCtor classifierMode universeNorm
               mergeCtorTables fromGens implicit
         _ -> Right M.empty
@@ -758,10 +797,10 @@ deriveCtorTables doc = do
               Right (M.singleton (orName ref) [])
         _ -> Right M.empty
 
-    addCtor tt universeNorm acc gd =
+    addCtor tt ownerMode universeNorm acc gd =
       case gdCod gd of
         [codTy] -> do
-          include <- eligibilityDefEq tt (map tmvSort (gdTmVars gd)) codTy universeNorm
+          include <- eligibilityDefEq tt ownerMode gd (map tmvSort (gdTmVars gd)) codTy universeNorm
           if include
             then do
               sig <- ctorSigFromGen gd
@@ -769,10 +808,26 @@ deriveCtorTables doc = do
             else Right acc
         _ -> Right acc
 
-    eligibilityDefEq tt tmCtx codTy universeNorm =
+    eligibilityDefEq tt ownerMode gd tmCtx codTy universeNorm =
       case defEqObj tt tmCtx codTy universeNorm of
         Right ok -> Right ok
-        Left _ -> Right False
+        Left err
+          | shouldDeferEligibilityError err ->
+              Right False
+        Left err ->
+          Left
+            ( "deriveCtorTables: constructor eligibility defeq failed for "
+                <> renderMode (gdMode gd)
+                <> "."
+                <> renderGen (gdName gd)
+                <> " while checking owner mode "
+                <> renderMode ownerMode
+                <> ": "
+                <> err
+            )
+
+    shouldDeferEligibilityError err =
+      "unknown type constructor" `T.isInfixOf` err
 
     mergeCtorTables a b =
       foldM

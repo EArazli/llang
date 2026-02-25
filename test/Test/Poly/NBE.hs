@@ -9,16 +9,35 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Set as S
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (ModuleEnv(..))
-import Strat.Poly.Doctrine (Doctrine, doctrineTypeTheory)
-import Strat.Poly.ModeTheory (ModeName(..), DefEqEngine(..))
+import Strat.Poly.Doctrine
+  ( Doctrine(..)
+  , BinderSig(..)
+  , InputShape(..)
+  , GenParam(..)
+  , GenDecl(..)
+  , deriveCtorTables
+  , doctrineTypeTheory
+  )
+import Strat.Poly.ModeTheory
+  ( ModeTheory
+  , ModeName(..)
+  , DefEqEngine(..)
+  , ClassificationDecl(..)
+  , emptyModeTheory
+  , addMode
+  , addClassification
+  , setModeDefEqEngine
+  )
 import Strat.Poly.TypeTheory (TypeTheory, defEqEngineForMode)
 import Strat.Poly.Obj
   ( Obj
   , ObjName(..)
   , ObjRef(..)
+  , TmVar(..)
   , TermDiagram(..)
   , CodeArg(..)
   , mkCon
@@ -50,6 +69,9 @@ tests =
     , testCase "NbE nested binders avoid capture" testNBENestedBinders
     , testCase "NbE mode missing lam is rejected at doctrine build" testNBEMissingLamRejected
     , testCase "NbE rejects splice payloads in definitional normalization" testNBERejectsSplice
+    , testCase "deriveCtorTables uses NbE for constructor eligibility" testCtorEligibilityUsesNBE
+    , testCase "deriveCtorTables surfaces eligibility defeq failures with context" testCtorEligibilityDefEqErrorContext
+    , testCase "doctrineTypeTheory rejects NbE mode missing Arr constructor" testCtorEligibilityMissingArrRejected
     , testCase "TRS mode still enforces termination checks" testTRSStillChecked
     ]
 
@@ -236,6 +258,310 @@ testTRSStillChecked =
         )
     Right _ ->
       assertFailure "expected doctrine elaboration to reject non-terminating TRS mode"
+
+modeTy :: ModeName
+modeTy = ModeName "Ty"
+
+modeTm :: ModeName
+modeTm = ModeName "Tm"
+
+mkEligibilityModeTheory :: Obj -> Either Text ModeTheory
+mkEligibilityModeTheory tmUniverse = do
+  mt0 <- addMode modeTy emptyModeTheory
+  mt1 <- addMode modeTm mt0
+  mt2 <- setModeDefEqEngine modeTy DefEqNBE mt1
+  let tyUniverse = mkCon (ObjRef modeTy (ObjName "U_Ty")) []
+  mt3 <-
+    addClassification
+      modeTy
+      ClassificationDecl
+        { cdClassifier = modeTy
+        , cdUniverse = tyUniverse
+        , cdTag = Nothing
+        , cdComp = Nothing
+        }
+      mt2
+  addClassification
+    modeTm
+    ClassificationDecl
+      { cdClassifier = modeTy
+      , cdUniverse = tmUniverse
+      , cdTag = Nothing
+      , cdComp = Nothing
+      }
+    mt3
+
+mkConstClosedTerm :: ModeName -> Obj -> GenName -> Either Text TermDiagram
+mkConstClosedTerm mode sortTy g = do
+  let (out, d0) = freshPort sortTy (emptyDiagram mode [])
+  d1 <- addEdgePayload (PGen g M.empty []) [] [out] d0
+  let diag = d1 { dIn = [], dOut = [out] }
+  validateDiagram diag
+  pure (TermDiagram diag)
+
+mkLamIdBodyFor :: ModeName -> Obj -> Either Text Diagram
+mkLamIdBodyFor mode aTy = do
+  let (x, d0) = freshPort aTy (emptyDiagram mode [])
+  let body = d0 { dIn = [x], dOut = [x] }
+  validateDiagram body
+  pure body
+
+mkClosedBetaTerm
+  :: ModeName
+  -> Obj
+  -> Obj
+  -> GenName
+  -> GenName
+  -> GenName
+  -> Either Text TermDiagram
+mkClosedBetaTerm mode natTy arrNatNat lamName appName zName = do
+  body <- mkLamIdBodyFor mode natTy
+  let (lamOut, d0) = freshPort arrNatNat (emptyDiagram mode [])
+  let (zOut, d1) = freshPort natTy d0
+  let (out, d2) = freshPort natTy d1
+  d3 <- addEdgePayload (PGen lamName M.empty [BAConcrete body]) [] [lamOut] d2
+  d4 <- addEdgePayload (PGen zName M.empty []) [] [zOut] d3
+  d5 <- addEdgePayload (PGen appName M.empty []) [lamOut, zOut] [out] d4
+  let diag = d5 { dIn = [], dOut = [out] }
+  validateDiagram diag
+  pure (TermDiagram diag)
+
+mkClosedSpliceTerm :: ModeName -> Obj -> GenName -> Either Text TermDiagram
+mkClosedSpliceTerm mode sortTy seedGen = do
+  let (mid, d0) = freshPort sortTy (emptyDiagram mode [])
+  let (out, d1) = freshPort sortTy d0
+  d2 <- addEdgePayload (PGen seedGen M.empty []) [] [mid] d1
+  d3 <- addEdgePayload (PSplice (BinderMetaVar "s0")) [mid] [out] d2
+  let diag = d3 { dIn = [], dOut = [out] }
+  validateDiagram diag
+  pure (TermDiagram diag)
+
+mkEligibilityDoctrine :: Bool -> Either Text Doctrine
+mkEligibilityDoctrine includeBad = do
+  let uTyRef = ObjRef modeTy (ObjName "U_Ty")
+  let natRef = ObjRef modeTy (ObjName "Nat")
+  let wrapRef = ObjRef modeTy (ObjName "Wrap")
+  let arrRef = ObjRef modeTy (ObjName "Arr")
+  let uTy = mkCon uTyRef []
+  let natTy = mkCon natRef []
+  let arrNatNat = mkCon arrRef [CAObj natTy, CAObj natTy]
+
+  zTm <- mkConstClosedTerm modeTy natTy (GenName "z")
+  betaTm <- mkClosedBetaTerm modeTy natTy arrNatNat (GenName "lam") (GenName "app") (GenName "z")
+  badTm <- mkClosedSpliceTerm modeTy natTy (GenName "z")
+  let tmUniverse = mkCon wrapRef [CATm zTm]
+  mt <- mkEligibilityModeTheory tmUniverse
+
+  let aTyVar = TmVar { tmvName = "a", tmvSort = uTy, tmvScope = 0, tmvOwnerMode = Just modeTy }
+  let bTyVar = TmVar { tmvName = "b", tmvSort = uTy, tmvScope = 0, tmvOwnerMode = Just modeTy }
+  let nTmVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Just modeTy }
+
+  let mkCtor name cod =
+        GenDecl
+          { gdName = GenName name
+          , gdMode = modeTy
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [cod]
+          , gdAttrs = []
+          }
+
+  let gUTy = mkCtor "U_Ty" uTy
+  let gNat = mkCtor "Nat" uTy
+  let gZ = mkCtor "z" natTy
+  let gBeta = mkCtor "Beta" (mkCon wrapRef [CATm betaTm])
+
+  let gWrap =
+        GenDecl
+          { gdName = GenName "Wrap"
+          , gdMode = modeTy
+          , gdTyVars = []
+          , gdTmVars = [nTmVar]
+          , gdParams = [GP_Tm nTmVar]
+          , gdDom = []
+          , gdCod = [uTy]
+          , gdAttrs = []
+          }
+
+  let gArr =
+        GenDecl
+          { gdName = GenName "Arr"
+          , gdMode = modeTy
+          , gdTyVars = [aTyVar, bTyVar]
+          , gdTmVars = []
+          , gdParams = [GP_Ty aTyVar, GP_Ty bTyVar]
+          , gdDom = []
+          , gdCod = [uTy]
+          , gdAttrs = []
+          }
+
+  let lamBody = BinderSig { bsTmCtx = [], bsDom = [natTy], bsCod = [natTy] }
+  let gLam =
+        GenDecl
+          { gdName = GenName "lam"
+          , gdMode = modeTy
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = [InBinder lamBody]
+          , gdCod = [arrNatNat]
+          , gdAttrs = []
+          }
+
+  let gApp =
+        GenDecl
+          { gdName = GenName "app"
+          , gdMode = modeTy
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = [InPort arrNatNat, InPort natTy]
+          , gdCod = [natTy]
+          , gdAttrs = []
+          }
+
+  let gBad =
+        GenDecl
+          { gdName = GenName "Bad"
+          , gdMode = modeTy
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [mkCon wrapRef [CATm badTm]]
+          , gdAttrs = []
+          }
+
+  let gens =
+        [ gUTy
+        , gNat
+        , gWrap
+        , gArr
+        , gLam
+        , gApp
+        , gZ
+        , gBeta
+        ]
+          <> [gBad | includeBad]
+  pure
+    Doctrine
+      { dName = "CtorEligibilityNBE"
+      , dModes = mt
+      , dAcyclicModes = S.empty
+      , dAttrSorts = M.empty
+      , dGens = M.fromList [(modeTy, M.fromList [(gdName gd, gd) | gd <- gens])]
+      , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
+      }
+
+mkMissingArrDoctrine :: Either Text Doctrine
+mkMissingArrDoctrine = do
+  mt0 <- addMode modeTy emptyModeTheory
+  mt1 <- setModeDefEqEngine modeTy DefEqNBE mt0
+  let uTy = mkCon (ObjRef modeTy (ObjName "U_Ty")) []
+  mt <-
+    addClassification
+      modeTy
+      ClassificationDecl
+        { cdClassifier = modeTy
+        , cdUniverse = uTy
+        , cdTag = Nothing
+        , cdComp = Nothing
+        }
+      mt1
+  let natTy = mkCon (ObjRef modeTy (ObjName "Nat")) []
+  let gUTy =
+        GenDecl
+          { gdName = GenName "U_Ty"
+          , gdMode = modeTy
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [uTy]
+          , gdAttrs = []
+          }
+  let gNat =
+        GenDecl
+          { gdName = GenName "Nat"
+          , gdMode = modeTy
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = []
+          , gdCod = [uTy]
+          , gdAttrs = []
+          }
+  let lamBody = BinderSig { bsTmCtx = [], bsDom = [natTy], bsCod = [natTy] }
+  let gLam =
+        GenDecl
+          { gdName = GenName "lam"
+          , gdMode = modeTy
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = [InBinder lamBody]
+          , gdCod = [natTy]
+          , gdAttrs = []
+          }
+  let gApp =
+        GenDecl
+          { gdName = GenName "app"
+          , gdMode = modeTy
+          , gdTyVars = []
+          , gdTmVars = []
+          , gdParams = []
+          , gdDom = [InPort natTy, InPort natTy]
+          , gdCod = [natTy]
+          , gdAttrs = []
+          }
+  pure
+    Doctrine
+      { dName = "MissingArrInEligibility"
+      , dModes = mt
+      , dAcyclicModes = S.empty
+      , dAttrSorts = M.empty
+      , dGens = M.fromList [(modeTy, M.fromList [(gdName gd, gd) | gd <- [gUTy, gNat, gLam, gApp]])]
+      , dCells2 = []
+      , dActions = M.empty
+      , dObligations = []
+      }
+
+testCtorEligibilityUsesNBE :: Assertion
+testCtorEligibilityUsesNBE = do
+  doc <- require (mkEligibilityDoctrine False)
+  tables <- require (deriveCtorTables doc)
+  let tmTable = M.findWithDefault M.empty modeTm tables
+  assertBool "expected Beta constructor in Tm owner vocabulary under NbE eligibility" (M.member (ObjName "Beta") tmTable)
+
+testCtorEligibilityDefEqErrorContext :: Assertion
+testCtorEligibilityDefEqErrorContext = do
+  doc <- require (mkEligibilityDoctrine True)
+  case deriveCtorTables doc of
+    Left err ->
+      assertBool
+        ("expected contextual ctor eligibility error, got: " <> T.unpack err)
+        (  "constructor eligibility defeq failed" `T.isInfixOf` err
+        && "Ty.Bad" `T.isInfixOf` err
+        )
+    Right _ ->
+      assertFailure "expected deriveCtorTables to surface eligibility defeq failure for Bad constructor"
+
+testCtorEligibilityMissingArrRejected :: Assertion
+testCtorEligibilityMissingArrRejected = do
+  doc <- require mkMissingArrDoctrine
+  case doctrineTypeTheory doc of
+    Left err ->
+      assertBool
+        ("expected missing Arr NbE validation error, got: " <> T.unpack err)
+        (  "missing arrow type constructor" `T.isInfixOf` err
+        && "Arr" `T.isInfixOf` err
+        )
+    Right _ ->
+      assertFailure "expected doctrineTypeTheory to reject NbE mode without Arr constructor"
 
 nbeDoctrineSrc :: Text
 nbeDoctrineSrc =
