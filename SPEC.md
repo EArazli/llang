@@ -179,6 +179,7 @@ Current generated-obligation behavior:
   - `comp_dom`
   - `comp_cod`
   - `nat`
+- generated comprehension obligations SHALL be discharged during doctrine elaboration (against the generated-obligation subset); if proof search returns `undecided` for any generated obligation, doctrine elaboration SHALL reject the doctrine.
 
 Current policy note:
 
@@ -370,6 +371,14 @@ For morphism law checking, action semantics, obligation discharge, and coherence
 - kernel/checker code validates proofs by replaying certified rewrite steps and checking join endpoints
 - “unknown within budget” is reported as undecided, not as a semantic counterexample
 
+Elaboration-time strictness for generated checks:
+
+- doctrine elaboration SHALL reject `undecided` results for:
+  - action semantics checking on declared actions,
+  - generated comprehension obligations,
+  - generated Beck-Chevalley obligations.
+- equivalently: these generated checks must be proved during doctrine elaboration for the doctrine to be accepted.
+
 Budgets are tooling-level search parameters (`SearchBudget`), not doctrine/morphism/obligation data.
 `sbTimeoutMs` is interpreted as a real wall-clock timeout for auto-proof search.
 
@@ -391,6 +400,11 @@ For each relevant slot on each source-mode generator (using the same slot-profil
 Current naming scheme:
 
 - generated names are `__bc/<mod>/<srcMode>/<gen>/<slotpath>/dom` or `.../cod`.
+
+Admission policy (current cut):
+
+- generated Beck-Chevalley obligations are discharged during doctrine elaboration;
+- if any generated Beck-Chevalley obligation result is `undecided`, doctrine elaboration rejects the doctrine.
 
 ## 8. DSL Summary
 
