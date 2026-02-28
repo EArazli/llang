@@ -11,12 +11,11 @@ import qualified Data.Set as S
 import Strat.Poly.Graph (Diagram(..), diagramPortObj)
 import Strat.Poly.ModeTheory (ModeName, ModeTheory(..))
 import qualified Strat.Poly.TypeTheory as TT
-import Strat.Poly.Obj (Obj, TmVar(..), TmMeta(..), tmVarToTmMeta, objOwnerMode, unTerm)
+import Strat.Poly.Obj (Obj, TmVar(..), defaultMetaArgs, sameTmVarId, unTerm)
 import Strat.Poly.TermExpr
   ( TermExpr(..)
   , TermConvEnv(..)
   , diagramGraphToTermExprWith
-  , sameTmMetaId
   )
 import Strat.Poly.Term.RewriteSystem (TRS, TRule(..), mkTRS, boundVarSet)
 
@@ -30,12 +29,11 @@ compileTermRules tt mode = do
 
     compileOne (i, rule) = do
       let vars = TT.trVars rule
-      let varsMeta = map tmVarToTmMeta vars
       let varCtx = map tmvSort vars
       lhs0 <- toExpr varCtx (TT.trLHS rule)
       rhs0 <- toExpr varCtx (TT.trRHS rule)
-      lhs <- abstractVars mode varCtx varsMeta lhs0
-      rhs <- abstractVars mode varCtx varsMeta rhs0
+      lhs <- abstractVars mode varCtx vars lhs0
+      rhs <- abstractVars mode varCtx vars rhs0
       ensureFirstOrder "lhs" lhs
       ensureFirstOrder "rhs" rhs
       ensureLHSShape lhs
@@ -78,42 +76,28 @@ compileAllTermRules tt = do
   pure (M.fromList trs)
 
 
-abstractVars :: ModeName -> [Obj] -> [TmMeta] -> TermExpr -> Either Text TermExpr
-abstractVars mode varCtx vars tm =
+abstractVars :: ModeName -> [Obj] -> [TmVar] -> TermExpr -> Either Text TermExpr
+abstractVars _mode varCtx vars tm =
   case tm of
-    TMVar v ->
-      case findVarIndex (tmVarToTmMeta v) vars 0 of
-        Nothing -> Left "compileTermRules: rule contains undeclared term metavariable"
-        Just i -> Right (TMBound i)
     TMMeta v metaArgs ->
-      if metaArgs == defaultMetaArgs mode varCtx v
-        then
-          case findVarIndex v vars 0 of
-            Nothing -> Left "compileTermRules: rule contains undeclared term metavariable"
-            Just i -> Right (TMBound i)
-        else Left "compileTermRules: explicit metavariable argument lists are not supported in term rules"
+      case findVarIndex v vars 0 of
+        Nothing -> Right (TMMeta v metaArgs)
+        Just i ->
+          if metaArgs == defaultMetaArgs varCtx v
+            then Right (TMBound i)
+            else Left ("Can't use term variable with non-canonical arguments in TRS compilation: " <> tmvName v)
     TMBound i -> Right (TMBound i)
-    TMFun f args -> TMFun f <$> mapM (abstractVars mode varCtx vars) args
+    TMFun f args -> TMFun f <$> mapM (abstractVars _mode varCtx vars) args
 
-defaultMetaArgs :: ModeName -> [Obj] -> TmMeta -> [Int]
-defaultMetaArgs mode varCtx v =
-  take
-    (tmmScope v)
-    [ i
-    | (i, ty) <- zip [0 :: Int ..] varCtx
-    , objOwnerMode ty == mode
-    ]
-
-findVarIndex :: TmMeta -> [TmMeta] -> Int -> Maybe Int
+findVarIndex :: TmVar -> [TmVar] -> Int -> Maybe Int
 findVarIndex _ [] _ = Nothing
 findVarIndex v (x:xs) i
-  | sameTmMetaId v x = Just i
+  | sameTmVarId v x = Just i
   | otherwise = findVarIndex v xs (i + 1)
 
 ensureFirstOrder :: Text -> TermExpr -> Either Text ()
 ensureFirstOrder side tm =
   case tm of
-    TMVar _ -> Left ("compileTermRules: unexpected TMVar in " <> side)
     TMMeta _ _ -> Left ("compileTermRules: unexpected TMMeta in " <> side)
     TMBound _ -> Right ()
     TMFun _ args -> mapM_ (ensureFirstOrder side) args

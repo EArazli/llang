@@ -768,7 +768,7 @@ extractFreshTmVars vars subst =
       case (IM.elems (dEdges diag), dOut diag) of
         ([edge], [outBoundary]) ->
           case (ePayload edge, eOuts edge) of
-            (PTmMeta v, [outPid]) | outPid == outBoundary -> Just (tmMetaToTmVar v)
+            (PTmMeta v, [outPid]) | outPid == outBoundary -> Just v
             _ -> Nothing
         _ -> Nothing
 
@@ -785,7 +785,7 @@ freshTmVar ttDoc tmCtx v = do
   n <- freshInt
   let name = tmvName v <> T.pack ("#" <> show n)
   let fresh = TmVar { tmvName = name, tmvSort = tmvSort v, tmvScope = max (tmvScope v) (length tmCtx), tmvOwnerMode = Nothing }
-  tm <- liftEither (termExprToDiagramChecked ttDoc tmCtx (tmvSort fresh) (TMVar fresh))
+  tm <- liftEither (termExprToDiagramChecked ttDoc tmCtx (tmvSort fresh) (TMMeta fresh (defaultMetaArgs tmCtx fresh)))
   pure (v, tm)
 
 freshInt :: Fresh Int

@@ -94,9 +94,9 @@ renderEdges edges = do
             ( "  "
                 <> renderEdgeId (eId e)
                 <> ": tmmeta("
-                <> tmmName v
+                <> tmvName v
                 <> "#"
-                <> T.pack (show (tmmScope v))
+                <> T.pack (show (tmvScope v))
                 <> ") ["
                 <> renderPortList (eIns e)
                 <> "] -> ["

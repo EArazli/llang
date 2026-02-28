@@ -409,12 +409,12 @@ elabTmTermWithTables
 elabTmTermWithTables doc ctorTables _tyVars tmVars tmBound mExpected raw =
   do
     ttDoc <- doctrineTypeTheoryFromTables doc ctorTables
-    (expr, inferredSort) <- elabExpr ctorTables mExpected raw
-    let expectedSort = maybe inferredSort id mExpected
     tmCtx <- mkTmCtx
+    (expr, inferredSort) <- elabExpr ctorTables tmCtx mExpected raw
+    let expectedSort = maybe inferredSort id mExpected
     termExprToDiagramChecked ttDoc tmCtx expectedSort expr
   where
-    elabExpr ctorTables mExp tmRaw =
+    elabExpr ctorTables tmCtx mExp tmRaw =
       case tmRaw of
         RPTMod _ _ -> Left "term arguments do not support modality application"
         RPTVar name ->
@@ -422,7 +422,7 @@ elabTmTermWithTables doc ctorTables _tyVars tmVars tmBound mExpected raw =
             Just (idx, sortTy) -> Right (TMBound idx, sortTy)
             Nothing ->
               case [v | v <- tmVars, tmvName v == name] of
-                [v] -> Right (TMVar v, tmvSort v)
+                [v] -> Right (TMMeta v (defaultMetaArgs tmCtx v), tmvSort v)
                 (_:_:_) -> Left ("duplicate term variable name: " <> name)
                 [] ->
                   case mExp of
@@ -440,7 +440,7 @@ elabTmTermWithTables doc ctorTables _tyVars tmVars tmBound mExpected raw =
                 case mExp of
                   Just expected -> lookupTmFunByNameInTables doc ctorTables expected (rtrName rawRef) (length args)
                   Nothing -> lookupTmFunAnyInTables doc ctorTables (rtrName rawRef) (length args)
-              argExprs <- mapM (\(argSort, argRaw) -> fst <$> elabExpr ctorTables (Just argSort) argRaw) (zip (tfsArgs sig) args)
+              argExprs <- mapM (\(argSort, argRaw) -> fst <$> elabExpr ctorTables tmCtx (Just argSort) argRaw) (zip (tfsArgs sig) args)
               pure (TMFun funName argExprs, tfsRes sig)
 
     mkTmCtx =

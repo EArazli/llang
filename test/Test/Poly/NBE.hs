@@ -38,8 +38,6 @@ import Strat.Poly.Obj
   , ObjName(..)
   , ObjRef(..)
   , TmVar(..)
-  , TmMeta(..)
-  , tmVarToTmMeta
   , TermDiagram(..)
   , CodeArg(..)
   , mkCon
@@ -258,11 +256,11 @@ testMetaSpineNonPrefixStable = do
   (tt, aTy, _bTy) <- mkNbeTypeTheory
   let tmCtx = [aTy, aTy, aTy]
       mv =
-        TmMeta
-          { tmmName = "m"
-          , tmmSort = aTy
-          , tmmScope = 3
-          , tmmOwnerMode = Just modeM
+        TmVar
+          { tmvName = "m"
+          , tmvSort = aTy
+          , tmvScope = 3
+          , tmvOwnerMode = Just modeM
           }
       tmExpr = TMMeta mv [0, 2]
   tm0 <- require (termExprToDiagram tt tmCtx aTy tmExpr)
@@ -616,7 +614,7 @@ testNBEOutputSortDefEq = do
   let metaSort = mkCon wrapRef [CATm betaTm]
   let v = TmVar { tmvName = "w", tmvSort = metaSort, tmvScope = 0, tmvOwnerMode = Just modeTy }
   let (out, d0) = freshPort metaSort (emptyDiagram modeTy [])
-  d1 <- require (addEdgePayload (PTmMeta (tmVarToTmMeta v)) [] [out] d0)
+  d1 <- require (addEdgePayload (PTmMeta v) [] [out] d0)
   let diag = d1 { dIn = [], dOut = [out] }
   _ <- require (validateDiagram diag)
   _ <- require (normalizeTermDiagram tt [] expectedSort (TermDiagram diag))

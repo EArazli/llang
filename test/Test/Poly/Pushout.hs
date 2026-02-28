@@ -35,7 +35,6 @@ import Strat.Poly.Obj
   , ovMode
   , objVarToTmVar
   , tmVarToObjVar
-  , tmVarToTmMeta
   , ObjName(..)
   , ObjRef(..)
   , Obj(..)
@@ -130,7 +129,7 @@ tmMeta v =
   let mode = objMode (tmvSort v)
       (outPid, d0) = freshPort (tmvSort v) (emptyDiagram mode [])
       d1 =
-        case addEdgePayload (PTmMeta (tmVarToTmMeta v)) [] [outPid] d0 of
+        case addEdgePayload (PTmMeta v) [] [outPid] d0 of
           Left err -> error (T.unpack err)
           Right d -> d
   in TermDiagram d1 { dOut = [outPid] }
@@ -470,8 +469,7 @@ mkDoctrine mode name tyVar cellName = do
         { c2Name = cellName
         , c2Class = Computational
         , c2Orient = LR
-        ,
-        c2Params = map GP_Ty [objVarToTmVar tyVar] <> map GP_Tm []
+        , c2Params = map GP_Ty [objVarToTmVar tyVar] <> map GP_Tm []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -578,8 +576,7 @@ mkCellDoctrine mode name cls orient = do
         { c2Name = "eq"
         , c2Class = cls
         , c2Orient = orient
-        ,
-        c2Params = []
+        , c2Params = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -624,8 +621,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
         { c2Name = "eq"
         , c2Class = cls
         , c2Orient = orient
-        ,
-        c2Params = []
+        , c2Params = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -869,8 +865,7 @@ testPushoutDisjointCellRenameUsesOriginalModeKey = do
           { c2Name = "eq"
           , c2Class = Computational
           , c2Orient = LR
-          ,
-          c2Params = []
+          , c2Params = []
           , c2LHS = lhs
           , c2RHS = rhs
           }
@@ -2228,8 +2223,7 @@ testCoproductObligationRenameElaborates = do
           , obForGen = False
           , obForGenName = Nothing
           , obGenerated = False
-          ,
-          obParams = []
+          , obParams = []
           , obDom = [natTy]
           , obCod = [natTy]
           , obLHSExpr = rawExpr
@@ -2345,8 +2339,7 @@ testCoproductObligationRawModalityRenameElaborates = do
           , obForGen = False
           , obForGenName = Nothing
           , obGenerated = False
-          ,
-          obParams = map GP_Ty [objVarToTmVar aVar] <> map GP_Tm []
+          , obParams = map GP_Ty [objVarToTmVar aVar] <> map GP_Tm []
           , obDom = [OVar aVar, fa, ffa, ffa]
           , obCod = [OVar aVar, fa, ffa, ffa]
           , obLHSExpr = rawExpr
@@ -2505,8 +2498,7 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
           { c2Name = "eq"
           , c2Class = Structural
           , c2Orient = LR
-          ,
-          c2Params = []
+          , c2Params = []
           , c2LHS = lhs
           , c2RHS = idD mode [aTy]
           }
@@ -2731,8 +2723,7 @@ testApplyPushoutCellCollisionAfterModeRename = do
           { c2Name = "eq"
           , c2Class = Computational
           , c2Orient = LR
-          ,
-          c2Params = []
+          , c2Params = []
           , c2LHS = bodyF
           , c2RHS = bodyG
           }
@@ -2763,8 +2754,7 @@ testApplyPushoutCellCollisionAfterModeRename = do
           { c2Name = "eq"
           , c2Class = Computational
           , c2Orient = LR
-          ,
-          c2Params = []
+          , c2Params = []
           , c2LHS = targetG
           , c2RHS = targetF
           }
@@ -2971,8 +2961,7 @@ testPushoutCellTmAlphaEq = do
           { c2Name = "eqLeftTm"
           , c2Class = Computational
           , c2Orient = LR
-          ,
-          c2Params = map GP_Ty [] <> map GP_Tm [leftTm]
+          , c2Params = map GP_Ty [] <> map GP_Tm [leftTm]
           , c2LHS = leftLHS
           , c2RHS = idD modeM [vecTy leftTm]
           }
@@ -2981,8 +2970,7 @@ testPushoutCellTmAlphaEq = do
           { c2Name = "eqRightTm"
           , c2Class = Computational
           , c2Orient = LR
-          ,
-          c2Params = map GP_Ty [] <> map GP_Tm [rightTm]
+          , c2Params = map GP_Ty [] <> map GP_Tm [rightTm]
           , c2LHS = rightLHS
           , c2RHS = idD modeM [vecTy rightTm]
           }
@@ -3310,8 +3298,7 @@ mkModeEqDoctrine name mt varName useUF = do
         { c2Name = "eta"
         , c2Class = Computational
         , c2Orient = LR
-        ,
-        c2Params = map GP_Ty [objVarToTmVar v] <> map GP_Tm []
+        , c2Params = map GP_Ty [objVarToTmVar v] <> map GP_Tm []
         , c2LHS = lhs
         , c2RHS = idD mode [hTy]
         }

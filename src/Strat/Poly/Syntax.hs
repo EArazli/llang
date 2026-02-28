@@ -17,9 +17,7 @@ module Strat.Poly.Syntax
   , tmVarToObjVar
   , TmFunName(..)
   , TmVar(..)
-  , TmMeta(..)
-  , tmMetaToTmVar
-  , tmVarToTmMeta
+  , sameTmVarId
   , TermDiagram(..)
   , CodeArg(..)
   , CodeTerm(CTMeta, CTCon, CTLift)
@@ -56,7 +54,7 @@ data TyMeta = TyMeta
   , tmvSort :: Obj
   , tmvScope :: Int
   , tmvOwnerMode :: Maybe ModeName
-  } deriving (Eq, Ord, Show)
+  } deriving (Show)
 
 type ObjVar = TyMeta
 
@@ -67,14 +65,7 @@ data TmVar = TmVar
   , tmvSort :: Obj
   , tmvScope :: Int
   , tmvOwnerMode :: Maybe ModeName
-  } deriving (Eq, Ord, Show)
-
-data TmMeta = TmMeta
-  { tmmName :: Text
-  , tmmSort :: Obj
-  , tmmScope :: Int
-  , tmmOwnerMode :: Maybe ModeName
-  } deriving (Eq, Ord, Show)
+  } deriving (Show)
 
 newtype PortId = PortId Int deriving (Eq, Ord, Show)
 newtype EdgeId = EdgeId Int deriving (Eq, Ord, Show)
@@ -90,7 +81,7 @@ data EdgePayload
   | PBox BoxName Diagram
   | PFeedback Diagram
   | PSplice BinderMetaVar
-  | PTmMeta TmMeta
+  | PTmMeta TmVar
   | PInternalDrop
   deriving (Eq, Ord, Show)
 
@@ -148,6 +139,29 @@ tmVarOwner TmVar { tmvOwnerMode = ownerM, tmvSort = sortTy } =
     Just owner -> owner
     Nothing -> objOwnerMode sortTy
 
+tyMetaIdKey :: TyMeta -> (Text, Int)
+tyMetaIdKey TyMeta { tmvName = name, tmvScope = scope } =
+  (name, scope)
+
+tmVarIdKey :: TmVar -> (Text, Int)
+tmVarIdKey TmVar { tmvName = name, tmvScope = scope } =
+  (name, scope)
+
+instance Eq TyMeta where
+  a == b = tyMetaIdKey a == tyMetaIdKey b
+
+instance Ord TyMeta where
+  compare a b = compare (tyMetaIdKey a) (tyMetaIdKey b)
+
+instance Eq TmVar where
+  a == b = tmVarIdKey a == tmVarIdKey b
+
+instance Ord TmVar where
+  compare a b = compare (tmVarIdKey a) (tmVarIdKey b)
+
+sameTmVarId :: TmVar -> TmVar -> Bool
+sameTmVarId v w = tmVarIdKey v == tmVarIdKey w
+
 objVarToTmVar :: ObjVar -> TmVar
 objVarToTmVar v@TyMeta { tmvName = name, tmvSort = sortTy, tmvScope = scope } =
   TmVar
@@ -164,24 +178,6 @@ tmVarToObjVar v@TmVar { tmvName = name, tmvSort = sortTy, tmvScope = scope } =
     , tmvSort = sortTy
     , tmvScope = scope
     , tmvOwnerMode = Just (tmVarOwner v)
-    }
-
-tmMetaToTmVar :: TmMeta -> TmVar
-tmMetaToTmVar TmMeta { tmmName = name, tmmSort = sortTy, tmmScope = scope, tmmOwnerMode = ownerM } =
-  TmVar
-    { tmvName = name
-    , tmvSort = sortTy
-    , tmvScope = scope
-    , tmvOwnerMode = ownerM
-    }
-
-tmVarToTmMeta :: TmVar -> TmMeta
-tmVarToTmMeta TmVar { tmvName = name, tmvSort = sortTy, tmvScope = scope, tmvOwnerMode = ownerM } =
-  TmMeta
-    { tmmName = name
-    , tmmSort = sortTy
-    , tmmScope = scope
-    , tmmOwnerMode = ownerM
     }
 
 ovSort :: ObjVar -> Obj

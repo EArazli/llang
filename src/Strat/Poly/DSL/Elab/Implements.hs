@@ -465,7 +465,7 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
                   edge <- nthIntMap "term edge" idx (dEdges termDiag)
                   case ePayload edge of
                     PTmMeta tv ->
-                      extractObjPath rest' (tmmSort tv)
+                      extractObjPath rest' (tmvSort tv)
                     _ ->
                       Left "generated slot obligation: expected PTmMeta edge at term slot sort path"
                 "box" : rest' -> do

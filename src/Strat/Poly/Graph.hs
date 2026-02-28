@@ -57,7 +57,6 @@ import Strat.Poly.Syntax
   , Diagram(..)
   , Obj
   , TmVar(..)
-  , TmMeta(..)
   )
 import Strat.Poly.Obj (boundTmIndicesObj, objOwnerMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
@@ -181,6 +180,7 @@ validateDiagram diag = do
   mapM_ (ensureBoundaryEndpoint "input" (dProd diag)) (dIn diag)
   mapM_ (ensureBoundaryEndpoint "output" (dCons diag)) (dOut diag)
   mapM_ checkEdge (IM.elems (dEdges diag))
+  checkTmMetaSortConsistency
   mapM_ checkPortMode (IM.toList (dPortObj diag))
   mapM_ checkPort (IM.keys (dPortObj diag))
   pure ()
@@ -324,19 +324,19 @@ validateDiagram diag = do
             case eOuts edge of
               [pid] -> requirePortType diag pid
               _ -> Left "validateDiagram: PTmMeta must have exactly one output"
-          if objOwnerMode outTy == objOwnerMode (tmmSort v)
+          if objOwnerMode outTy == objOwnerMode (tmvSort v)
             then Right ()
             else Left "validateDiagram: PTmMeta output mode mismatch"
-          if outTy == tmmSort v
+          if outTy == tmvSort v
             then Right ()
             else Left "validateDiagram: PTmMeta output sort mismatch"
           let modeIns =
                 [ pid
                 | pid <- dIn diag
                 , Just ty <- [diagramPortObj diag pid]
-                , objOwnerMode ty == objOwnerMode (tmmSort v)
+                , objOwnerMode ty == objOwnerMode (tmvSort v)
                 ]
-          if tmmScope v > length modeIns
+          if tmvScope v > length modeIns
             then Left "validateDiagram: PTmMeta scope exceeds available bound variables"
             else Right ()
           if all (`elem` dIn diag) (eIns edge)
@@ -346,6 +346,38 @@ validateDiagram diag = do
           case (eIns edge, eOuts edge) of
             ([_], []) -> Right ()
             _ -> Left "validateDiagram: PInternalDrop must have exactly one input and no outputs"
+    tmVarIdKey' :: TmVar -> (Text, Int)
+    tmVarIdKey' v = (tmvName v, tmvScope v)
+    checkTmMetaSortConsistency :: Either Text ()
+    checkTmMetaSortConsistency = do
+      let metas =
+            [ v
+            | edge <- IM.elems (dEdges diag)
+            , PTmMeta v <- [ePayload edge]
+            ]
+      _ <- foldM step M.empty metas
+      Right ()
+      where
+        step :: M.Map (Text, Int) Obj -> TmVar -> Either Text (M.Map (Text, Int) Obj)
+        step mp v =
+          let key = tmVarIdKey' v
+              sortTy = tmvSort v
+           in case M.lookup key mp of
+                Nothing -> Right (M.insert key sortTy mp)
+                Just sortTy0 ->
+                  if sortTy0 == sortTy
+                    then Right mp
+                    else
+                      Left
+                        ( "validateDiagram: inconsistent sort for term metavariable "
+                            <> tmvName v
+                            <> " (scope "
+                            <> T.pack (show (tmvScope v))
+                            <> "): "
+                            <> T.pack (show sortTy0)
+                            <> " vs "
+                            <> T.pack (show sortTy)
+                        )
     checkBinderArg barg =
       case barg of
         BAConcrete inner -> validateDiagram inner
@@ -808,7 +840,7 @@ colorKeyFor diag v =
         PSplice x ->
           Right (PKSplice x)
         PTmMeta tmv ->
-          Right (PKTmMeta (tmmName tmv) (tmmScope tmv))
+          Right (PKTmMeta (tmvName tmv) (tmvScope tmv))
         PInternalDrop ->
           Right PKInternalDrop
 

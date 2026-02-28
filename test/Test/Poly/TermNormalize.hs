@@ -61,8 +61,8 @@ testRepeatedVarMatch = do
 
 testCompileRejectsFreshRhsVars :: Assertion
 testCompileRejectsFreshRhsVars = do
-  lhs <- requireEither (termExprToDiagram ttBase [] sortTy (TMFun fName [TMVar xVar]))
-  rhs <- requireEither (termExprToDiagram ttBase [] sortTy (TMVar yVar))
+  lhs <- requireEither (termExprToDiagram ttBase [] sortTy (TMFun fName [TMMeta xVar []]))
+  rhs <- requireEither (termExprToDiagram ttBase [] sortTy (TMMeta yVar []))
   let rule = TT.TmRule { TT.trVars = [xVar, yVar], TT.trLHS = lhs, TT.trRHS = rhs }
   let tt = setModeTermRules modeM [rule] ttBase
   case compileTermRules tt modeM of

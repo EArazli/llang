@@ -68,7 +68,6 @@ applyTermSubstClosed subst = go S.empty
               if i `S.member` seen
                 then TMBound i
                 else go (S.insert i seen) t
-        TMVar _ -> tm
         TMMeta _ _ -> tm
         TMFun f args -> TMFun f (map (go seen) args)
 
@@ -81,7 +80,6 @@ applyTermSubstOnce subst = go
           case M.lookup i subst of
             Nothing -> TMBound i
             Just t -> t
-        TMVar _ -> tm
         TMMeta _ _ -> tm
         TMFun f args -> TMFun f (map go args)
 
@@ -89,7 +87,6 @@ renameBoundVars :: Int -> TermExpr -> TermExpr
 renameBoundVars off tm =
   case tm of
     TMBound i -> TMBound (i + off)
-    TMVar _ -> tm
     TMMeta v args -> TMMeta v (map (+ off) args)
     TMFun f args -> TMFun f (map (renameBoundVars off) args)
 
@@ -97,7 +94,6 @@ maxBoundVarIndex :: TermExpr -> Int
 maxBoundVarIndex tm =
   case tm of
     TMBound i -> i
-    TMVar _ -> -1
     TMMeta _ args -> maximum (-1 : args)
     TMFun _ args -> maximum (-1 : map maxBoundVarIndex args)
 
@@ -105,7 +101,6 @@ boundVarSet :: TermExpr -> S.Set Int
 boundVarSet tm =
   case tm of
     TMBound i -> S.singleton i
-    TMVar _ -> S.empty
     TMMeta _ args -> S.fromList args
     TMFun _ args -> S.unions (map boundVarSet args)
 
@@ -113,7 +108,6 @@ occursBoundVar :: Int -> TermExpr -> Bool
 occursBoundVar needle tm =
   case tm of
     TMBound i -> i == needle
-    TMVar _ -> False
     TMMeta _ args -> needle `elem` args
     TMFun _ args -> any (occursBoundVar needle) args
 
@@ -130,10 +124,6 @@ matchPattern pat tm = go M.empty pat tm
                   if t == tgt
                     then Just subst
                     else Nothing
-        TMVar v ->
-          case tgtTm of
-            TMVar w | v == w -> Just subst
-            _ -> Nothing
         TMMeta v args ->
           case tgtTm of
             TMMeta w args' | v == w && args == args' -> Just subst

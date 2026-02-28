@@ -31,7 +31,7 @@ import qualified Data.Set as S
 import Data.Functor.Identity (runIdentity)
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.Obj (Context, Obj, ObjVar, TmVar(..), freeObjVarsObj, freeTmVarsObj, objVarToTmVar, tmMetaToTmVar)
+import Strat.Poly.Obj (Context, Obj, ObjVar, TmVar(..), freeObjVarsObj, freeTmVarsObj, objVarToTmVar, )
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
 import Strat.Poly.UnifyObj
@@ -184,7 +184,7 @@ freeTmVarsDiagram =
         ]
     onPayload payload =
       case payload of
-        PTmMeta v -> S.singleton (tmMetaToTmVar v)
+        PTmMeta v -> S.singleton v
         _ -> S.empty
 
 binderArgMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar

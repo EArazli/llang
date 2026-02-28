@@ -70,6 +70,7 @@ tests =
     , testCase "validateDiagram detects duplicate outputs" testValidateDuplicateOutputs
     , testCase "validateDiagram rejects boundary input with producer" testValidateBoundaryInputProduced
     , testCase "validateDiagram rejects boundary output with consumer" testValidateBoundaryOutputConsumed
+    , testCase "validateDiagram rejects inconsistent PTmMeta sorts for same metavariable id" testValidateTmMetaSortConsistency
     , testCase "diagram iso equality ignores ids" testDiagramIsoEq
     , testCase "unionDisjointIntMap rejects collisions" testUnionDisjoint
     , testCase "applySubstObj chases substitutions" testApplySubstChase
@@ -246,6 +247,26 @@ testValidateBoundaryOutputConsumed = do
         Right _ -> assertFailure "expected validation failure for boundary output with consumer"
     _ -> assertFailure "unexpected boundary shape"
 
+testValidateTmMetaSortConsistency :: Assertion
+testValidateTmMetaSortConsistency = do
+  let mode = ModeName "Cart"
+  let sortA = tcon mode "A" []
+  let sortB = tcon mode "B" []
+  let vA = TmVar { tmvName = "m", tmvSort = sortA, tmvScope = 0, tmvOwnerMode = Nothing }
+  let vB = TmVar { tmvName = "m", tmvSort = sortB, tmvScope = 0, tmvOwnerMode = Nothing }
+  let (outA, d0) = freshPort sortA (emptyDiagram mode [])
+  d1 <- require (addEdgePayload (PTmMeta vA) [] [outA] d0)
+  let (outB, d2) = freshPort sortB d1
+  d3 <- require (addEdgePayload (PTmMeta vB) [] [outB] d2)
+  let bad = d3 { dOut = [outA, outB] }
+  case validateDiagram bad of
+    Left err ->
+      assertBool
+        ("expected inconsistent PTmMeta sort error, got: " <> T.unpack err)
+        ("inconsistent sort for term metavariable" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected validation failure for inconsistent PTmMeta sorts by id"
+
 testDiagramIsoEq :: Assertion
 testDiagramIsoEq = do
   let mode = ModeName "Cart"
@@ -383,8 +404,7 @@ testDuplicateCellTyVars = do
         { c2Name = "dupCellTyVars"
         , c2Class = Structural
         , c2Orient = Bidirectional
-        ,
-        c2Params = map GP_Ty [objVarToTmVar a, objVarToTmVar a] <> map GP_Tm []
+        , c2Params = map GP_Ty [objVarToTmVar a, objVarToTmVar a] <> map GP_Tm []
         , c2LHS = diag
         , c2RHS = diag
         }
@@ -419,8 +439,7 @@ testRejectRHSTyVars = do
         { c2Name = "rhs_fresh"
         , c2Class = Computational
         , c2Orient = LR
-        ,
-        c2Params = []
+        , c2Params = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -460,8 +479,7 @@ testAcceptRHSTyVars = do
         { c2Name = "rhs_ok"
         , c2Class = Computational
         , c2Orient = LR
-        ,
-        c2Params = map GP_Ty [objVarToTmVar aVar] <> map GP_Tm []
+        , c2Params = map GP_Ty [objVarToTmVar aVar] <> map GP_Tm []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -492,8 +510,7 @@ testRejectEmptyLHS = do
         { c2Name = "empty_lhs"
         , c2Class = Computational
         , c2Orient = LR
-        ,
-        c2Params = []
+        , c2Params = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -530,8 +547,7 @@ testCellBoundaryUsesDiagramTmCtx = do
           { c2Name = "tmctx_cell"
           , c2Class = Structural
           , c2Orient = Bidirectional
-          ,
-          c2Params = []
+          , c2Params = []
           , c2LHS = lhs
           , c2RHS = rhs
           }
@@ -638,8 +654,7 @@ testCellTmVarSortUsesTyVarScope = do
           { c2Name = "tmvar_scope_cell"
           , c2Class = Structural
           , c2Orient = LR
-          ,
-          c2Params = map GP_Ty [aVar] <> map GP_Tm [xVar]
+          , c2Params = map GP_Ty [aVar] <> map GP_Tm [xVar]
           , c2LHS = markerDiag
           , c2RHS = markerDiag
           }

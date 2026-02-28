@@ -23,7 +23,7 @@ import Strat.Poly.Graph
   , unEdgeId
   , canonDiagram
   )
-import Strat.Poly.Obj (Obj, TmVar(..), TmMeta(..))
+import Strat.Poly.Obj (Obj, TmVar(..), sameTmVarId)
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.UnifyObj (Subst, emptySubst, unifyObjFlex, applySubstCtx)
 import Strat.Poly.DefEq (defEqObj)
@@ -283,7 +283,7 @@ algoEq =
           | otherwise ->
               Right []
         (PTmMeta x, PTmMeta y)
-          | sameTmMetaId x y ->
+          | sameTmVarId x y ->
               Right [()]
           | otherwise ->
               Right []
@@ -318,7 +318,7 @@ algoEq =
         (PBox _ _, PBox _ _) -> True
         (PFeedback _, PFeedback _) -> True
         (PSplice x, PSplice y) -> x == y
-        (PTmMeta x, PTmMeta y) -> sameTmMetaId x y
+        (PTmMeta x, PTmMeta y) -> sameTmVarId x y
         (PInternalDrop, PInternalDrop) -> True
         _ -> False
 
@@ -412,7 +412,7 @@ algoMatch tt flex attrFlex =
           | otherwise ->
               Right []
         (PTmMeta x, PTmMeta y)
-          | sameTmMetaId x y ->
+          | sameTmVarId x y ->
               Right [extra]
           | otherwise ->
               Right []
@@ -431,16 +431,10 @@ algoMatch tt flex attrFlex =
         (PBox _ _, PBox _ _) -> True
         (PFeedback _, PFeedback _) -> True
         (PSplice x, PSplice y) -> x == y
-        (PTmMeta x, PTmMeta y) -> sameTmMetaId x y
+        (PTmMeta x, PTmMeta y) -> sameTmVarId x y
         (PInternalDrop, PInternalDrop) -> True
         _ -> False
 
     binderShape (BAConcrete _) (BAConcrete _) = True
     binderShape (BAMeta x) (BAMeta y) = x == y
     binderShape _ _ = False
-
-sameTmMetaId :: TmMeta -> TmMeta -> Bool
-sameTmMetaId a b =
-  tmmName a == tmmName b
-    && tmmScope a == tmmScope b
-    && tmmSort a == tmmSort b

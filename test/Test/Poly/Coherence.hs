@@ -62,8 +62,7 @@ mkCell name lhs rhs =
     { c2Name = name
     , c2Class = Computational
     , c2Orient = LR
-    ,
-    c2Params = []
+    , c2Params = []
     , c2LHS = lhs
     , c2RHS = rhs
     }

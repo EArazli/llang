@@ -304,8 +304,20 @@ Structural diagram isomorphism (`diagramIsoEq`) uses:
   - `PBox`: inner diagram only (box name is annotation)
   - `PFeedback`: inner diagram
   - `PSplice`: binder metavariable
-  - `PTmMeta`: metavariable identity by `(name, scope, sort)`
+  - `PTmMeta`: term metavariables.
+
+    A `PTmMeta` edge carries a typed metavariable `X` (implementation: a `TmVar` record) and has an explicit spine given by the ordered list of its input boundary ports. Intuitively, a `PTmMeta` edge represents an occurrence of a metavariable applied to a list of in-scope boundary variables; the spine records exactly which boundary inputs are supplied (and in which order).
+
+    Metavariable identity is `(name, scope)`; the sort is carried as part of typing data and must coincide with the output port type in any well-formed term diagram.
   - `PInternalDrop`: exact constructor match
+
+#### Contextual metavariables and spines
+
+A metavariable occurrence is understood in the standard “metavariable applied to bound variables” form: it is a metavariable together with an explicit spine selecting boundary variables.
+
+This is the common presentation in contextual type theory (metavariables/holes are decorated with a context and instantiated by providing an explicit substitution/spine), and in the higher-order pattern fragment where metavariables only occur applied to a list of distinct bound variables.
+
+Implementation note: the internal term-expression AST uses a single constructor for metavariables, `TMMeta X spine`. The earlier special case “implicit metavariable with canonical-prefix arguments” is not a separate constructor; it is represented by `TMMeta X defaultSpine`, where `defaultSpine` is the mode-local prefix of length `scope` in the ambient term context.
 
 ### 5.3 Meta Substitution
 
@@ -318,6 +330,10 @@ Well-formedness invariant:
 
 - a metavariable is only instantiated in the syntactic category where it occurs; kind mismatches are rejected as kernel errors.
 - code-metavariable scope checks are performed against the classifier-mode slice of the telescope (`modeClassifierMode owner`), not the owner-mode slice.
+
+The kernel unifier/substitution mechanism only solves/substitutes metavariables at occurrences with the canonical default spine (the implicit/default-spine form). Occurrences with non-canonical spines are treated as rigid (they are preserved, not solved).
+
+Kernel implementation note: metavariable `Eq`/`Ord` is intentionally id-based (`name`, `scope`), so `Map`/`Set` keys remain stable under sort normalization/substitution. Sort agreement is enforced by typing/diagram validation, not by metavariable identity keys.
 
 ### 5.2 Canonical Form
 

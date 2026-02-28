@@ -49,7 +49,6 @@ import Strat.Poly.Obj
   , objVarToTmVar
   , tmVarToObjVar
   , TmVar(..)
-  , TmMeta(..)
   , TermDiagram(..)
   )
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
@@ -632,7 +631,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
         (TPS_Tm _, GP_Ty _) ->
           Left "apply: internal kind mismatch for type template argument"
         (_, GP_Tm v) -> do
-          tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMVar v)
+          tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMMeta v [])
           Right (OATm tm)
 
     validateApplyCoverage paramName mor = do
@@ -1152,9 +1151,9 @@ renameTermDiagram modeRen modRen typeRen (TermDiagram diag) = do
     renEdge edge =
       case ePayload edge of
         PTmMeta tm -> do
-          sort' <- renameObjExpr modeRen modRen typeRen (tmmSort tm)
-          let owner' = fmap (\m -> M.findWithDefault m m modeRen) (tmmOwnerMode tm)
-          pure edge { ePayload = PTmMeta tm { tmmSort = sort', tmmOwnerMode = owner' } }
+          sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tm)
+          let owner' = fmap (\m -> M.findWithDefault m m modeRen) (tmvOwnerMode tm)
+          pure edge { ePayload = PTmMeta tm { tmvSort = sort', tmvOwnerMode = owner' } }
         _ -> pure edge
 
 

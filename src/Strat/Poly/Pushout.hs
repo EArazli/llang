@@ -950,7 +950,7 @@ requireTypeRenameMap mor = do
       case (IM.elems (dEdges diag), dIn diag, dOut diag) of
         ([edge], [], [outBoundary]) ->
           case (ePayload edge, eIns edge, eOuts edge) of
-            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just (tmMetaToTmVar v)
+            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just v
             _ -> Nothing
         _ -> Nothing
 
@@ -2304,8 +2304,8 @@ renameDiagram modeRen modRen attrRen tyRen permRen genRen diag =
           bargs' <- mapM renameBinderArg bargs
           pure (PGen gen' attrs' bargs')
         PTmMeta v -> do
-          sort' <- renameObjExpr modeRen modRen tyRen permRen (tmmSort v)
-          pure (PTmMeta v { tmmSort = sort' })
+          sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort v)
+          pure (PTmMeta v { tmvSort = sort' })
         _ -> pure payload
 
     renameBinderArg barg =
@@ -2409,8 +2409,8 @@ renameObjExpr modeRen modRen ren permRen ty = do
     renameEdge edge =
       case ePayload edge of
         PTmMeta v -> do
-          sort' <- renameObjExpr modeRen modRen ren permRen (tmmSort v)
-          Right edge { ePayload = PTmMeta v { tmmSort = sort' } }
+          sort' <- renameObjExpr modeRen modRen ren permRen (tmvSort v)
+          Right edge { ePayload = PTmMeta v { tmvSort = sort' } }
         _ -> Right edge
 
 applyPerm :: [Int] -> [a] -> Either Text [a]
@@ -2688,7 +2688,7 @@ renameTypeAlpha tyMap tmMap = goObj
         onPayload payload =
           pure $
             case payload of
-              PTmMeta v -> PTmMeta (tmVarToTmMeta (renameTmVarAlpha tyMap tmMap (tmMetaToTmVar v)))
+              PTmMeta v -> PTmMeta (renameTmVarAlpha tyMap tmMap v)
               _ -> payload
 
 renameInputShapeAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> InputShape -> InputShape
@@ -2732,8 +2732,8 @@ normalizeDiagramModes mt diag = do
         PSplice x ->
           pure edge { ePayload = PSplice x }
         PTmMeta v -> do
-          sort' <- normalizeTypeModes (tmmSort v)
-          pure edge { ePayload = PTmMeta v { tmmSort = sort' } }
+          sort' <- normalizeTypeModes (tmvSort v)
+          pure edge { ePayload = PTmMeta v { tmvSort = sort' } }
         PInternalDrop ->
           pure edge { ePayload = PInternalDrop }
 
@@ -2786,8 +2786,8 @@ normalizeDiagramModes mt diag = do
     goEdge edge =
       case ePayload edge of
         PTmMeta v -> do
-          sort' <- goType (tmmSort v)
-          Right edge { ePayload = PTmMeta v { tmmSort = sort' } }
+          sort' <- goType (tmvSort v)
+          Right edge { ePayload = PTmMeta v { tmvSort = sort' } }
         _ -> Right edge
 
 buildInj
@@ -2896,7 +2896,7 @@ buildTypeMap srcCtorTables srcDoc tgtDoc modeRen modRen renames permRen = do
         (TPS_Tm _, GP_Ty _) ->
           Left "poly pushout: internal kind mismatch for type template argument"
         (_, GP_Tm v) -> do
-          tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMVar v)
+          tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMMeta v [])
           Right (OATm tm)
 
 buildGenMap
@@ -3043,7 +3043,7 @@ composeMorphisms name first second = do
             (TPS_Tm _, GP_Ty _) ->
               Left "poly pushout: internal kind mismatch for composed type argument"
             (_, GP_Tm v) -> do
-              tm <- termExprToDiagramChecked ttSrc [] (tmvSort v) (TMVar v)
+              tm <- termExprToDiagramChecked ttSrc [] (tmvSort v) (TMMeta v [])
               Right (OATm tm)
 
         mapComposedParam firstTgtCtorTables secondTgtCtorTables param =

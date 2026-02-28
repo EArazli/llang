@@ -13,7 +13,6 @@ module Strat.Poly.TermExpr
   , boundGlobalsExpr
   , maxTmScopeExpr
   , isPureMetaExpr
-  , sameTmMetaId
   ) where
 
 import Control.Monad (foldM, forM, when)
@@ -29,7 +28,6 @@ import Strat.Poly.Term.AST
   , boundGlobalsExpr
   , maxTmScopeExpr
   , isPureMetaExpr
-  , sameTmMetaId
   )
 import Strat.Poly.Graph
   ( Diagram(..)
@@ -51,11 +49,9 @@ import Strat.Poly.Obj
   ( TermDiagram(..)
   , TmFunName(..)
   , TmVar(..)
-  , TmMeta(..)
-  , tmMetaToTmVar
-  , tmVarToTmMeta
   , Obj(..)
   , objOwnerMode
+  , modeCtxGlobals
   )
 import Strat.Poly.TypeTheory
   ( TmFunSig(..)
@@ -85,7 +81,7 @@ termExprToDiagramWith
   -> Either Text TermDiagram
 termExprToDiagramWith convEnv tmCtx expectedSort tm = do
   let mode = objOwnerMode expectedSort
-  let modeInputsAll = modeCtx tmCtx mode
+  let modeInputsAll = modeCtxEntries tmCtx mode
   needed <- requiredModePrefixLen tmCtx mode tm
   let modeInputs = take needed modeInputsAll
   let (inPorts, d0) = allocPorts (map snd modeInputs) (emptyDiagram mode tmCtx)
@@ -99,24 +95,14 @@ termExprToDiagramWith convEnv tmCtx expectedSort tm = do
   where
     go modeInputs modeInputsAll inPorts diag currentSort currentTm =
       case currentTm of
-        TMVar v -> do
+        TMMeta v metaArgs -> do
           let vSort = tmvSort v
           ensureSortEq "termExprToDiagram: metavariable sort mismatch" vSort currentSort
           if tmvScope v <= length modeInputsAll
             then Right ()
             else Left "termExprToDiagram: metavariable scope exceeds mode-local context"
-          let v' = v { tmvSort = vSort }
-          let (outPort, d1) = freshPort vSort diag
-          d2 <- addEdgePayload (PTmMeta (tmVarToTmMeta v')) (take (tmvScope v') inPorts) [outPort] d1
-          pure (outPort, d2)
-        TMMeta v metaArgs -> do
-          let vSort = tmmSort v
-          ensureSortEq "termExprToDiagram: metavariable sort mismatch" vSort currentSort
-          if tmmScope v <= length modeInputsAll
-            then Right ()
-            else Left "termExprToDiagram: metavariable scope exceeds mode-local context"
           argPorts <- mapM (lookupMetaInput modeInputs inPorts) metaArgs
-          let v' = v { tmmSort = vSort }
+          let v' = v { tmvSort = vSort }
           let (outPort, d1) = freshPort vSort diag
           d2 <- addEdgePayload (PTmMeta v') argPorts [outPort] d1
           pure (outPort, d2)
@@ -217,7 +203,7 @@ diagramGraphToTermExprWith convEnv tmCtx expectedSort diag = do
       diagramGraphToTermExprCore diag
     _ -> Left "diagramToTermExpr: term diagram must have exactly one output"
   where
-    modeInputs = modeCtx tmCtx (dMode diag)
+    modeInputs = modeCtxEntries tmCtx (dMode diag)
     nIn = length (dIn diag)
     validateBoundaryMapping = do
       if nIn <= length modeInputs
@@ -247,7 +233,7 @@ diagramGraphToTermExprCore diag = do
     [outPort] -> termAt S.empty outPort
     _ -> Left "diagramToTermExpr: term diagram must have exactly one output"
   where
-    modeInputs = modeCtx (dTmCtx diag) (dMode diag)
+    modeInputs = modeCtxEntries (dTmCtx diag) (dMode diag)
     nIn = length (dIn diag)
     localToGlobal = map fst (take nIn modeInputs)
     inMap = M.fromList (zip (dIn diag) [0 :: Int ..])
@@ -279,14 +265,9 @@ diagramGraphToTermExprCore diag = do
                 PTmMeta v ->
                   do
                     metaArgs <- mapM boundaryInputGlobal (eIns producer)
-                    if metaArgs == defaultMetaArgs v
-                      then Right (TMVar (tmMetaToTmVar v))
-                      else Right (TMMeta v metaArgs)
+                    Right (TMMeta v metaArgs)
                 _ ->
                   Left "diagramToTermExpr: non-term payload in term diagram"
-
-    defaultMetaArgs v =
-      take (tmmScope v) localToGlobal
     boundaryInputGlobal pid =
       case M.lookup pid inMap of
         Nothing ->
@@ -301,7 +282,7 @@ validateTermGraph diag = do
   case dOut diag of
     [_] -> Right ()
     _ -> Left "validateTermDiagram: term diagram must have exactly one output"
-  let modeInputs0 = modeCtx (dTmCtx diag) (dMode diag)
+  let modeInputs0 = modeCtxEntries (dTmCtx diag) (dMode diag)
   let nIn = length (dIn diag)
   if nIn <= length modeInputs0
     then Right ()
@@ -336,16 +317,9 @@ validateTermGraph diag = do
         PInternalDrop -> Right ()
         _ -> Left "validateTermDiagram: only PGen/PTmMeta/PInternalDrop are allowed in term diagrams"
 
-modeCtx :: [Obj] -> ModeName -> [(Int, Obj)]
-modeCtx tele mode =
-  [ (i, ty)
-  | (i, ty) <- zip [0 :: Int ..] tele
-  , objOwnerMode ty == mode
-  ]
-
 requiredModePrefixLen :: [Obj] -> ModeName -> TermExpr -> Either Text Int
 requiredModePrefixLen tmCtx mode tm = do
-  let modeInputsAll = modeCtx tmCtx mode
+  let modeInputsAll = modeCtxEntries tmCtx mode
   let globals = map fst modeInputsAll
   let neededScope = maxTmScopeExpr tm
   let boundGlobals = S.toList (boundGlobalsExpr tm)
@@ -379,6 +353,13 @@ lookupBound modeInputs inPorts idx = do
   pid <- nth inPorts local
   (_, sortTy) <- nth modeInputs local
   pure (pid, sortTy)
+
+modeCtxEntries :: [Obj] -> ModeName -> [(Int, Obj)]
+modeCtxEntries tmCtx mode =
+  [ (i, ty)
+  | i <- modeCtxGlobals tmCtx mode
+  , Just ty <- [nth tmCtx i]
+  ]
 
 allocPorts :: [Obj] -> Diagram -> ([PortId], Diagram)
 allocPorts [] diag = ([], diag)

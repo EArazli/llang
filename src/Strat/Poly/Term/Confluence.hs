@@ -161,7 +161,6 @@ canonicalizeVars tm =
         TMFun fn args ->
           let (args', fwd', next') = goList args fwd next
            in (TMFun fn args', fwd', next')
-        TMVar v -> (TMVar v, fwd, next)
         TMMeta v args ->
           let (args', fwd', next') = renameArgs args fwd next
            in (TMMeta v args', fwd', next')

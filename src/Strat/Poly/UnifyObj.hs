@@ -388,53 +388,23 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
               sig <- requireFunSig s currentSort f xs
               foldl step (Right s) (zip3 (tfsArgs sig) xs ys)
           | otherwise -> Left "unifyTm: function mismatch"
-        (TMVar v, TMVar w) -> do
-          checkTmVarSort s currentSort v
-          checkTmVarSort s currentSort w
-          if sameTmVarId v w
-            then Right s
-            else
-              if v `S.member` tmFlex
-                then bindTmVar s currentSort v (TMVar w)
-                else
-                  if w `S.member` tmFlex
-                    then bindTmVar s currentSort w (TMVar v)
-                    else Left "unifyTm: rigid term variable mismatch"
         (TMMeta v args, TMMeta w args')
-          | args == args' -> do
-              let vTm = tmMetaToTmVar v
-              let wTm = tmMetaToTmVar w
-              checkTmVarSort s currentSort vTm
-              checkTmVarSort s currentSort wTm
-              if sameTmVarId vTm wTm
-                then Right s
-                else Left "unifyTm: rigid term variable mismatch"
-          | otherwise ->
-              Left "unifyTm: rigid term variable mismatch"
-        (TMMeta v _, t) -> do
-          let vTm = tmMetaToTmVar v
-          checkTmVarSort s currentSort vTm
-          ensureTmTermSort s currentSort t
-          if vTm `S.member` tmFlex
-            then bindTmVar s currentSort vTm t
-            else Left "unifyTm: rigid term variable mismatch"
-        (t, TMMeta v _) -> do
-          let vTm = tmMetaToTmVar v
-          checkTmVarSort s currentSort vTm
-          ensureTmTermSort s currentSort t
-          if vTm `S.member` tmFlex
-            then bindTmVar s currentSort vTm t
-            else Left "unifyTm: rigid term variable mismatch"
-        (TMVar v, t) -> do
+          | sameTmVarId v w && args == args' -> do
+              checkTmVarSort s currentSort v
+              checkTmVarSort s currentSort w
+              Right s
+        (TMMeta v args, t) -> do
           checkTmVarSort s currentSort v
           ensureTmTermSort s currentSort t
-          if v `S.member` tmFlex
+          tmCtx' <- applySubstCtx tt s tmCtx
+          if v `S.member` tmFlex && args == defaultMetaArgs tmCtx' v
             then bindTmVar s currentSort v t
             else Left "unifyTm: rigid term variable mismatch"
-        (t, TMVar v) -> do
+        (t, TMMeta v args) -> do
           checkTmVarSort s currentSort v
           ensureTmTermSort s currentSort t
-          if v `S.member` tmFlex
+          tmCtx' <- applySubstCtx tt s tmCtx
+          if v `S.member` tmFlex && args == defaultMetaArgs tmCtx' v
             then bindTmVar s currentSort v t
             else Left "unifyTm: rigid term variable mismatch"
         _ -> Left "unifyTm: cannot unify term expressions"
@@ -495,8 +465,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
 
     ensureTmTermSort s currentSort tm =
       case tm of
-        TMVar v -> checkTmVarSort s currentSort v
-        TMMeta v _ -> checkTmVarSort s currentSort (tmMetaToTmVar v)
+        TMMeta v _ -> checkTmVarSort s currentSort v
         TMBound i -> checkBoundSort s currentSort i
         TMFun f args -> do
           sig <- requireFunSig s currentSort f args
@@ -526,20 +495,20 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
       where
         go seen currentSort tm =
           case tm of
-            TMVar v -> do
+            TMMeta v args -> do
               sort' <- applySubstObj tt s (tmvSort v)
               let v' = v { tmvSort = sort' }
-              case lookupTmById v' (sTm s) of
-                Nothing -> Right (TMVar v')
-                Just tmSub ->
-                  if v' `S.member` seen
-                    then Right (TMVar v')
-                    else do
-                      subExpr <- diagramToTermExpr tt ctx sort' tmSub
-                      go (S.insert v' seen) currentSort subExpr
-            TMMeta v args -> do
-              sort' <- applySubstObj tt s (tmmSort v)
-              pure (TMMeta (v { tmmSort = sort' }) args)
+              if args == defaultMetaArgs ctx v'
+                then
+                  case M.lookup v' (sTm s) of
+                    Nothing -> Right (TMMeta v' args)
+                    Just tmSub ->
+                      if v' `S.member` seen
+                        then Right (TMMeta v' args)
+                        else do
+                          subExpr <- diagramToTermExpr tt ctx sort' tmSub
+                          go (S.insert v' seen) currentSort subExpr
+                else Right (TMMeta v' args)
             TMBound _ -> Right tm
             TMFun f args -> do
               sig <- requireFunSigArity s currentSort f (length args)
@@ -581,7 +550,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
             PGen (GenName fName) attrs bargs
               | M.null attrs && null bargs -> Right (PHFun (TmFunName fName) (eIns edge))
               | otherwise -> Left "unifyTm: non-term generator payload in normalized term graph"
-            PTmMeta v -> Right (PHMeta (tmMetaToTmVar v))
+            PTmMeta v -> Right (PHMeta v)
             _ -> Left "unifyTm: non-term payload in normalized term graph"
 
     termFromPort diag inputs pid = go S.empty pid
@@ -601,10 +570,15 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                           Right (TMFun (TmFunName fName) args)
                       | otherwise ->
                           Left "unifyTm: non-term generator payload in normalized term graph"
-                    PTmMeta v ->
-                      Right (TMVar (tmMetaToTmVar v))
+                    PTmMeta v -> do
+                      metaArgs <- mapM boundaryGlobal (eIns edge)
+                      Right (TMMeta v metaArgs)
                     _ ->
                       Left "unifyTm: non-term payload in normalized term graph"
+        boundaryGlobal inp =
+          case M.lookup inp inputs of
+            Just i -> Right i
+            Nothing -> Left "unifyTm: PTmMeta inputs must connect to boundary inputs"
 
     producerEdge diag pid =
       case IM.lookup (unPortId pid) (dProd diag) of
@@ -730,9 +704,8 @@ applySubstDiagram tt subst =
     onPayload payload =
       case payload of
         PTmMeta v -> do
-          let vTm = tmMetaToTmVar v
-          sort' <- applySubstObj tt subst (tmvSort vTm)
-          pure (PTmMeta (tmVarToTmMeta vTm { tmvSort = sort' }))
+          sort' <- applySubstObj tt subst (tmvSort v)
+          pure (PTmMeta (v { tmvSort = sort' }))
         _ -> pure payload
 
 applySubstTmInCtx :: TypeTheory -> [Obj] -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
@@ -751,24 +724,24 @@ applySubstTmInCtx tt tmCtx subst expectedSort tm = do
   where
     goTm seen curCtx currentSort expr =
       case expr of
-        TMVar v -> do
+        TMMeta v args -> do
           sort' <- applySubstObj tt subst (tmvSort v)
           let v' = v { tmvSort = sort' }
-          case lookupTmById v' (sTm subst) of
-            Nothing -> Right (curCtx, TMVar v')
-            Just tmSub ->
-              if v' `S.member` seen
-                then Right (curCtx, TMVar v')
-                else do
-                  subCtx0 <- applySubstCtx tt subst (dTmCtx (unTerm tmSub))
-                  sortSub <- normalizeObjDeepWithCtx tt subCtx0 sort'
-                  subExpr <- diagramToTermExpr tt subCtx0 sortSub tmSub
-                  (subCtx, subExpr') <- goTm (S.insert v' seen) subCtx0 currentSort subExpr
-                  merged <- mergeCtx curCtx subCtx
-                  Right (merged, subExpr')
-        TMMeta v args -> do
-          sort' <- applySubstObj tt subst (tmmSort v)
-          Right (curCtx, TMMeta (v { tmmSort = sort' }) args)
+          if args == defaultMetaArgs curCtx v'
+            then
+              case M.lookup v' (sTm subst) of
+                Nothing -> Right (curCtx, TMMeta v' args)
+                Just tmSub ->
+                  if v' `S.member` seen
+                    then Right (curCtx, TMMeta v' args)
+                    else do
+                      subCtx0 <- applySubstCtx tt subst (dTmCtx (unTerm tmSub))
+                      sortSub <- normalizeObjDeepWithCtx tt subCtx0 sort'
+                      subExpr <- diagramToTermExpr tt subCtx0 sortSub tmSub
+                      (subCtx, subExpr') <- goTm (S.insert v' seen) subCtx0 currentSort subExpr
+                      merged <- mergeCtx curCtx subCtx
+                      Right (merged, subExpr')
+            else Right (curCtx, TMMeta v' args)
         TMBound _ -> Right (curCtx, expr)
         TMFun name args -> do
           sig <- requireSig curCtx currentSort name (length args)
@@ -857,24 +830,24 @@ applySubstTmNoNormalize tt subst expectedSort tm = do
   where
     go seen curCtx currentSort expr =
       case expr of
-        TMVar v -> do
+        TMMeta v args -> do
           sort' <- applySubstObj tt subst (tmvSort v)
           let v' = v { tmvSort = sort' }
-          case lookupTmById v' (sTm subst) of
-            Nothing -> Right (curCtx, TMVar v')
-            Just tmSub ->
-              if v' `S.member` seen
-                then Right (curCtx, TMVar v')
-                else do
-                  subCtx0 <- applySubstCtx tt subst (dTmCtx (unTerm tmSub))
-                  sortSub <- normalizeObjDeepWithCtx tt subCtx0 sort'
-                  subExpr <- diagramToTermExpr tt subCtx0 sortSub tmSub
-                  (subCtx, subExpr') <- go (S.insert v' seen) subCtx0 currentSort subExpr
-                  merged <- mergeCtx curCtx subCtx
-                  Right (merged, subExpr')
-        TMMeta v args -> do
-          sort' <- applySubstObj tt subst (tmmSort v)
-          Right (curCtx, TMMeta (v { tmmSort = sort' }) args)
+          if args == defaultMetaArgs curCtx v'
+            then
+              case M.lookup v' (sTm subst) of
+                Nothing -> Right (curCtx, TMMeta v' args)
+                Just tmSub ->
+                  if v' `S.member` seen
+                    then Right (curCtx, TMMeta v' args)
+                    else do
+                      subCtx0 <- applySubstCtx tt subst (dTmCtx (unTerm tmSub))
+                      sortSub <- normalizeObjDeepWithCtx tt subCtx0 sort'
+                      subExpr <- diagramToTermExpr tt subCtx0 sortSub tmSub
+                      (subCtx, subExpr') <- go (S.insert v' seen) subCtx0 currentSort subExpr
+                      merged <- mergeCtx curCtx subCtx
+                      Right (merged, subExpr')
+            else Right (curCtx, TMMeta v' args)
         TMBound _ -> Right (curCtx, expr)
         TMFun f args -> do
           sig <- requireSig curCtx currentSort f (length args)
@@ -917,7 +890,7 @@ maxTmScopeTerm :: TermDiagram -> Int
 maxTmScopeTerm tm =
   maximum
     ( 0
-        : [ tmmScope v
+        : [ tmvScope v
           | edge <- IM.elems (dEdges (unTerm tm))
           , PTmMeta v <- [ePayload edge]
           ]
@@ -945,25 +918,9 @@ inferTmSortFromDiagram tt subst tm =
 occursTmVarExpr :: TmVar -> TermExpr -> Bool
 occursTmVarExpr v tm =
   case tm of
-    TMVar v' -> sameTmVarId v v'
-    TMMeta v' _ -> sameTmVarId v (tmMetaToTmVar v')
+    TMMeta v' _ -> v == v'
     TMBound _ -> False
     TMFun _ args -> any (occursTmVarExpr v) args
-
-sameTmVarId :: TmVar -> TmVar -> Bool
-sameTmVarId a b = tmvName a == tmvName b && tmvScope a == tmvScope b
-
-lookupTmById :: TmVar -> M.Map TmVar TermDiagram -> Maybe TermDiagram
-lookupTmById v mp =
-  case M.lookup v mp of
-    Just tm -> Just tm
-    Nothing ->
-      snd <$> findTmById (M.toList mp)
-  where
-    findTmById [] = Nothing
-    findTmById ((k, tm):rest)
-      | sameTmVarId k v = Just (k, tm)
-      | otherwise = findTmById rest
 
 isTmIdentity :: TmVar -> TermDiagram -> Bool
 isTmIdentity v tm =
@@ -971,7 +928,7 @@ isTmIdentity v tm =
     [edge] ->
       case (ePayload edge, eIns edge, eOuts edge, dIn (unTerm tm), dOut (unTerm tm)) of
         (PTmMeta w, [], [outPid], [], [outBoundary]) ->
-          outPid == outBoundary && sameTmVarId v (tmMetaToTmVar w)
+          outPid == outBoundary && v == w
         _ -> False
     _ -> False
 

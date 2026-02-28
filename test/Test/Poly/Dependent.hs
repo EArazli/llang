@@ -299,8 +299,8 @@ testScopedTmUnify = do
   (tt, natTy, _modeM, _modeI) <- require mkNatTypeTheory
   let i0 = TmVar { tmvName = "i", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let j1 = TmVar { tmvName = "j", tmvSort = natTy, tmvScope = 1, tmvOwnerMode = Nothing }
-  tI0 <- require (termExprToDiagram tt [natTy] natTy (TMVar i0))
-  tJ1 <- require (termExprToDiagram tt [natTy] natTy (TMVar j1))
+  tI0 <- require (termExprToDiagram tt [natTy] natTy (TMMeta i0 []))
+  tJ1 <- require (termExprToDiagram tt [natTy] natTy (TMMeta j1 [0]))
   tB0 <- require (termExprToDiagram tt [natTy] natTy (TMBound 0))
   case unifyTm tt [natTy] (S.singleton i0) emptySubst natTy tI0 tB0 of
     Left err ->
@@ -325,8 +325,8 @@ testDependentUnify = do
   let n = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
-  lhsTm <- require (termExprToDiagram tt [] natTy (add (TMVar n) z))
-  rhsTm <- require (termExprToDiagram tt [] natTy (TMVar n))
+  lhsTm <- require (termExprToDiagram tt [] natTy (add (TMMeta n []) z))
+  rhsTm <- require (termExprToDiagram tt [] natTy (TMMeta n []))
   let lhs = mkCon vecRef [OATm lhsTm, OAObj aTy]
   let rhs = mkCon vecRef [OATm rhsTm, OAObj aTy]
   _ <- require (unifyObjFlex tt [] (S.singleton n) emptySubst lhs rhs)
@@ -496,10 +496,10 @@ testCheckedTermConversionDefEq = do
   let sortAdd = mkCon vecRef [OATm tmAdd]
   let sortZ = mkCon vecRef [OATm tmZ]
   let xVar = TmVar { tmvName = "x", tmvSort = sortAdd, tmvScope = 0, tmvOwnerMode = Nothing }
-  case termExprToDiagram tt [] sortZ (TMVar xVar) of
+  case termExprToDiagram tt [] sortZ (TMMeta xVar []) of
     Left _ -> pure ()
     Right _ -> assertFailure "expected unchecked conversion to reject structural sort mismatch"
-  _ <- require (DE.termExprToDiagramChecked tt [] sortZ (TMVar xVar))
+  _ <- require (DE.termExprToDiagramChecked tt [] sortZ (TMMeta xVar []))
   pure ()
 
 testBinderMetaSplice :: Assertion
@@ -613,12 +613,12 @@ mkNatTypeTheory = do
           withCtorSigs
             (modeOnlyTypeTheory mt1)
             []
-  r1L <- termExprToDiagram ttSig [] natTy (add z (TMVar vN))
-  r1R <- termExprToDiagram ttSig [] natTy (TMVar vN)
-  r2L <- termExprToDiagram ttSig [] natTy (add (s (TMVar vM)) (TMVar vN))
-  r2R <- termExprToDiagram ttSig [] natTy (s (add (TMVar vM) (TMVar vN)))
-  r3L <- termExprToDiagram ttSig [] natTy (add (TMVar vN) z)
-  r3R <- termExprToDiagram ttSig [] natTy (TMVar vN)
+  r1L <- termExprToDiagram ttSig [] natTy (add z (TMMeta vN []))
+  r1R <- termExprToDiagram ttSig [] natTy (TMMeta vN [])
+  r2L <- termExprToDiagram ttSig [] natTy (add (s (TMMeta vM [])) (TMMeta vN []))
+  r2R <- termExprToDiagram ttSig [] natTy (s (add (TMMeta vM []) (TMMeta vN [])))
+  r3L <- termExprToDiagram ttSig [] natTy (add (TMMeta vN []) z)
+  r3R <- termExprToDiagram ttSig [] natTy (TMMeta vN [])
   let rules =
         [ TmRule { trVars = [vN], trLHS = r1L, trRHS = r1R }
         , TmRule { trVars = [vM, vN], trLHS = r2L, trRHS = r2R }

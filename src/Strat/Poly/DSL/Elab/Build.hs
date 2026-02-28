@@ -46,7 +46,6 @@ import Strat.Poly.Obj
   , CodeTerm(..)
   , Obj(..)
   , ObjName(..)
-  , TmMeta(..)
   , TmVar(..)
   , TermDiagram(..)
   , objVarToTmVar
@@ -152,15 +151,6 @@ materializeResolvedUniverses ops st doc =
                 Nothing -> v1
             Nothing -> v1
 
-    rewriteTmMeta v =
-      let v1 = v { tmmSort = rewriteObj (tmmSort v) }
-       in case tmmOwnerMode v1 of
-            Just owner ->
-              case modeUniverseObj (dModes doc) owner of
-                Just universe -> v1 { tmmSort = universe }
-                Nothing -> v1
-            Nothing -> v1
-
     rewriteTyVar v =
       tmVarToObjVar (rewriteTmVar (objVarToTmVar v))
 
@@ -231,7 +221,7 @@ materializeResolvedUniverses ops st doc =
         PSplice mv ->
           PSplice mv
         PTmMeta v ->
-          PTmMeta (rewriteTmMeta v)
+          PTmMeta (rewriteTmVar v)
         PInternalDrop ->
           PInternalDrop
 

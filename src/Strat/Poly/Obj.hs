@@ -15,9 +15,7 @@ module Strat.Poly.Obj
   , ObjRef(..)
   , TmFunName(..)
   , TmVar(..)
-  , TmMeta(..)
-  , tmMetaToTmVar
-  , tmVarToTmMeta
+  , sameTmVarId
   , TermDiagram(..)
   , CodeArg(..)
   , CodeTerm(..)
@@ -38,6 +36,9 @@ module Strat.Poly.Obj
   , boundTmIndicesObj
   , boundTmIndicesTerm
   , resolveTmCtxIndex
+  , modeCtx
+  , modeCtxGlobals
+  , defaultMetaArgs
   , tmCtxForMode
   , codeMode0
   , objMode
@@ -64,9 +65,7 @@ import Strat.Poly.Syntax
   , ObjRef(..)
   , TmFunName(..)
   , TmVar(..)
-  , TmMeta(..)
-  , tmMetaToTmVar
-  , tmVarToTmMeta
+  , sameTmVarId
   , TermDiagram(..)
   , CodeArg(..)
   , CodeTerm(..)
@@ -163,7 +162,7 @@ freeObjVarsTerm (TermDiagram diag) =
   where
     edgeObjVars edge =
       case ePayload edge of
-        PTmMeta v -> freeObjVarsObj (tmmSort v)
+        PTmMeta v -> freeObjVarsObj (tmvSort v)
         _ -> S.empty
 
 freeTmVarsTerm :: TermDiagram -> S.Set TmVar
@@ -176,7 +175,7 @@ freeTmVarsTerm (TermDiagram diag) =
   where
     edgeTmVars edge =
       case ePayload edge of
-        PTmMeta v -> S.singleton (tmMetaToTmVar v)
+        PTmMeta v -> S.singleton v
         _ -> S.empty
 
 freeTmVarsObj :: Obj -> S.Set TmVar
@@ -243,11 +242,21 @@ resolveTmCtxIndex tmCtx mode localPos =
     (globalTm:_) -> Just globalTm
     [] -> Nothing
   where
-    globals =
-      [ i
-      | (i, ty) <- zip [0 :: Int ..] tmCtx
-      , objMode ty == mode
-      ]
+    globals = modeCtxGlobals tmCtx mode
+
+modeCtx :: [Obj] -> ModeName -> [(Int, Obj)]
+modeCtx tmCtx mode =
+  [ (i, ty)
+  | (i, ty) <- zip [0 ..] tmCtx
+  , objMode ty == mode
+  ]
+
+modeCtxGlobals :: [Obj] -> ModeName -> [Int]
+modeCtxGlobals tmCtx mode = map fst (modeCtx tmCtx mode)
+
+defaultMetaArgs :: [Obj] -> TmVar -> [Int]
+defaultMetaArgs tmCtx v =
+  take (tmvScope v) (modeCtxGlobals tmCtx (objMode (tmvSort v)))
 
 boundTmIndicesObj :: Obj -> S.Set Int
 boundTmIndicesObj obj =

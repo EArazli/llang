@@ -463,8 +463,8 @@ normalizeDiagramObjExprs mt diag = do
         PFeedback inner ->
           PFeedback <$> normalizeDiagramObjExprs mt inner
         PTmMeta v -> do
-          sort' <- normalizeObjExpr mt (tmmSort v)
-          pure (PTmMeta v { tmmSort = sort' })
+          sort' <- normalizeObjExpr mt (tmvSort v)
+          pure (PTmMeta v { tmvSort = sort' })
         PSplice x ->
           pure (PSplice x)
         PInternalDrop ->

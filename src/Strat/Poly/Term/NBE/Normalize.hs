@@ -30,8 +30,7 @@ import Strat.Poly.Obj
   , ObjRef(..)
   , TermDiagram(..)
   , TmVar(..)
-  , tmMetaToTmVar
-  , tmVarToTmMeta
+  , modeCtx
   , CodeArg(..)
   , CodeTerm(..)
   , objOwnerMode
@@ -164,7 +163,7 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
                               pure BTm { btSort = sortTy, btExpr = BGen g args }
                 PTmMeta v -> do
                   sortTy <- requirePortSort diag "NbE: missing PTmMeta output sort" pid
-                  let v' = (tmMetaToTmVar v) { tmvSort = sortTy }
+                  let v' = v { tmvSort = sortTy }
                   metaArgs <- mapM boundaryVarIndex (eIns edge)
                   pure BTm { btSort = sortTy, btExpr = BMeta v' metaArgs }
                 PInternalDrop ->
@@ -409,7 +408,7 @@ buildBTm cfg ctx diag tm =
       let v' = v { tmvSort = btSort tm }
       argPorts <- mapM (metaArgPort ctx) args
       let (out, d0) = freshPort (btSort tm) diag
-      d1 <- addEdgePayload (PTmMeta (tmVarToTmMeta v')) argPorts [out] d0
+      d1 <- addEdgePayload (PTmMeta v') argPorts [out] d0
       pure (out, d1)
     BGen g args -> do
       (argPorts, d0) <- foldM step ([], diag) args
@@ -555,13 +554,6 @@ saturateUnusedInputs diag =
               | boundaryOutput -> Right d
               | otherwise -> addEdgePayload PInternalDrop [pid] [] d
             _ -> Right d
-
-modeCtx :: [Obj] -> ModeName -> [(Int, Obj)]
-modeCtx tele mode =
-  [ (i, ty)
-  | (i, ty) <- zip [0 :: Int ..] tele
-  , objOwnerMode ty == mode
-  ]
 
 requirePortSort :: Diagram -> Text -> PortId -> Either Text Obj
 requirePortSort diag label pid =

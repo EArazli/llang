@@ -1229,11 +1229,9 @@ checkTmTerm doc tt tyvars tmvars tmCtx expectedSort tm =
     pure ()
   where
     checkMetaVar v = do
-      if any (sameTmVarId v) tmvars
+      if v `elem` tmvars
         then checkType doc tt tyvars tmvars tmCtx (tmvSort v)
         else Left "validateDoctrine: unknown term variable"
-
-    sameTmVarId a b = tmvName a == tmvName b && tmvScope a == tmvScope b
 
 ensureDistinctTyVars :: Text -> [TmVar] -> Either Text ()
 ensureDistinctTyVars label vars =

@@ -283,7 +283,7 @@ tmMeta v =
   let mode = objMode (tmvSort v)
       (outPid, d0) = freshPort (tmvSort v) (emptyDiagram mode [])
       d1 =
-        case addEdgePayload (PTmMeta (tmVarToTmMeta v)) [] [outPid] d0 of
+        case addEdgePayload (PTmMeta v) [] [outPid] d0 of
           Left err -> error (T.unpack err)
           Right d -> d
   in TermDiagram d1 { dOut = [outPid] }
@@ -1310,7 +1310,7 @@ testTermTypeTemplateInstantiation = do
     Right tt -> pure tt
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let aVar = TmVar { tmvName = "a", tmvSort = universeObj modeM', tmvScope = 0, tmvOwnerMode = Just modeM' }
-  nSucc <- case termExprToDiagram ttSrc [] natTy (s (TMVar nVar)) of
+  nSucc <- case termExprToDiagram ttSrc [] natTy (s (TMMeta nVar [])) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
   zTm <- case termExprToDiagram ttSrc [] natTy z of
@@ -1542,7 +1542,7 @@ testMorphismMapsStructuredTermArgs = do
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tt -> pure tt
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
-  tmSrc <- case termExprToDiagram ttSrc [] natTy (TMFun (TmFunName "succ") [TMVar nVar]) of
+  tmSrc <- case termExprToDiagram ttSrc [] natTy (TMFun (TmFunName "succ") [TMMeta nVar []]) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
   let tySrc = mkCon vecRef [OATm tmSrc]
@@ -1555,7 +1555,7 @@ testMorphismMapsStructuredTermArgs = do
       tmExpr <- case diagramToTermExpr ttTgt [] natTy tmOut of
         Left err -> assertFailure (T.unpack err) >> fail "unreachable"
         Right e -> pure e
-      tmExpr @?= TMFun (TmFunName "dbl") [TMVar nVar]
+      tmExpr @?= TMFun (TmFunName "dbl") [TMMeta nVar []]
     _ ->
       assertFailure "expected mapped Vec term argument"
 
@@ -1752,8 +1752,7 @@ assocRule name ty mulName = do
     { c2Name = name
     , c2Class = Computational
     , c2Orient = LR
-    ,
-    c2Params = []
+    , c2Params = []
     , c2LHS = lhs
     , c2RHS = rhs
     }
@@ -1775,8 +1774,7 @@ unitRule name ty unitName mulName leftSide = do
     { c2Name = name
     , c2Class = Computational
     , c2Orient = LR
-    ,
-    c2Params = []
+    , c2Params = []
     , c2LHS = expr
     , c2RHS = id1
     }

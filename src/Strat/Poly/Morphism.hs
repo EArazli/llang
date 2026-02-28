@@ -906,7 +906,7 @@ typeRefsInType ty =
         [ S.unions (map typeRefsInType (IM.elems (dPortObj diag)))
         , S.unions (map typeRefsInType (dTmCtx diag))
         , S.unions
-            [ typeRefsInType (tmmSort v)
+            [ typeRefsInType (tmvSort v)
             | edge <- IM.elems (dEdges diag)
             , PTmMeta v <- [ePayload edge]
             ]
@@ -1170,7 +1170,7 @@ buildTypeRenaming srcCtorTables tgtCtorTables mor = do
       case (IM.elems (dEdges diag), dIn diag, dOut diag) of
         ([edge], [], [outBoundary]) ->
           case (ePayload edge, eIns edge, eOuts edge) of
-            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just (tmMetaToTmVar v)
+            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just v
             _ -> Nothing
         _ -> Nothing
 
@@ -1257,7 +1257,7 @@ renameDiagram tyRen genRen diag =
             let gen' = M.findWithDefault gen (dMode diag, gen) genRen
             in PGen gen' attrs bargs
           PTmMeta v ->
-            PTmMeta v { tmmSort = renameObjExpr tyRen (tmmSort v) }
+            PTmMeta v { tmvSort = renameObjExpr tyRen (tmvSort v) }
           _ -> payload
 
 renameObjExpr :: M.Map ObjRef ObjRef -> Obj -> Obj
@@ -1289,7 +1289,7 @@ renameObjExpr ren ty =
     renameEdge edge =
       case ePayload edge of
         PTmMeta v ->
-          edge { ePayload = PTmMeta v { tmmSort = renameObjExpr ren (tmmSort v) } }
+          edge { ePayload = PTmMeta v { tmvSort = renameObjExpr ren (tmvSort v) } }
         _ -> edge
 
 injective :: Ord a => [a] -> Bool

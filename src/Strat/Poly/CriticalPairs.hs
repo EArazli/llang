@@ -30,9 +30,7 @@ import Strat.Poly.Obj
     , objVarToTmVar
     , tmVarToObjVar
     , TmVar(..)
-    , TmMeta(..)
-    , tmMetaToTmVar
-    , tmVarToTmMeta
+    , sameTmVarId
   , TermDiagram(..)
   , Obj(..)
   , pattern OVar
@@ -240,11 +238,11 @@ renameRule idx rule =
               { dPortObj = IM.map renameTmType (dPortObj d)
               , dTmCtx = map renameTmType (dTmCtx d)
               }
-          onPayload payload =
-            pure $
-              case payload of
-                PTmMeta v -> PTmMeta (tmVarToTmMeta (renameTmVar (tmMetaToTmVar v)))
-                _ -> payload
+      onPayload payload =
+        pure $
+          case payload of
+            PTmMeta v -> PTmMeta (renameTmVar v)
+            _ -> payload
       renameTmType ty = mapObjExpr renameTyNode renameTmTerm ty
       lhsTm' = renameTmVarsDiagram renameTmType (rrLHS rule)
       rhsTm' = renameTmVarsDiagram renameTmType (rrRHS rule)
@@ -400,7 +398,7 @@ payloadSubsts tt flex attrFlex tySubst attrSubst p1 p2 =
         (DiagramIso.diagramIsoMatchWithVarsFrom tt flex attrFlex tySubst attrSubst d1 d2)
     (PSplice x, PSplice y) | x == y -> Right [(tySubst, attrSubst)]
     (PTmMeta x, PTmMeta y)
-      | sameTmMetaId x y -> Right [(tySubst, attrSubst)]
+      | sameTmVarId x y -> Right [(tySubst, attrSubst)]
     (PInternalDrop, PInternalDrop) -> Right [(tySubst, attrSubst)]
     _ -> Right []
 
@@ -418,15 +416,9 @@ payloadCompatible p1 p2 =
     (PBox _ _, PBox _ _) -> True
     (PFeedback _, PFeedback _) -> True
     (PSplice x, PSplice y) -> x == y
-    (PTmMeta x, PTmMeta y) -> sameTmMetaId x y
+    (PTmMeta x, PTmMeta y) -> sameTmVarId x y
     (PInternalDrop, PInternalDrop) -> True
     _ -> False
-
-sameTmMetaId :: TmMeta -> TmMeta -> Bool
-sameTmMetaId a b =
-  tmmName a == tmmName b
-    && tmmScope a == tmmScope b
-    && tmmSort a == tmmSort b
 
 sortEdges :: [Edge] -> [Edge]
 sortEdges = L.sortOn (unEdgeId . eId)
@@ -636,7 +628,7 @@ renameTmVarsDiagram renameTy =
     onPayload payload =
       pure $
         case payload of
-          PTmMeta v -> PTmMeta v { tmmSort = renameTy (tmmSort v) }
+          PTmMeta v -> PTmMeta v { tmvSort = renameTy (tmvSort v) }
           _ -> payload
 
 renameBinderMetasDiagram :: (BinderMetaVar -> BinderMetaVar) -> Diagram -> Diagram

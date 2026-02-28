@@ -42,7 +42,7 @@ import Strat.Poly.Syntax
   ( BinderArg(..)
   , BinderMetaVar(..)
   , Obj
-  , TmMeta(..)
+  , TmVar(..)
   )
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.UnifyObj
@@ -101,8 +101,8 @@ interpretDiagram interp diagSrc = do
           updateEdgePayload tgt edgeKey (PFeedback inner')
 
         PTmMeta v -> do
-          sort' <- diMapTmMetaSort interp (tmmSort v)
-          updateEdgePayload tgt edgeKey (PTmMeta v { tmmSort = sort' })
+          sort' <- diMapTmMetaSort interp (tmvSort v)
+          updateEdgePayload tgt edgeKey (PTmMeta v { tmvSort = sort' })
 
         PSplice x ->
           updateEdgePayload tgt edgeKey (PSplice x)
