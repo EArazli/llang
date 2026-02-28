@@ -8,6 +8,8 @@ module Strat.Poly.Doctrine
   , gdTmVars
   , ModAction(..)
   , ObligationDecl(..)
+  , obTyVars
+  , obTmVars
   , Doctrine(..)
   , CtorTables
   , gdPlainDom
@@ -51,6 +53,7 @@ import Strat.Poly.Attr
 import Strat.Poly.Diagram
 import Strat.Poly.Graph (validateDiagram, Edge(..), EdgePayload(..), unPortId)
 import Strat.Poly.Cell2
+import Strat.Poly.Tele (GenParam(..), teleTyVars, teleTmVars)
 import Strat.Poly.DSL.AST (RawOblExpr(..))
 import Strat.Poly.UnifyObj (unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
@@ -81,11 +84,6 @@ data InputShape
   | InBinder BinderSig
   deriving (Eq, Ord, Show)
 
-data GenParam
-  = GP_Ty TmVar
-  | GP_Tm TmVar
-  deriving (Eq, Ord, Show)
-
 data GenDecl = GenDecl
   { gdName :: GenName
   , gdMode :: ModeName
@@ -96,10 +94,10 @@ data GenDecl = GenDecl
   } deriving (Eq, Show)
 
 gdTyVars :: GenDecl -> [TmVar]
-gdTyVars gd = [ v | GP_Ty v <- gdParams gd ]
+gdTyVars = teleTyVars . gdParams
 
 gdTmVars :: GenDecl -> [TmVar]
-gdTmVars gd = [ v | GP_Tm v <- gdParams gd ]
+gdTmVars = teleTmVars . gdParams
 
 data ModAction = ModAction
   { maMod :: ModName
@@ -113,14 +111,23 @@ data ObligationDecl = ObligationDecl
   , obForGen :: Bool
   , obForGenName :: Maybe GenName
   , obGenerated :: Bool
-  , obTyVars :: [TmVar]
-  , obTmVars :: [TmVar]
+  , obParams :: [GenParam]
   , obDom :: Context
   , obCod :: Context
   , obLHSExpr :: RawOblExpr
   , obRHSExpr :: RawOblExpr
   , obPolicy :: RewritePolicy
   } deriving (Eq, Show)
+
+obTyVars :: ObligationDecl -> [TmVar]
+obTyVars
+  =
+  teleTyVars . obParams
+
+obTmVars :: ObligationDecl -> [TmVar]
+obTmVars
+  =
+  teleTmVars . obParams
 
 type CtorTables = M.Map ModeName (M.Map ObjName [TypeParamSig])
 

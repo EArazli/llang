@@ -7,7 +7,7 @@ module Strat.Poly.DSL.Elab.Term
   , ownerModeForTypeMeta
   , elabTmDeclVar
   , elabParamDecls
-  , buildTypeTemplateParams
+  , buildTypeTemplateBinders
   , elabContext
   , elabContextWithTables
   , elabObjExpr
@@ -27,7 +27,6 @@ import Strat.Poly.DSL.AST
 import Strat.Poly.DSL.Elab.Resolve (elabRawModExpr)
 import Strat.Poly.DefEq (termExprToDiagramChecked)
 import Strat.Poly.Doctrine
-import Strat.Poly.Morphism (TemplateParam(..))
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
@@ -155,13 +154,13 @@ elabParamDecls doc defaultMode params = go [] [] [] params
               tmVar <- elabTmDeclVar doc defaultMode tyAcc tmDecl
               go tyAcc (tmVar:tmAcc) (GP_Tm tmVar : paramAcc) rest
 
-buildTypeTemplateParams
+buildTypeTemplateBinders
   :: Doctrine
   -> M.Map ModeName ModeName
   -> [TypeParamSig]
   -> [RawParamDecl]
-  -> Either Text ([TemplateParam], [TmVar], [TmVar])
-buildTypeTemplateParams tgt modeMap sigParams decls = do
+  -> Either Text ([GenParam], [TmVar], [TmVar])
+buildTypeTemplateBinders tgt modeMap sigParams decls = do
   if length sigParams /= length decls
     then Left "morphism: type mapping binder arity mismatch"
     else go [] [] [] (zip sigParams decls)
@@ -174,7 +173,7 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
           expectedMode <- lookupMappedMode srcMode
           tyVar <- resolveTyVarDecl tgt expectedMode tyDecl
           ensureFreshName tyAcc tmAcc (tmvName tyVar)
-          go (tyVar:tyAcc) tmAcc (TPType tyVar:tmplAcc) rest
+          go (tyVar:tyAcc) tmAcc (GP_Ty tyVar:tmplAcc) rest
         (TPS_Tm srcSort, RPDTerm tmDecl) -> do
           expectedMode <- lookupMappedMode (objOwnerMode srcSort)
           tmSort <- elabObjExpr tgt (reverse tyAcc) (reverse tmAcc) M.empty expectedMode (rtvdSort tmDecl)
@@ -183,7 +182,7 @@ buildTypeTemplateParams tgt modeMap sigParams decls = do
             else Right ()
           ensureFreshName tyAcc tmAcc (rtvdName tmDecl)
           let tmVar = TmVar { tmvName = rtvdName tmDecl, tmvSort = tmSort, tmvScope = 0, tmvOwnerMode = Nothing }
-          go tyAcc (tmVar:tmAcc) (TPTm tmVar:tmplAcc) rest
+          go tyAcc (tmVar:tmAcc) (GP_Tm tmVar:tmplAcc) rest
         (TPS_Ty _, _) ->
           Left "morphism: type mapping binder kind mismatch"
         (TPS_Tm _, _) ->

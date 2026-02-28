@@ -41,7 +41,7 @@ import Strat.Poly.Attr
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs, diagramDom, diagramCod)
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar(..), canonDiagramRaw, diagramPortIds)
 import Strat.Poly.DiagramIso (diagramIsoEq)
-import Strat.Poly.Cell2 (Cell2(..))
+import Strat.Poly.Cell2 (Cell2(..), c2TyVars, c2TmVars)
 import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.DefEq (termExprToDiagramChecked, defEqObj)
@@ -931,18 +931,18 @@ requireTypeRenameMap mor = do
 
     kindMatch srcParam tmplParam =
       case (srcParam, tmplParam) of
-        (TPS_Ty _, TPType _) -> True
-        (TPS_Tm _, TPTm _) -> True
+        (TPS_Ty _, GP_Ty _) -> True
+        (TPS_Tm _, GP_Tm _) -> True
         _ -> False
 
     argParamIndex params arg =
       case arg of
         OAObj (OVar v) ->
-          findParamIndex params (\p -> case p of TPType v' -> tmVarToObjVar v' == v; _ -> False)
+          findParamIndex params (\p -> case p of GP_Ty v' -> tmVarToObjVar v' == v; _ -> False)
         OATm tm ->
           case termMetaOnly tm of
             Just v ->
-              findParamIndex params (\p -> case p of TPTm v' -> v' == v; _ -> False)
+              findParamIndex params (\p -> case p of GP_Tm v' -> v' == v; _ -> False)
             Nothing -> Nothing
         _ -> Nothing
 
@@ -1972,8 +1972,7 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
       let tmVarNames = S.fromList (map tmvName (obTmVars obl))
       let mode0 = obMode obl
       let mode' = renameModeName modeRen mode0
-      tyVars' <- mapM renameObTyVar (obTyVars obl)
-      tmVars' <- mapM renameObTmVar (obTmVars obl)
+      params' <- mapM renameParam (obParams obl)
       dom' <- mapM (renameObjExpr modeRen modRen tyRen permRen) (obDom obl)
       cod' <- mapM (renameObjExpr modeRen modRen tyRen permRen) (obCod obl)
       lhs' <- renameOblExpr tyVarNames tmVarNames mode0 (obLHSExpr obl)
@@ -1982,8 +1981,7 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
         obl
           { obName = name'
           , obMode = mode'
-          , obTyVars = tyVars'
-          , obTmVars = tmVars'
+          , obParams = params'
           , obDom = dom'
           , obCod = cod'
           , obLHSExpr = lhs'
@@ -1997,6 +1995,11 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
         renameObTmVar tmVar = do
           sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tmVar)
           Right tmVar { tmvSort = sort' }
+
+        renameParam gp =
+          case gp of
+            GP_Ty v -> GP_Ty <$> renameObTyVar v
+            GP_Tm v -> GP_Tm <$> renameObTmVar v
 
     renameRawModExpr rawMe =
       case rawMe of
@@ -2633,9 +2636,14 @@ alphaRenameCellTo fromTy toTy fromTm toTm cell
   | otherwise =
       let tyMap = M.fromList (zip fromTy toTy)
           tmMap = M.fromList (zip fromTm toTm)
+          renameParam gp =
+            case gp of
+              GP_Ty v -> GP_Ty (renameTyVarAlpha tyMap v)
+              GP_Tm v -> GP_Tm (renameTmVarAlpha tyMap tmMap v)
+          params' = map renameParam (c2Params cell)
           lhs' = renameDiagramAlpha tyMap tmMap (c2LHS cell)
           rhs' = renameDiagramAlpha tyMap tmMap (c2RHS cell)
-      in Right cell { c2TyVars = toTy, c2TmVars = toTm, c2LHS = lhs', c2RHS = rhs' }
+      in Right cell { c2Params = params', c2LHS = lhs', c2RHS = rhs' }
 
 renameTyVarAlpha :: M.Map TmVar TmVar -> TmVar -> TmVar
 renameTyVarAlpha tyMap v =
@@ -2876,18 +2884,18 @@ buildTypeMap srcCtorTables srcDoc tgtDoc modeRen modRen renames permRen = do
       case param of
         TPS_Ty mode -> do
           v <- mkTypeMetaVarForMode tgtDoc (renameModeName modeRen mode) ("a" <> T.pack (show i))
-          Right (TPType v)
+          Right (GP_Ty v)
         TPS_Tm sortTy -> do
           sortTy' <- renameObjExpr modeRen modRen renames permRen sortTy
-          Right (TPTm TmVar { tmvName = "i" <> T.pack (show i), tmvSort = sortTy', tmvScope = 0, tmvOwnerMode = Nothing })
+          Right (GP_Tm TmVar { tmvName = "i" <> T.pack (show i), tmvSort = sortTy', tmvScope = 0, tmvOwnerMode = Nothing })
 
     toArg tt (srcParam, param) =
       case (srcParam, param) of
-        (TPS_Ty ownerMode, TPType v) ->
+        (TPS_Ty ownerMode, GP_Ty v) ->
           Right (OAObj Obj { objOwnerMode = renameModeName modeRen ownerMode, objCode = CTMeta (tmVarToObjVar v) })
-        (TPS_Tm _, TPType _) ->
+        (TPS_Tm _, GP_Ty _) ->
           Left "poly pushout: internal kind mismatch for type template argument"
-        (_, TPTm v) -> do
+        (_, GP_Tm v) -> do
           tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMVar v)
           Right (OATm tm)
 
@@ -3017,7 +3025,7 @@ composeMorphisms name first second = do
           case param of
             TPS_Ty mode -> do
               v <- mkTypeMetaVarForMode (morSrc first) mode ("a" <> T.pack (show i))
-              Right (TPType v)
+              Right (GP_Ty v)
             TPS_Tm sortTy ->
               let tmVar =
                     TmVar
@@ -3026,31 +3034,31 @@ composeMorphisms name first second = do
                       , tmvScope = 0
                       , tmvOwnerMode = Nothing
                       }
-              in Right (TPTm tmVar)
+              in Right (GP_Tm tmVar)
 
         sourceParamArg ttSrc (srcParam, param) =
           case (srcParam, param) of
-            (TPS_Ty ownerMode, TPType v) ->
+            (TPS_Ty ownerMode, GP_Ty v) ->
               Right (OAObj Obj { objOwnerMode = ownerMode, objCode = CTMeta (tmVarToObjVar v) })
-            (TPS_Tm _, TPType _) ->
+            (TPS_Tm _, GP_Ty _) ->
               Left "poly pushout: internal kind mismatch for composed type argument"
-            (_, TPTm v) -> do
+            (_, GP_Tm v) -> do
               tm <- termExprToDiagramChecked ttSrc [] (tmvSort v) (TMVar v)
               Right (OATm tm)
 
         mapComposedParam firstTgtCtorTables secondTgtCtorTables param =
           case param of
-            TPType v -> do
+            GP_Ty v -> do
               let ownerSrc = maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v)
               ownerMid <- applyMorphismMode first ownerSrc
               ownerTgt <- applyMorphismMode second ownerMid
               sortMid <- applyMorphismTyWithTables firstTgtCtorTables first (tmvSort v)
               sortTgt <- applyMorphismTyWithTables secondTgtCtorTables second sortMid
-              Right (TPType v { tmvSort = sortTgt, tmvOwnerMode = Just ownerTgt })
-            TPTm v -> do
+              Right (GP_Ty v { tmvSort = sortTgt, tmvOwnerMode = Just ownerTgt })
+            GP_Tm v -> do
               sortMid <- applyMorphismTyWithTables firstTgtCtorTables first (tmvSort v)
               sortTgt <- applyMorphismTyWithTables secondTgtCtorTables second sortMid
-              Right (TPTm v { tmvSort = sortTgt })
+              Right (GP_Tm v { tmvSort = sortTgt })
 
     composeGenMap = do
       secondTgtCtorTables <- deriveCtorTables (morTgt second)

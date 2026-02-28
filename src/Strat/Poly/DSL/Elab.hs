@@ -59,7 +59,7 @@ import Strat.Poly.DSL.Elab.Implements
   )
 import Strat.Poly.DSL.Elab.Resolve (elabRawModExpr)
 import Strat.Poly.DSL.Elab.Term
-  ( buildTypeTemplateParams
+  ( buildTypeTemplateBinders
   , elabObjExpr
   , ownerModeForTypeMeta
   )
@@ -279,7 +279,7 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
           Nothing -> Left "morphism: unknown source type in type map"
           Just ref -> Right ref
       srcParams <- lookupCtorSigForOwnerInTables src srcTables modeSrc srcRef
-      (tmplParams, tyVarsTgt, tmVarsTgt) <- buildTypeTemplateParams tgt modeMap srcParams (rpmtParams decl)
+      (tmplParams, tyVarsTgt, tmVarsTgt) <- buildTypeTemplateBinders tgt modeMap srcParams (rpmtParams decl)
       tgtExpr <- elabObjExpr tgt tyVarsTgt tmVarsTgt M.empty modeTgtDecl (rpmtTgtType decl)
       if objOwnerMode tgtExpr /= modeTgtDecl
         then Left ("morphism: target type expression mode mismatch (expected " <> rpmtTgtMode decl <> ")")

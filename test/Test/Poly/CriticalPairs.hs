@@ -134,8 +134,8 @@ testCriticalPairsFailOnSubstFailure = do
           { c2Name = "bad-subst"
           , c2Class = Structural
           , c2Orient = LR
-          , c2TyVars = []
-          , c2TmVars = []
+          ,
+          c2Params = []
           , c2LHS = lhs
           , c2RHS = lhs
           }

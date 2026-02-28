@@ -53,7 +53,7 @@ import Strat.Poly.Diagram (genD, idD)
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), ModAction(..), ObligationDecl(..), InputShape(..), BinderSig(..), gdPlainDom)
 import qualified Strat.Poly.Doctrine as PolyDoc
 import Strat.Poly.Cell2 (Cell2(..))
-import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..), TemplateParam(..), TypeTemplate(..))
+import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..), TypeTemplate(..))
 import qualified Strat.Poly.Morphism as PolyMor
 import Strat.Poly.Pushout (PolyPushoutResult(..))
 import qualified Strat.Poly.Pushout as PolyPush
@@ -470,8 +470,8 @@ mkDoctrine mode name tyVar cellName = do
         { c2Name = cellName
         , c2Class = Computational
         , c2Orient = LR
-        , c2TyVars = [objVarToTmVar tyVar]
-        , c2TmVars = []
+        ,
+        c2Params = map GP_Ty [objVarToTmVar tyVar] <> map GP_Tm []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -578,8 +578,8 @@ mkCellDoctrine mode name cls orient = do
         { c2Name = "eq"
         , c2Class = cls
         , c2Orient = orient
-        , c2TyVars = []
-        , c2TmVars = []
+        ,
+        c2Params = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -624,8 +624,8 @@ mkCellDoctrineWithAlt mode name cls orient = do
         { c2Name = "eq"
         , c2Class = cls
         , c2Orient = orient
-        , c2TyVars = []
-        , c2TmVars = []
+        ,
+        c2Params = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -688,7 +688,7 @@ testPushoutTypePermutationCommutes = do
   right <- case mkTypeDoctrine mode "C" [(prod, 2)] of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
-  let tmplF = TypeTemplate [TPType (objVarToTmVar aVar), TPType (objVarToTmVar bVar)] (mkCon (ObjRef mode pair) [OAObj (OVar bVar), OAObj (OVar aVar)])
+  let tmplF = TypeTemplate [GP_Ty (objVarToTmVar aVar), GP_Ty (objVarToTmVar bVar)] (mkCon (ObjRef mode pair) [OAObj (OVar bVar), OAObj (OVar aVar)])
   let morF = Morphism
         { morName = "f"
         , morSrc = base
@@ -869,8 +869,8 @@ testPushoutDisjointCellRenameUsesOriginalModeKey = do
           { c2Name = "eq"
           , c2Class = Computational
           , c2Orient = LR
-          , c2TyVars = []
-          , c2TmVars = []
+          ,
+          c2Params = []
           , c2LHS = lhs
           , c2RHS = rhs
           }
@@ -991,8 +991,8 @@ testPushoutDisjointRenamesAfterModeCollapse = do
                     )
                   ]
             , dCells2 =
-                [ Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsL1, c2RHS = rhsL1 }
-                , Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsL2, c2RHS = rhsL2 }
+                [ Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2Params = [], c2LHS = lhsL1, c2RHS = rhsL1 }
+                , Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2Params = [], c2LHS = lhsL2, c2RHS = rhsL2 }
                 ]
             , dActions = M.empty
             , dObligations = []
@@ -1094,8 +1094,8 @@ testPushoutCellNamesArePerMode = do
                     )
                   ]
             , dCells2 =
-                [ Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsL, c2RHS = rhsL }
-                , Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2TyVars = [], c2TmVars = [], c2LHS = lhsR, c2RHS = rhsR }
+                [ Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2Params = [], c2LHS = lhsL, c2RHS = rhsL }
+                , Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2Params = [], c2LHS = lhsR, c2RHS = rhsR }
                 ]
             , dActions = M.empty
             , dObligations = []
@@ -1976,7 +1976,7 @@ testPushoutTermTypeMaps = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPTm nVar, TPType (objVarToTmVar aVar)]
+                      [GP_Tm nVar, GP_Ty (objVarToTmVar aVar)]
                       (mkCon vec2Ref [OATm (tmMeta nVar), OAObj (OVar aVar)])
                   )
                 ]
@@ -2139,7 +2139,7 @@ testPushoutTypePermutationSortRename = do
                 [ (natRef, TypeTemplate [] natLTy)
                 , ( vecRef
                   , TypeTemplate
-                      [TPTm nVar, TPType (objVarToTmVar aVar)]
+                      [GP_Tm nVar, GP_Ty (objVarToTmVar aVar)]
                       (mkCon vec2Ref [OAObj (OVar aVar), OATm (tmMeta nVar)])
                   )
                 ]
@@ -2228,8 +2228,8 @@ testCoproductObligationRenameElaborates = do
           , obForGen = False
           , obForGenName = Nothing
           , obGenerated = False
-          , obTyVars = []
-          , obTmVars = []
+          ,
+          obParams = []
           , obDom = [natTy]
           , obCod = [natTy]
           , obLHSExpr = rawExpr
@@ -2345,8 +2345,8 @@ testCoproductObligationRawModalityRenameElaborates = do
           , obForGen = False
           , obForGenName = Nothing
           , obGenerated = False
-          , obTyVars = [objVarToTmVar aVar]
-          , obTmVars = []
+          ,
+          obParams = map GP_Ty [objVarToTmVar aVar] <> map GP_Tm []
           , obDom = [OVar aVar, fa, ffa, ffa]
           , obCod = [OVar aVar, fa, ffa, ffa]
           , obLHSExpr = rawExpr
@@ -2505,8 +2505,8 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
           { c2Name = "eq"
           , c2Class = Structural
           , c2Orient = LR
-          , c2TyVars = []
-          , c2TmVars = []
+          ,
+          c2Params = []
           , c2LHS = lhs
           , c2RHS = idD mode [aTy]
           }
@@ -2731,8 +2731,8 @@ testApplyPushoutCellCollisionAfterModeRename = do
           { c2Name = "eq"
           , c2Class = Computational
           , c2Orient = LR
-          , c2TyVars = []
-          , c2TmVars = []
+          ,
+          c2Params = []
           , c2LHS = bodyF
           , c2RHS = bodyG
           }
@@ -2763,8 +2763,8 @@ testApplyPushoutCellCollisionAfterModeRename = do
           { c2Name = "eq"
           , c2Class = Computational
           , c2Orient = LR
-          , c2TyVars = []
-          , c2TmVars = []
+          ,
+          c2Params = []
           , c2LHS = targetG
           , c2RHS = targetF
           }
@@ -2971,8 +2971,8 @@ testPushoutCellTmAlphaEq = do
           { c2Name = "eqLeftTm"
           , c2Class = Computational
           , c2Orient = LR
-          , c2TyVars = []
-          , c2TmVars = [leftTm]
+          ,
+          c2Params = map GP_Ty [] <> map GP_Tm [leftTm]
           , c2LHS = leftLHS
           , c2RHS = idD modeM [vecTy leftTm]
           }
@@ -2981,8 +2981,8 @@ testPushoutCellTmAlphaEq = do
           { c2Name = "eqRightTm"
           , c2Class = Computational
           , c2Orient = LR
-          , c2TyVars = []
-          , c2TmVars = [rightTm]
+          ,
+          c2Params = map GP_Ty [] <> map GP_Tm [rightTm]
           , c2LHS = rightLHS
           , c2RHS = idD modeM [vecTy rightTm]
           }
@@ -3310,8 +3310,8 @@ mkModeEqDoctrine name mt varName useUF = do
         { c2Name = "eta"
         , c2Class = Computational
         , c2Orient = LR
-        , c2TyVars = [objVarToTmVar v]
-        , c2TmVars = []
+        ,
+        c2Params = map GP_Ty [objVarToTmVar v] <> map GP_Tm []
         , c2LHS = lhs
         , c2RHS = idD mode [hTy]
         }

@@ -608,7 +608,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
                       , tmvScope = 0
                       , tmvOwnerMode = Just tgtMode
                       }
-              Right (PolyMorph.TPType tv)
+              Right (GP_Ty tv)
             Nothing ->
               Left
                 ( "apply: type metavariable `a"
@@ -621,17 +621,17 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
                 )
         TPS_Tm srcSort -> do
           tgtSort <- PolyMorph.applyMorphismTyWithTables tgtCtorTables mor srcSort
-          Right (PolyMorph.TPTm TmVar { tmvName = "t" <> T.pack (show i), tmvSort = tgtSort, tmvScope = 0, tmvOwnerMode = Nothing })
+          Right (GP_Tm TmVar { tmvName = "t" <> T.pack (show i), tmvSort = tgtSort, tmvScope = 0, tmvOwnerMode = Nothing })
       where
         renderMode (ModeName n) = n
 
     paramArg tt (srcParam, param) =
       case (srcParam, param) of
-        (TPS_Ty _, PolyMorph.TPType v) ->
+        (TPS_Ty _, GP_Ty v) ->
           Right (OAObj Obj { objOwnerMode = maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v), objCode = CTMeta (tmVarToObjVar v) })
-        (TPS_Tm _, PolyMorph.TPType _) ->
+        (TPS_Tm _, GP_Ty _) ->
           Left "apply: internal kind mismatch for type template argument"
-        (_, PolyMorph.TPTm v) -> do
+        (_, GP_Tm v) -> do
           tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMVar v)
           Right (OATm tm)
 

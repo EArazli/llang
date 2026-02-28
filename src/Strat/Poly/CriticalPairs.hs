@@ -46,7 +46,7 @@ import qualified Strat.Poly.UnifyObj as U
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite (RewriteRule(..))
 import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
-import Strat.Poly.Cell2 (Cell2(..))
+import Strat.Poly.Cell2 (Cell2(..), c2TyVars, c2TmVars)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.ModeTheory (ModeTheory)

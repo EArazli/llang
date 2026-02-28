@@ -4,7 +4,6 @@ module Strat.Poly.Morphism
   , MorphismCheck(..)
   , MorphismCheckResult(..)
   , GenImage(..)
-  , TemplateParam(..)
   , TypeTemplate(..)
   , applyMorphismMode
   , applyMorphismModExpr
@@ -125,13 +124,8 @@ data GenImage = GenImage
   , giBinderSigs :: M.Map BinderMetaVar BinderSig
   } deriving (Eq, Show)
 
-data TemplateParam
-  = TPType TmVar
-  | TPTm TmVar
-  deriving (Eq, Ord, Show)
-
 data TypeTemplate = TypeTemplate
-  { ttParams :: [TemplateParam]
+  { ttParams :: [GenParam]
   , ttBody :: Obj
   } deriving (Eq, Show)
 
@@ -287,9 +281,9 @@ applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor ty = do
 
     addParam s (param, arg) =
       case (param, arg) of
-        (TPType v, OAObj t) ->
+        (GP_Ty v, OAObj t) ->
           insertCodeMeta (tmVarToObjVar v) t s
-        (TPTm v, OATm tmArg) ->
+        (GP_Tm v, OATm tmArg) ->
           insertTmMeta v tmArg s
         _ ->
           Left "morphism: type template kind mismatch during instantiation"
@@ -785,18 +779,18 @@ validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor = do
       if length tmplParams /= length srcParams
         then Left "checkMorphism: type template arity mismatch"
         else Right ()
-      ensureDistinctTemplateParamNames tmplParams
+      ensureDistinctTemplateNames tmplParams
       mapM_ (uncurry (checkParam ttTgt)) (zip srcParams tmplParams)
-      let tyVars = [ v | TPType v <- tmplParams ]
-      let tmVars = [ v | TPTm v <- tmplParams ]
+      let tyVars = [ v | GP_Ty v <- tmplParams ]
+      let tmVars = [ v | GP_Tm v <- tmplParams ]
       checkType (morTgt mor) ttTgt tyVars tmVars [] (ttBody tmpl)
       mappedMode <- mapMode mor (orMode srcRef)
       if objMode (ttBody tmpl) == mappedMode
         then Right ()
         else Left "checkMorphism: type template body mode mismatch"
 
-    ensureDistinctTemplateParamNames params =
-      let names = [ tmvName v | TPType v <- params ] <> [ tmvName v | TPTm v <- params ]
+    ensureDistinctTemplateNames params =
+      let names = [ tmvName v | GP_Ty v <- params ] <> [ tmvName v | GP_Tm v <- params ]
           set = S.fromList names
       in if S.size set == length names
           then Right ()
@@ -804,7 +798,7 @@ validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor = do
 
     checkParam ttTgt srcParam tmplParam =
       case (srcParam, tmplParam) of
-        (TPS_Ty srcMode, TPType v) -> do
+        (TPS_Ty srcMode, GP_Ty v) -> do
           expectedMode <- mapMode mor srcMode
           expectedUniverse <-
             case modeUniverseObj (dModes (morTgt mor)) expectedMode of
@@ -818,7 +812,7 @@ validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor = do
           if sortOk
             then Right ()
             else Left "checkMorphism: type template type-parameter universe mismatch"
-        (TPS_Tm srcSort, TPTm tmParam) -> do
+        (TPS_Tm srcSort, GP_Tm tmParam) -> do
           expectedMode <- mapMode mor (objMode srcSort)
           if objMode (tmvSort tmParam) == expectedMode
             then do
@@ -1164,11 +1158,11 @@ buildTypeRenaming srcCtorTables tgtCtorTables mor = do
     argParamIndex params arg =
       case arg of
         OAObj (OVar v) ->
-          findParamIndex params (\p -> case p of TPType v' -> tmVarToObjVar v' == v; _ -> False)
+          findParamIndex params (\p -> case p of GP_Ty v' -> tmVarToObjVar v' == v; _ -> False)
         OATm tm ->
           case termMetaOnly tm of
             Just v ->
-              findParamIndex params (\p -> case p of TPTm v' -> v' == v; _ -> False)
+              findParamIndex params (\p -> case p of GP_Tm v' -> v' == v; _ -> False)
             Nothing -> Nothing
         _ -> Nothing
 

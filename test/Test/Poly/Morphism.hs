@@ -418,7 +418,7 @@ testTypeMapReorder = do
     Right () -> pure docTgt
   compImgs <- either (assertFailure . T.unpack) pure (compIdentityImages mode (universeObj mode))
   img <- either (assertFailure . T.unpack) pure (genD mode [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar b)), OAObj (OVar (tmVarToObjVar a))]] [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar b)), OAObj (OVar (tmVarToObjVar a))]] genName)
-  let typeMap = M.fromList [(ObjRef mode prod, TypeTemplate [TPType a, TPType b] (mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar b)), OAObj (OVar (tmVarToObjVar a))]))]
+  let typeMap = M.fromList [(ObjRef mode prod, TypeTemplate [GP_Ty a, GP_Ty b] (mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar b)), OAObj (OVar (tmVarToObjVar a))]))]
   let mor = Morphism
         { morName = "SwapProd"
         , morSrc = docSrc'
@@ -1181,7 +1181,7 @@ testTermTemplateSortMismatch = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPTm nWrong, TPType (objVarToTmVar aVar)]
+                      [GP_Tm nWrong, GP_Ty (objVarToTmVar aVar)]
                       (OVar aVar)
                   )
                 ]
@@ -1340,7 +1340,7 @@ testTermTypeTemplateInstantiation = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPTm nVar, TPType aVar]
+                      [GP_Tm nVar, GP_Ty aVar]
                       (mkCon vec2Ref [OATm nSucc, OAObj (OVar (tmVarToObjVar aVar))])
                   )
                 ]
@@ -1449,7 +1449,7 @@ testTermTemplateKindMismatch = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPType (objVarToTmVar aVar), TPTm nVar]
+                      [GP_Ty (objVarToTmVar aVar), GP_Tm nVar]
                       (mkCon vec2Ref [OATm nVarTm, OAObj (OVar aVar)])
                   )
                 ]
@@ -1752,8 +1752,8 @@ assocRule name ty mulName = do
     { c2Name = name
     , c2Class = Computational
     , c2Orient = LR
-    , c2TyVars = []
-    , c2TmVars = []
+    ,
+    c2Params = []
     , c2LHS = lhs
     , c2RHS = rhs
     }
@@ -1775,8 +1775,8 @@ unitRule name ty unitName mulName leftSide = do
     { c2Name = name
     , c2Class = Computational
     , c2Orient = LR
-    , c2TyVars = []
-    , c2TmVars = []
+    ,
+    c2Params = []
     , c2LHS = expr
     , c2RHS = id1
     }

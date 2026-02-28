@@ -258,7 +258,13 @@ Key records:
   Surface syntax may still call code metavariables "type variables".
 - `GenDecl` parameters form a single ordered **telescope** (`gdParams : [GenParam]`), i.e. a context in the sense of generalized algebraic theories/contextual categories.
   - The “type-parameter list” and “term-parameter list” are *derived projections* of the telescope, not separately stored kernel data.
-  - Any kernel component that needs the split lists MUST compute them by filtering the telescope (preserving relative order among entries of the same kind).
+  - **Kernel invariant (telescope-only storage):** all mixed contexts Γ of kinded parameters are stored *only* as a single telescope `[GenParam]`. Split views (type parameters vs term parameters) are derived *only* by filtering/projection.
+  - This invariant applies at:
+    - `GenDecl.gdParams :: [GenParam]`
+    - `Cell2.c2Params :: [GenParam]` (rules)
+    - `ObligationDecl.obParams :: [GenParam]` (obligations)
+    - `TypeTemplate.ttParams :: [GenParam]` (morphism type maps / templates)
+  - There is no separate “template parameter” datatype; type templates reuse `GenParam`.
   - This eliminates a coherence obligation (“metadata mismatch”) that arises if a telescope and its projections are stored independently.
 - `Cell2` rewrites diagrams
 - `ModAction` stores per-modality generator images
@@ -271,7 +277,7 @@ Validation checks:
 - action coverage and mode correctness
 - obligation diagrams are valid and boundary-compatible
 
-Reference note: Telescopes/contexts as the primitive representation of parameters follow the standard presentation of generalized algebraic theories and contextual categories (Cartmell 1978/1986). This aligns with the use of ordered contexts in second-order GAT accounts of binding signatures (e.g. Fiore–Plotkin–Turi; and later “Second-Order Generalised Algebraic Theories” formulations).
+Reference note: Telescopes/contexts as the primitive representation of parameters follow the standard presentation of generalized algebraic theories and contextual categories. John Cartmell, *Generalised algebraic theories and contextual categories*, Annals of Pure and Applied Logic 32 (1986), 209–243. Marcelo Fiore, Gordon Plotkin, Daniele Turi, *Abstract Syntax and Variable Binding*, Proceedings of LICS 1999.
 
 ## 5. Diagram Layer
 

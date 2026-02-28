@@ -190,8 +190,7 @@ materializeResolvedUniverses ops st doc =
 
     rewriteCell cell =
       cell
-        { c2TyVars = map rewriteTmVar (c2TyVars cell)
-        , c2TmVars = map rewriteTmVar (c2TmVars cell)
+        { c2Params = map rewriteGenParam (c2Params cell)
         , c2LHS = rewriteDiagram (c2LHS cell)
         , c2RHS = rewriteDiagram (c2RHS cell)
         }
@@ -203,8 +202,7 @@ materializeResolvedUniverses ops st doc =
 
     rewriteObligation obl =
       obl
-        { obTyVars = map rewriteTmVar (obTyVars obl)
-        , obTmVars = map rewriteTmVar (obTmVars obl)
+        { obParams = map rewriteGenParam (obParams obl)
         , obDom = map rewriteObj (obDom obl)
         , obCod = map rewriteObj (obCod obl)
         }

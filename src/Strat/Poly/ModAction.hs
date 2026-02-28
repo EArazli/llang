@@ -18,7 +18,7 @@ import qualified Data.Set as S
 
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar(..), AttrTerm(..))
-import Strat.Poly.Cell2 (Cell2(..))
+import Strat.Poly.Cell2 (Cell2(..), c2TyVars)
 import Strat.Poly.Doctrine
 import Strat.Poly.Graph
 import Strat.Poly.Diagram

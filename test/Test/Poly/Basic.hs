@@ -383,8 +383,8 @@ testDuplicateCellTyVars = do
         { c2Name = "dupCellTyVars"
         , c2Class = Structural
         , c2Orient = Bidirectional
-        , c2TyVars = [objVarToTmVar a, objVarToTmVar a]
-        , c2TmVars = []
+        ,
+        c2Params = map GP_Ty [objVarToTmVar a, objVarToTmVar a] <> map GP_Tm []
         , c2LHS = diag
         , c2RHS = diag
         }
@@ -419,8 +419,8 @@ testRejectRHSTyVars = do
         { c2Name = "rhs_fresh"
         , c2Class = Computational
         , c2Orient = LR
-        , c2TyVars = []
-        , c2TmVars = []
+        ,
+        c2Params = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -460,8 +460,8 @@ testAcceptRHSTyVars = do
         { c2Name = "rhs_ok"
         , c2Class = Computational
         , c2Orient = LR
-        , c2TyVars = [objVarToTmVar aVar]
-        , c2TmVars = []
+        ,
+        c2Params = map GP_Ty [objVarToTmVar aVar] <> map GP_Tm []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -492,8 +492,8 @@ testRejectEmptyLHS = do
         { c2Name = "empty_lhs"
         , c2Class = Computational
         , c2Orient = LR
-        , c2TyVars = []
-        , c2TmVars = []
+        ,
+        c2Params = []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -530,8 +530,8 @@ testCellBoundaryUsesDiagramTmCtx = do
           { c2Name = "tmctx_cell"
           , c2Class = Structural
           , c2Orient = Bidirectional
-          , c2TyVars = []
-          , c2TmVars = []
+          ,
+          c2Params = []
           , c2LHS = lhs
           , c2RHS = rhs
           }
@@ -638,8 +638,8 @@ testCellTmVarSortUsesTyVarScope = do
           { c2Name = "tmvar_scope_cell"
           , c2Class = Structural
           , c2Orient = LR
-          , c2TyVars = [aVar]
-          , c2TmVars = [xVar]
+          ,
+          c2Params = map GP_Ty [aVar] <> map GP_Tm [xVar]
           , c2LHS = markerDiag
           , c2RHS = markerDiag
           }
