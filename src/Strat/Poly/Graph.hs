@@ -339,6 +339,18 @@ validateDiagram diag = do
           if tmvScope v > length modeIns
             then Left "validateDiagram: PTmMeta scope exceeds available bound variables"
             else Right ()
+          if length (eIns edge) == tmvScope v
+            then Right ()
+            else
+              Left
+                ( "validateDiagram: PTmMeta arity mismatch for metavariable "
+                    <> tmvName v
+                    <> " (expected "
+                    <> T.pack (show (tmvScope v))
+                    <> ", got "
+                    <> T.pack (show (length (eIns edge)))
+                    <> ")"
+                )
           if all (`elem` dIn diag) (eIns edge)
             then Right ()
             else Left "validateDiagram: PTmMeta inputs must be boundary ports"

@@ -259,7 +259,7 @@ testMetaSpineNonPrefixStable = do
         TmVar
           { tmvName = "m"
           , tmvSort = aTy
-          , tmvScope = 3
+          , tmvScope = 2
           , tmvOwnerMode = Just modeM
           }
       tmExpr = TMMeta mv [0, 2]

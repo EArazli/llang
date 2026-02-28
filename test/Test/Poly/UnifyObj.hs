@@ -38,7 +38,8 @@ import Strat.Poly.Obj
   , occursVar
   )
 import Strat.Poly.Diagram (idDTm)
-import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)
+import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
+import Strat.Poly.Graph (Diagram(..), emptyDiagram, freshPort, addEdgePayload, validateDiagram, EdgePayload(..))
 import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), modeOnlyTypeTheory)
 import Test.Poly.Helpers (mkModes)
 import qualified Strat.Poly.UnifyObj as U
@@ -59,6 +60,10 @@ tests =
     , testCase "unification under CTLift with non-identity path binds inner metavariables" testUnifyUnderCTLiftPathBindsMeta
     , testCase "unification under CTLift binds inner metavariables" testUnifyUnderCTLiftBindsMeta
     , testCase "code metavariable scope uses classifier slice of term context" testCodeMetaScopeClassifierSlice
+    , testCase "non-canonical injective term-meta spine solve succeeds" testPatternSolveNonCanonicalInjective
+    , testCase "solved term metas instantiate at arbitrary spines" testPatternSubstituteArbitrarySpine
+    , testCase "non-injective term-meta solving spine is rejected" testPatternRejectNonInjectiveSolve
+    , testCase "term-meta arity mismatch is rejected at term and graph boundaries" testPatternArityMismatchRejected
     ]
 
 buildClassifiedModes :: ModeName -> ModeName -> Either Text ModeTheory
@@ -331,6 +336,113 @@ testCodeMetaScopeClassifierSlice = do
         ("escape from bound term-variable scope" `isInfixOf` err)
     Right _ ->
       assertFailure "expected owner-slice bound index to be rejected for classifier-scoped code metavariable"
+
+testPatternSolveNonCanonicalInjective :: Assertion
+testPatternSolveNonCanonicalInjective = do
+  let mode = ModeName "M"
+      tt = modeOnlyTypeTheory (mkModes [mode])
+      sortTy = mkCon (ObjRef mode (ObjName "A")) []
+      tmCtx = [sortTy, sortTy, sortTy]
+      x =
+        TmVar
+          { tmvName = "x"
+          , tmvSort = sortTy
+          , tmvScope = 2
+          , tmvOwnerMode = Just mode
+          }
+  lhs <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMMeta x [1, 0]))
+  rhs <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMBound 1))
+  subst <- case U.unifyTm tt tmCtx (S.singleton x) U.emptySubst sortTy lhs rhs of
+    Left err -> assertFailure ("expected non-canonical injective solve to succeed: " <> show err) >> pure U.emptySubst
+    Right s -> pure s
+  tmBinding <-
+    case U.lookupTmMeta subst x of
+      Nothing -> assertFailure "expected solved term-meta binding" >> pure (TermDiagram (idDTm mode [] []))
+      Just tm -> pure tm
+  expr <- either (assertFailure . show) pure (diagramToTermExpr tt tmCtx sortTy tmBinding)
+  expr @?= TMBound 0
+
+testPatternSubstituteArbitrarySpine :: Assertion
+testPatternSubstituteArbitrarySpine = do
+  let mode = ModeName "M"
+      tt = modeOnlyTypeTheory (mkModes [mode])
+      sortTy = mkCon (ObjRef mode (ObjName "A")) []
+      tmCtx = [sortTy, sortTy, sortTy]
+      x =
+        TmVar
+          { tmvName = "x"
+          , tmvSort = sortTy
+          , tmvScope = 2
+          , tmvOwnerMode = Just mode
+          }
+  seedL <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMMeta x [1, 0]))
+  seedR <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMBound 1))
+  seedSubst <- case U.unifyTm tt tmCtx (S.singleton x) U.emptySubst sortTy seedL seedR of
+    Left err -> assertFailure ("expected seed solve to succeed: " <> show err) >> pure U.emptySubst
+    Right s -> pure s
+  query <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMMeta x [2, 0]))
+  want <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMBound 2))
+  case U.unifyTm tt tmCtx S.empty seedSubst sortTy query want of
+    Left err ->
+      assertFailure
+        ( "expected solved meta to instantiate at non-canonical spine; got: "
+            <> show err
+        )
+    Right _ ->
+      pure ()
+
+testPatternRejectNonInjectiveSolve :: Assertion
+testPatternRejectNonInjectiveSolve = do
+  let mode = ModeName "M"
+      tt = modeOnlyTypeTheory (mkModes [mode])
+      sortTy = mkCon (ObjRef mode (ObjName "A")) []
+      tmCtx = [sortTy, sortTy]
+      x =
+        TmVar
+          { tmvName = "x"
+          , tmvSort = sortTy
+          , tmvScope = 2
+          , tmvOwnerMode = Just mode
+          }
+  case termExprToDiagram tt tmCtx sortTy (TMMeta x [0, 0]) of
+    Left err ->
+      assertBool
+        ("expected non-injective spine rejection, got: " <> show err)
+        ("duplicate ports" `isInfixOf` err)
+    Right _ ->
+      assertFailure "expected non-injective term-meta spine to be rejected"
+
+testPatternArityMismatchRejected :: Assertion
+testPatternArityMismatchRejected = do
+  let mode = ModeName "M"
+      tt = modeOnlyTypeTheory (mkModes [mode])
+      sortTy = mkCon (ObjRef mode (ObjName "A")) []
+      v =
+        TmVar
+          { tmvName = "m"
+          , tmvSort = sortTy
+          , tmvScope = 1
+          , tmvOwnerMode = Just mode
+          }
+  case termExprToDiagram tt [sortTy] sortTy (TMMeta v []) of
+    Left err ->
+      assertBool
+        ("expected term-level spine arity rejection, got: " <> show err)
+        ("spine arity mismatch" `isInfixOf` err)
+    Right _ ->
+      assertFailure "expected termExprToDiagram to reject mismatched spine arity"
+
+  let (inPid, d0) = freshPort sortTy (emptyDiagram mode [])
+      (outPid, d1) = freshPort sortTy d0
+  d2 <- either (assertFailure . show) pure (addEdgePayload (PTmMeta v) [] [outPid] d1)
+  let badDiag = d2 { dIn = [inPid], dOut = [outPid] }
+  case validateDiagram badDiag of
+    Left err ->
+      assertBool
+        ("expected graph-level PTmMeta arity rejection, got: " <> show err)
+        ("PTmMeta arity mismatch" `isInfixOf` err)
+    Right _ ->
+      assertFailure "expected validateDiagram to reject PTmMeta arity mismatch"
 
 withCtorSigs :: TypeTheory -> [(ObjRef, [TypeParamSig])] -> TypeTheory
 withCtorSigs tt entries =

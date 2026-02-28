@@ -324,6 +324,8 @@ A metavariable occurrence is understood in the standard “metavariable applied 
 
 This is the common presentation in contextual type theory (metavariables/holes are decorated with a context and instantiated by providing an explicit substitution/spine), and in the higher-order pattern fragment where metavariables only occur applied to a list of distinct bound variables.
 
+Well-formed term metavariable occurrences satisfy `length(spine) = scope(X)`.
+
 Implementation note: the internal term-expression AST uses a single constructor for metavariables, `TMMeta X spine`. The earlier special case “implicit metavariable with canonical-prefix arguments” is not a separate constructor; it is represented by `TMMeta X defaultSpine`, where `defaultSpine` is the mode-local prefix of length `scope` in the ambient term context.
 
 ### 5.3 Meta Substitution
@@ -337,8 +339,12 @@ Well-formedness invariant:
 
 - a metavariable is only instantiated in the syntactic category where it occurs; kind mismatches are rejected as kernel errors.
 - code-metavariable scope checks are performed against the classifier-mode slice of the telescope (`modeClassifierMode owner`), not the owner-mode slice.
-
-The kernel unifier/substitution mechanism only solves/substitutes metavariables at occurrences with the canonical default spine (the implicit/default-spine form). Occurrences with non-canonical spines are treated as rigid (they are preserved, not solved).
+- term metavariable solutions are stored in canonical form and instantiated at each occurrence spine during substitution.
+- pattern-fragment solving for term metavariables requires:
+  - correct spine arity (`length(spine) = scope(X)`),
+  - injective solving spines,
+  - RHS bound indices contained in the solving spine.
+- non-injective spines are not solvable by unification (rigid for solving), but existing solutions are still instantiated at such spines during substitution.
 
 Kernel implementation note: metavariable `Eq`/`Ord` is intentionally id-based (`name`, `scope`), so `Map`/`Set` keys remain stable under sort normalization/substitution. Sort agreement is enforced by typing/diagram validation, not by metavariable identity keys.
 

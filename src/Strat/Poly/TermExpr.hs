@@ -97,6 +97,18 @@ termExprToDiagramWith convEnv tmCtx expectedSort tm = do
         TMMeta v metaArgs -> do
           let vSort = tmvSort v
           ensureSortEq "termExprToDiagram: metavariable sort mismatch" vSort currentSort
+          if length metaArgs == tmvScope v
+            then Right ()
+            else
+              Left
+                ( "termExprToDiagram: metavariable spine arity mismatch for "
+                    <> tmvName v
+                    <> " (expected "
+                    <> T.pack (show (tmvScope v))
+                    <> ", got "
+                    <> T.pack (show (length metaArgs))
+                    <> ")"
+                )
           if tmvScope v <= length modeInputsAll
             then Right ()
             else Left "termExprToDiagram: metavariable scope exceeds mode-local context"

@@ -420,24 +420,26 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
               sig <- requireFunSig s currentSort f xs
               foldl step (Right s) (zip3 (tfsArgs sig) xs ys)
           | otherwise -> Left "unifyTm: function mismatch"
-        (TMMeta v args, TMMeta w args')
-          | sameTmVarId v w && args == args' -> do
-              checkTmVarSort s currentSort v
-              checkTmVarSort s currentSort w
-              Right s
+        (TMMeta v args, TMMeta w args') -> do
+          ensureTmTermSort s currentSort (TMMeta v args)
+          ensureTmTermSort s currentSort (TMMeta w args')
+          if sameTmVarId v w
+            then
+              if args == args'
+                then Right s
+                else Left "unifyTm: rigid term variable mismatch"
+            else tryMetaMeta s currentSort v args w args'
         (TMMeta v args, t) -> do
-          checkTmVarSort s currentSort v
+          ensureTmTermSort s currentSort (TMMeta v args)
           ensureTmTermSort s currentSort t
-          tmCtx' <- applySubstCtx tt s tmCtx
-          if v `S.member` tmFlex && args == defaultMetaArgs tmCtx' v
-            then bindTmVar s currentSort v t
+          if v `S.member` tmFlex
+            then bindTmVarAtSpine s currentSort v args t
             else Left "unifyTm: rigid term variable mismatch"
         (t, TMMeta v args) -> do
-          checkTmVarSort s currentSort v
           ensureTmTermSort s currentSort t
-          tmCtx' <- applySubstCtx tt s tmCtx
-          if v `S.member` tmFlex && args == defaultMetaArgs tmCtx' v
-            then bindTmVar s currentSort v t
+          ensureTmTermSort s currentSort (TMMeta v args)
+          if v `S.member` tmFlex
+            then bindTmVarAtSpine s currentSort v args t
             else Left "unifyTm: rigid term variable mismatch"
         _ -> Left "unifyTm: cannot unify term expressions"
       where
@@ -452,7 +454,23 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
           yNorm <- normalizeTermExprInCtx tmCtx1 s1 argSort' y'
           unifyTmNorm s1 argSort' xNorm yNorm
 
-    bindTmVar s currentSort v t = do
+    tryMetaMeta s currentSort v args w args' =
+      case bindLeft of
+        Right s' -> Right s'
+        Left leftErr ->
+          if w `S.member` tmFlex
+            then
+              case bindTmVarAtSpine s currentSort w args' (TMMeta v args) of
+                Right s' -> Right s'
+                Left _ -> Left leftErr
+            else Left leftErr
+      where
+        bindLeft =
+          if v `S.member` tmFlex
+            then bindTmVarAtSpine s currentSort v args (TMMeta w args')
+            else Left "unifyTm: rigid term variable mismatch"
+
+    bindTmVarAtSpine s currentSort v spine t = do
       sortV0 <- applySubstObj tt s (tmvSort v)
       sortV <- normalizeInCtx s sortV0
       currentSort' <- normalizeInCtx s currentSort
@@ -465,17 +483,10 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
       if occursTmVarExpr v t'
         then Left "unifyTm: occurs check failed"
         else do
-          let boundSet = boundGlobalsExpr t'
-          allowed <- allowedBoundGlobals s sortV v
-          if tmvScope v == 0 && not (S.null boundSet)
-            then Left "unifyTm: scope-0 metavariable cannot mention bound indices"
-            else
-              if S.isSubsetOf boundSet allowed
-                then do
-                  tDiag <- termExprToDiagram tt tmCtx' sortV t'
-                  singletonSubst <- mkSubst [(v, CATm tDiag)]
-                  composeSubst tt singletonSubst s
-                else Left "unifyTm: escape from bound term-variable scope"
+          tAbs <- abstractOverSpineToFormals tmCtx' v spine t'
+          tDiag <- termExprToDiagram tt tmCtx' sortV tAbs
+          singletonSubst <- mkSubst [(v, CATm tDiag)]
+          composeSubst tt singletonSubst s
 
     checkTmVarSort s currentSort v = do
       sortV0 <- applySubstObj tt s (tmvSort v)
@@ -498,7 +509,27 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
 
     ensureTmTermSort s currentSort tm =
       case tm of
-        TMMeta v _ -> checkTmVarSort s currentSort v
+        TMMeta v args -> do
+          checkTmVarSort s currentSort v
+          if length args == tmvScope v
+            then Right ()
+            else
+              Left
+                ( "unifyTm: metavariable spine arity mismatch for "
+                    <> tmvName v
+                    <> " (expected "
+                    <> T.pack (show (tmvScope v))
+                    <> ", got "
+                    <> T.pack (show (length args))
+                    <> ")"
+                )
+          if all (\i -> i >= 0 && i < length tmCtx) args
+            then Right ()
+            else
+              Left
+                ( "unifyTm: metavariable spine index out of range for "
+                    <> tmvName v
+                )
         TMBound i -> checkBoundSort s currentSort i
         TMFun f args -> do
           sig <- requireFunSig s currentSort f args
@@ -531,17 +562,15 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
             TMMeta v args -> do
               sort' <- applySubstObj tt s (tmvSort v)
               let v' = v { tmvSort = sort' }
-              if args == defaultMetaArgs ctx v'
-                then
-                  case lookupTmMeta s v' of
-                    Nothing -> Right (TMMeta v' args)
-                    Just tmSub ->
-                      if v' `S.member` seen
-                        then Right (TMMeta v' args)
-                        else do
-                          subExpr <- diagramToTermExpr tt ctx sort' tmSub
-                          go (S.insert v' seen) currentSort subExpr
-                else Right (TMMeta v' args)
+              case lookupTmMeta s v' of
+                Nothing -> Right (TMMeta v' args)
+                Just tmSub ->
+                  if v' `S.member` seen
+                    then Right (TMMeta v' args)
+                    else do
+                      subExpr0 <- diagramToTermExpr tt ctx sort' tmSub
+                      subExpr <- instantiateMetaBody ctx v' args subExpr0
+                      go (S.insert v' seen) currentSort subExpr
             TMBound _ -> Right tm
             TMFun f args -> do
               sig <- requireFunSigArity s currentSort f (length args)
@@ -552,16 +581,6 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
       tm <- termExprToDiagram tt ctx expectedSort expr
       tmNorm <- normalizeTermDiagram tt ctx expectedSort tm
       diagramToTermExpr tt ctx expectedSort tmNorm
-
-    allowedBoundGlobals s sortV v = do
-      sortV' <- normalizeInCtx s sortV
-      let mode = objOwnerMode sortV'
-      let globals =
-            [ i
-            | (i, ty) <- zip [0 :: Int ..] tmCtx
-            , objOwnerMode ty == mode
-            ]
-      pure (S.fromList (take (tmvScope v) globals))
 
     checkPortSort s currentSort diag pid = do
       portSort0 <-
@@ -851,21 +870,19 @@ substituteTermExprMetas tt subst =
         TMMeta v args -> do
           sort' <- applySubstObj tt subst (tmvSort v)
           let v' = v { tmvSort = sort' }
-          if args == defaultMetaArgs curCtx v'
-            then
-              case lookupTmMeta subst v' of
-                Nothing -> Right (curCtx, TMMeta v' args)
-                Just tmSub ->
-                  if v' `S.member` seen
-                    then Right (curCtx, TMMeta v' args)
-                    else do
-                      subCtx0 <- applySubstCtx tt subst (dTmCtx (unTerm tmSub))
-                      sortSub <- normalizeObjDeepWithCtx tt subCtx0 sort'
-                      subExpr <- diagramToTermExpr tt subCtx0 sortSub tmSub
-                      (subCtx, subExpr') <- go (S.insert v' seen) subCtx0 currentSort subExpr
-                      merged <- mergeTermCtx curCtx subCtx
-                      Right (merged, subExpr')
-            else Right (curCtx, TMMeta v' args)
+          case lookupTmMeta subst v' of
+            Nothing -> Right (curCtx, TMMeta v' args)
+            Just tmSub ->
+              if v' `S.member` seen
+                then Right (curCtx, TMMeta v' args)
+                else do
+                  subCtx0 <- applySubstCtx tt subst (dTmCtx (unTerm tmSub))
+                  sortSub <- normalizeObjDeepWithCtx tt subCtx0 sort'
+                  subExpr0 <- diagramToTermExpr tt subCtx0 sortSub tmSub
+                  merged0 <- mergeTermCtx curCtx subCtx0
+                  subExpr <- instantiateMetaBody merged0 v' args subExpr0
+                  (subCtx, subExpr') <- go (S.insert v' seen) merged0 currentSort subExpr
+                  Right (subCtx, subExpr')
         TMBound _ -> Right (curCtx, expr)
         TMFun f args -> do
           sig <- requireSig curCtx currentSort f (length args)
@@ -933,6 +950,79 @@ inferTmSortFromDiagram tt subst tm =
         Nothing -> Left "inferTmSortFromDiagram: missing output port type"
         Just ty -> applySubstObj tt subst ty
     _ -> Left "inferTmSortFromDiagram: term diagram must have exactly one output"
+
+renameTermGlobalsPartial :: M.Map Int Int -> TermExpr -> TermExpr
+renameTermGlobalsPartial ren tm =
+  case tm of
+    TMBound i -> TMBound (M.findWithDefault i i ren)
+    TMMeta v args -> TMMeta v (map (\i -> M.findWithDefault i i ren) args)
+    TMFun f args -> TMFun f (map (renameTermGlobalsPartial ren) args)
+
+instantiateMetaBody
+  :: [Obj]
+  -> TmVar
+  -> [Int]
+  -> TermExpr
+  -> Either Text TermExpr
+instantiateMetaBody tmCtx v spine body = do
+  let formal = defaultMetaArgs tmCtx v
+      scope = tmvScope v
+  if length formal == scope
+    then Right ()
+    else Left "instantiateMetaBody: default-meta spine arity does not match scope"
+  if length spine == scope
+    then Right ()
+    else
+      Left
+        ( "instantiateMetaBody: occurrence spine arity mismatch for "
+            <> tmvName v
+            <> " (expected "
+            <> T.pack (show scope)
+            <> ", got "
+            <> T.pack (show (length spine))
+            <> ")"
+        )
+  let ren = M.fromList (zip formal spine)
+  pure (renameTermGlobalsPartial ren body)
+
+abstractOverSpineToFormals
+  :: [Obj]
+  -> TmVar
+  -> [Int]
+  -> TermExpr
+  -> Either Text TermExpr
+abstractOverSpineToFormals tmCtx v spine rhs = do
+  let scope = tmvScope v
+      formal = defaultMetaArgs tmCtx v
+      spineSet = S.fromList spine
+      boundSet = boundGlobalsExpr rhs
+  if length formal == scope
+    then Right ()
+    else Left "abstractOverSpineToFormals: default-meta spine arity does not match scope"
+  if length spine == scope
+    then Right ()
+    else
+      Left
+        ( "unifyTm: metavariable spine arity mismatch for "
+            <> tmvName v
+            <> " (expected "
+            <> T.pack (show scope)
+            <> ", got "
+            <> T.pack (show (length spine))
+            <> ")"
+        )
+  if S.size spineSet == length spine
+    then Right ()
+    else
+      Left
+        ( "unifyTm: metavariable solving spine must be injective for "
+            <> tmvName v
+        )
+  if S.isSubsetOf boundSet spineSet
+    then Right ()
+    else Left "unifyTm: escape from bound term-variable scope"
+  let ren = M.fromList (zip spine formal)
+  pure (renameTermGlobalsPartial ren rhs)
 
 occursTmVarExpr :: TmVar -> TermExpr -> Bool
 occursTmVarExpr v tm =
