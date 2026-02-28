@@ -27,6 +27,7 @@ module Strat.Poly.TypeTheory
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName, ModeTheory(..), DefEqEngine(..), modeDefEqEngine)
+import Strat.Poly.Names (GenName)
 import Strat.Poly.ObjClassifier (modeClassifierMode)
 import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
 import Strat.Poly.Term.NBE.Config (NbeConfig, defaultNbeConfig)
@@ -39,13 +40,13 @@ type UniverseCtors = M.Map ModeName (S.Set ObjName)
 data DefFragment
   = DefFragmentTRS
       { dfMode :: ModeName
-      , dfFuns :: M.Map TmFunName TmFunSig
+      , dfFuns :: M.Map GenName TmFunSig
       , dfRules :: [TmRule]
       , dfTRS :: TRS
       }
   | DefFragmentNBE
       { dfMode :: ModeName
-      , dfFuns :: M.Map TmFunName TmFunSig
+      , dfFuns :: M.Map GenName TmFunSig
       , dfRules :: [TmRule]
       , dfNBE :: NbeConfig
       }
@@ -133,7 +134,7 @@ setDefFragment fragment tt =
   where
     mode = dfMode fragment
 
-setModeTermFuns :: ModeName -> M.Map TmFunName TmFunSig -> TypeTheory -> TypeTheory
+setModeTermFuns :: ModeName -> M.Map GenName TmFunSig -> TypeTheory -> TypeTheory
 setModeTermFuns mode funs tt =
   setDefFragment fragment tt
   where
@@ -216,7 +217,7 @@ defEqEngineForMode tt mode =
     Just DefFragmentNBE {} -> DefEqNBE
     Nothing -> modeDefEqEngine (ttModes tt) mode
 
-termFunsForMode :: TypeTheory -> ModeName -> M.Map TmFunName TmFunSig
+termFunsForMode :: TypeTheory -> ModeName -> M.Map GenName TmFunSig
 termFunsForMode tt mode =
   case defFragmentForMode tt mode of
     Just fragment -> dfFuns fragment
@@ -242,6 +243,6 @@ nbeConfigForMode tt mode =
     Just DefFragmentNBE { dfNBE = cfg } -> Just cfg
     _ -> Nothing
 
-lookupTmFunSig :: TypeTheory -> ModeName -> TmFunName -> Maybe TmFunSig
+lookupTmFunSig :: TypeTheory -> ModeName -> GenName -> Maybe TmFunSig
 lookupTmFunSig tt mode f =
   M.lookup f (termFunsForMode tt mode)

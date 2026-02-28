@@ -456,9 +456,9 @@ elabTmTermWithTables doc ctorTables _tyVars tmVars tmBound mExpected raw =
                 Nothing -> Left "term argument uses sparse bound term context")
             [0 .. maxIdx]
 
-lookupTmFunByNameInTables :: Doctrine -> CtorTables -> Obj -> Text -> Int -> Either Text (TmFunName, TmFunSig)
+lookupTmFunByNameInTables :: Doctrine -> CtorTables -> Obj -> Text -> Int -> Either Text (GenName, TmFunSig)
 lookupTmFunByNameInTables doc ctorTables expectedSort name arity =
-  let fname = TmFunName name
+  let fname = GenName name
       sigs = gatherCandidates ctorTables (objOwnerMode expectedSort)
    in case sigs of
         [] -> Left ("unknown term function: " <> name)
@@ -487,7 +487,7 @@ lookupTmFunByNameInTables doc ctorTables expectedSort name arity =
         InPort _ -> True
         InBinder _ -> False
 
-lookupTmFunAnyInTables :: Doctrine -> CtorTables -> Text -> Int -> Either Text (TmFunName, TmFunSig)
+lookupTmFunAnyInTables :: Doctrine -> CtorTables -> Text -> Int -> Either Text (GenName, TmFunSig)
 lookupTmFunAnyInTables doc ctorTables name arity =
   case genCandidates ctorTables of
     [] -> Left ("unknown term function: " <> name)
@@ -495,7 +495,7 @@ lookupTmFunAnyInTables doc ctorTables name arity =
     _ -> Left ("ambiguous term function: " <> name)
   where
     genCandidates ctorTables' =
-      [ ( TmFunName name
+      [ ( GenName name
         , TmFunSig
             { tfsArgs = [ ty | InPort ty <- gdDom gd ]
             , tfsRes = res

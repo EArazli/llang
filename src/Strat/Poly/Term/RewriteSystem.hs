@@ -22,7 +22,6 @@ import qualified Data.Set as S
 import Strat.Poly.ModeSyntax (ModeName)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Term.AST (TermExpr(..))
-import Strat.Poly.Syntax (TmFunName(..))
 
 
 data TRule = TRule
@@ -53,7 +52,7 @@ mkTRS mode rules =
 rootKey :: TermExpr -> Maybe GenName
 rootKey tm =
   case tm of
-    TMFun (TmFunName f) _ -> Just (GenName f)
+    TMFun f _ -> Just f
     _ -> Nothing
 
 applyTermSubstClosed :: TermSubst -> TermExpr -> TermExpr

@@ -31,7 +31,6 @@ import Strat.Poly.Obj
   , tmVarOwner
   , ObjName(..)
   , ObjRef(..)
-  , TmFunName(..)
   , TmVar(..)
   , TermDiagram(..)
   , boundTmIndicesTerm
@@ -140,9 +139,9 @@ testDoctrineNormalizeTypeArg = do
   let aTy = mkCon (ObjRef modeM (ObjName "A")) []
   let vecRef = ObjRef modeM (ObjName "Vec")
   let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
-  let z = TMFun (TmFunName "Z") []
-  let s x = TMFun (TmFunName "S") [x]
-  let add x y = TMFun (TmFunName "add") [x, y]
+  let z = TMFun (GenName "Z") []
+  let s x = TMFun (GenName "S") [x]
+  let add x y = TMFun (GenName "add") [x, y]
   tmArg <- require (termExprToDiagram tt [] natTy (add (s z) (s z)))
   wantTm <- require (termExprToDiagram tt [] natTy (s (s z)))
   let ty = mkCon vecRef [OATm tmArg, OAObj aTy]
@@ -160,9 +159,9 @@ testDoctrineNormalizeTypeArg = do
 testNormalizeTm :: Assertion
 testNormalizeTm = do
   (tt, natTy, _modeM, _modeI) <- require mkNatTypeTheory
-  let z = TMFun (TmFunName "Z") []
-  let s x = TMFun (TmFunName "S") [x]
-  let add x y = TMFun (TmFunName "add") [x, y]
+  let z = TMFun (GenName "Z") []
+  let s x = TMFun (GenName "S") [x]
+  let add x y = TMFun (GenName "add") [x, y]
   tm <- require (termExprToDiagram tt [] natTy (add (s z) (s z)))
   norm <- require (normalizeTermDiagram tt [] natTy tm)
   want <- require (termExprToDiagram tt [] natTy (s (s z)))
@@ -173,9 +172,9 @@ testNormalizeTm = do
 testNormalizeTmIdempotent :: Assertion
 testNormalizeTmIdempotent = do
   (tt, natTy, _modeM, _modeI) <- require mkNatTypeTheory
-  let z = TMFun (TmFunName "Z") []
-  let s x = TMFun (TmFunName "S") [x]
-  let add x y = TMFun (TmFunName "add") [x, y]
+  let z = TMFun (GenName "Z") []
+  let s x = TMFun (GenName "S") [x]
+  let add x y = TMFun (GenName "add") [x, y]
   tm <- require (termExprToDiagram tt [] natTy (add (s z) (s z)))
   n1 <- require (normalizeTermDiagram tt [] natTy tm)
   n2 <- require (normalizeTermDiagram tt [] natTy n1)
@@ -322,8 +321,8 @@ testDependentUnify = do
   let aTy = mkCon (ObjRef modeM (ObjName "A")) []
   let tt = withCtorSigs tt0 [(vecRef, [TPS_Tm natTy, TPS_Ty modeM])]
   let n = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
-  let z = TMFun (TmFunName "Z") []
-  let add x y = TMFun (TmFunName "add") [x, y]
+  let z = TMFun (GenName "Z") []
+  let add x y = TMFun (GenName "add") [x, y]
   lhsTm <- require (termExprToDiagram tt [] natTy (add (TMMeta n []) z))
   rhsTm <- require (termExprToDiagram tt [] natTy (TMMeta n []))
   let lhs = mkCon vecRef [OATm lhsTm, OAObj aTy]
@@ -393,8 +392,8 @@ testDependentCompDefEq = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
   let outRef = ObjRef modeM (ObjName "Out")
-  let z = TMFun (TmFunName "Z") []
-  let add x y = TMFun (TmFunName "add") [x, y]
+  let z = TMFun (GenName "Z") []
+  let add x y = TMFun (GenName "add") [x, y]
   let vecTy tmArg = mkCon vecRef [OATm tmArg]
   let outTy = mkCon outRef []
   let tt =
@@ -414,8 +413,8 @@ testDefEqObjTermIndexReduction :: Assertion
 testDefEqObjTermIndexReduction = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
-  let z = TMFun (TmFunName "Z") []
-  let add x y = TMFun (TmFunName "add") [x, y]
+  let z = TMFun (GenName "Z") []
+  let add x y = TMFun (GenName "add") [x, y]
   let tt =
         withCtorSigs tt0 [(vecRef, [TPS_Tm natTy])]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
@@ -452,8 +451,8 @@ testMatchTmCtxDefEqCompatibility = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
   let vecTy tmArg = mkCon vecRef [OATm tmArg]
-  let z = TMFun (TmFunName "Z") []
-  let add x y = TMFun (TmFunName "add") [x, y]
+  let z = TMFun (GenName "Z") []
+  let add x y = TMFun (GenName "add") [x, y]
   let tt =
         withCtorSigs tt0 [(vecRef, [TPS_Tm natTy])]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
@@ -488,8 +487,8 @@ testCheckedTermConversionDefEq = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
   let tt = withCtorSigs tt0 [(vecRef, [TPS_Tm natTy])]
-  let z = TMFun (TmFunName "Z") []
-  let add x y = TMFun (TmFunName "add") [x, y]
+  let z = TMFun (GenName "Z") []
+  let add x y = TMFun (GenName "add") [x, y]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
   tmZ <- require (termExprToDiagram tt [] natTy z)
   let sortAdd = mkCon vecRef [OATm tmAdd]
@@ -596,16 +595,16 @@ mkNatTypeTheory = do
   mt0 <- addMode modeM emptyModeTheory
   mt1 <- addMode modeI mt0
   let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
-  let z = TMFun (TmFunName "Z") []
-  let s x = TMFun (TmFunName "S") [x]
-  let add x y = TMFun (TmFunName "add") [x, y]
+  let z = TMFun (GenName "Z") []
+  let s x = TMFun (GenName "S") [x]
+  let add x y = TMFun (GenName "add") [x, y]
   let vM = TmVar { tmvName = "m", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let vN = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let funSigs =
         M.fromList
-          [ (TmFunName "Z", TmFunSig [] natTy)
-          , (TmFunName "S", TmFunSig [natTy] natTy)
-          , (TmFunName "add", TmFunSig [natTy, natTy] natTy)
+          [ (GenName "Z", TmFunSig [] natTy)
+          , (GenName "S", TmFunSig [natTy] natTy)
+          , (GenName "add", TmFunSig [natTy, natTy] natTy)
           ]
   let ttSig =
         setModeTermFuns modeI funSigs $

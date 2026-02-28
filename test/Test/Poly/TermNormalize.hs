@@ -10,7 +10,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.Obj (Obj(..), mkModeMetaVar, TmVar, tmvName, tmVarOwner, TmFunName(..), TmVar(..))
+import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Obj (Obj(..), mkModeMetaVar, TmVar, tmvName, tmVarOwner, TmVar(..))
 import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory, setModeTermFuns, setModeTermRules)
 import qualified Strat.Poly.TypeTheory as TT
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)
@@ -32,22 +33,22 @@ tests =
 testNonRecursiveSubst :: Assertion
 testNonRecursiveSubst = do
   let trs = TRS.mkTRS modeM [projRule]
-  let tm = TMFun (TmFunName "g") [TMBound 1, TMBound 0]
+  let tm = TMFun (GenName "g") [TMBound 1, TMBound 0]
   normalizeTermExpr trs tm @?= TMBound 1
   where
     modeM = ModeName "M"
     projRule =
       TRS.TRule
         { TRS.trName = "proj"
-        , TRS.trLHS = TMFun (TmFunName "g") [TMBound 0, TMBound 1]
+        , TRS.trLHS = TMFun (GenName "g") [TMBound 0, TMBound 1]
         , TRS.trRHS = TMBound 0
         }
 
 testRepeatedVarMatch :: Assertion
 testRepeatedVarMatch = do
   let trs = TRS.mkTRS modeM [diagRule]
-  let noRewrite = TMFun (TmFunName "h") [TMBound 0, TMBound 1]
-  let rewrite = TMFun (TmFunName "h") [TMBound 0, TMBound 0]
+  let noRewrite = TMFun (GenName "h") [TMBound 0, TMBound 1]
+  let rewrite = TMFun (GenName "h") [TMBound 0, TMBound 0]
   normalizeTermExpr trs noRewrite @?= noRewrite
   normalizeTermExpr trs rewrite @?= TMBound 0
   where
@@ -55,7 +56,7 @@ testRepeatedVarMatch = do
     diagRule =
       TRS.TRule
         { TRS.trName = "diag"
-        , TRS.trLHS = TMFun (TmFunName "h") [TMBound 0, TMBound 0]
+        , TRS.trLHS = TMFun (GenName "h") [TMBound 0, TMBound 0]
         , TRS.trRHS = TMBound 0
         }
 
@@ -74,7 +75,7 @@ testCompileRejectsFreshRhsVars = do
       assertFailure "expected term-rule compilation to reject rhs fresh variables"
   where
     modeM = ModeName "M"
-    fName = TmFunName "f"
+    fName = GenName "f"
     sortTy = OVar (mkModeMetaVar "a" modeM)
     xVar = TmVar { tmvName = "x", tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
     yVar = TmVar { tmvName = "y", tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }

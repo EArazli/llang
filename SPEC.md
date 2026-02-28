@@ -200,6 +200,7 @@ Implemented fragments:
 
 - `TRS` fragment:
   - first-order TRS normalization compiled from admissible computational rules and eligible generators.
+  - term symbols are generator names: the TRS signature is a *subset* of the mode’s generators determined by the term-fragment eligibility checks.
   - admissibility requirements:
     - rewrite compilation remains in the first-order term fragment,
     - termination MUST be proven (SCT),
@@ -222,6 +223,8 @@ Implemented fragments:
 
 Termination/confluence checks apply to `TRS` fragments only; `NbE` fragments skip TRS compilation checks.
 
+This matches the standard TRS presentation over a signature (\Sigma) (Terese, *Term Rewriting Systems*, 2003), where in llang the signature (\Sigma) is the eligible subset of generator 1-cells of the mode (cf. Burroni’s polygraphs as presentations, 1993).
+
 ### 3.1 Kernel DefEq API (Current)
 
 Current implementation centralizes normalization/equality entrypoints in `Strat.Poly.DefEq`:
@@ -236,12 +239,12 @@ Per-mode definitional data is represented by `DefFragment`:
 
 - `DefFragmentTRS`:
   - `dfMode`: mode name
-  - `dfFuns`: admissible term symbols in that mode
+  - `dfFuns`: admissible term symbols in that mode, keyed by generator names (`GenName`); there is no separate “term function name” namespace—TRS term symbols are exactly the eligible generator symbols of the mode.
   - `dfRules`: admissible computational rules in that mode
   - `dfTRS`: compiled TRS used by normalization/equality
 - `DefFragmentNBE`:
   - `dfMode`: mode name
-  - `dfFuns`: admissible term symbols in that mode
+  - `dfFuns`: admissible term symbols in that mode, keyed by generator names (`GenName`); there is no separate “term function name” namespace—TRS term symbols are exactly the eligible generator symbols of the mode.
   - `dfRules`: admissible computational rules in that mode
   - `dfNBE`: NbE configuration
 

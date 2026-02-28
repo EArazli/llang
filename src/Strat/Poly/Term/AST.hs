@@ -7,13 +7,14 @@ module Strat.Poly.Term.AST
   ) where
 
 import qualified Data.Set as S
-import Strat.Poly.Syntax (TmFunName, TmVar(..))
+import Strat.Poly.Names (GenName)
+import Strat.Poly.Syntax (TmVar(..))
 
 
 data TermExpr
   = TMBound Int
   | TMMeta TmVar [Int]
-  | TMFun TmFunName [TermExpr]
+  | TMFun GenName [TermExpr]
   deriving (Eq, Ord, Show)
 
 freeTmVarsExpr :: TermExpr -> S.Set TmVar

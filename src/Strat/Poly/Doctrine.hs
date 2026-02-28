@@ -236,7 +236,7 @@ doctrineTypeTheoryBaseFromTables doc ctorTables =
 
 mkDefFragments
   :: ModeTheory
-  -> M.Map ModeName (M.Map TmFunName TmFunSig)
+  -> M.Map ModeName (M.Map GenName TmFunSig)
   -> M.Map ModeName [TmRule]
   -> M.Map ModeName TRS
   -> M.Map ModeName DefFragment
@@ -570,7 +570,7 @@ renderRootSymbols trs =
     names = S.toList (S.fromList (mapMaybe rootName (RS.trsRules trs)))
     rootName rule =
       case RS.trLHS rule of
-        TMFun (TmFunName name) _ -> Just name
+        TMFun (GenName name) _ -> Just name
         _ -> Nothing
 
 renderFragmentRules :: TRS -> Text
@@ -584,14 +584,14 @@ renderFragmentRules trs =
       | rule <- RS.trsRules trs
       ]
 
-derivedTmFuns :: Doctrine -> CtorTables -> M.Map ModeName (M.Map TmFunName TmFunSig)
+derivedTmFuns :: Doctrine -> CtorTables -> M.Map ModeName (M.Map GenName TmFunSig)
 derivedTmFuns doc ctorTables =
   M.fromList
     [ (mode, funs)
     | (mode, table) <- M.toList (dGens doc)
     , let funs =
             M.fromList
-              [ (TmFunName gName, TmFunSig { tfsArgs = [ ty | InPort ty <- gdDom gd ], tfsRes = res })
+              [ (GenName gName, TmFunSig { tfsArgs = [ ty | InPort ty <- gdDom gd ], tfsRes = res })
               | gd <- M.elems table
               , let GenName gName = gdName gd
               , not (isTypeDeclGenNameInTables doc ctorTables mode (ObjName gName))
@@ -609,7 +609,7 @@ derivedTmFuns doc ctorTables =
         InPort _ -> True
         InBinder _ -> False
 
-derivedTmRules :: Doctrine -> M.Map ModeName (M.Map TmFunName TmFunSig) -> M.Map ModeName [TmRule]
+derivedTmRules :: Doctrine -> M.Map ModeName (M.Map GenName TmFunSig) -> M.Map ModeName [TmRule]
 derivedTmRules doc tmFuns =
   M.fromListWith (<>)
     [ (mode, [rule])
@@ -628,7 +628,7 @@ derivedTmRules doc tmFuns =
         Bidirectional -> [(c2LHS cell, c2RHS cell), (c2RHS cell, c2LHS cell)]
         Unoriented -> []
 
-cellPairToTmRule :: M.Map TmFunName TmFunSig -> Diagram -> Diagram -> Maybe TmRule
+cellPairToTmRule :: M.Map GenName TmFunSig -> Diagram -> Diagram -> Maybe TmRule
 cellPairToTmRule funs lhs0 rhs0 = do
   vars <- mkInputVars lhs0
   let varCtx = map tmvSort vars
@@ -646,7 +646,7 @@ cellPairToTmRule funs lhs0 rhs0 = do
       case ePayload edge of
         PGen (GenName gName) attrs bargs
           | M.null attrs && null bargs -> do
-              sig <- M.lookup (TmFunName gName) funs
+              sig <- M.lookup (GenName gName) funs
               if length (tfsArgs sig) == length (eIns edge) && length (eOuts edge) == 1
                 then Just ()
                 else Nothing

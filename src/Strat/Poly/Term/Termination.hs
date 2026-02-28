@@ -9,7 +9,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.List as L
-import Strat.Poly.Syntax (TmFunName(..))
+import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Term.AST (TermExpr(..))
 import Strat.Poly.Term.RewriteSystem (TRS(..), TRule(..))
 
@@ -20,8 +20,8 @@ data SCRel
   deriving (Eq, Ord, Show)
 
 data SCGraph = SCGraph
-  { scFrom :: TmFunName
-  , scTo :: TmFunName
+  { scFrom :: GenName
+  , scTo :: GenName
   , scFromArity :: Int
   , scToArity :: Int
   , scEdges :: M.Map (Int, Int) SCRel
@@ -74,14 +74,14 @@ ruleGraphs rule = do
     | (g, qArgs) <- calls
     ]
 
-collectCalls :: TermExpr -> [(TmFunName, [TermExpr])]
+collectCalls :: TermExpr -> [(GenName, [TermExpr])]
 collectCalls tm =
   case tm of
     TMFun f args -> (f, args) : concatMap collectCalls args
     TMMeta _ _ -> []
     TMBound _ -> []
 
-mkGraph :: TmFunName -> [TermExpr] -> TmFunName -> [TermExpr] -> SCGraph
+mkGraph :: GenName -> [TermExpr] -> GenName -> [TermExpr] -> SCGraph
 mkGraph f lhsArgs g qArgs =
   SCGraph
     { scFrom = f
@@ -222,8 +222,8 @@ renderEdge ((i, j), rel) =
         SCStrict -> "-<"
         SCWeak -> "<="
 
-renderFun :: TmFunName -> Text
-renderFun (TmFunName t) = t
+renderFun :: GenName -> Text
+renderFun (GenName t) = t
 
 indent :: Text -> Text
 indent t =

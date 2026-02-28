@@ -71,7 +71,7 @@ newtype Subst = Subst
 
 data PortHead
   = PHBound Int
-  | PHFun TmFunName [PortId]
+  | PHFun GenName [PortId]
   | PHMeta TmVar
 
 lookupMeta :: Subst -> TmVar -> Maybe CodeArg
@@ -580,8 +580,8 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
         Nothing -> do
           edge <- producerEdge diag pid
           case ePayload edge of
-            PGen (GenName fName) attrs bargs
-              | M.null attrs && null bargs -> Right (PHFun (TmFunName fName) (eIns edge))
+            PGen fName attrs bargs
+              | M.null attrs && null bargs -> Right (PHFun fName (eIns edge))
               | otherwise -> Left "unifyTm: non-term generator payload in normalized term graph"
             PTmMeta v -> Right (PHMeta v)
             _ -> Left "unifyTm: non-term payload in normalized term graph"
@@ -597,10 +597,10 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                 else do
                   edge <- producerEdge diag pid0
                   case ePayload edge of
-                    PGen (GenName fName) attrs bargs
+                    PGen fName attrs bargs
                       | M.null attrs && null bargs -> do
                           args <- mapM (go (S.insert pid0 seen)) (eIns edge)
-                          Right (TMFun (TmFunName fName) args)
+                          Right (TMFun fName args)
                       | otherwise ->
                           Left "unifyTm: non-term generator payload in normalized term graph"
                     PTmMeta v -> do

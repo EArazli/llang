@@ -37,8 +37,8 @@ import Data.Map.Strict (Map)
 import qualified Data.Set as S
 import Control.Monad (foldM)
 import Strat.Poly.ModeSyntax
-import Strat.Poly.Syntax (Obj(..), TmFunName(..))
-import Strat.Poly.Names (GenName)
+import Strat.Poly.Syntax (Obj(..))
+import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Term.AST (TermExpr(..))
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
 import Strat.Poly.Term.RewriteSystem (TRS, TRule(..), mkTRS)
@@ -264,8 +264,8 @@ composeMod _ f g
 -- A path m1.m2...mk is encoded as m1(m2(...(mk(__mod_id))...)).
 -- `__mod_id` is a nullary constant that cannot clash with user identifiers
 -- (user identifiers must start with a letter; `__mod_id` starts with `_`).
-modEqIdFun :: TmFunName
-modEqIdFun = TmFunName "__mod_id"
+modEqIdFun :: GenName
+modEqIdFun = GenName "__mod_id"
 
 modEqIdTerm :: TermExpr
 modEqIdTerm = TMFun modEqIdFun []
@@ -276,7 +276,7 @@ modEqDiagnosticMode = ModeName "__mod_eq"
 
 encodeModPathWithTail :: [ModName] -> TermExpr -> TermExpr
 encodeModPathWithTail mods tail0 =
-  foldr (\(ModName m) acc -> TMFun (TmFunName m) [acc]) tail0 mods
+  foldr (\(ModName m) acc -> TMFun (GenName m) [acc]) tail0 mods
 
 decodeModPathFromTerm :: TermExpr -> Maybe [ModName]
 decodeModPathFromTerm = go
@@ -285,7 +285,7 @@ decodeModPathFromTerm = go
     go (TMFun f [inner]) | f /= modEqIdFun = do
       rest <- go inner
       case f of
-        TmFunName nm -> Just (ModName nm : rest)
+        GenName nm -> Just (ModName nm : rest)
     go _ = Nothing
 
 modExprToTerm :: ModExpr -> TermExpr

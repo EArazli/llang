@@ -24,7 +24,6 @@ import Strat.Poly.Obj
   , Obj(..)
   , ObjName(..)
   , ObjRef(..)
-  , TmFunName(..)
   )
 import Strat.Poly.DefEq (diagramToTermExprChecked, normalizeObjDeepWithCtx)
 import Strat.Poly.TermExpr (TermExpr(..))
@@ -161,7 +160,7 @@ testTermArgNormalization = do
           assertFailure "expected Unit classifier code in Vec second argument"
       natSort <- lookupNatSort doc ref
       nExpr <- requireEither (diagramToTermExprChecked tt [] natSort nTm)
-      nExpr @?= TMFun (TmFunName "S") [TMFun (TmFunName "Z") []]
+      nExpr @?= TMFun (GenName "S") [TMFun (GenName "Z") []]
     _ ->
       assertFailure "expected Vec(term, obj) code shape"
   where

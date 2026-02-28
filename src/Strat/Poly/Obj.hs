@@ -5,7 +5,6 @@ module Strat.Poly.Obj
   ( mkModeMetaVar
   , ObjName(..)
   , ObjRef(..)
-  , TmFunName(..)
   , TmVar(..)
   , tmVarOwner
   , sameTmVarId
@@ -46,7 +45,6 @@ import Strat.Poly.Syntax
   ( mkModeMetaVar
   , ObjName(..)
   , ObjRef(..)
-  , TmFunName(..)
   , TmVar(..)
   , tmVarOwner
   , sameTmVarId

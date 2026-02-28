@@ -47,7 +47,6 @@ import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
   ( TermDiagram(..)
-  , TmFunName(..)
   , TmVar(..)
   , Obj(..)
   , objOwnerMode
@@ -60,7 +59,7 @@ import Strat.Poly.TypeTheory
   )
 
 data TermConvEnv = TermConvEnv
-  { tcLookupSig :: ModeName -> TmFunName -> Maybe TmFunSig
+  { tcLookupSig :: ModeName -> GenName -> Maybe TmFunSig
   , tcSortEq :: [Obj] -> Obj -> Obj -> Either Text Bool
   }
 
@@ -117,8 +116,7 @@ termExprToDiagramWith convEnv tmCtx expectedSort tm = do
           sig <- requireFunSig convEnv tmCtx currentSort f args
           (argPorts, d1) <- foldM step ([], diag) (zip (tfsArgs sig) args)
           let (outPort, d2) = freshPort currentSort d1
-          let TmFunName fname = f
-          d3 <- addEdgePayload (PGen (GenName fname) M.empty []) argPorts [outPort] d2
+          d3 <- addEdgePayload (PGen f M.empty []) argPorts [outPort] d2
           pure (outPort, d3)
       where
         step (ports, dAcc) (argSort, argTm) = do
@@ -256,10 +254,10 @@ diagramGraphToTermExprCore diag = do
                       Just edge -> Right edge
                   _ -> Left "diagramToTermExpr: missing producer"
               case ePayload producer of
-                PGen (GenName gName) attrs bargs
+                PGen gen attrs bargs
                   | M.null attrs && null bargs -> do
                       args <- mapM (termAt (S.insert pid seen)) (eIns producer)
-                      Right (TMFun (TmFunName gName) args)
+                      Right (TMFun gen args)
                   | otherwise ->
                       Left "diagramToTermExpr: generator term node must not carry attrs or binder args"
                 PTmMeta v ->
@@ -388,7 +386,7 @@ structuralConvEnv tt =
     , tcSortEq = \_ a b -> Right (a == b)
     }
 
-requireFunSig :: TermConvEnv -> [Obj] -> Obj -> TmFunName -> [TermExpr] -> Either Text TmFunSig
+requireFunSig :: TermConvEnv -> [Obj] -> Obj -> GenName -> [TermExpr] -> Either Text TmFunSig
 requireFunSig convEnv tmCtx sortTy f args = do
   sig <-
     case tcLookupSig convEnv (objOwnerMode sortTy) f of

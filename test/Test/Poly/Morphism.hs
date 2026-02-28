@@ -1207,8 +1207,8 @@ testTermTypeTemplateInstantiation = do
   let vec2Ref = ObjRef modeM' (ObjName "Vec2")
   let natTy = mkCon natRef []
   let aTy' = mkCon aRef []
-  let z = TMFun (TmFunName "Z") []
-  let s x = TMFun (TmFunName "S") [x]
+  let z = TMFun (GenName "Z") []
+  let s x = TMFun (GenName "S") [x]
   let zGen =
         GenDecl
           { gdName = GenName "Z"
@@ -1542,7 +1542,7 @@ testMorphismMapsStructuredTermArgs = do
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tt -> pure tt
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
-  tmSrc <- case termExprToDiagram ttSrc [] natTy (TMFun (TmFunName "succ") [TMMeta nVar []]) of
+  tmSrc <- case termExprToDiagram ttSrc [] natTy (TMFun (GenName "succ") [TMMeta nVar []]) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
   let tySrc = mkCon vecRef [OATm tmSrc]
@@ -1555,7 +1555,7 @@ testMorphismMapsStructuredTermArgs = do
       tmExpr <- case diagramToTermExpr ttTgt [] natTy tmOut of
         Left err -> assertFailure (T.unpack err) >> fail "unreachable"
         Right e -> pure e
-      tmExpr @?= TMFun (TmFunName "dbl") [TMMeta nVar []]
+      tmExpr @?= TMFun (GenName "dbl") [TMMeta nVar []]
     _ ->
       assertFailure "expected mapped Vec term argument"
 

@@ -4,7 +4,6 @@ module Strat.Poly.Syntax
   ( ObjName(..)
   , ObjRef(..)
   , mkModeMetaVar
-  , TmFunName(..)
   , TmVar(..)
   , tmVarOwner
   , sameTmVarId
@@ -38,8 +37,6 @@ data ObjRef = ObjRef
   { orMode :: ModeName
   , orName :: ObjName
   } deriving (Eq, Ord, Show)
-
-newtype TmFunName = TmFunName Text deriving (Eq, Ord, Show)
 
 data TmVar = TmVar
   { tmvName :: Text
