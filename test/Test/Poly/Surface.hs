@@ -16,7 +16,7 @@ import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, ModuleEnv(..), TermDef(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.ModeTheory (ModeName(..), ClassificationDecl(..), ModeTheory(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), pattern ObjVar, CodeArg(..), CodeTerm(..), mkCon)
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), pattern ObjVar, objVarToTmVar, CodeArg(..), CodeTerm(..), mkCon)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), InputShape(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..))
@@ -106,7 +106,7 @@ mkDoctrine hasDup hasDrop =
                 ClassificationDecl
                   { cdClassifier = modeM
                   , cdUniverse = universe
-                  , cdTag = Nothing
+                  
                   , cdComp = Nothing
                   }
           }
@@ -115,7 +115,7 @@ mkDoctrine hasDup hasDrop =
         GenDecl
           { gdName = GenName name
           , gdMode = modeM
-          , gdTyVars = tyVars
+          , gdTyVars = map objVarToTmVar tyVars
           , gdTmVars = []
           , gdParams = []
           , gdDom = map InPort dom
@@ -162,7 +162,7 @@ mkStructEnv target = do
                 ClassificationDecl
                   { cdClassifier = modeM
                   , cdUniverse = universe
-                  , cdTag = Nothing
+                  
                   , cdComp = Nothing
                   }
           }
@@ -171,7 +171,7 @@ mkStructEnv target = do
         GenDecl
           { gdName = GenName name
           , gdMode = modeM
-          , gdTyVars = [aVar]
+          , gdTyVars = [objVarToTmVar aVar]
           , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort (OVar aVar)]

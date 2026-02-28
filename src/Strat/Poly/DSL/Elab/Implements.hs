@@ -1,0 +1,770 @@
+{-# LANGUAGE OverloadedStrings #-}
+module Strat.Poly.DSL.Elab.Implements
+  ( ImplementsCheckResult(..)
+  , ImplementsProof(..)
+  , checkImplementsObligationsWithBudget
+  , checkImplementsObligations
+  ) where
+
+import Control.Monad (foldM)
+import Data.Char (isAlphaNum)
+import qualified Data.IntMap.Strict as IM
+import qualified Data.List as L
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
+import Data.Text (Text)
+import qualified Data.Text as T
+import Strat.Common.Rules (RewritePolicy(..))
+import Strat.Frontend.Env (ModuleEnv(..))
+import Strat.Poly.Attr (ensureAttrVarNameSortsDiagram)
+import Strat.Poly.DSL.AST
+import Strat.Poly.DSL.Elab.Diag
+  ( BinderMetaMode(..)
+  , elabDiagExprWith
+  , ensureAcyclicMode
+  , mkForGenDiag
+  , renderGenName
+  , renderModeName
+  , unifyBoundary
+  )
+import Strat.Poly.DSL.Elab.Resolve (elabRawModExpr)
+import Strat.Poly.DSL.Elab.Term (ownerModeForTypeMeta)
+import Strat.Poly.DefEq (defEqTermDiagram)
+import Strat.Poly.Diagram
+import Strat.Poly.DiagramIso (diagramIsoEq)
+import Strat.Poly.Doctrine
+import Strat.Poly.Graph (BinderArg(..), Edge(..), EdgePayload(..), diagramPortObj)
+import Strat.Poly.ModAction (applyModExpr)
+import Strat.Poly.ModeTheory
+import Strat.Poly.Morphism
+import Strat.Poly.Normalize (NormalizationStatus(..), autoJoinProof, normalize)
+import Strat.Poly.Obj
+import Strat.Poly.Proof
+  ( JoinProof(..)
+  , RewritePath(..)
+  , SearchBudget(..)
+  , SearchLimit
+  , SearchOutcome(..)
+  , defaultSearchBudget
+  , renderSearchLimit
+  , checkJoinProof
+  )
+import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.Slots
+  ( Slot(..)
+  , SlotId(..)
+  , SlotKind(..)
+  , SlotSig(..)
+  , extractDoctrineSlotsWithTables
+  )
+import Strat.Poly.TypeTheory (TypeTheory(..), ttCtorTablesByOwner)
+import qualified Strat.Poly.UnifyObj as U
+
+data ImplementsCheckResult
+  = ImplementsCheckProved [(Text, ImplementsProof)]
+  | ImplementsCheckUndecided Text SearchLimit
+  deriving (Eq, Show)
+
+data ImplementsProof
+  = ImplementsProofJoin JoinProof
+  | ImplementsProofDefEq
+  deriving (Eq, Show)
+
+checkImplementsObligationsWithBudget :: SearchBudget -> ModuleEnv -> Doctrine -> Morphism -> Doctrine -> Either Text ImplementsCheckResult
+checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
+  ttTgt <- doctrineTypeTheory tgtDoc
+  ttSrc <- doctrineTypeTheory (morSrc morph)
+  let tgtCtorTables = ttCtorTablesByOwner ttTgt
+  slotsByGen <- extractDoctrineSlotsWithTables tgtDoc tgtCtorTables
+  checkObligations ttSrc ttTgt tgtCtorTables slotsByGen (dObligations ifaceDoc)
+  where
+    checkObligations _ _ _ _ [] = Right (ImplementsCheckProved [])
+    checkObligations ttSrc ttTgt tgtCtorTables slotsByGen (obl:rest) = do
+      result <- checkOne ttSrc ttTgt tgtCtorTables slotsByGen obl
+      case result of
+        ImplementsCheckUndecided{} -> Right result
+        ImplementsCheckProved proofs -> do
+          restResult <- checkObligations ttSrc ttTgt tgtCtorTables slotsByGen rest
+          case restResult of
+            ImplementsCheckUndecided{} -> Right restResult
+            ImplementsCheckProved restProofs ->
+              Right (ImplementsCheckProved (proofs <> restProofs))
+
+    generatedCompRules = rulesFromPolicy UseOnlyComputationalLR (dCells2 tgtDoc)
+
+    checkOne ttSrc ttTgt tgtCtorTables slotsByGen obl
+      | obForGen obl = checkForGen ttSrc ttTgt tgtCtorTables slotsByGen obl
+      | otherwise = checkPlain ttSrc ttTgt tgtCtorTables obl
+
+    checkPlain ttSrc ttTgt tgtCtorTables obl = do
+      tyVarsTgt <- mapM (mapObligationTyVar ttSrc ttTgt tgtCtorTables morph) (obTyVars obl)
+      tmVarsTgt <- mapM (mapObligationTmVar ttSrc ttTgt tgtCtorTables morph) (obTmVars obl)
+      lhs0 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obLHSExpr obl)
+      rhs0 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obRHSExpr obl)
+      domTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph) (obDom obl)
+      codTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph) (obCod obl)
+      let rigidTy = S.fromList (map tmVarToObjVar tyVarsTgt)
+      let rigidTm = S.fromList tmVarsTgt
+      lhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt lhs0
+      rhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt rhs0
+      let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
+      checkObligationJoin ttTgt rules (obGenerated obl) (obName obl) lhs rhs
+
+    checkForGen ttSrc ttTgt tgtCtorTables slotsByGen obl = do
+      modeTgt <- applyMorphismMode morph (obMode obl)
+      gens <- resolveForGenTargets tgtCtorTables modeTgt obl
+      checkForGens ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl gens
+
+    checkForGens _ _ _ _ _ _ [] = Right (ImplementsCheckProved [])
+    checkForGens ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl (gen:rest) = do
+      result <- checkForGenOne ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl gen
+      case result of
+        ImplementsCheckUndecided{} -> Right result
+        ImplementsCheckProved proofs -> do
+          restResult <- checkForGens ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl rest
+          case restResult of
+            ImplementsCheckUndecided{} -> Right restResult
+            ImplementsCheckProved restProofs ->
+              Right (ImplementsCheckProved (proofs <> restProofs))
+
+    checkForGenOne ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl gen = do
+      genDiag <- mkForGenDiag modeTgt gen
+      lhs0 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obLHSExpr obl)
+      rhs0 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obRHSExpr obl)
+      dom <- diagramDom genDiag
+      cod <- diagramCod genDiag
+      let rigidTy = S.fromList (map tmVarToObjVar (gdTyVars gen))
+      let rigidTm = S.fromList (gdTmVars gen)
+      lhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod lhs0
+      rhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod rhs0
+      let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
+      let label = obName obl <> "[" <> renderGenName (gdName gen) <> "]"
+      generatedSlotOutcome <- checkGeneratedSlot ttTgt slotsByGen modeTgt gen obl label lhs rhs
+      case generatedSlotOutcome of
+        Just out -> Right out
+        Nothing -> checkObligationJoin ttTgt rules (obGenerated obl) label lhs rhs
+
+    resolveForGenTargets tgtCtorTables modeTgt obl =
+      case obForGenName obl of
+        Nothing -> Right allModeGens
+        Just srcGenName -> do
+          tgtGenName <- mapForGenName (obMode obl) srcGenName
+          case M.lookup modeTgt (dGens tgtDoc) >>= M.lookup tgtGenName of
+            Nothing ->
+              Left
+                ( "implements obligation "
+                    <> obName obl
+                    <> ": missing target generator "
+                    <> renderModeName modeTgt
+                    <> "."
+                    <> renderGenName tgtGenName
+                )
+            Just gd ->
+              if isTypeDeclGenNameInTables tgtDoc tgtCtorTables modeTgt (ObjName (renderGenName tgtGenName))
+                then
+                  Left
+                    ( "implements obligation "
+                        <> obName obl
+                        <> ": target generator "
+                        <> renderModeName modeTgt
+                        <> "."
+                        <> renderGenName tgtGenName
+                        <> " is constructor-like"
+                    )
+                else Right [gd]
+      where
+        compSupportNames =
+          case M.lookup modeTgt (mtClassifiedBy (dModes tgtDoc)) >>= cdComp of
+            Just comp ->
+              S.fromList [compCtxExt comp, compVar comp, compReindex comp]
+            Nothing -> S.empty
+        allModeGens =
+          [ gd
+          | gd <- M.elems (M.findWithDefault M.empty modeTgt (dGens tgtDoc))
+          , not (isTypeDeclGenNameInTables tgtDoc tgtCtorTables modeTgt (ObjName (renderGenName (gdName gd))))
+          , gdName gd `S.notMember` compSupportNames
+          ]
+
+    mapForGenName modeSrc srcGenName =
+      case M.lookup (modeSrc, srcGenName) (morGenMap morph) of
+        Nothing -> Right srcGenName
+        Just image ->
+          case singleGeneratorImageName (giDiagram image) of
+            Just tgtGenName -> Right tgtGenName
+            Nothing ->
+              Left
+                ( "implements obligation: source generator "
+                    <> renderModeName modeSrc
+                    <> "."
+                    <> renderGenName srcGenName
+                    <> " maps to a non-singleton generator image"
+                )
+
+    singleGeneratorImageName diag =
+      case IM.elems (dEdges diag) of
+        [edge] ->
+          case ePayload edge of
+            PGen g _ _ 
+              | eIns edge == dIn diag
+              , eOuts edge == dOut diag ->
+                  Just g
+            _ -> Nothing
+        _ -> Nothing
+
+    checkGeneratedSlot tt slotsByGen modeTgt gen obl label lhs rhs =
+      case generatedSlotFor slotsByGen modeTgt gen obl of
+        Nothing -> Right Nothing
+        Just slot -> do
+          case slotKind slot of
+            SlotCtorTmArg -> do
+              let lhsTmE = extractCtorSlotTerm gen slot lhs
+              let rhsTmE = extractCtorSlotTerm gen slot rhs
+              case (lhsTmE, rhsTmE) of
+                (Right lhsTm, Right rhsTm) ->
+                  case slotSig slot of
+                    SlotTermSig _ sortTy -> do
+                      let lhsCtx = dTmCtx (unTerm lhsTm)
+                      let rhsCtx = dTmCtx (unTerm rhsTm)
+                      case chooseHostTmCtx lhsCtx rhsCtx of
+                        Nothing ->
+                          Right Nothing
+                        Just hostCtx -> do
+                          ok <- defEqTermDiagram tt hostCtx sortTy lhsTm rhsTm
+                          if ok
+                            -- Slot-local ctor obligations are discharged on the designated term slot,
+                            -- not by a whole-diagram join witness.
+                            then Right (Just (ImplementsCheckProved [(label, ImplementsProofDefEq)]))
+                            else Right Nothing
+                    SlotBinderSig _ ->
+                      Right Nothing
+                _ ->
+                  Right Nothing
+            SlotBinder -> do
+              let lhsArgE = extractBinderSlotArg gen slot lhs
+              let rhsArgE = extractBinderSlotArg gen slot rhs
+              case (lhsArgE, rhsArgE) of
+                (Right lhsArg, Right rhsArg) -> do
+                  ok <- defEqBinderArg tt lhsArg rhsArg
+                  if ok
+                    -- Slot-local binder obligations are discharged on the designated binder slot.
+                    then Right (Just (ImplementsCheckProved [(label, ImplementsProofDefEq)]))
+                    else Right Nothing
+                _ ->
+                  Right Nothing
+
+    chooseHostTmCtx lhsCtx rhsCtx
+      | lhsCtx == rhsCtx = Just lhsCtx
+      | lhsCtx `L.isPrefixOf` rhsCtx = Just rhsCtx
+      | rhsCtx `L.isPrefixOf` lhsCtx = Just lhsCtx
+      | otherwise = Nothing
+
+    generatedSlotFor slotsByGen modeTgt gen obl = do
+      slots <- M.lookup (modeTgt, gdName gen) slotsByGen
+      key <- generatedSlotKey (obName obl)
+      law <- generatedLawSuffix (obName obl)
+      let matches =
+            [ s
+            | s <- slots
+            , sanitizeGeneratedSlotPath (sidPath (slotId s)) == key
+            , generatedSlotLawAllowed obl law gen s
+            ]
+      case matches of
+        [slot] -> Just slot
+        _ -> Nothing
+
+    generatedSlotLawAllowed obl law _gen slot =
+      if obGenerated obl && obForGen obl
+        then
+          case (slotKind slot, law) of
+            (SlotCtorTmArg, "id_dom") -> True
+            (SlotCtorTmArg, "id_cod") -> True
+            (SlotCtorTmArg, "comp_dom") -> True
+            (SlotCtorTmArg, "comp_cod") -> True
+            (SlotBinder, "id_dom") -> True
+            (SlotBinder, "id_cod") -> True
+            (SlotBinder, "comp_dom") -> True
+            (SlotBinder, "comp_cod") -> True
+            (SlotBinder, "nat") -> True
+            _ -> False
+        else False
+
+    generatedLawSuffix name =
+      case reverse (T.splitOn "/" name) of
+        law : _ -> Just law
+        _ -> Nothing
+
+    generatedSlotKey name =
+      case T.splitOn "/" name of
+        (_prefix : _mode : _gen : slotKey : _law : []) -> Just slotKey
+        _ -> Nothing
+
+    sanitizeGeneratedSlotPath =
+      T.map (\c -> if isAlphaNum c || c == '/' || c == '_' || c == '-' then c else '_')
+
+    extractBinderSlotArg :: GenDecl -> Slot -> Diagram -> Either Text BinderArg
+    extractBinderSlotArg gen slot diag = do
+      (domIdx, pathTail) <- parseBinderSlotPath (sidPath (slotId slot))
+      if null pathTail
+        then Right ()
+        else Left "generated slot obligation: unsupported binder slot path"
+      binderIdx <- binderArgIndexForDomSlot gen domIdx
+      bargs <- uniqueGenBinderArgs (gdName gen) diag
+      nth "binder argument" binderIdx bargs
+
+    parseBinderSlotPath path =
+      case T.splitOn "." path of
+        [] ->
+          Left "generated slot obligation: empty slot path"
+        root : rest ->
+          case parseIndexed "dom[" root of
+            Just domIdx -> Right (domIdx, rest)
+            Nothing -> Left "generated slot obligation: binder slot root must be dom[...]"
+
+    binderArgIndexForDomSlot gen domIdx =
+      if domIdx < 0 || domIdx >= length (gdDom gen)
+        then Left "generated slot obligation: binder slot domain index out of bounds"
+        else
+          let before = take domIdx (gdDom gen)
+           in case gdDom gen !! domIdx of
+                InBinder _ ->
+                  Right (length [() | InBinder _ <- before])
+                InPort _ ->
+                  Left "generated slot obligation: slot path points to non-binder domain input"
+
+    uniqueGenBinderArgs g diag =
+      case
+        [ bargs
+        | edge <- IM.elems (dEdges diag)
+        , PGen g' _ bargs <- [ePayload edge]
+        , g' == g
+        ]
+      of
+        [bargs] -> Right bargs
+        [] -> Left "generated slot obligation: generator edge not found while extracting binder slot"
+        _ -> Left "generated slot obligation: multiple generator edges found while extracting binder slot"
+
+    defEqBinderArg tt lhsArg rhsArg =
+      case (lhsArg, rhsArg) of
+        (BAMeta l, BAMeta r) ->
+          Right (l == r)
+        (BAConcrete lhsDiag0, BAConcrete rhsDiag0) ->
+          case chooseHostTmCtx (dTmCtx lhsDiag0) (dTmCtx rhsDiag0) of
+            Nothing ->
+              Right False
+            Just hostCtx -> do
+              lhsDiag <- weakenDiagramTmCtxTo hostCtx lhsDiag0
+              rhsDiag <- weakenDiagramTmCtxTo hostCtx rhsDiag0
+              lhsSeed <- normalizeForGeneratedObligation tt [] lhsDiag
+              rhsSeed <- normalizeForGeneratedObligation tt [] rhsDiag
+              diagramIsoEq lhsSeed rhsSeed
+        _ ->
+          Right False
+
+    extractCtorSlotTerm :: GenDecl -> Slot -> Diagram -> Either Text TermDiagram
+    extractCtorSlotTerm gen slot diag = do
+      let parts = T.splitOn "." (sidPath (slotId slot))
+      case parts of
+        [] ->
+          Left "generated slot obligation: empty slot path"
+        root : rest -> do
+          (rootObj, tailSegs) <- extractRootObj gen root rest diag
+          extractObjPath tailSegs rootObj
+
+    extractRootObj gen seg rest diag
+      | Just idx <- parseIndexed "dom[" seg =
+          extractDomRootObj gen idx rest diag
+      | Just idx <- parseIndexed "cod[" seg = do
+          pid <- nth "codomain" idx (dOut diag)
+          ty <- lookupPortTy "codomain" pid diag
+          Right (ty, rest)
+      | otherwise =
+          Left "generated slot obligation: unsupported root slot path"
+
+    extractDomRootObj gen domIdx rest diag =
+      if domIdx < 0 || domIdx >= length (gdDom gen)
+        then Left "generated slot obligation: domain index out of bounds"
+        else
+          case gdDom gen !! domIdx of
+            InPort _ -> do
+              let domPortIdx = length [() | InPort _ <- take domIdx (gdDom gen)]
+              pid <- nth "domain" domPortIdx (dIn diag)
+              ty <- lookupPortTy "domain" pid diag
+              Right (ty, rest)
+            InBinder _ -> do
+              bdiag <- binderArgDiagramForDomSlot gen domIdx diag
+              case rest of
+                seg' : rest'
+                  | Just idx <- parseIndexed "binderDom[" seg' -> do
+                      pid <- nth "binder domain" idx (dIn bdiag)
+                      ty <- lookupPortTy "binder domain" pid bdiag
+                      Right (ty, rest')
+                  | Just idx <- parseIndexed "binderCod[" seg' -> do
+                      pid <- nth "binder codomain" idx (dOut bdiag)
+                      ty <- lookupPortTy "binder codomain" pid bdiag
+                      Right (ty, rest')
+                  | Just idx <- parseIndexed "tmctx[" seg' -> do
+                      ty <- nth "binder term context" idx (dTmCtx bdiag)
+                      Right (ty, rest')
+                _ ->
+                  Left "generated slot obligation: binder ctor slot path must continue with binderDom/binderCod/tmctx"
+
+    binderArgDiagramForDomSlot gen domIdx diag = do
+      binderIdx <- binderArgIndexForDomSlot gen domIdx
+      bargs <- uniqueGenBinderArgs (gdName gen) diag
+      barg <- nth "binder argument" binderIdx bargs
+      case barg of
+        BAConcrete bdiag -> Right bdiag
+        BAMeta _ -> Left "generated slot obligation: expected concrete binder argument for binder ctor slot path"
+
+    extractObjPath segs obj =
+      extractObjCodePath segs (objCode obj)
+
+    extractObjCodePath segs code =
+      case segs of
+        [] ->
+          Left "generated slot obligation: slot path does not end at a term argument"
+        seg : rest
+          | seg == "mod" ->
+              case code of
+                CTLift _ inner ->
+                  extractObjCodePath rest inner
+                _ ->
+                  Left "generated slot obligation: expected modality wrapper in slot path"
+          | Just idx <- parseIndexed "arg[" seg ->
+              case code of
+                CTCon _ args -> do
+                  arg <- nth "constructor argument" idx args
+                  case arg of
+                    CATm tm ->
+                      if null rest
+                        then Right tm
+                        else extractTermPath rest tm
+                    CAObj ty ->
+                      extractObjPath rest ty
+                _ ->
+                  Left "generated slot obligation: expected constructor in slot path"
+          | otherwise ->
+              Left "generated slot obligation: unsupported object slot segment"
+
+    extractTermPath segs tm =
+      case segs of
+        "term" : rest -> stepTerm rest tm
+        _ -> Left "generated slot obligation: expected term segment in slot path"
+      where
+        stepTerm [] term = Right term
+        stepTerm (seg : rest) (TermDiagram termDiag)
+          | Just idx <- parseIndexed "port[" seg = do
+              ty <- nthIntMap "term port" idx (dPortObj termDiag)
+              extractObjPath rest ty
+          | Just idx <- parseIndexed "tmctx[" seg = do
+              ty <- nth "term context" idx (dTmCtx termDiag)
+              extractObjPath rest ty
+          | Just idx <- parseIndexed "edge[" seg =
+              case rest of
+                "sort" : rest' -> do
+                  edge <- nthIntMap "term edge" idx (dEdges termDiag)
+                  case ePayload edge of
+                    PTmMeta tv ->
+                      extractObjPath rest' (tmmSort tv)
+                    _ ->
+                      Left "generated slot obligation: expected PTmMeta edge at term slot sort path"
+                "box" : rest' -> do
+                  edge <- nthIntMap "term edge" idx (dEdges termDiag)
+                  case ePayload edge of
+                    PBox _ inner ->
+                      extractTermPath rest' (TermDiagram inner)
+                    _ ->
+                      Left "generated slot obligation: expected PBox edge at term slot box path"
+                "feedback" : rest' -> do
+                  edge <- nthIntMap "term edge" idx (dEdges termDiag)
+                  case ePayload edge of
+                    PFeedback inner ->
+                      extractTermPath rest' (TermDiagram inner)
+                    _ ->
+                      Left "generated slot obligation: expected PFeedback edge at term slot feedback path"
+                bargSeg : rest'
+                  | Just bargIdx <- parseIndexed "barg[" bargSeg -> do
+                      edge <- nthIntMap "term edge" idx (dEdges termDiag)
+                      case ePayload edge of
+                        PGen _ _ bargs -> do
+                          barg <- nth "term binder argument" bargIdx bargs
+                          case barg of
+                            BAConcrete inner ->
+                              extractTermPath rest' (TermDiagram inner)
+                            BAMeta _ ->
+                              Left "generated slot obligation: expected concrete term binder argument path"
+                        _ ->
+                          Left "generated slot obligation: expected PGen edge at term slot binder-arg path"
+                _ ->
+                  Left "generated slot obligation: expected .sort/.box/.feedback/.barg[...] after term edge segment"
+          | otherwise =
+              Left "generated slot obligation: unsupported term slot segment"
+
+    parseIndexed prefix seg =
+      if prefix `T.isPrefixOf` seg && "]" `T.isSuffixOf` seg
+        then
+          let inner = T.dropEnd 1 (T.drop (T.length prefix) seg)
+           in case reads (T.unpack inner) of
+                [(n, "")] -> Just n
+                _ -> Nothing
+        else Nothing
+
+    nth label idx xs =
+      if idx >= 0 && idx < length xs
+        then Right (xs !! idx)
+        else Left ("generated slot obligation: " <> label <> " index out of bounds")
+
+    nthIntMap label idx table =
+      case IM.lookup idx table of
+        Just x -> Right x
+        Nothing -> Left ("generated slot obligation: " <> label <> " index out of bounds")
+
+    lookupPortTy label pid diag =
+      case diagramPortObj diag pid of
+        Just ty -> Right ty
+        Nothing -> Left ("generated slot obligation: missing " <> label <> " port type")
+
+    checkObligationJoin tt rules useGeneratedSeed label lhs rhs = do
+      generatedOutcome <-
+        if useGeneratedSeed
+          then tryGeneratedSeed tt rules label lhs rhs
+          else Right Nothing
+      case generatedOutcome of
+        Just out -> Right out
+        Nothing -> runJoin tt rules label lhs rhs
+
+    runJoin tt rules label lhs rhs = do
+      proof <- autoJoinProof tt budget rules lhs rhs
+      case proof of
+        SearchUndecided lim ->
+          Right (ImplementsCheckUndecided label lim)
+        SearchProved witness -> do
+          checkJoinProof tt rules witness
+          Right (ImplementsCheckProved [(label, ImplementsProofJoin witness)])
+
+    tryGeneratedSeed tt rules label lhs rhs = do
+      lhsSeed <- normalizeForGeneratedObligation tt rules lhs
+      rhsSeed <- normalizeForGeneratedObligation tt rules rhs
+      same <- diagramIsoEq lhsSeed rhsSeed
+      if same
+        then do
+          let witness =
+                JoinProof
+                  { jpLeft = RewritePath { rpStart = lhsSeed, rpSteps = [] }
+                  , jpRight = RewritePath { rpStart = rhsSeed, rpSteps = [] }
+                  }
+          checkJoinProof tt rules witness
+          Right (Just (ImplementsCheckProved [(label, ImplementsProofJoin witness)]))
+        else do
+          seedProof <- autoJoinProof tt budget rules lhsSeed rhsSeed
+          case seedProof of
+            SearchUndecided _ ->
+              Right Nothing
+            SearchProved witness -> do
+              checkJoinProof tt rules witness
+              Right (Just (ImplementsCheckProved [(label, ImplementsProofJoin witness)]))
+
+    normalizeForGeneratedObligation tt _rules diag =
+      case generatedCompRules of
+        [] -> Right diag
+        _ -> do
+          status <- normalize tt generatedSeedFuel generatedCompRules diag
+          pure $
+            case status of
+              Finished d -> d
+              OutOfFuel d -> d
+
+    generatedSeedFuel =
+      let depthFuel = max 1 (sbMaxDepth budget * 4)
+       in min 256 depthFuel
+
+checkImplementsObligations :: ModuleEnv -> Doctrine -> Morphism -> Doctrine -> Either Text ()
+checkImplementsObligations env tgtDoc morph ifaceDoc = do
+  result <- checkImplementsObligationsWithBudget defaultSearchBudget env tgtDoc morph ifaceDoc
+  case result of
+    ImplementsCheckProved _ ->
+      Right ()
+    ImplementsCheckUndecided label lim ->
+      Left
+        ( "implements obligation undecided: "
+            <> label
+            <> " ("
+            <> renderSearchLimit lim
+            <> ")"
+        )
+
+mapObligationTyVar :: TypeTheory -> TypeTheory -> CtorTables -> Morphism -> TmVar -> Either Text TmVar
+mapObligationTyVar ttSrc ttTgt tgtCtorTables morph v = do
+  ownerSrc <- ownerModeForTypeMeta (morSrc morph) v
+  ownerTgt <- applyMorphismMode morph ownerSrc
+  sort' <- applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph (tmvSort v)
+  pure v { tmvSort = sort', tmvOwnerMode = Just ownerTgt }
+
+mapObligationTmVar :: TypeTheory -> TypeTheory -> CtorTables -> Morphism -> TmVar -> Either Text TmVar
+mapObligationTmVar ttSrc ttTgt tgtCtorTables morph v = do
+  sort' <- applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph (tmvSort v)
+  pure v { tmvSort = sort', tmvOwnerMode = Nothing }
+
+evalObligationExprMapped
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> ModuleEnv
+  -> Doctrine
+  -> Doctrine
+  -> Morphism
+  -> ModeName
+  -> [TmVar]
+  -> [TmVar]
+  -> RawOblExpr
+  -> Either Text Diagram
+evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars expr = do
+  modeTgt <- applyMorphismMode morph mode
+  case expr of
+    ROEDiag rawDiag -> do
+      diagSrc <- elabObligationDiag env ifaceDoc mode [] tyVars tmVars rawDiag
+      diagTgt <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables morph diagSrc
+      if dMode diagTgt == modeTgt
+        then Right diagTgt
+        else Left "obligation: mapped diagram mode mismatch after morphism application"
+    ROEMap rawMe innerExpr -> do
+      me <- elabRawModExpr (dModes ifaceDoc) rawMe
+      inner <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars innerExpr
+      mappedMe <- applyMorphismModExpr morph me
+      mapped <- applyModExpr tgtDoc mappedMe inner
+      if dMode mapped == modeTgt
+        then Right mapped
+        else Left "obligation map: mapped diagram mode does not match surrounding expression mode"
+    ROEGen ->
+      Left "obligation: @gen is only valid in for_gen obligations"
+    ROELiftDom _ ->
+      Left "obligation: lift_dom is only valid in for_gen obligations"
+    ROELiftCod _ ->
+      Left "obligation: lift_cod is only valid in for_gen obligations"
+    ROEComp a b -> do
+      d1 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars a
+      d2 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars b
+      compD ttTgt d2 d1
+    ROETensor a b -> do
+      d1 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars a
+      d2 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars b
+      tensorD d1 d2
+
+data LiftBoundary
+  = LiftOverDom
+  | LiftOverCod
+  deriving (Eq, Show)
+
+evalObligationExprForGen
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> ModuleEnv
+  -> Doctrine
+  -> Doctrine
+  -> Morphism
+  -> ModeName
+  -> [TmVar]
+  -> [TmVar]
+  -> Diagram
+  -> RawOblExpr
+  -> Either Text Diagram
+evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag expr = do
+  modeTgt <- applyMorphismMode morph mode
+  case expr of
+    ROEDiag rawDiag -> do
+      diagSrc <- elabObligationDiag env ifaceDoc mode (dTmCtx genDiag) tyVars tmVars rawDiag
+      diagTgt0 <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables morph diagSrc
+      diagTgt <- weakenDiagramTmCtxTo (dTmCtx genDiag) diagTgt0
+      if dMode diagTgt == modeTgt
+        then Right diagTgt
+        else Left "obligation: mapped diagram mode mismatch after morphism application"
+    ROEMap rawMe innerExpr -> do
+      me <- elabRawModExpr (dModes ifaceDoc) rawMe
+      inner <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars genDiag innerExpr
+      mappedMe <- applyMorphismModExpr morph me
+      mapped <- applyModExpr tgtDoc mappedMe inner
+      if dMode mapped == modeTgt
+        then Right mapped
+        else Left "obligation map: mapped diagram mode does not match surrounding expression mode"
+    ROEGen ->
+      if dMode genDiag == modeTgt
+        then Right genDiag
+        else Left "obligation: @gen mode mismatch"
+    ROELiftDom rawOp ->
+      evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverDom rawOp
+    ROELiftCod rawOp ->
+      evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverCod rawOp
+    ROEComp a b -> do
+      d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+      d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
+      compD ttTgt d2 d1
+    ROETensor a b -> do
+      d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+      d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
+      tensorD d1 d2
+
+evalLiftedForGen
+  :: TypeTheory
+  -> TypeTheory
+  -> CtorTables
+  -> ModuleEnv
+  -> Doctrine
+  -> Doctrine
+  -> Morphism
+  -> ModeName
+  -> ModeName
+  -> [TmVar]
+  -> [TmVar]
+  -> Diagram
+  -> LiftBoundary
+  -> RawDiagExpr
+  -> Either Text Diagram
+evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc _tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag liftSide rawOp = do
+  let ttDoc = ttTgt
+  ctx <- case liftSide of
+    LiftOverDom -> diagramDom genDiag
+    LiftOverCod -> diagramCod genDiag
+  ops <- mapM (instantiateAt ttDoc (dTmCtx genDiag)) ctx
+  case ops of
+    [] -> Right (idDTm modeTgt (dTmCtx genDiag) [])
+    (d0:rest) -> foldM tensorD d0 rest
+  where
+    rigidTy = S.fromList (map tmVarToObjVar tyVars)
+    rigidTm = S.fromList tmVars
+    sideLabel =
+      case liftSide of
+        LiftOverDom -> "lift_dom"
+        LiftOverCod -> "lift_cod"
+
+    instantiateAt ttDoc tmCtx argTy = do
+      opSrc <- elabObligationDiag env ifaceDoc modeSrc tmCtx tyVars tmVars rawOp
+      opTgt0 <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables morph opSrc
+      opTgt <- weakenDiagramTmCtxTo (dTmCtx genDiag) opTgt0
+      if dMode opTgt == modeTgt
+        then Right ()
+        else Left "obligation: mapped diagram mode mismatch after morphism application"
+      dom0 <- diagramDom opTgt
+      if length dom0 /= 1
+        then Left (sideLabel <> ": operator must have exactly one input ([x] -> [...])")
+        else do
+          let flexTy = S.difference (freeObjVarsDiagram opTgt) rigidTy
+          let flexTm = S.difference (freeTmVarsDiagram opTgt) rigidTm
+          let flex = S.union (S.map objVarToTmVar flexTy) flexTm
+          sDom <- U.unifyCtx ttDoc (dTmCtx opTgt) flex dom0 [argTy]
+          applySubstDiagram ttDoc sDom opTgt
+
+elabObligationDiag
+  :: ModuleEnv
+  -> Doctrine
+  -> ModeName
+  -> [Obj]
+  -> [TmVar]
+  -> [TmVar]
+  -> RawDiagExpr
+  -> Either Text Diagram
+elabObligationDiag env doc mode tmCtx tyVars tmVars rawDiag = do
+  (diag, _) <- elabDiagExprWith env doc mode tmCtx tyVars tmVars M.empty BMNoMeta False rawDiag
+  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
+  ensureAcyclicMode doc mode diag
+  pure diag

@@ -21,6 +21,8 @@ import Strat.Poly.Obj
   , pattern ObjVar
   , ovName
   , ovMode
+  , objVarToTmVar
+  , tmVarToObjVar
   , TmVar(..)
   , ObjArg
   , pattern OAObj
@@ -319,9 +321,9 @@ testDuplicateGenTyVars = do
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
-        , gdTyVars = [a, a]
+        , gdTyVars = [objVarToTmVar a, objVarToTmVar a]
         , gdTmVars = []
-        , gdParams = [GP_Ty a, GP_Ty a]
+        , gdParams = [GP_Ty (objVarToTmVar a), GP_Ty (objVarToTmVar a)]
         , gdDom = map InPort [OVar a]
         , gdCod = [OVar a]
         , gdAttrs = []
@@ -385,7 +387,7 @@ testDuplicateCellTyVars = do
         { c2Name = "dupCellTyVars"
         , c2Class = Structural
         , c2Orient = Bidirectional
-        , c2TyVars = [a, a]
+        , c2TyVars = [objVarToTmVar a, objVarToTmVar a]
         , c2TmVars = []
         , c2LHS = diag
         , c2RHS = diag
@@ -453,9 +455,9 @@ testAcceptRHSTyVars = do
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
-        , gdTyVars = [aVar]
+        , gdTyVars = [objVarToTmVar aVar]
         , gdTmVars = []
-        , gdParams = [GP_Ty aVar]
+        , gdParams = [GP_Ty (objVarToTmVar aVar)]
         , gdDom = map InPort [OVar aVar]
         , gdCod = [OVar aVar]
         , gdAttrs = []
@@ -466,7 +468,7 @@ testAcceptRHSTyVars = do
         { c2Name = "rhs_ok"
         , c2Class = Computational
         , c2Orient = LR
-        , c2TyVars = [aVar]
+        , c2TyVars = [objVarToTmVar aVar]
         , c2TmVars = []
         , c2LHS = lhs
         , c2RHS = rhs
@@ -578,7 +580,7 @@ testGenTmVarSortUsesTyVarScope = do
   let xVar =
         TmVar
           { tmvName = "x"
-          , tmvSort = OVar aVar
+          , tmvSort = OVar (tmVarToObjVar aVar)
           , tmvScope = 1
           , tmvOwnerMode = Nothing
           }
@@ -627,7 +629,7 @@ testCellTmVarSortUsesTyVarScope = do
   let xVar =
         TmVar
           { tmvName = "x"
-          , tmvSort = OVar aVar
+          , tmvSort = OVar (tmVarToObjVar aVar)
           , tmvScope = 1
           , tmvOwnerMode = Nothing
           }

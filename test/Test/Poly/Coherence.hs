@@ -142,7 +142,7 @@ mkModes modes =
             , ClassificationDecl
                 { cdClassifier = m
                 , cdUniverse = universeObj m
-                , cdTag = Nothing
+                
                 , cdComp =
                     Just
                       CompDecl

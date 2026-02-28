@@ -150,6 +150,13 @@ library
       Strat.Poly.Doctrine
       Strat.Poly.DSL.AST
       Strat.Poly.DSL.Elab
+      Strat.Poly.DSL.Elab.Build
+      Strat.Poly.DSL.Elab.Diag
+      Strat.Poly.DSL.Elab.DoctrinePhase
+      Strat.Poly.DSL.Elab.Implements
+      Strat.Poly.DSL.Elab.PhaseTypes
+      Strat.Poly.DSL.Elab.Resolve
+      Strat.Poly.DSL.Elab.Term
       Strat.Poly.DSL.Parse
       Strat.Poly.Foliation
       Strat.Poly.Graph

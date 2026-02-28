@@ -38,11 +38,14 @@ import Strat.Poly.Obj
   , ObjName(..)
   , ObjRef(..)
   , TmVar(..)
+  , TmMeta(..)
+  , tmVarToTmMeta
   , TermDiagram(..)
   , CodeArg(..)
   , mkCon
   )
 import Strat.Poly.DefEq (normalizeTermDiagram)
+import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Strat.Poly.Graph
   ( Diagram(..)
   , Edge(..)
@@ -74,6 +77,7 @@ tests =
     , testCase "deriveCtorTables rejects malformed NbE lam config at eligibility validation time" testCtorEligibilityLamShapeRejected
     , testCase "doctrineTypeTheory rejects NbE mode missing Arr constructor" testCtorEligibilityMissingArrRejected
     , testCase "NbE normalization accepts definitionally equal output sorts" testNBEOutputSortDefEq
+    , testCase "meta spines support non-prefix arguments and remain stable through NbE" testMetaSpineNonPrefixStable
     , testCase "TRS mode still enforces termination checks" testTRSStillChecked
     ]
 
@@ -249,6 +253,28 @@ testNBERejectsSplice = do
     Right _ ->
       assertFailure "expected NbE normalization to reject splice payload"
 
+testMetaSpineNonPrefixStable :: Assertion
+testMetaSpineNonPrefixStable = do
+  (tt, aTy, _bTy) <- mkNbeTypeTheory
+  let tmCtx = [aTy, aTy, aTy]
+      mv =
+        TmMeta
+          { tmmName = "m"
+          , tmmSort = aTy
+          , tmmScope = 3
+          , tmmOwnerMode = Just modeM
+          }
+      tmExpr = TMMeta mv [0, 2]
+  tm0 <- require (termExprToDiagram tt tmCtx aTy tmExpr)
+  expr0 <- require (diagramToTermExpr tt tmCtx aTy tm0)
+  expr0 @?= tmExpr
+  norm <- require (normalizeTermDiagram tt tmCtx aTy tm0)
+  exprNorm <- require (diagramToTermExpr tt tmCtx aTy norm)
+  exprNorm @?= tmExpr
+  tm1 <- require (termExprToDiagram tt tmCtx aTy exprNorm)
+  ok <- require (diagramIsoEq (unTerm norm) (unTerm tm1))
+  assertBool "expected meta-spine term->graph roundtrip stability after NbE" ok
+
 testTRSStillChecked :: Assertion
 testTRSStillChecked =
   case parseRawFile mixedNbeTrsSrc >>= elabRawFile of
@@ -279,7 +305,7 @@ mkEligibilityModeTheory tmUniverse = do
       ClassificationDecl
         { cdClassifier = modeTy
         , cdUniverse = tyUniverse
-        , cdTag = Nothing
+        
         , cdComp = Nothing
         }
       mt2
@@ -288,7 +314,7 @@ mkEligibilityModeTheory tmUniverse = do
     ClassificationDecl
       { cdClassifier = modeTy
       , cdUniverse = tmUniverse
-      , cdTag = Nothing
+      
       , cdComp = Nothing
       }
     mt3
@@ -470,7 +496,7 @@ mkMissingArrDoctrine = do
       ClassificationDecl
         { cdClassifier = modeTy
         , cdUniverse = uTy
-        , cdTag = Nothing
+        
         , cdComp = Nothing
         }
       mt1
@@ -610,7 +636,7 @@ testNBEOutputSortDefEq = do
   let metaSort = mkCon wrapRef [CATm betaTm]
   let v = TmVar { tmvName = "w", tmvSort = metaSort, tmvScope = 0, tmvOwnerMode = Just modeTy }
   let (out, d0) = freshPort metaSort (emptyDiagram modeTy [])
-  d1 <- require (addEdgePayload (PTmMeta v) [] [out] d0)
+  d1 <- require (addEdgePayload (PTmMeta (tmVarToTmMeta v)) [] [out] d0)
   let diag = d1 { dIn = [], dOut = [out] }
   _ <- require (validateDiagram diag)
   _ <- require (normalizeTermDiagram tt [] expectedSort (TermDiagram diag))

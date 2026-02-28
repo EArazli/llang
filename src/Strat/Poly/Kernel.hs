@@ -19,6 +19,8 @@ module Strat.Poly.Kernel
   , pattern ObjVar
   , ovName
   , ovMode
+  , checkObjWellFormed
+  , checkCodeWellFormed
   , normalizeObjDeep
   , normalizeObjDeepWithCtx
   , normalizeCodeTermDeepWithCtx
@@ -53,7 +55,9 @@ import Strat.Poly.Obj
   , ObjRef(..)
   )
 import Strat.Poly.DefEq
-  ( normalizeObjDeep
+  ( checkObjWellFormed
+  , checkCodeWellFormed
+  , normalizeObjDeep
   , normalizeObjDeepWithCtx
   , normalizeCodeTermDeepWithCtx
   , normalizeTermDiagram

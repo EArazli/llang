@@ -130,7 +130,7 @@ selfClassifiedMode mode = do
     ClassificationDecl
       { cdClassifier = mode
       , cdUniverse = universeObj mode
-      , cdTag = Nothing
+      
       , cdComp = Just preludeCompDecl
       }
     mt0
@@ -199,4 +199,4 @@ compGen mode name =
         , tmvScope = 0
         , tmvOwnerMode = Just mode
         }
-    aTy = OVar aVar
+    aTy = OVar (tmVarToObjVar aVar)

@@ -162,6 +162,9 @@ canonicalizeVars tm =
           let (args', fwd', next') = goList args fwd next
            in (TMFun fn args', fwd', next')
         TMVar v -> (TMVar v, fwd, next)
+        TMMeta v args ->
+          let (args', fwd', next') = renameArgs args fwd next
+           in (TMMeta v args', fwd', next')
         TMBound i ->
           case M.lookup i fwd of
             Just j -> (TMBound j, fwd, next)
@@ -173,3 +176,12 @@ canonicalizeVars tm =
       let (x', fwd1, next1) = go x fwd next
           (xs', fwd2, next2) = goList xs fwd1 next1
        in (x' : xs', fwd2, next2)
+
+    renameArgs [] fwd next = ([], fwd, next)
+    renameArgs (i:is) fwd next =
+      let (j, fwd1, next1) =
+            case M.lookup i fwd of
+              Just k -> (k, fwd, next)
+              Nothing -> (next, M.insert i next fwd, next + 1)
+          (is', fwd2, next2) = renameArgs is fwd1 next1
+       in (j : is', fwd2, next2)

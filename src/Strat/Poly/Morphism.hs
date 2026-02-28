@@ -73,14 +73,14 @@ import Strat.Poly.Traversal (traverseDiagram)
 
 unifyCtxCompat :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
 unifyCtxCompat tt tmCtx ctxA ctxB =
-  let tyFlex = S.unions (map freeObjVarsObj (ctxA <> ctxB))
+  let tyFlex = S.map objVarToTmVar (S.unions (map freeObjVarsObj (ctxA <> ctxB)))
       tmFlex = S.unions (map freeTmVarsObj (ctxA <> ctxB))
       flex = S.union tyFlex tmFlex
    in unifyCtx tt tmCtx flex ctxA ctxB
 
 unifyCtxFromPattern :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
 unifyCtxFromPattern tt tmCtx pat host =
-  let tyFlex = S.unions (map freeObjVarsObj pat)
+  let tyFlex = S.map objVarToTmVar (S.unions (map freeObjVarsObj pat))
       tmFlex = S.unions (map freeTmVarsObj pat)
       flex = S.union tyFlex tmFlex
    in unifyCtx tt tmCtx flex pat host
@@ -228,37 +228,41 @@ applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor ty = do
     go ty = do
       let ownerSrc = objOwnerMode ty
       owner' <- mapMode mor (objOwnerMode ty)
-      case objCode ty of
+      code' <- goCode ownerSrc owner' (objCode ty)
+      normalizeObjExpr
+        (dModes (morTgt mor))
+        Obj
+          { objOwnerMode = owner'
+          , objCode = code'
+          }
+
+    goCode ownerSrc ownerTgt code =
+      case code of
         CTMeta v -> do
-          sort' <- go (tmvSort v)
-          let v' = v { tmvSort = sort', tmvOwnerMode = Just owner' }
-          pure Obj { objOwnerMode = owner', objCode = CTMeta v' }
-        CTMod me innerCode -> do
-          inner' <- go Obj { objOwnerMode = meSrc me, objCode = innerCode }
-          me' <- mapModExpr mor me
-          normalizeObjExpr
-            (dModes (morTgt mor))
-            Obj
-              { objOwnerMode = owner'
-              , objCode = CTMod me' (objCode inner')
-              }
+          sort' <- go (ovSort v)
+          let vTm = objVarToTmVar v
+          let v' = tmVarToObjVar (vTm { tmvSort = sort', tmvOwnerMode = Just ownerTgt })
+          pure (CTMeta v')
         CTLift me innerCode -> do
-          inner' <- go Obj { objOwnerMode = meSrc me, objCode = innerCode }
           me' <- mapModExpr mor me
-          normalizeObjExpr
-            (dModes (morTgt mor))
-            Obj
-              { objOwnerMode = owner'
-              , objCode = CTLift me' (objCode inner')
-              }
+          inner' <- goCode (meSrc me) (meSrc me') innerCode
+          pure (CTLift me' inner')
         CTCon ref args -> do
           args' <- mapM mapArg args
           case M.lookup ref (morTypeMap mor) of
             Nothing -> do
-              ref' <- mapTypeRef tgtCtorTables mor ownerSrc owner' ref
-              pure Obj { objOwnerMode = owner', objCode = CTCon ref' args' }
+              ref' <- mapTypeRef tgtCtorTables mor ownerSrc ownerTgt ref
+              pure (CTCon ref' args')
             Just tmpl ->
-              instantiateTemplate tmpl args'
+              if ownerSrc == orMode ref
+                then do
+                  inst <- instantiateTemplate tmpl args'
+                  if objOwnerMode inst == ownerTgt
+                    then Right (objCode inst)
+                    else Left "morphism: type template instantiation changed owner mode"
+                else do
+                  ref' <- mapTypeRef tgtCtorTables mor ownerSrc ownerTgt ref
+                  pure (CTCon ref' args')
 
     mapArg arg =
       case arg of
@@ -275,7 +279,7 @@ applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor ty = do
     addParam s (param, arg) =
       case (param, arg) of
         (TPType v, OAObj t) ->
-          insertCodeMeta v t s
+          insertCodeMeta (tmVarToObjVar v) t s
         (TPTm v, OATm tmArg) ->
           insertTmMeta v tmArg s
         _ ->
@@ -379,8 +383,8 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
               PSplice x ->
                 updateEdgePayload diagTgt edgeKey (PSplice x)
               PTmMeta v -> do
-                sort' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor (tmvSort v)
-                updateEdgePayload diagTgt edgeKey (PTmMeta v { tmvSort = sort' })
+                sort' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor (tmmSort v)
+                updateEdgePayload diagTgt edgeKey (PTmMeta v { tmmSort = sort' })
               PInternalDrop ->
                 updateEdgePayload diagTgt edgeKey PInternalDrop
   diagTgt <- foldl step (Right diagTgt0) edgeIds
@@ -419,11 +423,13 @@ mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor subst = do
   tmPairs <- mapM mapTmOne (tmBindings subst)
   pure (mkSubst (M.fromList tyPairs) (M.fromList tmPairs))
   where
+    mapTyOne :: (ObjVar, Obj) -> Either Text (ObjVar, Obj)
     mapTyOne (v, t) = do
-      ownerSrc <- pure (maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v))
+      ownerSrc <- pure (ovOwnerMode v)
       ownerTgt <- mapMode mor ownerSrc
-      sortV' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor (tmvSort v)
-      let v' = v { tmvSort = sortV', tmvOwnerMode = Just ownerTgt }
+      sortV' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor (ovSort v)
+      let vTm = objVarToTmVar v
+      let v' = tmVarToObjVar vTm { tmvSort = sortV', tmvOwnerMode = Just ownerTgt }
       t' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor t
       pure (v', t')
     mapTmOne (v, t) = do
@@ -1075,8 +1081,6 @@ typeRefsInType ty =
     OVar _ -> S.empty
     OCon ref args ->
       S.insert ref (S.unions (map typeRefsInArg args))
-    OMod _ inner ->
-      typeRefsInType inner
     OLift _ inner ->
       typeRefsInType inner
   where
@@ -1090,7 +1094,7 @@ typeRefsInType ty =
         [ S.unions (map typeRefsInType (IM.elems (dPortObj diag)))
         , S.unions (map typeRefsInType (dTmCtx diag))
         , S.unions
-            [ typeRefsInType (tmvSort v)
+            [ typeRefsInType (tmmSort v)
             | edge <- IM.elems (dEdges diag)
             , PTmMeta v <- [ePayload edge]
             ]
@@ -1345,7 +1349,7 @@ buildTypeRenaming srcCtorTables tgtCtorTables mor = do
     argParamIndex params arg =
       case arg of
         OAObj (OVar v) ->
-          findParamIndex params (\p -> case p of TPType v' -> v' == v; _ -> False)
+          findParamIndex params (\p -> case p of TPType v' -> tmVarToObjVar v' == v; _ -> False)
         OATm tm ->
           case termMetaOnly tm of
             Just v ->
@@ -1357,7 +1361,7 @@ buildTypeRenaming srcCtorTables tgtCtorTables mor = do
       case (IM.elems (dEdges diag), dIn diag, dOut diag) of
         ([edge], [], [outBoundary]) ->
           case (ePayload edge, eIns edge, eOuts edge) of
-            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just v
+            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just (tmMetaToTmVar v)
             _ -> Nothing
         _ -> Nothing
 
@@ -1447,7 +1451,7 @@ renameDiagram tyRen genRen diag =
             let gen' = M.findWithDefault gen (dMode diag, gen) genRen
             in PGen gen' attrs bargs
           PTmMeta v ->
-            PTmMeta v { tmvSort = renameObjExpr tyRen (tmvSort v) }
+            PTmMeta v { tmmSort = renameObjExpr tyRen (tmmSort v) }
           _ -> payload
 
 renameObjExpr :: M.Map ObjRef ObjRef -> Obj -> Obj
@@ -1460,8 +1464,6 @@ renameObjExpr ren ty =
         CTCon ref args ->
           let ref' = M.findWithDefault ref ref ren
           in CTCon ref' (map renameArg args)
-        CTMod me inner ->
-          CTMod me (renameCode inner)
         CTLift me inner ->
           CTLift me (renameCode inner)
 
@@ -1481,7 +1483,7 @@ renameObjExpr ren ty =
     renameEdge edge =
       case ePayload edge of
         PTmMeta v ->
-          edge { ePayload = PTmMeta v { tmvSort = renameObjExpr ren (tmvSort v) } }
+          edge { ePayload = PTmMeta v { tmmSort = renameObjExpr ren (tmmSort v) } }
         _ -> edge
 
 injective :: Ord a => [a] -> Bool

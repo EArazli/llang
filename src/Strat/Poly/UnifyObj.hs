@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.UnifyObj
-  ( MetaRhs(..)
-  , Subst(..)
+  ( Subst(..)
   , mkSubst
   , lookupCodeMeta
   , lookupTmMeta
@@ -65,13 +64,9 @@ import Strat.Poly.TermExpr
   )
 
 
-data MetaRhs
-  = MRCode Obj
-  | MRTm TermDiagram
-  deriving (Eq, Ord, Show)
-
-newtype Subst = Subst
-  { sMeta :: M.Map TmVar MetaRhs
+data Subst = Subst
+  { sCodeMeta :: M.Map ObjVar Obj
+  , sTmMeta :: M.Map TmVar TermDiagram
   } deriving (Eq, Ord, Show)
 
 data PortHead
@@ -79,67 +74,51 @@ data PortHead
   | PHFun TmFunName [PortId]
   | PHMeta TmVar
 
-lookupCodeMeta :: Subst -> TmVar -> Maybe Obj
+lookupCodeMeta :: Subst -> ObjVar -> Maybe Obj
 lookupCodeMeta subst v =
-  case M.lookup v (sMeta subst) of
-    Just (MRCode t) -> Just t
-    _ -> Nothing
+  M.lookup v (sCodeMeta subst)
 
 lookupTmMeta :: Subst -> TmVar -> Maybe TermDiagram
 lookupTmMeta subst v =
-  case M.lookup v (sMeta subst) of
-    Just (MRTm tm) -> Just tm
-    _ -> Nothing
+  M.lookup v (sTmMeta subst)
 
-codeBindings :: Subst -> [(TmVar, Obj)]
-codeBindings subst =
-  [ (v, t)
-  | (v, rhs) <- M.toList (sMeta subst)
-  , MRCode t <- [rhs]
-  ]
+codeBindings :: Subst -> [(ObjVar, Obj)]
+codeBindings subst = M.toList (sCodeMeta subst)
 
 tmBindings :: Subst -> [(TmVar, TermDiagram)]
-tmBindings subst =
-  [ (v, tm)
-  | (v, rhs) <- M.toList (sMeta subst)
-  , MRTm tm <- [rhs]
-  ]
+tmBindings subst = M.toList (sTmMeta subst)
 
-insertCodeMeta :: TmVar -> Obj -> Subst -> Either Text Subst
+insertCodeMeta :: ObjVar -> Obj -> Subst -> Either Text Subst
 insertCodeMeta v t subst =
-  case M.lookup v (sMeta subst) of
-        Just (MRTm _) -> Left "subst: metavariable kind mismatch (code vs term)"
-        _ -> Right subst { sMeta = M.insert v (MRCode t) (sMeta subst) }
+  Right subst { sCodeMeta = M.insert v t (sCodeMeta subst) }
 
 insertTmMeta :: TmVar -> TermDiagram -> Subst -> Either Text Subst
 insertTmMeta v tm subst =
-  case M.lookup v (sMeta subst) of
-    Just (MRCode _) -> Left "subst: metavariable kind mismatch (term vs code)"
-    _ -> Right subst { sMeta = M.insert v (MRTm tm) (sMeta subst) }
+  Right subst { sTmMeta = M.insert v tm (sTmMeta subst) }
 
-mkSubst :: M.Map TmVar Obj -> M.Map TmVar TermDiagram -> Subst
+mkSubst :: M.Map ObjVar Obj -> M.Map TmVar TermDiagram -> Subst
 mkSubst objMap tmMap =
-  case foldM addObj (Subst M.empty) (M.toList objMap) >>= \s -> foldM addTm s (M.toList tmMap) of
-    Left err -> error (T.unpack err)
-    Right s -> s
-  where
-    addObj s (v, t) = insertCodeMeta v t s
-    addTm s (v, tm) = insertTmMeta v tm s
+  Subst
+    { sCodeMeta = objMap
+    , sTmMeta = tmMap
+    }
 
-sObj :: Subst -> M.Map TmVar Obj
-sObj = M.fromList . codeBindings
+sObj :: Subst -> M.Map ObjVar Obj
+sObj = sCodeMeta
 
 sTm :: Subst -> M.Map TmVar TermDiagram
-sTm = M.fromList . tmBindings
+sTm = sTmMeta
 
 emptySubst :: Subst
-emptySubst = Subst M.empty
+emptySubst = Subst M.empty M.empty
 
 unifyObj :: TypeTheory -> Obj -> Obj -> Either Text Subst
 unifyObj tt t1 t2 =
-  let flex = S.union (freeObjVarsObj t1) (freeTmVarsObj t1)
-      flex' = S.union flex (S.union (freeObjVarsObj t2) (freeTmVarsObj t2))
+  let flex = S.union (objVarsAsTmVars (freeObjVarsObj t1)) (freeTmVarsObj t1)
+      flex' = S.union flex (S.union (objVarsAsTmVars (freeObjVarsObj t2)) (freeTmVarsObj t2))
    in unifyObjFlex tt [] flex' emptySubst t1 t2
+  where
+    objVarsAsTmVars = S.map objVarToTmVar
 
 unifyObjFlex
   :: TypeTheory
@@ -159,96 +138,89 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
     objVarObj v = OVar v
 
     expandModSpine ty =
-      case objCode ty of
-        CTMeta _ -> Right ty
-        CTCon ref args -> do
-          args' <- mapM expandArg args
-          Right ty { objCode = CTCon ref args' }
-        CTMod me innerCode -> do
-          if objOwnerMode ty == meTgt me
-            then Right ()
-            else Left "unifyObjFlex: modality target does not match object owner mode in CTMod spine"
-          inner' <- expandModSpine (mkObj (meSrc me) innerCode)
-          code' <- expandPath CTMod True me (objCode inner')
-          Right ty { objCode = code' }
-        CTLift me innerCode -> do
-          if modeClassifierMode (ttModes tt) (objOwnerMode ty) == meTgt me
-            then Right ()
-            else Left "unifyObjFlex: CTLift spine requires lift target == classifier(owner mode)"
-          inner' <- expandModSpine (mkObj (meSrc me) innerCode)
-          code' <- expandPath CTLift False me (objCode inner')
-          Right ty { objCode = code' }
+      do
+        code' <- expandCode (objOwnerMode ty) (objCode ty)
+        Right ty { objCode = code' }
 
     expandArg arg =
       case arg of
         CAObj ty -> CAObj <$> expandModSpine ty
         CATm tm -> Right (CATm tm)
 
-    expandPath wrap dropIdentity me innerCode =
-      case mePath me of
-        [] ->
-          if meSrc me == meTgt me
-            then
-              if dropIdentity
-                then Right innerCode
-                else Right (wrap me innerCode)
-            else Left "unifyObjFlex: ill-typed empty modality path"
-        _ -> do
-          (cur, outCode) <- foldM step (meSrc me, innerCode) (mePath me)
-          if cur == meTgt me
-            then Right outCode
-            else Left "unifyObjFlex: ill-typed modality path"
-      where
-        step (cur, acc) name =
-          case M.lookup name (mtDecls (ttModes tt)) of
-            Nothing -> Left "unifyObjFlex: unknown modality in type"
-            Just decl ->
-              if mdSrc decl == cur
-                then
-                  Right
-                    ( mdTgt decl
-                    , wrap
-                        ModExpr
-                          { meSrc = mdSrc decl
-                          , meTgt = mdTgt decl
-                          , mePath = [name]
-                          }
-                        acc
-                    )
-                else Left "unifyObjFlex: ill-typed modality path"
+    expandCode ownerMode code =
+      case code of
+        CTMeta _ -> Right code
+        CTCon ref args -> do
+          let codeMode = modeClassifierMode (ttModes tt) ownerMode
+          if orMode ref == codeMode || isOpaqueMetaSort ref
+            then Right ()
+            else Left "unifyObjFlex: constructor mode does not match current code mode"
+          args' <- mapM expandArg args
+          Right (CTCon ref args')
+        CTLift me innerCode -> do
+          let codeMode = modeClassifierMode (ttModes tt) ownerMode
+          if meTgt me == codeMode
+            then Right ()
+            else Left "unifyObjFlex: modality target does not match current code mode"
+          inner' <- expandCodeInMode (meSrc me) innerCode
+          normalizeCodeTerm (ttModes tt) (CTLift me inner')
+
+    expandCodeInMode codeMode code =
+      case code of
+        CTMeta _ -> Right code
+        CTCon ref args -> do
+          if orMode ref == codeMode || isOpaqueMetaSort ref
+            then Right ()
+            else Left "unifyObjFlex: constructor mode does not match current code mode"
+          args' <- mapM expandArg args
+          Right (CTCon ref args')
+        CTLift me innerCode -> do
+          if meTgt me == codeMode
+            then Right ()
+            else Left "unifyObjFlex: modality target does not match current code mode"
+          inner' <- expandCodeInMode (meSrc me) innerCode
+          normalizeCodeTerm (ttModes tt) (CTLift me inner')
 
     unifyWith s a b =
       if objOwnerMode a /= objOwnerMode b
         then Left ("unifyObjFlex: owner-mode mismatch " <> renderObj a <> " with " <> renderObj b)
-        else unifyCode s (objOwnerMode a) (objCode a) (objCode b)
+        else do
+          let ownerMode = objOwnerMode a
+          let codeMode = modeClassifierMode (ttModes tt) ownerMode
+          unifyCode s codeMode ownerMode (objCode a) (objCode b)
 
-    unifyCode s owner codeA codeB =
+    unifyCode s codeMode ownerMode codeA codeB =
       case (codeA, codeB) of
-        (CTMeta v, CTMeta w) -> unifyTyVar s v (objVarObj w)
-        (CTMeta v, t) -> unifyTyVar s v (mkObj owner t)
-        (t, CTMeta v) -> unifyTyVar s v (mkObj owner t)
+        (CTMeta v, CTMeta w) -> unifyTyVar s codeMode v (CTMeta w)
+        (CTMeta v, t) -> unifyTyVar s codeMode v t
+        (t, CTMeta v) -> unifyTyVar s codeMode v t
         (CTCon refA argsA, CTCon refB argsB)
-          | refA == refB && length argsA == length argsB ->
-              case M.lookup refA (ttObjParams tt) of
+          | refA == refB && length argsA == length argsB -> do
+              if orMode refA == codeMode || isOpaqueMetaSort refA
+                then Right ()
+                else Left "unifyObjFlex: constructor mode does not match current code mode"
+              case M.lookup (orName refA) sigTable of
                 Just params
                   | length params == length argsA ->
                       foldl stepBySig (Right s) (zip params (zip argsA argsB))
                 _ ->
                   foldl step (Right s) (zip argsA argsB)
           | otherwise ->
-              Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
-        (CTMod me1 innerA, CTMod me2 innerB)
-          | me1 == me2 ->
-              unifyCode s (meSrc me1) innerA innerB
-          | otherwise ->
-              Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
+              Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj ownerMode codeA) <> " with " <> renderObj (mkObj ownerMode codeB))
         (CTLift me1 innerA, CTLift me2 innerB)
-          | me1 == me2 ->
-              unifyCode s (meSrc me1) innerA innerB
+          | me1 == me2 && meTgt me1 == codeMode ->
+              unifyCode s (meSrc me1) ownerMode innerA innerB
           | otherwise ->
-              Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
+              Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj ownerMode codeA) <> " with " <> renderObj (mkObj ownerMode codeB))
         _ ->
-          Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj owner codeA) <> " with " <> renderObj (mkObj owner codeB))
+          Left ("unifyObjFlex: cannot unify " <> renderObj (mkObj ownerMode codeA) <> " with " <> renderObj (mkObj ownerMode codeB))
+      where
+        sigTable = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
+
+    isOpaqueMetaSort ref =
+      case orName ref of
+        ObjName "__obj_meta_sort" -> True
+        _ -> False
 
     step acc (argA, argB) = do
       s <- acc
@@ -272,23 +244,22 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
         (TPS_Tm _, _, _) ->
           Left "unifyObjFlex: expected term argument for constructor parameter"
 
-    unifyTyVar s v t
-      | v `S.member` flex = bindTyVar s v t
+    unifyTyVar s codeMode v tCode
+      | objVarToTmVar v `S.member` flex = bindTyVar s codeMode v tCode
       | otherwise =
-          case objCode t of
+          case tCode of
             CTMeta v' | v == v' -> Right s
-            CTMeta v' | v' `S.member` flex -> bindTyVar s v' (objVarObj v)
-            _ -> Left ("unifyObjFlex: rigid variable mismatch " <> renderObjVar v <> " with " <> renderObj t)
+            CTMeta v' | objVarToTmVar v' `S.member` flex -> bindTyVar s codeMode v' (CTMeta v)
+            _ -> Left ("unifyObjFlex: rigid variable mismatch " <> renderObjVar v <> " with " <> renderObj (mkObj codeMode tCode))
 
-    bindTyVar s v t = do
-      t' <- applySubstObj tt s t
+    bindTyVar s codeMode v tCode = do
       tmCtx' <- applySubstCtx tt s tmCtx
-      sortV <- normalizeObjDeepWithCtx tt tmCtx' =<< applySubstObj tt s (tmvSort v)
-      let ownerV =
-            case tmvOwnerMode v of
-              Just owner -> owner
-              Nothing -> objOwnerMode sortV
+      let ownerV = ovOwnerMode v
       let scopeMode = modeClassifierMode (ttModes tt) ownerV
+      if scopeMode /= codeMode
+        then Left "unifyObjFlex: code metavariable kind mismatch"
+        else Right ()
+      t' <- applySubstObj tt s Obj { objOwnerMode = ownerV, objCode = tCode }
       if ownerV /= objOwnerMode t'
         then Left ("unifyObjFlex: mode mismatch " <> renderObjVar v <> " with " <> renderObj t')
         else if t' == objVarObj v
@@ -300,13 +271,13 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
                   allowed =
                     S.fromList
                       ( take
-                          (tmvScope v)
+                          (ovScope v)
                           [ i
                           | (i, tyCtx) <- zip [0 :: Int ..] tmCtx'
                           , objOwnerMode tyCtx == scopeMode
                           ]
                       )
-              if tmvScope v == 0 && not (S.null boundSet)
+              if ovScope v == 0 && not (S.null boundSet)
                 then Left "unifyObjFlex: scope-0 code metavariable cannot mention bound indices"
                 else
                   if S.isSubsetOf boundSet allowed
@@ -429,6 +400,31 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                   if w `S.member` tmFlex
                     then bindTmVar s currentSort w (TMVar v)
                     else Left "unifyTm: rigid term variable mismatch"
+        (TMMeta v args, TMMeta w args')
+          | args == args' -> do
+              let vTm = tmMetaToTmVar v
+              let wTm = tmMetaToTmVar w
+              checkTmVarSort s currentSort vTm
+              checkTmVarSort s currentSort wTm
+              if sameTmVarId vTm wTm
+                then Right s
+                else Left "unifyTm: rigid term variable mismatch"
+          | otherwise ->
+              Left "unifyTm: rigid term variable mismatch"
+        (TMMeta v _, t) -> do
+          let vTm = tmMetaToTmVar v
+          checkTmVarSort s currentSort vTm
+          ensureTmTermSort s currentSort t
+          if vTm `S.member` tmFlex
+            then bindTmVar s currentSort vTm t
+            else Left "unifyTm: rigid term variable mismatch"
+        (t, TMMeta v _) -> do
+          let vTm = tmMetaToTmVar v
+          checkTmVarSort s currentSort vTm
+          ensureTmTermSort s currentSort t
+          if vTm `S.member` tmFlex
+            then bindTmVar s currentSort vTm t
+            else Left "unifyTm: rigid term variable mismatch"
         (TMVar v, t) -> do
           checkTmVarSort s currentSort v
           ensureTmTermSort s currentSort t
@@ -500,6 +496,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
     ensureTmTermSort s currentSort tm =
       case tm of
         TMVar v -> checkTmVarSort s currentSort v
+        TMMeta v _ -> checkTmVarSort s currentSort (tmMetaToTmVar v)
         TMBound i -> checkBoundSort s currentSort i
         TMFun f args -> do
           sig <- requireFunSig s currentSort f args
@@ -540,6 +537,9 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                     else do
                       subExpr <- diagramToTermExpr tt ctx sort' tmSub
                       go (S.insert v' seen) currentSort subExpr
+            TMMeta v args -> do
+              sort' <- applySubstObj tt s (tmmSort v)
+              pure (TMMeta (v { tmmSort = sort' }) args)
             TMBound _ -> Right tm
             TMFun f args -> do
               sig <- requireFunSigArity s currentSort f (length args)
@@ -581,7 +581,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
             PGen (GenName fName) attrs bargs
               | M.null attrs && null bargs -> Right (PHFun (TmFunName fName) (eIns edge))
               | otherwise -> Left "unifyTm: non-term generator payload in normalized term graph"
-            PTmMeta v -> Right (PHMeta v)
+            PTmMeta v -> Right (PHMeta (tmMetaToTmVar v))
             _ -> Left "unifyTm: non-term payload in normalized term graph"
 
     termFromPort diag inputs pid = go S.empty pid
@@ -602,7 +602,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                       | otherwise ->
                           Left "unifyTm: non-term generator payload in normalized term graph"
                     PTmMeta v ->
-                      Right (TMVar v)
+                      Right (TMVar (tmMetaToTmVar v))
                     _ ->
                       Left "unifyTm: non-term payload in normalized term graph"
 
@@ -636,10 +636,12 @@ applySubstObj tt subst ty = do
     mkObj owner code = Obj { objOwnerMode = owner, objCode = code }
 
     needsTmCtxType expr =
-      case objCode expr of
+      needsTmCtxCode (objCode expr)
+
+    needsTmCtxCode code =
+      case code of
         CTMeta _ -> False
-        CTMod me innerCode -> needsTmCtxType (mkObj (meSrc me) innerCode)
-        CTLift me innerCode -> needsTmCtxType (mkObj (meSrc me) innerCode)
+        CTLift _ innerCode -> needsTmCtxCode innerCode
         CTCon _ args -> any needsTmCtxArg args
 
     needsTmCtxArg arg =
@@ -649,30 +651,50 @@ applySubstObj tt subst ty = do
           not (S.null (boundTmIndicesTerm tm)) || maxTmScopeTerm tm > 0
 
     goTy seen expr =
-      case objCode expr of
+      let ownerMode = objOwnerMode expr
+          codeMode = modeClassifierMode (ttModes tt) ownerMode
+       in do
+            code' <- goCode seen ownerMode codeMode (objCode expr)
+            Right expr { objCode = code' }
+
+    goCode seen ownerMode codeMode code =
+      case code of
         CTMeta v ->
           case lookupCodeMeta subst v of
-            Nothing -> Right expr
+            Nothing -> Right code
             Just t ->
               if v `S.member` seen
-                then Right expr
-                else goTy (S.insert v seen) t
+                then Right code
+                else do
+                  let tCodeMode = modeClassifierMode (ttModes tt) (objOwnerMode t)
+                  if tCodeMode == codeMode
+                    then goCode (S.insert v seen) (objOwnerMode t) codeMode (objCode t)
+                    else Left "applySubstObj: code metavariable mode mismatch"
         CTCon ref args -> do
+          if orMode ref == codeMode || isOpaqueMetaSort ref
+            then Right ()
+            else Left "applySubstObj: constructor mode does not match current code mode"
+          let sigTableForCode = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
           args' <-
-            case M.lookup ref (ttObjParams tt) of
+            case M.lookup (orName ref) sigTableForCode of
               Just params ->
                 if length params /= length args
                   then Left "applySubstObj: type constructor arity mismatch"
                   else mapM (goArgBySig seen) (zip params args)
               Nothing ->
                 mapM (goArgNoSig seen) args
-          Right expr { objCode = CTCon ref args' }
-        CTMod me innerCode -> do
-          inner' <- goTy seen (mkObj (meSrc me) innerCode)
-          Right expr { objCode = CTMod me (objCode inner') }
+          Right (CTCon ref args')
         CTLift me innerCode -> do
-          inner' <- goTy seen (mkObj (meSrc me) innerCode)
-          Right expr { objCode = CTLift me (objCode inner') }
+          if meTgt me == codeMode
+            then do
+              inner' <- goCode seen ownerMode (meSrc me) innerCode
+              Right (CTLift me inner')
+            else Left "applySubstObj: lift target does not match current code mode"
+
+    isOpaqueMetaSort ref =
+      case orName ref of
+        ObjName "__obj_meta_sort" -> True
+        _ -> False
 
     goArgBySig seen (param, arg) =
       case (param, arg) of
@@ -708,8 +730,9 @@ applySubstDiagram tt subst =
     onPayload payload =
       case payload of
         PTmMeta v -> do
-          sort' <- applySubstObj tt subst (tmvSort v)
-          pure (PTmMeta v { tmvSort = sort' })
+          let vTm = tmMetaToTmVar v
+          sort' <- applySubstObj tt subst (tmvSort vTm)
+          pure (PTmMeta (tmVarToTmMeta vTm { tmvSort = sort' }))
         _ -> pure payload
 
 applySubstTmInCtx :: TypeTheory -> [Obj] -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
@@ -743,6 +766,9 @@ applySubstTmInCtx tt tmCtx subst expectedSort tm = do
                   (subCtx, subExpr') <- goTm (S.insert v' seen) subCtx0 currentSort subExpr
                   merged <- mergeCtx curCtx subCtx
                   Right (merged, subExpr')
+        TMMeta v args -> do
+          sort' <- applySubstObj tt subst (tmmSort v)
+          Right (curCtx, TMMeta (v { tmmSort = sort' }) args)
         TMBound _ -> Right (curCtx, expr)
         TMFun name args -> do
           sig <- requireSig curCtx currentSort name (length args)
@@ -846,6 +872,9 @@ applySubstTmNoNormalize tt subst expectedSort tm = do
                   (subCtx, subExpr') <- go (S.insert v' seen) subCtx0 currentSort subExpr
                   merged <- mergeCtx curCtx subCtx
                   Right (merged, subExpr')
+        TMMeta v args -> do
+          sort' <- applySubstObj tt subst (tmmSort v)
+          Right (curCtx, TMMeta (v { tmmSort = sort' }) args)
         TMBound _ -> Right (curCtx, expr)
         TMFun f args -> do
           sig <- requireSig curCtx currentSort f (length args)
@@ -888,7 +917,7 @@ maxTmScopeTerm :: TermDiagram -> Int
 maxTmScopeTerm tm =
   maximum
     ( 0
-        : [ tmvScope v
+        : [ tmmScope v
           | edge <- IM.elems (dEdges (unTerm tm))
           , PTmMeta v <- [ePayload edge]
           ]
@@ -917,6 +946,7 @@ occursTmVarExpr :: TmVar -> TermExpr -> Bool
 occursTmVarExpr v tm =
   case tm of
     TMVar v' -> sameTmVarId v v'
+    TMMeta v' _ -> sameTmVarId v (tmMetaToTmVar v')
     TMBound _ -> False
     TMFun _ args -> any (occursTmVarExpr v) args
 
@@ -941,7 +971,7 @@ isTmIdentity v tm =
     [edge] ->
       case (ePayload edge, eIns edge, eOuts edge, dIn (unTerm tm), dOut (unTerm tm)) of
         (PTmMeta w, [], [outPid], [], [outBoundary]) ->
-          outPid == outBoundary && sameTmVarId v w
+          outPid == outBoundary && sameTmVarId v (tmMetaToTmVar w)
         _ -> False
     _ -> False
 
@@ -967,7 +997,6 @@ renderObj ty =
         CTCon ref [] -> renderTypeRef ref
         CTCon ref args ->
           renderTypeRef ref <> "(" <> T.intercalate ", " (map renderArg args) <> ")"
-        CTMod me inner -> renderModExpr me <> "(" <> renderCode inner <> ")"
         CTLift me inner -> "lift[" <> renderModExpr me <> "](" <> renderCode inner <> ")"
 
     renderArg arg =
@@ -975,15 +1004,11 @@ renderObj ty =
         CAObj innerTy -> renderObj innerTy
         CATm _ -> "<tm>"
 
-renderObjVar :: TmVar -> Text
+renderObjVar :: ObjVar -> Text
 renderObjVar v =
-  tmvName v
+  ovName v
     <> "@"
-    <> renderMode
-      ( case tmvOwnerMode v of
-          Just owner -> owner
-          Nothing -> objOwnerMode (tmvSort v)
-      )
+    <> renderMode (ovOwnerMode v)
 
 renderTypeRef :: ObjRef -> Text
 renderTypeRef ref =

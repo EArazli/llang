@@ -1,18 +1,28 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
 module Strat.Poly.Syntax
   ( ObjName(..)
   , ObjRef(..)
+  , TyMeta(..)
   , ObjVar
   , pattern ObjVar
   , ovName
   , ovMode
+  , ovSort
+  , ovScope
+  , ovOwnerMode
+  , objVarToTmVar
+  , tmVarToObjVar
   , TmFunName(..)
   , TmVar(..)
+  , TmMeta(..)
+  , tmMetaToTmVar
+  , tmVarToTmMeta
   , TermDiagram(..)
   , CodeArg(..)
-  , CodeTerm(CTMeta, CTCon, CTMod, CTLift)
+  , CodeTerm(CTMeta, CTCon, CTLift)
   , Obj(..)
   , Context
   , PortId(..)
@@ -41,7 +51,14 @@ data ObjRef = ObjRef
   , orName :: ObjName
   } deriving (Eq, Ord, Show)
 
-type ObjVar = TmVar
+data TyMeta = TyMeta
+  { tmvName :: Text
+  , tmvSort :: Obj
+  , tmvScope :: Int
+  , tmvOwnerMode :: Maybe ModeName
+  } deriving (Eq, Ord, Show)
+
+type ObjVar = TyMeta
 
 newtype TmFunName = TmFunName Text deriving (Eq, Ord, Show)
 
@@ -50,6 +67,13 @@ data TmVar = TmVar
   , tmvSort :: Obj
   , tmvScope :: Int
   , tmvOwnerMode :: Maybe ModeName
+  } deriving (Eq, Ord, Show)
+
+data TmMeta = TmMeta
+  { tmmName :: Text
+  , tmmSort :: Obj
+  , tmmScope :: Int
+  , tmmOwnerMode :: Maybe ModeName
   } deriving (Eq, Ord, Show)
 
 newtype PortId = PortId Int deriving (Eq, Ord, Show)
@@ -66,7 +90,7 @@ data EdgePayload
   | PBox BoxName Diagram
   | PFeedback Diagram
   | PSplice BinderMetaVar
-  | PTmMeta TmVar
+  | PTmMeta TmMeta
   | PInternalDrop
   deriving (Eq, Ord, Show)
 
@@ -100,9 +124,8 @@ data CodeArg
   deriving (Eq, Ord, Show)
 
 data CodeTerm
-  = CTMeta TmVar
+  = CTMeta TyMeta
   | CTCon ObjRef [CodeArg]
-  | CTMod ModExpr CodeTerm
   | CTLift ModExpr CodeTerm
   deriving (Eq, Ord, Show)
 
@@ -120,19 +143,72 @@ metaSortObj mode =
     }
 
 tmVarOwner :: TmVar -> ModeName
-tmVarOwner v =
-  case tmvOwnerMode v of
+tmVarOwner TmVar { tmvOwnerMode = ownerM, tmvSort = sortTy } =
+  case ownerM of
     Just owner -> owner
-    Nothing -> objOwnerMode (tmvSort v)
+    Nothing -> objOwnerMode sortTy
 
-objVarView :: TmVar -> Maybe (Text, ModeName)
-objVarView v = Just (tmvName v, tmVarOwner v)
+objVarToTmVar :: ObjVar -> TmVar
+objVarToTmVar v@TyMeta { tmvName = name, tmvSort = sortTy, tmvScope = scope } =
+  TmVar
+    { tmvName = name
+    , tmvSort = sortTy
+    , tmvScope = scope
+    , tmvOwnerMode = Just (ovOwnerMode v)
+    }
+
+tmVarToObjVar :: TmVar -> ObjVar
+tmVarToObjVar v@TmVar { tmvName = name, tmvSort = sortTy, tmvScope = scope } =
+  TyMeta
+    { tmvName = name
+    , tmvSort = sortTy
+    , tmvScope = scope
+    , tmvOwnerMode = Just (tmVarOwner v)
+    }
+
+tmMetaToTmVar :: TmMeta -> TmVar
+tmMetaToTmVar TmMeta { tmmName = name, tmmSort = sortTy, tmmScope = scope, tmmOwnerMode = ownerM } =
+  TmVar
+    { tmvName = name
+    , tmvSort = sortTy
+    , tmvScope = scope
+    , tmvOwnerMode = ownerM
+    }
+
+tmVarToTmMeta :: TmVar -> TmMeta
+tmVarToTmMeta TmVar { tmvName = name, tmvSort = sortTy, tmvScope = scope, tmvOwnerMode = ownerM } =
+  TmMeta
+    { tmmName = name
+    , tmmSort = sortTy
+    , tmmScope = scope
+    , tmmOwnerMode = ownerM
+    }
+
+ovSort :: ObjVar -> Obj
+ovSort TyMeta { tmvSort = sortTy } = sortTy
+
+ovScope :: ObjVar -> Int
+ovScope TyMeta { tmvScope = scope } = scope
+
+ovOwnerMode :: ObjVar -> ModeName
+ovOwnerMode TyMeta { tmvOwnerMode = Just owner } = owner
+ovOwnerMode TyMeta { tmvName = name } =
+  error
+    ( "ObjVar invariant violated: missing owner mode for type metavariable "
+        <> show name
+    )
+
+objVarOwner :: ObjVar -> ModeName
+objVarOwner = ovOwnerMode
+
+objVarView :: ObjVar -> Maybe (Text, ModeName)
+objVarView v@TyMeta { tmvName = name } = Just (name, objVarOwner v)
 
 pattern ObjVar :: Text -> ModeName -> ObjVar
 pattern ObjVar {ovName, ovMode} <- (objVarView -> Just (ovName, ovMode))
   where
     ObjVar ovName ovMode =
-      TmVar
+      TyMeta
         { tmvName = ovName
         , tmvSort = metaSortObj ovMode
         , tmvScope = 0

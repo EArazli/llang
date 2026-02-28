@@ -8,7 +8,7 @@ Term arguments (`TATm`) normalize through restricted diagram fragments that depe
   - one output
   - no boxes, feedback, or splice nodes
   - no generator attrs or binder args
-  - `PTmMeta` inputs must be the canonical prefix determined by `tmvScope`
+  - `PTmMeta` inputs must be boundary ports; explicit meta arguments may choose any boundary subset/order
   - `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
 
 - `NbE` defeq term-argument fragment:
@@ -16,7 +16,7 @@ Term arguments (`TATm`) normalize through restricted diagram fragments that depe
   - no boxes, feedback, or splice nodes
   - no generator attrs
   - binder args are allowed only for `lam`, and only as the enforced concrete binder-body form used by NbE (`BAConcrete`, bound var first, then outer-prefix inputs)
-  - `PTmMeta` inputs must be the canonical prefix determined by `tmvScope`
+  - `PTmMeta` inputs must be boundary ports; explicit meta arguments may choose any boundary subset/order
   - `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
 
 ## 2. Context-sensitive Normalization
@@ -73,12 +73,17 @@ Unsupported constructs (for now) include structural diagram features such as spl
 This is a scope restriction, not a fundamental limitation, and should be revisited after core NbE stability and soundness are locked in.
 Follow-up work item: expand supported definitional fragment after NbE core stability/soundness are established.
 
-## 11. Classification Metadata and Graph Limits
+## 11. Classification Graph Limits
 
-- `cdTag` on `classifiedBy` declarations is parsed/stored but has no kernel semantics yet.
 - Non-self classification cycles are rejected. Allowing longer cycles would require an explicit universe-level stratification design and implementation.
 
 ## 12. Constructor/Surface Caveats
 
 - Constructor term-parameter sorts are required to be closed with respect to the generator's type parameters.
 - Surface type annotations do not support constructor parameters of kind `TPS_Tm`; term-indexed arguments must be expressed through core/kernel paths.
+
+## 13. Mode Equation Semantics
+
+- `mod_eq` declarations are treated as oriented rewrite rules (`lhs -> rhs`) for modality normalization.
+- Validation enforces strict path-length decrease, so non-decreasing rules are rejected.
+- The kernel currently does not run global confluence/completion for mode-equation rewriting.

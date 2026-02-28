@@ -84,7 +84,6 @@ data RawClassifierLiftDecl = RawClassifierLiftDecl
 data RawClassifiedByDecl = RawClassifiedByDecl
   { rcdClassifier :: Text
   , rcdUniverse :: RawPolyObjExpr
-  , rcdTag :: Maybe Text
   } deriving (Eq, Show)
 
 data RawModExpr

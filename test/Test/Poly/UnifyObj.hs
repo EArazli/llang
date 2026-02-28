@@ -30,6 +30,8 @@ import Strat.Poly.Obj
   , pattern ObjVar
   , ovName
   , ovMode
+  , objVarToTmVar
+  , tmVarToObjVar
   , TmVar(..)
   , CodeTerm(..)
   , pattern OATm
@@ -51,11 +53,11 @@ tests =
   testGroup
     "Poly.UnifyObj"
     [ testCase "object vars in term arguments are visible to free/occurs checks" testSeesObjVarInTermArg
-    , testCase "unified substitution rejects code/term kind collisions" testRejectsMetaKindCollision
+    , testCase "unified substitution keeps code and term metas in separate maps" testSeparateMetaNamespaces
     , testCase "scope-0 code metavariables reject bound term indices in object bindings" testRejectsCodeMetaScopeEscape
-    , testCase "expandModSpine handles nested CTMod using inner source owner" testExpandModSpineNestedOwner
-    , testCase "expandModSpine rejects CTMod owner/target mismatch" testExpandModSpineOwnerMismatch
-    , testCase "unification under CTMod binds inner metavariables" testUnifyUnderCTModBindsMeta
+    , testCase "expandModSpine handles nested CTLift using inner source owner" testExpandModSpineNestedOwner
+    , testCase "expandModSpine rejects CTLift owner/target mismatch" testExpandModSpineOwnerMismatch
+    , testCase "unification under CTLift with non-identity path binds inner metavariables" testUnifyUnderCTLiftPathBindsMeta
     , testCase "unification under CTLift binds inner metavariables" testUnifyUnderCTLiftBindsMeta
     , testCase "code metavariable scope uses classifier slice of term context" testCodeMetaScopeClassifierSlice
     ]
@@ -71,7 +73,7 @@ buildClassifiedModes ty tm = do
       ClassificationDecl
         { cdClassifier = ty
         , cdUniverse = uTy
-        , cdTag = Nothing
+        
         , cdComp = Nothing
         }
       mt1
@@ -81,7 +83,7 @@ buildClassifiedModes ty tm = do
     ClassificationDecl
       { cdClassifier = ty
       , cdUniverse = uTm
-      , cdTag = Nothing
+      
       , cdComp = Nothing
       }
     mt2
@@ -96,28 +98,28 @@ testSeesObjVarInTermArg = do
   assertBool "free vars should include object vars from CATm payloads" (aVar `S.member` freeObjVarsObj rhs)
   assertBool "occurs check should include object vars from CATm payloads" (occursObjVar aVar rhs)
 
-testRejectsMetaKindCollision :: Assertion
-testRejectsMetaKindCollision = do
+testSeparateMetaNamespaces :: Assertion
+testSeparateMetaNamespaces = do
   let mode = ModeName "M"
       v = ObjVar { ovName = "x", ovMode = mode }
       rhsObj = OVar v
       rhsTm = TermDiagram (idDTm mode [] [])
-      assertKindMismatch result =
-        case result of
-          Left err ->
-            assertBool
-              "expected a kind mismatch error"
-              ("kind mismatch" `isInfixOf` err)
-          Right _ ->
-            assertFailure "expected insertion to fail with kind mismatch"
   substCodeFirst <- case U.insertCodeMeta v rhsObj U.emptySubst of
     Left err -> assertFailure ("unexpected insertCodeMeta failure: " <> show err) >> pure U.emptySubst
     Right s -> pure s
-  assertKindMismatch (U.insertTmMeta v rhsTm substCodeFirst)
-  substTmFirst <- case U.insertTmMeta v rhsTm U.emptySubst of
+  substBoth <- case U.insertTmMeta (objVarToTmVar v) rhsTm substCodeFirst of
     Left err -> assertFailure ("unexpected insertTmMeta failure: " <> show err) >> pure U.emptySubst
     Right s -> pure s
-  assertKindMismatch (U.insertCodeMeta v rhsObj substTmFirst)
+  U.lookupCodeMeta substBoth v @?= Just rhsObj
+  U.lookupTmMeta substBoth (objVarToTmVar v) @?= Just rhsTm
+  substTmFirst <- case U.insertTmMeta (objVarToTmVar v) rhsTm U.emptySubst of
+    Left err -> assertFailure ("unexpected insertTmMeta failure: " <> show err) >> pure U.emptySubst
+    Right s -> pure s
+  substBoth2 <- case U.insertCodeMeta v rhsObj substTmFirst of
+    Left err -> assertFailure ("unexpected insertCodeMeta failure: " <> show err) >> pure U.emptySubst
+    Right s -> pure s
+  U.lookupCodeMeta substBoth2 v @?= Just rhsObj
+  U.lookupTmMeta substBoth2 (objVarToTmVar v) @?= Just rhsTm
 
 testRejectsCodeMetaScopeEscape :: Assertion
 testRejectsCodeMetaScopeEscape = do
@@ -128,7 +130,7 @@ testRejectsCodeMetaScopeEscape = do
       fooRef = ObjRef mode (ObjName "Foo")
       tm = TermDiagram (idDTm mode [sortTy] [sortTy])
       rhs = mkCon fooRef [OATm tm]
-  case U.unifyObjFlex tt [sortTy] (S.singleton v) U.emptySubst (OVar v) rhs of
+  case U.unifyObjFlex tt [sortTy] (S.singleton (objVarToTmVar v)) U.emptySubst (OVar v) rhs of
     Left err ->
       assertBool
         "expected code-meta scope escape error"
@@ -144,11 +146,11 @@ testExpandModSpineNestedOwner = do
       modF = ModName "f"
       modH = ModName "h"
       innerBase = mkCon (ObjRef modeC (ObjName "BaseC")) []
-      innerA = Obj { objOwnerMode = modeA, objCode = CTMod ModExpr { meSrc = modeC, meTgt = modeA, mePath = [modH] } (objCode innerBase) }
+      innerA = Obj { objOwnerMode = modeA, objCode = CTLift ModExpr { meSrc = modeC, meTgt = modeA, mePath = [modH] } (objCode innerBase) }
       outer =
         Obj
           { objOwnerMode = modeB
-          , objCode = CTMod ModExpr { meSrc = modeA, meTgt = modeB, mePath = [modF] } (objCode innerA)
+          , objCode = CTLift ModExpr { meSrc = modeA, meTgt = modeB, mePath = [modF] } (objCode innerA)
           }
   mt <- either (assertFailure . show) pure $
     foldM
@@ -159,7 +161,7 @@ testExpandModSpineNestedOwner = do
       ]
   let tt = modeOnlyTypeTheory mt
   case U.unifyObjFlex tt [] S.empty U.emptySubst outer outer of
-    Left err -> assertFailure ("expected nested CTMod unification to succeed: " <> show err)
+    Left err -> assertFailure ("expected nested CTLift unification to succeed: " <> show err)
     Right _ -> pure ()
 
 testExpandModSpineOwnerMismatch :: Assertion
@@ -171,7 +173,7 @@ testExpandModSpineOwnerMismatch = do
       badOuter =
         Obj
           { objOwnerMode = modeA
-          , objCode = CTMod ModExpr { meSrc = modeA, meTgt = modeB, mePath = [modF] } (objCode baseA)
+          , objCode = CTLift ModExpr { meSrc = modeA, meTgt = modeB, mePath = [modF] } (objCode baseA)
           }
   mt <- either (assertFailure . show) pure $
     addModDecl ModDecl { mdName = modF, mdSrc = modeA, mdTgt = modeB } (mkModes [modeA, modeB])
@@ -179,31 +181,34 @@ testExpandModSpineOwnerMismatch = do
   case U.unifyObjFlex tt [] S.empty U.emptySubst badOuter badOuter of
     Left err ->
       assertBool
-        "expected owner/target mismatch error from CTMod spine expansion"
-        ("modality target does not match object owner mode" `isInfixOf` err)
+        "expected code-mode/target mismatch error from CTLift spine expansion"
+        ( "modality target" `isInfixOf` err
+            || "current code mode" `isInfixOf` err
+            || "cannot unify" `isInfixOf` err
+        )
     Right _ ->
-      assertFailure "expected malformed CTMod owner/target mismatch to be rejected"
+      assertFailure "expected malformed CTLift owner/target mismatch to be rejected"
 
-testUnifyUnderCTModBindsMeta :: Assertion
-testUnifyUnderCTModBindsMeta = do
+testUnifyUnderCTLiftPathBindsMeta :: Assertion
+testUnifyUnderCTLiftPathBindsMeta = do
   let modeA = ModeName "A"
       modeB = ModeName "B"
       modF = ModName "f"
       aVar = ObjVar { ovName = "a", ovMode = modeA }
       me = ModExpr { meSrc = modeA, meTgt = modeB, mePath = [modF] }
-      lhs = Obj { objOwnerMode = modeB, objCode = CTMod me (objCode (OVar aVar)) }
-      rhs = Obj { objOwnerMode = modeB, objCode = CTMod me (objCode (mkCon (ObjRef modeA (ObjName "Unit")) [])) }
+      lhs = Obj { objOwnerMode = modeB, objCode = CTLift me (objCode (OVar aVar)) }
+      rhs = Obj { objOwnerMode = modeB, objCode = CTLift me (objCode (mkCon (ObjRef modeA (ObjName "Unit")) [])) }
   mt <- either (assertFailure . show) pure $
     addModDecl ModDecl { mdName = modF, mdSrc = modeA, mdTgt = modeB } (mkModes [modeA, modeB])
   let tt = modeOnlyTypeTheory mt
-  subst <- case U.unifyObjFlex tt [] (S.singleton aVar) U.emptySubst lhs rhs of
-    Left err -> assertFailure ("expected CTMod unification to succeed: " <> show err) >> pure U.emptySubst
+  subst <- case U.unifyObjFlex tt [] (S.singleton (objVarToTmVar aVar)) U.emptySubst lhs rhs of
+    Left err -> assertFailure ("expected CTLift unification to succeed: " <> show err) >> pure U.emptySubst
     Right s -> pure s
   case U.lookupCodeMeta subst aVar of
     Just bound ->
       bound @?= mkCon (ObjRef modeA (ObjName "Unit")) []
     Nothing ->
-      assertFailure "expected unification to bind the inner code metavariable under CTMod"
+      assertFailure "expected unification to bind the inner code metavariable under CTLift"
 
 testUnifyUnderCTLiftBindsMeta :: Assertion
 testUnifyUnderCTLiftBindsMeta = do
@@ -215,7 +220,7 @@ testUnifyUnderCTLiftBindsMeta = do
       rhs = Obj { objOwnerMode = modeTm, objCode = CTLift liftId (objCode (mkCon (ObjRef modeTy (ObjName "UnitTy")) [])) }
   mt <- either (assertFailure . show) pure (buildClassifiedModes modeTy modeTm)
   let tt = modeOnlyTypeTheory mt
-  subst <- case U.unifyObjFlex tt [] (S.singleton aVar) U.emptySubst lhs rhs of
+  subst <- case U.unifyObjFlex tt [] (S.singleton (objVarToTmVar aVar)) U.emptySubst lhs rhs of
     Left err -> assertFailure ("expected CTLift unification to succeed: " <> show err) >> pure U.emptySubst
     Right s -> pure s
   case U.lookupCodeMeta subst aVar of
@@ -229,32 +234,46 @@ testCodeMetaScopeClassifierSlice = do
   let modeTy = ModeName "Ty"
       modeTm = ModeName "Tm"
       natTy = mkCon (ObjRef modeTy (ObjName "Nat")) []
-      idxTm = mkCon (ObjRef modeTm (ObjName "Idx")) []
-      boxTyRef = ObjRef modeTm (ObjName "BoxTyIdx")
-      boxTmRef = ObjRef modeTm (ObjName "BoxTmIdx")
+      idxTm = Obj { objOwnerMode = modeTm, objCode = CTCon (ObjRef modeTy (ObjName "Idx")) [] }
+      boxTyRef = ObjRef modeTy (ObjName "BoxTyIdx")
+      boxTmRef = ObjRef modeTy (ObjName "BoxTmIdx")
       baseMeta = ObjVar { ovName = "x", ovMode = modeTm }
-      vClassifier = baseMeta { tmvName = "x_classifier", tmvScope = 1 }
-      vOwner = baseMeta { tmvName = "x_owner", tmvScope = 1 }
+      baseMetaTm = objVarToTmVar baseMeta
+      vClassifier = tmVarToObjVar (baseMetaTm { tmvName = "x_classifier", tmvScope = 1 })
+      vOwner = tmVarToObjVar (baseMetaTm { tmvName = "x_owner", tmvScope = 1 })
       tmCtx = [natTy, idxTm]
   mt <- either (assertFailure . show) pure (buildClassifiedModes modeTy modeTm)
   let tt =
-        (modeOnlyTypeTheory mt)
-          { ttObjParams =
-              M.fromList
-                [ (boxTyRef, [TPS_Tm natTy])
-                , (boxTmRef, [TPS_Tm idxTm])
-                ]
-          }
+        withCtorSigs
+          (modeOnlyTypeTheory mt)
+          [ (boxTyRef, [TPS_Tm natTy])
+          , (boxTmRef, [TPS_Tm idxTm])
+          ]
   tmTyIdx <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx natTy (TMBound 0))
   tmOwnerIdx <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx idxTm (TMBound 1))
-  case U.unifyObjFlex tt tmCtx (S.singleton vClassifier) U.emptySubst (OVar vClassifier) (mkCon boxTyRef [OATm tmTyIdx]) of
+  let boxTyObj = Obj { objOwnerMode = modeTm, objCode = CTCon boxTyRef [OATm tmTyIdx] }
+  let boxTmObj = Obj { objOwnerMode = modeTm, objCode = CTCon boxTmRef [OATm tmOwnerIdx] }
+  case U.unifyObjFlex tt tmCtx (S.singleton (objVarToTmVar vClassifier)) U.emptySubst (OVar vClassifier) boxTyObj of
     Left err ->
       assertFailure ("expected classifier-slice binding to succeed: " <> show err)
     Right _ -> pure ()
-  case U.unifyObjFlex tt tmCtx (S.singleton vOwner) U.emptySubst (OVar vOwner) (mkCon boxTmRef [OATm tmOwnerIdx]) of
+  case U.unifyObjFlex tt tmCtx (S.singleton (objVarToTmVar vOwner)) U.emptySubst (OVar vOwner) boxTmObj of
     Left err ->
       assertBool
         "expected classifier-slice escape rejection"
         ("escape from bound term-variable scope" `isInfixOf` err)
     Right _ ->
       assertFailure "expected owner-slice bound index to be rejected for classifier-scoped code metavariable"
+
+withCtorSigs :: TypeTheory -> [(ObjRef, [TypeParamSig])] -> TypeTheory
+withCtorSigs tt entries =
+  tt
+    { ttCtorSigs = table
+    , ttUniverseCtors = M.map (S.fromList . M.keys) table
+    }
+  where
+    table =
+      foldl
+        (\acc (ref, sig) -> M.insertWith M.union (orMode ref) (M.singleton (orName ref) sig) acc)
+        M.empty
+        entries

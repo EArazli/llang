@@ -36,9 +36,10 @@ import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Frontend.Env (emptyEnv)
 import Strat.Poly.Diagram (diagramDom)
+import Strat.Poly.DefEq (checkObjWellFormed)
 import Strat.Poly.UnifyObj (unifyObj)
 import Strat.Poly.Graph (Diagram(..), emptyDiagram, freshPort, validateDiagram)
-import Strat.Poly.TypeTheory (modeOnlyTypeTheory, TypeParamSig(..))
+import Strat.Poly.TypeTheory (TypeTheory(..), modeOnlyTypeTheory, TypeParamSig(..))
 
 
 tests :: TestTree
@@ -53,6 +54,7 @@ tests =
     , testCase "diagram ports store Obj in the diagram mode" testDiagramPortsStoreObj
     , testCase "normalizeObjExpr accepts classifier-targeted CTLift on non-self owner" testNormalizeClassifierLiftTarget
     , testCase "normalizeObjExpr collapses identity CTLift on non-self owner" testNormalizeClassifierLiftIdentityCollapse
+    , testCase "checkObjWellFormed rejects wrong-mode constructors and elaboration rejects wrong qualifiers" testWrongModeCtorRejected
     ]
 
 modeC :: ModeName
@@ -109,7 +111,7 @@ selfClassifiedModes modes =
                 , ClassificationDecl
                     { cdClassifier = mode
                     , cdUniverse = mkCon (ObjRef mode (ObjName "U")) []
-                    , cdTag = Nothing
+                    
                     , cdComp = Just compDecl
                     }
                 )
@@ -321,7 +323,7 @@ testNormalizeClassifierLiftTarget = do
                   , ClassificationDecl
                       { cdClassifier = modeTy
                       , cdUniverse = universeTy
-                      , cdTag = Nothing
+                      
                       , cdComp = Nothing
                       }
                   )
@@ -329,7 +331,7 @@ testNormalizeClassifierLiftTarget = do
                   , ClassificationDecl
                       { cdClassifier = modeTy
                       , cdUniverse = universeTm
-                      , cdTag = Nothing
+                      
                       , cdComp = Nothing
                       }
                   )
@@ -369,7 +371,7 @@ testNormalizeClassifierLiftIdentityCollapse = do
                   , ClassificationDecl
                       { cdClassifier = modeTy
                       , cdUniverse = universeTy
-                      , cdTag = Nothing
+                      
                       , cdComp = Nothing
                       }
                   )
@@ -377,7 +379,7 @@ testNormalizeClassifierLiftIdentityCollapse = do
                   , ClassificationDecl
                       { cdClassifier = modeTy
                       , cdUniverse = universeTm
-                      , cdTag = Nothing
+                      
                       , cdComp = Nothing
                       }
                   )
@@ -395,3 +397,44 @@ testNormalizeClassifierLiftIdentityCollapse = do
     Left err -> assertFailure ("expected CTLift identity collapse to succeed: " <> T.unpack err) >> pure lifted
     Right obj -> pure obj
   normalized @?= Obj { objOwnerMode = modeTm, objCode = objCode innerTy }
+
+testWrongModeCtorRejected :: Assertion
+testWrongModeCtorRejected = do
+  let modeM = ModeName "M"
+      modeN = ModeName "N"
+      table =
+        M.fromList
+          [ (modeM, M.singleton (ObjName "A") [])
+          , (modeN, M.singleton (ObjName "A") [])
+          ]
+      tt =
+        (modeOnlyTypeTheory (mkModes (S.fromList [modeM, modeN])))
+          { ttCtorSigs = table
+          , ttUniverseCtors = M.map (S.fromList . M.keys) table
+          , ttStrictCtorLookup = True
+          }
+      badObj =
+        Obj
+          { objOwnerMode = modeM
+          , objCode = CTCon (ObjRef modeN (ObjName "A")) []
+          }
+  case checkObjWellFormed tt badObj of
+    Left err ->
+      assertBool
+        "expected constructor-mode mismatch from checkObjWellFormed"
+        ("constructor mode does not match current code mode" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected checkObjWellFormed to reject wrong-mode constructor"
+
+  let doc0 =
+        mkDoctrine
+          [ (modeM, [(ObjName "A", [])])
+          , (modeN, [(ObjName "A", [])])
+          ]
+  doc <- requireDoc doc0
+  raw <- case parseDiagExpr "id[M.A]" of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right expr -> pure expr
+  case elabDiagExpr emptyEnv doc modeN [] raw of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected elaboration to reject wrong-mode constructor qualifier"

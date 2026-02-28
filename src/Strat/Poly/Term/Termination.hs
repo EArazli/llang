@@ -79,6 +79,7 @@ collectCalls tm =
   case tm of
     TMFun f args -> (f, args) : concatMap collectCalls args
     TMVar _ -> []
+    TMMeta _ _ -> []
     TMBound _ -> []
 
 mkGraph :: TmFunName -> [TermExpr] -> TmFunName -> [TermExpr] -> SCGraph
@@ -182,6 +183,7 @@ subterm needle tm
       case tm of
         TMFun _ args -> any (subterm needle) args
         TMVar _ -> False
+        TMMeta _ _ -> False
         TMBound _ -> False
 
 strictSubterm :: TermExpr -> TermExpr -> Bool

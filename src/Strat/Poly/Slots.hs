@@ -37,7 +37,7 @@ import Strat.Poly.Obj
   , pattern OATm
   )
 import Strat.Poly.TypeTheory (TypeParamSig(..))
-import Strat.Poly.Syntax (Diagram(..), Edge(..), EdgePayload(..), BinderArg(..), TmVar(..))
+import Strat.Poly.Syntax (Diagram(..), Edge(..), EdgePayload(..), BinderArg(..), TmVar(..), TmMeta(..))
 
 data SlotKind
   = SlotBinder
@@ -120,8 +120,6 @@ extractGenSlotsWithTables doc ctorTables gd = do
       case ty of
         OVar _ ->
           Right []
-        OMod _ inner ->
-          slotsInObj (path <> ".mod") inner
         OLift _ inner ->
           slotsInObj (path <> ".lift") inner
         OCon ref args -> do
@@ -174,7 +172,7 @@ extractGenSlotsWithTables doc ctorTables gd = do
         edgeOne (eid, edge) =
           case ePayload edge of
             PTmMeta tv ->
-              slotsInObj (path <> ".term.edge[" <> tshow eid <> "].sort") (tmvSort tv)
+              slotsInObj (path <> ".term.edge[" <> tshow eid <> "].sort") (tmmSort tv)
             PGen _ _ bargs ->
               fmap concat (mapM (binderArgOne eid) (zip [0 :: Int ..] bargs))
             PBox _ inner ->

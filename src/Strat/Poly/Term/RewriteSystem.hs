@@ -69,6 +69,7 @@ applyTermSubstClosed subst = go S.empty
                 then TMBound i
                 else go (S.insert i seen) t
         TMVar _ -> tm
+        TMMeta _ _ -> tm
         TMFun f args -> TMFun f (map (go seen) args)
 
 applyTermSubstOnce :: TermSubst -> TermExpr -> TermExpr
@@ -81,6 +82,7 @@ applyTermSubstOnce subst = go
             Nothing -> TMBound i
             Just t -> t
         TMVar _ -> tm
+        TMMeta _ _ -> tm
         TMFun f args -> TMFun f (map go args)
 
 renameBoundVars :: Int -> TermExpr -> TermExpr
@@ -88,6 +90,7 @@ renameBoundVars off tm =
   case tm of
     TMBound i -> TMBound (i + off)
     TMVar _ -> tm
+    TMMeta v args -> TMMeta v (map (+ off) args)
     TMFun f args -> TMFun f (map (renameBoundVars off) args)
 
 maxBoundVarIndex :: TermExpr -> Int
@@ -95,6 +98,7 @@ maxBoundVarIndex tm =
   case tm of
     TMBound i -> i
     TMVar _ -> -1
+    TMMeta _ args -> maximum (-1 : args)
     TMFun _ args -> maximum (-1 : map maxBoundVarIndex args)
 
 boundVarSet :: TermExpr -> S.Set Int
@@ -102,6 +106,7 @@ boundVarSet tm =
   case tm of
     TMBound i -> S.singleton i
     TMVar _ -> S.empty
+    TMMeta _ args -> S.fromList args
     TMFun _ args -> S.unions (map boundVarSet args)
 
 occursBoundVar :: Int -> TermExpr -> Bool
@@ -109,6 +114,7 @@ occursBoundVar needle tm =
   case tm of
     TMBound i -> i == needle
     TMVar _ -> False
+    TMMeta _ args -> needle `elem` args
     TMFun _ args -> any (occursBoundVar needle) args
 
 matchPattern :: TermExpr -> TermExpr -> Maybe TermSubst
@@ -127,6 +133,10 @@ matchPattern pat tm = go M.empty pat tm
         TMVar v ->
           case tgtTm of
             TMVar w | v == w -> Just subst
+            _ -> Nothing
+        TMMeta v args ->
+          case tgtTm of
+            TMMeta w args' | v == w && args == args' -> Just subst
             _ -> Nothing
         TMFun f args ->
           case tgtTm of
@@ -157,6 +167,10 @@ unifyTerms lhs rhs = go M.empty [(lhs, rhs)]
                   | f == g
                   , length xs == length ys ->
                       go subst (zip xs ys <> rest)
+                (TMMeta v args, TMMeta w args')
+                  | v == w
+                  , args == args' ->
+                      go subst rest
                 _ -> Nothing
 
     bindVar i t subst rest =

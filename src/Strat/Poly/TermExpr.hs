@@ -4,12 +4,10 @@ module Strat.Poly.TermExpr
   , TermConvEnv(..)
   , termExprToDiagramWith
   , termExprToDiagram
-  , termExprToDiagramUnchecked
   , diagramToTermExprWith
   , diagramToTermExpr
   , diagramGraphToTermExprWith
   , diagramGraphToTermExpr
-  , diagramGraphToTermExprUnchecked
   , validateTermGraph
   , freeTmVarsExpr
   , boundGlobalsExpr
@@ -53,6 +51,9 @@ import Strat.Poly.Obj
   ( TermDiagram(..)
   , TmFunName(..)
   , TmVar(..)
+  , TmMeta(..)
+  , tmMetaToTmVar
+  , tmVarToTmMeta
   , Obj(..)
   , objOwnerMode
   )
@@ -74,16 +75,7 @@ termExprToDiagram
   -> TermExpr
   -> Either Text TermDiagram
 termExprToDiagram tt =
-  termExprToDiagramWith (uncheckedConvEnv tt)
-
-termExprToDiagramUnchecked
-  :: TypeTheory
-  -> [Obj]
-  -> Obj
-  -> TermExpr
-  -> Either Text TermDiagram
-termExprToDiagramUnchecked tt =
-  termExprToDiagramWith (uncheckedConvEnv tt)
+  termExprToDiagramWith (structuralConvEnv tt)
 
 termExprToDiagramWith
   :: TermConvEnv
@@ -109,20 +101,31 @@ termExprToDiagramWith convEnv tmCtx expectedSort tm = do
       case currentTm of
         TMVar v -> do
           let vSort = tmvSort v
-          ensureSortEq "termExprToDiagramUnchecked: metavariable sort mismatch" vSort currentSort
+          ensureSortEq "termExprToDiagram: metavariable sort mismatch" vSort currentSort
           if tmvScope v <= length modeInputsAll
             then Right ()
-            else Left "termExprToDiagramUnchecked: metavariable scope exceeds mode-local context"
+            else Left "termExprToDiagram: metavariable scope exceeds mode-local context"
           let v' = v { tmvSort = vSort }
           let (outPort, d1) = freshPort vSort diag
-          d2 <- addEdgePayload (PTmMeta v') (take (tmvScope v') inPorts) [outPort] d1
+          d2 <- addEdgePayload (PTmMeta (tmVarToTmMeta v')) (take (tmvScope v') inPorts) [outPort] d1
+          pure (outPort, d2)
+        TMMeta v metaArgs -> do
+          let vSort = tmmSort v
+          ensureSortEq "termExprToDiagram: metavariable sort mismatch" vSort currentSort
+          if tmmScope v <= length modeInputsAll
+            then Right ()
+            else Left "termExprToDiagram: metavariable scope exceeds mode-local context"
+          argPorts <- mapM (lookupMetaInput modeInputs inPorts) metaArgs
+          let v' = v { tmmSort = vSort }
+          let (outPort, d1) = freshPort vSort diag
+          d2 <- addEdgePayload (PTmMeta v') argPorts [outPort] d1
           pure (outPort, d2)
         TMBound i ->
           case lookupBound modeInputs inPorts i of
-            Nothing -> Left "termExprToDiagramUnchecked: bound term variable out of scope or wrong mode"
+            Nothing -> Left "termExprToDiagram: bound term variable out of scope or wrong mode"
             Just (pid, sortTy) ->
               do
-                ensureSortEq "termExprToDiagramUnchecked: bound term variable sort mismatch" sortTy currentSort
+                ensureSortEq "termExprToDiagram: bound term variable sort mismatch" sortTy currentSort
                 pure (pid, diag)
         TMFun f args -> do
           sig <- requireFunSig convEnv tmCtx currentSort f args
@@ -135,6 +138,19 @@ termExprToDiagramWith convEnv tmCtx expectedSort tm = do
         step (ports, dAcc) (argSort, argTm) = do
           (argPort, dNext) <- go modeInputs modeInputsAll inPorts dAcc argSort argTm
           pure (ports <> [argPort], dNext)
+
+    lookupMetaInput modeInputs inPorts globalTm =
+      case elemIndex globalTm (map fst modeInputs) of
+        Nothing ->
+          Left
+            ( "termExprToDiagram: metavariable argument index "
+                <> T.pack (show globalTm)
+                <> " not in mode-local context"
+            )
+        Just localIx ->
+          case nth inPorts localIx of
+            Nothing -> Left "termExprToDiagram: internal metavariable input mapping failure"
+            Just pid -> Right pid
 
     annotateInputs modeInputs inPorts diag =
       foldM step diag (zip modeInputs inPorts)
@@ -164,7 +180,7 @@ diagramToTermExpr
   -> TermDiagram
   -> Either Text TermExpr
 diagramToTermExpr tt =
-  diagramToTermExprWith (uncheckedConvEnv tt)
+  diagramToTermExprWith (structuralConvEnv tt)
 
 diagramGraphToTermExpr
   :: TypeTheory
@@ -173,7 +189,7 @@ diagramGraphToTermExpr
   -> Diagram
   -> Either Text TermExpr
 diagramGraphToTermExpr tt =
-  diagramGraphToTermExprWith (uncheckedConvEnv tt)
+  diagramGraphToTermExprWith (structuralConvEnv tt)
 
 diagramGraphToTermExprWith
   :: TermConvEnv
@@ -198,7 +214,7 @@ diagramGraphToTermExprWith convEnv tmCtx expectedSort diag = do
       if outOk
         then Right ()
         else Left "diagramToTermExpr: output sort mismatch"
-      diagramGraphToTermExprUnchecked diag
+      diagramGraphToTermExprCore diag
     _ -> Left "diagramToTermExpr: term diagram must have exactly one output"
   where
     modeInputs = modeCtx tmCtx (dMode diag)
@@ -222,14 +238,14 @@ diagramGraphToTermExprWith convEnv tmCtx expectedSort diag = do
         then Right ()
         else Left "diagramToTermExpr: boundary input sort mismatch"
 
-diagramGraphToTermExprUnchecked
+diagramGraphToTermExprCore
   :: Diagram
   -> Either Text TermExpr
-diagramGraphToTermExprUnchecked diag = do
+diagramGraphToTermExprCore diag = do
   validateTermGraph diag
   case dOut diag of
     [outPort] -> termAt S.empty outPort
-    _ -> Left "diagramToTermExprUnchecked: term diagram must have exactly one output"
+    _ -> Left "diagramToTermExpr: term diagram must have exactly one output"
   where
     modeInputs = modeCtx (dTmCtx diag) (dMode diag)
     nIn = length (dIn diag)
@@ -240,32 +256,45 @@ diagramGraphToTermExprUnchecked diag = do
       case M.lookup pid inMap of
         Just local ->
           case nth localToGlobal local of
-            Nothing -> Left "diagramToTermExprUnchecked: invalid boundary input mapping"
+            Nothing -> Left "diagramToTermExpr: invalid boundary input mapping"
             Just globalTm -> Right (TMBound globalTm)
         Nothing ->
           if pid `S.member` seen
-            then Left "diagramToTermExprUnchecked: cycle detected in term diagram"
+            then Left "diagramToTermExpr: cycle detected in term diagram"
             else do
               producer <-
                 case IM.lookup (unPortId pid) (dProd diag) of
                   Just (Just eid) ->
                     case IM.lookup (unEdgeId eid) (dEdges diag) of
-                      Nothing -> Left "diagramToTermExprUnchecked: producer edge missing"
+                      Nothing -> Left "diagramToTermExpr: producer edge missing"
                       Just edge -> Right edge
-                  _ -> Left "diagramToTermExprUnchecked: missing producer"
+                  _ -> Left "diagramToTermExpr: missing producer"
               case ePayload producer of
                 PGen (GenName gName) attrs bargs
                   | M.null attrs && null bargs -> do
                       args <- mapM (termAt (S.insert pid seen)) (eIns producer)
                       Right (TMFun (TmFunName gName) args)
                   | otherwise ->
-                      Left "diagramToTermExprUnchecked: generator term node must not carry attrs or binder args"
+                      Left "diagramToTermExpr: generator term node must not carry attrs or binder args"
                 PTmMeta v ->
-                  if eIns producer == take (tmvScope v) (dIn diag)
-                    then Right (TMVar v)
-                    else Left "diagramToTermExprUnchecked: PTmMeta inputs do not match canonical scope prefix"
+                  do
+                    metaArgs <- mapM boundaryInputGlobal (eIns producer)
+                    if metaArgs == defaultMetaArgs v
+                      then Right (TMVar (tmMetaToTmVar v))
+                      else Right (TMMeta v metaArgs)
                 _ ->
-                  Left "diagramToTermExprUnchecked: non-term payload in term diagram"
+                  Left "diagramToTermExpr: non-term payload in term diagram"
+
+    defaultMetaArgs v =
+      take (tmmScope v) localToGlobal
+    boundaryInputGlobal pid =
+      case M.lookup pid inMap of
+        Nothing ->
+          Left "diagramToTermExpr: PTmMeta inputs must connect to boundary inputs"
+        Just local ->
+          case nth localToGlobal local of
+            Nothing -> Left "diagramToTermExpr: invalid boundary input mapping"
+            Just globalTm -> Right globalTm
 validateTermGraph :: Diagram -> Either Text ()
 validateTermGraph diag = do
   validateDiagram diag
@@ -300,7 +329,10 @@ validateTermGraph diag = do
           if M.null attrs && null bargs
             then Right ()
             else Left "validateTermDiagram: term generator nodes cannot have attrs or binder args"
-        PTmMeta _ -> Right ()
+        PTmMeta _ ->
+          if all (`elem` dIn diag) (eIns edge)
+            then Right ()
+            else Left "validateTermDiagram: PTmMeta inputs must be boundary ports"
         PInternalDrop -> Right ()
         _ -> Left "validateTermDiagram: only PGen/PTmMeta/PInternalDrop are allowed in term diagrams"
 
@@ -368,8 +400,8 @@ saturateUnusedPrefixInputs diag =
                   addEdgePayload PInternalDrop [pid] [] d
             _ -> Right d
 
-uncheckedConvEnv :: TypeTheory -> TermConvEnv
-uncheckedConvEnv tt =
+structuralConvEnv :: TypeTheory -> TermConvEnv
+structuralConvEnv tt =
   TermConvEnv
     { tcLookupSig = \mode f -> lookupTmFunSig tt mode f
     , tcSortEq = \_ a b -> Right (a == b)
@@ -379,15 +411,15 @@ requireFunSig :: TermConvEnv -> [Obj] -> Obj -> TmFunName -> [TermExpr] -> Eithe
 requireFunSig convEnv tmCtx sortTy f args = do
   sig <-
     case tcLookupSig convEnv (objOwnerMode sortTy) f of
-      Nothing -> Left "termExprToDiagramUnchecked: unknown term function"
+      Nothing -> Left "termExprToDiagram: unknown term function"
       Just s -> Right s
   if length (tfsArgs sig) /= length args
-    then Left "termExprToDiagramUnchecked: term function arity mismatch"
+    then Left "termExprToDiagram: term function arity mismatch"
     else Right ()
   ok <- tcSortEq convEnv tmCtx (tfsRes sig) sortTy
   if ok
     then Right sig
-    else Left "termExprToDiagramUnchecked: term function result sort mismatch"
+    else Left "termExprToDiagram: term function result sort mismatch"
 
 nth :: [a] -> Int -> Maybe a
 nth xs i

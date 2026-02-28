@@ -14,7 +14,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar, pattern ObjVar, ovName, ovMode, mkCon)
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar, pattern ObjVar, ovName, ovMode, objVarToTmVar, mkCon)
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Match (Match(..), MatchConfig(..), findFirstMatch)
@@ -311,7 +311,7 @@ testBoxTypeVarUnify = do
   fConcrete <- require (mkGen "f" [aConcrete] [aConcrete])
   lhs <- require (mkBoxDiagram "B" fVar aVarTy)
   host <- require (mkBoxDiagram "B" fConcrete aConcrete)
-  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) (S.singleton aVar) S.empty
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) (S.singleton (objVarToTmVar aVar)) S.empty
   res <- case findFirstMatch cfg lhs host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m

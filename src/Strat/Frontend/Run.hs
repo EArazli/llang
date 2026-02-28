@@ -28,7 +28,7 @@ import Strat.Poly.Graph
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Attr
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeTheory (TypeTheory(..))
+import Strat.Poly.TypeTheory (TypeTheory(..), ttCtorTablesByOwner)
 import qualified Strat.Poly.Morphism as Morph
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Poly.Foliation (SSA(..), SSAStep(..), foliate, forgetSSA)
@@ -345,7 +345,7 @@ topologicalEdges diag =
 encodeSSAArtifact :: Doctrine -> SSA -> Either Text Diagram
 encodeSSAArtifact doc ssa = do
   tt <- doctrineTypeTheory doc
-  let ctorTables = ttCtorTables tt
+  let ctorTables = ttCtorTablesByOwner tt
   let mode = ssaMode ssa
       requireType0 tName = do
         let mRef = lookupCtorRefForOwnerInTables doc ctorTables mode (ObjName tName)

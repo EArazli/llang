@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.ModAction
   ( applyModExpr
+  , mapTypeByModExpr
   , applyAction
   , ActionSemanticsResult(..)
   , validateActionSemanticsWithBudgetResult
@@ -47,7 +48,7 @@ data ActionSemanticsResult
 validateActionSemanticsWithBudgetResult :: SearchBudget -> Doctrine -> Either Text ActionSemanticsResult
 validateActionSemanticsWithBudgetResult budget doc = do
   tt <- doctrineTypeTheory doc
-  let ctorTables = ttCtorTables tt
+  let ctorTables = ttCtorTablesByOwner tt
   actionResult <- checkActions tt ctorTables (M.toList (dActions doc))
   case actionResult of
     ActionSemanticsUndecided{} ->
@@ -212,11 +213,16 @@ freshenRuleTyVars tt cell = do
       pure cell { c2LHS = lhs, c2RHS = rhs }
   where
     freshOne (acc, used) v =
-      let name' = pickFresh used (ovMode v) ("actchk_" <> ovName v) 0
-          v' = v { ovName = name' }
-          used' = S.insert (ovMode v', ovName v') used
-          acc' = M.insert v (OVar v') acc
-       in (acc', used')
+          let name' = pickFresh used (tyVarMode v) ("actchk_" <> tmvName v) 0
+              v' = v { tmvName = name' }
+              used' = S.insert (tyVarMode v', tmvName v') used
+              acc' = M.insert (tmVarToObjVar v) (OVar (tmVarToObjVar v')) acc
+           in (acc', used')
+
+    tyVarMode v =
+      case tmvOwnerMode v of
+        Just m -> m
+        Nothing -> objOwnerMode (tmvSort v)
 
     pickFresh used mode base n =
       let suffix = if n == (0 :: Int) then "" else T.pack (show n)
@@ -233,6 +239,19 @@ maybeToList mv =
 
 renderGenName :: GenName -> Text
 renderGenName (GenName g) = g
+
+mapTypeByModExpr :: Doctrine -> ModExpr -> Obj -> Either Text Obj
+mapTypeByModExpr doc me ty = do
+  if objOwnerMode ty /= meSrc me
+    then Left "map: type mode does not match action source"
+    else pure ()
+  codeLift <- classifierLiftForModExpr (dModes doc) me
+  normalizeObjExpr
+    (dModes doc)
+    Obj
+      { objOwnerMode = meTgt me
+      , objCode = CTLift codeLift (objCode ty)
+      }
 
 applyModExpr :: Doctrine -> ModExpr -> Diagram -> Either Text Diagram
 applyModExpr doc me diag = do
@@ -265,42 +284,32 @@ applyAction doc mName diagSrc = do
     else pure ()
   tt <- doctrineTypeTheory doc
   let me = ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [mName] }
-  let classMap = mtClassifiedBy (dModes doc)
-  mClassifierLift <-
-    case (M.lookup (mdSrc decl) classMap, M.lookup (mdTgt decl) classMap) of
-      (Just _, Just _) ->
-        Just <$> classifierLiftForModality (dModes doc) mName
-      _ ->
-        Right Nothing
-  dTmCtx' <- mapM (mapTypeIfSource me mClassifierLift) (dTmCtx diagSrc)
-  dPortObj' <- mapM (mapType me mClassifierLift) (dPortObj diagSrc)
+  codeLift <- classifierLiftForModExpr (dModes doc) me
+  dTmCtx' <- mapM (mapTypeIfSource me codeLift) (dTmCtx diagSrc)
+  dPortObj' <- mapM (mapType me codeLift) (dPortObj diagSrc)
   let diag0 = diagSrc { dMode = mdTgt decl, dTmCtx = dTmCtx', dPortObj = dPortObj' }
   let edgeKeys = IM.keys (dEdges diagSrc)
-  diag1 <- foldM (step tt action me mClassifierLift) diag0 edgeKeys
+  diag1 <- foldM (step tt action me codeLift) diag0 edgeKeys
   validateDiagram diag1
   pure diag1
   where
-    mapType me mClassifierLift ty = do
+    mapType me codeLift ty = do
       if objOwnerMode ty /= meSrc me
         then Left "map: type mode does not match action source"
         else
-          case mClassifierLift of
-            Just liftExpr ->
-              normalizeObjExpr
-                (dModes doc)
-                Obj
-                  { objOwnerMode = meTgt me
-                  , objCode = CTLift liftExpr (objCode ty)
-                  }
-            Nothing ->
-              normalizeObjExpr (dModes doc) (OMod me ty)
+          normalizeObjExpr
+            (dModes doc)
+            Obj
+              { objOwnerMode = meTgt me
+              , objCode = CTLift codeLift (objCode ty)
+              }
 
-    mapTypeIfSource me mClassifierLift ty =
+    mapTypeIfSource me codeLift ty =
       if objOwnerMode ty == meSrc me
-        then mapType me mClassifierLift ty
+        then mapType me codeLift ty
         else pure ty
 
-    step tt action me mClassifierLift diagTgt edgeKey = do
+    step tt action me codeLift diagTgt edgeKey = do
       edgeSrc <-
         case IM.lookup edgeKey (dEdges diagSrc) of
           Nothing -> Left "map: missing source edge"
@@ -316,7 +325,7 @@ applyAction doc mName diagSrc = do
           img0 <- freshenImageTyVars tt diagTgt img0raw
           (img1, subst) <- instantiateImage tt diagTgt edgeKey img0
           let img2 = applyAttrSubstDiagram (actionAttrSubst genDecl attrs) img1
-          img3 <- instantiateMappedBinders tt me mClassifierLift genDecl mappedBargs subst img2
+          img3 <- instantiateMappedBinders tt me codeLift genDecl mappedBargs subst img2
           img4 <- weakenDiagramTmCtxTo (dTmCtx diagTgt) img3
           diagTgtNorm <- normalizeBoundaryPorts (eIns edgeSrc <> eOuts edgeSrc) diagTgt
           img4Norm <- normalizeDiagramObjExprs (dModes doc) img4
@@ -330,8 +339,8 @@ applyAction doc mName diagSrc = do
         PSplice x ->
           updateEdgePayload diagTgt edgeKey (PSplice x)
         PTmMeta v -> do
-          sort' <- mapTypeIfSource me mClassifierLift (tmvSort v)
-          updateEdgePayload diagTgt edgeKey (PTmMeta v { tmvSort = sort' })
+          sort' <- mapTypeIfSource me codeLift (tmmSort v)
+          updateEdgePayload diagTgt edgeKey (PTmMeta v { tmmSort = sort' })
         PInternalDrop ->
           updateEdgePayload diagTgt edgeKey PInternalDrop
 
@@ -342,7 +351,7 @@ applyAction doc mName diagSrc = do
         BAMeta x ->
           Right (BAMeta x)
 
-    instantiateMappedBinders typeTheory me mClassifierLift genDecl mappedBargs subst image = do
+    instantiateMappedBinders typeTheory me codeLift genDecl mappedBargs subst image = do
       let slots = [ bs | InBinder bs <- gdDom genDecl ]
       if length slots /= length mappedBargs
         then Left "map: source binder argument arity mismatch"
@@ -358,13 +367,13 @@ applyAction doc mName diagSrc = do
         else Left "map: uninstantiated binder holes in action image"
       where
         mapBinderSig sig = do
-          tmCtx <- mapM (mapTypeIfSource me mClassifierLift) (bsTmCtx sig)
-          dom <- mapM (mapType me mClassifierLift) (bsDom sig)
-          cod <- mapM (mapType me mClassifierLift) (bsCod sig)
+          tmCtx <- mapM (mapTypeIfSource me codeLift) (bsTmCtx sig)
+          dom <- mapM (mapType me codeLift) (bsDom sig)
+          cod <- mapM (mapType me codeLift) (bsCod sig)
           pure sig { bsTmCtx = tmCtx, bsDom = dom, bsCod = cod }
 
     freshenImageTyVars typeTheory host image = do
-      let vars = S.toList (freeObjVarsDiagram image)
+      let vars = map objVarToTmVar (S.toList (freeObjVarsDiagram image))
       if null vars
         then Right image
         else do
@@ -374,10 +383,15 @@ applyAction doc mName diagSrc = do
           applySubstDiagram typeTheory subst image
       where
         freshOne (used, acc) v =
-          let name' = pickFresh used (ovMode v) (ovName v <> "_img") 0
-              v' = v { ovName = name' }
-              used' = S.insert (ovMode v', ovName v') used
-           in (used', (v, OVar v') : acc)
+          let name' = pickFresh used (tyVarMode v) (tmvName v <> "_img") 0
+              v' = v { tmvName = name' }
+              used' = S.insert (tyVarMode v', tmvName v') used
+           in (used', (tmVarToObjVar v, OVar (tmVarToObjVar v')) : acc)
+
+        tyVarMode v =
+          case tmvOwnerMode v of
+            Just m -> m
+            Nothing -> objOwnerMode (tmvSort v)
 
         pickFresh used mode base n =
           let suffix = if n == (0 :: Int) then "" else T.pack (show n)
@@ -450,7 +464,7 @@ instantiateImage tt diag edgeKey img = do
   codEdge <- mapM (requirePortType diag) (eOuts edge)
   domImg <- diagramDom img
   codImg <- diagramCod img
-  let flexTy = freeObjVarsDiagram img
+  let flexTy = S.map objVarToTmVar (freeObjVarsDiagram img)
   let flexTm = freeTmVarsDiagram img
   let flex = S.union flexTy flexTm
   sDom <- unifyCtxDiagram tt diag flex domImg domEdge
@@ -488,8 +502,8 @@ normalizeDiagramObjExprs mt diag = do
         PFeedback inner ->
           PFeedback <$> normalizeDiagramObjExprs mt inner
         PTmMeta v -> do
-          sort' <- normalizeObjExpr mt (tmvSort v)
-          pure (PTmMeta v { tmvSort = sort' })
+          sort' <- normalizeObjExpr mt (tmmSort v)
+          pure (PTmMeta v { tmmSort = sort' })
         PSplice x ->
           pure (PSplice x)
         PInternalDrop ->

@@ -71,7 +71,7 @@ selfClassifiedModes modes =
   in mt
        { mtClassifiedBy =
            M.fromList
-             [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing, cdComp = Just compDecl })
+             [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdComp = Just compDecl })
              | mode <- modes
              ]
        }
@@ -136,7 +136,7 @@ addSelfClassifications modes mt =
               M.insertWith
                 (\_ old -> old)
                 mode
-                (ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing, cdComp = Just compDecl })
+                (ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdComp = Just compDecl })
                 acc
           )
           (mtClassifiedBy mt)
@@ -242,7 +242,7 @@ attachComprehensionFixture mode aTy doc =
       ClassificationDecl
         { cdClassifier = mode
         , cdUniverse = universeObj mode
-        , cdTag = Nothing
+        
         , cdComp = Just compDecl
         }
 
@@ -287,7 +287,7 @@ tmMeta v =
   let mode = objMode (tmvSort v)
       (outPid, d0) = freshPort (tmvSort v) (emptyDiagram mode [])
       d1 =
-        case addEdgePayload (PTmMeta v) [] [outPid] d0 of
+        case addEdgePayload (PTmMeta (tmVarToTmMeta v)) [] [outPid] d0 of
           Left err -> error (T.unpack err)
           Right d -> d
   in TermDiagram d1 { dOut = [outPid] }
@@ -361,8 +361,8 @@ testTypeMapReorder = do
           , gdTyVars = [a, b]
           , gdTmVars = []
           , gdParams = [GP_Ty a, GP_Ty b]
-          , gdDom = map InPort [mkCon (ObjRef mode prod) [OAObj (OVar a), OAObj (OVar b)]]
-          , gdCod = [mkCon (ObjRef mode prod) [OAObj (OVar a), OAObj (OVar b)]]
+          , gdDom = map InPort [mkCon (ObjRef mode prod) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
+          , gdCod = [mkCon (ObjRef mode prod) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
           , gdAttrs = []
           }
   let genTgt =
@@ -372,8 +372,8 @@ testTypeMapReorder = do
           , gdTyVars = [a, b]
           , gdTmVars = []
           , gdParams = [GP_Ty a, GP_Ty b]
-          , gdDom = map InPort [mkCon (ObjRef mode pair) [OAObj (OVar a), OAObj (OVar b)]]
-          , gdCod = [mkCon (ObjRef mode pair) [OAObj (OVar a), OAObj (OVar b)]]
+          , gdDom = map InPort [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
+          , gdCod = [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
           , gdAttrs = []
           }
   let prodCtor =
@@ -429,8 +429,8 @@ testTypeMapReorder = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
   compImgs <- either (assertFailure . T.unpack) pure (compIdentityImages mode (universeObj mode))
-  img <- either (assertFailure . T.unpack) pure (genD mode [mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] [mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]] genName)
-  let typeMap = M.fromList [(ObjRef mode prod, TypeTemplate [TPType a, TPType b] (mkCon (ObjRef mode pair) [OAObj (OVar b), OAObj (OVar a)]))]
+  img <- either (assertFailure . T.unpack) pure (genD mode [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar b)), OAObj (OVar (tmVarToObjVar a))]] [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar b)), OAObj (OVar (tmVarToObjVar a))]] genName)
+  let typeMap = M.fromList [(ObjRef mode prod, TypeTemplate [TPType a, TPType b] (mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar b)), OAObj (OVar (tmVarToObjVar a))]))]
   let mor = Morphism
         { morName = "SwapProd"
         , morSrc = docSrc'
@@ -1215,7 +1215,7 @@ testTermTemplateSortMismatch = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPTm nWrong, TPType aVar]
+                      [TPTm nWrong, TPType (objVarToTmVar aVar)]
                       (OVar aVar)
                   )
                 ]
@@ -1387,7 +1387,7 @@ testTermTypeTemplateInstantiation = do
                 [ ( vecRef
                   , TypeTemplate
                       [TPTm nVar, TPType aVar]
-                      (mkCon vec2Ref [OATm nSucc, OAObj (OVar aVar)])
+                      (mkCon vec2Ref [OATm nSucc, OAObj (OVar (tmVarToObjVar aVar))])
                   )
                 ]
           , morGenMap =
@@ -1497,7 +1497,7 @@ testTermTemplateKindMismatch = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPType aVar, TPTm nVar]
+                      [TPType (objVarToTmVar aVar), TPTm nVar]
                       (mkCon vec2Ref [OATm nVarTm, OAObj (OVar aVar)])
                   )
                 ]

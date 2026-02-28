@@ -1,6 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.TypeTheory
   ( TypeTheory(..)
+  , CtorSigEnv
+  , UniverseCtors
+  , ttCtorTablesByOwner
   , DefFragment(..)
   , TypeParamSig(..)
   , TmFunSig(..)
@@ -22,10 +25,15 @@ module Strat.Poly.TypeTheory
   ) where
 
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName, ModeTheory(..), DefEqEngine(..), modeDefEqEngine)
+import Strat.Poly.ObjClassifier (modeClassifierMode)
 import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
 import Strat.Poly.Term.NBE.Config (NbeConfig, defaultNbeConfig)
 import Strat.Poly.Obj
+
+type CtorSigEnv = M.Map ModeName (M.Map ObjName [TypeParamSig])
+type UniverseCtors = M.Map ModeName (S.Set ObjName)
 
 
 data DefFragment
@@ -45,8 +53,8 @@ data DefFragment
 
 data TypeTheory = TypeTheory
   { ttModes :: ModeTheory
-  , ttCtorTables :: M.Map ModeName (M.Map ObjName [TypeParamSig])
-  , ttObjParams :: M.Map ObjRef [TypeParamSig]
+  , ttCtorSigs :: CtorSigEnv
+  , ttUniverseCtors :: UniverseCtors
   , ttDefFragments :: M.Map ModeName DefFragment
   , ttStrictCtorLookup :: Bool
   } deriving (Eq, Show)
@@ -81,11 +89,24 @@ modeOnlyTypeTheory mt =
    in
   TypeTheory
     { ttModes = mt
-    , ttCtorTables = M.empty
-    , ttObjParams = M.empty
+    , ttCtorSigs = M.empty
+    , ttUniverseCtors = M.empty
     , ttDefFragments = fragments
     , ttStrictCtorLookup = False
     }
+
+ttCtorTablesByOwner :: TypeTheory -> CtorSigEnv
+ttCtorTablesByOwner tt =
+  M.fromList
+    [ (ownerMode, tableForOwner ownerMode)
+    | ownerMode <- M.keys (mtModes (ttModes tt))
+    ]
+  where
+    tableForOwner ownerMode =
+      let classifierMode = modeClassifierMode (ttModes tt) ownerMode
+          sigs = M.findWithDefault M.empty classifierMode (ttCtorSigs tt)
+          eligible = M.findWithDefault S.empty ownerMode (ttUniverseCtors tt)
+       in M.filterWithKey (\name _ -> S.member name eligible) sigs
 
 emptyDefFragment :: ModeName -> DefFragment
 emptyDefFragment mode =

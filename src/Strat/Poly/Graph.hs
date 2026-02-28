@@ -57,6 +57,7 @@ import Strat.Poly.Syntax
   , Diagram(..)
   , Obj
   , TmVar(..)
+  , TmMeta(..)
   )
 import Strat.Poly.Obj (boundTmIndicesObj, objOwnerMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
@@ -323,25 +324,24 @@ validateDiagram diag = do
             case eOuts edge of
               [pid] -> requirePortType diag pid
               _ -> Left "validateDiagram: PTmMeta must have exactly one output"
-          if objOwnerMode outTy == objOwnerMode (tmvSort v)
+          if objOwnerMode outTy == objOwnerMode (tmmSort v)
             then Right ()
             else Left "validateDiagram: PTmMeta output mode mismatch"
-          if outTy == tmvSort v
+          if outTy == tmmSort v
             then Right ()
             else Left "validateDiagram: PTmMeta output sort mismatch"
           let modeIns =
                 [ pid
                 | pid <- dIn diag
                 , Just ty <- [diagramPortObj diag pid]
-                , objOwnerMode ty == objOwnerMode (tmvSort v)
+                , objOwnerMode ty == objOwnerMode (tmmSort v)
                 ]
-          if tmvScope v > length modeIns
+          if tmmScope v > length modeIns
             then Left "validateDiagram: PTmMeta scope exceeds available bound variables"
             else Right ()
-          let expectedIns = take (tmvScope v) modeIns
-          if eIns edge == expectedIns
+          if all (`elem` dIn diag) (eIns edge)
             then Right ()
-            else Left "validateDiagram: PTmMeta inputs must be canonical scoped boundary prefix"
+            else Left "validateDiagram: PTmMeta inputs must be boundary ports"
         PInternalDrop ->
           case (eIns edge, eOuts edge) of
             ([_], []) -> Right ()
@@ -808,7 +808,7 @@ colorKeyFor diag v =
         PSplice x ->
           Right (PKSplice x)
         PTmMeta tmv ->
-          Right (PKTmMeta (tmvName tmv) (tmvScope tmv))
+          Right (PKTmMeta (tmmName tmv) (tmmScope tmv))
         PInternalDrop ->
           Right PKInternalDrop
 

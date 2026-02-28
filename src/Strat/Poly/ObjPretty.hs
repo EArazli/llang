@@ -20,12 +20,11 @@ renderMode (ModeName t) = t
 renderType :: Obj -> Text
 renderType ty =
   case ty of
-    OVar v -> ovName v <> "@" <> renderMode (ovMode v)
+    OVar v ->
+      ovName v <> "@" <> renderMode (ovOwnerMode v)
     OCon ref [] -> renderTypeRef ref
     OCon ref args ->
       renderTypeRef ref <> "(" <> T.intercalate ", " (map renderTypeArg args) <> ")"
-    OMod me inner ->
-      renderModExpr me <> "(" <> renderType inner <> ")"
     OLift me inner ->
       "lift[" <> renderModExpr me <> "](" <> renderType inner <> ")"
 

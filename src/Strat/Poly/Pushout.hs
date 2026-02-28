@@ -938,7 +938,7 @@ requireTypeRenameMap mor = do
     argParamIndex params arg =
       case arg of
         OAObj (OVar v) ->
-          findParamIndex params (\p -> case p of TPType v' -> v' == v; _ -> False)
+          findParamIndex params (\p -> case p of TPType v' -> tmVarToObjVar v' == v; _ -> False)
         OATm tm ->
           case termMetaOnly tm of
             Just v ->
@@ -950,7 +950,7 @@ requireTypeRenameMap mor = do
       case (IM.elems (dEdges diag), dIn diag, dOut diag) of
         ([edge], [], [outBoundary]) ->
           case (ePayload edge, eIns edge, eOuts edge) of
-            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just v
+            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just (tmMetaToTmVar v)
             _ -> Nothing
         _ -> Nothing
 
@@ -1995,7 +1995,7 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
 
     renameObligation obl = do
       let name' = M.findWithDefault (obName obl) (obName obl) oblRen
-      let tyVarNames = S.fromList (map ovName (obTyVars obl))
+      let tyVarNames = S.fromList (map tmvName (obTyVars obl))
       let tmVarNames = S.fromList (map tmvName (obTmVars obl))
       let mode0 = obMode obl
       let mode' = renameModeName modeRen mode0
@@ -2328,8 +2328,8 @@ renameDiagram modeRen modRen attrRen tyRen permRen genRen diag =
           bargs' <- mapM renameBinderArg bargs
           pure (PGen gen' attrs' bargs')
         PTmMeta v -> do
-          sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort v)
-          pure (PTmMeta v { tmvSort = sort' })
+          sort' <- renameObjExpr modeRen modRen tyRen permRen (tmmSort v)
+          pure (PTmMeta v { tmmSort = sort' })
         _ -> pure payload
 
     renameBinderArg barg =
@@ -2386,11 +2386,16 @@ renameObjExpr modeRen modRen ren permRen ty = do
     renameCode code =
       case code of
         CTMeta v -> do
-          sort' <- renameObjExpr modeRen modRen ren permRen (tmvSort v)
-          Right (CTMeta v { tmvSort = sort', tmvOwnerMode = fmap (renameModeName modeRen) (tmvOwnerMode v) })
-        CTMod me inner -> do
-          inner' <- renameCode inner
-          Right (CTMod (renameModExpr modeRen modRen me) inner')
+          sort' <- renameObjExpr modeRen modRen ren permRen (ovSort v)
+          let vTm = objVarToTmVar v
+              v' =
+                tmVarToObjVar
+                  ( vTm
+                      { tmvSort = sort'
+                      , tmvOwnerMode = Just (renameModeName modeRen (ovOwnerMode v))
+                      }
+                  )
+          Right (CTMeta v')
         CTLift me inner -> do
           inner' <- renameCode inner
           Right (CTLift (renameModExpr modeRen modRen me) inner')
@@ -2428,8 +2433,8 @@ renameObjExpr modeRen modRen ren permRen ty = do
     renameEdge edge =
       case ePayload edge of
         PTmMeta v -> do
-          sort' <- renameObjExpr modeRen modRen ren permRen (tmvSort v)
-          Right edge { ePayload = PTmMeta v { tmvSort = sort' } }
+          sort' <- renameObjExpr modeRen modRen ren permRen (tmmSort v)
+          Right edge { ePayload = PTmMeta v { tmmSort = sort' } }
         _ -> Right edge
 
 applyPerm :: [Int] -> [a] -> Either Text [a]
@@ -2670,12 +2675,25 @@ renameTmVarAlpha tyMap tmMap v =
     Nothing -> v { tmvSort = renameTypeAlpha tyMap tmMap (tmvSort v) }
 
 renameTypeAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Obj -> Obj
-renameTypeAlpha tyMap tmMap = mapObjExpr renameTy renameTm
+renameTypeAlpha tyMap tmMap = goObj
   where
-    renameTy ty =
-      case ty of
-        OVar v -> OVar (renameTyVarAlpha tyMap v)
-        _ -> ty
+    goObj ty =
+      ty { objCode = goCode (objCode ty) }
+
+    goCode code =
+      case code of
+        CTMeta v ->
+          CTMeta (tmVarToObjVar (renameTyVarAlpha tyMap (objVarToTmVar v)))
+        CTCon ref args ->
+          CTCon ref (map goArg args)
+        CTLift me inner ->
+          CTLift me (goCode inner)
+
+    goArg arg =
+      case arg of
+        CAObj ty -> CAObj (goObj ty)
+        CATm tm -> CATm (renameTm tm)
+
     renameTm (TermDiagram diag) =
       TermDiagram $
         runIdentity $
@@ -2689,7 +2707,7 @@ renameTypeAlpha tyMap tmMap = mapObjExpr renameTy renameTm
         onPayload payload =
           pure $
             case payload of
-              PTmMeta v -> PTmMeta (renameTmVarAlpha tyMap tmMap v)
+              PTmMeta v -> PTmMeta (tmVarToTmMeta (renameTmVarAlpha tyMap tmMap (tmMetaToTmVar v)))
               _ -> payload
 
 renameInputShapeAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> InputShape -> InputShape
@@ -2733,8 +2751,8 @@ normalizeDiagramModes mt diag = do
         PSplice x ->
           pure edge { ePayload = PSplice x }
         PTmMeta v -> do
-          sort' <- normalizeTypeModes (tmvSort v)
-          pure edge { ePayload = PTmMeta v { tmvSort = sort' } }
+          sort' <- normalizeTypeModes (tmmSort v)
+          pure edge { ePayload = PTmMeta v { tmmSort = sort' } }
         PInternalDrop ->
           pure edge { ePayload = PInternalDrop }
 
@@ -2748,17 +2766,23 @@ normalizeDiagramModes mt diag = do
       normalizeObjExpr mt ty'
 
     goType ty =
-      case objCode ty of
-        CTMeta _ -> Right ty
+      let codeMode = modeClassifierMode mt (objOwnerMode ty)
+       in do
+            code' <- goCode codeMode (objCode ty)
+            Right ty { objCode = code' }
+
+    goCode codeMode code =
+      case code of
+        CTMeta _ -> Right code
         CTCon ref args -> do
           args' <- mapM goArg args
-          Right ty { objCode = CTCon ref args' }
-        CTMod me innerCode -> do
-          inner' <- goType Obj { objOwnerMode = meSrc me, objCode = innerCode }
-          Right ty { objCode = CTMod me (objCode inner') }
-        CTLift me innerCode -> do
-          inner' <- goType Obj { objOwnerMode = meSrc me, objCode = innerCode }
-          Right ty { objCode = CTLift me (objCode inner') }
+          Right (CTCon ref args')
+        CTLift me innerCode ->
+          if meTgt me == codeMode
+            then do
+              inner' <- goCode (meSrc me) innerCode
+              Right (CTLift me inner')
+            else Left "pushout: normalizeDiagramModes encountered ill-typed CTLift"
 
     goArg arg =
       case arg of
@@ -2781,8 +2805,8 @@ normalizeDiagramModes mt diag = do
     goEdge edge =
       case ePayload edge of
         PTmMeta v -> do
-          sort' <- goType (tmvSort v)
-          Right edge { ePayload = PTmMeta v { tmvSort = sort' } }
+          sort' <- goType (tmmSort v)
+          Right edge { ePayload = PTmMeta v { tmmSort = sort' } }
         _ -> Right edge
 
 buildInj
@@ -2887,7 +2911,7 @@ buildTypeMap srcCtorTables srcDoc tgtDoc modeRen modRen renames permRen = do
     toArg tt (srcParam, param) =
       case (srcParam, param) of
         (TPS_Ty ownerMode, TPType v) ->
-          Right (OAObj Obj { objOwnerMode = renameModeName modeRen ownerMode, objCode = CTMeta v })
+          Right (OAObj Obj { objOwnerMode = renameModeName modeRen ownerMode, objCode = CTMeta (tmVarToObjVar v) })
         (TPS_Tm _, TPType _) ->
           Left "poly pushout: internal kind mismatch for type template argument"
         (_, TPTm v) -> do
@@ -3034,7 +3058,7 @@ composeMorphisms name first second = do
         sourceParamArg ttSrc (srcParam, param) =
           case (srcParam, param) of
             (TPS_Ty ownerMode, TPType v) ->
-              Right (OAObj Obj { objOwnerMode = ownerMode, objCode = CTMeta v })
+              Right (OAObj Obj { objOwnerMode = ownerMode, objCode = CTMeta (tmVarToObjVar v) })
             (TPS_Tm _, TPType _) ->
               Left "poly pushout: internal kind mismatch for composed type argument"
             (_, TPTm v) -> do

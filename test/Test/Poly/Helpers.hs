@@ -62,7 +62,7 @@ selfClassifiedModes modes =
    in mt
         { mtClassifiedBy =
             M.fromList
-              [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing, cdComp = Just compDecl })
+              [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdComp = Just compDecl })
               | mode <- modes
               ]
         }
@@ -127,7 +127,7 @@ addSelfClassifications modes mt =
               M.insertWith
                 (\_ old -> old)
                 mode
-                (ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing, cdComp = Just compDecl })
+                (ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdComp = Just compDecl })
                 acc
           )
           (mtClassifiedBy mt)

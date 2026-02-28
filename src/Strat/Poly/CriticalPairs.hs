@@ -23,10 +23,15 @@ import Strat.Poly.Diagram
 import Strat.Poly.Match (Match(..))
 import Strat.Poly.Obj
   ( ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
-  , TmVar(..)
+    , pattern ObjVar
+    , ovName
+    , ovMode
+    , objVarToTmVar
+    , tmVarToObjVar
+    , TmVar(..)
+    , TmMeta(..)
+    , tmMetaToTmVar
+    , tmVarToTmMeta
   , TermDiagram(..)
   , Obj(..)
   , pattern OVar
@@ -210,13 +215,13 @@ renameRule idx rule =
       attrSuffix = "#" <> idxText
       binderSuffix = "%" <> idxText
       renamedTyVars = M.fromList [ (v, renameTyVar v) | v <- rrTyVars rule ]
-      renameTyVar v = v { ovName = ovName v <> tySuffix }
+      renameTyVar v = v { tmvName = tmvName v <> tySuffix }
       renameBinderMeta (BinderMetaVar name) = BinderMetaVar (name <> binderSuffix)
       renameTyNode ty =
         case ty of
           OVar v ->
-            case M.lookup v renamedTyVars of
-              Just v' -> OVar v'
+            case M.lookup (objVarToTmVar v) renamedTyVars of
+              Just v' -> OVar (tmVarToObjVar v')
               Nothing -> OVar v
           _ -> ty
       renameTmVar v =
@@ -237,7 +242,7 @@ renameRule idx rule =
           onPayload payload =
             pure $
               case payload of
-                PTmMeta v -> PTmMeta (renameTmVar v)
+                PTmMeta v -> PTmMeta (tmVarToTmMeta (renameTmVar (tmMetaToTmVar v)))
                 _ -> payload
       renameTmType ty = mapObjExpr renameTyNode renameTmTerm ty
       lhsTm' = renameTmVarsDiagram renameTmType (rrLHS rule)
@@ -416,11 +421,11 @@ payloadCompatible p1 p2 =
     (PInternalDrop, PInternalDrop) -> True
     _ -> False
 
-sameTmMetaId :: TmVar -> TmVar -> Bool
+sameTmMetaId :: TmMeta -> TmMeta -> Bool
 sameTmMetaId a b =
-  tmvName a == tmvName b
-    && tmvScope a == tmvScope b
-    && tmvSort a == tmvSort b
+  tmmName a == tmmName b
+    && tmmScope a == tmmScope b
+    && tmmSort a == tmmSort b
 
 sortEdges :: [Edge] -> [Edge]
 sortEdges = L.sortOn (unEdgeId . eId)
@@ -636,7 +641,7 @@ renameTmVarsDiagram renameTy =
     onPayload payload =
       pure $
         case payload of
-          PTmMeta v -> PTmMeta v { tmvSort = renameTy (tmvSort v) }
+          PTmMeta v -> PTmMeta v { tmmSort = renameTy (tmmSort v) }
           _ -> payload
 
 renameBinderMetasDiagram :: (BinderMetaVar -> BinderMetaVar) -> Diagram -> Diagram

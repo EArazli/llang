@@ -23,7 +23,7 @@ import Strat.Poly.Graph
   , unEdgeId
   , canonDiagram
   )
-import Strat.Poly.Obj (Obj, TmVar(..))
+import Strat.Poly.Obj (Obj, TmVar(..), TmMeta(..))
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.UnifyObj (Subst, emptySubst, unifyObjFlex, applySubstCtx)
 import Strat.Poly.DefEq (defEqObj)
@@ -439,8 +439,8 @@ algoMatch tt flex attrFlex =
     binderShape (BAMeta x) (BAMeta y) = x == y
     binderShape _ _ = False
 
-sameTmMetaId :: TmVar -> TmVar -> Bool
+sameTmMetaId :: TmMeta -> TmMeta -> Bool
 sameTmMetaId a b =
-  tmvName a == tmvName b
-    && tmvScope a == tmvScope b
-    && tmvSort a == tmvSort b
+  tmmName a == tmmName b
+    && tmmScope a == tmmScope b
+    && tmmSort a == tmmSort b

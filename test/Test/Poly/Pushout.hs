@@ -33,6 +33,9 @@ import Strat.Poly.Obj
   , pattern ObjVar
   , ovName
   , ovMode
+  , objVarToTmVar
+  , tmVarToObjVar
+  , tmVarToTmMeta
   , ObjName(..)
   , ObjRef(..)
   , Obj(..)
@@ -127,7 +130,7 @@ tmMeta v =
   let mode = objMode (tmvSort v)
       (outPid, d0) = freshPort (tmvSort v) (emptyDiagram mode [])
       d1 =
-        case addEdgePayload (PTmMeta v) [] [outPid] d0 of
+        case addEdgePayload (PTmMeta (tmVarToTmMeta v)) [] [outPid] d0 of
           Left err -> error (T.unpack err)
           Right d -> d
   in TermDiagram d1 { dOut = [outPid] }
@@ -240,7 +243,7 @@ selfClassifiedModes modes =
   in mt
        { mtClassifiedBy =
            M.fromList
-             [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdTag = Nothing, cdComp = Just compDecl })
+             [ (mode, ClassificationDecl { cdClassifier = mode, cdUniverse = universeObj mode, cdComp = Just compDecl })
              | mode <- S.toList modes
              ]
        }
@@ -305,7 +308,7 @@ addSelfClassifications modes mt =
               M.insertWith
                 (\_ old -> old)
                 mode
-                (ClassificationDecl { cdClassifier = mode, cdUniverse = defaultUniverseObj mode, cdTag = Nothing, cdComp = Just compDecl })
+                (ClassificationDecl { cdClassifier = mode, cdUniverse = defaultUniverseObj mode, cdComp = Just compDecl })
                 acc
           )
           (mtClassifiedBy mt)
@@ -417,7 +420,7 @@ attachComprehensionFixture mode aTy doc =
       ClassificationDecl
         { cdClassifier = mode
         , cdUniverse = defaultUniverseObj mode
-        , cdTag = Nothing
+        
         , cdComp = Just compDecl
         }
 
@@ -458,9 +461,9 @@ mkDoctrine mode name tyVar cellName = do
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
-        , gdTyVars = [tyVar]
+        , gdTyVars = [objVarToTmVar tyVar]
         , gdTmVars = []
-        , gdParams = [GP_Ty tyVar]
+        , gdParams = [GP_Ty (objVarToTmVar tyVar)]
         , gdDom = map InPort [OVar tyVar]
         , gdCod = [OVar tyVar]
         , gdAttrs = []
@@ -473,7 +476,7 @@ mkDoctrine mode name tyVar cellName = do
         { c2Name = cellName
         , c2Class = Computational
         , c2Orient = LR
-        , c2TyVars = [tyVar]
+        , c2TyVars = [objVarToTmVar tyVar]
         , c2TmVars = []
         , c2LHS = lhs
         , c2RHS = rhs
@@ -699,7 +702,7 @@ testPushoutTypePermutationCommutes = do
   right <- case mkTypeDoctrine mode "C" [(prod, 2)] of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
-  let tmplF = TypeTemplate [TPType aVar, TPType bVar] (mkCon (ObjRef mode pair) [OAObj (OVar bVar), OAObj (OVar aVar)])
+  let tmplF = TypeTemplate [TPType (objVarToTmVar aVar), TPType (objVarToTmVar bVar)] (mkCon (ObjRef mode pair) [OAObj (OVar bVar), OAObj (OVar aVar)])
   let morF = Morphism
         { morName = "f"
         , morSrc = base
@@ -1765,7 +1768,7 @@ testPushoutClassificationUniverseFollowsTypeRename = do
         ClassificationDecl
           { cdClassifier = mode
           , cdUniverse = universe
-          , cdTag = Nothing
+          
           , cdComp = Just compDecl
           }
   let src =
@@ -2009,7 +2012,7 @@ testPushoutTermTypeMaps = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [TPTm nVar, TPType aVar]
+                      [TPTm nVar, TPType (objVarToTmVar aVar)]
                       (mkCon vec2Ref [OATm (tmMeta nVar), OAObj (OVar aVar)])
                   )
                 ]
@@ -2180,7 +2183,7 @@ testPushoutTypePermutationSortRename = do
                 [ (natRef, TypeTemplate [] natLTy)
                 , ( vecRef
                   , TypeTemplate
-                      [TPTm nVar, TPType aVar]
+                      [TPTm nVar, TPType (objVarToTmVar aVar)]
                       (mkCon vec2Ref [OAObj (OVar aVar), OATm (tmMeta nVar)])
                   )
                 ]
@@ -2338,9 +2341,9 @@ testCoproductObligationRawModalityRenameElaborates = do
         GenDecl
           { gdName = GenName "k"
           , gdMode = mode
-          , gdTyVars = [aVar]
+          , gdTyVars = [objVarToTmVar aVar]
           , gdTmVars = []
-          , gdParams = [GP_Ty aVar]
+          , gdParams = [GP_Ty (objVarToTmVar aVar)]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = [OVar aVar]
           , gdAttrs = []
@@ -2388,7 +2391,7 @@ testCoproductObligationRawModalityRenameElaborates = do
           , obForGen = False
           , obForGenName = Nothing
           , obGenerated = False
-          , obTyVars = [aVar]
+          , obTyVars = [objVarToTmVar aVar]
           , obTmVars = []
           , obDom = [OVar aVar, fa, ffa, ffa]
           , obCod = [OVar aVar, fa, ffa, ffa]
@@ -2477,9 +2480,9 @@ testCoproductTransformCollisionRenames = do
         GenDecl
           { gdName = GenName "w"
           , gdMode = mode
-          , gdTyVars = [aVar]
+          , gdTyVars = [objVarToTmVar aVar]
           , gdTmVars = []
-          , gdParams = [GP_Ty aVar]
+          , gdParams = [GP_Ty (objVarToTmVar aVar)]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = [OVar aVar]
           , gdAttrs = []
@@ -2895,7 +2898,7 @@ testApplyPushoutModeCollapseUniverseDefEq = do
                         , ClassificationDecl
                             { cdClassifier = mode
                             , cdUniverse = defaultUniverseObj mode
-                            , cdTag = Nothing
+                            
                             , cdComp = Just compDecl
                             }
                         )
@@ -3377,7 +3380,7 @@ mkModeEqDoctrine name mt varName useUF = do
         { c2Name = "eta"
         , c2Class = Computational
         , c2Orient = LR
-        , c2TyVars = [v]
+        , c2TyVars = [objVarToTmVar v]
         , c2TmVars = []
         , c2LHS = lhs
         , c2RHS = idD mode [hTy]
@@ -3385,9 +3388,9 @@ mkModeEqDoctrine name mt varName useUF = do
   let genH = GenDecl
         { gdName = GenName "h"
         , gdMode = mode
-        , gdTyVars = [v]
+        , gdTyVars = [objVarToTmVar v]
         , gdTmVars = []
-        , gdParams = [GP_Ty v]
+        , gdParams = [GP_Ty (objVarToTmVar v)]
         , gdDom = map InPort [OVar v]
         , gdCod = [OVar v]
         , gdAttrs = []
@@ -3395,9 +3398,9 @@ mkModeEqDoctrine name mt varName useUF = do
   let genModal = GenDecl
         { gdName = GenName "modal"
         , gdMode = mode
-        , gdTyVars = [v]
+        , gdTyVars = [objVarToTmVar v]
         , gdTmVars = []
-        , gdParams = [GP_Ty v]
+        , gdParams = [GP_Ty (objVarToTmVar v)]
         , gdDom = map InPort [modalTy]
         , gdCod = [modalTy]
         , gdAttrs = []
@@ -3472,7 +3475,7 @@ mkClassifiedPushoutDoctrine name tmUniverse tmCtorName = do
                   , ClassificationDecl
                       { cdClassifier = modeTy
                       , cdUniverse = uTy
-                      , cdTag = Nothing
+                      
                       , cdComp = Just compDecl
                       }
                   )
@@ -3480,7 +3483,7 @@ mkClassifiedPushoutDoctrine name tmUniverse tmCtorName = do
                   , ClassificationDecl
                       { cdClassifier = modeTy
                       , cdUniverse = tmUniverse
-                      , cdTag = Nothing
+                      
                       , cdComp = Just compDecl
                       }
                   )
@@ -3534,8 +3537,8 @@ mkPolyCompGen mode sortTy name =
         , gdTyVars = [a]
         , gdTmVars = []
         , gdParams = [GP_Ty a]
-        , gdDom = [InPort (OVar a)]
-        , gdCod = [OVar a]
+        , gdDom = [InPort (OVar (tmVarToObjVar a))]
+        , gdCod = [OVar (tmVarToObjVar a)]
         , gdAttrs = []
         }
 

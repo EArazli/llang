@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.ObjNormalize
-  ( normalizeObjDeep
+  ( checkObjWellFormed
+  , checkCodeWellFormed
+  , normalizeObjDeep
   , normalizeObjDeepWithCtx
   , normalizeCodeTermDeepWithCtx
   , normalizeTermDiagram
@@ -14,6 +16,8 @@ module Strat.Poly.ObjNormalize
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
+import Control.Monad (unless)
 import Strat.Poly.Graph
   ( Diagram(..)
   , PortId
@@ -22,7 +26,7 @@ import Strat.Poly.Graph
   , weakenDiagramTmCtxTo
   )
 import Strat.Poly.ModeTheory (ModeName, meSrc, meTgt)
-import Strat.Poly.ObjClassifier (modeUniverseObj, modeClassifierMode)
+import Strat.Poly.ObjClassifier (modeClassifierMode)
 import Strat.Poly.Obj
   ( TermDiagram(..)
   , CodeArg(..)
@@ -31,6 +35,7 @@ import Strat.Poly.Obj
   , ObjName(..)
   , ObjRef(..)
   , objOwnerMode
+  , normalizeCodeTerm
   , normalizeObjExpr
   )
 import Strat.Poly.TypeTheory
@@ -45,7 +50,7 @@ import Strat.Poly.TermExpr
   ( TermExpr
   , TermConvEnv(..)
   , diagramToTermExprWith
-  , diagramGraphToTermExprUnchecked
+  , diagramGraphToTermExprWith
   , termExprToDiagramWith
   , validateTermGraph
   )
@@ -56,17 +61,84 @@ import Strat.Poly.Term.NBE.Normalize (normalizeDiagramNBE)
 normalizeObjDeep :: TypeTheory -> Obj -> Either Text Obj
 normalizeObjDeep tt = normalizeObjDeepWithCtx tt []
 
+checkObjWellFormed :: TypeTheory -> Obj -> Either Text ()
+checkObjWellFormed tt obj = do
+  let owner = objOwnerMode obj
+  let codeMode = modeClassifierMode (ttModes tt) owner
+  checkCodeWellFormed tt codeMode (objCode obj)
+  case objCode obj of
+    CTCon ref _ -> do
+      let ownerTable = M.findWithDefault S.empty owner (ttUniverseCtors tt)
+      unless
+        (S.member (orName ref) ownerTable)
+        (Left "checkObjWellFormed: top-level constructor is not eligible for owner mode")
+    _ -> Right ()
+
+checkCodeWellFormed :: TypeTheory -> ModeName -> CodeTerm -> Either Text ()
+checkCodeWellFormed tt codeMode code =
+  case code of
+    CTMeta _ -> Right ()
+    CTCon ref args -> do
+      unless
+        (orMode ref == codeMode || isOpaqueMetaSort ref)
+        (Left "checkCodeWellFormed: constructor mode does not match current code mode")
+      case M.lookup (orName ref) sigTable of
+        Just params -> do
+          unless
+            (length params == length args)
+            (Left "checkCodeWellFormed: constructor arity mismatch")
+          mapM_ checkArgBySig (zip params args)
+        Nothing ->
+          if ttStrictCtorLookup tt
+            then Left "checkCodeWellFormed: unknown constructor"
+            else mapM_ checkArgUnknown args
+    CTLift me inner -> do
+      if meTgt me == codeMode
+        then checkCodeWellFormed tt (meSrc me) inner
+        else Left "checkCodeWellFormed: lift target does not match current code mode"
+  where
+    sigTable = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
+
+    checkArgBySig (TPS_Ty expectedOwner, arg) =
+      case arg of
+        CAObj innerObj -> do
+          unless
+            (objOwnerMode innerObj == expectedOwner)
+            (Left "checkCodeWellFormed: type argument owner mode mismatch")
+          checkObjWellFormed tt innerObj
+        CATm _ ->
+          Left "checkCodeWellFormed: expected type argument"
+    checkArgBySig (TPS_Tm _, arg) =
+      case arg of
+        CAObj _ ->
+          Left "checkCodeWellFormed: expected term argument"
+        CATm _ ->
+          Right ()
+
+    checkArgUnknown arg =
+      case arg of
+        CAObj innerObj -> checkObjWellFormed tt innerObj
+        CATm _ -> Right ()
+
+    isOpaqueMetaSort ref =
+      case orName ref of
+        ObjName "__obj_meta_sort" -> True
+        _ -> False
+
 normalizeCodeTermDeepWithCtx
   :: TypeTheory
   -> [Obj]
-  -> ModeName
+  -> ModeName -- code mode
   -> CodeTerm
   -> Either Text CodeTerm
-normalizeCodeTermDeepWithCtx tt tmCtx owner code =
+normalizeCodeTermDeepWithCtx tt tmCtx codeMode code =
   case code of
     CTMeta _ -> Right code
-    CTCon ref args ->
-      case M.lookup ref (ttObjParams tt) of
+    CTCon ref args -> do
+      if orMode ref == codeMode || isOpaqueMetaSort ref
+        then Right ()
+        else Left "normalizeCodeTermDeepWithCtx: constructor mode does not match current code mode"
+      case M.lookup (orName ref) sigTable of
         Just params ->
           if length params /= length args
             then Left "normalizeCodeTermDeepWithCtx: type constructor arity mismatch"
@@ -76,7 +148,7 @@ normalizeCodeTermDeepWithCtx tt tmCtx owner code =
         Nothing ->
           if not (ttStrictCtorLookup tt)
             then
-              if M.null (ttObjParams tt)
+              if M.null sigTable
                 then do
                   -- modeOnlyTypeTheory intentionally omits constructor signatures; normalize structurally.
                   args' <- mapM normalizeUnknownArg args
@@ -86,7 +158,7 @@ normalizeCodeTermDeepWithCtx tt tmCtx owner code =
                     then Right code
                     else unknownCtor ref
             else
-              if M.null (ttObjParams tt) || not ownerRequiresCtorLookup
+              if M.null sigTable
                 then do
                   -- modeOnlyTypeTheory intentionally omits constructor signatures; normalize structurally.
                   args' <- mapM normalizeUnknownArg args
@@ -95,20 +167,12 @@ normalizeCodeTermDeepWithCtx tt tmCtx owner code =
                   if null args && isOpaqueNullary ref
                     then Right code
                     else unknownCtor ref
-    CTMod me innerCode -> do
-      if meTgt me /= owner
-        then Left "normalizeCodeTermDeepWithCtx: modality target does not match object owner mode"
-        else Right ()
-      inner' <- normalizeCodeTermDeepWithCtx tt tmCtx (meSrc me) innerCode
-      merged <- normalizeObjExpr (ttModes tt) Obj { objOwnerMode = owner, objCode = CTMod me inner' }
-      pure (objCode merged)
     CTLift me innerCode -> do
-      if meTgt me /= modeClassifierMode (ttModes tt) owner
-        then Left "normalizeCodeTermDeepWithCtx: CTLift requires lift target == classifier(owner mode)"
-        else Right ()
+      if meTgt me == codeMode
+        then Right ()
+        else Left "normalizeCodeTermDeepWithCtx: modality target does not match current code mode"
       inner' <- normalizeCodeTermDeepWithCtx tt tmCtx (meSrc me) innerCode
-      merged <- normalizeObjExpr (ttModes tt) Obj { objOwnerMode = owner, objCode = CTLift me inner' }
-      pure (objCode merged)
+      normalizeCodeTerm (ttModes tt) (CTLift me inner')
   where
     normalizeArgBySig (TPS_Ty _, CAObj tyArg) =
       CAObj <$> normalizeObjDeepWithCtx tt tmCtx tyArg
@@ -126,14 +190,6 @@ normalizeCodeTermDeepWithCtx tt tmCtx owner code =
         CAObj tyArg -> CAObj <$> normalizeObjDeepWithCtx tt tmCtx tyArg
         CATm tm -> Right (CATm tm)
 
-    ownerRequiresCtorLookup =
-      case modeUniverseObj (ttModes tt) owner of
-        Just universe ->
-          case objCode universe of
-            CTMeta _ -> False
-            _ -> True
-        Nothing -> False
-
     renderRef ref = T.pack (show ref)
     renderModeName m = T.pack (show m)
 
@@ -142,25 +198,33 @@ normalizeCodeTermDeepWithCtx tt tmCtx owner code =
         ObjName "__obj_meta_sort" -> True
         _ -> False
 
+    isOpaqueMetaSort ref =
+      case orName ref of
+        ObjName "__obj_meta_sort" -> True
+        _ -> False
+
     unknownCtor ref =
       Left
         ( "normalizeCodeTermDeepWithCtx: unknown type constructor "
             <> renderRef ref
-            <> " (owner mode "
-            <> renderModeName owner
+            <> " (code mode "
+            <> renderModeName codeMode
             <> "); available refs: "
             <> renderAvailableRefs
         )
 
     renderAvailableRefs =
-      let refs = M.keys (ttObjParams tt)
+      let refs = [ ObjRef codeMode name | name <- M.keys sigTable ]
        in if null refs
             then "(none)"
             else T.intercalate ", " (map renderRef refs)
 
+    sigTable = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
+
 normalizeObjDeepWithCtx :: TypeTheory -> [Obj] -> Obj -> Either Text Obj
 normalizeObjDeepWithCtx tt tmCtx ty = do
-  code' <- normalizeCodeTermDeepWithCtx tt tmCtx (objOwnerMode ty) (objCode ty)
+  let codeMode = modeClassifierMode (ttModes tt) (objOwnerMode ty)
+  code' <- normalizeCodeTermDeepWithCtx tt tmCtx codeMode (objCode ty)
   normalizeObjExpr (ttModes tt) ty { objCode = code' }
 
 normalizeTermDiagram
@@ -182,14 +246,20 @@ normalizeTermDiagram tt tmCtx expectedSort term = do
       pure out
     _ -> do
       let trs = termTRSForMode tt mode
-      expr0 <- wrap "diagram-to-termexpr" (diagramGraphToTermExprUnchecked src)
+      expr0 <-
+        wrap
+          "diagram-to-termexpr"
+          (diagramGraphToTermExprWith (checkedConvEnv tt) tmCtx expectedSort' src)
       let expr = normalizeTermExpr trs expr0
       out <- wrap "termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' expr)
       let outGraph = unTerm out
       wrap "validate-output-graph" (validateTermGraph outGraph)
       wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' outGraph)
       -- Normalize output graph layout by a deterministic structural roundtrip.
-      exprCanon <- wrap "roundtrip-diagram-to-termexpr" (diagramGraphToTermExprUnchecked outGraph)
+      exprCanon <-
+        wrap
+          "roundtrip-diagram-to-termexpr"
+          (diagramGraphToTermExprWith (checkedConvEnv tt) tmCtx expectedSort' outGraph)
       wrap "roundtrip-termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' exprCanon)
   where
     nbeSortEq sortCtx tyA tyB = do

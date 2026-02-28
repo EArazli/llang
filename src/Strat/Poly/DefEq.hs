@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.DefEq
-  ( normalizeTermDiagram
+  ( checkObjWellFormed
+  , checkCodeWellFormed
+  , normalizeTermDiagram
   , normalizeObjDeep
   , normalizeObjDeepWithCtx
   , normalizeCodeTermDeepWithCtx
@@ -15,7 +17,9 @@ module Strat.Poly.DefEq
 import Data.Text (Text)
 import Strat.Poly.Obj (Obj, TermDiagram)
 import Strat.Poly.ObjNormalize
-  ( normalizeTermDiagram
+  ( checkObjWellFormed
+  , checkCodeWellFormed
+  , normalizeTermDiagram
   , normalizeObjDeep
   , normalizeObjDeepWithCtx
   , normalizeCodeTermDeepWithCtx

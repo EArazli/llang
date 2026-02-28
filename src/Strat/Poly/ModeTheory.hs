@@ -31,6 +31,7 @@ module Strat.Poly.ModeTheory
   ) where
 
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import Data.Map.Strict (Map)
 import qualified Data.Set as S
@@ -59,7 +60,6 @@ data CompDecl = CompDecl
 data ClassificationDecl = ClassificationDecl
   { cdClassifier :: ModeName
   , cdUniverse :: Obj
-  , cdTag :: Maybe Text
   , cdComp :: Maybe CompDecl
   } deriving (Eq, Show)
 
@@ -138,8 +138,8 @@ addClassifierLift modName liftExpr mt = do
     case M.lookup modName (mtDecls mt) of
       Nothing -> Left "mode theory: classifier lift references unknown modality"
       Just decl -> Right decl
-  srcClassifier <- requireClassifier (mdSrc baseDecl)
-  tgtClassifier <- requireClassifier (mdTgt baseDecl)
+  let srcClassifier = modeClassifierModeLocal mt (mdSrc baseDecl)
+  let tgtClassifier = modeClassifierModeLocal mt (mdTgt baseDecl)
   validateModExpr mt liftExpr
   if meSrc liftExpr == srcClassifier && meTgt liftExpr == tgtClassifier
     then Right ()
@@ -147,13 +147,6 @@ addClassifierLift modName liftExpr mt = do
   if M.member modName (mtClassifierLifts mt)
     then Left "mode theory: duplicate classifier lift for modality"
     else Right mt { mtClassifierLifts = M.insert modName liftExpr (mtClassifierLifts mt) }
-  where
-    requireClassifier mode =
-      case M.lookup mode (mtClassifiedBy mt) of
-        Nothing ->
-          Left "mode theory: classifier lift requires classified source/target modes"
-        Just decl ->
-          Right (cdClassifier decl)
 
 classifierLiftForModality :: ModeTheory -> ModName -> Either Text ModExpr
 classifierLiftForModality mt modName = do
@@ -161,21 +154,15 @@ classifierLiftForModality mt modName = do
     case M.lookup modName (mtDecls mt) of
       Nothing -> Left "mode theory: unknown modality"
       Just d -> Right d
-  srcClassDecl <-
-    case M.lookup (mdSrc decl) (mtClassifiedBy mt) of
-      Nothing -> Left "mode theory: modality source is not classified"
-      Just d -> Right d
-  tgtClassDecl <-
-    case M.lookup (mdTgt decl) (mtClassifiedBy mt) of
-      Nothing -> Left "mode theory: modality target is not classified"
-      Just d -> Right d
+  let srcClassifier = modeClassifierModeLocal mt (mdSrc decl)
+  let tgtClassifier = modeClassifierModeLocal mt (mdTgt decl)
   case M.lookup modName (mtClassifierLifts mt) of
     Just me -> do
-      if meSrc me == cdClassifier srcClassDecl && meTgt me == cdClassifier tgtClassDecl
+      if meSrc me == srcClassifier && meTgt me == tgtClassifier
         then Right me
         else Left "mode theory: classifier lift source/target mismatch"
     Nothing ->
-      if cdClassifier srcClassDecl == mdSrc decl && cdClassifier tgtClassDecl == mdTgt decl
+      if srcClassifier == mdSrc decl && tgtClassifier == mdTgt decl
         then
           Right
             ModExpr
@@ -183,7 +170,11 @@ classifierLiftForModality mt modName = do
               , meTgt = mdTgt decl
               , mePath = [modName]
               }
-        else Left "mode theory: missing explicit classifier lift for modality"
+        else
+          Left
+            ( "mode theory: missing explicit classifier lift for modality "
+                <> renderMod modName
+            )
 
 classifierLiftForModExpr :: ModeTheory -> ModExpr -> Either Text ModExpr
 classifierLiftForModExpr mt me = do
@@ -218,7 +209,9 @@ classificationDeps mt =
     edgeDeps mode =
       case M.lookup mode (mtClassifiedBy mt) of
         Just decl
-          | cdClassifier decl /= mode -> [cdClassifier decl]
+          | cdClassifier decl /= mode
+          , M.member (cdClassifier decl) (mtModes mt) ->
+              [cdClassifier decl]
         _ -> []
 
 classificationOrder :: ModeTheory -> Either Text [ModeName]
@@ -274,11 +267,13 @@ checkWellFormed :: ModeTheory -> Either Text ()
 checkWellFormed mt = do
   if M.null (mtModes mt)
     then Left "mode theory: no modes declared"
-    else Right ()
+  else Right ()
   mapM_ checkDecl (M.elems (mtDecls mt))
   mapM_ (validateModEqn mt) (mtEqns mt)
   mapM_ (validateModTransformDecl mt) (M.elems (mtTransforms mt))
   mapM_ (validateClassifierLiftDecl mt) (M.toList (mtClassifierLifts mt))
+  validateClassifierLifts mt
+  validateClassifierLiftsCoherent mt
   checkClassificationWellFormed mt
   checkClassificationStratifiable mt
   where
@@ -292,19 +287,59 @@ validateClassifierLiftDecl mt (modName, liftExpr) = do
     case M.lookup modName (mtDecls mt) of
       Nothing -> Left "mode theory: classifier lift references unknown modality"
       Just d -> Right d
-  srcClassifier <- requireClassifier (mdSrc decl)
-  tgtClassifier <- requireClassifier (mdTgt decl)
+  let srcClassifier = modeClassifierModeLocal mt (mdSrc decl)
+  let tgtClassifier = modeClassifierModeLocal mt (mdTgt decl)
   validateModExpr mt liftExpr
   if meSrc liftExpr == srcClassifier && meTgt liftExpr == tgtClassifier
     then Right ()
     else Left "mode theory: classifier lift source/target mismatch"
+
+validateClassifierLifts :: ModeTheory -> Either Text ()
+validateClassifierLifts mt =
+  mapM_ checkOne (M.toList (mtDecls mt))
   where
-    requireClassifier mode =
-      case M.lookup mode (mtClassifiedBy mt) of
-        Nothing ->
-          Left "mode theory: classifier lift requires classified source/target modes"
-        Just classDecl ->
-          Right (cdClassifier classDecl)
+    checkOne (modName, decl) =
+      let srcClassifier = modeClassifierModeLocal mt (mdSrc decl)
+          tgtClassifier = modeClassifierModeLocal mt (mdTgt decl)
+          needsExplicit =
+            srcClassifier /= mdSrc decl || tgtClassifier /= mdTgt decl
+       in case M.lookup modName (mtClassifierLifts mt) of
+            Just liftExpr ->
+              if meSrc liftExpr == srcClassifier && meTgt liftExpr == tgtClassifier
+                then Right ()
+                else Left "mode theory: classifier lift source/target mismatch"
+            Nothing ->
+              if needsExplicit
+                then
+                  Left
+                    ( "mode theory: missing explicit classifier lift for modality "
+                        <> renderMod modName
+                    )
+                else Right ()
+
+validateClassifierLiftsCoherent :: ModeTheory -> Either Text ()
+validateClassifierLiftsCoherent mt =
+  mapM_ checkEqn (mtEqns mt)
+  where
+    checkEqn eqn = do
+      lhsLift <- classifierLiftForModExpr mt (meLHS eqn)
+      rhsLift <- classifierLiftForModExpr mt (meRHS eqn)
+      let lhsNorm = normalizeModExpr mt lhsLift
+      let rhsNorm = normalizeModExpr mt rhsLift
+      if lhsNorm == rhsNorm
+        then Right ()
+        else
+          Left
+            ( "mode theory: classifier lift coherence failed for modality equation "
+                <> T.pack (show (meLHS eqn))
+                <> " -> "
+                <> T.pack (show (meRHS eqn))
+                <> " (lhs lift "
+                <> T.pack (show lhsNorm)
+                <> ", rhs lift "
+                <> T.pack (show rhsNorm)
+                <> ")"
+            )
 
 checkClassificationWellFormed :: ModeTheory -> Either Text ()
 checkClassificationWellFormed mt =
@@ -427,3 +462,12 @@ mkExprFromPath mt src path = do
 
 objMode0 :: Obj -> ModeName
 objMode0 = objOwnerMode
+
+modeClassifierModeLocal :: ModeTheory -> ModeName -> ModeName
+modeClassifierModeLocal mt mode =
+  case M.lookup mode (mtClassifiedBy mt) of
+    Nothing -> mode
+    Just decl -> cdClassifier decl
+
+renderMod :: ModName -> Text
+renderMod (ModName name) = name

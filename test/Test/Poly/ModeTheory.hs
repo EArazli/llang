@@ -13,13 +13,15 @@ import Control.Monad (foldM)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
-import Strat.Frontend.Env (meDoctrines, meImplDefaults)
+import Strat.Frontend.Env (emptyEnv, meDoctrines, meImplDefaults)
 import Strat.Poly.DSL.Elab
   ( checkImplementsObligationsWithBudget
   , ImplementsCheckResult(..)
   , ImplementsProof(..)
   , identityMorphismFor
+  , elabDiagExpr
   )
+import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Obj
 import Strat.Poly.UnifyObj
@@ -37,7 +39,8 @@ import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), modeOnlyTypeTheo
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Diagram (genDTm, genD, diagramDom, diagramCod)
 import Strat.Poly.Graph (Diagram(..))
-import Strat.Poly.ModAction (applyAction)
+import Strat.Poly.ModAction (applyAction, mapTypeByModExpr)
+import Strat.Poly.DefEq (normalizeObjDeepWithCtx)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Strat.Poly.Proof (defaultSearchBudget)
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
@@ -54,6 +57,8 @@ tests =
     , testCase "classificationOrder places classifier before classified mode" testClassificationOrder
     , testCase "classifier lift for identity modality expression is identity on classifier" testClassifierLiftForIdentityExpr
     , testCase "classifier lift for composed modality expression composes step lifts" testClassifierLiftForComposedExpr
+    , testCase "classifier lift coherence rejects inconsistent lifts across mod_eq" testClassifierLiftCoherenceRejected
+    , testCase "classifier lift coherence accepts consistent lifts across mod_eq" testClassifierLiftCoherenceAccepted
     , testCase "classified modality over classifier-headed code normalizes" testClassifiedModalityNormalization
     , testCase "classified non-self modality requires explicit classifier lift" testClassifiedModalityMissingLiftRejected
     , testCase "explicit classifier lift universe compatibility is enforced" testClassifierLiftUniverseMismatchRejected
@@ -64,6 +69,7 @@ tests =
     , testCase "applyAction preserves non-source tmctx and unifies using diagram tmctx" testApplyActionUsesDiagramTmCtx
     , testCase "applyAction weakens image term-context prefixes before splice" testApplyActionWeakenImageTmCtx
     , testCase "map elaborates inner expression at modality source mode" testMapCrossModeElab
+    , testCase "modal type formation elaboration matches mapped type transport" testModalTypeFormationMatchesMapType
     , testCase "for_gen obligations elaborate @gen and lifts" testForGenObligationElab
     , testCase "for_gen obligations expand over target generators during implements" testForGenImplementsQuantifiesTarget
     , testCase "for_gen obligations map schema generator refs through morphism" testForGenSchemaRefsMapped
@@ -171,19 +177,34 @@ testMultiplePendingUniversesDeferred = do
   let elUniverse = cdUniverse <$> M.lookup (ModeName "El") classes
   case (tmUniverse, elUniverse) of
     (Just tmU, Just elU) -> do
-      assertBool "expected Tm universe to resolve from pending placeholder" (not (isPendingUniverse tmU))
-      assertBool "expected El universe to resolve from pending placeholder" (not (isPendingUniverse elU))
+      let tyMode = ModeName "Ty"
+      let wrapRef = ObjRef tyMode (ObjName "Wrap")
+      let uRef = ObjRef tyMode (ObjName "U")
+      let uObj = Obj { objOwnerMode = tyMode, objCode = CTCon uRef [] }
+      tmU @?=
+        Obj
+          { objOwnerMode = tyMode
+          , objCode = CTCon wrapRef [CAObj uObj]
+          }
+      elU @?=
+        Obj
+          { objOwnerMode = tyMode
+          , objCode =
+              CTCon
+                wrapRef
+                [ CAObj
+                    Obj
+                      { objOwnerMode = tyMode
+                      , objCode = CTCon wrapRef [CAObj uObj]
+                      }
+                ]
+          }
     _ -> assertFailure "expected classified universes for Tm and El"
   ctorTables <- requireEither (deriveCtorTables doc)
   let tmTable = M.findWithDefault M.empty (ModeName "Tm") ctorTables
   let elTable = M.findWithDefault M.empty (ModeName "El") ctorTables
   assertBool "expected non-empty constructor table for Tm after pending resolution" (not (M.null tmTable))
   assertBool "expected non-empty constructor table for El after pending resolution" (not (M.null elTable))
-  where
-    isPendingUniverse obj =
-      case objCode obj of
-        CTMeta v -> tmvName v == "__pending_universe"
-        _ -> False
 
 testUnclassifiedModeNoCtorUsageAllowed :: Assertion
 testUnclassifiedModeNoCtorUsageAllowed = do
@@ -242,8 +263,8 @@ testClassificationOrder = do
   let uTy2 = OVar ObjVar { ovName = "U2", ovMode = ty }
   mt0 <- requireEither (addMode ty (mkModes []))
   mt1 <- requireEither (addMode tm mt0)
-  mt2 <- requireEither (addClassification ty ClassificationDecl { cdClassifier = ty, cdUniverse = uTy, cdTag = Nothing, cdComp = Nothing } mt1)
-  mt3 <- requireEither (addClassification tm ClassificationDecl { cdClassifier = ty, cdUniverse = uTy2, cdTag = Nothing, cdComp = Nothing } mt2)
+  mt2 <- requireEither (addClassification ty ClassificationDecl { cdClassifier = ty, cdUniverse = uTy, cdComp = Nothing } mt1)
+  mt3 <- requireEither (addClassification tm ClassificationDecl { cdClassifier = ty, cdUniverse = uTy2, cdComp = Nothing } mt2)
   order <- requireEither (classificationOrder mt3)
   let pos mode = lookup mode (zip order [0 :: Int ..])
   assertBool "expected classificationOrder to include Ty and Tm" (maybe False (const True) (pos ty) && maybe False (const True) (pos tm))
@@ -261,8 +282,8 @@ testClassifierLiftForIdentityExpr = do
       uTm = OVar ObjVar { ovName = "U_Tm", ovMode = modeTy }
   mt0 <- requireEither (addMode modeTy emptyModeTheory)
   mt1 <- requireEither (addMode modeTm mt0)
-  mt2 <- requireEither (addClassification modeTy ClassificationDecl { cdClassifier = modeTy, cdUniverse = uTy, cdTag = Nothing, cdComp = Nothing } mt1)
-  mt3 <- requireEither (addClassification modeTm ClassificationDecl { cdClassifier = modeTy, cdUniverse = uTm, cdTag = Nothing, cdComp = Nothing } mt2)
+  mt2 <- requireEither (addClassification modeTy ClassificationDecl { cdClassifier = modeTy, cdUniverse = uTy, cdComp = Nothing } mt1)
+  mt3 <- requireEither (addClassification modeTm ClassificationDecl { cdClassifier = modeTy, cdUniverse = uTm, cdComp = Nothing } mt2)
   let expr = ModExpr { meSrc = modeTm, meTgt = modeTm, mePath = [] }
   liftExpr <- requireEither (classifierLiftForModExpr mt3 expr)
   liftExpr @?= ModExpr { meSrc = modeTy, meTgt = modeTy, mePath = [] }
@@ -287,7 +308,7 @@ testClassifierLiftForComposedExpr = do
           ClassificationDecl
             { cdClassifier = classifier
             , cdUniverse = u classifier
-            , cdTag = Nothing
+            
             , cdComp = Nothing
             }
       addDecl name src tgt = addModDecl ModDecl { mdName = name, mdSrc = src, mdTgt = tgt }
@@ -308,6 +329,55 @@ testClassifierLiftForComposedExpr = do
   let composed = ModExpr { meSrc = modeA, meTgt = modeC, mePath = [modF, modG] }
   liftExpr <- requireEither (classifierLiftForModExpr mt12 composed)
   liftExpr @?= ModExpr { meSrc = classA, meTgt = classC, mePath = [liftF, liftG] }
+
+buildLiftCoherenceTheory :: ModExpr -> Either T.Text ModeTheory
+buildLiftCoherenceTheory gLift = do
+  let modeC = ModeName "C"
+      modeA = ModeName "A"
+      modL = ModName "L"
+      modF = ModName "f"
+      modG = ModName "g"
+      uC = OVar ObjVar { ovName = "U_C", ovMode = modeC }
+      addDecl name src tgt = addModDecl ModDecl { mdName = name, mdSrc = src, mdTgt = tgt }
+  mt0 <- addMode modeC emptyModeTheory
+  mt1 <- addMode modeA mt0
+  mt2 <- addClassification modeC ClassificationDecl { cdClassifier = modeC, cdUniverse = uC, cdComp = Nothing } mt1
+  mt3 <- addClassification modeA ClassificationDecl { cdClassifier = modeC, cdUniverse = uC, cdComp = Nothing } mt2
+  mt4 <- addDecl modL modeC modeC mt3
+  mt5 <- addDecl modF modeA modeA mt4
+  mt6 <- addDecl modG modeA modeA mt5
+  mt7 <- addClassifierLift modF ModExpr { meSrc = modeC, meTgt = modeC, mePath = [] } mt6
+  mt8 <- addClassifierLift modG gLift mt7
+  addModEqn
+    ModEqn
+      { meLHS = ModExpr { meSrc = modeA, meTgt = modeA, mePath = [modF, modF] }
+      , meRHS = ModExpr { meSrc = modeA, meTgt = modeA, mePath = [modG] }
+      }
+    mt8
+
+testClassifierLiftCoherenceRejected :: Assertion
+testClassifierLiftCoherenceRejected = do
+  let modeC = ModeName "C"
+      badLift = ModExpr { meSrc = modeC, meTgt = modeC, mePath = [ModName "L"] }
+  mt <- requireEither (buildLiftCoherenceTheory badLift)
+  case checkWellFormed mt of
+    Left err ->
+      assertBool
+        ("expected classifier lift coherence failure, got: " <> T.unpack err)
+        ("classifier lift coherence failed" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected inconsistent classifier lifts to be rejected"
+
+testClassifierLiftCoherenceAccepted :: Assertion
+testClassifierLiftCoherenceAccepted = do
+  let modeC = ModeName "C"
+      goodLift = ModExpr { meSrc = modeC, meTgt = modeC, mePath = [] }
+  mt <- requireEither (buildLiftCoherenceTheory goodLift)
+  case checkWellFormed mt of
+    Left err ->
+      assertFailure ("expected coherent classifier lifts to pass: " <> T.unpack err)
+    Right () ->
+      pure ()
 
 testClassifiedModalityNormalization :: Assertion
 testClassifiedModalityNormalization = do
@@ -344,14 +414,17 @@ testClassifiedModalityNormalization = do
     [obj] -> do
       objOwnerMode obj @?= ModeName "Tm"
       case objCode obj of
-        CTMod me innerCode -> do
-          meSrc me @?= ModeName "Tm"
-          meTgt me @?= ModeName "Tm"
+        CTLift me innerCode -> do
+          meSrc me @?= ModeName "Ty"
+          meTgt me @?= ModeName "Ty"
           case innerCode of
             CTCon ref [] ->
               ref @?= ObjRef (ModeName "Ty") (ObjName "X")
-            _ -> assertFailure "expected modality body to be Ty.X code"
-        _ -> assertFailure "expected modality code for idMu boundary"
+            _ -> assertFailure "expected lifted modality body to be Ty.X code"
+        CTCon ref [] ->
+          ref @?= ObjRef (ModeName "Ty") (ObjName "X")
+        _ ->
+          assertFailure "expected classifier-lifted or identity-collapsed code for idMu boundary"
     _ -> assertFailure "expected one boundary object for idMu"
 
 testClassifiedModalityMissingLiftRejected :: Assertion
@@ -699,6 +772,63 @@ testMapCrossModeElab = do
         ]
   _ <- requireEither (parseRawFile src >>= elabRawFile)
   pure ()
+
+testModalTypeFormationMatchesMapType :: Assertion
+testModalTypeFormationMatchesMapType = do
+  let modeA = ModeName "A"
+      modeB = ModeName "B"
+      modF = ModName "F"
+      src = T.unlines
+        [ "doctrine ModalTypeEq where {"
+        , "  mode A classifiedBy A via A.U_A;"
+        , "  gen U_A : [] -> [A.U_A] @A;"
+        , "  gen ctx_ext(a@A) : [a] -> [a] @A;"
+        , "  gen var(a@A) : [a] -> [a] @A;"
+        , "  gen reindex(a@A) : [a] -> [a] @A;"
+        , "  comprehension A where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  mode B classifiedBy A via A.U_A;"
+        , "  gen U_B : [] -> [A.U_A] @B;"
+        , "  gen ctx_ext(a@B) : [a] -> [a] @B;"
+        , "  gen var(a@B) : [a] -> [a] @B;"
+        , "  gen reindex(a@B) : [a] -> [a] @B;"
+        , "  comprehension B where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  modality F : A -> B;"
+        , "  lift_classifier F = id@A;"
+        , "  gen X : [] -> [A.U_A] @A;"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "ModalTypeEq" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine ModalTypeEq" >> fail "unreachable"
+      Just d -> pure d
+  tt <- requireEither (doctrineTypeTheory doc)
+
+  rawBase <- requireEither (parseDiagExpr "id[X]")
+  diagBase <- requireEither (elabDiagExpr emptyEnv doc modeA [] rawBase)
+  baseDom <- requireEither (diagramDom diagBase)
+  baseTy <-
+    case baseDom of
+      [ty] -> pure ty
+      _ -> assertFailure "expected one boundary type for id[X]" >> fail "unreachable"
+
+  mappedTy <- requireEither $
+    mapTypeByModExpr
+      doc
+      ModExpr { meSrc = modeA, meTgt = modeB, mePath = [modF] }
+      baseTy
+
+  rawModal <- requireEither (parseDiagExpr "id[F(X)]")
+  diagModal <- requireEither (elabDiagExpr emptyEnv doc modeB [] rawModal)
+  modalDom <- requireEither (diagramDom diagModal)
+  modalTy <-
+    case modalDom of
+      [ty] -> pure ty
+      _ -> assertFailure "expected one boundary type for id[F(X)]" >> fail "unreachable"
+
+  mappedNorm <- requireEither (normalizeObjDeepWithCtx tt [] mappedTy)
+  modalNorm <- requireEither (normalizeObjDeepWithCtx tt [] modalTy)
+  mappedNorm @?= modalNorm
 
 testForGenObligationElab :: Assertion
 testForGenObligationElab = do

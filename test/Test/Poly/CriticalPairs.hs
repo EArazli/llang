@@ -99,7 +99,7 @@ testCriticalPairsFreshenTyVars = do
           { rrName = "rule.ty1"
           , rrLHS = lhs1
           , rrRHS = lhs1
-          , rrTyVars = [a]
+          , rrTyVars = [objVarToTmVar a]
           , rrTmVars = []
           }
   let rule2 =
@@ -107,7 +107,7 @@ testCriticalPairsFreshenTyVars = do
           { rrName = "rule.ty2"
           , rrLHS = lhs2
           , rrRHS = lhs2
-          , rrTyVars = [a]
+          , rrTyVars = [objVarToTmVar a]
           , rrTmVars = []
           }
   let info1 = RuleInfo { riLabel = "rule.ty1", riRule = rule1, riClass = Structural }
@@ -150,7 +150,7 @@ testCriticalPairsFailOnSubstFailure = do
                       ClassificationDecl
                         { cdClassifier = mode
                         , cdUniverse = mkCon (ObjRef mode (ObjName "U")) []
-                        , cdTag = Nothing
+                        
                         , cdComp =
                             Just
                               CompDecl

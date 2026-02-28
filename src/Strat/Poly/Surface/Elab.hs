@@ -44,7 +44,7 @@ import Strat.Poly.Graph
   , shiftDiagram
   , diagramPortObj
   )
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModName(..), ModDecl(..), ModExpr(..), classifierLiftForModExpr)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
 import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
@@ -82,9 +82,9 @@ composeSubst :: ModeTheory -> Subst -> Subst -> Either Text Subst
 composeSubst mt =
   U.composeSubst (modeOnlyTypeTheory mt)
 
-freeFlexCtx :: Context -> S.Set ObjVar
+freeFlexCtx :: Context -> S.Set TmVar
 freeFlexCtx =
-  S.unions . map (\ty -> S.union (freeObjVarsObj ty) (freeTmVarsObj ty))
+  S.unions . map (\ty -> S.union (S.map Ty.objVarToTmVar (freeObjVarsObj ty)) (freeTmVarsObj ty))
 
 
 -- Public entrypoint
@@ -261,12 +261,13 @@ elabSurfaceObjExprWithTables doc ctorTables mode expr =
           Right Obj { objOwnerMode = mode, objCode = CTCon ref [] }
         Nothing -> do
           v <- mkTypeMetaVar doc mode name
-          Right Obj { objOwnerMode = mode, objCode = CTMeta v }
+          Right Obj { objOwnerMode = mode, objCode = CTMeta (Ty.tmVarToObjVar v) }
     RPTMod rawMe innerRaw -> do
       me <- elabRawModExprSurface (dModes doc) rawMe
       if meTgt me /= mode
         then Left "surface: modality application target/object mode mismatch"
         else Right ()
+      codeLift <- classifierLiftForModExpr (dModes doc) me
       inner <- elabSurfaceObjExprWithTables doc ctorTables (meSrc me) innerRaw
       if objOwnerMode inner /= meSrc me
         then Left "surface: modality application source/argument mode mismatch"
@@ -275,7 +276,7 @@ elabSurfaceObjExprWithTables doc ctorTables mode expr =
             (dModes doc)
             Obj
               { objOwnerMode = mode
-              , objCode = CTMod me (objCode inner)
+              , objCode = CTLift codeLift (objCode inner)
               }
     RPTCon rawRef args -> do
       case asModalityCall rawRef args of
@@ -284,6 +285,7 @@ elabSurfaceObjExprWithTables doc ctorTables mode expr =
           if meTgt me /= mode
             then Left "surface: modality application target/object mode mismatch"
             else Right ()
+          codeLift <- classifierLiftForModExpr (dModes doc) me
           inner <- elabSurfaceObjExprWithTables doc ctorTables (meSrc me) innerRaw
           if objOwnerMode inner /= meSrc me
             then Left "surface: modality application source/argument mode mismatch"
@@ -292,7 +294,7 @@ elabSurfaceObjExprWithTables doc ctorTables mode expr =
                 (dModes doc)
                 Obj
                   { objOwnerMode = mode
-                  , objCode = CTMod me (objCode inner)
+                  , objCode = CTLift codeLift (objCode inner)
                   }
         Nothing -> do
           ref <- resolveTypeRefInClassifierInTables doc ctorTables mode classifierMode rawRef
@@ -566,7 +568,7 @@ instantiateImplUnaryGen iface mor g ty = do
     case gdTyVars g of
       [v] -> Right v
       _ -> Left "surface: structural schema generator must be unary polymorphic"
-  dSchema <- instantiateUnaryGen ifaceTT g (Ty.OVar srcVar)
+  dSchema <- instantiateUnaryGen ifaceTT g (Ty.OVar (Ty.tmVarToObjVar srcVar))
   dMapped <- PolyMorph.applyMorphismDiagram mor dSchema
   tgtSort <- PolyMorph.applyMorphismTyWithTables tgtCtorTables mor (Ty.tmvSort srcVar)
   let srcOwner = maybe (Ty.objOwnerMode (Ty.tmvSort srcVar)) id (Ty.tmvOwnerMode srcVar)
@@ -574,20 +576,22 @@ instantiateImplUnaryGen iface mor g ty = do
   let tgtVar = srcVar { Ty.tmvSort = tgtSort, Ty.tmvOwnerMode = Just tgtOwner }
   applySubstDiagram
     tgtTT
-    (U.mkSubst (M.singleton tgtVar ty) M.empty)
+    (U.mkSubst (M.singleton (Ty.tmVarToObjVar tgtVar) ty) M.empty)
     dMapped
 
 isDupShape :: GenDecl -> Bool
 isDupShape gen =
   case (gdTyVars gen, gdTmVars gen, gdAttrs gen, gdDom gen, gdCod gen) of
     ([v], [], [], [InPort (Ty.OVar v1)], [Ty.OVar v2, Ty.OVar v3]) ->
-      v == v1 && v == v2 && v == v3
+      Ty.tmVarToObjVar v == v1
+        && Ty.tmVarToObjVar v == v2
+        && Ty.tmVarToObjVar v == v3
     _ -> False
 
 isDropShape :: GenDecl -> Bool
 isDropShape gen =
   case (gdTyVars gen, gdTmVars gen, gdAttrs gen, gdDom gen, gdCod gen) of
-    ([v], [], [], [InPort (Ty.OVar v1)], []) -> v == v1
+    ([v], [], [], [InPort (Ty.OVar v1)], []) -> Ty.tmVarToObjVar v == v1
     _ -> False
 
 
@@ -645,7 +649,7 @@ prepareBinder doc ctorTables mode mt env params (Just decl) =
       varName <- liftEither (requireIdentParam params varCap)
       base <- liftEither (mkTypeMetaVar doc mode varName)
       fresh <- freshTyVar base
-      let ty = Ty.OVar fresh
+      let ty = Ty.OVar (Ty.tmVarToObjVar fresh)
       let env' =
             env
               { eeVars = M.insert varName ty (eeVars env)
@@ -804,7 +808,7 @@ buildTypeSubst doc ctorTables mode env paramMap = do
   pairs <- mapM toPair (M.toList paramMap)
   let localTy = M.fromList (concat pairs)
       envSub = eeTypeSubst env
-      localSub = U.mkSubst localTy M.empty
+      localSub = U.mkSubst (M.mapKeys Ty.tmVarToObjVar localTy) M.empty
   U.composeSubst (modeOnlyTypeTheory (dModes doc)) envSub localSub
   where
     toPair (name, param) =
@@ -950,7 +954,10 @@ unifyVarType mt varName ty sd =
       case diagramPortObj (sdDiag sd) p of
         Nothing -> pure sd
         Just tyUse -> do
-          let flex = S.union (freeObjVarsObj tyUse) (freeObjVarsObj ty)
+          let flex =
+                S.union
+                  (S.map Ty.objVarToTmVar (freeObjVarsObj tyUse))
+                  (S.map Ty.objVarToTmVar (freeObjVarsObj ty))
           subst <- liftEither (unifyObjFlex mt flex U.emptySubst tyUse ty)
           liftEither (applySubstSurf mt subst sd)
 
@@ -1075,7 +1082,7 @@ instantiateUnaryGen tt gen ty = do
     [v] -> Right (M.singleton v ty)
     [] -> Right M.empty
     _ -> Left "surface: structural generator must be unary polymorphic in exactly one type variable"
-  let subst = U.mkSubst substTy M.empty
+  let subst = U.mkSubst (M.mapKeys Ty.tmVarToObjVar substTy) M.empty
   dom <- U.applySubstCtx tt subst (gdPlainDom gen)
   cod <- U.applySubstCtx tt subst (gdCod gen)
   genD (gdMode gen) dom cod (gdName gen)
@@ -1139,7 +1146,7 @@ genDFromDecl mt mode env gen mArgs attrs bargs = do
           then liftEither (Left "surface: generator type argument mismatch")
           else do
             freshVars <- liftEither (extractFreshVars tyVars renameSubst)
-            let subst = U.mkSubst (M.fromList (zip freshVars args')) M.empty
+            let subst = U.mkSubst (M.fromList (zip (map Ty.tmVarToObjVar freshVars) args')) M.empty
             dom2' <- liftEither (applySubstCtx mt subst dom1)
             cod2' <- liftEither (applySubstCtx mt subst cod1)
             slots2' <- liftEither (mapM (applySubstBinderSigTy mt subst) slots1)
@@ -1225,8 +1232,8 @@ compSurf :: ModeTheory -> SurfDiag -> SurfDiag -> Either Text SurfDiag
 compSurf mt a b = do
   codA <- diagramCod (sdDiag a)
   domB <- diagramDom (sdDiag b)
-  let flexA = S.union (freeObjVarsDiagram (sdDiag a)) (freeTmVarsDiagram (sdDiag a))
-  let flexB = S.union (freeObjVarsDiagram (sdDiag b)) (freeTmVarsDiagram (sdDiag b))
+  let flexA = S.union (S.map Ty.objVarToTmVar (freeObjVarsDiagram (sdDiag a))) (freeTmVarsDiagram (sdDiag a))
+  let flexB = S.union (S.map Ty.objVarToTmVar (freeObjVarsDiagram (sdDiag b))) (freeTmVarsDiagram (sdDiag b))
   let flex = S.union flexA flexB
   subst <- U.unifyCtx (modeOnlyTypeTheory mt) [] flex codA domB
   a' <- applySubstSurf mt subst a
@@ -1361,28 +1368,28 @@ evalFresh (Fresh f) = fmap fst (f 0)
 freshSubst :: [TmVar] -> Fresh Subst
 freshSubst vars = do
   pairs <- mapM freshVar vars
-  pure (U.mkSubst (M.fromList pairs) M.empty)
+  pure (U.mkSubst (M.fromList [ (Ty.tmVarToObjVar v, t) | (v, t) <- pairs ]) M.empty)
 
 extractFreshVars :: [TmVar] -> Subst -> Either Text [TmVar]
 extractFreshVars vars subst =
   mapM lookupVar vars
   where
     lookupVar v =
-      case U.lookupCodeMeta subst v of
-        Just (Ty.OVar v') -> Right v'
+      case U.lookupCodeMeta subst (Ty.tmVarToObjVar v) of
+        Just (Ty.OVar v') -> Right (Ty.objVarToTmVar v')
         _ -> Left "internal error: expected fresh type variable"
 
 freshVar :: TmVar -> Fresh (TmVar, Obj)
 freshVar v = do
   n <- freshInt
-  let name = ovName v <> T.pack ("#" <> show n)
+  let name = Ty.tmvName v <> T.pack ("#" <> show n)
   let fresh = v { Ty.tmvName = name }
-  pure (v, Ty.OVar fresh)
+  pure (v, Ty.OVar (Ty.tmVarToObjVar fresh))
 
 freshTyVar :: TmVar -> Fresh TmVar
 freshTyVar v = do
   n <- freshInt
-  let name = ovName v <> T.pack ("#" <> show n)
+  let name = Ty.tmvName v <> T.pack ("#" <> show n)
   pure v { Ty.tmvName = name }
 
 freshInt :: Fresh Int

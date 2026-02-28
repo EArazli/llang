@@ -279,12 +279,10 @@ polyModeDecl = do
     cls <- ident
     _ <- symbol "via"
     uni <- polyObjExpr
-    mTag <- optional (symbol "as" *> ident)
     pure
       PolyAST.RawClassifiedByDecl
         { PolyAST.rcdClassifier = cls
         , PolyAST.rcdUniverse = uni
-        , PolyAST.rcdTag = mTag
         }
   optionalSemi
   pure (PolyAST.RPMode (PolyAST.RawModeDecl name acyclic mDefEq mClass))

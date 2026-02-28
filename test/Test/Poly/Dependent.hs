@@ -29,6 +29,7 @@ import Strat.Poly.Obj
   , pattern ObjVar
   , ovName
   , ovMode
+  , objVarToTmVar
   , ObjName(..)
   , ObjRef(..)
   , TmFunName(..)
@@ -253,13 +254,11 @@ testMixedModeTmCtxResolution = do
   let natTy = mkCon natRef []
   let tmCtx = [fooTy, natTy]
   let tt =
-        (modeOnlyTypeTheory (mkModes [modeC, modeI]))
-          { ttObjParams =
-              M.fromList
-                [ (fooRef, [])
-                , (natRef, [])
-                ]
-          }
+        withCtorSigs
+          (modeOnlyTypeTheory (mkModes [modeC, modeI]))
+          [ (fooRef, [])
+          , (natRef, [])
+          ]
   tm <- require (termExprToDiagram tt tmCtx natTy (TMBound 1))
   let unlabeledTm =
         case tm of
@@ -322,7 +321,7 @@ testDependentUnify = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
   let aTy = mkCon (ObjRef modeM (ObjName "A")) []
-  let tt = tt0 { ttObjParams = M.fromList [ (vecRef, [TPS_Tm natTy, TPS_Ty modeM]) ] }
+  let tt = withCtorSigs tt0 [(vecRef, [TPS_Tm natTy, TPS_Ty modeM])]
   let n = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
@@ -343,13 +342,14 @@ testBoundSortUsesSubstitution = do
   let tmCtxSort = mkCon lenRef [OAObj (OVar aVar)]
   let expectedSort = mkCon lenRef [OAObj concrete]
   let tt =
-        (modeOnlyTypeTheory (mkModes [modeM, modeI]))
-          { ttObjParams = M.fromList [(lenRef, [TPS_Ty modeM])] }
+        withCtorSigs
+          (modeOnlyTypeTheory (mkModes [modeM, modeI]))
+          [(lenRef, [TPS_Ty modeM])]
   bound0 <- require (termExprToDiagram tt [tmCtxSort] tmCtxSort (TMBound 0))
   case unifyTm tt [tmCtxSort] S.empty emptySubst expectedSort bound0 bound0 of
     Left _ -> pure ()
     Right _ -> assertFailure "expected bound sort mismatch before solving substitution"
-  subst <- require (unifyObjFlex tt [] (S.singleton aVar) emptySubst (OVar aVar) concrete)
+  subst <- require (unifyObjFlex tt [] (S.singleton (objVarToTmVar aVar)) emptySubst (OVar aVar) concrete)
   _ <- require (unifyTm tt [tmCtxSort] S.empty subst expectedSort bound0 bound0)
   pure ()
 
@@ -364,13 +364,11 @@ testMatchBoundSortUsesCurrentSubst = do
   let tmCtxSort = mkCon lenRef [OAObj (OVar aVar)]
   let expectedSort = mkCon lenRef [OAObj concrete]
   let tt =
-        (modeOnlyTypeTheory (mkModes [modeM, modeI]))
-          { ttObjParams =
-              M.fromList
-                [ (lenRef, [TPS_Ty modeM])
-                , (fooRef, [TPS_Tm expectedSort])
-                ]
-          }
+        withCtorSigs
+          (modeOnlyTypeTheory (mkModes [modeM, modeI]))
+          [ (lenRef, [TPS_Ty modeM])
+          , (fooRef, [TPS_Tm expectedSort])
+          ]
   bound0 <- require (termExprToDiagram tt [tmCtxSort] tmCtxSort (TMBound 0))
 
   let d0 = emptyDiagram modeM [tmCtxSort]
@@ -387,7 +385,7 @@ testMatchBoundSortUsesCurrentSubst = do
   let host = h3 { dIn = [h1, h2], dOut = [] }
   _ <- require (validateDiagram host)
 
-  let cfg = MatchConfig tt (S.singleton aVar) S.empty
+  let cfg = MatchConfig tt (S.singleton (objVarToTmVar aVar)) S.empty
   matches <- require (findAllMatches cfg lhs host)
   assertBool "expected at least one match" (not (null matches))
 
@@ -401,13 +399,11 @@ testDependentCompDefEq = do
   let vecTy tmArg = mkCon vecRef [OATm tmArg]
   let outTy = mkCon outRef []
   let tt =
-        tt0
-          { ttObjParams =
-              M.fromList
-                [ (vecRef, [TPS_Tm natTy])
-                , (outRef, [])
-                ]
-          }
+        withCtorSigs
+          tt0
+          [ (vecRef, [TPS_Tm natTy])
+          , (outRef, [])
+          ]
   addzz <- require (termExprToDiagram tt [] natTy (add z z))
   zTm <- require (termExprToDiagram tt [] natTy z)
   f <- require (genDTm modeM [] [] [vecTy addzz] (GenName "f"))
@@ -422,8 +418,7 @@ testDefEqObjTermIndexReduction = do
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
   let tt =
-        tt0
-          { ttObjParams = M.fromList [(vecRef, [TPS_Tm natTy])] }
+        withCtorSigs tt0 [(vecRef, [TPS_Tm natTy])]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
   tmZ <- require (termExprToDiagram tt [] natTy z)
   let lhs = mkCon vecRef [OATm tmAdd]
@@ -442,8 +437,9 @@ testMatchTmCtxCompatibility = do
   let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
   let boolTy = mkCon (ObjRef modeI (ObjName "Bool")) []
   let tt =
-        (modeOnlyTypeTheory (mkModes [modeM, modeI]))
-          { ttObjParams = M.empty }
+        withCtorSigs
+          (modeOnlyTypeTheory (mkModes [modeM, modeI]))
+          []
   let lhs = (idD modeM [aTy]) { dTmCtx = [natTy] }
   let host = (idD modeM [aTy]) { dTmCtx = [boolTy] }
   _ <- require (validateDiagram lhs)
@@ -460,8 +456,7 @@ testMatchTmCtxDefEqCompatibility = do
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
   let tt =
-        tt0
-          { ttObjParams = M.fromList [(vecRef, [TPS_Tm natTy])] }
+        withCtorSigs tt0 [(vecRef, [TPS_Tm natTy])]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
   tmZ <- require (termExprToDiagram tt [] natTy z)
   let lhsTy = vecTy tmAdd
@@ -479,8 +474,9 @@ testIsoMatchDropsSubstFailure = do
   let goodTy = mkCon (ObjRef mode (ObjName "A")) []
   let badSort = mkCon (ObjRef mode (ObjName "BadSort")) [OAObj goodTy]
   let tt =
-        (modeOnlyTypeTheory (mkModes [mode]))
-          { ttObjParams = M.fromList [(ObjRef mode (ObjName "A"), [])] }
+        withCtorSigs
+          (modeOnlyTypeTheory (mkModes [mode]))
+          [(ObjRef mode (ObjName "A"), [])]
   let inner = emptyDiagram mode [badSort]
   _ <- require (validateDiagram inner)
   lhs <- require (mkWrapWithBinder mode goodTy inner)
@@ -492,7 +488,7 @@ testCheckedTermConversionDefEq :: Assertion
 testCheckedTermConversionDefEq = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
-  let tt = tt0 { ttObjParams = M.fromList [(vecRef, [TPS_Tm natTy])] }
+  let tt = withCtorSigs tt0 [(vecRef, [TPS_Tm natTy])]
   let z = TMFun (TmFunName "Z") []
   let add x y = TMFun (TmFunName "add") [x, y]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
@@ -614,8 +610,9 @@ mkNatTypeTheory = do
           ]
   let ttSig =
         setModeTermFuns modeI funSigs $
-          (modeOnlyTypeTheory mt1)
-            { ttObjParams = M.empty }
+          withCtorSigs
+            (modeOnlyTypeTheory mt1)
+            []
   r1L <- termExprToDiagram ttSig [] natTy (add z (TMVar vN))
   r1R <- termExprToDiagram ttSig [] natTy (TMVar vN)
   r2L <- termExprToDiagram ttSig [] natTy (add (s (TMVar vM)) (TMVar vN))
@@ -635,3 +632,16 @@ mkNatTypeTheory = do
       Just trs -> Right trs
   let tt = setModeTermTRS modeI trsMode tt1
   pure (tt, natTy, modeM, modeI)
+
+withCtorSigs :: TypeTheory -> [(ObjRef, [TypeParamSig])] -> TypeTheory
+withCtorSigs tt entries =
+  tt
+    { ttCtorSigs = table
+    , ttUniverseCtors = M.map (S.fromList . M.keys) table
+    }
+  where
+    table =
+      foldl
+        (\acc (ref, sig) -> M.insertWith M.union (orMode ref) (M.singleton (orName ref) sig) acc)
+        M.empty
+        entries

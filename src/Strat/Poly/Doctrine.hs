@@ -14,11 +14,11 @@ module Strat.Poly.Doctrine
   , doctrineTypeTheory
   , doctrineTypeTheoryFromTables
   , deriveCtorTables
-  , deriveCtorTablesForElab
   , lookupCtorSigForOwnerInTables
   , lookupCtorRefForOwnerInTables
   , checkType
   , checkModTransformWitness
+  , doctrineCheck
   , validateDoctrine
   , modeIsAcyclic
   ) where
@@ -36,6 +36,7 @@ import Strat.Poly.Obj
 import Strat.Poly.ObjClassifier (classifierOfMode, classifierModeForCtorUse, modeClassifierMode, modeUniverseObj)
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
+  , ttCtorTablesByOwner
   , DefFragment(..)
   , TypeParamSig(..)
   , TmFunSig(..)
@@ -50,7 +51,14 @@ import Strat.Poly.Cell2
 import Strat.Poly.DSL.AST (RawOblExpr(..))
 import Strat.Poly.UnifyObj (unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
-import Strat.Poly.DefEq (termToDiagram, validateTermDiagram, normalizeObjDeep, defEqObj)
+import Strat.Poly.DefEq
+  ( checkCodeWellFormed
+  , checkObjWellFormed
+  , termToDiagram
+  , validateTermDiagram
+  , normalizeObjDeep
+  , defEqObj
+  )
 import Strat.Poly.Term.RewriteCompile (compileAllTermRules)
 import Strat.Poly.Term.Termination (checkTerminatingSCT)
 import Strat.Poly.Term.Confluence (checkConfluent)
@@ -167,28 +175,35 @@ doctrineTypeTheoryBaseFromTables doc ctorTables =
       tmRules = derivedTmRules doc tmFuns
       fragments0 = mkDefFragments (dModes doc) tmFuns tmRules M.empty
    in do
-        ctorObjParams <- ctorObjParamsFromTables doc ctorTables
+        ctorSigs <- ctorSigEnvFromTables doc ctorTables
         pure
           TypeTheory
             { ttModes = dModes doc
-            , ttCtorTables = ctorTables
-            , ttObjParams = ctorObjParams
+            , ttCtorSigs = ctorSigs
+            , ttUniverseCtors = universeCtorsFromTables ctorTables
             , ttDefFragments = fragments0
             , ttStrictCtorLookup = True
             }
   where
-    ctorObjParamsFromTables d tables =
+    ctorSigEnvFromTables d tables =
       foldM insertOwner M.empty (M.toList tables)
       where
         insertOwner acc (ownerMode, table) =
           foldM (insertOne ownerMode) acc (M.toList table)
         insertOne ownerMode acc (ctorName, sig) =
           let classifierMode = modeClassifierMode (dModes d) ownerMode
-              ref = ObjRef classifierMode ctorName
-           in case M.lookup ref acc of
-                Nothing -> Right (M.insert ref sig acc)
+              classifierTable = M.findWithDefault M.empty classifierMode acc
+           in case M.lookup ctorName classifierTable of
+                Nothing ->
+                  Right
+                    ( M.insert
+                        classifierMode
+                        (M.insert ctorName sig classifierTable)
+                        acc
+                    )
                 Just sig0
-                  | sig0 == sig -> Right acc
+                  | sig0 == sig ->
+                      Right acc
                   | otherwise ->
                       Left
                         ( "constructor `"
@@ -196,6 +211,8 @@ doctrineTypeTheoryBaseFromTables doc ctorTables =
                             <> "` has conflicting signatures across owner modes for classifier "
                             <> renderMode classifierMode
                         )
+    universeCtorsFromTables tables =
+      M.map (S.fromList . M.keys) tables
 
 mkDefFragments
   :: ModeTheory
@@ -411,7 +428,13 @@ validateNbeConfigForMode doc tt arrValidation mode cfg =
         && not (declHasPendingCod lamDecl) && not (declHasPendingCod appDecl)
 
     declHasPendingCod gd =
-      any isPendingUniverseObj (gdCod gd)
+      any
+        ( \codTy ->
+            case checkObjWellFormed tt codTy of
+              Right () -> False
+              Left _ -> True
+        )
+        (gdCod gd)
 
     declLooksProvisional gd =
       null (gdDom gd) && length (gdCod gd) == 1 && null (gdAttrs gd)
@@ -471,7 +494,7 @@ validateNbeConfigForMode doc tt arrValidation mode cfg =
             )
 
     checkArrCtorFromDerivedTables =
-      case M.lookup mode (ttCtorTables tt) >>= M.lookup (nbeArrTyCon cfg) of
+      case M.lookup mode (ttCtorTablesByOwner tt) >>= M.lookup (nbeArrTyCon cfg) of
         Nothing ->
           Left
             ( "validateDoctrine: NbE mode "
@@ -636,6 +659,9 @@ validateDoctrine doc = do
   mapM_ (checkObligation doc tt) (dObligations doc)
   pure ()
 
+doctrineCheck :: Doctrine -> Either Text ()
+doctrineCheck = validateDoctrine
+
 checkClassifierLiftUniverseCompatibility :: Doctrine -> TypeTheory -> Either Text ()
 checkClassifierLiftUniverseCompatibility doc tt =
   mapM_ checkOne classifiedModalities
@@ -673,7 +699,7 @@ checkClassifierLiftUniverseCompatibility doc tt =
     liftUniverse liftExpr universe =
       Obj
         { objOwnerMode = meTgt liftExpr
-        , objCode = CTMod liftExpr (objCode universe)
+        , objCode = CTLift liftExpr (objCode universe)
         }
 
     renderMod (ModName n) = n
@@ -830,24 +856,26 @@ deriveCtorTables doc = do
 
     implicitForOwner classifierMode ownerMode =
       case modeUniverseObj (dModes doc) ownerMode of
-        Just universe
-          | not (isPendingUniverse universe) -> do
-              universeNorm <- normalizeObjExpr (dModes doc) universe
-              implicitUniverseCtor classifierMode universeNorm
-        _ -> Right M.empty
+        Just universe -> do
+          universeNorm <- normalizeObjExpr (dModes doc) universe
+          implicitUniverseCtor classifierMode universeNorm
+        _ -> provisionalCtorsForOwner ownerMode
 
     eligibleForOwner tt ownerMode = do
       case ownerClassifier ownerMode of
         Nothing -> Right M.empty
         Just classifierMode ->
           case modeUniverseObj (dModes doc) ownerMode of
-            Just universe
-              | not (isPendingUniverse universe) -> do
-                  universeNorm <- normalizeObjExpr (dModes doc) universe
+            Just universe -> do
+              mUniverseNorm <- normalizeUniverseIfReady tt ownerMode universe
+              case mUniverseNorm of
+                Just universeNorm -> do
                   fromGens <- foldM (addCtor tt ownerMode universeNorm) M.empty (candidateCtors ownerMode)
                   implicit <- implicitUniverseCtor classifierMode universeNorm
                   mergeCtorTables fromGens implicit
-            _ -> Right M.empty
+                Nothing ->
+                  provisionalCtorsForOwner ownerMode
+            _ -> provisionalCtorsForOwner ownerMode
 
     candidateCtors ownerMode =
       case ownerClassifier ownerMode of
@@ -864,6 +892,26 @@ deriveCtorTables doc = do
           | orMode ref == classifierMode ->
               Right (M.singleton (orName ref) [])
         _ -> Right M.empty
+
+    normalizeUniverseIfReady tt ownerMode universe = do
+      universeNorm <- normalizeObjExpr (dModes doc) universe
+      case universeNorm of
+        Obj _ (CTCon _ []) ->
+          -- Bare universe names are allowed as implicit classifier vocabulary.
+          Right (Just universeNorm)
+        _ -> do
+          let classifierMode = modeClassifierMode (dModes doc) ownerMode
+          case checkCodeWellFormed tt classifierMode (objCode universeNorm) of
+            Right () -> Right (Just universeNorm)
+            Left _ -> Right Nothing
+
+    provisionalCtorsForOwner ownerMode =
+      foldM
+        (\acc gd -> do
+          sig <- ctorSigFromGen gd
+          insertCtorSig (genToObjName (gdName gd)) sig acc)
+        M.empty
+        (candidateCtors ownerMode)
 
     addCtor tt ownerMode universeNorm acc gd =
       case gdCod gd of
@@ -904,60 +952,7 @@ deriveCtorTables doc = do
         (M.toList b)
 
     genToObjName (GenName name) = ObjName name
-    isPendingUniverse = isPendingUniverseObj
     ownerClassifier mode = cdClassifier <$> classifierOfMode (dModes doc) mode
-
-deriveCtorTablesForElab :: Doctrine -> Either Text CtorTables
-deriveCtorTablesForElab doc = do
-  tables0 <-
-    case deriveCtorTables doc of
-      Right tables -> Right tables
-      Left err
-        | "classification order incomplete" `T.isInfixOf` err
-            && not (null unresolvedClassifiers) ->
-            deriveCtorTables docWithoutUnresolvedClassifiers
-        | otherwise -> Left err
-  foldM addPendingOwner tables0 pendingOwners
-  where
-    unresolvedClassifiers =
-      [ ownerMode
-      | (ownerMode, decl) <- M.toList (mtClassifiedBy (dModes doc))
-      , not (M.member (cdClassifier decl) (mtModes (dModes doc)))
-      ]
-
-    docWithoutUnresolvedClassifiers =
-      let mt = dModes doc
-          keepDecl _ decl = M.member (cdClassifier decl) (mtModes mt)
-          mt' = mt { mtClassifiedBy = M.filterWithKey keepDecl (mtClassifiedBy mt) }
-       in doc { dModes = mt' }
-
-    pendingOwners =
-      [ ownerMode
-      | (ownerMode, decl) <- M.toList (mtClassifiedBy (dModes doc))
-      , isPendingUniverseObj (cdUniverse decl)
-      ]
-
-    addPendingOwner acc ownerMode = do
-      provisional <- provisionalForOwner ownerMode
-      let existing = M.findWithDefault M.empty ownerMode acc
-      merged <- foldM (\tbl (name, sig) -> insertCtorSig name sig tbl) existing (M.toList provisional)
-      pure (M.insert ownerMode merged acc)
-
-    provisionalForOwner ownerMode = do
-      case classifierOfMode (dModes doc) ownerMode of
-        Nothing -> Right M.empty
-        Just decl -> do
-          let classifierMode = cdClassifier decl
-          let candidates =
-                [ gd
-                | gd <- M.elems (M.findWithDefault M.empty classifierMode (dGens doc))
-                , isCtorLikeGen gd
-                ]
-          foldM addCtor M.empty candidates
-
-    addCtor acc gd = do
-      sig <- ctorSigFromGen gd
-      insertCtorSig (ObjName (renderGen (gdName gd))) sig acc
 
 isCtorLikeGen :: GenDecl -> Bool
 isCtorLikeGen gd =
@@ -967,7 +962,7 @@ ctorSigFromGen :: GenDecl -> Either Text [TypeParamSig]
 ctorSigFromGen gd = do
   let tyVars = gdTyVars gd
   let tmVars = gdTmVars gd
-  let tySet = S.fromList tyVars
+  let tySet = S.fromList (map tmVarToObjVar tyVars)
   mapM_ (ensureClosedTmSort tySet) tmVars
   pure
     [ case gp of
@@ -1005,12 +1000,6 @@ insertCtorSig name sig acc =
                 <> unObjName name
                 <> "` with incompatible signatures in classifier vocabulary"
             )
-
-isPendingUniverseObj :: Obj -> Bool
-isPendingUniverseObj obj =
-  case objCode obj of
-    CTMeta v -> tmvName v == "__pending_universe"
-    _ -> False
 
 genParamsMatchDecls :: GenDecl -> Bool
 genParamsMatchDecls gd =
@@ -1144,19 +1133,19 @@ checkCell doc tt cell = do
       let tmCtx = dTmCtx (c2LHS cell)
       ctxL <- diagramDom (c2LHS cell)
       ctxR <- diagramDom (c2RHS cell)
-      let tyFlexDom = S.unions (map freeObjVarsObj (ctxL <> ctxR))
+      let tyFlexDom = S.map objVarToTmVar (S.unions (map freeObjVarsObj (ctxL <> ctxR)))
       let tmFlexDom = S.unions (map freeTmVarsObj (ctxL <> ctxR))
       let flexDom = S.union tyFlexDom tmFlexDom
       _ <- unifyCtx tt tmCtx flexDom ctxL ctxR
       codL <- diagramCod (c2LHS cell)
       codR <- diagramCod (c2RHS cell)
-      let tyFlexCod = S.unions (map freeObjVarsObj (codL <> codR))
+      let tyFlexCod = S.map objVarToTmVar (S.unions (map freeObjVarsObj (codL <> codR)))
       let tmFlexCod = S.unions (map freeTmVarsObj (codL <> codR))
       let flexCod = S.union tyFlexCod tmFlexCod
       _ <- unifyCtx tt tmCtx flexCod codL codR
       let lhsVars = freeObjVarsDiagram (c2LHS cell)
       let rhsVars = freeObjVarsDiagram (c2RHS cell)
-      let declaredTy = S.fromList (c2TyVars cell)
+      let declaredTy = S.fromList (map tmVarToObjVar (c2TyVars cell))
       if S.isSubsetOf rhsVars (S.union lhsVars declaredTy)
         then Right ()
         else Left "validateDoctrine: RHS introduces fresh type variables"
@@ -1199,30 +1188,23 @@ checkType :: Doctrine -> TypeTheory -> [TmVar] -> [TmVar] -> [Obj] -> Obj -> Eit
 checkType doc tt tyvars tmvars tmCtx ty =
   case ty of
     OVar v ->
-      if v `elem` tyvars
+      if v `elem` map tmVarToObjVar tyvars
         then
-          if M.member (tyVarOwnerMode v) (mtModes (dModes doc))
+          if M.member (tyVarOwnerMode (objVarToTmVar v)) (mtModes (dModes doc))
             then Right ()
             else Left "validateDoctrine: type variable has unknown mode"
         else Left "validateDoctrine: unknown type variable"
     OCon ref args -> do
-      params <- lookupCtorSigForOwnerInTables doc (ttCtorTables tt) (objOwnerMode ty) ref
+      params <- lookupCtorSigForOwnerInTables doc (ttCtorTablesByOwner tt) (objOwnerMode ty) ref
       if length params /= length args
         then Left "validateDoctrine: type constructor arity mismatch"
         else mapM_ (checkArg ref) (zip params args)
-    OMod _ inner -> do
-      checkType doc tt tyvars tmvars tmCtx inner
-      _ <- normalizeObjExpr (dModes doc) ty
-      Right ()
     OLift me inner -> do
       let owner = objOwnerMode ty
       let expectedClassifier = modeClassifierMode (dModes doc) owner
       if meTgt me == expectedClassifier
         then Right ()
-        else Left "validateDoctrine: classifier lift target does not match owner classifier mode"
-      if objOwnerMode inner == meSrc me
-        then Right ()
-        else Left "validateDoctrine: classifier lift source does not match inner owner mode"
+        else Left "validateDoctrine: lift target does not match owner classifier mode"
       checkType doc tt tyvars tmvars tmCtx inner
       _ <- normalizeObjExpr (dModes doc) ty
       Right ()
@@ -1419,8 +1401,8 @@ checkModTransformWitness doc fromMe toMe witness = do
     case gdCod witness of
       [ty] -> Right ty
       _ -> Left "mod_transform: witness generator codomain must be exactly one output port"
-  let expectedDom = OMod fromMe (OVar tyVar)
-  let expectedCod = OMod toMe (OVar tyVar)
+  expectedDom <- mapOwnerModalType fromMe (OVar (tmVarToObjVar tyVar))
+  expectedCod <- mapOwnerModalType toMe (OVar (tmVarToObjVar tyVar))
   domNorm <- normalizeObjExpr (dModes doc) domTy
   codNorm <- normalizeObjExpr (dModes doc) codTy
   expectedDomNorm <- normalizeObjExpr (dModes doc) expectedDom
@@ -1428,6 +1410,14 @@ checkModTransformWitness doc fromMe toMe witness = do
   if domNorm == expectedDomNorm && codNorm == expectedCodNorm
     then Right ()
     else Left "mod_transform: witness generator must have type [mu(A)] -> [nu(A)] for the declared transform"
+  where
+    mapOwnerModalType me ty = do
+      codeLift <- classifierLiftForModExpr (dModes doc) me
+      pure
+        Obj
+          { objOwnerMode = meTgt me
+          , objCode = CTLift codeLift (objCode ty)
+          }
 
 ensureDistinct :: Ord a => Text -> [a] -> Either Text ()
 ensureDistinct label xs =

@@ -30,6 +30,8 @@ import Strat.Poly.Obj
   , ObjRef(..)
   , TermDiagram(..)
   , TmVar(..)
+  , tmMetaToTmVar
+  , tmVarToTmMeta
   , CodeArg(..)
   , CodeTerm(..)
   , objOwnerMode
@@ -47,7 +49,7 @@ data BTm = BTm
 
 data BTmExpr
   = BVar Int
-  | BMeta TmVar
+  | BMeta TmVar [Int]
   | BGen GenName [BTm]
   | BLam BTm
   | BApp BTm BTm
@@ -64,7 +66,7 @@ data ValExpr
 
 data Neu
   = NVar Int Obj
-  | NMeta TmVar
+  | NMeta TmVar [Val]
   | NGen GenName [Val] Obj
   | NApp Neu Val Obj Obj
 
@@ -161,10 +163,10 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
                               sortTy <- requirePortSort diag "NbE: missing generator output sort" pid
                               pure BTm { btSort = sortTy, btExpr = BGen g args }
                 PTmMeta v -> do
-                  checkMetaPrefix diag edge v
                   sortTy <- requirePortSort diag "NbE: missing PTmMeta output sort" pid
-                  let v' = v { tmvSort = sortTy }
-                  pure BTm { btSort = sortTy, btExpr = BMeta v' }
+                  let v' = (tmMetaToTmVar v) { tmvSort = sortTy }
+                  metaArgs <- mapM boundaryVarIndex (eIns edge)
+                  pure BTm { btSort = sortTy, btExpr = BMeta v' metaArgs }
                 PInternalDrop ->
                   Left "NbE: reachable PInternalDrop is unsupported in NbE term normalization"
                 PBox _ _ ->
@@ -181,6 +183,15 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
             Just edge -> Right edge
             Nothing -> Left "NbE: missing producer edge"
         _ -> Left "NbE: missing producer edge"
+
+    boundaryVarIndex pid =
+      case M.lookup pid inMap of
+        Just local ->
+          case nth boundaryVars local of
+            Just idx -> Right idx
+            Nothing -> Left "NbE: boundary-variable mapping failure"
+        Nothing ->
+          Left "NbE: PTmMeta inputs must connect to boundary ports"
 
     parseLam pid edge bargs = do
       case (eIns edge, eOuts edge, bargs) of
@@ -244,11 +255,12 @@ evalBTm cfg tt env tm =
       case nth env i of
         Just v -> Right v
         Nothing -> Left "NbE: de Bruijn variable out of scope during evaluation"
-    BMeta v ->
+    BMeta v args -> do
+      argVals <- mapM lookupArg args
       Right
         Val
           { valSort = btSort tm
-          , valExpr = VNeu (NMeta v)
+          , valExpr = VNeu (NMeta v argVals)
           }
     BGen g args -> do
       vals <- mapM (evalBTm cfg tt env) args
@@ -271,6 +283,11 @@ evalBTm cfg tt env tm =
       fV <- evalBTm cfg tt env f
       aV <- evalBTm cfg tt env a
       applyVal cfg tt fV aV
+  where
+    lookupArg i =
+      case nth env i of
+        Just v -> Right v
+        Nothing -> Left "NbE: metavariable argument index out of scope during evaluation"
 
 applyVal :: NbeConfig -> TypeTheory -> Val -> Val -> Either Text Val
 applyVal cfg _tt funVal argVal =
@@ -323,8 +340,9 @@ quoteNeu cfg lvl neu =
       if idx >= 0
         then pure BTm { btSort = sortTy, btExpr = BVar idx }
         else Left "NbE: internal level/index conversion underflow"
-    NMeta v ->
-      pure BTm { btSort = tmvSort v, btExpr = BMeta v }
+    NMeta v args -> do
+      argIdx <- mapM (metaArgIndex lvl) args
+      pure BTm { btSort = tmvSort v, btExpr = BMeta v argIdx }
     NGen g args sortTy -> do
       args' <- mapM (\v -> quoteValAt lvl v) args
       pure BTm { btSort = sortTy, btExpr = BGen g args' }
@@ -387,10 +405,11 @@ buildBTm cfg ctx diag tm =
           | sortTy == btSort tm -> Right (pid, diag)
           | otherwise -> Left "NbE: variable sort mismatch during diagram quoting"
         Nothing -> Left "NbE: de Bruijn variable out of scope during diagram quoting"
-    BMeta v -> do
+    BMeta v args -> do
       let v' = v { tmvSort = btSort tm }
+      argPorts <- mapM (metaArgPort ctx) args
       let (out, d0) = freshPort (btSort tm) diag
-      d1 <- addEdgePayload (PTmMeta v') (take (tmvScope v') (bcBoundaryOldToNew ctx)) [out] d0
+      d1 <- addEdgePayload (PTmMeta (tmVarToTmMeta v')) argPorts [out] d0
       pure (out, d1)
     BGen g args -> do
       (argPorts, d0) <- foldM step ([], diag) args
@@ -447,8 +466,9 @@ requiredTopPrefix tm = go 0 tm
           if i < depth
             then Right 0
             else Right (i - depth + 1)
-        BMeta v ->
-          Right (max 0 (tmvScope v - depth))
+        BMeta v args -> do
+          reqArgs <- mapM (argReq depth) args
+          pure (max (maximumOrZero reqArgs) (max 0 (tmvScope v - depth)))
         BGen _ args ->
           maximumOrZero <$> mapM (go depth) args
         BLam body ->
@@ -457,6 +477,11 @@ requiredTopPrefix tm = go 0 tm
           rf <- go depth f
           ra <- go depth a
           pure (max rf ra)
+
+    argReq depth i =
+      if i < depth
+        then Right 0
+        else Right (i - depth + 1)
 
 mkInitialEnv :: Int -> [Obj] -> Either Text [Val]
 mkInitialEnv lvl inSortsOldToNew = do
@@ -473,18 +498,29 @@ neutralVar level sortTy =
     , valExpr = VNeu (NVar level sortTy)
     }
 
+metaArgIndex :: Int -> Val -> Either Text Int
+metaArgIndex lvl argVal =
+  case valExpr argVal of
+    VNeu (NVar level _) ->
+      let idx = lvl - level - 1
+       in if idx >= 0
+            then Right idx
+            else Left "NbE: invalid metavariable argument level"
+    _ ->
+      Left "NbE: metavariable arguments must remain neutral variables"
+
+metaArgPort :: BuildCtx -> Int -> Either Text PortId
+metaArgPort ctx i =
+  case nth (bcVarsNearest ctx) i of
+    Just (_, pid) -> Right pid
+    Nothing -> Left "NbE: metavariable argument index out of scope"
+
 splitArr :: NbeConfig -> Obj -> Maybe (Obj, Obj)
 splitArr cfg ty =
   case objCode ty of
     CTCon (ObjRef _ name) [CAObj domTy, CAObj codTy]
       | name == nbeArrTyCon cfg -> Just (domTy, codTy)
     _ -> Nothing
-
-checkMetaPrefix :: Diagram -> Edge -> TmVar -> Either Text ()
-checkMetaPrefix diag edge v =
-  if eIns edge == take (tmvScope v) (dIn diag)
-    then Right ()
-    else Left "NbE: PTmMeta inputs must be canonical boundary prefix"
 
 rejectUnsupportedDiagram :: NbeConfig -> Diagram -> Either Text ()
 rejectUnsupportedDiagram cfg diag = do

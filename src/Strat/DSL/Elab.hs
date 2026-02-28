@@ -44,7 +44,12 @@ import Strat.Poly.Obj
   , pattern ObjVar
   , ovName
   , ovMode
+  , ovSort
+  , ovOwnerMode
+  , objVarToTmVar
+  , tmVarToObjVar
   , TmVar(..)
+  , TmMeta(..)
   , TermDiagram(..)
   )
 import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
@@ -623,7 +628,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     paramArg tt (srcParam, param) =
       case (srcParam, param) of
         (TPS_Ty _, PolyMorph.TPType v) ->
-          Right (OAObj Obj { objOwnerMode = maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v), objCode = CTMeta v })
+          Right (OAObj Obj { objOwnerMode = maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v), objCode = CTMeta (tmVarToObjVar v) })
         (TPS_Tm _, PolyMorph.TPType _) ->
           Left "apply: internal kind mismatch for type template argument"
         (_, PolyMorph.TPTm v) -> do
@@ -1110,19 +1115,16 @@ renameObjExpr modeRen modRen typeRen ty = do
     renCode code =
       case code of
         CTMeta tv -> do
-          sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tv)
-          Right (CTMeta tv { tmvSort = sort', tmvOwnerMode = fmap renMode (tmvOwnerMode tv) })
-        CTMod me inner -> do
-          inner' <- renCode inner
-          Right
-            ( CTMod
-                me
-                  { meSrc = renMode (meSrc me)
-                  , meTgt = renMode (meTgt me)
-                  , mePath = map (\m -> M.findWithDefault m m modRen) (mePath me)
-                  }
-                inner'
-            )
+          sort' <- renameObjExpr modeRen modRen typeRen (ovSort tv)
+          let tvTm = objVarToTmVar tv
+              tv' =
+                tmVarToObjVar
+                  ( tvTm
+                      { tmvSort = sort'
+                      , tmvOwnerMode = Just (renMode (ovOwnerMode tv))
+                      }
+                  )
+          Right (CTMeta tv')
         CTLift me inner -> do
           inner' <- renCode inner
           Right
@@ -1167,9 +1169,9 @@ renameTermDiagram modeRen modRen typeRen (TermDiagram diag) = do
     renEdge edge =
       case ePayload edge of
         PTmMeta tm -> do
-          sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tm)
-          let owner' = fmap (\m -> M.findWithDefault m m modeRen) (tmvOwnerMode tm)
-          pure edge { ePayload = PTmMeta tm { tmvSort = sort', tmvOwnerMode = owner' } }
+          sort' <- renameObjExpr modeRen modRen typeRen (tmmSort tm)
+          let owner' = fmap (\m -> M.findWithDefault m m modeRen) (tmmOwnerMode tm)
+          pure edge { ePayload = PTmMeta tm { tmmSort = sort', tmmOwnerMode = owner' } }
         _ -> pure edge
 
 
@@ -1260,7 +1262,7 @@ buildFoliatedDoctrine name baseDoc mode = do
         ClassificationDecl
           { cdClassifier = mode
           , cdUniverse = universeTy
-          , cdTag = Nothing
+          
           , cdComp = Nothing
           }
       mt = mt0 { mtClassifiedBy = M.singleton mode classDecl }
