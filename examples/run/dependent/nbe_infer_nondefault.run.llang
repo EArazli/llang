@@ -1,0 +1,26 @@
+doctrine NbeInferNonDefault where {
+  mode M defeq nbe classifiedBy M via M.U_M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen A : [] -> [M.U_M] @M;
+  gen Fun(a@M, b@M) : [] -> [M.U_M] @M;
+  gen abs(a@M, b@M) : [binder { x : a } : [b]] -> [Fun(a, b)] @M;
+  gen ev(a@M, b@M) : [Fun(a, b), a] -> [b] @M;
+  gen ctx_ext(a@M) : [a] -> [a] @M;
+  gen var(a@M) : [a] -> [a] @M;
+  gen reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };
+  rule computational beta -> (a@M, b@M) : [a] -> [b] @M =
+    (abs{a, b}[?Body] * id[a]) ; ev{a, b} == splice(?Body)
+}
+
+pipeline debug where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run main using debug where {
+  source doctrine NbeInferNonDefault;
+  source mode M;
+}
+---
+(abs{A, A}[id[A]] * id[A]) ; ev{A, A}
