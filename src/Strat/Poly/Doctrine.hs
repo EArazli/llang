@@ -35,7 +35,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import qualified Data.Text as T
 import Data.Maybe (mapMaybe)
-import Control.Monad (foldM)
+import Control.Monad (foldM, guard)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Obj
 import Strat.Poly.ObjClassifier (classifierOfMode, classifierModeForCtorUse, modeClassifierMode, modeUniverseObj)
@@ -59,7 +59,6 @@ import Strat.Poly.UnifyObj (unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.Poly.DefEq
   ( checkCodeWellFormed
-  , checkObjWellFormed
   , termToDiagram
   , validateTermDiagram
   , normalizeObjDeep
@@ -285,10 +284,246 @@ checkFragmentConfluence fragment =
     DefFragmentNBE {} -> Right ()
     DefFragmentTRS { dfTRS = trs } -> checkConfluent trs
 
-data NbeArrValidation
-  = NbeArrFromDerivedTables
-  | NbeArrFromDeclaredCtors
+data NbePrimitives = NbePrimitives
+  { nbepLamGen :: GenName
+  , nbepAppGen :: GenName
+  , nbepArrTyCon :: ObjName
+  }
   deriving (Eq, Show)
+
+renderModeNameText :: ModeName -> Text
+renderModeNameText (ModeName n) = n
+
+renderGenNameText :: GenName -> Text
+renderGenNameText (GenName n) = n
+
+renderObjNameText :: ObjName -> Text
+renderObjNameText (ObjName n) = n
+
+normalizeMaybe :: ModeTheory -> Obj -> Maybe Obj
+normalizeMaybe mt ty = either (const Nothing) Just (normalizeObjExpr mt ty)
+
+matchBinaryCon
+  :: ModeTheory
+  -> ModeName
+  -> Obj
+  -> Maybe (ObjName, Obj, Obj)
+matchBinaryCon mt expectedClassifier ty = do
+  ty' <- normalizeMaybe mt ty
+  case objCode ty' of
+    CTCon ref [CAObj a, CAObj b]
+      | orMode ref == expectedClassifier -> do
+          a' <- normalizeMaybe mt a
+          b' <- normalizeMaybe mt b
+          Just (orName ref, a', b')
+    _ -> Nothing
+
+inferLamCandidateArr
+  :: ModeTheory
+  -> ModeName
+  -> ModeName
+  -> GenDecl
+  -> Maybe ObjName
+inferLamCandidateArr mt ownerMode classifierMode gd = do
+  guard (gdMode gd == ownerMode)
+  guard (null (gdAttrs gd))
+  let ports = [ty | InPort ty <- gdDom gd]
+      binders = [bs | InBinder bs <- gdDom gd]
+  guard (null ports)
+  guard (length binders == 1)
+  bs <- case binders of
+    [one] -> Just one
+    _ -> Nothing
+  guard (length (bsDom bs) == 1)
+  guard (length (bsCod bs) == 1)
+  guard (length (gdCod gd) == 1)
+
+  aTy0 <- case bsDom bs of
+    [a] -> Just a
+    _ -> Nothing
+  bTy0 <- case bsCod bs of
+    [b] -> Just b
+    _ -> Nothing
+  outTy0 <- case gdCod gd of
+    [o] -> Just o
+    _ -> Nothing
+
+  aTy <- normalizeMaybe mt aTy0
+  bTy <- normalizeMaybe mt bTy0
+  outTy <- normalizeMaybe mt outTy0
+
+  (arrName, domTy, codTy) <- matchBinaryCon mt classifierMode outTy
+  guard (domTy == aTy)
+  guard (codTy == bTy)
+  pure arrName
+
+inferAppCandidateArr
+  :: ModeTheory
+  -> ModeName
+  -> ModeName
+  -> GenDecl
+  -> Maybe ObjName
+inferAppCandidateArr mt ownerMode classifierMode gd = do
+  guard (gdMode gd == ownerMode)
+  guard (null (gdAttrs gd))
+  let ports = [ty | InPort ty <- gdDom gd]
+      binders = [bs | InBinder bs <- gdDom gd]
+  guard (null binders)
+  guard (length ports == 2)
+  guard (length (gdCod gd) == 1)
+
+  (funTy0, argTy0) <- case ports of
+    [funTy, argTy] -> Just (funTy, argTy)
+    _ -> Nothing
+  resTy0 <- case gdCod gd of
+    [resTy] -> Just resTy
+    _ -> Nothing
+
+  funTy <- normalizeMaybe mt funTy0
+  argTy <- normalizeMaybe mt argTy0
+  resTy <- normalizeMaybe mt resTy0
+
+  (arrName, domTy, codTy) <- matchBinaryCon mt classifierMode funTy
+  guard (domTy == argTy)
+  guard (codTy == resTy)
+  pure arrName
+
+inferNbePrimitivesForMode
+  :: Doctrine
+  -> ModeName
+  -> Either Text (Maybe NbePrimitives)
+inferNbePrimitivesForMode doc mode =
+  case arrsWithBoth of
+    [] ->
+      Right Nothing
+    [arr] ->
+      let lams = M.findWithDefault [] arr lamByArr
+          apps = M.findWithDefault [] arr appByArr
+       in case (lams, apps) of
+            ([lamGen], [appGen]) ->
+              Right (Just (NbePrimitives lamGen appGen arr))
+            _ ->
+              Left
+                ( "validateDoctrine: NbE mode "
+                    <> renderModeNameText mode
+                    <> " has ambiguous NbE primitives for arrow constructor `"
+                    <> renderObjNameText arr
+                    <> "`; lambda candidates = ["
+                    <> T.intercalate ", " (map renderGenNameText lams)
+                    <> "], application candidates = ["
+                    <> T.intercalate ", " (map renderGenNameText apps)
+                    <> "]"
+                )
+    _ ->
+      Left
+        ( "validateDoctrine: NbE mode "
+            <> renderModeNameText mode
+            <> " has ambiguous NbE primitives: multiple arrow constructors fit: ["
+            <> T.intercalate ", " (map renderObjNameText arrsWithBoth)
+            <> "]"
+        )
+  where
+    mt = dModes doc
+    classifierMode = modeClassifierMode mt mode
+    gensInMode = M.elems (M.findWithDefault M.empty mode (dGens doc))
+
+    lamCands :: [(ObjName, GenName)]
+    lamCands =
+      [ (arrName, gdName gd)
+      | gd <- gensInMode
+      , Just arrName <- [inferLamCandidateArr mt mode classifierMode gd]
+      ]
+
+    appCands :: [(ObjName, GenName)]
+    appCands =
+      [ (arrName, gdName gd)
+      | gd <- gensInMode
+      , Just arrName <- [inferAppCandidateArr mt mode classifierMode gd]
+      ]
+
+    lamByArr = M.fromListWith (<>) [ (arr, [g]) | (arr, g) <- lamCands ]
+    appByArr = M.fromListWith (<>) [ (arr, [g]) | (arr, g) <- appCands ]
+
+    arrsWithBoth =
+      [ arr
+      | arr <- M.keys lamByArr
+      , M.member arr appByArr
+      ]
+
+finalizeNbeConfigForMode
+  :: Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> NbePrimitives
+  -> NbeConfig
+  -> Either Text NbeConfig
+finalizeNbeConfigForMode doc tt mode prims cfg0 = do
+  let mt = dModes doc
+      classifierMode = modeClassifierMode mt mode
+      arrName = nbepArrTyCon prims
+      arrGenName = GenName (renderObjNameText arrName)
+
+  arrDecl <-
+    case M.lookup classifierMode (dGens doc) >>= M.lookup arrGenName of
+      Just gd -> Right gd
+      Nothing ->
+        Left
+          ( "validateDoctrine: NbE mode "
+              <> renderModeNameText mode
+              <> " is missing arrow type constructor `"
+              <> renderObjNameText arrName
+              <> "` (no constructor-like generator `"
+              <> renderModeNameText classifierMode
+              <> "."
+              <> renderObjNameText arrName
+              <> "` declared)"
+          )
+
+  if isCtorLikeGen arrDecl
+    then pure ()
+    else
+      Left
+        ( "validateDoctrine: NbE mode "
+            <> renderModeNameText mode
+            <> " requires arrow type constructor `"
+            <> renderObjNameText arrName
+            <> "` to be constructor-like (no inputs, no attributes)"
+        )
+
+  sig <- ctorSigFromGen arrDecl
+  if length sig == 2 && all isTyParam sig
+    then pure ()
+    else
+      Left
+        ( "validateDoctrine: NbE mode "
+            <> renderModeNameText mode
+            <> " requires arrow type constructor `"
+            <> renderObjNameText arrName
+            <> "` to take exactly two type parameters"
+        )
+
+  case M.lookup mode (ttCtorTablesByOwner tt) >>= M.lookup arrName of
+    Just _ -> pure ()
+    Nothing ->
+      Left
+        ( "validateDoctrine: NbE mode "
+            <> renderModeNameText mode
+            <> " requires arrow type constructor `"
+            <> renderObjNameText arrName
+            <> "` to be eligible for the mode (missing from derived constructor table)"
+        )
+
+  pure
+    cfg0
+      { nbeLamGen = nbepLamGen prims
+      , nbeAppGen = nbepAppGen prims
+      , nbeArrTyCon = nbepArrTyCon prims
+      }
+  where
+    isTyParam param =
+      case param of
+        TPS_Ty _ -> True
+        TPS_Tm _ -> False
 
 buildCompiledFragments
   :: Doctrine
@@ -328,7 +563,17 @@ buildCompiledFragments doc tt0 trsByMode =
           checkFragmentConfluence fragment
           pure (mode, fragment)
         DefEqNBE -> do
-          cfg <- validateNbeConfigForMode doc tt0 NbeArrFromDerivedTables mode defaultNbeConfig
+          prims <-
+            case inferNbePrimitivesForMode doc mode of
+              Left err -> Left err
+              Right (Just p) -> Right p
+              Right Nothing ->
+                Left
+                  ( "validateDoctrine: NbE mode "
+                      <> renderModeNameText mode
+                      <> " cannot infer NbE primitives (lambda/application/arrow type) from generator signatures"
+                  )
+          cfg <- finalizeNbeConfigForMode doc tt0 mode prims defaultNbeConfig
           let fragment =
                 case base of
                   trsFrag@DefFragmentTRS {} ->
@@ -378,7 +623,17 @@ buildCtorEligibilityFragments doc tt0 trsByMode =
                       }
           pure (mode, fragment)
         DefEqNBE -> do
-          cfg <- validateNbeConfigForMode doc tt0 NbeArrFromDeclaredCtors mode defaultNbeConfig
+          inferred <- inferNbePrimitivesForMode doc mode
+          cfg <-
+            case inferred of
+              Nothing -> Right defaultNbeConfig
+              Just prims ->
+                Right
+                  defaultNbeConfig
+                    { nbeLamGen = nbepLamGen prims
+                    , nbeAppGen = nbepAppGen prims
+                    , nbeArrTyCon = nbepArrTyCon prims
+                    }
           let fragment =
                 case base of
                   trsFrag@DefFragmentTRS {} ->
@@ -391,175 +646,6 @@ buildCtorEligibilityFragments doc tt0 trsByMode =
                   nbeFrag@DefFragmentNBE {} ->
                     nbeFrag { dfNBE = cfg }
           pure (mode, fragment)
-
-validateNbeConfigForMode
-  :: Doctrine
-  -> TypeTheory
-  -> NbeArrValidation
-  -> ModeName
-  -> NbeConfig
-  -> Either Text NbeConfig
-validateNbeConfigForMode doc tt arrValidation mode cfg =
-  case arrValidation of
-    NbeArrFromDerivedTables -> do
-      (lamDecl, appDecl) <- requireLamAppDecls
-      checkLamShape lamDecl
-      checkAppShape appDecl
-      checkArrCtorFromDerivedTables
-      pure cfg
-    NbeArrFromDeclaredCtors ->
-      case lookupDeclaredArrCtor of
-        Nothing ->
-          -- During elaboration we may validate with incomplete generator tables.
-          -- Defer NbE shape checks until Arr is declared for this mode.
-          Right cfg
-        Just arrDecl ->
-          case lookupLamAppDecls of
-            Nothing ->
-              -- During elaboration, Arr can be declared before lam/app.
-              -- Defer NbE shape checks until the full primitive set is present.
-              Right cfg
-            Just (lamDecl, appDecl) ->
-              if primitivesReady lamDecl appDecl
-                then do
-                  checkLamShape lamDecl
-                  checkAppShape appDecl
-                  checkArrCtorFromDeclaredDecl arrDecl
-                  pure cfg
-                else
-                  -- Generator elaboration uses provisional declarations while
-                  -- checking signatures. Delay NbE shape checks until those
-                  -- provisional codomains are resolved.
-                  Right cfg
-  where
-    requireLamAppDecls = do
-      lamDecl <- requireGen "lam" (nbeLamGen cfg)
-      appDecl <- requireGen "app" (nbeAppGen cfg)
-      pure (lamDecl, appDecl)
-
-    lookupLamAppDecls = do
-      table <- M.lookup mode (dGens doc)
-      lamDecl <- M.lookup (nbeLamGen cfg) table
-      appDecl <- M.lookup (nbeAppGen cfg) table
-      pure (lamDecl, appDecl)
-
-    primitivesReady lamDecl appDecl =
-      not (declLooksProvisional lamDecl) && not (declLooksProvisional appDecl)
-        && not (declHasPendingCod lamDecl) && not (declHasPendingCod appDecl)
-
-    declHasPendingCod gd =
-      any
-        ( \codTy ->
-            case checkObjWellFormed tt codTy of
-              Right () -> False
-              Left _ -> True
-        )
-        (gdCod gd)
-
-    declLooksProvisional gd =
-      null (gdDom gd) && length (gdCod gd) == 1 && null (gdAttrs gd)
-
-    requireGen label genName =
-      case M.lookup mode (dGens doc) >>= M.lookup genName of
-        Just gd -> Right gd
-        Nothing ->
-          Left
-            ( "validateDoctrine: NbE mode "
-                <> renderMode mode
-                <> " is missing required "
-                <> label
-                <> " generator `"
-                <> renderGen genName
-                <> "`"
-            )
-
-    checkLamShape gd = do
-      let plainIns = [ () | InPort _ <- gdDom gd ]
-      let binderIns = [ bs | InBinder bs <- gdDom gd ]
-      if null plainIns && length binderIns == 1 && length (gdCod gd) == 1
-        then Right ()
-        else
-          Left
-            ( "validateDoctrine: NbE mode "
-                <> renderMode mode
-                <> " requires `"
-                <> renderGen (gdName gd)
-                <> "` to have exactly one binder arg, zero plain inputs, and one output"
-            )
-      case binderIns of
-        [slot]
-          | length (bsDom slot) == 1 && length (bsCod slot) == 1 -> Right ()
-          | otherwise ->
-              Left
-                ( "validateDoctrine: NbE mode "
-                    <> renderMode mode
-                    <> " requires `"
-                    <> renderGen (gdName gd)
-                    <> "` binder slot shape [x] -> [body]"
-                )
-        _ -> Right ()
-
-    checkAppShape gd = do
-      let plainIns = [ () | InPort _ <- gdDom gd ]
-      let binderIns = [ () | InBinder _ <- gdDom gd ]
-      if length plainIns == 2 && null binderIns && length (gdCod gd) == 1
-        then Right ()
-        else
-          Left
-            ( "validateDoctrine: NbE mode "
-                <> renderMode mode
-                <> " requires `"
-                <> renderGen (gdName gd)
-                <> "` to have exactly two plain inputs, zero binder args, and one output"
-            )
-
-    checkArrCtorFromDerivedTables =
-      case M.lookup mode (ttCtorTablesByOwner tt) >>= M.lookup (nbeArrTyCon cfg) of
-        Nothing ->
-          Left
-            ( "validateDoctrine: NbE mode "
-                <> renderMode mode
-                <> " is missing arrow type constructor `"
-                <> unObjName (nbeArrTyCon cfg)
-                <> "`"
-            )
-        Just sig -> checkArrSig sig
-
-    checkArrCtorFromDeclaredDecl arrDecl = do
-      if isCtorLikeGen arrDecl
-        then Right ()
-        else
-          Left
-            ( "validateDoctrine: NbE mode "
-                <> renderMode mode
-                <> " requires declared arrow constructor `"
-                <> unObjName (nbeArrTyCon cfg)
-                <> "` to have zero inputs and no attributes"
-            )
-      sig <- ctorSigFromGen arrDecl
-      checkArrSig sig
-
-    lookupDeclaredArrCtor =
-      let classifierMode = modeClassifierMode (dModes doc) mode
-          arrGen = GenName (unObjName (nbeArrTyCon cfg))
-       in M.lookup classifierMode (dGens doc) >>= M.lookup arrGen
-
-    checkArrSig sig =
-      if length sig == 2 && all isTyParam sig
-        then Right ()
-        else
-          Left
-            ( "validateDoctrine: NbE mode "
-                <> renderMode mode
-                <> " requires `"
-                <> unObjName (nbeArrTyCon cfg)
-                <> "` to take exactly two type arguments"
-            )
-
-    isTyParam param =
-      case param of
-        TPS_Ty _ -> True
-        TPS_Tm _ -> False
 
 renderRootSymbols :: TRS -> Text
 renderRootSymbols trs =

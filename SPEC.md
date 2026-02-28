@@ -208,18 +208,22 @@ Implemented fragments:
 - `NbE` fragment:
   - binder-aware normalization for a lambda fragment in term diagrams.
   - normalization is beta-normal and eta-long at function sorts (`Arr`), with eta enabled by default.
-  - required primitives per NbE mode:
-    - term generators `lam` and `app`,
-    - type constructor `Arr` with two object arguments.
-  - required shape checks:
-    - `lam`: exactly one binder arg, zero plain inputs, one output.
-    - `app`: exactly two plain inputs, zero binder args, one output.
-    - `Arr`: arity two with object/type parameters.
+  - required primitives per NbE mode are inferred structurally by typing shape (not by fixed names):
+    - a lambda generator in owner mode `M` with one binder input of shape `[A] -> [B]`, zero plain inputs, and one output sort `Arr(A,B)`,
+    - an application generator in owner mode `M` with boundary shape `[Arr(A,B), A] -> [B]`,
+    - an arrow type constructor `Arr` in the classifier mode of `M` used by both shapes above.
+  - primitive inference requires a unique `(lambda, app, Arr)` triple per NbE mode; zero matches or multiple matches are rejected.
+  - additional `Arr` checks:
+    - `Arr` must be declared constructor-like in `classifier(M)` (no inputs, no attrs),
+    - `Arr` must have exactly two type parameters,
+    - `Arr` must be eligible for owner mode `M` (present in derived constructor tables).
   - unsupported constructs are rejected during definitional normalization in NbE modes:
     - box/feedback/splice payloads,
     - generator attrs,
     - binder metavariables,
-    - non-`lam` generators carrying binder args.
+    - generators other than the inferred lambda primitive carrying binder args.
+
+  Conceptually, this matches CCC/STLC structure: `Arr` as exponential type former with lambda/application as intro/elim operations (Lambek–Scott; Berger–Schwichtenberg NbE perspective).
 
 Termination/confluence checks apply to `TRS` fragments only; `NbE` fragments skip TRS compilation checks.
 

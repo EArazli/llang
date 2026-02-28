@@ -229,7 +229,7 @@ testNBEMissingLamRejected =
       assertBool
         ("expected missing-lam NbE validation error, got: " <> T.unpack err)
         (  "NbE mode" `T.isInfixOf` err
-        && "missing required lam generator" `T.isInfixOf` err
+        && "cannot infer NbE primitives (lambda/application/arrow type) from generator signatures" `T.isInfixOf` err
         )
     Right _ ->
       assertFailure "expected doctrine elaboration to reject NbE mode without lam"
@@ -505,6 +505,7 @@ mkMissingArrDoctrine = do
           , gdCod = [uTy]
           , gdAttrs = []
           }
+  let arrNatNat = mkCon (ObjRef modeTy (ObjName "Arr")) [CAObj natTy, CAObj natTy]
   let lamBody = BinderSig { bsTmCtx = [], bsDom = [natTy], bsCod = [natTy] }
   let gLam =
         GenDecl
@@ -512,7 +513,7 @@ mkMissingArrDoctrine = do
           , gdMode = modeTy
           , gdParams = []
           , gdDom = [InBinder lamBody]
-          , gdCod = [natTy]
+          , gdCod = [arrNatNat]
           , gdAttrs = []
           }
   let gApp =
@@ -520,7 +521,7 @@ mkMissingArrDoctrine = do
           { gdName = GenName "app"
           , gdMode = modeTy
           , gdParams = []
-          , gdDom = [InPort natTy, InPort natTy]
+          , gdDom = [InPort arrNatNat, InPort natTy]
           , gdCod = [natTy]
           , gdAttrs = []
           }
@@ -559,8 +560,6 @@ testCtorEligibilityDefEqErrorContext = do
 mkEligibilityDoctrineMalformedLam :: Either Text Doctrine
 mkEligibilityDoctrineMalformedLam = do
   doc <- mkEligibilityDoctrine False
-  let natTy = mkCon (ObjRef modeTy (ObjName "Nat")) []
-  let arrNatNat = mkCon (ObjRef modeTy (ObjName "Arr")) [CAObj natTy, CAObj natTy]
   modeGens <-
     case M.lookup modeTy (dGens doc) of
       Just gs -> Right gs
@@ -569,12 +568,8 @@ mkEligibilityDoctrineMalformedLam = do
     case M.lookup (GenName "lam") modeGens of
       Just gd -> Right gd
       Nothing -> Left "missing lam generator declaration"
-  let badLam =
-        lamDecl
-          { gdDom = [InPort natTy]
-          , gdCod = [arrNatNat]
-          }
-  let modeGens' = M.insert (GenName "lam") badLam modeGens
+  let lamDecl2 = lamDecl { gdName = GenName "lam2" }
+  let modeGens' = M.insert (gdName lamDecl2) lamDecl2 modeGens
   pure doc { dGens = M.insert modeTy modeGens' (dGens doc) }
 
 testCtorEligibilityLamShapeRejected :: Assertion
@@ -584,7 +579,7 @@ testCtorEligibilityLamShapeRejected = do
     Left err ->
       assertBool
         ("expected malformed lam config error during ctor eligibility validation, got: " <> T.unpack err)
-        ("requires `lam` to have exactly one binder arg" `T.isInfixOf` err)
+        ("has ambiguous NbE primitives" `T.isInfixOf` err)
     Right _ ->
       assertFailure "expected deriveCtorTables to reject malformed NbE lam config"
 

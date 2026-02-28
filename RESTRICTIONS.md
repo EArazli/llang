@@ -15,7 +15,7 @@ Term arguments (`TATm`) normalize through restricted diagram fragments that depe
   - one output
   - no boxes, feedback, or splice nodes
   - no generator attrs
-  - binder args are allowed only for `lam`, and only as the enforced concrete binder-body form used by NbE (`BAConcrete`, bound var first, then outer-prefix inputs)
+  - binder args are allowed only for the mode's inferred lambda generator, and only as the enforced concrete binder-body form used by NbE (`BAConcrete`, bound var first, then outer-prefix inputs)
   - `PTmMeta` inputs must be boundary ports; explicit meta arguments may choose any boundary subset/order
   - `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
 
@@ -60,29 +60,23 @@ Disconnected dead subgraphs do not contribute to reported bound indices.
 - Witness shape is constrained to `mu(A) -> nu(A)` (checked after modality/type normalization).
 - No automatic transform coercion insertion is performed; witnesses must be used explicitly.
 
-## 9. NbE Primitive Selection Is Currently Fixed
-
-For NbE modes, the required primitive names are currently fixed in the kernel (`lam`, `app`, and `Arr`).
-This is temporary and should be revisited so NbE primitive/operator names can be configured per mode.
-Follow-up work item: replace hardcoded names with per-mode NbE configuration.
-
-## 10. NbE Fragment Coverage Is Intentionally Narrow
+## 9. NbE Fragment Coverage Is Intentionally Narrow
 
 Current NbE normalization targets a strict lambda-calculus fragment for definitional equality.
 Unsupported constructs (for now) include structural diagram features such as splice/feedback/box/tensor/comp/symmetry in definitional normalization paths.
 This is a scope restriction, not a fundamental limitation, and should be revisited after core NbE stability and soundness are locked in.
 Follow-up work item: expand supported definitional fragment after NbE core stability/soundness are established.
 
-## 11. Classification Graph Limits
+## 10. Classification Graph Limits
 
 - Non-self classification cycles are rejected. Allowing longer cycles would require an explicit universe-level stratification design and implementation.
 
-## 12. Constructor/Surface Caveats
+## 11. Constructor/Surface Caveats
 
 - Constructor term-parameter sorts are required to be closed with respect to the generator's type parameters.
 - Surface type annotations do not support constructor parameters of kind `TPS_Tm`; term-indexed arguments must be expressed through core/kernel paths.
 
-## 13. Mode Equations
+## 12. Mode Equations
 
 Mode theory `mod_eq` declarations are treated as an oriented rewrite system used to normalize modality expressions (so that definitional equality is equality of normal forms).
 
