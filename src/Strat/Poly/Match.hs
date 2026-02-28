@@ -14,7 +14,8 @@ import qualified Data.Set as S
 import Strat.Poly.Attr (AttrSubst, AttrVar, unifyAttrFlex)
 import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVarsFrom)
-import Strat.Poly.Obj (TmVar, Obj)
+import Strat.Poly.DiagramInterpretation (requirePortType)
+import Strat.Poly.Obj (TmVar)
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.UnifyObj
   ( Subst
@@ -175,8 +176,8 @@ extendMatch tt flex attrFlex lhs host match patEdge hostEdge
                   pure (M.insert p h portMap, S.insert h usedPorts, tySubst', attrSubst)
 
     unifyPorts tySubst p h = do
-      pTy <- requirePortType lhs p
-      hTy <- requirePortType host h
+      pTy <- requirePortType "match" lhs p
+      hTy <- requirePortType "match" host h
       unifyObjFlex
         tt
         (dTmCtx lhs)
@@ -273,12 +274,6 @@ payloadSubsts tt flex attrFlex match patEdge hostEdge =
 
     _ -> Right []
 
-requirePortType :: Diagram -> PortId -> Either Text Obj
-requirePortType diag pid =
-  case diagramPortObj diag pid of
-    Nothing -> Left "match: missing port type"
-    Just ty -> Right ty
-
 completeBoundary
   :: TypeTheory
   -> S.Set TmVar
@@ -296,7 +291,7 @@ completeBoundary tt flex lhs host match =
         Nothing -> mapFreshPort m p
 
     mapFreshPort m p = do
-      pTy <- requirePortType lhs p
+      pTy <- requirePortType "match" lhs p
       let candidates = diagramPortIds host
       chooseCandidate m p pTy candidates
 
@@ -304,7 +299,7 @@ completeBoundary tt flex lhs host match =
     chooseCandidate m p pTy (h : rest)
       | h `S.member` mUsedHostPorts m = chooseCandidate m p pTy rest
       | otherwise =
-          case requirePortType host h of
+          case requirePortType "match" host h of
             Left _ -> chooseCandidate m p pTy rest
             Right hTy ->
               case

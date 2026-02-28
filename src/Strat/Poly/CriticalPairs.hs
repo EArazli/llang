@@ -20,6 +20,7 @@ import Strat.Poly.Graph
 import qualified Strat.Poly.DiagramIso as DiagramIso
 import qualified Strat.Poly.Diagram as Diag
 import Strat.Poly.Diagram
+import Strat.Poly.DiagramInterpretation (requirePortType)
 import Strat.Poly.Match (Match(..))
 import Strat.Poly.Obj
   ( ObjVar
@@ -343,8 +344,8 @@ extendPort tt l1 l2 flex acc (p1, p2) = do
 
 unifyPorts :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> Subst -> PortId -> PortId -> Either Text Subst
 unifyPorts tt l1 l2 flex subst p1 p2 = do
-  pTy <- requirePortType l1 p1
-  hTy <- requirePortType l2 p2
+  pTy <- requirePortType "criticalPairs" l1 p1
+  hTy <- requirePortType "criticalPairs" l2 p2
   pTy' <- mapLeft fatalSubstError (U.applySubstObj tt subst pTy)
   hTy' <- mapLeft fatalSubstError (U.applySubstObj tt subst hTy)
   tmCtx' <- mapLeft fatalSubstError (U.applySubstCtx tt subst (dTmCtx l1))
@@ -430,12 +431,6 @@ sameTmMetaId a b =
 sortEdges :: [Edge] -> [Edge]
 sortEdges = L.sortOn (unEdgeId . eId)
 
-requirePortType :: Diagram -> PortId -> Either Text Obj
-requirePortType diag pid =
-  case diagramPortObj diag pid of
-    Nothing -> Left "criticalPairs: missing port type"
-    Just ty -> Right ty
-
 buildOverlapHost :: TypeTheory -> Diagram -> Diagram -> PartialIso -> Either Text (Diagram, Match, Match)
 buildOverlapHost tt l1 l2 ov = do
   let tySubst = piTySubst ov
@@ -485,7 +480,7 @@ mapPortsInto host l2 portMap ports =
           case M.lookup p pm of
             Just hp -> Right (h, pm, accPorts <> [hp])
             Nothing -> do
-              ty <- requirePortType l2 p
+              ty <- requirePortType "criticalPairs" l2 p
               let (hp, h') = freshPort ty h
               Right (h', M.insert p hp pm, accPorts <> [hp])
 
@@ -500,7 +495,7 @@ mapBoundaryPorts host l2 portMap =
           case M.lookup p pm of
             Just _ -> Right (h, pm)
             Nothing -> do
-              ty <- requirePortType l2 p
+              ty <- requirePortType "criticalPairs" l2 p
               let (hp, h') = freshPort ty h
               Right (h', M.insert p hp pm)
 

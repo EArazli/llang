@@ -3,6 +3,7 @@
 module Strat.Poly.DiagramInterpretation
   ( DiagramInterpretation(..)
   , interpretDiagram
+  , binderHoleNames
   , requirePortType
   , spliceEdge
   , updateEdgePayload
@@ -168,6 +169,12 @@ applySubstBinderSigs
   -> Either Text (M.Map BinderMetaVar BinderSig)
 applySubstBinderSigs tt subst =
   mapM (applySubstBinderSig tt subst)
+
+binderHoleNames :: Int -> [BinderMetaVar]
+binderHoleNames n =
+  [ BinderMetaVar ("b" <> T.pack (show i))
+  | i <- [0 .. n - 1]
+  ]
 
 data SpliceAction
   = SpliceBindHole BinderMetaVar

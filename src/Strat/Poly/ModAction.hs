@@ -25,6 +25,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.DiagramInterpretation
   ( DiagramInterpretation(..)
   , applySubstBinderSigs
+  , binderHoleNames
   , instantiateGenImageBinders
   , interpretDiagram
   , requirePortType
@@ -249,16 +250,20 @@ renderGenName (GenName g) = g
 
 mapTypeByModExpr :: Doctrine -> ModExpr -> Obj -> Either Text Obj
 mapTypeByModExpr doc me ty = do
+  codeLift <- classifierLiftForModExpr (dModes doc) me
+  mapTypeWithLift (dModes doc) me codeLift ty
+
+mapTypeWithLift :: ModeTheory -> ModExpr -> ModExpr -> Obj -> Either Text Obj
+mapTypeWithLift mt me codeLift ty = do
   if objOwnerMode ty /= meSrc me
     then Left "map: type mode does not match action source"
-    else pure ()
-  codeLift <- classifierLiftForModExpr (dModes doc) me
-  normalizeObjExpr
-    (dModes doc)
-    Obj
-      { objOwnerMode = meTgt me
-      , objCode = CTLift codeLift (objCode ty)
-      }
+    else
+      normalizeObjExpr
+        mt
+        Obj
+          { objOwnerMode = meTgt me
+          , objCode = CTLift codeLift (objCode ty)
+          }
 
 applyModExpr :: Doctrine -> ModExpr -> Diagram -> Either Text Diagram
 applyModExpr doc me diag = do
@@ -304,16 +309,7 @@ applyAction doc mName diagSrc = do
           }
   interpretDiagram interp diagSrc
   where
-    mapType me codeLift ty = do
-      if objOwnerMode ty /= meSrc me
-        then Left "map: type mode does not match action source"
-        else
-          normalizeObjExpr
-            (dModes doc)
-            Obj
-              { objOwnerMode = meTgt me
-              , objCode = CTLift codeLift (objCode ty)
-              }
+    mapType me codeLift = mapTypeWithLift (dModes doc) me codeLift
 
     mapTypeIfSource me codeLift ty =
       if objOwnerMode ty == meSrc me
@@ -323,7 +319,7 @@ applyAction doc mName diagSrc = do
     onGenEdge tt action me codeLift diagSrc0 diagTgt edgeKey edgeSrc mappedBargs =
       case ePayload edgeSrc of
         PGen g attrs _bargsSrc -> do
-          genDecl <- lookupSrcGen doc (dMode diagSrc0) g
+          genDecl <- lookupGenDeclInDoctrine "map: unknown source generator" doc (dMode diagSrc0) g
           img0raw <-
             case M.lookup (dMode diagSrc0, g) (maGenMap action) of
               Nothing -> Left "map: missing generator image"
@@ -344,7 +340,7 @@ applyAction doc mName diagSrc = do
       if length slots /= length mappedBargs
         then Left "map: source binder argument arity mismatch"
         else Right ()
-      let holes = [ BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 :: Int .. length slots - 1] ]
+      let holes = binderHoleNames (length slots)
       sigs0 <- mapM mapBinderSig (M.fromList (zip holes slots))
       sigs <- applySubstBinderSigs typeTheory subst sigs0
       let holeSub = M.fromList (zip holes mappedBargs)
@@ -404,7 +400,7 @@ genericGenDiagram gd = do
   let mode = gdMode gd
   let attrs = M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- gdAttrs gd ]
   let binderSlots = [ bs | InBinder bs <- gdDom gd ]
-  let bargs = [ BAMeta (BinderMetaVar ("b" <> T.pack (show i))) | i <- [0 :: Int .. length binderSlots - 1] ]
+  let bargs = map BAMeta (binderHoleNames (length binderSlots))
   let (ins, d0) = allocPorts (gdPlainDom gd) (emptyDiagram mode [])
   let (outs, d1) = allocPorts (gdCod gd) d0
   d2 <- addEdgePayload (PGen (gdName gd) attrs bargs) ins outs d1
@@ -424,12 +420,6 @@ actionAttrSubst genDecl attrs =
     [ (AttrVar fieldName sortName, M.findWithDefault (ATVar (AttrVar fieldName sortName)) fieldName attrs)
     | (fieldName, sortName) <- gdAttrs genDecl
     ]
-
-lookupSrcGen :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
-lookupSrcGen doc mode genName =
-  case M.lookup mode (dGens doc) >>= M.lookup genName of
-    Nothing -> Left "map: unknown source generator"
-    Just gd -> Right gd
 
 instantiateImage :: TypeTheory -> Diagram -> Int -> Diagram -> Either Text (Diagram, Subst)
 instantiateImage tt diag edgeKey img = do

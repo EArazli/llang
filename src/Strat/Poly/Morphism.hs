@@ -39,6 +39,7 @@ import Strat.Poly.DiagramInterpretation
   ( DiagramInterpretation(..)
   , applySubstBinderSig
   , applySubstBinderSigs
+  , binderHoleNames
   , instantiateGenImageBinders
   , interpretDiagram
   , requirePortType
@@ -362,11 +363,6 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
       | InBinder bs <- gdDom gen
       ]
 
-    binderHoleNames n =
-      [ BinderMetaVar ("b" <> T.pack (show i))
-      | i <- [0 .. n - 1]
-      ]
-
     buildBinderHoleSub gen bargs = do
       let slots = binderSlots gen
       if length slots /= length bargs
@@ -379,7 +375,7 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
       case ePayload edgeSrc of
         PGen genName attrsSrc _bargsSrc -> do
           let modeSrc = dMode diagSrc0
-          genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
+          genDecl <- lookupGenDeclInDoctrine "applyMorphismDiagram: unknown generator" (morSrc mor) modeSrc genName
           substSrc <- instantiateGen srcTheory genDecl diagSrc0 edgeSrc
           substTgt <- mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor substSrc
           case M.lookup (modeSrc, genName) (morGenMap mor) of
@@ -642,7 +638,7 @@ validateClassificationPreservation tgtCtorTables ttSrc ttTgt mor = do
       case M.lookup (modeSrc, witnessName) (morGenMap mor) of
         Just image -> do
           mapped <- singleGeneratorWitnessName modeTgt image
-          _ <- lookupGenInMode (morTgt mor) modeTgt mapped
+          _ <- lookupGenDeclInDoctrine "applyMorphismDiagram: unknown generator" (morTgt mor) modeTgt mapped
           Right mapped
         Nothing ->
           Left
@@ -974,10 +970,7 @@ checkGenMapping tgtCtorTables ttSrc ttTgt mor gen = do
                 [ bs
                 | InBinder bs <- gdDom gen
                 ]
-          let holes =
-                [ BinderMetaVar ("b" <> T.pack (show i))
-                | i <- [0 .. length binderSlotsSrc - 1]
-                ]
+          let holes = binderHoleNames (length binderSlotsSrc)
           binderSlotsTgt <- mapM (applyMorphismBinderSigWithTables tgtCtorTables mor) binderSlotsSrc
           let expectedBinderSigs = M.fromList (zip holes binderSlotsTgt)
           if giBinderSigs image0 == expectedBinderSigs
@@ -1247,10 +1240,7 @@ singleGenNameMaybe srcGen image0 =
       [ bs
       | InBinder bs <- gdDom srcGen
       ]
-    holes =
-      [ BinderMetaVar ("b" <> T.pack (show i))
-      | i <- [0 .. length binderSlots - 1]
-      ]
+    holes = binderHoleNames (length binderSlots)
     expectedBinderArgs = map BAMeta holes
     expectedBinderSigs = M.fromList (zip holes binderSlots)
     passThroughAttrs attrs =
@@ -1366,12 +1356,6 @@ lookupCtorSigByRefInTables doc tables ref = do
     [] -> Left "checkMorphism: unknown source type in type map"
     [sig] -> Right sig
     _ -> Left "checkMorphism: ambiguous constructor signature across owner modes"
-
-lookupGenInMode :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
-lookupGenInMode doc mode name =
-  case M.lookup mode (dGens doc) >>= M.lookup name of
-    Nothing -> Left "applyMorphismDiagram: unknown generator"
-    Just gd -> Right gd
 
 instantiateGen :: TypeTheory -> GenDecl -> Diagram -> Edge -> Either Text Subst
 instantiateGen tt gen diag edge = do

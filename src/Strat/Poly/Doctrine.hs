@@ -18,6 +18,7 @@ module Strat.Poly.Doctrine
   , deriveCtorTables
   , lookupCtorSigForOwnerInTables
   , lookupCtorRefForOwnerInTables
+  , lookupGenDeclInDoctrine
   , checkType
   , checkModTransformWitness
   , doctrineCheck
@@ -128,6 +129,12 @@ gdPlainDom gd =
   [ ty
   | InPort ty <- gdDom gd
   ]
+
+lookupGenDeclInDoctrine :: Text -> Doctrine -> ModeName -> GenName -> Either Text GenDecl
+lookupGenDeclInDoctrine missingMsg doc mode genName =
+  case M.lookup mode (dGens doc) >>= M.lookup genName of
+    Nothing -> Left missingMsg
+    Just gd -> Right gd
 
 isTypeDeclGenNameInTables :: Doctrine -> CtorTables -> ModeName -> ObjName -> Bool
 isTypeDeclGenNameInTables doc tables classifierMode ctorName =

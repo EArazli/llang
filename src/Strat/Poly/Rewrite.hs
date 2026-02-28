@@ -15,8 +15,12 @@ import qualified Data.Set as S
 import Data.Monoid (Any(..), getAny)
 import Strat.Poly.Graph
 import Strat.Poly.Diagram
+import Strat.Poly.DiagramInterpretation
+  ( requirePortType
+  , spliceEdge
+  )
 import Strat.Poly.Match
-import Strat.Poly.Obj (TmVar, Obj)
+import Strat.Poly.Obj (TmVar)
 import Strat.Poly.Cell2
 import Strat.Poly.UnifyObj (emptySubst)
 import Strat.Common.Rules (RewritePolicy(..))
@@ -239,7 +243,7 @@ expandSplices binderSub =
     expandTop diag =
       case findSpliceEdge diag of
         Nothing -> Right diag
-        Just (_, edge, x) -> do
+        Just (edgeKey, edge, x) -> do
           captured <-
             case M.lookup x binderSub of
               Nothing -> Left "rewriteOnce: splice uses uncaptured binder meta"
@@ -247,19 +251,14 @@ expandSplices binderSub =
           if dTmCtx captured /= dTmCtx diag
             then Left "rewriteOnce: splice term-context mismatch"
             else Right ()
-          domSplice <- mapM (requirePortType diag) (eIns edge)
-          codSplice <- mapM (requirePortType diag) (eOuts edge)
-          domCaptured <- mapM (requirePortType captured) (dIn captured)
-          codCaptured <- mapM (requirePortType captured) (dOut captured)
+          domSplice <- mapM (requirePortType "rewriteOnce" diag) (eIns edge)
+          codSplice <- mapM (requirePortType "rewriteOnce" diag) (eOuts edge)
+          domCaptured <- mapM (requirePortType "rewriteOnce" captured) (dIn captured)
+          codCaptured <- mapM (requirePortType "rewriteOnce" captured) (dOut captured)
           if domSplice /= domCaptured || codSplice /= codCaptured
             then Left "rewriteOnce: splice boundary mismatch"
             else Right ()
-          diagNoEdge <- deleteEdgeKeepPorts diag (eId edge)
-          let capturedShift = shiftDiagram (dNextPort diagNoEdge) (dNextEdge diagNoEdge) captured
-          diagInserted <- unionDiagram diagNoEdge capturedShift
-          let splicePairs = zip (eIns edge) (dIn capturedShift) <> zip (eOuts edge) (dOut capturedShift)
-          diagMerged <- mergeBoundaryPairs diagInserted splicePairs
-          validateDiagram diagMerged
+          diagMerged <- spliceEdge diag edgeKey captured
           expandTop diagMerged
 
 findSpliceEdge :: Diagram -> Maybe (Int, Edge, BinderMetaVar)
@@ -272,12 +271,6 @@ findSpliceEdge diag =
     of
       [] -> Nothing
       (x:_) -> Just x
-
-requirePortType :: Diagram -> PortId -> Either Text Obj
-requirePortType diag pid =
-  case diagramPortObj diag pid of
-    Nothing -> Left "rewriteOnce: missing port type"
-    Just ty -> Right ty
 
 internalPorts :: Diagram -> [PortId]
 internalPorts diag =
