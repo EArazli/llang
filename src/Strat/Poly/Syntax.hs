@@ -5,7 +5,7 @@
 module Strat.Poly.Syntax
   ( ObjName(..)
   , ObjRef(..)
-  , TyMeta(..)
+  , TyMeta
   , ObjVar
   , pattern ObjVar
   , ovName
@@ -49,15 +49,6 @@ data ObjRef = ObjRef
   , orName :: ObjName
   } deriving (Eq, Ord, Show)
 
-data TyMeta = TyMeta
-  { tmvName :: Text
-  , tmvSort :: Obj
-  , tmvScope :: Int
-  , tmvOwnerMode :: Maybe ModeName
-  } deriving (Show)
-
-type ObjVar = TyMeta
-
 newtype TmFunName = TmFunName Text deriving (Eq, Ord, Show)
 
 data TmVar = TmVar
@@ -66,6 +57,9 @@ data TmVar = TmVar
   , tmvScope :: Int
   , tmvOwnerMode :: Maybe ModeName
   } deriving (Show)
+
+type TyMeta = TmVar
+type ObjVar = TmVar
 
 newtype PortId = PortId Int deriving (Eq, Ord, Show)
 newtype EdgeId = EdgeId Int deriving (Eq, Ord, Show)
@@ -139,19 +133,9 @@ tmVarOwner TmVar { tmvOwnerMode = ownerM, tmvSort = sortTy } =
     Just owner -> owner
     Nothing -> objOwnerMode sortTy
 
-tyMetaIdKey :: TyMeta -> (Text, Int)
-tyMetaIdKey TyMeta { tmvName = name, tmvScope = scope } =
-  (name, scope)
-
 tmVarIdKey :: TmVar -> (Text, Int)
 tmVarIdKey TmVar { tmvName = name, tmvScope = scope } =
   (name, scope)
-
-instance Eq TyMeta where
-  a == b = tyMetaIdKey a == tyMetaIdKey b
-
-instance Ord TyMeta where
-  compare a b = compare (tyMetaIdKey a) (tyMetaIdKey b)
 
 instance Eq TmVar where
   a == b = tmVarIdKey a == tmVarIdKey b
@@ -163,32 +147,22 @@ sameTmVarId :: TmVar -> TmVar -> Bool
 sameTmVarId v w = tmVarIdKey v == tmVarIdKey w
 
 objVarToTmVar :: ObjVar -> TmVar
-objVarToTmVar v@TyMeta { tmvName = name, tmvSort = sortTy, tmvScope = scope } =
-  TmVar
-    { tmvName = name
-    , tmvSort = sortTy
-    , tmvScope = scope
-    , tmvOwnerMode = Just (ovOwnerMode v)
-    }
+objVarToTmVar v =
+  v { tmvOwnerMode = Just (ovOwnerMode v) }
 
 tmVarToObjVar :: TmVar -> ObjVar
-tmVarToObjVar v@TmVar { tmvName = name, tmvSort = sortTy, tmvScope = scope } =
-  TyMeta
-    { tmvName = name
-    , tmvSort = sortTy
-    , tmvScope = scope
-    , tmvOwnerMode = Just (tmVarOwner v)
-    }
+tmVarToObjVar v =
+  v { tmvOwnerMode = Just (tmVarOwner v) }
 
 ovSort :: ObjVar -> Obj
-ovSort TyMeta { tmvSort = sortTy } = sortTy
+ovSort TmVar { tmvSort = sortTy } = sortTy
 
 ovScope :: ObjVar -> Int
-ovScope TyMeta { tmvScope = scope } = scope
+ovScope TmVar { tmvScope = scope } = scope
 
 ovOwnerMode :: ObjVar -> ModeName
-ovOwnerMode TyMeta { tmvOwnerMode = Just owner } = owner
-ovOwnerMode TyMeta { tmvName = name } =
+ovOwnerMode TmVar { tmvOwnerMode = Just owner } = owner
+ovOwnerMode TmVar { tmvName = name } =
   error
     ( "ObjVar invariant violated: missing owner mode for type metavariable "
         <> show name
@@ -198,13 +172,13 @@ objVarOwner :: ObjVar -> ModeName
 objVarOwner = ovOwnerMode
 
 objVarView :: ObjVar -> Maybe (Text, ModeName)
-objVarView v@TyMeta { tmvName = name } = Just (name, objVarOwner v)
+objVarView v@TmVar { tmvName = name } = Just (name, objVarOwner v)
 
 pattern ObjVar :: Text -> ModeName -> ObjVar
 pattern ObjVar {ovName, ovMode} <- (objVarView -> Just (ovName, ovMode))
   where
     ObjVar ovName ovMode =
-      TyMeta
+      TmVar
         { tmvName = ovName
         , tmvSort = metaSortObj ovMode
         , tmvScope = 0
