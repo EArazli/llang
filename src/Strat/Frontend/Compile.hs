@@ -14,7 +14,7 @@ import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
-import Strat.Poly.Diagram (Diagram, freeObjVarsDiagram, freeTmVarsDiagram)
+import Strat.Poly.Diagram (Diagram, freeVarsDiagram)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Obj (TmVar(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
@@ -86,18 +86,15 @@ compileSourceDiagram env targetName mMode mSurface uses exprText = do
         case coerceDiagramTo env docUsed diagUsed targetName of
           Right ok -> Right ok
           Left err -> Left (renderMismatch usesMismatch err)
-  if S.null (freeObjVarsDiagram diagFinal)
-    then Right ()
-  else Left "unresolved type variables in diagram"
-  let unresolvedTm = S.toList (freeTmVarsDiagram diagFinal)
-  if null unresolvedTm
+  let unresolved = S.toList (freeVarsDiagram diagFinal)
+  if null unresolved
     then Right ()
   else
-    let names = map tmvName unresolvedTm
+    let names = map tmvName unresolved
     in Left
-         ("unresolved term variables in diagram: "
+         ("unresolved metavariables in diagram: "
            <> mconcat (punctuate ", " names)
-           <> " (likely missing explicit term arguments)")
+           <> " (likely missing explicit arguments)")
   pure (docFinal, diagFinal)
   where
     punctuate _ [] = []

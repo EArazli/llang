@@ -2,19 +2,12 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
 module Strat.Poly.Obj
-  ( ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
-  , ovSort
-  , ovScope
-  , ovOwnerMode
-  , objVarToTmVar
-  , tmVarToObjVar
+  ( mkModeMetaVar
   , ObjName(..)
   , ObjRef(..)
   , TmFunName(..)
   , TmVar(..)
+  , tmVarOwner
   , sameTmVarId
   , TermDiagram(..)
   , CodeArg(..)
@@ -28,11 +21,9 @@ module Strat.Poly.Obj
   , Context
   , mapTermDiagram
   , mapObjExpr
-  , freeObjVarsObj
-  , freeObjVarsTerm
-  , freeTmVarsObj
-  , freeTmVarsTerm
-  , occursObjVar
+  , freeVarsObj
+  , freeVarsTerm
+  , occursVar
   , boundTmIndicesObj
   , boundTmIndicesTerm
   , resolveTmCtxIndex
@@ -52,19 +43,12 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName, ModExpr(..), ModeTheory(..), ClassificationDecl(..), composeMod, normalizeModExpr)
 import Strat.Poly.Syntax
-  ( ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
-  , ovSort
-  , ovScope
-  , ovOwnerMode
-  , objVarToTmVar
-  , tmVarToObjVar
+  ( mkModeMetaVar
   , ObjName(..)
   , ObjRef(..)
   , TmFunName(..)
   , TmVar(..)
+  , tmVarOwner
   , sameTmVarId
   , TermDiagram(..)
   , CodeArg(..)
@@ -92,12 +76,10 @@ mkObj owner code = Obj { objOwnerMode = owner, objCode = code }
 mkCon :: ObjRef -> [ObjArg] -> Obj
 mkCon ref args = mkObj (orMode ref) (CTCon ref args)
 
-pattern OVar :: ObjVar -> Obj
+pattern OVar :: TmVar -> Obj
 pattern OVar v <- Obj _ (CTMeta v)
   where
-    OVar v = mkObj owner (CTMeta v)
-      where
-        owner = ovOwnerMode v
+    OVar v = mkObj (tmVarOwner v) (CTMeta v)
 
 pattern OCon :: ObjRef -> [ObjArg] -> Obj
 pattern OCon ref args <- Obj _ (CTCon ref args)
@@ -138,38 +120,38 @@ mapObjExpr fTy fTm = goObj
         CAObj ty -> CAObj (goObj ty)
         CATm tm -> CATm (mapTermDiagram fTm tm)
 
-freeObjVarsObj :: Obj -> S.Set ObjVar
-freeObjVarsObj obj =
-  freeObjVarsCode (objCode obj)
+freeCodeVarsObj :: Obj -> S.Set TmVar
+freeCodeVarsObj obj =
+  freeCodeVarsCode (objCode obj)
   where
-    freeObjVarsCode code =
+    freeCodeVarsCode code =
       case code of
         CTMeta v -> S.singleton v
-        CTCon _ args -> S.unions (map freeObjVarsArg args)
-        CTLift _ inner -> freeObjVarsCode inner
-    freeObjVarsArg arg =
+        CTCon _ args -> S.unions (map freeCodeVarsArg args)
+        CTLift _ inner -> freeCodeVarsCode inner
+    freeCodeVarsArg arg =
       case arg of
-        CAObj innerObj -> freeObjVarsObj innerObj
-        CATm tmArg -> freeObjVarsTerm tmArg
+        CAObj innerObj -> freeCodeVarsObj innerObj
+        CATm tmArg -> freeCodeVarsTerm tmArg
 
-freeObjVarsTerm :: TermDiagram -> S.Set ObjVar
-freeObjVarsTerm (TermDiagram diag) =
+freeCodeVarsTerm :: TermDiagram -> S.Set TmVar
+freeCodeVarsTerm (TermDiagram diag) =
   S.unions
-    [ S.unions (map freeObjVarsObj (IM.elems (dPortObj diag)))
-    , S.unions (map freeObjVarsObj (dTmCtx diag))
+    [ S.unions (map freeCodeVarsObj (IM.elems (dPortObj diag)))
+    , S.unions (map freeCodeVarsObj (dTmCtx diag))
     , S.unions (map edgeObjVars (IM.elems (dEdges diag)))
     ]
   where
     edgeObjVars edge =
       case ePayload edge of
-        PTmMeta v -> freeObjVarsObj (tmvSort v)
+        PTmMeta v -> freeCodeVarsObj (tmvSort v)
         _ -> S.empty
 
-freeTmVarsTerm :: TermDiagram -> S.Set TmVar
-freeTmVarsTerm (TermDiagram diag) =
+freeTermVarsTerm :: TermDiagram -> S.Set TmVar
+freeTermVarsTerm (TermDiagram diag) =
   S.unions
-    [ S.unions (map freeTmVarsObj (IM.elems (dPortObj diag)))
-    , S.unions (map freeTmVarsObj (dTmCtx diag))
+    [ S.unions (map freeTermVarsObj (IM.elems (dPortObj diag)))
+    , S.unions (map freeTermVarsObj (dTmCtx diag))
     , S.unions (map edgeTmVars (IM.elems (dEdges diag)))
     ]
   where
@@ -178,33 +160,31 @@ freeTmVarsTerm (TermDiagram diag) =
         PTmMeta v -> S.singleton v
         _ -> S.empty
 
-freeTmVarsObj :: Obj -> S.Set TmVar
-freeTmVarsObj obj =
-  freeTmVarsCode (objCode obj)
+freeTermVarsObj :: Obj -> S.Set TmVar
+freeTermVarsObj obj =
+  freeTermVarsCode (objCode obj)
   where
-    freeTmVarsCode code =
+    freeTermVarsCode code =
       case code of
         CTMeta _ -> S.empty
-        CTCon _ args -> S.unions (map freeTmVarsArg args)
-        CTLift _ inner -> freeTmVarsCode inner
-    freeTmVarsArg arg =
+        CTCon _ args -> S.unions (map freeTermVarsArg args)
+        CTLift _ inner -> freeTermVarsCode inner
+    freeTermVarsArg arg =
       case arg of
-        CAObj innerObj -> freeTmVarsObj innerObj
-        CATm tm -> freeTmVarsTerm tm
+        CAObj innerObj -> freeTermVarsObj innerObj
+        CATm tm -> freeTermVarsTerm tm
 
-occursObjVar :: ObjVar -> Obj -> Bool
-occursObjVar v obj =
-  occursInCode (objCode obj)
-  where
-    occursInCode code =
-      case code of
-        CTMeta v' -> v == v'
-        CTCon _ args -> any occursArg args
-        CTLift _ inner -> occursInCode inner
-    occursArg arg =
-      case arg of
-        CAObj innerObj -> occursObjVar v innerObj
-        CATm tmArg -> v `S.member` freeObjVarsTerm tmArg
+freeVarsObj :: Obj -> S.Set TmVar
+freeVarsObj obj =
+  S.union (freeCodeVarsObj obj) (freeTermVarsObj obj)
+
+freeVarsTerm :: TermDiagram -> S.Set TmVar
+freeVarsTerm tm =
+  S.union (freeCodeVarsTerm tm) (freeTermVarsTerm tm)
+
+occursVar :: TmVar -> Obj -> Bool
+occursVar v obj =
+  v `S.member` freeCodeVarsObj obj
 
 boundTmIndicesTerm :: TermDiagram -> S.Set Int
 boundTmIndicesTerm (TermDiagram diag) =
@@ -283,7 +263,7 @@ codeMode0 :: CodeTerm -> ModeName
 codeMode0 code =
   case code of
     CTMeta v ->
-      ovOwnerMode v
+      tmVarOwner v
     CTCon r _ -> orMode r
     CTLift me _ -> meTgt me
 

@@ -14,15 +14,13 @@ import qualified Data.Set as S
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Obj
   ( Obj(..)
+  , mkModeMetaVar
   , mkCon
   , ObjName(..)
   , ObjRef(..)
-  , ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
-  , objVarToTmVar
-  , tmVarToObjVar
+  , TmVar
+  , tmvName
+  , tmVarOwner
   , TmVar(..)
   , ObjArg
   , pattern OAObj
@@ -63,7 +61,7 @@ tests =
     , testCase "compD rejects boundary mismatch" testCompMismatch
     , testCase "tensorD rejects mode mismatch" testTensorModeMismatch
     , testCase "validateDiagram detects stale incidence" testValidateStaleIncidence
-    , testCase "validateDiagram detects edge key/id mismatch" testValidateEdgeKeyIdMismatch
+    , testCase "validateDiagram detects edge key/mismatch" testValidateEdgeKeyIdMismatch
     , testCase "validateDiagram detects invalid next ids" testValidateInvalidNextIds
     , testCase "validateDiagram detects missing output boundary" testValidateMissingOutputBoundary
     , testCase "validateDiagram detects unused input" testValidateUnusedInput
@@ -91,8 +89,8 @@ tests =
 require :: Either Text a -> IO a
 require = either (assertFailure . T.unpack) pure
 
-tvar :: ModeName -> Text -> ObjVar
-tvar mode name = ObjVar { ovName = name, ovMode = mode }
+tvar :: ModeName -> Text -> TmVar
+tvar mode name = mkModeMetaVar name mode
 
 tcon :: ModeName -> Text -> [Obj] -> Obj
 tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
@@ -171,7 +169,7 @@ testValidateEdgeKeyIdMismatch = do
               }
       case validateDiagram bad of
         Left _ -> pure ()
-        Right _ -> assertFailure "expected validation failure for edge key/id mismatch"
+        Right _ -> assertFailure "expected validation failure for edge key/mismatch"
     _ -> assertFailure "unexpected edge shape"
 
 testValidateInvalidNextIds :: Assertion
@@ -297,7 +295,7 @@ testApplySubstChase = do
   let b = tvar mode "b"
   let c = tcon mode "C" []
   let tt = modeOnlyTypeTheory (mkModes [mode])
-  let subst = mkSubst (M.fromList [(a, OVar b), (b, c)]) M.empty
+  subst <- require (mkSubst [(a, OAObj (OVar b)), (b, OAObj c)])
   ty <- require (applySubstObj tt subst (OVar a))
   ty @?= c
 
@@ -307,7 +305,7 @@ testApplySubstCycle = do
   let a = tvar mode "a"
   let b = tvar mode "b"
   let tt = modeOnlyTypeTheory (mkModes [mode])
-  let subst = mkSubst (M.fromList [(a, OVar b), (b, OVar a)]) M.empty
+  subst <- require (mkSubst [(a, OAObj (OVar b)), (b, OAObj (OVar a))])
   ty <- require (applySubstObj tt subst (OVar a))
   ty @?= OVar a
 
@@ -316,7 +314,8 @@ testNormalizeSubstIdentity = do
   let mode = ModeName "M"
   let a = tvar mode "a"
   let tt = modeOnlyTypeTheory (mkModes [mode])
-  subst <- require (normalizeSubst tt (mkSubst (M.fromList [(a, OVar a)]) M.empty))
+  s0 <- require (mkSubst [(a, OAObj (OVar a))])
+  subst <- require (normalizeSubst tt s0)
   codeBindings subst @?= []
 
 testDiagramIsoBoxName :: Assertion
@@ -342,7 +341,7 @@ testDuplicateGenTyVars = do
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
-        , gdParams = [GP_Ty (objVarToTmVar a), GP_Ty (objVarToTmVar a)]
+        , gdParams = [GP_Ty (a), GP_Ty (a)]
         , gdDom = map InPort [OVar a]
         , gdCod = [OVar a]
         , gdAttrs = []
@@ -404,7 +403,7 @@ testDuplicateCellTyVars = do
         { c2Name = "dupCellTyVars"
         , c2Class = Structural
         , c2Orient = Bidirectional
-        , c2Params = map GP_Ty [objVarToTmVar a, objVarToTmVar a] <> map GP_Tm []
+        , c2Params = map GP_Ty [a, a] <> map GP_Tm []
         , c2LHS = diag
         , c2RHS = diag
         }
@@ -468,7 +467,7 @@ testAcceptRHSTyVars = do
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
-        , gdParams = [GP_Ty (objVarToTmVar aVar)]
+        , gdParams = [GP_Ty (aVar)]
         , gdDom = map InPort [OVar aVar]
         , gdCod = [OVar aVar]
         , gdAttrs = []
@@ -479,7 +478,7 @@ testAcceptRHSTyVars = do
         { c2Name = "rhs_ok"
         , c2Class = Computational
         , c2Orient = LR
-        , c2Params = map GP_Ty [objVarToTmVar aVar] <> map GP_Tm []
+        , c2Params = map GP_Ty [aVar] <> map GP_Tm []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -588,7 +587,7 @@ testGenTmVarSortUsesTyVarScope = do
   let xVar =
         TmVar
           { tmvName = "x"
-          , tmvSort = OVar (tmVarToObjVar aVar)
+          , tmvSort = OVar (aVar)
           , tmvScope = 1
           , tmvOwnerMode = Nothing
           }
@@ -635,7 +634,7 @@ testCellTmVarSortUsesTyVarScope = do
   let xVar =
         TmVar
           { tmvName = "x"
-          , tmvSort = OVar (tmVarToObjVar aVar)
+          , tmvSort = OVar (aVar)
           , tmvScope = 1
           , tmvOwnerMode = Nothing
           }

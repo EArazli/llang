@@ -81,16 +81,12 @@ import Strat.Poly.Traversal (traverseDiagram)
 
 unifyCtxCompat :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
 unifyCtxCompat tt tmCtx ctxA ctxB =
-  let tyFlex = S.map objVarToTmVar (S.unions (map freeObjVarsObj (ctxA <> ctxB)))
-      tmFlex = S.unions (map freeTmVarsObj (ctxA <> ctxB))
-      flex = S.union tyFlex tmFlex
+  let flex = S.unions (map freeVarsObj (ctxA <> ctxB))
    in unifyCtx tt tmCtx flex ctxA ctxB
 
 unifyCtxFromPattern :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
 unifyCtxFromPattern tt tmCtx pat host =
-  let tyFlex = S.map objVarToTmVar (S.unions (map freeObjVarsObj pat))
-      tmFlex = S.unions (map freeTmVarsObj pat)
-      flex = S.union tyFlex tmFlex
+  let flex = S.unions (map freeVarsObj pat)
    in unifyCtx tt tmCtx flex pat host
 
 
@@ -242,9 +238,8 @@ applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor ty = do
     goCode ownerSrc ownerTgt code =
       case code of
         CTMeta v -> do
-          sort' <- go (ovSort v)
-          let vTm = objVarToTmVar v
-          let v' = tmVarToObjVar (vTm { tmvSort = sort', tmvOwnerMode = Just ownerTgt })
+          sort' <- go (tmvSort v)
+          let v' = v { tmvSort = sort', tmvOwnerMode = Just ownerTgt }
           pure (CTMeta v')
         CTLift me innerCode -> do
           me' <- mapModExpr mor me
@@ -282,7 +277,7 @@ applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor ty = do
     addParam s (param, arg) =
       case (param, arg) of
         (GP_Ty v, OAObj t) ->
-          insertCodeMeta (tmVarToObjVar v) t s
+          insertCodeMeta v t s
         (GP_Tm v, OATm tmArg) ->
           insertTmMeta v tmArg s
         _ ->
@@ -406,15 +401,21 @@ mapSubstWithTheories
 mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor subst = do
   tyPairs <- mapM mapTyOne (codeBindings subst)
   tmPairs <- mapM mapTmOne (tmBindings subst)
-  pure (mkSubst (M.fromList tyPairs) (M.fromList tmPairs))
+  mkSubst
+    ( [ (v, CAObj t)
+      | (v, t) <- tyPairs
+      ]
+        <> [ (v, CATm t)
+           | (v, t) <- tmPairs
+           ]
+    )
   where
-    mapTyOne :: (ObjVar, Obj) -> Either Text (ObjVar, Obj)
+    mapTyOne :: (TmVar, Obj) -> Either Text (TmVar, Obj)
     mapTyOne (v, t) = do
-      ownerSrc <- pure (ovOwnerMode v)
+      ownerSrc <- pure (tmVarOwner v)
       ownerTgt <- mapMode mor ownerSrc
-      sortV' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor (ovSort v)
-      let vTm = objVarToTmVar v
-      let v' = tmVarToObjVar vTm { tmvSort = sortV', tmvOwnerMode = Just ownerTgt }
+      sortV' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor (tmvSort v)
+      let v' = v { tmvSort = sortV', tmvOwnerMode = Just ownerTgt }
       t' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor t
       pure (v', t')
     mapTmOne (v, t) = do
@@ -1158,7 +1159,7 @@ buildTypeRenaming srcCtorTables tgtCtorTables mor = do
     argParamIndex params arg =
       case arg of
         OAObj (OVar v) ->
-          findParamIndex params (\p -> case p of GP_Ty v' -> tmVarToObjVar v' == v; _ -> False)
+          findParamIndex params (\p -> case p of GP_Ty v' -> v' == v; _ -> False)
         OATm tm ->
           case termMetaOnly tm of
             Just v ->

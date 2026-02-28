@@ -57,7 +57,7 @@ testUnionDiagramUsesMaxNextIds = do
   let next = dNextPort merged
   let (fresh, _) = freshPort aTy merged
   fresh @?= PortId next
-  assertBool "fresh port id should be new" (fresh `S.notMember` ports)
+  assertBool "fresh port should be new" (fresh `S.notMember` ports)
 
 testDeleteEdgeClearsIncidence :: Assertion
 testDeleteEdgeClearsIncidence = do

@@ -14,7 +14,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), ObjVar, pattern ObjVar, ovName, ovMode, objVarToTmVar, mkCon)
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), TmVar, mkCon, mkModeMetaVar)
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Match (Match(..), MatchConfig(..), findFirstMatch)
@@ -51,8 +51,8 @@ modeName = ModeName "M"
 aTy :: Obj
 aTy = mkCon (ObjRef modeName (ObjName "A")) []
 
-tvar :: Text -> ObjVar
-tvar name = ObjVar { ovName = name, ovMode = modeName }
+tvar :: Text -> TmVar
+tvar name = mkModeMetaVar name modeName
 
 mkGen :: Text -> [Obj] -> [Obj] -> Either Text Diagram
 mkGen name dom cod = genD modeName dom cod (GenName name)
@@ -311,7 +311,7 @@ testBoxTypeVarUnify = do
   fConcrete <- require (mkGen "f" [aConcrete] [aConcrete])
   lhs <- require (mkBoxDiagram "B" fVar aVarTy)
   host <- require (mkBoxDiagram "B" fConcrete aConcrete)
-  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) (S.singleton (objVarToTmVar aVar)) S.empty
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) (S.singleton (aVar)) S.empty
   res <- case findFirstMatch cfg lhs host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m

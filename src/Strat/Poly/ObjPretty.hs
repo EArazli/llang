@@ -21,7 +21,7 @@ renderType :: Obj -> Text
 renderType ty =
   case ty of
     OVar v ->
-      ovName v <> "@" <> renderMode (ovOwnerMode v)
+      tmvName v <> "@" <> renderMode (tmVarOwner v)
     OCon ref [] -> renderTypeRef ref
     OCon ref args ->
       renderTypeRef ref <> "(" <> T.intercalate ", " (map renderTypeArg args) <> ")"

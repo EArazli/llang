@@ -21,15 +21,14 @@ import Strat.Poly.ModeTheory (ModeName(..), addMode, emptyModeTheory)
 import Strat.Poly.Doctrine (doctrineTypeTheory)
 import Strat.Poly.Obj
   ( Obj(..)
+  , mkModeMetaVar
   , mkCon
   , ObjArg
   , pattern OAObj
   , pattern OATm
-  , ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
-  , objVarToTmVar
+  , TmVar
+  , tmvName
+  , tmVarOwner
   , ObjName(..)
   , ObjRef(..)
   , TmFunName(..)
@@ -65,7 +64,7 @@ import Strat.Poly.Graph
   , validateDiagram
   )
 import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVars)
-import Strat.Poly.Diagram (idD, genDTm, compD, freeTmVarsDiagram)
+import Strat.Poly.Diagram (idD, genDTm, compD, freeVarsDiagram)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Rewrite (RewriteRule(..), rewriteOnce)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr, diagramGraphToTermExpr)
@@ -336,7 +335,7 @@ testBoundSortUsesSubstitution :: Assertion
 testBoundSortUsesSubstitution = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let aVar = ObjVar { ovName = "a", ovMode = modeM }
+  let aVar = mkModeMetaVar "a" modeM
   let lenRef = ObjRef modeI (ObjName "Len")
   let concrete = mkCon (ObjRef modeM (ObjName "AConcrete")) []
   let tmCtxSort = mkCon lenRef [OAObj (OVar aVar)]
@@ -349,7 +348,7 @@ testBoundSortUsesSubstitution = do
   case unifyTm tt [tmCtxSort] S.empty emptySubst expectedSort bound0 bound0 of
     Left _ -> pure ()
     Right _ -> assertFailure "expected bound sort mismatch before solving substitution"
-  subst <- require (unifyObjFlex tt [] (S.singleton (objVarToTmVar aVar)) emptySubst (OVar aVar) concrete)
+  subst <- require (unifyObjFlex tt [] (S.singleton (aVar)) emptySubst (OVar aVar) concrete)
   _ <- require (unifyTm tt [tmCtxSort] S.empty subst expectedSort bound0 bound0)
   pure ()
 
@@ -357,7 +356,7 @@ testMatchBoundSortUsesCurrentSubst :: Assertion
 testMatchBoundSortUsesCurrentSubst = do
   let modeM = ModeName "M"
   let modeI = ModeName "I"
-  let aVar = ObjVar { ovName = "a", ovMode = modeM }
+  let aVar = mkModeMetaVar "a" modeM
   let lenRef = ObjRef modeI (ObjName "Len")
   let fooRef = ObjRef modeM (ObjName "Foo")
   let concrete = mkCon (ObjRef modeM (ObjName "AConcrete")) []
@@ -385,7 +384,7 @@ testMatchBoundSortUsesCurrentSubst = do
   let host = h3 { dIn = [h1, h2], dOut = [] }
   _ <- require (validateDiagram host)
 
-  let cfg = MatchConfig tt (S.singleton (objVarToTmVar aVar)) S.empty
+  let cfg = MatchConfig tt (S.singleton (aVar)) S.empty
   matches <- require (findAllMatches cfg lhs host)
   assertBool "expected at least one match" (not (null matches))
 
@@ -560,7 +559,7 @@ testExplicitBinderTermArg = do
       Just d -> pure d
   raw <- require (parseDiagExpr "wrap[use{n}]")
   diag <- require (elabDiagExpr env doc (ModeName "M") [] raw)
-  assertBool "expected no unresolved term variables" (S.null (freeTmVarsDiagram diag))
+  assertBool "expected no unresolved metavariables" (S.null (freeVarsDiagram diag))
 
 mkBetaInput :: ModeName -> Obj -> BinderArg -> Either Text Diagram
 mkBetaInput mode aTy lamArg = do

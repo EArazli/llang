@@ -56,8 +56,8 @@ tests =
     , testCase "wire metavariables reject duplicate names in one diagram" testWireMetaRuleRejectsDuplicateName
     ]
 
-tvar :: ModeName -> Text -> ObjVar
-tvar mode name = ObjVar { ovName = name, ovMode = mode }
+tvar :: ModeName -> Text -> TmVar
+tvar mode name = mkModeMetaVar name mode
 
 universeName :: ModeName -> ObjName
 universeName (ModeName n) = ObjName ("U_" <> n)
@@ -355,8 +355,8 @@ testTypeMapReorder = do
           { gdName = genName
           , gdMode = mode
           , gdParams = [GP_Ty a, GP_Ty b]
-          , gdDom = map InPort [mkCon (ObjRef mode prod) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
-          , gdCod = [mkCon (ObjRef mode prod) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
+          , gdDom = map InPort [mkCon (ObjRef mode prod) [OAObj (OVar (a)), OAObj (OVar (b))]]
+          , gdCod = [mkCon (ObjRef mode prod) [OAObj (OVar (a)), OAObj (OVar (b))]]
           , gdAttrs = []
           }
   let genTgt =
@@ -364,8 +364,8 @@ testTypeMapReorder = do
           { gdName = genName
           , gdMode = mode
           , gdParams = [GP_Ty a, GP_Ty b]
-          , gdDom = map InPort [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
-          , gdCod = [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
+          , gdDom = map InPort [mkCon (ObjRef mode pair) [OAObj (OVar (a)), OAObj (OVar (b))]]
+          , gdCod = [mkCon (ObjRef mode pair) [OAObj (OVar (a)), OAObj (OVar (b))]]
           , gdAttrs = []
           }
   let prodCtor =
@@ -417,8 +417,8 @@ testTypeMapReorder = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure docTgt
   compImgs <- either (assertFailure . T.unpack) pure (compIdentityImages mode (universeObj mode))
-  img <- either (assertFailure . T.unpack) pure (genD mode [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar b)), OAObj (OVar (tmVarToObjVar a))]] [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar b)), OAObj (OVar (tmVarToObjVar a))]] genName)
-  let typeMap = M.fromList [(ObjRef mode prod, TypeTemplate [GP_Ty a, GP_Ty b] (mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar b)), OAObj (OVar (tmVarToObjVar a))]))]
+  img <- either (assertFailure . T.unpack) pure (genD mode [mkCon (ObjRef mode pair) [OAObj (OVar (b)), OAObj (OVar (a))]] [mkCon (ObjRef mode pair) [OAObj (OVar (b)), OAObj (OVar (a))]] genName)
+  let typeMap = M.fromList [(ObjRef mode prod, TypeTemplate [GP_Ty a, GP_Ty b] (mkCon (ObjRef mode pair) [OAObj (OVar (b)), OAObj (OVar (a))]))]
   let mor = Morphism
         { morName = "SwapProd"
         , morSrc = docSrc'
@@ -1167,7 +1167,7 @@ testTermTemplateSortMismatch = do
   compImgsI <- either (assertFailure . T.unpack) pure (compIdentityImages modeI' (universeObj modeI'))
   compImgsM <- either (assertFailure . T.unpack) pure (compIdentityImages modeM' (universeObj modeM'))
   let nWrong = TmVar { tmvName = "n", tmvSort = boolTy, tmvScope = 0, tmvOwnerMode = Nothing }
-  let aVar = ObjVar { ovName = "a", ovMode = modeM' }
+  let aVar = mkModeMetaVar "a" modeM'
   let mor =
         Morphism
           { morName = "SortMismatch"
@@ -1181,7 +1181,7 @@ testTermTemplateSortMismatch = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [GP_Tm nWrong, GP_Ty (objVarToTmVar aVar)]
+                      [GP_Tm nWrong, GP_Ty (aVar)]
                       (OVar aVar)
                   )
                 ]
@@ -1341,7 +1341,7 @@ testTermTypeTemplateInstantiation = do
                 [ ( vecRef
                   , TypeTemplate
                       [GP_Tm nVar, GP_Ty aVar]
-                      (mkCon vec2Ref [OATm nSucc, OAObj (OVar (tmVarToObjVar aVar))])
+                      (mkCon vec2Ref [OATm nSucc, OAObj (OVar (aVar))])
                   )
                 ]
           , morGenMap =
@@ -1434,7 +1434,7 @@ testTermTemplateKindMismatch = do
   compImgsI <- either (assertFailure . T.unpack) pure (compIdentityImages modeI' (universeObj modeI'))
   compImgsM <- either (assertFailure . T.unpack) pure (compIdentityImages modeM' (universeObj modeM'))
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
-  let aVar = ObjVar { ovName = "a", ovMode = modeM' }
+  let aVar = mkModeMetaVar "a" modeM'
   let nVarTm = tmMeta nVar
   let mor =
         Morphism
@@ -1449,7 +1449,7 @@ testTermTemplateKindMismatch = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [GP_Ty (objVarToTmVar aVar), GP_Tm nVar]
+                      [GP_Ty (aVar), GP_Tm nVar]
                       (mkCon vec2Ref [OATm nVarTm, OAObj (OVar aVar)])
                   )
                 ]

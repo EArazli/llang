@@ -15,10 +15,9 @@ module Strat.Poly.Kernel
   , pattern OMod
   , ObjRef(..)
   , ObjName(..)
-  , ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
+  , TmVar
+  , tmvName
+  , tmVarOwner
   , checkObjWellFormed
   , checkCodeWellFormed
   , normalizeObjDeep
@@ -38,10 +37,9 @@ import Strat.Poly.Doctrine (Doctrine, validateDoctrine)
 import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Proof (SearchOutcome(..))
 import Strat.Poly.Obj
-  ( ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
+  ( TmVar
+  , tmvName
+  , tmVarOwner
   , ObjArg
   , CodeArg(..)
   , CodeTerm(..)

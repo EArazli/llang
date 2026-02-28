@@ -154,7 +154,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
   let ctorTables = ttCtorTablesByOwner ttDoc
   build ttDoc ctorTables tmCtx binderSigs0 expr
   where
-    rigidTy = S.fromList (map tmVarToObjVar tyVars)
+    rigidTy = S.fromList tyVars
     rigidTm = S.fromList tmVars
 
     elabOneParamArg ttDoc ctorTables curTmCtx tyFreshMap tmFreshMap (tyAcc, tmAcc) (paramKind, rawArg) =
@@ -192,7 +192,17 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           gen <- liftEither (lookupGen doc mode (GenName name))
           tyRename <- freshTySubst doc (gdTyVars gen)
           tmRename <- freshTmSubst ttDoc curTmCtx (gdTmVars gen)
-          let renameSubst = U.mkSubst (M.mapKeys tmVarToObjVar tyRename) tmRename
+          renameSubst <-
+            liftEither
+              ( U.mkSubst
+                  ( [ (v, CAObj ty)
+                    | (v, ty) <- M.toList tyRename
+                    ]
+                      <> [ (v, CATm tm)
+                         | (v, tm) <- M.toList tmRename
+                         ]
+                  )
+              )
           dom0 <- applySubstCtxDoc ttDoc renameSubst (gdPlainDom gen)
           cod0 <- applySubstCtxDoc ttDoc renameSubst (gdCod gen)
           binderSlots0 <- mapM (applySubstBinderSig ttDoc renameSubst) [ bs | InBinder bs <- gdDom gen ]
@@ -213,10 +223,17 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                         (elabOneParamArg ttDoc ctorTables curTmCtx tyFreshMap tmFreshMap)
                         ([], [])
                         (zip paramOrder args)
-                    let argSubst =
-                          U.mkSubst
-                            (M.fromList [ (tmVarToObjVar v, ty) | (v, ty) <- reverse tyBinds ])
-                            (M.fromList (reverse tmBinds))
+                    argSubst <-
+                      liftEither
+                        ( U.mkSubst
+                            ( [ (v, CAObj ty)
+                              | (v, ty) <- reverse tyBinds
+                              ]
+                                <> [ (v, CATm tm)
+                                   | (v, tm) <- reverse tmBinds
+                                   ]
+                            )
+                        )
                     dom1 <- applySubstCtxDoc ttDoc argSubst dom0
                     cod1 <- applySubstCtxDoc ttDoc argSubst cod0
                     binderSlots1 <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
@@ -495,18 +512,15 @@ lookupGen doc mode name =
     renderMode (ModeName m) = m
     renderGen (GenName g) = g
 
-unifyBoundary :: TypeTheory -> S.Set ObjVar -> S.Set TmVar -> Context -> Context -> Diagram -> Either Text Diagram
+unifyBoundary :: TypeTheory -> S.Set TmVar -> S.Set TmVar -> Context -> Context -> Diagram -> Either Text Diagram
 unifyBoundary tt rigidTy rigidTm dom cod diag = do
   domDiag <- diagramDom diag
-  let flexTy0 = S.difference (freeObjVarsDiagram diag) rigidTy
-  let flexTm0 = S.difference (freeTmVarsDiagram diag) rigidTm
-  let flex0 = S.union (S.map objVarToTmVar flexTy0) flexTm0
+  let rigid = S.union rigidTy rigidTm
+  let flex0 = S.difference (freeVarsDiagram diag) rigid
   s1 <- U.unifyCtx tt (dTmCtx diag) flex0 domDiag dom
   diag1 <- applySubstDiagram tt s1 diag
   codDiag <- diagramCod diag1
-  let flexTy1 = S.difference (freeObjVarsDiagram diag1) rigidTy
-  let flexTm1 = S.difference (freeTmVarsDiagram diag1) rigidTm
-  let flex1 = S.union (S.map objVarToTmVar flexTy1) flexTm1
+  let flex1 = S.difference (freeVarsDiagram diag1) rigid
   s2 <- U.unifyCtx tt (dTmCtx diag1) flex1 codDiag cod
   applySubstDiagram tt s2 diag1
 
@@ -749,7 +763,7 @@ extractFreshTyVars vars subst =
   where
     lookupVar v =
       case M.lookup v subst of
-        Just (OVar v') -> Right (objVarToTmVar v')
+        Just (OVar v') -> Right v'
         _ -> Left "internal error: expected fresh type variable"
 
 extractFreshTmVars :: [TmVar] -> M.Map TmVar TermDiagram -> Either Text [TmVar]
@@ -778,7 +792,7 @@ freshTyVar doc v = do
   let name = tmvName v <> T.pack ("#" <> show n)
   let fresh = v { tmvName = name }
   ownerMode <- liftEither (ownerModeForTypeMeta doc v)
-  pure (v, Obj { objOwnerMode = ownerMode, objCode = CTMeta (tmVarToObjVar fresh) })
+  pure (v, Obj { objOwnerMode = ownerMode, objCode = CTMeta fresh })
 
 freshTmVar :: TypeTheory -> [Obj] -> TmVar -> Fresh (TmVar, TermDiagram)
 freshTmVar ttDoc tmCtx v = do

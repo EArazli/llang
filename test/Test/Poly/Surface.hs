@@ -16,7 +16,7 @@ import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, ModuleEnv(..), TermDef(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.ModeTheory (ModeName(..), ClassificationDecl(..), ModeTheory(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), pattern ObjVar, objVarToTmVar, CodeArg(..), CodeTerm(..), mkCon)
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), CodeArg(..), CodeTerm(..), mkCon, mkModeMetaVar)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..))
@@ -110,12 +110,12 @@ mkDoctrine hasDup hasDrop =
                   , cdComp = Nothing
                   }
           }
-      aVar = ObjVar "a" modeM
+      aVar = mkModeMetaVar "a" modeM
       mkGen name tyVars dom cod =
         GenDecl
           { gdName = GenName name
           , gdMode = modeM
-          , gdParams = map (GP_Ty . objVarToTmVar) tyVars
+          , gdParams = map GP_Ty tyVars
           , gdDom = map InPort dom
           , gdCod = cod
           , gdAttrs = []
@@ -164,12 +164,12 @@ mkStructEnv target = do
                   , cdComp = Nothing
                   }
           }
-      aVar = ObjVar "a" modeM
+      aVar = mkModeMetaVar "a" modeM
       mkGen name cod =
         GenDecl
           { gdName = GenName name
           , gdMode = modeM
-          , gdParams = [GP_Ty (objVarToTmVar aVar)]
+          , gdParams = [GP_Ty (aVar)]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = cod
           , gdAttrs = []

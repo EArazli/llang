@@ -193,4 +193,4 @@ compGen mode name =
         , tmvScope = 0
         , tmvOwnerMode = Just mode
         }
-    aTy = OVar (tmVarToObjVar aVar)
+    aTy = OVar aVar

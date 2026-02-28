@@ -259,8 +259,8 @@ testClassificationOrder :: Assertion
 testClassificationOrder = do
   let ty = ModeName "Ty"
   let tm = ModeName "Tm"
-  let uTy = OVar ObjVar { ovName = "U", ovMode = ty }
-  let uTy2 = OVar ObjVar { ovName = "U2", ovMode = ty }
+  let uTy = OVar (mkModeMetaVar "U" ty)
+  let uTy2 = OVar (mkModeMetaVar "U2" ty)
   mt0 <- requireEither (addMode ty (mkModes []))
   mt1 <- requireEither (addMode tm mt0)
   mt2 <- requireEither (addClassification ty ClassificationDecl { cdClassifier = ty, cdUniverse = uTy, cdComp = Nothing } mt1)
@@ -278,8 +278,8 @@ testClassifierLiftForIdentityExpr :: Assertion
 testClassifierLiftForIdentityExpr = do
   let modeTy = ModeName "Ty"
       modeTm = ModeName "Tm"
-      uTy = OVar ObjVar { ovName = "U_Ty", ovMode = modeTy }
-      uTm = OVar ObjVar { ovName = "U_Tm", ovMode = modeTy }
+      uTy = OVar (mkModeMetaVar "U_Ty" modeTy)
+      uTm = OVar (mkModeMetaVar "U_Tm" modeTy)
   mt0 <- requireEither (addMode modeTy emptyModeTheory)
   mt1 <- requireEither (addMode modeTm mt0)
   mt2 <- requireEither (addClassification modeTy ClassificationDecl { cdClassifier = modeTy, cdUniverse = uTy, cdComp = Nothing } mt1)
@@ -301,7 +301,7 @@ testClassifierLiftForComposedExpr = do
       liftF = ModName "liftF"
       liftG = ModName "liftG"
       modes = [modeA, modeB, modeC, classA, classB, classC]
-      u mode = OVar ObjVar { ovName = "U_" <> renderMode mode, ovMode = mode }
+      u mode = OVar (mkModeMetaVar ("U_" <> renderMode mode) mode)
       classify owner classifier =
         addClassification
           owner
@@ -337,7 +337,7 @@ buildLiftCoherenceTheory gLift = do
       modL = ModName "L"
       modF = ModName "f"
       modG = ModName "g"
-      uC = OVar ObjVar { ovName = "U_C", ovMode = modeC }
+      uC = OVar (mkModeMetaVar "U_C" modeC)
       addDecl name src tgt = addModDecl ModDecl { mdName = name, mdSrc = src, mdTgt = tgt }
   mt0 <- addMode modeC emptyModeTheory
   mt1 <- addMode modeA mt0
@@ -549,8 +549,8 @@ testSubstReNormalizes = do
   let ct = ModeName "CT"
   let quote = ModName "quote"
   let splice = ModName "splice"
-  let xVar = ObjVar { ovName = "x", ovMode = ct }
-  let aVar = ObjVar { ovName = "A", ovMode = rt }
+  let xVar = mkModeMetaVar "x" ct
+  let aVar = mkModeMetaVar "A" rt
   let quoteE = ModExpr { meSrc = rt, meTgt = ct, mePath = [quote] }
   let spliceE = ModExpr { meSrc = ct, meTgt = rt, mePath = [splice] }
   let tt = modeOnlyTypeTheory mt

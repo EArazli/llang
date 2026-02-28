@@ -982,7 +982,7 @@ ctorSigFromGen :: GenDecl -> Either Text [TypeParamSig]
 ctorSigFromGen gd = do
   let tyVars = gdTyVars gd
   let tmVars = gdTmVars gd
-  let tySet = S.fromList (map tmVarToObjVar tyVars)
+  let tySet = S.fromList tyVars
   mapM_ (ensureClosedTmSort tySet) tmVars
   pure
     [ case gp of
@@ -992,7 +992,7 @@ ctorSigFromGen gd = do
     ]
   where
     ensureClosedTmSort tySet tmVar =
-      let bad = S.intersection (freeObjVarsObj (tmvSort tmVar)) tySet
+      let bad = S.intersection (freeVarsObj (tmvSort tmVar)) tySet
        in if S.null bad
             then Right ()
             else
@@ -1135,26 +1135,19 @@ checkCell doc tt cell = do
       let tmCtx = dTmCtx (c2LHS cell)
       ctxL <- diagramDom (c2LHS cell)
       ctxR <- diagramDom (c2RHS cell)
-      let tyFlexDom = S.map objVarToTmVar (S.unions (map freeObjVarsObj (ctxL <> ctxR)))
-      let tmFlexDom = S.unions (map freeTmVarsObj (ctxL <> ctxR))
-      let flexDom = S.union tyFlexDom tmFlexDom
+      let flexDom = S.unions (map freeVarsObj (ctxL <> ctxR))
       _ <- unifyCtx tt tmCtx flexDom ctxL ctxR
       codL <- diagramCod (c2LHS cell)
       codR <- diagramCod (c2RHS cell)
-      let tyFlexCod = S.map objVarToTmVar (S.unions (map freeObjVarsObj (codL <> codR)))
-      let tmFlexCod = S.unions (map freeTmVarsObj (codL <> codR))
-      let flexCod = S.union tyFlexCod tmFlexCod
+      let flexCod = S.unions (map freeVarsObj (codL <> codR))
       _ <- unifyCtx tt tmCtx flexCod codL codR
-      let lhsVars = freeObjVarsDiagram (c2LHS cell)
-      let rhsVars = freeObjVarsDiagram (c2RHS cell)
-      let declaredTy = S.fromList (map tmVarToObjVar (c2TyVars cell))
-      if S.isSubsetOf rhsVars (S.union lhsVars declaredTy)
+      let lhsVars = freeVarsDiagram (c2LHS cell)
+      let rhsVars = freeVarsDiagram (c2RHS cell)
+      let declaredVars = S.fromList (c2TyVars cell <> c2TmVars cell)
+      if S.isSubsetOf rhsVars (S.union lhsVars declaredVars)
         then Right ()
         else Left "validateDoctrine: RHS introduces fresh type variables"
-      let lhsTmVars = freeTmVarsDiagram (c2LHS cell)
-      let rhsTmVars = freeTmVarsDiagram (c2RHS cell)
-      let declaredTm = S.fromList (c2TmVars cell)
-      if S.isSubsetOf rhsTmVars (S.union lhsTmVars declaredTm)
+      if S.isSubsetOf rhsVars (S.union lhsVars declaredVars)
         then Right ()
         else Left "validateDoctrine: RHS introduces fresh term variables"
       let lhsAttrVars = freeAttrVarsDiagram (c2LHS cell)
@@ -1163,11 +1156,10 @@ checkCell doc tt cell = do
         then Right ()
         else Left "Cell RHS introduces fresh attribute variables"
       let vars = S.union lhsVars rhsVars
-      if S.isSubsetOf vars declaredTy
+      if S.isSubsetOf vars declaredVars
         then Right ()
         else Left "validateDoctrine: cell uses undeclared type variables"
-      let tmVars = S.union lhsTmVars rhsTmVars
-      if S.isSubsetOf tmVars declaredTm
+      if S.isSubsetOf vars declaredVars
         then Right ()
         else Left "validateDoctrine: cell uses undeclared term variables"
       let lhsCapturedMetas = binderArgMetaVarsDiagram (c2LHS cell)
@@ -1190,9 +1182,9 @@ checkType :: Doctrine -> TypeTheory -> [TmVar] -> [TmVar] -> [Obj] -> Obj -> Eit
 checkType doc tt tyvars tmvars tmCtx ty =
   case ty of
     OVar v ->
-      if v `elem` map tmVarToObjVar tyvars
+      if v `elem` tyvars
         then
-          if M.member (tyVarOwnerMode (objVarToTmVar v)) (mtModes (dModes doc))
+          if M.member (tyVarOwnerMode v) (mtModes (dModes doc))
             then Right ()
             else Left "validateDoctrine: type variable has unknown mode"
         else Left "validateDoctrine: unknown type variable"
@@ -1224,10 +1216,17 @@ checkType doc tt tyvars tmvars tmCtx ty =
 checkTmTerm :: Doctrine -> TypeTheory -> [TmVar] -> [TmVar] -> [Obj] -> Obj -> TermDiagram -> Either Text ()
 checkTmTerm doc tt tyvars tmvars tmCtx expectedSort tm =
   do
-    mapM_ checkMetaVar (S.toList (freeTmVarsTerm tm))
+    mapM_ checkMetaVar (S.toList (freeTermMetas tm))
     _ <- termToDiagram tt tmCtx expectedSort tm
     pure ()
   where
+    freeTermMetas (TermDiagram diag) =
+      S.fromList
+        [ v
+        | edge <- IM.elems (dEdges diag)
+        , PTmMeta v <- [ePayload edge]
+        ]
+
     checkMetaVar v = do
       if v `elem` tmvars
         then checkType doc tt tyvars tmvars tmCtx (tmvSort v)
@@ -1401,8 +1400,8 @@ checkModTransformWitness doc fromMe toMe witness = do
     case gdCod witness of
       [ty] -> Right ty
       _ -> Left "mod_transform: witness generator codomain must be exactly one output port"
-  expectedDom <- mapOwnerModalType fromMe (OVar (tmVarToObjVar tyVar))
-  expectedCod <- mapOwnerModalType toMe (OVar (tmVarToObjVar tyVar))
+  expectedDom <- mapOwnerModalType fromMe (OVar tyVar)
+  expectedCod <- mapOwnerModalType toMe (OVar tyVar)
   domNorm <- normalizeObjExpr (dModes doc) domTy
   codNorm <- normalizeObjExpr (dModes doc) codTy
   expectedDomNorm <- normalizeObjExpr (dModes doc) expectedDom

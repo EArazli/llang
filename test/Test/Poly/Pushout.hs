@@ -29,12 +29,10 @@ import Strat.Poly.ModeTheory
   , mtDecls
   )
 import Strat.Poly.Obj
-  ( ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
-  , objVarToTmVar
-  , tmVarToObjVar
+  ( TmVar
+  , tmvName
+  , tmVarOwner
+  , mkModeMetaVar
   , ObjName(..)
   , ObjRef(..)
   , Obj(..)
@@ -118,8 +116,8 @@ setSingleEdgeBargs diag bargs =
       in pure diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
     _ -> Left "expected a single generator edge"
 
-tvar :: ModeName -> Text -> ObjVar
-tvar mode name = ObjVar { ovName = name, ovMode = mode }
+tvar :: ModeName -> Text -> TmVar
+tvar mode name = mkModeMetaVar name mode
 
 tcon :: ModeName -> Text -> [Obj] -> Obj
 tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
@@ -451,12 +449,12 @@ testPushoutDedupByBody = do
   length (dCells2 (poDoctrine res)) @?= 1
 
 
-mkDoctrine :: ModeName -> Text -> ObjVar -> Text -> Either String Doctrine
+mkDoctrine :: ModeName -> Text -> TmVar -> Text -> Either String Doctrine
 mkDoctrine mode name tyVar cellName = do
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
-        , gdParams = [GP_Ty (objVarToTmVar tyVar)]
+        , gdParams = [GP_Ty (tyVar)]
         , gdDom = map InPort [OVar tyVar]
         , gdCod = [OVar tyVar]
         , gdAttrs = []
@@ -469,7 +467,7 @@ mkDoctrine mode name tyVar cellName = do
         { c2Name = cellName
         , c2Class = Computational
         , c2Orient = LR
-        , c2Params = map GP_Ty [objVarToTmVar tyVar] <> map GP_Tm []
+        , c2Params = map GP_Ty [tyVar] <> map GP_Tm []
         , c2LHS = lhs
         , c2RHS = rhs
         }
@@ -487,7 +485,7 @@ mkDoctrine mode name tyVar cellName = do
     Left err -> Left (show err)
     Right () -> Right doc
 
-mkInclusionMorph :: Text -> Doctrine -> Doctrine -> ObjVar -> Morphism
+mkInclusionMorph :: Text -> Doctrine -> Doctrine -> TmVar -> Morphism
 mkInclusionMorph name src tgt tyVar =
   let mode = ModeName "M"
       diag = case genD mode [OVar tyVar] [OVar tyVar] (GenName "f") of
@@ -684,7 +682,7 @@ testPushoutTypePermutationCommutes = do
   right <- case mkTypeDoctrine mode "C" [(prod, 2)] of
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
-  let tmplF = TypeTemplate [GP_Ty (objVarToTmVar aVar), GP_Ty (objVarToTmVar bVar)] (mkCon (ObjRef mode pair) [OAObj (OVar bVar), OAObj (OVar aVar)])
+  let tmplF = TypeTemplate [GP_Ty (aVar), GP_Ty (bVar)] (mkCon (ObjRef mode pair) [OAObj (OVar bVar), OAObj (OVar aVar)])
   let morF = Morphism
         { morName = "f"
         , morSrc = base
@@ -1958,7 +1956,7 @@ testPushoutTermTypeMaps = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
-  let aVar = ObjVar { ovName = "a", ovMode = modeM }
+  let aVar = mkModeMetaVar "a" modeM
   let morF =
         Morphism
           { morName = "fIdx"
@@ -1971,7 +1969,7 @@ testPushoutTermTypeMaps = do
               M.fromList
                 [ ( vecRef
                   , TypeTemplate
-                      [GP_Tm nVar, GP_Ty (objVarToTmVar aVar)]
+                      [GP_Tm nVar, GP_Ty (aVar)]
                       (mkCon vec2Ref [OATm (tmMeta nVar), OAObj (OVar aVar)])
                   )
                 ]
@@ -2120,7 +2118,7 @@ testPushoutTypePermutationSortRename = do
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
   let nVar = TmVar { tmvName = "n", tmvSort = natLTy, tmvScope = 0, tmvOwnerMode = Nothing }
-  let aVar = ObjVar { ovName = "a", ovMode = modeM }
+  let aVar = mkModeMetaVar "a" modeM
   let morF =
         Morphism
           { morName = "fIdxSwap"
@@ -2134,7 +2132,7 @@ testPushoutTypePermutationSortRename = do
                 [ (natRef, TypeTemplate [] natLTy)
                 , ( vecRef
                   , TypeTemplate
-                      [GP_Tm nVar, GP_Ty (objVarToTmVar aVar)]
+                      [GP_Tm nVar, GP_Ty (aVar)]
                       (mkCon vec2Ref [OAObj (OVar aVar), OATm (tmMeta nVar)])
                   )
                 ]
@@ -2291,7 +2289,7 @@ testCoproductObligationRawModalityRenameElaborates = do
         GenDecl
           { gdName = GenName "k"
           , gdMode = mode
-          , gdParams = [GP_Ty (objVarToTmVar aVar)]
+          , gdParams = [GP_Ty (aVar)]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = [OVar aVar]
           , gdAttrs = []
@@ -2339,7 +2337,7 @@ testCoproductObligationRawModalityRenameElaborates = do
           , obForGen = False
           , obForGenName = Nothing
           , obGenerated = False
-          , obParams = map GP_Ty [objVarToTmVar aVar] <> map GP_Tm []
+          , obParams = map GP_Ty [aVar] <> map GP_Tm []
           , obDom = [OVar aVar, fa, ffa, ffa]
           , obCod = [OVar aVar, fa, ffa, ffa]
           , obLHSExpr = rawExpr
@@ -2427,7 +2425,7 @@ testCoproductTransformCollisionRenames = do
         GenDecl
           { gdName = GenName "w"
           , gdMode = mode
-          , gdParams = [GP_Ty (objVarToTmVar aVar)]
+          , gdParams = [GP_Ty (aVar)]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = [OVar aVar]
           , gdAttrs = []
@@ -3256,7 +3254,7 @@ mkModeEqMorph :: Text -> Doctrine -> Doctrine -> Text -> Morphism
 mkModeEqMorph name src tgt varName =
   let mode = ModeName "M"
       modF = ModName "F"
-      v = ObjVar { ovName = varName, ovMode = mode }
+      v = mkModeMetaVar varName mode
       fExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF] }
       hTy = OVar v
       modalTy = OMod fExpr (OVar v)
@@ -3285,7 +3283,7 @@ mkModeEqDoctrine name mt varName useUF = do
   let mode = ModeName "M"
   let modF = ModName "F"
   let modU = ModName "U"
-  let v = ObjVar { ovName = varName, ovMode = mode }
+  let v = mkModeMetaVar varName mode
   let fExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF] }
   let ufExpr = ModExpr { meSrc = mode, meTgt = mode, mePath = [modF, modU] }
   let hTy =
@@ -3298,14 +3296,14 @@ mkModeEqDoctrine name mt varName useUF = do
         { c2Name = "eta"
         , c2Class = Computational
         , c2Orient = LR
-        , c2Params = map GP_Ty [objVarToTmVar v] <> map GP_Tm []
+        , c2Params = map GP_Ty [v] <> map GP_Tm []
         , c2LHS = lhs
         , c2RHS = idD mode [hTy]
         }
   let genH = GenDecl
         { gdName = GenName "h"
         , gdMode = mode
-        , gdParams = [GP_Ty (objVarToTmVar v)]
+        , gdParams = [GP_Ty (v)]
         , gdDom = map InPort [OVar v]
         , gdCod = [OVar v]
         , gdAttrs = []
@@ -3313,7 +3311,7 @@ mkModeEqDoctrine name mt varName useUF = do
   let genModal = GenDecl
         { gdName = GenName "modal"
         , gdMode = mode
-        , gdParams = [GP_Ty (objVarToTmVar v)]
+        , gdParams = [GP_Ty (v)]
         , gdDom = map InPort [modalTy]
         , gdCod = [modalTy]
         , gdAttrs = []
@@ -3448,8 +3446,8 @@ mkPolyCompGen mode sortTy name =
         { gdName = name
         , gdMode = mode
         , gdParams = [GP_Ty a]
-        , gdDom = [InPort (OVar (tmVarToObjVar a))]
-        , gdCod = [OVar (tmVarToObjVar a)]
+        , gdDom = [InPort (OVar (a))]
+        , gdCod = [OVar (a)]
         , gdAttrs = []
         }
 

@@ -23,12 +23,9 @@ import Strat.Poly.Diagram
 import Strat.Poly.DiagramInterpretation (requirePortType)
 import Strat.Poly.Match (Match(..))
 import Strat.Poly.Obj
-  ( ObjVar
-    , pattern ObjVar
-    , ovName
-    , ovMode
-    , objVarToTmVar
-    , tmVarToObjVar
+  ( TmVar
+    , tmvName
+    , tmVarOwner
     , TmVar(..)
     , sameTmVarId
   , TermDiagram(..)
@@ -134,11 +131,7 @@ criticalPairsForPair tt r1 r2 = do
   let r1' = renameRule 0 (riRule r1)
   let r2' = renameRule 1 (riRule r2)
   let tyFlex = S.fromList (rrTyVars r1' <> rrTyVars r2')
-  let tmFlex =
-        S.union
-          (freeTmVarsDiagram (rrLHS r1'))
-          (freeTmVarsDiagram (rrLHS r2'))
-  let flex = S.union tyFlex tmFlex
+  let flex = S.unions [tyFlex, freeVarsDiagram (rrLHS r1'), freeVarsDiagram (rrLHS r2')]
   let attrFlex =
         S.union
           (freeAttrVarsDiagram (rrLHS r1'))
@@ -219,8 +212,8 @@ renameRule idx rule =
       renameTyNode ty =
         case ty of
           OVar v ->
-            case M.lookup (objVarToTmVar v) renamedTyVars of
-              Just v' -> OVar (tmVarToObjVar v')
+            case M.lookup v renamedTyVars of
+              Just v' -> OVar v'
               Nothing -> OVar v
           _ -> ty
       renameTmVar v =

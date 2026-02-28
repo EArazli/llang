@@ -494,16 +494,16 @@ elabPolyItem env st item =
       cod <- elabContext doc mode ruleTyVars ruleTmVars M.empty (rprCod decl)
       (lhs, binderSigs) <- withRule (elabRuleLHS env doc mode ruleTyVars ruleTmVars (rprLHS decl))
       rhs <- withRule (elabRuleRHS env doc mode ruleTyVars ruleTmVars binderSigs (rprRHS decl))
-      let rigidTy = S.fromList (map tmVarToObjVar ruleTyVars)
+      let rigidTy = S.fromList ruleTyVars
       let rigidTm = S.fromList ruleTmVars
       tt <- doctrineTypeTheory doc
       lhs' <- unifyBoundary tt rigidTy rigidTm dom cod lhs
       rhs' <- unifyBoundary tt rigidTy rigidTm dom cod rhs
-      let free = S.union (freeObjVarsDiagram lhs') (freeObjVarsDiagram rhs')
-      let allowed = S.fromList (map tmVarToObjVar ruleTyVars)
+      let free = S.union (freeVarsDiagram lhs') (freeVarsDiagram rhs')
+      let allowed = S.fromList (ruleTyVars <> ruleTmVars)
       if S.isSubsetOf free allowed
         then pure ()
-        else Left ("rule " <> rprName decl <> ": unresolved type variables")
+        else Left ("rule " <> rprName decl <> ": unresolved metavariables")
       let lhsAttrVars = freeAttrVarsDiagram lhs'
       let rhsAttrVars = freeAttrVarsDiagram rhs'
       if S.isSubsetOf rhsAttrVars lhsAttrVars

@@ -249,7 +249,7 @@ elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode exp
         [v] -> do
           ownerMode <- ownerModeForTypeMeta doc v
           if ownerMode == expectedOwnerMode
-            then Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTMeta (tmVarToObjVar v) }
+            then Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTMeta v }
             else Left "type variable mode mismatch"
         (_:_:_) -> Left ("duplicate type variable name: " <> name)
         [] -> do

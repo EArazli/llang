@@ -81,12 +81,12 @@ testCriticalPairsRespectModeEq = do
   let infoUF = RuleInfo { riLabel = "rule.uf", riRule = ruleUF, riClass = Structural }
   let infoBase = RuleInfo { riLabel = "rule.base", riRule = ruleBase, riClass = Computational }
   pairs <- require (criticalPairsForRules mt CP_StructuralVsComputational [infoUF, infoBase])
-  assertBool "expected cross-rule overlap under U.F -> id mode equation" (not (null pairs))
+  assertBool "expected cross-rule overlap under U.F -> mode equation" (not (null pairs))
 
 testCriticalPairsFreshenTyVars :: Assertion
 testCriticalPairsFreshenTyVars = do
   let mode = ModeName "M"
-  let a = ObjVar { ovName = "a", ovMode = mode }
+  let a = mkModeMetaVar "a" mode
   let baseTy = mkCon (ObjRef mode (ObjName "B")) []
   g1 <- require (genD mode [baseTy] [baseTy] (GenName "g"))
   h1 <- require (genD mode [OVar a] [OVar a] (GenName "h1"))
@@ -99,7 +99,7 @@ testCriticalPairsFreshenTyVars = do
           { rrName = "rule.ty1"
           , rrLHS = lhs1
           , rrRHS = lhs1
-          , rrTyVars = [objVarToTmVar a]
+          , rrTyVars = [a]
           , rrTmVars = []
           }
   let rule2 =
@@ -107,7 +107,7 @@ testCriticalPairsFreshenTyVars = do
           { rrName = "rule.ty2"
           , rrLHS = lhs2
           , rrRHS = lhs2
-          , rrTyVars = [objVarToTmVar a]
+          , rrTyVars = [a]
           , rrTmVars = []
           }
   let info1 = RuleInfo { riLabel = "rule.ty1", riRule = rule1, riClass = Structural }
@@ -121,7 +121,7 @@ testCriticalPairsFreshenTyVars = do
         , (aName == "rule.ty1" && bName == "rule.ty2") || (aName == "rule.ty2" && bName == "rule.ty1")
         ]
   assertBool "expected cross-rule critical pair" (not (null cross))
-  assertBool "expected overlap to keep distinct tyvars from both rules" (any (\d -> S.size (freeObjVarsDiagram d) >= 2) cross)
+  assertBool "expected overlap to keep distinct tyvars from both rules" (any (\d -> S.size (freeVarsDiagram d) >= 2) cross)
 
 testCriticalPairsFailOnSubstFailure :: Assertion
 testCriticalPairsFailOnSubstFailure = do

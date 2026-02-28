@@ -27,11 +27,9 @@ import Strat.Poly.Obj
   , ObjName(..)
   , ObjRef(..)
   , mkCon
-  , ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
-  , tmVarToObjVar
+  , TmVar
+  , tmvName
+  , tmVarOwner
   , ObjArg
   , pattern OAObj
   , pattern OATm
@@ -90,10 +88,10 @@ testDataMacroElab = do
   aVar <- case gdTyVars nilGen of
     [v] -> pure v
     _ -> assertFailure "expected Nil constructor to carry one type metavariable"
-  let listTy = mkCon listRef [OAObj (OVar (tmVarToObjVar aVar))]
+  let listTy = mkCon listRef [OAObj (OVar (aVar))]
   gdPlainDom nilGen @?= []
   gdCod nilGen @?= [listTy]
-  gdPlainDom consGen @?= [OVar (tmVarToObjVar aVar), listTy]
+  gdPlainDom consGen @?= [OVar (aVar), listTy]
   gdCod consGen @?= [listTy]
 
 testDataMacroCollision :: Assertion

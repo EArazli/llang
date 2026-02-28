@@ -1,22 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE ViewPatterns #-}
 module Strat.Poly.Syntax
   ( ObjName(..)
   , ObjRef(..)
-  , TyMeta
-  , ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
-  , ovSort
-  , ovScope
-  , ovOwnerMode
-  , objVarToTmVar
-  , tmVarToObjVar
+  , mkModeMetaVar
   , TmFunName(..)
   , TmVar(..)
+  , tmVarOwner
   , sameTmVarId
   , TermDiagram(..)
   , CodeArg(..)
@@ -57,9 +47,6 @@ data TmVar = TmVar
   , tmvScope :: Int
   , tmvOwnerMode :: Maybe ModeName
   } deriving (Show)
-
-type TyMeta = TmVar
-type ObjVar = TmVar
 
 newtype PortId = PortId Int deriving (Eq, Ord, Show)
 newtype EdgeId = EdgeId Int deriving (Eq, Ord, Show)
@@ -109,7 +96,7 @@ data CodeArg
   deriving (Eq, Ord, Show)
 
 data CodeTerm
-  = CTMeta TyMeta
+  = CTMeta TmVar
   | CTCon ObjRef [CodeArg]
   | CTLift ModExpr CodeTerm
   deriving (Eq, Ord, Show)
@@ -127,15 +114,24 @@ metaSortObj mode =
     , objCode = CTCon (ObjRef mode (ObjName "__obj_meta_sort")) []
     }
 
+mkModeMetaVar :: Text -> ModeName -> TmVar
+mkModeMetaVar name mode =
+  TmVar
+    { tmvName = name
+    , tmvSort = metaSortObj mode
+    , tmvScope = 0
+    , tmvOwnerMode = Just mode
+    }
+
 tmVarOwner :: TmVar -> ModeName
 tmVarOwner TmVar { tmvOwnerMode = ownerM, tmvSort = sortTy } =
   case ownerM of
     Just owner -> owner
     Nothing -> objOwnerMode sortTy
 
-tmVarIdKey :: TmVar -> (Text, Int)
-tmVarIdKey TmVar { tmvName = name, tmvScope = scope } =
-  (name, scope)
+tmVarIdKey :: TmVar -> (ModeName, Text, Int)
+tmVarIdKey v =
+  (tmVarOwner v, tmvName v, tmvScope v)
 
 instance Eq TmVar where
   a == b = tmVarIdKey a == tmVarIdKey b
@@ -145,47 +141,6 @@ instance Ord TmVar where
 
 sameTmVarId :: TmVar -> TmVar -> Bool
 sameTmVarId v w = tmVarIdKey v == tmVarIdKey w
-
-objVarToTmVar :: ObjVar -> TmVar
-objVarToTmVar v =
-  v { tmvOwnerMode = Just (ovOwnerMode v) }
-
-tmVarToObjVar :: TmVar -> ObjVar
-tmVarToObjVar v =
-  v { tmvOwnerMode = Just (tmVarOwner v) }
-
-ovSort :: ObjVar -> Obj
-ovSort TmVar { tmvSort = sortTy } = sortTy
-
-ovScope :: ObjVar -> Int
-ovScope TmVar { tmvScope = scope } = scope
-
-ovOwnerMode :: ObjVar -> ModeName
-ovOwnerMode TmVar { tmvOwnerMode = Just owner } = owner
-ovOwnerMode TmVar { tmvName = name } =
-  error
-    ( "ObjVar invariant violated: missing owner mode for type metavariable "
-        <> show name
-    )
-
-objVarOwner :: ObjVar -> ModeName
-objVarOwner = ovOwnerMode
-
-objVarView :: ObjVar -> Maybe (Text, ModeName)
-objVarView v@TmVar { tmvName = name } = Just (name, objVarOwner v)
-
-pattern ObjVar :: Text -> ModeName -> ObjVar
-pattern ObjVar {ovName, ovMode} <- (objVarView -> Just (ovName, ovMode))
-  where
-    ObjVar ovName ovMode =
-      TmVar
-        { tmvName = ovName
-        , tmvSort = metaSortObj ovMode
-        , tmvScope = 0
-        , tmvOwnerMode = Just ovMode
-        }
-
-{-# COMPLETE ObjVar #-}
 
 type Context = [Obj]
 

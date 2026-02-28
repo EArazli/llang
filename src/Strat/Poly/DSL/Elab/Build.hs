@@ -48,8 +48,6 @@ import Strat.Poly.Obj
   , ObjName(..)
   , TmVar(..)
   , TermDiagram(..)
-  , objVarToTmVar
-  , tmVarToObjVar
   )
 import Strat.Poly.ObjClassifier (modeUniverseObj)
 import Strat.Poly.Graph (BinderArg(..), Edge(..), EdgePayload(..))
@@ -152,7 +150,7 @@ materializeResolvedUniverses ops st doc =
             Nothing -> v1
 
     rewriteTyVar v =
-      tmVarToObjVar (rewriteTmVar (objVarToTmVar v))
+      rewriteTmVar v
 
     rewriteInputShape shape =
       case shape of

@@ -938,7 +938,7 @@ requireTypeRenameMap mor = do
     argParamIndex params arg =
       case arg of
         OAObj (OVar v) ->
-          findParamIndex params (\p -> case p of GP_Ty v' -> tmVarToObjVar v' == v; _ -> False)
+          findParamIndex params (\p -> case p of GP_Ty v' -> v' == v; _ -> False)
         OATm tm ->
           case termMetaOnly tm of
             Just v ->
@@ -2362,15 +2362,12 @@ renameObjExpr modeRen modRen ren permRen ty = do
     renameCode code =
       case code of
         CTMeta v -> do
-          sort' <- renameObjExpr modeRen modRen ren permRen (ovSort v)
-          let vTm = objVarToTmVar v
-              v' =
-                tmVarToObjVar
-                  ( vTm
-                      { tmvSort = sort'
-                      , tmvOwnerMode = Just (renameModeName modeRen (ovOwnerMode v))
-                      }
-                  )
+          sort' <- renameObjExpr modeRen modRen ren permRen (tmvSort v)
+          let v' =
+                v
+                  { tmvSort = sort'
+                  , tmvOwnerMode = Just (renameModeName modeRen (tmVarOwner v))
+                  }
           Right (CTMeta v')
         CTLift me inner -> do
           inner' <- renameCode inner
@@ -2664,7 +2661,7 @@ renameTypeAlpha tyMap tmMap = goObj
     goCode code =
       case code of
         CTMeta v ->
-          CTMeta (tmVarToObjVar (renameTyVarAlpha tyMap (objVarToTmVar v)))
+          CTMeta (renameTyVarAlpha tyMap v)
         CTCon ref args ->
           CTCon ref (map goArg args)
         CTLift me inner ->
@@ -2892,7 +2889,7 @@ buildTypeMap srcCtorTables srcDoc tgtDoc modeRen modRen renames permRen = do
     toArg tt (srcParam, param) =
       case (srcParam, param) of
         (TPS_Ty ownerMode, GP_Ty v) ->
-          Right (OAObj Obj { objOwnerMode = renameModeName modeRen ownerMode, objCode = CTMeta (tmVarToObjVar v) })
+          Right (OAObj Obj { objOwnerMode = renameModeName modeRen ownerMode, objCode = CTMeta v })
         (TPS_Tm _, GP_Ty _) ->
           Left "poly pushout: internal kind mismatch for type template argument"
         (_, GP_Tm v) -> do
@@ -3039,7 +3036,7 @@ composeMorphisms name first second = do
         sourceParamArg ttSrc (srcParam, param) =
           case (srcParam, param) of
             (TPS_Ty ownerMode, GP_Ty v) ->
-              Right (OAObj Obj { objOwnerMode = ownerMode, objCode = CTMeta (tmVarToObjVar v) })
+              Right (OAObj Obj { objOwnerMode = ownerMode, objCode = CTMeta v })
             (TPS_Tm _, GP_Ty _) ->
               Left "poly pushout: internal kind mismatch for composed type argument"
             (_, GP_Tm v) -> do
@@ -3049,7 +3046,7 @@ composeMorphisms name first second = do
         mapComposedParam firstTgtCtorTables secondTgtCtorTables param =
           case param of
             GP_Ty v -> do
-              let ownerSrc = maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v)
+              let ownerSrc = tmVarOwner v
               ownerMid <- applyMorphismMode first ownerSrc
               ownerTgt <- applyMorphismMode second ownerMid
               sortMid <- applyMorphismTyWithTables firstTgtCtorTables first (tmvSort v)

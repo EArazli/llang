@@ -16,8 +16,7 @@ module Strat.Poly.Diagram
   , applySubstDiagram
   , applyAttrSubstDiagram
   , renameAttrVarsDiagram
-  , freeObjVarsDiagram
-  , freeTmVarsDiagram
+  , freeVarsDiagram
   , freeAttrVarsDiagram
   , binderArgMetaVarsDiagram
   , spliceMetaVarsDiagram
@@ -31,7 +30,7 @@ import qualified Data.Set as S
 import Data.Functor.Identity (runIdentity)
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.Obj (Context, Obj, ObjVar, TmVar(..), freeObjVarsObj, freeTmVarsObj, objVarToTmVar, )
+import Strat.Poly.Obj (Context, Obj, TmVar(..), freeVarsObj)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
 import Strat.Poly.UnifyObj
@@ -92,9 +91,7 @@ compD tt g f
         else Left "diagram composition term-context mismatch"
       domG <- diagramDom g
       codF <- diagramCod f
-      let tyFlex = S.map objVarToTmVar (S.unions (map freeObjVarsObj (codF <> domG)))
-      let tmFlex = S.unions (map freeTmVarsObj (codF <> domG))
-      let flex = S.union tyFlex tmFlex
+      let flex = S.unions (map freeVarsObj (codF <> domG))
       subst <-
         case unifyCtx tt tmCtxF flex codF domG of
           Left err -> Left ("diagram composition boundary mismatch: " <> err)
@@ -154,16 +151,6 @@ diagramCod diag = mapM (lookupPort "diagramCod") (dOut diag)
 applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
 applySubstDiagram = U.applySubstDiagram
 
-freeObjVarsDiagram :: Diagram -> S.Set ObjVar
-freeObjVarsDiagram =
-  foldDiagram onDiag (\_ -> mempty) (\_ -> mempty)
-  where
-    onDiag d =
-      S.unions
-        [ S.unions (map freeObjVarsObj (IM.elems (dPortObj d)))
-        , S.unions (map freeObjVarsObj (dTmCtx d))
-        ]
-
 freeAttrVarsDiagram :: Diagram -> S.Set AttrVar
 freeAttrVarsDiagram =
   foldDiagram (\_ -> mempty) onPayload (\_ -> mempty)
@@ -173,14 +160,14 @@ freeAttrVarsDiagram =
         PGen _ attrs _ -> freeAttrVarsMap attrs
         _ -> mempty
 
-freeTmVarsDiagram :: Diagram -> S.Set TmVar
-freeTmVarsDiagram =
+freeVarsDiagram :: Diagram -> S.Set TmVar
+freeVarsDiagram =
   foldDiagram onDiag onPayload (\_ -> mempty)
   where
     onDiag d =
       S.unions
-        [ S.unions (map freeTmVarsObj (IM.elems (dPortObj d)))
-        , S.unions (map freeTmVarsObj (dTmCtx d))
+        [ S.unions (map freeVarsObj (IM.elems (dPortObj d)))
+        , S.unions (map freeVarsObj (dTmCtx d))
         ]
     onPayload payload =
       case payload of

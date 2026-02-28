@@ -301,17 +301,15 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       let codSrc = gdCod gen
       domTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor0) domSrc
       codTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor0) codSrc
-      let rigidTy = S.fromList (map tmVarToObjVar tyVarsTgt)
+      let rigidTy = S.fromList tyVarsTgt
       let rigidTm = S.fromList tmVarsTgt
       diag <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt diag0
-      let freeTy = freeObjVarsDiagram diag
-      let allowedTy = S.fromList (map tmVarToObjVar tyVarsTgt)
-      if S.isSubsetOf freeTy allowedTy
+      let freeVars = freeVarsDiagram diag
+      let allowedVars = S.fromList (tyVarsTgt <> tmVarsTgt)
+      if S.isSubsetOf freeVars allowedVars
         then Right ()
         else Left "morphism: generator mapping uses undeclared type variables"
-      let freeTm = freeTmVarsDiagram diag
-      let allowedTm = S.fromList tmVarsTgt
-      if S.isSubsetOf freeTm allowedTm
+      if S.isSubsetOf freeVars allowedVars
         then Right ()
         else Left "morphism: generator mapping uses undeclared term variables"
       let usedMetas = binderMetaVarsDiagram diag

@@ -103,7 +103,7 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
       rhs0 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obRHSExpr obl)
       domTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph) (obDom obl)
       codTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph) (obCod obl)
-      let rigidTy = S.fromList (map tmVarToObjVar tyVarsTgt)
+      let rigidTy = S.fromList tyVarsTgt
       let rigidTm = S.fromList tmVarsTgt
       lhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt lhs0
       rhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt rhs0
@@ -133,7 +133,7 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
       rhs0 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obRHSExpr obl)
       dom <- diagramDom genDiag
       cod <- diagramCod genDiag
-      let rigidTy = S.fromList (map tmVarToObjVar (gdTyVars gen))
+      let rigidTy = S.fromList (gdTyVars gen)
       let rigidTm = S.fromList (gdTmVars gen)
       lhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod lhs0
       rhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod rhs0
@@ -730,7 +730,7 @@ evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc _tgtDoc morph modeSrc mo
     [] -> Right (idDTm modeTgt (dTmCtx genDiag) [])
     (d0:rest) -> foldM tensorD d0 rest
   where
-    rigidTy = S.fromList (map tmVarToObjVar tyVars)
+    rigidTy = S.fromList tyVars
     rigidTm = S.fromList tmVars
     sideLabel =
       case liftSide of
@@ -748,9 +748,7 @@ evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc _tgtDoc morph modeSrc mo
       if length dom0 /= 1
         then Left (sideLabel <> ": operator must have exactly one input ([x] -> [...])")
         else do
-          let flexTy = S.difference (freeObjVarsDiagram opTgt) rigidTy
-          let flexTm = S.difference (freeTmVarsDiagram opTgt) rigidTm
-          let flex = S.union (S.map objVarToTmVar flexTy) flexTm
+          let flex = S.difference (freeVarsDiagram opTgt) (S.union rigidTy rigidTm)
           sDom <- U.unifyCtx ttDoc (dTmCtx opTgt) flex dom0 [argTy]
           applySubstDiagram ttDoc sDom opTgt
 

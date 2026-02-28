@@ -211,21 +211,21 @@ freshenRuleTyVars tt cell = do
     else do
       let used0 =
             S.fromList
-              [ (ovMode v, ovName v)
-              | v <- S.toList (S.union (freeObjVarsDiagram (c2LHS cell)) (freeObjVarsDiagram (c2RHS cell)))
+              [ (tmVarOwner v, tmvName v)
+              | v <- S.toList (S.union (freeVarsDiagram (c2LHS cell)) (freeVarsDiagram (c2RHS cell)))
               ]
       let (substMap, _used) = foldl freshOne (M.empty, used0) vars
-      let subst = mkSubst substMap M.empty
+      subst <- mkSubst [ (v, CAObj t) | (v, t) <- M.toList substMap ]
       lhs <- applySubstDiagram tt subst (c2LHS cell)
       rhs <- applySubstDiagram tt subst (c2RHS cell)
       pure cell { c2LHS = lhs, c2RHS = rhs }
   where
     freshOne (acc, used) v =
-          let name' = pickFresh used (tyVarMode v) ("actchk_" <> tmvName v) 0
-              v' = v { tmvName = name' }
-              used' = S.insert (tyVarMode v', tmvName v') used
-              acc' = M.insert (tmVarToObjVar v) (OVar (tmVarToObjVar v')) acc
-           in (acc', used')
+      let name' = pickFresh used (tyVarMode v) ("actchk_" <> tmvName v) 0
+          v' = v { tmvName = name' }
+          used' = S.insert (tyVarMode v', tmvName v') used
+          acc' = M.insert v (OVar v') acc
+       in (acc', used')
 
     tyVarMode v =
       case tmvOwnerMode v of
@@ -357,20 +357,20 @@ applyAction doc mName diagSrc = do
           pure sig { bsTmCtx = tmCtx, bsDom = dom, bsCod = cod }
 
     freshenImageTyVars typeTheory host image = do
-      let vars = map objVarToTmVar (S.toList (freeObjVarsDiagram image))
+      let vars = S.toList (freeVarsDiagram image)
       if null vars
         then Right image
         else do
-          let used0 = S.fromList [ (ovMode v, ovName v) | v <- S.toList (freeObjVarsDiagram host) ]
+          let used0 = S.fromList [ (tmVarOwner v, tmvName v) | v <- S.toList (freeVarsDiagram host) ]
           let (_, pairsRev) = foldl freshOne (used0, []) vars
-          let subst = mkSubst (M.fromList (reverse pairsRev)) M.empty
+          subst <- mkSubst [ (v, CAObj t) | (v, t) <- reverse pairsRev ]
           applySubstDiagram typeTheory subst image
       where
         freshOne (used, acc) v =
           let name' = pickFresh used (tyVarMode v) (tmvName v <> "_img") 0
               v' = v { tmvName = name' }
               used' = S.insert (tyVarMode v', tmvName v') used
-           in (used', (tmVarToObjVar v, OVar (tmVarToObjVar v')) : acc)
+           in (used', (v, OVar v') : acc)
 
         tyVarMode v =
           case tmvOwnerMode v of
@@ -431,9 +431,7 @@ instantiateImage tt diag edgeKey img = do
   codEdge <- mapM (requirePortType "map" diag) (eOuts edge)
   domImg <- diagramDom img
   codImg <- diagramCod img
-  let flexTy = S.map objVarToTmVar (freeObjVarsDiagram img)
-  let flexTm = freeTmVarsDiagram img
-  let flex = S.union flexTy flexTm
+  let flex = freeVarsDiagram img
   sDom <- unifyCtxDiagram tt diag flex domImg domEdge
   codImg1 <- applySubstCtx tt sDom codImg
   codEdge1 <- applySubstCtx tt sDom codEdge

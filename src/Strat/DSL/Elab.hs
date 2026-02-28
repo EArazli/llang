@@ -40,14 +40,10 @@ import Strat.Poly.Obj
   , pattern OATm
   , ObjRef(..)
   , ObjName(..)
-  , ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
-  , ovSort
-  , ovOwnerMode
-  , objVarToTmVar
-  , tmVarToObjVar
+  , TmVar
+  , tmvName
+  , tmVarOwner
+  , tmvSort
   , TmVar(..)
   , TermDiagram(..)
   )
@@ -627,7 +623,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     paramArg tt (srcParam, param) =
       case (srcParam, param) of
         (TPS_Ty _, GP_Ty v) ->
-          Right (OAObj Obj { objOwnerMode = maybe (objOwnerMode (tmvSort v)) id (tmvOwnerMode v), objCode = CTMeta (tmVarToObjVar v) })
+          Right (OAObj Obj { objOwnerMode = tmVarOwner v, objCode = CTMeta v })
         (TPS_Tm _, GP_Ty _) ->
           Left "apply: internal kind mismatch for type template argument"
         (_, GP_Tm v) -> do
@@ -1097,15 +1093,12 @@ renameObjExpr modeRen modRen typeRen ty = do
     renCode code =
       case code of
         CTMeta tv -> do
-          sort' <- renameObjExpr modeRen modRen typeRen (ovSort tv)
-          let tvTm = objVarToTmVar tv
-              tv' =
-                tmVarToObjVar
-                  ( tvTm
-                      { tmvSort = sort'
-                      , tmvOwnerMode = Just (renMode (ovOwnerMode tv))
-                      }
-                  )
+          sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tv)
+          let tv' =
+                tv
+                  { tmvSort = sort'
+                  , tmvOwnerMode = Just (renMode (tmVarOwner tv))
+                  }
           Right (CTMeta tv')
         CTLift me inner -> do
           inner' <- renCode inner

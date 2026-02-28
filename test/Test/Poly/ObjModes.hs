@@ -16,13 +16,13 @@ import Strat.Poly.Obj
   ( Obj(..)
   , CodeTerm(..)
   , mkCon
+  , mkModeMetaVar
   , ObjName(..)
   , ObjRef(..)
   , TmVar(..)
-  , ObjVar
-  , pattern ObjVar
-  , ovName
-  , ovMode
+  , TmVar
+  , tmvName
+  , tmVarOwner
   , ObjArg
   , pattern OAObj
   , pattern OATm
@@ -63,8 +63,8 @@ modeC = ModeName "C"
 modeV :: ModeName
 modeV = ModeName "V"
 
-tvar :: ModeName -> Text -> ObjVar
-tvar mode name = ObjVar { ovName = name, ovMode = mode }
+tvar :: ModeName -> Text -> TmVar
+tvar mode name = mkModeMetaVar name mode
 
 tcon :: ModeName -> Text -> [Obj] -> Obj
 tcon mode name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
