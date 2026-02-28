@@ -5,3 +5,18 @@
 *~
 llang.cabal
 car
+
+# Ignore markdown by default; allow only currently tracked markdown files.
+*.md
+!AGENTS.md
+!CHANGELOG.md
+!README.md
+!RESTRICTIONS.md
+!SPEC.md
+!VISION.md
+!docs/CANONICAL_COVERAGE.md
+!docs/MIGRATION.md
+!examples/README.md
+!examples/run/README.md
+!examples/run/codegen/minifun/README.md
+!examples/run/xfail/README.md
