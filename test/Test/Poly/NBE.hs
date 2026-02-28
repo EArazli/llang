@@ -388,8 +388,6 @@ mkEligibilityDoctrine includeBad = do
         GenDecl
           { gdName = GenName name
           , gdMode = modeTy
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [cod]
@@ -405,8 +403,6 @@ mkEligibilityDoctrine includeBad = do
         GenDecl
           { gdName = GenName "Wrap"
           , gdMode = modeTy
-          , gdTyVars = []
-          , gdTmVars = [nTmVar]
           , gdParams = [GP_Tm nTmVar]
           , gdDom = []
           , gdCod = [uTy]
@@ -417,8 +413,6 @@ mkEligibilityDoctrine includeBad = do
         GenDecl
           { gdName = GenName "Arr"
           , gdMode = modeTy
-          , gdTyVars = [aTyVar, bTyVar]
-          , gdTmVars = []
           , gdParams = [GP_Ty aTyVar, GP_Ty bTyVar]
           , gdDom = []
           , gdCod = [uTy]
@@ -430,8 +424,6 @@ mkEligibilityDoctrine includeBad = do
         GenDecl
           { gdName = GenName "lam"
           , gdMode = modeTy
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InBinder lamBody]
           , gdCod = [arrNatNat]
@@ -442,8 +434,6 @@ mkEligibilityDoctrine includeBad = do
         GenDecl
           { gdName = GenName "app"
           , gdMode = modeTy
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort arrNatNat, InPort natTy]
           , gdCod = [natTy]
@@ -454,8 +444,6 @@ mkEligibilityDoctrine includeBad = do
         GenDecl
           { gdName = GenName "Bad"
           , gdMode = modeTy
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [mkCon wrapRef [CATm badTm]]
@@ -505,8 +493,6 @@ mkMissingArrDoctrine = do
         GenDecl
           { gdName = GenName "U_Ty"
           , gdMode = modeTy
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [uTy]
@@ -516,8 +502,6 @@ mkMissingArrDoctrine = do
         GenDecl
           { gdName = GenName "Nat"
           , gdMode = modeTy
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [uTy]
@@ -528,8 +512,6 @@ mkMissingArrDoctrine = do
         GenDecl
           { gdName = GenName "lam"
           , gdMode = modeTy
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InBinder lamBody]
           , gdCod = [natTy]
@@ -539,8 +521,6 @@ mkMissingArrDoctrine = do
         GenDecl
           { gdName = GenName "app"
           , gdMode = modeTy
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort natTy, InPort natTy]
           , gdCod = [natTy]

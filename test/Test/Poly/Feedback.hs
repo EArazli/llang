@@ -77,8 +77,6 @@ genStep =
   GenDecl
     { gdName = GenName "step"
     , gdMode = modeM
-    , gdTyVars = []
-    , gdTmVars = []
     , gdParams = []
     , gdDom = [InPort tyT]
     , gdCod = [tyT, tyT]

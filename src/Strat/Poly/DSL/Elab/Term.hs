@@ -21,7 +21,6 @@ module Strat.Poly.DSL.Elab.Term
   , elabInputShapes
   ) where
 
-import Control.Monad (foldM)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import Strat.Poly.DSL.AST
@@ -135,11 +134,11 @@ elabTmDeclVar doc defaultMode tyVars decl = do
       Left _ -> elabObjExprInferOwner doc tyVars [] M.empty (rtvdSort decl)
   pure TmVar { tmvName = rtvdName decl, tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
 
-elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text ([TmVar], [TmVar], [GenParam])
-elabParamDecls doc defaultMode params = go 0 [] [] [] params
+elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text [GenParam]
+elabParamDecls doc defaultMode params = go [] [] [] params
   where
-    go _ tyAcc tmAcc paramAcc [] = Right (reverse tyAcc, reverse tmAcc, reverse paramAcc)
-    go i tyAcc tmAcc paramAcc (p:rest) =
+    go _ _ paramAcc [] = Right (reverse paramAcc)
+    go tyAcc tmAcc paramAcc (p:rest) =
       case p of
         RPDType tvDecl -> do
           ownerMode <- resolveTyVarMode doc defaultMode tvDecl
@@ -147,14 +146,14 @@ elabParamDecls doc defaultMode params = go 0 [] [] [] params
           let name = tmvName tv
           if name `elem` map tmvName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
-            else go (i + 1) (tv:tyAcc) tmAcc (GP_Ty tv : paramAcc) rest
+            else go (tv:tyAcc) tmAcc (GP_Ty tv : paramAcc) rest
         RPDTerm tmDecl -> do
           let name = rtvdName tmDecl
           if name `elem` map tmvName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
             else do
               tmVar <- elabTmDeclVar doc defaultMode tyAcc tmDecl
-              go (i + 1) tyAcc (tmVar:tmAcc) (GP_Tm tmVar : paramAcc) rest
+              go tyAcc (tmVar:tmAcc) (GP_Tm tmVar : paramAcc) rest
 
 buildTypeTemplateParams
   :: Doctrine

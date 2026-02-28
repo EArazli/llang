@@ -75,8 +75,6 @@ ctorDecl mode ctorName sig =
   GenDecl
     { gdName = GenName (objNameText ctorName)
     , gdMode = mode
-    , gdTyVars = tyVars
-    , gdTmVars = tmVars
     , gdParams = params
     , gdDom = []
     , gdCod = [universeObj mode]
@@ -139,8 +137,6 @@ compSupportGen mode name =
   GenDecl
     { gdName = name
     , gdMode = mode
-    , gdTyVars = []
-    , gdTmVars = []
     , gdParams = []
     , gdDom = [InPort (universeObj mode)]
     , gdCod = [universeObj mode]

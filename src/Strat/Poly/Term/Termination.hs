@@ -9,7 +9,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.List as L
-import Strat.Poly.Obj (TmFunName(..))
+import Strat.Poly.Syntax (TmFunName(..))
 import Strat.Poly.Term.AST (TermExpr(..))
 import Strat.Poly.Term.RewriteSystem (TRS(..), TRule(..))
 

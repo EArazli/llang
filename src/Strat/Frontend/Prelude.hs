@@ -152,8 +152,6 @@ ctorGen mode name =
   GenDecl
     { gdName = GenName name
     , gdMode = mode
-    , gdTyVars = []
-    , gdTmVars = []
     , gdParams = []
     , gdDom = []
     , gdCod = [universeObj mode]
@@ -165,8 +163,6 @@ simpleGen name dom cod attrs =
   GenDecl
     { gdName = GenName name
     , gdMode = modeFromCtx cod
-    , gdTyVars = []
-    , gdTmVars = []
     , gdParams = []
     , gdDom = map InPort dom
     , gdCod = cod
@@ -184,8 +180,6 @@ compGen mode name =
   GenDecl
     { gdName = name
     , gdMode = mode
-    , gdTyVars = [aVar]
-    , gdTmVars = []
     , gdParams = [GP_Ty aVar]
     , gdDom = [InPort aTy]
     , gdCod = [aTy]

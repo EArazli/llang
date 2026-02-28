@@ -148,8 +148,6 @@ compSupportGens mode =
       GenDecl
         { gdName = name
         , gdMode = m
-        , gdTyVars = []
-        , gdTmVars = []
         , gdParams = []
         , gdDom = [InPort uTy]
         , gdCod = [uTy]
@@ -164,8 +162,6 @@ ctorDecl mode ctorName sig =
   GenDecl
     { gdName = GenName (objNameText ctorName)
     , gdMode = mode
-    , gdTyVars = tyVars
-    , gdTmVars = tmVars
     , gdParams = params
     , gdDom = []
     , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]

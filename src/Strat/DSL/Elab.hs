@@ -1047,9 +1047,7 @@ renameGenDecl
   -> Either Text GenDecl
 renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
   let mode0 = gdMode gen
-  tyVars' <- mapM renTyVar (gdTyVars gen)
-  tmVars' <- mapM renTmVar (gdTmVars gen)
-  params' <- rebuildParams (gdParams gen) tyVars' tmVars'
+  params' <- mapM renParam (gdParams gen)
   dom' <- mapM renInput (gdDom gen)
   cod' <- mapM (renameObjExpr modeRen modRen typeRen) (gdCod gen)
   let attrs' = [ (field, M.findWithDefault sortName sortName sortRen) | (field, sortName) <- gdAttrs gen ]
@@ -1058,37 +1056,22 @@ renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
     gen
       { gdName = genName'
       , gdMode = M.findWithDefault mode0 mode0 modeRen
-      , gdTyVars = tyVars'
-      , gdTmVars = tmVars'
       , gdParams = params'
       , gdDom = dom'
       , gdCod = cod'
       , gdAttrs = attrs'
       }
   where
-    rebuildParams [] tyVars tmVars = Right (map GP_Ty tyVars <> map GP_Tm tmVars)
-    rebuildParams params tyVars tmVars = mapM rebuildOne params
-      where
-        rebuildOne gp =
-          case gp of
-            GP_Ty v ->
-              GP_Ty <$> findVar "type" v tyVars
-            GP_Tm v ->
-              GP_Tm <$> findVar "term" v tmVars
-
-    findVar label needle hay =
-      case [ v | v <- hay, sameVarId v needle ] of
-        [v] -> Right v
-        _ -> Left ("namespace: failed to rebuild " <> label <> " parameter metadata")
-
-    sameVarId a b = tmvName a == tmvName b
-
     renTyVar tv = do
       sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tv)
       Right tv { tmvSort = sort', tmvOwnerMode = renVarOwner (tmvOwnerMode tv) }
     renTmVar tm = do
       sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tm)
       Right tm { tmvSort = sort', tmvOwnerMode = renVarOwner (tmvOwnerMode tm) }
+    renParam gp =
+      case gp of
+        GP_Ty v -> GP_Ty <$> renTyVar v
+        GP_Tm v -> GP_Tm <$> renTmVar v
     renVarOwner owner = fmap (\m -> M.findWithDefault m m modeRen) owner
     renInput shape =
       case shape of
@@ -1279,8 +1262,6 @@ buildFoliatedDoctrine name baseDoc mode = do
         , GenDecl
             { gdName = GenName gName
             , gdMode = mode
-            , gdTyVars = []
-            , gdTmVars = []
             , gdParams = []
             , gdDom = map InPort dom
             , gdCod = cod

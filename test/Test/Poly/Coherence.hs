@@ -50,8 +50,6 @@ mkGenDecl name =
   GenDecl
     { gdName = GenName name
     , gdMode = modeName
-    , gdTyVars = []
-    , gdTmVars = []
     , gdParams = []
     , gdDom = map InPort [aTy]
     , gdCod = [aTy]
@@ -76,8 +74,6 @@ mkDoctrine cells =
         [ GenDecl
             { gdName = GenName "A"
             , gdMode = modeName
-            , gdTyVars = []
-            , gdTmVars = []
             , gdParams = []
             , gdDom = []
             , gdCod = [universeObj modeName]
@@ -86,8 +82,6 @@ mkDoctrine cells =
         , GenDecl
             { gdName = GenName "comp_ctx_ext"
             , gdMode = modeName
-            , gdTyVars = []
-            , gdTmVars = []
             , gdParams = []
             , gdDom = [InPort (universeObj modeName)]
             , gdCod = [universeObj modeName]
@@ -96,8 +90,6 @@ mkDoctrine cells =
         , GenDecl
             { gdName = GenName "comp_var"
             , gdMode = modeName
-            , gdTyVars = []
-            , gdTmVars = []
             , gdParams = []
             , gdDom = [InPort (universeObj modeName)]
             , gdCod = [universeObj modeName]
@@ -106,8 +98,6 @@ mkDoctrine cells =
         , GenDecl
             { gdName = GenName "comp_reindex"
             , gdMode = modeName
-            , gdTyVars = []
-            , gdTmVars = []
             , gdParams = []
             , gdDom = [InPort (universeObj modeName)]
             , gdCod = [universeObj modeName]

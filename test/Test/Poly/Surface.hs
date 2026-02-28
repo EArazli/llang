@@ -18,7 +18,7 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.ModeTheory (ModeName(..), ClassificationDecl(..), ModeTheory(..))
 import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), pattern ObjVar, objVarToTmVar, CodeArg(..), CodeTerm(..), mkCon)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), InputShape(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..))
 import Strat.Poly.Surface.Parse (parseSurfaceSpec)
 import Strat.Poly.Surface (PolySurfaceDef, elabPolySurfaceDecl)
@@ -115,9 +115,7 @@ mkDoctrine hasDup hasDrop =
         GenDecl
           { gdName = GenName name
           , gdMode = modeM
-          , gdTyVars = map objVarToTmVar tyVars
-          , gdTmVars = []
-          , gdParams = []
+          , gdParams = map (GP_Ty . objVarToTmVar) tyVars
           , gdDom = map InPort dom
           , gdCod = cod
           , gdAttrs = []
@@ -171,9 +169,7 @@ mkStructEnv target = do
         GenDecl
           { gdName = GenName name
           , gdMode = modeM
-          , gdTyVars = [objVarToTmVar aVar]
-          , gdTmVars = []
-          , gdParams = []
+          , gdParams = [GP_Ty (objVarToTmVar aVar)]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = cod
           , gdAttrs = []

@@ -183,9 +183,7 @@ materializeResolvedUniverses ops st doc =
 
     rewriteGen gd =
       gd
-        { gdTyVars = map rewriteTmVar (gdTyVars gd)
-        , gdTmVars = map rewriteTmVar (gdTmVars gd)
-        , gdParams = map rewriteGenParam (gdParams gd)
+        { gdParams = map rewriteGenParam (gdParams gd)
         , gdDom = map rewriteInputShape (gdDom gd)
         , gdCod = map rewriteObj (gdCod gd)
         }

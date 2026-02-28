@@ -123,8 +123,6 @@ genA =
   GenDecl
     { gdName = GenName "a"
     , gdMode = modeM
-    , gdTyVars = []
-    , gdTmVars = []
     , gdParams = []
     , gdDom = []
     , gdCod = [tyT]
@@ -137,8 +135,6 @@ genB =
   GenDecl
     { gdName = GenName "b"
     , gdMode = modeM
-    , gdTyVars = []
-    , gdTmVars = []
     , gdParams = []
     , gdDom = [InPort tyT]
     , gdCod = [tyT]
@@ -151,8 +147,6 @@ genC =
   GenDecl
     { gdName = GenName "c"
     , gdMode = modeM
-    , gdTyVars = []
-    , gdTmVars = []
     , gdParams = []
     , gdDom = [InPort tyT]
     , gdCod = []

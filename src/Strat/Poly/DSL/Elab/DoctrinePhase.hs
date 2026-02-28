@@ -372,7 +372,9 @@ elabPolyItem env st item =
                   }
           pure st { esDoc = doc { dObligations = dObligations doc <> [obl] } }
         else do
-          (tyVars, tmVars, _sigParams) <- elabParamDecls doc mode (rodVars decl)
+          params <- elabParamDecls doc mode (rodVars decl)
+          let tyVars = [ v | GP_Ty v <- params ]
+          let tmVars = [ v | GP_Tm v <- params ]
           dom <- elabContext doc mode tyVars tmVars M.empty (rodDom decl)
           cod <- elabContext doc mode tyVars tmVars M.empty (rodCod decl)
           validateObligationExprMode doc mode False (rodLHS decl)
@@ -405,7 +407,9 @@ elabPolyItem env st item =
       let mode = ModeName (rpgMode decl)
       ensureMode doc mode
       let gname = GenName (rpgName decl)
-      (tyVars, tmVars, params) <- elabParamDecls doc mode (rpgVars decl)
+      params <- elabParamDecls doc mode (rpgVars decl)
+      let tyVars = [ v | GP_Ty v <- params ]
+      let tmVars = [ v | GP_Tm v <- params ]
       let table0 = M.findWithDefault M.empty mode (dGens doc)
       if M.member gname table0
         then Left "duplicate generator name"
@@ -414,8 +418,6 @@ elabPolyItem env st item =
             GenDecl
               { gdName = gname
               , gdMode = mode
-              , gdTyVars = tyVars
-              , gdTmVars = tmVars
               , gdParams = params
               , gdDom = []
               , gdCod = [provisionalCtorSort doc mode]
@@ -432,8 +434,6 @@ elabPolyItem env st item =
       let gen = GenDecl
             { gdName = gname
             , gdMode = mode
-            , gdTyVars = tyVars
-            , gdTmVars = tmVars
             , gdParams = params
             , gdDom = dom
             , gdCod = cod
@@ -468,13 +468,11 @@ elabPolyItem env st item =
       if M.member (GenName typeName) existingClassifier
         then Left ("data: type constructor name conflicts with classifier generator " <> typeName)
         else Right ()
-      (tyVars, tmVars, params) <- elabParamDecls doc classifierMode (map RPDType (rpdTyVars decl))
+      params <- elabParamDecls doc classifierMode (map RPDType (rpdTyVars decl))
       let typeCtorGen =
             GenDecl
               { gdName = GenName typeName
               , gdMode = classifierMode
-              , gdTyVars = tyVars
-              , gdTmVars = tmVars
               , gdParams = params
               , gdDom = []
               , gdCod = [universe]
@@ -491,7 +489,9 @@ elabPolyItem env st item =
     RPRule decl -> do
       let mode = ModeName (rprMode decl)
       ensureMode doc mode
-      (ruleTyVars, ruleTmVars, _sigParams) <- elabParamDecls doc mode (rprVars decl)
+      params <- elabParamDecls doc mode (rprVars decl)
+      let ruleTyVars = [ v | GP_Ty v <- params ]
+      let ruleTmVars = [ v | GP_Tm v <- params ]
       dom <- elabContext doc mode ruleTyVars ruleTmVars M.empty (rprDom decl)
       cod <- elabContext doc mode ruleTyVars ruleTmVars M.empty (rprCod decl)
       (lhs, binderSigs) <- withRule (elabRuleLHS env doc mode ruleTyVars ruleTmVars (rprLHS decl))

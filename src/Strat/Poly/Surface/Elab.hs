@@ -23,6 +23,8 @@ import Strat.Poly.Doctrine
   , deriveCtorTables
   , lookupCtorSigForOwnerInTables
   , gdPlainDom
+  , gdTyVars
+  , gdTmVars
   , doctrineTypeTheory
   , doctrineTypeTheoryFromTables
   )

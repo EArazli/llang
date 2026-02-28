@@ -350,7 +350,7 @@ buildLiftCoherenceTheory gLift = do
   mt8 <- addClassifierLift modG gLift mt7
   addModEqn
     ModEqn
-      { meLHS = ModExpr { meSrc = modeA, meTgt = modeA, mePath = [modF, modF] }
+      { meLHS = ModExpr { meSrc = modeA, meTgt = modeA, mePath = [modF] }
       , meRHS = ModExpr { meSrc = modeA, meTgt = modeA, mePath = [modG] }
       }
     mt8
@@ -651,8 +651,6 @@ testApplyActionUsesDiagramTmCtx = do
         GenDecl
           { gdName = genName
           , gdMode = modeC
-          , gdTyVars = []
-          , gdTmVars = [tmParam]
           , gdParams = []
           , gdDom = [InPort vecParam]
           , gdCod = [vecParam]
@@ -707,8 +705,6 @@ testApplyActionWeakenImageTmCtx = do
         GenDecl
           { gdName = name
           , gdMode = modeM
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort tyX]
           , gdCod = [tyX]

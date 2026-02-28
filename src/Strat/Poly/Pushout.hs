@@ -1891,20 +1891,16 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
           let mode' = renameModeName modeRen mode
           dom' <- mapM (renameInputShape modeRen modRen tyRen permRen) (gdDom gen)
           cod' <- mapM (renameObjExpr modeRen modRen tyRen permRen) (gdCod gen)
-          tyVars' <- mapM renameTyVar (gdTyVars gen)
-          tmVars' <- mapM renameTmVar (gdTmVars gen)
-          params0 <- rebuildParams (gdParams gen) tyVars' tmVars'
-          (tyVars'', tmVars'', params') <-
+          params0 <- mapM renameParam (gdParams gen)
+          params' <-
             case ctorParamPerm mode (gdName gen) of
-              Nothing -> Right (tyVars', tmVars', params0)
-              Just perm -> permuteCtorParams perm tyVars' tmVars' params0
+              Nothing -> Right params0
+              Just perm -> applyPerm perm params0
           let attrs' = [ (fieldName, M.findWithDefault sortName sortName attrRen) | (fieldName, sortName) <- gdAttrs gen ]
           let gen' =
                 gen
                   { gdName = name'
                   , gdMode = mode'
-                  , gdTyVars = tyVars''
-                  , gdTmVars = tmVars''
                   , gdParams = params'
                   , gdDom = dom'
                   , gdCod = cod'
@@ -1938,33 +1934,10 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
         renameTmVar tmVar = do
           sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tmVar)
           Right tmVar { tmvSort = sort' }
-
-        rebuildParams [] tyVars tmVars = Right (map GP_Ty tyVars <> map GP_Tm tmVars)
-        rebuildParams params tyVars tmVars = mapM rebuildOne params
-          where
-            rebuildOne gp =
-              case gp of
-                GP_Ty v ->
-                  GP_Ty <$> findVar "type" v tyVars
-                GP_Tm v ->
-                  GP_Tm <$> findVar "term" v tmVars
-
-        findVar label needle hay =
-          case [ v | v <- hay, sameVarId v needle ] of
-            [v] -> Right v
-            _ -> Left ("poly pushout: failed to rebuild " <> label <> " parameter metadata")
-
-        sameVarId a b = tmvName a == tmvName b
-
-        permuteCtorParams perm tyVars tmVars params = do
-          paramsPerm0 <- applyPerm perm params
-          let tyVarsPerm = [ v | GP_Ty v <- paramsPerm0 ]
-          let tmVarsPerm = [ v | GP_Tm v <- paramsPerm0 ]
-          let fallbackTy = [ v | GP_Ty v <- map GP_Ty tyVars ]
-          let fallbackTm = [ v | GP_Tm v <- map GP_Tm tmVars ]
-          let tyOut = if null tyVarsPerm && not (null tyVars) then fallbackTy else tyVarsPerm
-          let tmOut = if null tmVarsPerm && not (null tmVars) then fallbackTm else tmVarsPerm
-          pure (tyOut, tmOut, paramsPerm0)
+        renameParam gp =
+          case gp of
+            GP_Ty v -> GP_Ty <$> renameTyVar v
+            GP_Tm v -> GP_Tm <$> renameTmVar v
 
     renameActions table =
       foldM addAction M.empty (M.toList table)

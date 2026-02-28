@@ -256,6 +256,10 @@ Key records:
   - code metavariables (type-level) represented in object codes as `CTMeta`
   - term metavariables represented on term edges as `PTmMeta`
   Surface syntax may still call code metavariables "type variables".
+- `GenDecl` parameters form a single ordered **telescope** (`gdParams : [GenParam]`), i.e. a context in the sense of generalized algebraic theories/contextual categories.
+  - The “type-parameter list” and “term-parameter list” are *derived projections* of the telescope, not separately stored kernel data.
+  - Any kernel component that needs the split lists MUST compute them by filtering the telescope (preserving relative order among entries of the same kind).
+  - This eliminates a coherence obligation (“metadata mismatch”) that arises if a telescope and its projections are stored independently.
 - `Cell2` rewrites diagrams
 - `ModAction` stores per-modality generator images
 - `ObligationDecl` stores named equations checked on `implements`
@@ -266,6 +270,8 @@ Validation checks:
 - object/generator/rule well-formedness
 - action coverage and mode correctness
 - obligation diagrams are valid and boundary-compatible
+
+Reference note: Telescopes/contexts as the primitive representation of parameters follow the standard presentation of generalized algebraic theories and contextual categories (Cartmell 1978/1986). This aligns with the use of ordered contexts in second-order GAT accounts of binding signatures (e.g. Fiore–Plotkin–Turi; and later “Second-Order Generalised Algebraic Theories” formulations).
 
 ## 5. Diagram Layer
 
@@ -321,7 +327,17 @@ Port labels are treated as metadata for structural isomorphism/canonization by d
 
 ## 6. Modalities
 
-`mod_eq` gives oriented modality-expression equations.
+`mod_eq` contributes to definitional equality of modality expressions by normalization.
+
+Semantically, modalities generate the free category on the mode graph: a modality expression is a path, and each `mod_eq` declaration is a generating 2-cell (relation) between parallel paths. The kernel treats the set of `mod_eq` declarations as an *oriented rewriting system* on paths and requires this system to be *convergent* (terminating and confluent). Under convergence, every modality expression has a unique normal form, and definitional equality of modality expressions is equality of their normal forms.
+
+Implementation (used for checking and normalization): encode a path `m1.m2...mk` as a unary term spine `m1(m2(...(mk(__mod_id))...))`, where each modality name is a unary symbol and `__mod_id` is a nullary constant for the empty path. A declared equation `lhs -> rhs` is compiled to the TRS rule `enc(lhs, X) -> enc(rhs, X)`, where `X` is a single variable representing the suffix context.
+
+Kernel checks for `mod_eq`:
+- **Termination:** must be proven by the same size-change termination (SCT) check used for computational TRSs.
+- **Confluence:** all critical pairs must be joinable (checked by normalizing both sides); together with termination, this yields confluence and strategy-independent normal forms.
+
+References (rewriting/convergent presentations): Baader–Nipkow *Term Rewriting and All That*; Book–Otto *String-Rewriting Systems*; Guiraud (polygraphs/convergent presentations of categories); Burroni (polygraphs).
 
 `mod_transform t : mu => nu [witness g];` adds a directed 2-cell witness between modality
 expressions. It does not contribute to definitional equality and does not rewrite `ModExpr`.

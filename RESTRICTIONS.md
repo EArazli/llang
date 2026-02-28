@@ -82,8 +82,13 @@ Follow-up work item: expand supported definitional fragment after NbE core stabi
 - Constructor term-parameter sorts are required to be closed with respect to the generator's type parameters.
 - Surface type annotations do not support constructor parameters of kind `TPS_Tm`; term-indexed arguments must be expressed through core/kernel paths.
 
-## 13. Mode Equation Semantics
+## 13. Mode Equations
 
-- `mod_eq` declarations are treated as oriented rewrite rules (`lhs -> rhs`) for modality normalization.
-- Validation enforces strict path-length decrease, so non-decreasing rules are rejected.
-- The kernel currently does not run global confluence/completion for mode-equation rewriting.
+Mode theory `mod_eq` declarations are treated as an oriented rewrite system used to normalize modality expressions (so that definitional equality is equality of normal forms).
+
+To make this mathematically well-defined (strategy-independent), the kernel requires the compiled rewrite system to be *convergent*:
+
+- **Termination:** must be proven by the same SCT-based termination check used for computational TRSs.
+- **Confluence:** all critical pairs must be joinable (checked by normalizing both sides).
+
+The kernel still does not perform completion: users must provide a convergent presentation themselves.

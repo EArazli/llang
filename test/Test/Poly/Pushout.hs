@@ -256,8 +256,6 @@ ctorDecl universeTy mode ctorName sig =
   GenDecl
     { gdName = GenName (objNameText ctorName)
     , gdMode = mode
-    , gdTyVars = tyVars
-    , gdTmVars = tmVars
     , gdParams = params
     , gdDom = []
     , gdCod = [universeTy]
@@ -369,8 +367,6 @@ mkCompGen mode aTy name =
   GenDecl
     { gdName = name
     , gdMode = mode
-    , gdTyVars = []
-    , gdTmVars = []
     , gdParams = []
     , gdDom = [InPort aTy]
     , gdCod = [aTy]
@@ -461,8 +457,6 @@ mkDoctrine mode name tyVar cellName = do
   let gen = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
-        , gdTyVars = [objVarToTmVar tyVar]
-        , gdTmVars = []
         , gdParams = [GP_Ty (objVarToTmVar tyVar)]
         , gdDom = map InPort [OVar tyVar]
         , gdCod = [OVar tyVar]
@@ -565,8 +559,6 @@ mkCellDoctrine mode name cls orient = do
   let genF = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
-        , gdTyVars = []
-        , gdTmVars = []
         , gdParams = []
         , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
@@ -575,8 +567,6 @@ mkCellDoctrine mode name cls orient = do
   let genG = GenDecl
         { gdName = GenName "g"
         , gdMode = mode
-        , gdTyVars = []
-        , gdTmVars = []
         , gdParams = []
         , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
@@ -615,8 +605,6 @@ mkCellDoctrineWithAlt mode name cls orient = do
   let genF = GenDecl
         { gdName = GenName "f"
         , gdMode = mode
-        , gdTyVars = []
-        , gdTmVars = []
         , gdParams = []
         , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
@@ -625,8 +613,6 @@ mkCellDoctrineWithAlt mode name cls orient = do
   let genG = GenDecl
         { gdName = GenName "g"
         , gdMode = mode
-        , gdTyVars = []
-        , gdTmVars = []
         , gdParams = []
         , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
@@ -899,8 +885,8 @@ testPushoutDisjointCellRenameUsesOriginalModeKey = do
                 M.singleton
                   modeL
                   ( M.fromList
-                      [ (GenName "f", GenDecl (GenName "f") modeL [] [] [] [InPort tyL] [tyL] [])
-                      , (GenName "g", GenDecl (GenName "g") modeL [] [] [] [InPort tyL] [tyL] [])
+                      [ (GenName "f", GenDecl (GenName "f") modeL [] [InPort tyL] [tyL] [])
+                      , (GenName "g", GenDecl (GenName "g") modeL [] [InPort tyL] [tyL] [])
                       ]
                   )
             , dCells2 = [leftCell]
@@ -993,14 +979,14 @@ testPushoutDisjointRenamesAfterModeCollapse = do
                 M.fromList
                   [ ( modeL1
                     , M.fromList
-                        [ (GenName "f", GenDecl (GenName "f") modeL1 [] [] [] [InPort tyL1] [tyL1] [])
-                        , (GenName "g", GenDecl (GenName "g") modeL1 [] [] [] [InPort tyL1] [tyL1] [])
+                        [ (GenName "f", GenDecl (GenName "f") modeL1 [] [InPort tyL1] [tyL1] [])
+                        , (GenName "g", GenDecl (GenName "g") modeL1 [] [InPort tyL1] [tyL1] [])
                         ]
                     )
                   , ( modeL2
                     , M.fromList
-                        [ (GenName "f", GenDecl (GenName "f") modeL2 [] [] [] [InPort tyL2] [tyL2] [])
-                        , (GenName "g", GenDecl (GenName "g") modeL2 [] [] [] [InPort tyL2] [tyL2] [])
+                        [ (GenName "f", GenDecl (GenName "f") modeL2 [] [InPort tyL2] [tyL2] [])
+                        , (GenName "g", GenDecl (GenName "g") modeL2 [] [InPort tyL2] [tyL2] [])
                         ]
                     )
                   ]
@@ -1096,14 +1082,14 @@ testPushoutCellNamesArePerMode = do
                 M.fromList
                   [ ( modeL
                     , M.fromList
-                        [ (GenName "f", GenDecl (GenName "f") modeL [] [] [] [InPort tyL] [tyL] [])
-                        , (GenName "g", GenDecl (GenName "g") modeL [] [] [] [InPort tyL] [tyL] [])
+                        [ (GenName "f", GenDecl (GenName "f") modeL [] [InPort tyL] [tyL] [])
+                        , (GenName "g", GenDecl (GenName "g") modeL [] [InPort tyL] [tyL] [])
                         ]
                     )
                   , ( modeR
                     , M.fromList
-                        [ (GenName "f", GenDecl (GenName "f") modeR [] [] [] [InPort tyR] [tyR] [])
-                        , (GenName "g", GenDecl (GenName "g") modeR [] [] [] [InPort tyR] [tyR] [])
+                        [ (GenName "f", GenDecl (GenName "f") modeR [] [InPort tyR] [tyR] [])
+                        , (GenName "g", GenDecl (GenName "g") modeR [] [InPort tyR] [tyR] [])
                         ]
                     )
                   ]
@@ -1314,8 +1300,6 @@ testPushoutNonInjectiveGenCompatible = do
         GenDecl
           { gdName = GenName name
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = []
@@ -1389,8 +1373,6 @@ testPushoutNonInjectiveGenIncompatible = do
         GenDecl
           { gdName = GenName "g1"
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = []
@@ -1400,8 +1382,6 @@ testPushoutNonInjectiveGenIncompatible = do
         GenDecl
           { gdName = GenName "g2"
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort aTy]
           , gdCod = []
@@ -1411,8 +1391,6 @@ testPushoutNonInjectiveGenIncompatible = do
         GenDecl
           { gdName = GenName name
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = []
@@ -1521,8 +1499,6 @@ testPushoutGlueComposesThroughInr = do
         GenDecl
           { gdName = GenName "f"
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort xTy]
           , gdCod = [xTy]
@@ -1532,8 +1508,6 @@ testPushoutGlueComposesThroughInr = do
         GenDecl
           { gdName = GenName "h"
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort yTy]
           , gdCod = [yTy]
@@ -1621,8 +1595,6 @@ testPushoutGenInjectiveByMode = do
         GenDecl
           { gdName = GenName name
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = []
@@ -1757,8 +1729,6 @@ testPushoutClassificationUniverseFollowsTypeRename = do
         GenDecl
           { gdName = GenName "U"
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [universe]
@@ -1897,8 +1867,6 @@ testPushoutTermTypeMaps = do
         GenDecl
           { gdName = GenName "Nat"
           , gdMode = modeI
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [universeI]
@@ -1922,8 +1890,6 @@ testPushoutTermTypeMaps = do
         GenDecl
           { gdName = GenName "Vec"
           , gdMode = modeM
-          , gdTyVars = [vecTyVar]
-          , gdTmVars = [vecTmVar]
           , gdParams = [GP_Tm vecTmVar, GP_Ty vecTyVar]
           , gdDom = []
           , gdCod = [universeM]
@@ -1947,8 +1913,6 @@ testPushoutTermTypeMaps = do
         GenDecl
           { gdName = GenName "Vec2"
           , gdMode = modeM
-          , gdTyVars = [vec2TyVar]
-          , gdTmVars = [vec2TmVar]
           , gdParams = [GP_Tm vec2TmVar, GP_Ty vec2TyVar]
           , gdDom = []
           , gdCod = [universeM]
@@ -2056,8 +2020,6 @@ testPushoutTypePermutationSortRename = do
         GenDecl
           { gdName = GenName "Nat"
           , gdMode = modeI
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [universeI]
@@ -2067,8 +2029,6 @@ testPushoutTypePermutationSortRename = do
         GenDecl
           { gdName = GenName "NatL"
           , gdMode = modeI
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [universeI]
@@ -2092,8 +2052,6 @@ testPushoutTypePermutationSortRename = do
         GenDecl
           { gdName = GenName "Vec"
           , gdMode = modeM
-          , gdTyVars = [vecTyVar]
-          , gdTmVars = [vecTmVar]
           , gdParams = [GP_Tm vecTmVar, GP_Ty vecTyVar]
           , gdDom = []
           , gdCod = [universeM]
@@ -2117,8 +2075,6 @@ testPushoutTypePermutationSortRename = do
         GenDecl
           { gdName = GenName "Vec2"
           , gdMode = modeM
-          , gdTyVars = [vec2TyVar]
-          , gdTmVars = [vec2TmVar]
           , gdParams = [GP_Ty vec2TyVar, GP_Tm vec2TmVar]
           , gdDom = []
           , gdCod = [universeM]
@@ -2341,8 +2297,6 @@ testCoproductObligationRawModalityRenameElaborates = do
         GenDecl
           { gdName = GenName "k"
           , gdMode = mode
-          , gdTyVars = [objVarToTmVar aVar]
-          , gdTmVars = []
           , gdParams = [GP_Ty (objVarToTmVar aVar)]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = [OVar aVar]
@@ -2480,8 +2434,6 @@ testCoproductTransformCollisionRenames = do
         GenDecl
           { gdName = GenName "w"
           , gdMode = mode
-          , gdTyVars = [objVarToTmVar aVar]
-          , gdTmVars = []
           , gdParams = [GP_Ty (objVarToTmVar aVar)]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = [OVar aVar]
@@ -2542,8 +2494,6 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
         GenDecl
           { gdName = GenName "f"
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort aTy]
           , gdCod = [aTy]
@@ -2590,8 +2540,6 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
         GenDecl
           { gdName = GenName "g"
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort aTy]
           , gdCod = [aTy]
@@ -2677,8 +2625,6 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
         GenDecl
           { gdName = GenName "g"
           , gdMode = modeL1
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = []
@@ -2688,8 +2634,6 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
         GenDecl
           { gdName = GenName "g"
           , gdMode = modeL2
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort cL2]
           , gdCod = [cL2]
@@ -2803,8 +2747,8 @@ testApplyPushoutCellCollisionAfterModeRename = do
                 M.singleton
                   modeL
                   ( M.fromList
-                      [ (GenName "f", GenDecl (GenName "f") modeL [] [] [] [InPort tyL] [tyL] [])
-                      , (GenName "g", GenDecl (GenName "g") modeL [] [] [] [InPort tyL] [tyL] [])
+                      [ (GenName "f", GenDecl (GenName "f") modeL [] [InPort tyL] [tyL] [])
+                      , (GenName "g", GenDecl (GenName "g") modeL [] [InPort tyL] [tyL] [])
                       ]
                   )
             , dCells2 = [bodyCell]
@@ -2835,8 +2779,8 @@ testApplyPushoutCellCollisionAfterModeRename = do
                 M.singleton
                   modeM
                   ( M.fromList
-                      [ (GenName "f", GenDecl (GenName "f") modeM [] [] [] [InPort tyM] [tyM] [])
-                      , (GenName "g", GenDecl (GenName "g") modeM [] [] [] [InPort tyM] [tyM] [])
+                      [ (GenName "f", GenDecl (GenName "f") modeM [] [InPort tyM] [tyM] [])
+                      , (GenName "g", GenDecl (GenName "g") modeM [] [InPort tyM] [tyM] [])
                       ]
                   )
             , dCells2 = [targetCell]
@@ -2988,8 +2932,6 @@ testPushoutCellTmAlphaEq = do
         GenDecl
           { gdName = GenName "Z"
           , gdMode = modeI
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [natTy]
@@ -2999,8 +2941,6 @@ testPushoutCellTmAlphaEq = do
         GenDecl
           { gdName = genName
           , gdMode = modeM
-          , gdTyVars = []
-          , gdTmVars = [srcTm]
           , gdParams = [GP_Tm srcTm]
           , gdDom = [InPort (vecTy srcTm)]
           , gdCod = [vecTy srcTm]
@@ -3010,8 +2950,6 @@ testPushoutCellTmAlphaEq = do
         GenDecl
           { gdName = genName
           , gdMode = modeM
-          , gdTyVars = []
-          , gdTmVars = [leftTm]
           , gdParams = [GP_Tm leftTm]
           , gdDom = [InPort (vecTy leftTm)]
           , gdCod = [vecTy leftTm]
@@ -3021,8 +2959,6 @@ testPushoutCellTmAlphaEq = do
         GenDecl
           { gdName = genName
           , gdMode = modeM
-          , gdTyVars = []
-          , gdTmVars = [rightTm]
           , gdParams = [GP_Tm rightTm]
           , gdDom = [InPort (vecTy rightTm)]
           , gdCod = [vecTy rightTm]
@@ -3134,8 +3070,6 @@ testPushoutInjectionPreservesBinderArgs = do
         GenDecl
           { gdName = gName
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy]
@@ -3214,8 +3148,6 @@ testPushoutAcceptsRenamingWithBinders = do
         GenDecl
           { gdName = gName
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InBinder slotSigSrc]
           , gdCod = [aTy]
@@ -3225,8 +3157,6 @@ testPushoutAcceptsRenamingWithBinders = do
         GenDecl
           { gdName = g1Name
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InBinder slotSigTgt]
           , gdCod = [a1Ty]
@@ -3388,8 +3318,6 @@ mkModeEqDoctrine name mt varName useUF = do
   let genH = GenDecl
         { gdName = GenName "h"
         , gdMode = mode
-        , gdTyVars = [objVarToTmVar v]
-        , gdTmVars = []
         , gdParams = [GP_Ty (objVarToTmVar v)]
         , gdDom = map InPort [OVar v]
         , gdCod = [OVar v]
@@ -3398,8 +3326,6 @@ mkModeEqDoctrine name mt varName useUF = do
   let genModal = GenDecl
         { gdName = GenName "modal"
         , gdMode = mode
-        , gdTyVars = [objVarToTmVar v]
-        , gdTmVars = []
         , gdParams = [GP_Ty (objVarToTmVar v)]
         , gdDom = map InPort [modalTy]
         , gdCod = [modalTy]
@@ -3534,8 +3460,6 @@ mkPolyCompGen mode sortTy name =
    in GenDecl
         { gdName = name
         , gdMode = mode
-        , gdTyVars = [a]
-        , gdTmVars = []
         , gdParams = [GP_Ty a]
         , gdDom = [InPort (OVar (tmVarToObjVar a))]
         , gdCod = [OVar (tmVarToObjVar a)]

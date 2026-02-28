@@ -17,6 +17,7 @@ import Strat.Poly.Doctrine
   , GenDecl(..)
   , deriveCtorTables
   , gdPlainDom
+  , gdTyVars
   , lookupCtorRefForOwnerInTables
   )
 import Strat.Poly.ModeTheory (ModeName(..))

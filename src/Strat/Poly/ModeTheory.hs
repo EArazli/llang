@@ -37,8 +37,13 @@ import Data.Map.Strict (Map)
 import qualified Data.Set as S
 import Control.Monad (foldM)
 import Strat.Poly.ModeSyntax
-import Strat.Poly.Syntax (Obj(..))
+import Strat.Poly.Syntax (Obj(..), TmFunName(..))
 import Strat.Poly.Names (GenName)
+import Strat.Poly.Term.AST (TermExpr(..))
+import Strat.Poly.Term.Normalize (normalizeTermExpr)
+import Strat.Poly.Term.RewriteSystem (TRS, TRule(..), mkTRS)
+import Strat.Poly.Term.Termination (checkTerminatingSCT)
+import Strat.Poly.Term.Confluence (checkConfluent)
 
 
 data DefEqEngine
@@ -255,13 +260,69 @@ composeMod _ f g
           , mePath = mePath f <> mePath g
           }
 
-normalizeModExpr :: ModeTheory -> ModExpr -> ModExpr
-normalizeModExpr mt = go
+-- Internal encoding of modality paths as unary TermExpr spines.
+-- A path m1.m2...mk is encoded as m1(m2(...(mk(__mod_id))...)).
+-- `__mod_id` is a nullary constant that cannot clash with user identifiers
+-- (user identifiers must start with a letter; `__mod_id` starts with `_`).
+modEqIdFun :: TmFunName
+modEqIdFun = TmFunName "__mod_id"
+
+modEqIdTerm :: TermExpr
+modEqIdTerm = TMFun modEqIdFun []
+
+-- Diagnostic-only mode name for the TRS checks; cannot clash with user modes.
+modEqDiagnosticMode :: ModeName
+modEqDiagnosticMode = ModeName "__mod_eq"
+
+encodeModPathWithTail :: [ModName] -> TermExpr -> TermExpr
+encodeModPathWithTail mods tail0 =
+  foldr (\(ModName m) acc -> TMFun (TmFunName m) [acc]) tail0 mods
+
+decodeModPathFromTerm :: TermExpr -> Maybe [ModName]
+decodeModPathFromTerm = go
   where
-    go me =
-      case rewriteOnce mt me of
-        Nothing -> me
-        Just me' -> go me'
+    go (TMFun f []) | f == modEqIdFun = Just []
+    go (TMFun f [inner]) | f /= modEqIdFun = do
+      rest <- go inner
+      case f of
+        TmFunName nm -> Just (ModName nm : rest)
+    go _ = Nothing
+
+modExprToTerm :: ModExpr -> TermExpr
+modExprToTerm me = encodeModPathWithTail (mePath me) modEqIdTerm
+
+renderModeName :: ModeName -> Text
+renderModeName (ModeName n) = n
+
+renderModExprShort :: ModExpr -> Text
+renderModExprShort me =
+  case mePath me of
+    [] -> "id@" <> renderModeName (meSrc me)
+    ms -> T.intercalate "." (map renderMod ms)
+
+modEqRuleToTRule :: Int -> ModEqn -> TRule
+modEqRuleToTRule i (ModEqn lhs rhs) =
+  TRule
+    { trName = "mod_eq[" <> T.pack (show i) <> "] "
+               <> renderModExprShort lhs <> " -> " <> renderModExprShort rhs
+    , trLHS  = encodeModPathWithTail (mePath lhs) (TMBound 0)
+    , trRHS  = encodeModPathWithTail (mePath rhs) (TMBound 0)
+    }
+
+modEqTRS :: ModeTheory -> TRS
+modEqTRS mt =
+  mkTRS modEqDiagnosticMode (zipWith modEqRuleToTRule [0..] (mtEqns mt))
+
+normalizeModExpr :: ModeTheory -> ModExpr -> ModExpr
+normalizeModExpr mt me
+  | null (mtEqns mt) = me
+  | otherwise =
+      let trs   = modEqTRS mt
+          term0 = modExprToTerm me
+          termN = normalizeTermExpr trs term0
+      in case decodeModPathFromTerm termN of
+           Just pathN -> me { mePath = pathN }
+           Nothing    -> me
 
 checkWellFormed :: ModeTheory -> Either Text ()
 checkWellFormed mt = do
@@ -270,6 +331,13 @@ checkWellFormed mt = do
   else Right ()
   mapM_ checkDecl (M.elems (mtDecls mt))
   mapM_ (validateModEqn mt) (mtEqns mt)
+  let trs = modEqTRS mt
+  case checkTerminatingSCT trs of
+    Left err -> Left ("mode theory: mod_eq termination not proven: " <> err)
+    Right () -> pure ()
+  case checkConfluent trs of
+    Left err -> Left ("mode theory: mod_eq confluence failed: " <> err)
+    Right () -> pure ()
   mapM_ (validateModTransformDecl mt) (M.elems (mtTransforms mt))
   mapM_ (validateClassifierLiftDecl mt) (M.toList (mtClassifierLifts mt))
   validateClassifierLifts mt
@@ -406,59 +474,12 @@ validateModEqn mt eqn = do
   if meSrc (meLHS eqn) == meSrc (meRHS eqn) && meTgt (meLHS eqn) == meTgt (meRHS eqn)
     then Right ()
     else Left "mode theory: modality equation source/target mismatch"
-  if length (mePath (meRHS eqn)) < length (mePath (meLHS eqn))
-    then Right ()
-    else Left "mode theory: modality equation must strictly decrease path length"
 
 requireModDecl :: ModeTheory -> ModName -> Either Text ModDecl
 requireModDecl mt name =
   case M.lookup name (mtDecls mt) of
     Nothing -> Left "mode theory: unknown modality"
     Just decl -> Right decl
-
-rewriteOnce :: ModeTheory -> ModExpr -> Maybe ModExpr
-rewriteOnce mt me =
-  case findRewrite 0 (mePath me) of
-    Nothing -> Nothing
-    Just path' ->
-      case mkExprFromPath mt (meSrc me) path' of
-        Right me' -> Just me'
-        Left _ -> Nothing
-  where
-    findRewrite _ [] = Nothing
-    findRewrite idx path =
-      case firstRule path (mtEqns mt) of
-        Just (lhsLen, rhsPath) ->
-          let (prefix, rest) = splitAt idx (mePath me)
-              suffix = drop lhsLen rest
-          in Just (prefix <> rhsPath <> suffix)
-        Nothing ->
-          case path of
-            (_:xs) -> findRewrite (idx + 1) xs
-
-    firstRule _ [] = Nothing
-    firstRule path (eqn:eqns) =
-      let lhsPath = mePath (meLHS eqn)
-      in if matchesPrefix lhsPath path
-          then Just (length lhsPath, mePath (meRHS eqn))
-          else firstRule path eqns
-
-matchesPrefix :: Eq a => [a] -> [a] -> Bool
-matchesPrefix [] _ = True
-matchesPrefix _ [] = False
-matchesPrefix (x:xs) (y:ys) = x == y && matchesPrefix xs ys
-
-mkExprFromPath :: ModeTheory -> ModeName -> [ModName] -> Either Text ModExpr
-mkExprFromPath mt src path = do
-  tgt <- walk src path
-  Right ModExpr { meSrc = src, meTgt = tgt, mePath = path }
-  where
-    walk cur [] = Right cur
-    walk cur (m:ms) = do
-      decl <- requireModDecl mt m
-      if mdSrc decl == cur
-        then walk (mdTgt decl) ms
-        else Left "mode theory: modality composition type mismatch"
 
 objMode0 :: Obj -> ModeName
 objMode0 = objOwnerMode

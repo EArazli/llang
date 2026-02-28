@@ -19,10 +19,10 @@ import Control.Monad (foldM)
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.ModeSyntax (ModeName)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Term.AST (TermExpr(..))
-import Strat.Poly.Obj (TmFunName(..))
+import Strat.Poly.Syntax (TmFunName(..))
 
 
 data TRule = TRule

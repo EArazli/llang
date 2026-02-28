@@ -170,8 +170,6 @@ testCriticalPairsFailOnSubstFailure = do
                       , GenDecl
                           { gdName = GenName "A"
                           , gdMode = mode
-                          , gdTyVars = []
-                          , gdTmVars = []
                           , gdParams = []
                           , gdDom = []
                           , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
@@ -182,8 +180,6 @@ testCriticalPairsFailOnSubstFailure = do
                       , GenDecl
                           { gdName = GenName "comp_ctx_ext"
                           , gdMode = mode
-                          , gdTyVars = []
-                          , gdTmVars = []
                           , gdParams = []
                           , gdDom = [InPort (mkCon (ObjRef mode (ObjName "U")) [])]
                           , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
@@ -194,8 +190,6 @@ testCriticalPairsFailOnSubstFailure = do
                       , GenDecl
                           { gdName = GenName "comp_var"
                           , gdMode = mode
-                          , gdTyVars = []
-                          , gdTmVars = []
                           , gdParams = []
                           , gdDom = [InPort (mkCon (ObjRef mode (ObjName "U")) [])]
                           , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
@@ -206,8 +200,6 @@ testCriticalPairsFailOnSubstFailure = do
                       , GenDecl
                           { gdName = GenName "comp_reindex"
                           , gdMode = mode
-                          , gdTyVars = []
-                          , gdTmVars = []
                           , gdParams = []
                           , gdDom = [InPort (mkCon (ObjRef mode (ObjName "U")) [])]
                           , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]

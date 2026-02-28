@@ -84,8 +84,6 @@ ctorDecl mode ctorName sig =
   GenDecl
     { gdName = GenName (objNameText ctorName)
     , gdMode = mode
-    , gdTyVars = tyVars
-    , gdTmVars = tmVars
     , gdParams = params
     , gdDom = []
     , gdCod = [universeObj mode]
@@ -191,8 +189,6 @@ mkCompGen mode aTy name =
   GenDecl
     { gdName = name
     , gdMode = mode
-    , gdTyVars = []
-    , gdTmVars = []
     , gdParams = []
     , gdDom = [InPort aTy]
     , gdCod = [aTy]
@@ -358,8 +354,6 @@ testTypeMapReorder = do
         GenDecl
           { gdName = genName
           , gdMode = mode
-          , gdTyVars = [a, b]
-          , gdTmVars = []
           , gdParams = [GP_Ty a, GP_Ty b]
           , gdDom = map InPort [mkCon (ObjRef mode prod) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
           , gdCod = [mkCon (ObjRef mode prod) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
@@ -369,8 +363,6 @@ testTypeMapReorder = do
         GenDecl
           { gdName = genName
           , gdMode = mode
-          , gdTyVars = [a, b]
-          , gdTmVars = []
           , gdParams = [GP_Ty a, GP_Ty b]
           , gdDom = map InPort [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
           , gdCod = [mkCon (ObjRef mode pair) [OAObj (OVar (tmVarToObjVar a)), OAObj (OVar (tmVarToObjVar b))]]
@@ -380,8 +372,6 @@ testTypeMapReorder = do
         GenDecl
           { gdName = GenName "Prod"
           , gdMode = mode
-          , gdTyVars = [a, b]
-          , gdTmVars = []
           , gdParams = [GP_Ty a, GP_Ty b]
           , gdDom = []
           , gdCod = [uTy]
@@ -391,8 +381,6 @@ testTypeMapReorder = do
         GenDecl
           { gdName = GenName "Pair"
           , gdMode = mode
-          , gdTyVars = [a, b]
-          , gdTmVars = []
           , gdParams = [GP_Ty a, GP_Ty b]
           , gdDom = []
           , gdCod = [uTy]
@@ -460,8 +448,6 @@ testCrossModeMorphism = do
         GenDecl
           { gdName = GenName "f"
           , gdMode = modeC
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
@@ -471,8 +457,6 @@ testCrossModeMorphism = do
         GenDecl
           { gdName = GenName "g"
           , gdMode = modeV
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = map InPort [bTy]
           , gdCod = [bTy]
@@ -595,8 +579,6 @@ testModalityMapRewritesTypeModalities = do
         GenDecl
           { gdName = GenName "g"
           , gdMode = modeB
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = map InPort [fBaseSrc]
           , gdCod = [fBaseSrc]
@@ -606,8 +588,6 @@ testModalityMapRewritesTypeModalities = do
         GenDecl
           { gdName = GenName "gg"
           , gdMode = modeB
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = map InPort [hfBaseSrc]
           , gdCod = [hfBaseSrc]
@@ -617,8 +597,6 @@ testModalityMapRewritesTypeModalities = do
         GenDecl
           { gdName = GenName "g"
           , gdMode = modeD
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = map InPort [gBaseTgt]
           , gdCod = [gBaseTgt]
@@ -628,8 +606,6 @@ testModalityMapRewritesTypeModalities = do
         GenDecl
           { gdName = GenName "gg"
           , gdMode = modeD
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = map InPort [kgBaseTgt]
           , gdCod = [kgBaseTgt]
@@ -835,8 +811,6 @@ testMorphismInstantiationSubstFailure = do
         GenDecl
           { gdName = GenName "f"
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
@@ -846,8 +820,6 @@ testMorphismInstantiationSubstFailure = do
         GenDecl
           { gdName = GenName "g"
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
@@ -916,8 +888,6 @@ testBinderIdentityMorphismPreservesBinders = do
         GenDecl
           { gdName = lamName
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy']
@@ -988,8 +958,6 @@ testMorphismSpliceRenamesToBinderMeta = do
         GenDecl
           { gdName = gName
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort aTy', InBinder slotSig]
           , gdCod = [aTy']
@@ -1057,8 +1025,6 @@ testMorphismRejectsBadBinderHoleSignatures = do
         GenDecl
           { gdName = lamName
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy']
@@ -1247,8 +1213,6 @@ testTermTypeTemplateInstantiation = do
         GenDecl
           { gdName = GenName "Z"
           , gdMode = modeI'
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [natTy]
@@ -1258,8 +1222,6 @@ testTermTypeTemplateInstantiation = do
         GenDecl
           { gdName = GenName "S"
           , gdMode = modeI'
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort natTy]
           , gdCod = [natTy]
@@ -1269,8 +1231,6 @@ testTermTypeTemplateInstantiation = do
         GenDecl
           { gdName = GenName "Nat"
           , gdMode = modeI'
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [universeObj modeI']
@@ -1280,8 +1240,6 @@ testTermTypeTemplateInstantiation = do
         GenDecl
           { gdName = GenName "A"
           , gdMode = modeM'
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [universeObj modeM']
@@ -1293,8 +1251,6 @@ testTermTypeTemplateInstantiation = do
         GenDecl
           { gdName = GenName "Vec"
           , gdMode = modeM'
-          , gdTyVars = [aIx]
-          , gdTmVars = [nIx]
           , gdParams = [GP_Tm nIx, GP_Ty aIx]
           , gdDom = []
           , gdCod = [universeObj modeM']
@@ -1304,8 +1260,6 @@ testTermTypeTemplateInstantiation = do
         GenDecl
           { gdName = GenName "Vec2"
           , gdMode = modeM'
-          , gdTyVars = [aIx]
-          , gdTmVars = [nIx]
           , gdParams = [GP_Tm nIx, GP_Ty aIx]
           , gdDom = []
           , gdCod = [universeObj modeM']
@@ -1436,8 +1390,6 @@ testTermTemplateKindMismatch = do
         GenDecl
           { gdName = GenName "Z"
           , gdMode = modeI'
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = []
           , gdCod = [natTy]
@@ -1524,8 +1476,6 @@ testMorphismMapsStructuredTermArgs = do
         GenDecl
           { gdName = succName
           , gdMode = modeI'
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort natTy]
           , gdCod = [natTy]
@@ -1619,8 +1569,6 @@ testMorphismWeakenImageTmCtx = do
         GenDecl
           { gdName = name
           , gdMode = mode
-          , gdTyVars = []
-          , gdTmVars = []
           , gdParams = []
           , gdDom = [InPort tyX]
           , gdCod = [tyX]
@@ -1706,8 +1654,6 @@ mkMonoid = do
                   , GenDecl
                       { gdName = GenName "unit"
                       , gdMode = modeM
-                      , gdTyVars = []
-                      , gdTmVars = []
                       , gdParams = []
                       , gdDom = map InPort []
                       , gdCod = [aTy]
@@ -1718,8 +1664,6 @@ mkMonoid = do
                   , GenDecl
                       { gdName = GenName "mul"
                       , gdMode = modeM
-                      , gdTyVars = []
-                      , gdTmVars = []
                       , gdParams = []
                       , gdDom = map InPort [aTy, aTy]
                       , gdCod = [aTy]
@@ -1760,8 +1704,6 @@ mkStringMonoid = do
                   , GenDecl
                       { gdName = GenName "empty"
                       , gdMode = modeM
-                      , gdTyVars = []
-                      , gdTmVars = []
                       , gdParams = []
                       , gdDom = map InPort []
                       , gdCod = [strTy]
@@ -1772,8 +1714,6 @@ mkStringMonoid = do
                   , GenDecl
                       { gdName = GenName "append"
                       , gdMode = modeM
-                      , gdTyVars = []
-                      , gdTmVars = []
                       , gdParams = []
                       , gdDom = map InPort [strTy, strTy]
                       , gdCod = [strTy]

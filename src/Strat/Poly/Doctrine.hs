@@ -4,6 +4,8 @@ module Strat.Poly.Doctrine
   , GenParam(..)
   , BinderSig(..)
   , GenDecl(..)
+  , gdTyVars
+  , gdTmVars
   , ModAction(..)
   , ObligationDecl(..)
   , Doctrine(..)
@@ -86,13 +88,17 @@ data GenParam
 data GenDecl = GenDecl
   { gdName :: GenName
   , gdMode :: ModeName
-  , gdTyVars :: [TmVar]
-  , gdTmVars :: [TmVar]
   , gdParams :: [GenParam]
   , gdDom :: [InputShape]
   , gdCod :: Context
   , gdAttrs :: [(AttrName, AttrSort)]
   } deriving (Eq, Show)
+
+gdTyVars :: GenDecl -> [TmVar]
+gdTyVars gd = [ v | GP_Ty v <- gdParams gd ]
+
+gdTmVars :: GenDecl -> [TmVar]
+gdTmVars gd = [ v | GP_Tm v <- gdParams gd ]
 
 data ModAction = ModAction
   { maMod :: ModName
@@ -1001,21 +1007,6 @@ insertCtorSig name sig acc =
                 <> "` with incompatible signatures in classifier vocabulary"
             )
 
-genParamsMatchDecls :: GenDecl -> Bool
-genParamsMatchDecls gd =
-  mapMaybe pickTy (gdParams gd) == gdTyVars gd
-    && mapMaybe pickTm (gdParams gd) == gdTmVars gd
-    && length (gdParams gd) == length (gdTyVars gd) + length (gdTmVars gd)
-  where
-    pickTy gp =
-      case gp of
-        GP_Ty v -> Just v
-        GP_Tm _ -> Nothing
-    pickTm gp =
-      case gp of
-        GP_Ty _ -> Nothing
-        GP_Tm v -> Just v
-
 lookupCtorRefForOwnerInTables :: Doctrine -> CtorTables -> ModeName -> ObjName -> Maybe ObjRef
 lookupCtorRefForOwnerInTables doc tables ownerMode ctorName =
   case classifierOfMode (dModes doc) ownerMode of
@@ -1079,9 +1070,6 @@ checkGen :: Doctrine -> TypeTheory -> ModeName -> GenDecl -> Either Text ()
 checkGen doc tt mode gd
   | gdMode gd /= mode = Left "validateDoctrine: generator stored under wrong mode"
   | otherwise = do
-      if genParamsMatchDecls gd
-        then Right ()
-        else Left "validateDoctrine: generator parameter order metadata mismatch"
       checkTyVarModes doc (gdTyVars gd)
       checkTmVarModes doc tt (gdTyVars gd) (gdTmVars gd)
       ensureDistinctTyVars ("validateDoctrine: duplicate generator tyvars in " <> renderGen (gdName gd)) (gdTyVars gd)
