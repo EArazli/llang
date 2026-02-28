@@ -22,7 +22,14 @@ import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Graph
 import Strat.Poly.Diagram
-import Strat.Poly.Morphism (instantiateGenImageBinders)
+import Strat.Poly.DiagramInterpretation
+  ( DiagramInterpretation(..)
+  , applySubstBinderSigs
+  , instantiateGenImageBinders
+  , interpretDiagram
+  , requirePortType
+  , spliceEdge
+  )
 import Strat.Poly.ModeTheory
 import Strat.Poly.Normalize (autoJoinProof)
 import Strat.Poly.Names (GenName(..))
@@ -285,13 +292,17 @@ applyAction doc mName diagSrc = do
   tt <- doctrineTypeTheory doc
   let me = ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [mName] }
   codeLift <- classifierLiftForModExpr (dModes doc) me
-  dTmCtx' <- mapM (mapTypeIfSource me codeLift) (dTmCtx diagSrc)
-  dPortObj' <- mapM (mapType me codeLift) (dPortObj diagSrc)
-  let diag0 = diagSrc { dMode = mdTgt decl, dTmCtx = dTmCtx', dPortObj = dPortObj' }
-  let edgeKeys = IM.keys (dEdges diagSrc)
-  diag1 <- foldM (step tt action me codeLift) diag0 edgeKeys
-  validateDiagram diag1
-  pure diag1
+  let interp =
+        DiagramInterpretation
+          { diMapMode = \m ->
+              if m == mdSrc decl then Right (mdTgt decl)
+              else Left "map: modality source mismatch"
+          , diMapTmCtxObj = mapTypeIfSource me codeLift
+          , diMapPortObj = mapType me codeLift
+          , diMapTmMetaSort = mapTypeIfSource me codeLift
+          , diOnGenEdge = onGenEdge tt action me codeLift
+          }
+  interpretDiagram interp diagSrc
   where
     mapType me codeLift ty = do
       if objOwnerMode ty /= meSrc me
@@ -309,17 +320,12 @@ applyAction doc mName diagSrc = do
         then mapType me codeLift ty
         else pure ty
 
-    step tt action me codeLift diagTgt edgeKey = do
-      edgeSrc <-
-        case IM.lookup edgeKey (dEdges diagSrc) of
-          Nothing -> Left "map: missing source edge"
-          Just e -> Right e
+    onGenEdge tt action me codeLift diagSrc0 diagTgt edgeKey edgeSrc mappedBargs =
       case ePayload edgeSrc of
-        PGen g attrs bargs -> do
-          genDecl <- lookupSrcGen doc (dMode diagSrc) g
-          mappedBargs <- mapM (mapBinderArg mName) bargs
+        PGen g attrs _bargsSrc -> do
+          genDecl <- lookupSrcGen doc (dMode diagSrc0) g
           img0raw <-
-            case M.lookup (dMode diagSrc, g) (maGenMap action) of
+            case M.lookup (dMode diagSrc0, g) (maGenMap action) of
               Nothing -> Left "map: missing generator image"
               Just d -> Right d
           img0 <- freshenImageTyVars tt diagTgt img0raw
@@ -330,26 +336,8 @@ applyAction doc mName diagSrc = do
           diagTgtNorm <- normalizeBoundaryPorts (eIns edgeSrc <> eOuts edgeSrc) diagTgt
           img4Norm <- normalizeDiagramObjExprs (dModes doc) img4
           spliceEdge diagTgtNorm edgeKey img4Norm
-        PBox name inner -> do
-          inner' <- applyAction doc mName inner
-          updateEdgePayload diagTgt edgeKey (PBox name inner')
-        PFeedback inner -> do
-          inner' <- applyAction doc mName inner
-          updateEdgePayload diagTgt edgeKey (PFeedback inner')
-        PSplice x ->
-          updateEdgePayload diagTgt edgeKey (PSplice x)
-        PTmMeta v -> do
-          sort' <- mapTypeIfSource me codeLift (tmmSort v)
-          updateEdgePayload diagTgt edgeKey (PTmMeta v { tmmSort = sort' })
-        PInternalDrop ->
-          updateEdgePayload diagTgt edgeKey PInternalDrop
-
-    mapBinderArg modName barg =
-      case barg of
-        BAConcrete inner ->
-          BAConcrete <$> applyAction doc modName inner
-        BAMeta x ->
-          Right (BAMeta x)
+        _ ->
+          Left "map: internal error: diOnGenEdge called on non-PGen"
 
     instantiateMappedBinders typeTheory me codeLift genDecl mappedBargs subst image = do
       let slots = [ bs | InBinder bs <- gdDom genDecl ]
@@ -437,17 +425,6 @@ actionAttrSubst genDecl attrs =
     | (fieldName, sortName) <- gdAttrs genDecl
     ]
 
-applySubstBinderSigs :: TypeTheory -> Subst -> M.Map BinderMetaVar BinderSig -> Either Text (M.Map BinderMetaVar BinderSig)
-applySubstBinderSigs tt subst =
-  mapM (applySubstBinderSig tt subst)
-
-applySubstBinderSig :: TypeTheory -> Subst -> BinderSig -> Either Text BinderSig
-applySubstBinderSig tt subst sig = do
-  tmCtx <- applySubstCtx tt subst (bsTmCtx sig)
-  dom <- applySubstCtx tt subst (bsDom sig)
-  cod <- applySubstCtx tt subst (bsCod sig)
-  pure sig { bsTmCtx = tmCtx, bsDom = dom, bsCod = cod }
-
 lookupSrcGen :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
 lookupSrcGen doc mode genName =
   case M.lookup mode (dGens doc) >>= M.lookup genName of
@@ -460,8 +437,8 @@ instantiateImage tt diag edgeKey img = do
     case IM.lookup edgeKey (dEdges diag) of
       Nothing -> Left "map: missing target edge"
       Just e -> Right e
-  domEdge <- mapM (requirePortType diag) (eIns edge)
-  codEdge <- mapM (requirePortType diag) (eOuts edge)
+  domEdge <- mapM (requirePortType "map" diag) (eIns edge)
+  codEdge <- mapM (requirePortType "map" diag) (eOuts edge)
   domImg <- diagramDom img
   codImg <- diagramCod img
   let flexTy = S.map objVarToTmVar (freeObjVarsDiagram img)
@@ -475,12 +452,6 @@ instantiateImage tt diag edgeKey img = do
   img' <- applySubstDiagram tt s img
   imgNorm <- normalizeDiagramObjExprs (ttModes tt) img'
   pure (imgNorm, s)
-
-requirePortType :: Diagram -> PortId -> Either Text Obj
-requirePortType diag pid =
-  case diagramPortObj diag pid of
-    Nothing -> Left "map: missing port type"
-    Just ty -> Right ty
 
 normalizeDiagramObjExprs :: ModeTheory -> Diagram -> Either Text Diagram
 normalizeDiagramObjExprs mt diag = do
@@ -515,30 +486,3 @@ normalizeDiagramObjExprs mt diag = do
           BAConcrete <$> normalizeDiagramObjExprs mt inner
         BAMeta v ->
           pure (BAMeta v)
-
-spliceEdge :: Diagram -> Int -> Diagram -> Either Text Diagram
-spliceEdge diag edgeKey image = do
-  edge <-
-    case IM.lookup edgeKey (dEdges diag) of
-      Nothing -> Left "spliceEdge: missing edge"
-      Just e -> Right e
-  let ins = eIns edge
-  let outs = eOuts edge
-  diag1 <- deleteEdgeKeepPorts diag (EdgeId edgeKey)
-  let imageShift = shiftDiagram (dNextPort diag1) (dNextEdge diag1) image
-  diag2 <- unionDiagram diag1 imageShift
-  let boundary = dIn imageShift <> dOut imageShift
-  if length boundary /= length (ins <> outs)
-    then Left "spliceEdge: boundary mismatch"
-    else do
-      diag3 <- mergeBoundaryPairs diag2 (zip (ins <> outs) boundary)
-      validateDiagram diag3
-      pure diag3
-
-updateEdgePayload :: Diagram -> Int -> EdgePayload -> Either Text Diagram
-updateEdgePayload diag edgeKey payload =
-  case IM.lookup edgeKey (dEdges diag) of
-    Nothing -> Left "updateEdgePayload: missing edge"
-    Just edge ->
-      let edge' = edge { ePayload = payload }
-      in Right diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }

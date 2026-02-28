@@ -355,6 +355,10 @@ Current witness constraints:
 
 `map[<ModExpr>](<DiagExpr>)` elaborates by applying declared actions along the composed modality expression.
 
+**Diagram interpretation principle.** Both modality actions and doctrine morphisms use the same universal construction: specifying the image of each generating edge (together with how boundary/object-types are transported) determines a unique extension to all diagrams by structural recursion on diagram shape (boxes/feedback/subdiagrams) and by *splicing* the chosen image at each generator-edge. This is the string-diagram/PROP analogue of how a polygraph/computad presentation freely generates a categorical structure, and an “interpretation of generators” extends uniquely to an interpretation of all composites/tensors.
+
+Reference: explicit action semantics are described in [[https://arxiv.org/abs/2305.05958](https://arxiv.org/abs/2305.05958)]. Background on string diagrams as an internal language for (strict) monoidal categories: Joyal & Street, *The Geometry of Tensor Calculus I* (1991). Background on polygraphs/computads as presentations: Burroni (1993) and Ara–Maltsiniotis et al., *Polygraphs* (PolyBook).
+
 ### 6.1 Classified Modalities (Current Cut)
 
 Classifier lift requirement:
@@ -454,6 +458,7 @@ Removed legacy items:
 ## 9. Morphisms and Pushouts
 
 Morphisms map modes/modalities/types/generators and transport diagrams.
+This replacement is the same “diagram interpretation principle” as for modality actions: the morphism’s generator images extend uniquely to all diagrams by recursion and generator-edge splicing.
 Pushout/coproduct construction remains available and merges doctrine content with compatibility checks.
 `apply` computes a right-biased pushout where target names are preserved and colliding
 functor-body declarations are prefixed/freshened.

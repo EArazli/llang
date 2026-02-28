@@ -16,7 +16,6 @@ module Strat.Poly.Morphism
   , applyMorphismDiagram
   , applyMorphismDiagramWithTables
   , applyMorphismDiagramWithTheories
-  , instantiateGenImageBinders
   , checkMorphismResultWithBudget
   , checkMorphismWithBudget
   , checkMorphism
@@ -36,6 +35,15 @@ import Strat.Poly.Cell2
 import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Diagram
+import Strat.Poly.DiagramInterpretation
+  ( DiagramInterpretation(..)
+  , applySubstBinderSig
+  , applySubstBinderSigs
+  , instantiateGenImageBinders
+  , interpretDiagram
+  , requirePortType
+  , spliceEdge
+  )
 import Strat.Poly.Names
 import Strat.Poly.Obj
 import Strat.Poly.UnifyObj hiding (applySubstDiagram)
@@ -338,61 +346,17 @@ applyMorphismDiagramWithTheories
   -> Diagram
   -> Either Text Diagram
 applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc = do
-  modeTgt <- mapMode mor modeSrc
-  tmCtx <- mapM (applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor) (dTmCtx diagSrc)
-  portTy <- mapM (applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor) (dPortObj diagSrc)
-  let diagTgt0 = diagSrc { dMode = modeTgt, dTmCtx = tmCtx, dPortObj = portTy }
-  let edgeIds = IM.keys (dEdges diagSrc)
-  let step acc edgeKey = do
-        diagTgt <- acc
-        case IM.lookup edgeKey (dEdges diagSrc) of
-          Nothing -> Left "applyMorphismDiagram: missing source edge"
-          Just edgeSrc ->
-            case ePayload edgeSrc of
-              PGen genName attrsSrc bargsSrc -> do
-                genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
-                substSrc <- instantiateGen srcTheory genDecl diagSrc edgeSrc
-                substTgt <- mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor substSrc
-                mappedBargs <- mapM (applyMorphismBinderArgWithTheories srcTheory tgtTheory tgtCtorTables mor) bargsSrc
-                case M.lookup (modeSrc, genName) (morGenMap mor) of
-                  Nothing -> Left "applyMorphismDiagram: missing generator mapping"
-                  Just image0 -> do
-                    let image = giDiagram image0
-                    if dMode image /= modeTgt
-                      then Left "applyMorphismDiagram: generator mapping mode mismatch"
-                      else Right ()
-                    attrSubst <- instantiateAttrSubst mor genDecl attrsSrc
-                    holeSub <- buildBinderHoleSub genDecl mappedBargs
-                    instImage0 <- applySubstDiagram tgtTheory substTgt image
-                    instHoleSigs0 <- applySubstBinderSigsTT tgtTheory substTgt (giBinderSigs image0)
-                    let instImage1 = applyAttrSubstDiagram attrSubst instImage0
-                    instImage <- instantiateGenImageBinders tgtTheory instHoleSigs0 holeSub instImage1
-                    let holeKeys = S.fromList (binderHoleNames (length (binderSlots genDecl)))
-                    let remaining = S.intersection holeKeys (binderMetaVarsDiagram instImage)
-                    if S.null remaining
-                      then Right ()
-                      else Left "applyMorphismDiagram: uninstantiated binder holes in generator image"
-                    instImage' <- weakenDiagramTmCtxTo (dTmCtx diagTgt) instImage
-                    spliceEdge diagTgt edgeKey instImage'
-              PBox name inner -> do
-                inner' <- applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor inner
-                updateEdgePayload diagTgt edgeKey (PBox name inner')
-              PFeedback inner -> do
-                inner' <- applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor inner
-                updateEdgePayload diagTgt edgeKey (PFeedback inner')
-              PSplice x ->
-                updateEdgePayload diagTgt edgeKey (PSplice x)
-              PTmMeta v -> do
-                sort' <- applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor (tmmSort v)
-                updateEdgePayload diagTgt edgeKey (PTmMeta v { tmmSort = sort' })
-              PInternalDrop ->
-                updateEdgePayload diagTgt edgeKey PInternalDrop
-  diagTgt <- foldl step (Right diagTgt0) edgeIds
-  validateDiagram diagTgt
-  pure diagTgt
+  let mapType = applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor
+  let interp =
+        DiagramInterpretation
+          { diMapMode = mapMode mor
+          , diMapTmCtxObj = mapType
+          , diMapPortObj = mapType
+          , diMapTmMetaSort = mapType
+          , diOnGenEdge = onGenEdge
+          }
+  interpretDiagram interp diagSrc
   where
-    modeSrc = dMode diagSrc
-
     binderSlots gen =
       [ bs
       | InBinder bs <- gdDom gen
@@ -407,9 +371,40 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
       let slots = binderSlots gen
       if length slots /= length bargs
         then Left "applyMorphismDiagram: source binder argument arity mismatch"
-        else Right ()
+      else Right ()
       let holes = binderHoleNames (length bargs)
       pure (M.fromList (zip holes bargs))
+
+    onGenEdge diagSrc0 diagTgt edgeKey edgeSrc mappedBargs =
+      case ePayload edgeSrc of
+        PGen genName attrsSrc _bargsSrc -> do
+          let modeSrc = dMode diagSrc0
+          genDecl <- lookupGenInMode (morSrc mor) modeSrc genName
+          substSrc <- instantiateGen srcTheory genDecl diagSrc0 edgeSrc
+          substTgt <- mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor substSrc
+          case M.lookup (modeSrc, genName) (morGenMap mor) of
+            Nothing -> Left "applyMorphismDiagram: missing generator mapping"
+            Just image0 -> do
+              let modeTgt = dMode diagTgt
+              let image = giDiagram image0
+              if dMode image /= modeTgt
+                then Left "applyMorphismDiagram: generator mapping mode mismatch"
+                else Right ()
+              attrSubst <- instantiateAttrSubst mor genDecl attrsSrc
+              holeSub <- buildBinderHoleSub genDecl mappedBargs
+              instImage0 <- applySubstDiagram tgtTheory substTgt image
+              instHoleSigs0 <- applySubstBinderSigs tgtTheory substTgt (giBinderSigs image0)
+              let instImage1 = applyAttrSubstDiagram attrSubst instImage0
+              instImage <- instantiateGenImageBinders tgtTheory instHoleSigs0 holeSub instImage1
+              let holeKeys = S.fromList (binderHoleNames (length (binderSlots genDecl)))
+              let remaining = S.intersection holeKeys (binderMetaVarsDiagram instImage)
+              if S.null remaining
+                then Right ()
+                else Left "applyMorphismDiagram: uninstantiated binder holes in generator image"
+              instImage' <- weakenDiagramTmCtxTo (dTmCtx diagTgt) instImage
+              spliceEdge diagTgt edgeKey instImage'
+        _ ->
+          Left "applyMorphismDiagram: internal error: diOnGenEdge called on non-PGen"
 
 mapSubstWithTheories
   :: TypeTheory
@@ -437,18 +432,6 @@ mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor subst = do
       t' <- applyMorphismTmTermWithTheories srcTheory tgtTheory tgtCtorTables mor t
       pure (v { tmvSort = sort' }, t')
 
-applyMorphismBinderArgWithTheories
-  :: TypeTheory
-  -> TypeTheory
-  -> CtorTables
-  -> Morphism
-  -> BinderArg
-  -> Either Text BinderArg
-applyMorphismBinderArgWithTheories srcTheory tgtTheory tgtCtorTables mor barg =
-  case barg of
-    BAConcrete d -> BAConcrete <$> applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor d
-    BAMeta x -> Right (BAMeta x)
-
 applyMorphismBinderSig :: Morphism -> BinderSig -> Either Text BinderSig
 applyMorphismBinderSig mor sig = do
   tgtCtorTables <- deriveCtorTables (morTgt mor)
@@ -465,167 +448,6 @@ applyMorphismBinderSigInTables tgtCtorTables mor sig = do
   dom' <- mapM (applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor) (bsDom sig)
   cod' <- mapM (applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor) (bsCod sig)
   pure sig { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
-
-applySubstBinderSigTT :: TypeTheory -> Subst -> BinderSig -> Either Text BinderSig
-applySubstBinderSigTT tt subst sig = do
-  tmCtx' <- applySubstCtx tt subst (bsTmCtx sig)
-  dom' <- applySubstCtx tt subst (bsDom sig)
-  cod' <- applySubstCtx tt subst (bsCod sig)
-  pure sig { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
-
-applySubstBinderSigsTT :: TypeTheory -> Subst -> M.Map BinderMetaVar BinderSig -> Either Text (M.Map BinderMetaVar BinderSig)
-applySubstBinderSigsTT tt subst =
-  traverse (applySubstBinderSigTT tt subst)
-
-data SpliceAction
-  = SpliceRename BinderMetaVar
-  | SpliceInsert Diagram
-
-instantiateGenImageBinders
-  :: TypeTheory
-  -> M.Map BinderMetaVar BinderSig
-  -> M.Map BinderMetaVar BinderArg
-  -> Diagram
-  -> Either Text Diagram
-instantiateGenImageBinders tt binderSigs holeSub diag0 = do
-  diag1 <- recurseDiagram diag0
-  expandSplicesLoop diag1
-  where
-    recurseDiagram diag = do
-      edges' <- traverse recurseEdge (dEdges diag)
-      pure diag { dEdges = edges' }
-
-    recurseEdge edge =
-      case ePayload edge of
-        PGen g attrs bargs -> do
-          bargs' <- mapM recurseBinderArg bargs
-          pure edge { ePayload = PGen g attrs bargs' }
-        PBox name inner -> do
-          inner' <- instantiateGenImageBinders tt binderSigs holeSub inner
-          pure edge { ePayload = PBox name inner' }
-        PFeedback inner -> do
-          inner' <- instantiateGenImageBinders tt binderSigs holeSub inner
-          pure edge { ePayload = PFeedback inner' }
-        PSplice x ->
-          pure edge { ePayload = PSplice x }
-        PTmMeta v ->
-          pure edge { ePayload = PTmMeta v }
-        PInternalDrop ->
-          pure edge { ePayload = PInternalDrop }
-      where
-        recurseBinderArg barg =
-          case barg of
-            BAConcrete inner ->
-              BAConcrete <$> instantiateGenImageBinders tt binderSigs holeSub inner
-            BAMeta x ->
-              case M.lookup x holeSub of
-                Nothing ->
-                  if M.member x binderSigs
-                    then Left "applyMorphismDiagram: missing binder-hole substitution"
-                    else Right (BAMeta x)
-                Just mapped ->
-                  case mapped of
-                    BAConcrete d -> do
-                      checkConcreteAgainstSig x d
-                      Right (BAConcrete d)
-                    BAMeta y ->
-                      Right (BAMeta y)
-
-    expandSplicesLoop diag = do
-      mNext <- findExpandableSplice diag
-      case mNext of
-        Nothing -> Right diag
-        Just (edgeKey, action) ->
-          case action of
-            SpliceRename x' -> do
-              diag' <- updateEdgePayload diag edgeKey (PSplice x')
-              expandSplicesLoop diag'
-            SpliceInsert d -> do
-              diag' <- spliceEdge diag edgeKey d
-              expandSplicesLoop diag'
-
-    findExpandableSplice diag =
-      go (IM.toAscList (dEdges diag))
-      where
-        go [] = Right Nothing
-        go ((edgeKey, edge):rest) =
-          case ePayload edge of
-            PSplice hole -> do
-              resolved <- resolveSpliceHole hole
-              case resolved of
-                BAMeta x'
-                  | x' /= hole -> Right (Just (edgeKey, SpliceRename x'))
-                  | otherwise -> go rest
-                BAConcrete d -> do
-                  checkConcreteAgainstSig hole d
-                  checkSpliceInsertion diag edge d
-                  Right (Just (edgeKey, SpliceInsert d))
-            _ -> go rest
-
-    resolveSpliceHole x = resolveAliasChain S.empty [] x
-
-    resolveAliasChain seen chain x
-      | x `S.member` seen =
-          Left ("applyMorphismDiagram: binder-hole alias cycle: " <> renderAliasCycle (reverse (x : chain)))
-      | otherwise =
-          case M.lookup x holeSub of
-            Nothing ->
-              if M.member x binderSigs
-                then Left "applyMorphismDiagram: missing binder-hole substitution"
-                else Right (BAMeta x)
-            Just (BAConcrete d) ->
-              Right (BAConcrete d)
-            Just (BAMeta y) ->
-              if M.member y holeSub
-                then resolveAliasChain (S.insert x seen) (x : chain) y
-                else
-                  if M.member y binderSigs
-                    then Left "applyMorphismDiagram: missing binder-hole substitution"
-                    else Right (BAMeta y)
-
-    checkSpliceInsertion diag edge d = do
-      if dMode d == dMode diag
-        then Right ()
-        else Left "applyMorphismDiagram: splice insertion mode mismatch"
-      tmCaptured <- applySubstCtx tt emptySubst (dTmCtx d)
-      tmHost <- applySubstCtx tt emptySubst (dTmCtx diag)
-      if tmCaptured == tmHost
-        then Right ()
-        else Left "applyMorphismDiagram: splice insertion term-context mismatch"
-      if length (dIn d) == length (eIns edge) && length (dOut d) == length (eOuts edge)
-        then Right ()
-        else Left "applyMorphismDiagram: splice insertion boundary arity mismatch"
-      domSplice <- mapM (requirePortType diag) (eIns edge)
-      codSplice <- mapM (requirePortType diag) (eOuts edge)
-      domCaptured <- mapM (requirePortType d) (dIn d)
-      codCaptured <- mapM (requirePortType d) (dOut d)
-      if domSplice == domCaptured && codSplice == codCaptured
-        then Right ()
-        else Left "applyMorphismDiagram: splice insertion boundary mismatch"
-
-    checkConcreteAgainstSig hole d =
-      case M.lookup hole binderSigs of
-        Nothing -> Right ()
-        Just sig -> do
-          sigTm <- applySubstCtx tt emptySubst (bsTmCtx sig)
-          dTm <- applySubstCtx tt emptySubst (dTmCtx d)
-          if dTm == sigTm
-            then Right ()
-            else Left "applyMorphismDiagram: binder argument term-context mismatch"
-          dDom <- diagramDom d
-          dCod <- diagramCod d
-          dDom' <- applySubstCtx tt emptySubst dDom
-          dCod' <- applySubstCtx tt emptySubst dCod
-          sigDom <- applySubstCtx tt emptySubst (bsDom sig)
-          sigCod <- applySubstCtx tt emptySubst (bsCod sig)
-          if dDom' == sigDom && dCod' == sigCod
-            then Right ()
-            else Left "applyMorphismDiagram: binder argument boundary mismatch"
-
-    renderAliasCycle xs =
-      T.intercalate " -> " (map renderMeta xs)
-
-    renderMeta (BinderMetaVar name) = "?" <> name
 
 checkMorphismResultWithBudget :: SearchBudget -> Morphism -> Either Text MorphismCheckResult
 checkMorphismResultWithBudget budget mor = do
@@ -1553,8 +1375,8 @@ lookupGenInMode doc mode name =
 
 instantiateGen :: TypeTheory -> GenDecl -> Diagram -> Edge -> Either Text Subst
 instantiateGen tt gen diag edge = do
-  dom <- mapM (requirePortType diag) (eIns edge)
-  cod <- mapM (requirePortType diag) (eOuts edge)
+  dom <- mapM (requirePortType "applyMorphismDiagram" diag) (eIns edge)
+  cod <- mapM (requirePortType "applyMorphismDiagram" diag) (eOuts edge)
   s1 <- unifyCtxFromPattern tt (dTmCtx diag) (gdPlainDom gen) dom
   codExpected <- applySubstCtx tt s1 (gdCod gen)
   s2 <- unifyCtxFromPattern tt (dTmCtx diag) codExpected cod
@@ -1578,7 +1400,7 @@ instantiateGen tt gen diag edge = do
         BAMeta _ ->
           Right subst
         BAConcrete inner -> do
-          slot0 <- applySubstBinderSigTT tt subst slot
+          slot0 <- applySubstBinderSig tt subst slot
           slotTm <- applySubstCtx tt emptySubst (bsTmCtx slot0)
           innerTm <- applySubstCtx tt emptySubst (dTmCtx inner)
           if innerTm == slotTm
@@ -1587,7 +1409,7 @@ instantiateGen tt gen diag edge = do
           domInner <- diagramDom inner
           sDom <- unifyCtxFromPattern tt slotTm (bsDom slot0) domInner
           subst1 <- composeSubst tt sDom subst
-          slot1 <- applySubstBinderSigTT tt subst1 slot
+          slot1 <- applySubstBinderSig tt subst1 slot
           slotTm1 <- applySubstCtx tt emptySubst (bsTmCtx slot1)
           codInner <- diagramCod inner
           sCod <- unifyCtxFromPattern tt slotTm1 (bsCod slot1) codInner
@@ -1611,36 +1433,3 @@ instantiateAttrSubst mor gen attrsSrc = do
       sortName' <- mapAttrSort mor sortName
       let v = AttrVar fieldName sortName'
       Right (fieldName, v)
-
-requirePortType :: Diagram -> PortId -> Either Text Obj
-requirePortType diag pid =
-  case diagramPortObj diag pid of
-    Nothing -> Left "applyMorphismDiagram: missing port type"
-    Just ty -> Right ty
-
-spliceEdge :: Diagram -> Int -> Diagram -> Either Text Diagram
-spliceEdge diag edgeKey image = do
-  edge <-
-    case IM.lookup edgeKey (dEdges diag) of
-      Nothing -> Left "spliceEdge: missing edge"
-      Just e -> Right e
-  let ins = eIns edge
-  let outs = eOuts edge
-  diag1 <- deleteEdgeKeepPorts diag (EdgeId edgeKey)
-  let imageShift = shiftDiagram (dNextPort diag1) (dNextEdge diag1) image
-  diag2 <- unionDiagram diag1 imageShift
-  let boundary = dIn imageShift <> dOut imageShift
-  if length boundary /= length (ins <> outs)
-    then Left "spliceEdge: boundary mismatch"
-    else do
-      diag3 <- mergeBoundaryPairs diag2 (zip (ins <> outs) boundary)
-      validateDiagram diag3
-      pure diag3
-
-updateEdgePayload :: Diagram -> Int -> EdgePayload -> Either Text Diagram
-updateEdgePayload diag edgeKey payload =
-  case IM.lookup edgeKey (dEdges diag) of
-    Nothing -> Left "updateEdgePayload: missing edge"
-    Just edge ->
-      let edge' = edge { ePayload = payload }
-      in Right diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }

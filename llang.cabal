@@ -146,6 +146,7 @@ library
       Strat.Poly.CriticalPairs
       Strat.Poly.DefEq
       Strat.Poly.Diagram
+      Strat.Poly.DiagramInterpretation
       Strat.Poly.DiagramIso
       Strat.Poly.Doctrine
       Strat.Poly.DSL.AST
