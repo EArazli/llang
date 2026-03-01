@@ -674,6 +674,7 @@ polyDiagTerm =
     <|> polyMapTerm
     <|> try polyIdTerm
     <|> polySpliceTerm
+    <|> polyTraceTerm
     <|> polyLoopTerm
     <|> polyBoxTerm
     <|> polyGenTerm
@@ -780,6 +781,21 @@ polyLoopTerm = do
   inner <- polyDiagExpr
   _ <- symbol "}"
   pure (PolyAST.RDLoop inner)
+
+polyTraceTerm :: Parser PolyAST.RawDiagExpr
+polyTraceTerm = do
+  _ <- keyword "trace"
+  k <- parseTraceArity
+  _ <- symbol "{"
+  inner <- polyDiagExpr
+  _ <- symbol "}"
+  pure (PolyAST.RDTrace k inner)
+  where
+    parseTraceArity = do
+      n <- integer
+      if n > fromIntegral (maxBound :: Int)
+        then fail "trace arity is too large"
+        else pure (fromInteger n)
 
 polyMapTerm :: Parser PolyAST.RawDiagExpr
 polyMapTerm = do

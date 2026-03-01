@@ -110,6 +110,7 @@ data TemplateExpr
   | TGen GenRef (Maybe [RawPolyObjExpr]) (Maybe [TemplateAttrArg]) (Maybe [TemplateBinderArg])
   | TTermRef Text
   | TBox Text TemplateExpr
+  | TTrace Int TemplateExpr
   | TLoop TemplateExpr
   | TComp TemplateExpr TemplateExpr
   | TTensor TemplateExpr TemplateExpr

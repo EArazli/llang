@@ -189,6 +189,7 @@ validateTemplate info templ =
     TId _ -> Right ()
     TTermRef _ -> Right ()
     TBox _ inner -> validateTemplate info inner
+    TTrace _ inner -> validateTemplate info inner
     TLoop inner -> validateTemplate info inner
     TComp a b -> validateTemplate info a >> validateTemplate info b
     TTensor a b -> validateTemplate info a >> validateTemplate info b

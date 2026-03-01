@@ -10,5 +10,5 @@ run main using main where {
   source mode M;
 }
 ---
-loop { dup ; (f * id[A]) }
+loop { dup ; (id[A] * f) }
 ---

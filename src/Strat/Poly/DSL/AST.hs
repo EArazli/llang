@@ -218,6 +218,7 @@ data RawDiagExpr
   | RDTermRef Text
   | RDSplice Text
   | RDBox Text RawDiagExpr
+  | RDTrace Int RawDiagExpr
   | RDLoop RawDiagExpr
   | RDMap RawModExpr RawDiagExpr
   | RDComp RawDiagExpr RawDiagExpr

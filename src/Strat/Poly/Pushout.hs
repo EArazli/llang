@@ -2049,6 +2049,8 @@ renameDoctrine modeRen modRen attrRen tyRen permRen genRen cellRen oblRen transf
           Right (PolyAST.RDSplice name)
         PolyAST.RDBox name inner ->
           PolyAST.RDBox name <$> renameRawDiagExpr tyVarNames tmVarNames mode inner
+        PolyAST.RDTrace k inner ->
+          PolyAST.RDTrace k <$> renameRawDiagExpr tyVarNames tmVarNames mode inner
         PolyAST.RDLoop inner ->
           PolyAST.RDLoop <$> renameRawDiagExpr tyVarNames tmVarNames mode inner
         PolyAST.RDMap me inner -> do

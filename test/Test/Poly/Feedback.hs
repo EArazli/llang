@@ -6,6 +6,7 @@ module Test.Poly.Feedback
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
@@ -16,7 +17,7 @@ import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.Foliation (foliate, SSAStep(..), SSA(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (EdgePayload(..), ePayload)
+import Strat.Poly.Graph (Edge(..), EdgePayload(..), ePayload, emptyDiagram, freshPort, addEdgePayload, validateDiagram)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
@@ -28,6 +29,12 @@ tests =
   testGroup
     "Poly.Feedback"
     [ testCase "loop elaborates to explicit feedback payload" testFeedbackElab
+    , testCase "trace elaborates to feedback payload with outer inputs" testTraceElab
+    , testCase "trace rejects zero arity" testTraceRejectsZeroArity
+    , testCase "trace rejects body arity smaller than k" testTraceRejectsInsufficientBoundary
+    , testCase "trace rejects suffix feedback object mismatch" testTraceRejectsSuffixMismatch
+    , testCase "trace parser rejects oversized arity literal" testTraceParserRejectsOversizedArity
+    , testCase "kernel validation rejects feedback with zero inferred wires" testKernelRejectsZeroInferredFeedbackWires
     ]
 
 
@@ -45,6 +52,55 @@ testFeedbackElab = do
         StepFeedback {} -> True
         _ -> False
 
+testTraceElab :: Assertion
+testTraceElab = do
+  let doc = mkDoctrine
+  raw <- require (parseDiagExpr "trace 1 { step2 }")
+  diag <- require (elabDiagExpr emptyEnv doc modeM [] raw)
+  assertBool "expected feedback edge with one outer input and one outer output" (hasFeedbackWithIO 1 1 diag)
+  ssa <- require (foliate defaultFoliationPolicy doc modeM diag)
+  assertBool "expected StepFeedback with one input and one output" (any isFeedbackStep (ssaSteps ssa))
+  where
+    isFeedbackStep step =
+      case step of
+        StepFeedback { stepIns = ins, stepOuts = outs } -> length ins == 1 && length outs == 1
+        _ -> False
+
+testTraceRejectsZeroArity :: Assertion
+testTraceRejectsZeroArity = do
+  let doc = mkDoctrine
+  raw <- require (parseDiagExpr "trace 0 { step2 }")
+  expectLeftContains "trace: expected k > 0" (elabDiagExpr emptyEnv doc modeM [] raw)
+
+testTraceRejectsInsufficientBoundary :: Assertion
+testTraceRejectsInsufficientBoundary = do
+  let doc = mkDoctrine
+  raw <- require (parseDiagExpr "trace 3 { step2 }")
+  expectLeftContains "trace: body has fewer inputs than k" (elabDiagExpr emptyEnv doc modeM [] raw)
+
+testTraceRejectsSuffixMismatch :: Assertion
+testTraceRejectsSuffixMismatch = do
+  let doc = mkDoctrine
+  raw <- require (parseDiagExpr "trace 1 { step_bad }")
+  expectLeftContains "trace: feedback input/output objects must match (suffix convention)" (elabDiagExpr emptyEnv doc modeM [] raw)
+
+testTraceParserRejectsOversizedArity :: Assertion
+testTraceParserRejectsOversizedArity =
+  case parseDiagExpr "trace 999999999999999999999999999999999999 { step2 }" of
+    Left err ->
+      assertBool "expected parse error to mention oversized trace arity" ("trace arity is too large" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected parser to reject oversized trace arity"
+
+testKernelRejectsZeroInferredFeedbackWires :: Assertion
+testKernelRejectsZeroInferredFeedbackWires = do
+  let inner = idD modeM [tyT]
+  let (pIn, d0) = freshPort tyT (emptyDiagram modeM [])
+  let (pOut, d1) = freshPort tyT d0
+  d2 <- require (addEdgePayload (PFeedback inner) [pIn] [pOut] d1)
+  let bad = d2 { dIn = [pIn], dOut = [pOut] }
+  expectLeftContains "feedback: expected at least one feedback wire" (validateDiagram bad)
+
 
 hasFeedback :: Diagram -> Bool
 hasFeedback diag =
@@ -55,17 +111,35 @@ hasFeedback diag =
         PFeedback _ -> True
         _ -> False
 
+hasFeedbackWithIO :: Int -> Int -> Diagram -> Bool
+hasFeedbackWithIO inCount outCount diag =
+  any isFeedback (IM.elems (dEdges diag))
+  where
+    isFeedback edge =
+      case ePayload edge of
+        PFeedback _ -> length (eIns edge) == inCount && length (eOuts edge) == outCount
+        _ -> False
+
 
 mkDoctrine :: Doctrine
 mkDoctrine =
   withSelfClassifiedCtors
-    [(modeM, [(ObjName "T", [])])]
+    [(modeM, [(ObjName "T", []), (ObjName "U", [])])]
     Doctrine
       { dName = "D"
       , dModes = mkModes [modeM]
       , dAcyclicModes = S.singleton modeM
       , dAttrSorts = M.empty
-      , dGens = M.fromList [(modeM, M.fromList [(GenName "step", genStep)])]
+      , dGens =
+          M.fromList
+            [ ( modeM
+              , M.fromList
+                  [ (GenName "step", genStep)
+                  , (GenName "step2", genStep2)
+                  , (GenName "step_bad", genStepBad)
+                  ]
+              )
+            ]
       , dCells2 = []
       , dActions = M.empty
       , dObligations = []
@@ -83,6 +157,28 @@ genStep =
     , gdAttrs = []
     }
 
+genStep2 :: GenDecl
+genStep2 =
+  GenDecl
+    { gdName = GenName "step2"
+    , gdMode = modeM
+    , gdParams = []
+    , gdDom = [InPort tyT, InPort tyT]
+    , gdCod = [tyT, tyT]
+    , gdAttrs = []
+    }
+
+genStepBad :: GenDecl
+genStepBad =
+  GenDecl
+    { gdName = GenName "step_bad"
+    , gdMode = modeM
+    , gdParams = []
+    , gdDom = [InPort tyT, InPort tyU]
+    , gdCod = [tyT, tyT]
+    , gdAttrs = []
+    }
+
 
 modeM :: ModeName
 modeM = ModeName "M"
@@ -90,6 +186,20 @@ modeM = ModeName "M"
 
 tyT :: Obj
 tyT = mkCon (ObjRef modeM (ObjName "T")) []
+
+tyU :: Obj
+tyU = mkCon (ObjRef modeM (ObjName "U")) []
+
+
+expectLeftContains :: Text -> Either Text a -> Assertion
+expectLeftContains needle result =
+  case result of
+    Left err ->
+      assertBool
+        ("expected error to contain: " <> T.unpack needle <> ", got: " <> T.unpack err)
+        (needle `T.isInfixOf` err)
+    Right _ ->
+      assertFailure ("expected failure containing: " <> T.unpack needle)
 
 
 require :: Either Text a -> IO a

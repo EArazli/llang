@@ -284,22 +284,64 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           let diag3 = diag2 { dIn = ins, dOut = outs }
           liftEither (validateDiagram diag3)
           pure (diag3, binderSigs')
+        RDTrace k bodyExpr -> do
+          (inner, binderSigs') <- build ttDoc ctorTables curTmCtx binderSigs bodyExpr
+          let dom = dIn inner
+          let cod = dOut inner
+          let inLen = length dom
+          let outLen = length cod
+          if k > 0
+            then pure ()
+            else liftEither (Left "trace: expected k > 0")
+          if inLen >= k
+            then pure ()
+            else liftEither (Left "trace: body has fewer inputs than k")
+          if outLen >= k
+            then pure ()
+            else liftEither (Left "trace: body has fewer outputs than k")
+          let m = inLen - k
+          let n = outLen - k
+          let fbIns = drop m dom
+          let fbOuts = drop n cod
+          fbInTys <- mapM (liftEither . lookupPortTy inner) fbIns
+          fbOutTys <- mapM (liftEither . lookupPortTy inner) fbOuts
+          if fbInTys == fbOutTys
+            then pure ()
+            else liftEither (Left "trace: feedback input/output objects must match (suffix convention)")
+          outerInTys <- mapM (liftEither . lookupPortTy inner) (take m dom)
+          outerOutTys <- mapM (liftEither . lookupPortTy inner) (take n cod)
+          let (outerIns, outer1) = allocPorts outerInTys (emptyDiagram mode curTmCtx)
+          let outer2 = outer1 { dIn = outerIns }
+          let (outerOuts, outer3) = allocPorts outerOutTys outer2
+          let outer4 = outer3 { dOut = outerOuts }
+          outer5 <- liftEither (addEdgePayload (PFeedback inner) outerIns outerOuts outer4)
+          liftEither (validateDiagram outer5)
+          pure (outer5, binderSigs')
         RDLoop innerExpr -> do
           (inner, binderSigs') <- build ttDoc ctorTables curTmCtx binderSigs innerExpr
-          case (dIn inner, dOut inner) of
-            ([pIn], pState:pOuts) -> do
-              stateInTy <- liftEither (lookupPortTy inner pIn)
-              stateOutTy <- liftEither (lookupPortTy inner pState)
-              if stateInTy == stateOutTy
-                then pure ()
-                else liftEither (Left "loop: body first output type must match input type")
-              outTys <- mapM (liftEither . lookupPortTy inner) pOuts
-              let (outs, diag0) = allocPorts outTys (emptyDiagram mode curTmCtx)
-              diag1 <- liftEither (addEdgePayload (PFeedback inner) [] outs diag0)
-              let diag2 = diag1 { dIn = [], dOut = outs }
-              liftEither (validateDiagram diag2)
-              pure (diag2, binderSigs')
-            _ -> liftEither (Left "loop: expected exactly one input and at least one output")
+          let dom = dIn inner
+          let cod = dOut inner
+          let k = length dom
+          if k > 0
+            then pure ()
+            else liftEither (Left "loop: expected body to have at least one input")
+          if length cod >= k
+            then pure ()
+            else liftEither (Left "loop: expected body to have at least as many outputs as inputs")
+          let n = length cod - k
+          let outerOutPortsInner = take n cod
+          let fbOutPorts = drop n cod
+          inTys <- mapM (liftEither . lookupPortTy inner) dom
+          fbOutTys <- mapM (liftEither . lookupPortTy inner) fbOutPorts
+          if inTys == fbOutTys
+            then pure ()
+            else liftEither (Left "loop: expected last k outputs to match inputs (suffix convention)")
+          outerOutTys <- mapM (liftEither . lookupPortTy inner) outerOutPortsInner
+          let (outerOuts, outer0) = allocPorts outerOutTys (emptyDiagram mode curTmCtx)
+          let outer1 = outer0 { dOut = outerOuts }
+          outer2 <- liftEither (addEdgePayload (PFeedback inner) [] outerOuts outer1)
+          liftEither (validateDiagram outer2)
+          pure (outer2, binderSigs')
         RDMap rawMe innerExpr -> do
           me <- liftEither (elabRawModExpr (dModes doc) rawMe)
           (inner, binderSigs') <-
@@ -435,7 +477,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
 
     lookupPortTy d pid =
       case diagramPortObj d pid of
-        Nothing -> Left "loop: internal missing port type"
+        Nothing -> Left "diagram: internal missing port type"
         Just ty -> Right ty
 
     canonicalCtx ttDoc ctx = liftEither (mapM (U.applySubstObj ttDoc U.emptySubst) ctx)
@@ -476,6 +518,7 @@ metaVarsIn expr =
     RDTermRef _ -> []
     RDSplice _ -> []
     RDBox _ inner -> metaVarsIn inner
+    RDTrace _ inner -> metaVarsIn inner
     RDLoop inner -> metaVarsIn inner
     RDMap _ inner -> metaVarsIn inner
     RDComp a b -> metaVarsIn a <> metaVarsIn b

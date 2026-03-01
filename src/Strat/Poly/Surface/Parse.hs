@@ -308,6 +308,7 @@ templateTerm =
     [ try templateId
     , try templateBox
     , try templateLoop
+    , try templateTrace
     , try templateHole
     , try templateTermRef
     , try templateGen
@@ -368,6 +369,21 @@ templateLoop = do
   inner <- templateExpr
   _ <- symbol "}"
   pure (TLoop inner)
+
+templateTrace :: Parser TemplateExpr
+templateTrace = do
+  _ <- keyword "trace"
+  k <- parseTraceArity
+  _ <- symbol "{"
+  inner <- templateExpr
+  _ <- symbol "}"
+  pure (TTrace k inner)
+  where
+    parseTraceArity = do
+      n <- integer
+      if n > fromIntegral (maxBound :: Int)
+        then fail "trace arity is too large"
+        else pure (fromInteger n)
 
 templateHole :: Parser TemplateExpr
 templateHole = lexeme $ do

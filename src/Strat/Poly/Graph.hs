@@ -301,23 +301,33 @@ validateDiagram diag = do
             then Left "validateDiagram: feedback term context mismatch"
             else Right ()
           validateDiagram inner
-          innerDom <- mapM (requirePortType inner) (dIn inner)
-          innerCod <- mapM (requirePortType inner) (dOut inner)
-          outerDom <- mapM (requirePortType diag) (eIns edge)
-          outerCod <- mapM (requirePortType diag) (eOuts edge)
-          if null outerDom
+          domOuter <- mapM (requirePortType diag) (eIns edge)
+          codOuter <- mapM (requirePortType diag) (eOuts edge)
+          domInner <- mapM (requirePortType inner) (dIn inner)
+          codInner <- mapM (requirePortType inner) (dOut inner)
+          let m = length domOuter
+          let n = length codOuter
+          if length domInner >= m
             then Right ()
-            else Left "validateDiagram: feedback edge must not consume outer inputs"
-          case (innerDom, innerCod) of
-            ([stateIn], stateOut : codTail) -> do
-              if stateIn /= stateOut
-                then Left "validateDiagram: feedback body first output must match input type"
-                else Right ()
-              if outerCod == codTail
-                then Right ()
-                else Left "validateDiagram: feedback outer outputs mismatch body outputs"
-            _ ->
-              Left "validateDiagram: feedback body must have one input and at least one output"
+            else Left "feedback: inner has fewer inputs than outer"
+          let k = length domInner - m
+          if k > 0
+            then Right ()
+            else Left "feedback: expected at least one feedback wire"
+          if length codInner == n + k
+            then Right ()
+            else Left "feedback: inner outputs must be outer outputs plus feedback outputs"
+          if take m domInner == domOuter
+            then Right ()
+            else Left "feedback: inner input prefix must match outer inputs"
+          if take n codInner == codOuter
+            then Right ()
+            else Left "feedback: inner output prefix must match outer outputs"
+          let fbIn = drop m domInner
+          let fbOut = drop n codInner
+          if fbIn == fbOut
+            then Right ()
+            else Left "feedback: feedback input/output objects must match"
         PSplice _ -> Right ()
         PTmMeta v -> do
           outTy <-

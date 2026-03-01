@@ -1,0 +1,29 @@
+doctrine TraceDemo where {
+  mode M acyclic classifiedBy M via M.U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_M : [] -> [M.U_M] @M;
+  gen T : [] -> [M.U_M] @M;
+
+  -- A body suitable for tracing 1 wire:
+  -- dom = [T, T], cod = [T, T]
+  gen step2 : [T, T] -> [T, T] @M;
+}
+
+derived doctrine TraceDemo_SSA = foliated TraceDemo mode M;
+
+pipeline main where {
+  extract foliate into TraceDemo_SSA;
+  extract diagram;
+}
+
+run main using main where {
+  source doctrine TraceDemo;
+  source mode M;
+}
+
+---
+trace 1 { step2 }
+---

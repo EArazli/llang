@@ -48,6 +48,7 @@ tests =
     , testCase "surface type annotations support term-indexed constructor args" testSurfaceConstructorTermArgInTypeAnnotation
     , testCase "surface term-indexed annotations can reference bound terms" testSurfaceConstructorTermArgUsesBoundBinder
     , testCase "template @TermName splice uses module term" testSurfaceTemplateSplice
+    , testCase "surface template trace elaborates to feedback with outer boundary" testSurfaceTemplateTrace
     , testCase "surface elaboration eliminates to base doctrine" testSurfaceEliminatesToBaseDoctrine
     ]
 
@@ -90,6 +91,20 @@ spliceSpecText =
     , "}"
     ]
 
+traceTemplateSpecText :: Text
+traceTemplateSpecText =
+  T.unlines
+    [ "doctrine TestDoc;"
+    , "  mode M;"
+    , "lexer {"
+    , "  symbols: ;"
+    , "}"
+    , "expr {"
+    , "  atom:"
+    , "    ident(name) => trace 1 { #name };"
+    , "}"
+    ]
+
 modeM :: ModeName
 modeM = ModeName "M"
 
@@ -126,10 +141,12 @@ mkDoctrine hasDup hasDrop =
       genDrop = mkGen "drop" [aVar] [OVar aVar] []
       genA = mkGen "A" [] [] [universe]
       genF = mkGen "f" [] [typeA, typeA] [typeA]
+      genStep2 = mkGen "step2" [] [typeA, typeA] [typeA, typeA]
       genUnit = mkGen "unit" [] [] [typeA]
       gens =
         [ (GenName "A", genA)
         , (GenName "f", genF)
+        , (GenName "step2", genStep2)
         , (GenName "unit", genUnit)
         ]
           <> [ (GenName "dup", genDup) | hasDup ]
@@ -850,6 +867,21 @@ testSurfaceTemplateSplice = do
       Left err -> assertFailure (T.unpack err)
       Right ok -> pure ok
   assertBool "expected spliced term diagram" iso
+
+testSurfaceTemplateTrace :: Assertion
+testSurfaceTemplateTrace = do
+  let doc = mkDoctrine True True
+  surf <- either (assertFailure . T.unpack) pure (mkSurfaceWithSpec traceTemplateSpecText doc)
+  diag <- either (assertFailure . T.unpack) pure (elabSurfaceDiagram emptyEnv doc surf "step2")
+  assertEqual "trace should expose one outer input" 1 (length (dIn diag))
+  assertEqual "trace should expose one outer output" 1 (length (dOut diag))
+  case IM.elems (dEdges diag) of
+    [Edge _ (PFeedback body) ins outs] -> do
+      assertEqual "feedback edge should consume one outer input" 1 (length ins)
+      assertEqual "feedback edge should produce one outer output" 1 (length outs)
+      assertEqual "feedback body should have two inputs" 2 (length (dIn body))
+      assertEqual "feedback body should have two outputs" 2 (length (dOut body))
+    _ -> assertFailure "expected exactly one feedback edge"
 
 testSurfaceEliminatesToBaseDoctrine :: Assertion
 testSurfaceEliminatesToBaseDoctrine = do

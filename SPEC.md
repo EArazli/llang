@@ -309,10 +309,42 @@ A `Diagram` is a typed port graph with edge payloads:
 
 - `PGen`
 - `PBox`
-- `PFeedback`
+- `PFeedback` (traced feedback node; see “Feedback as trace” below)
 - `PSplice`
 - `PTmMeta`
 - `PInternalDrop` (kernel-internal, non-surface payload)
+
+### Feedback as trace
+
+`PFeedback inner` represents the trace (feedback) operator in string-diagram form.
+
+An outer diagram contains an edge `e` with payload `PFeedback inner`. Let:
+
+- `A` be the list of objects on outer input ports `eIns`.
+- `B` be the list of objects on outer output ports `eOuts`.
+- `dom(inner)` / `cod(inner)` be the boundary object lists of `inner`.
+
+The edge is well-typed iff there exists a non-empty feedback list `X = [X1, ..., Xk]` with `k > 0` such that:
+
+- `dom(inner) = A ++ X`
+- `cod(inner) = B ++ X`
+
+Equivalently, with `m = |A|` and `n = |B|`:
+
+- `k = |dom(inner)| - m` and `k > 0`
+- `|cod(inner)| = n + k`
+- `drop m (dom(inner))` and `drop n (cod(inner))` match pointwise
+
+This is the standard traced-monoidal operator:
+
+    Tr^X : Hom(A ⊗ X, B ⊗ X) -> Hom(A, B)
+
+Suffix convention: the feedback wires are the suffix wires of `inner` (last `k` inputs and last `k` outputs).
+
+Syntactic sugar:
+
+- `trace k { d }` traces the last `k` boundary wires of `d`.
+- `loop { d }` traces all inputs of `d`: if `d : X -> (B ++ X)` with `|X| > 0`, then `loop { d } : [] -> B`.
 
 Matching and rewriting are structural and mode-aware.
 
@@ -510,6 +542,11 @@ Top-level functor/apply items:
 
 - `doctrine_functor F(A : SA, B : SB, ...) where { ... }`
 - `doctrine New = apply F to Target using { A = implA; B = implB; ... };`
+
+Diagram-level trace/feedback constructs:
+
+- `trace k { d }` traces the suffix of size `k` (requires `k > 0`).
+- `loop { d }` is sugar for tracing all inputs of `d` (suffix convention).
 
 Functor namespace/use rules:
 

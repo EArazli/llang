@@ -601,6 +601,9 @@ evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList templ 
     TBox name inner -> do
       innerDiag <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList inner
       liftEither (boxSurf mode name innerDiag)
+    TTrace k inner -> do
+      innerDiag <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList inner
+      liftEither (traceSurf mode k innerDiag)
     TLoop inner -> do
       innerDiag <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList inner
       liftEither (loopSurf innerDiag)
@@ -1138,31 +1141,77 @@ boxSurf mode name inner = do
   tags' <- remapTags (sdDiag inner) ins outs (sdTags inner)
   pure SurfDiag { sdDiag = diag3, sdUses = uses', sdTags = tags' }
 
+traceSurf :: ModeName -> Int -> SurfDiag -> Either Text SurfDiag
+traceSurf mode k sd = do
+  let inner = sdDiag sd
+  let dom = dIn inner
+  let cod = dOut inner
+  let inLen = length dom
+  let outLen = length cod
+  if k > 0
+    then Right ()
+    else Left "trace: expected k > 0"
+  if inLen >= k
+    then Right ()
+    else Left "trace: body has fewer inputs than k"
+  if outLen >= k
+    then Right ()
+    else Left "trace: body has fewer outputs than k"
+  let m = inLen - k
+  let n = outLen - k
+  let fbIns = drop m dom
+  let fbOuts = drop n cod
+  fbInTys <- mapM (requirePortTy inner) fbIns
+  fbOutTys <- mapM (requirePortTy inner) fbOuts
+  if fbInTys == fbOutTys
+    then Right ()
+    else Left "trace: feedback input/output objects must match (suffix convention)"
+  outerInTys <- mapM (requirePortTy inner) (take m dom)
+  outerOutTys <- mapM (requirePortTy inner) (take n cod)
+  let (outerIns, outer0) = allocPorts outerInTys (emptyDiagram mode (dTmCtx inner))
+  let outer1 = outer0 { dIn = outerIns }
+  let (outerOuts, outer2) = allocPorts outerOutTys outer1
+  let outer3 = outer2 { dOut = outerOuts }
+  outer4 <- addEdgePayload (PFeedback inner) outerIns outerOuts outer3
+  validateDiagram outer4
+  uses' <- remapUses inner outerIns outerOuts (sdUses sd)
+  tags' <- remapTags inner outerIns outerOuts (sdTags sd)
+  pure sd { sdDiag = outer4, sdUses = uses', sdTags = tags' }
+
 loopSurf :: SurfDiag -> Either Text SurfDiag
-loopSurf sd =
-  case (dIn (sdDiag sd), dOut (sdDiag sd)) of
-    ([pIn], pState : pOuts) -> do
-      stateInTy <- requirePortTy (sdDiag sd) pIn
-      stateOutTy <- requirePortTy (sdDiag sd) pState
-      if stateInTy == stateOutTy
-        then Right ()
-        else Left "loop: body first output type must match input type"
-      outTys <- mapM (requirePortTy (sdDiag sd)) pOuts
-      let (outs, diag0) = allocPorts outTys (emptyDiagram (dMode (sdDiag sd)) (dTmCtx (sdDiag sd)))
-      diag1 <- addEdgePayload (PFeedback (sdDiag sd)) [] outs diag0
-      let diag2 = diag1 { dIn = [], dOut = outs }
-      validateDiagram diag2
-      let mapping = M.fromList (zip pOuts outs)
-      let remap p = M.findWithDefault p p mapping
-      let uses' = M.map (map remap) (sdUses sd)
-      let tags' = M.map (map remap) (sdTags sd)
-      pure sd { sdDiag = diag2, sdUses = uses', sdTags = tags' }
-    _ -> Left "loop: expected exactly one input and at least one output"
-  where
-    requirePortTy d p =
-      case diagramPortObj d p of
-        Nothing -> Left "loop: internal missing port type"
-        Just ty -> Right ty
+loopSurf sd = do
+  let inner = sdDiag sd
+  let dom = dIn inner
+  let cod = dOut inner
+  let k = length dom
+  if k > 0
+    then Right ()
+    else Left "loop: expected body to have at least one input"
+  if length cod >= k
+    then Right ()
+    else Left "loop: expected body to have at least as many outputs as inputs"
+  let n = length cod - k
+  let outerOutPortsInner = take n cod
+  let fbOutPorts = drop n cod
+  inTys <- mapM (requirePortTy inner) dom
+  fbOutTys <- mapM (requirePortTy inner) fbOutPorts
+  if inTys == fbOutTys
+    then Right ()
+    else Left "loop: expected last k outputs to match inputs (suffix convention)"
+  outerOutTys <- mapM (requirePortTy inner) outerOutPortsInner
+  let (outerOuts, outer0) = allocPorts outerOutTys (emptyDiagram (dMode inner) (dTmCtx inner))
+  let outer1 = outer0 { dOut = outerOuts }
+  outer2 <- addEdgePayload (PFeedback inner) [] outerOuts outer1
+  validateDiagram outer2
+  uses' <- remapUses inner [] outerOuts (sdUses sd)
+  tags' <- remapTags inner [] outerOuts (sdTags sd)
+  pure sd { sdDiag = outer2, sdUses = uses', sdTags = tags' }
+
+requirePortTy :: Diagram -> PortId -> Either Text Obj
+requirePortTy d p =
+  case diagramPortObj d p of
+    Nothing -> Left "surface: internal missing port type"
+    Just ty -> Right ty
 
 remapUses :: Diagram -> [PortId] -> [PortId] -> Uses -> Either Text Uses
 remapUses inner outerIns outerOuts uses = do
