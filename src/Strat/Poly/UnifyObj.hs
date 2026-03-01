@@ -29,7 +29,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import Control.Monad (foldM)
-import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..), ModDecl(..), ModeTheory(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
 import Strat.Poly.ObjClassifier (modeClassifierMode)
@@ -51,8 +51,7 @@ import Strat.Poly.TypeTheory
   )
 import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.DefEq
-  ( normalizeObjDeep
-  , normalizeObjDeepWithCtx
+  ( normalizeObjDeepWithCtx
   , normalizeTermDiagram
   , termToDiagram
   )
@@ -655,24 +654,35 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
 applySubstObj :: TypeTheory -> Subst -> Obj -> Either Text Obj
 applySubstObj tt subst ty = do
   raw <- goTy S.empty ty
-  if needsTmCtxType raw
-    then normalizeObjExpr (ttModes tt) raw
-    else normalizeObjDeep tt raw
+  tmCtx <- inferObjTmCtx raw
+  normalizeObjDeepWithCtx tt tmCtx raw
   where
-    needsTmCtxType expr =
-      needsTmCtxCode (objCode expr)
+    -- | Infer a term-context large enough to deep-normalize an object by
+    -- | merging the term-contexts of all embedded term arguments.
+    --
+    -- This is the least upper bound of all embedded dTmCtx's under the prefix order
+    -- (implemented by mergeTermCtx). If an Obj contains embedded terms whose contexts
+    -- are incompatible (non-prefix-compatible), the Obj is ill-formed and we fail.
+    inferObjTmCtx :: Obj -> Either Text [Obj]
+    inferObjTmCtx o = do
+      let ctxs = collectObjCtxs o
+      foldM mergeTermCtx [] ctxs
 
-    needsTmCtxCode code =
-      case code of
-        CTMeta _ -> False
-        CTLift _ innerCode -> needsTmCtxCode innerCode
-        CTCon _ args -> any needsTmCtxArg args
+    collectObjCtxs :: Obj -> [[Obj]]
+    collectObjCtxs Obj { objCode = code } = collectCodeCtxs code
 
-    needsTmCtxArg arg =
-      case arg of
-        CAObj innerTy -> needsTmCtxType innerTy
-        CATm tm ->
-          not (S.null (boundTmIndicesTerm tm)) || maxTmScopeTerm tm > 0
+    collectCodeCtxs :: CodeTerm -> [[Obj]]
+    collectCodeCtxs c =
+      case c of
+        CTMeta _ -> []
+        CTLift _ inner -> collectCodeCtxs inner
+        CTCon _ args -> concatMap collectArgCtxs args
+
+    collectArgCtxs :: CodeArg -> [[Obj]]
+    collectArgCtxs a =
+      case a of
+        CAObj inner -> collectObjCtxs inner
+        CATm tm -> [dTmCtx (unTerm tm)]
 
     goTy seen expr =
       let ownerMode = objOwnerMode expr
@@ -726,7 +736,7 @@ applySubstObj tt subst ty = do
           CAObj <$> goTy seen innerTy
         (TPS_Tm sortTy, CATm tmArg) -> do
           sort' <- goTy seen sortTy
-          CATm <$> applySubstTmMaybeNormalize tt subst sort' tmArg
+          CATm <$> applySubstTm tt subst sort' tmArg
         (TPS_Ty _, CATm _) ->
           Left "applySubstObj: expected type argument for constructor parameter"
         (TPS_Tm _, CAObj _) ->
@@ -737,7 +747,7 @@ applySubstObj tt subst ty = do
         CAObj innerTy -> CAObj <$> goTy seen innerTy
         CATm tmArg -> do
           sort <- inferTmSortFromDiagram tt subst tmArg
-          CATm <$> applySubstTmMaybeNormalize tt subst sort tmArg
+          CATm <$> applySubstTm tt subst sort tmArg
 
 applySubstTm :: TypeTheory -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
 applySubstTm tt subst expectedSort tm =
@@ -795,7 +805,7 @@ normalizeSubst tt subst = do
           pure (v, CAObj t')
         CATm t -> do
           sort' <- applySubstObj tt subst (tmvSort v)
-          t' <- applySubstTmMaybeNormalize tt subst sort' t
+          t' <- applySubstTm tt subst sort' t
           pure (v { tmvSort = sort' }, CATm t')
 
     isIdentity v binding =
@@ -817,7 +827,7 @@ composeSubst tt s2 s1 = do
           pure (v, CAObj t')
         CATm t -> do
           sort' <- applySubstObj tt subst (tmvSort v)
-          t' <- applySubstTmMaybeNormalize tt subst sort' t
+          t' <- applySubstTm tt subst sort' t
           pure (v { tmvSort = sort' }, CATm t')
 
     ensureCategoryCompatible left right =
@@ -836,24 +846,6 @@ composeSubst tt s2 s1 = do
         (CAObj _, CAObj _) -> True
         (CATm _, CATm _) -> True
         _ -> False
-
-applySubstTmMaybeNormalize :: TypeTheory -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
-applySubstTmMaybeNormalize tt subst expectedSort tm =
-  if S.null (boundTmIndicesTerm tm) && maxTmScopeTerm tm == 0
-    then applySubstTm tt subst expectedSort tm
-    else applySubstTmNoNormalize tt subst expectedSort tm
-
-applySubstTmNoNormalize :: TypeTheory -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
-applySubstTmNoNormalize tt subst expectedSort tm = do
-  tmGraph <- applySubstDiagram tt subst (unTerm tm)
-  let tmSub = TermDiagram tmGraph
-  let tmCtx = dTmCtx (unTerm tmSub)
-  expectedSort0 <- applySubstObj tt subst expectedSort
-  expectedSort' <- normalizeObjDeepWithCtx tt tmCtx expectedSort0
-  expr <- diagramToTermExpr tt tmCtx expectedSort' tmSub
-  (tmCtxOut, expr') <- substituteTermExprMetas tt subst tmCtx expectedSort' expr
-  expectedSortOut <- normalizeObjDeepWithCtx tt tmCtxOut expectedSort0
-  termExprToDiagram tt tmCtxOut expectedSortOut expr'
 
 substituteTermExprMetas
   :: TypeTheory
@@ -921,16 +913,6 @@ mergeTermCtx left right =
         (Just a, Nothing) -> Right a
         (Nothing, Just b) -> Right b
         (Nothing, Nothing) -> Left "applySubstTm: internal context merge failure"
-
-maxTmScopeTerm :: TermDiagram -> Int
-maxTmScopeTerm tm =
-  maximum
-    ( 0
-        : [ tmvScope v
-          | edge <- IM.elems (dEdges (unTerm tm))
-          , PTmMeta v <- [ePayload edge]
-          ]
-    )
 
 inferExpectedTmSort :: TypeTheory -> [Obj] -> Subst -> TermDiagram -> TermDiagram -> Either Text Obj
 inferExpectedTmSort tt tmCtx subst lhs rhs =

@@ -798,7 +798,13 @@ freshTmVar :: TypeTheory -> [Obj] -> TmVar -> Fresh (TmVar, TermDiagram)
 freshTmVar ttDoc tmCtx v = do
   n <- freshInt
   let name = tmvName v <> T.pack ("#" <> show n)
-  let fresh = TmVar { tmvName = name, tmvSort = tmvSort v, tmvScope = max (tmvScope v) (length tmCtx), tmvOwnerMode = Nothing }
+  let fresh =
+        TmVar
+          { tmvName = name
+          , tmvSort = tmvSort v
+          , tmvScope = max (tmvScope v) (length (modeCtxGlobals tmCtx (objOwnerMode (tmvSort v))))
+          , tmvOwnerMode = Nothing
+          }
   tm <- liftEither (termExprToDiagramChecked ttDoc tmCtx (tmvSort fresh) (TMMeta fresh (defaultMetaArgs tmCtx fresh)))
   pure (v, tm)
 

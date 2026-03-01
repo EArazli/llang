@@ -2,7 +2,7 @@
 
 ## 1. Term Diagram Fragment
 
-Term arguments (`TATm`) normalize through restricted diagram fragments that depend on the mode's defeq engine:
+Term arguments (`CATm`) normalize through restricted diagram fragments that depend on the mode's defeq engine:
 
 - `TRS` defeq term-argument fragment:
   - one output
@@ -19,64 +19,59 @@ Term arguments (`TATm`) normalize through restricted diagram fragments that depe
   - `PTmMeta` inputs must be boundary ports; explicit meta arguments may choose any boundary subset/order
   - `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
 
-## 2. Context-sensitive Normalization
-
-Term normalization requires enough same-mode bound context for scoped reductions.
-If a scoped term needs concrete context (for example it mentions non-meta structure), normalization fails with an explicit error.
-Pure metavariable terms may be preserved as-is when context is insufficient.
-
-## 3. Definitional TRS Admissibility
+## 2. Definitional TRS Admissibility
 
 Dependent definitional term normalization is fuel-free, but only for admissible term TRSs.
 Doctrine validation rejects term-rule sets when termination is not proven (SCT) or when
 critical pairs are not joinable after normalization.
 
-## 4. Surface Structural Capabilities
+## 3. Surface Structural Capabilities
 
 Surface duplication/drop are capability-based and resolved through default `implements` instances for the target doctrine.
 Any mapped source generator with the required polymorphic unary shape can provide `dup`/`drop`; there is no local-name fallback path.
 
-## 5. Term Rule Compilation Shape
+## 4. Term Rule Compilation Shape
 
 Term rewrite compilation requires function-headed left-hand sides and a first-order term fragment
 (no residual `TMVar` after abstraction to `TMBound`). Rules outside this fragment are rejected for
 definitional normalization.
 
-## 6. Bound-Index Reporting Is Output-Reachable
+## 5. Bound-Index Reporting Is Output-Reachable
 
 `boundTmIndicesTerm` reports bound indices reachable from term outputs.
 Disconnected dead subgraphs do not contribute to reported bound indices.
 
-## 7. Doctrine Functors
+## 6. Doctrine Functors
 
 - **Persistent restriction (kept intentionally):** functor parameter schemas are signature-only.
   Allowed: modes, modalities, `mod_eq`, attrsort/type/gen/data declarations.
   Disallowed (compiler error): cells/rules, actions, obligations, and `mod_transform`.
 
-## 8. Transform Restrictions (Phase 2)
+## 7. Transform Restrictions (Phase 2)
 
 - `mod_transform` does not rewrite modalities and does not change `mod_eq`.
 - The witness must be a generator with exactly one type variable, no term vars, no attrs, one input port, and one output type.
 - Witness shape is constrained to `mu(A) -> nu(A)` (checked after modality/type normalization).
 - No automatic transform coercion insertion is performed; witnesses must be used explicitly.
 
-## 9. NbE Fragment Coverage Is Intentionally Narrow
+## 8. NbE Fragment Coverage Is Intentionally Narrow
 
 Current NbE normalization targets a strict lambda-calculus fragment for definitional equality.
-Unsupported constructs (for now) include structural diagram features such as splice/feedback/box/tensor/comp/symmetry in definitional normalization paths.
+Unsupported constructs (for now) include box/feedback/splice nodes, generator attrs, and binder metavariables; non-lambda generators cannot carry binder args.
 This is a scope restriction, not a fundamental limitation, and should be revisited after core NbE stability and soundness are locked in.
 Follow-up work item: expand supported definitional fragment after NbE core stability/soundness are established.
 
-## 10. Classification Graph Limits
+## 9. Classification Graph Limits
 
 - Non-self classification cycles are rejected. Allowing longer cycles would require an explicit universe-level stratification design and implementation.
 
-## 11. Constructor/Surface Caveats
+## 10. Constructor/Surface Caveats
 
 - Constructor term-parameter sorts are required to be closed with respect to the generator's type parameters.
-- Surface type annotations do not support constructor parameters of kind `TPS_Tm`; term-indexed arguments must be expressed through core/kernel paths.
+- Surface type annotations support constructor parameters of kind `TPS_Tm`.
+  Such arguments are elaborated with the same term elaboration path used by doctrine elaboration (including in-scope surface term binders): the raw argument is elaborated as a term-expression `RawPolyObjExpr` to a `TermDiagram` at the required sort and stored as `CATm`.
 
-## 12. Mode Equations
+## 11. Mode Equations
 
 Mode theory `mod_eq` declarations are treated as an oriented rewrite system used to normalize modality expressions (so that definitional equality is equality of normal forms).
 

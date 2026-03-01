@@ -96,6 +96,23 @@ Current elaboration rule:
 - constructor signatures are derived from the generator parameter telescope order (`gdParams`), not from split ty/tm lists.
 - legacy `dTypes`/`TypeSig` tables have been removed from kernel and tests; constructor resolution/typechecking is fully driven by derived constructor tables from classifier generators.
 
+### Surface elaboration of object expressions
+
+Object expressions are the concrete syntax for *codes* in a universe object `U_m` associated to an owner mode `m`. Categorically, this corresponds to the internal language of a category-with-families / contextual category: types are elements of a universe (codes), and dependent type formers are operations on those codes parameterized by terms.
+
+The implementation uses a single object-expression elaborator for both:
+- doctrine/kernel elaboration (strict name resolution), and
+- surface type annotations (implicit holes).
+
+Elaboration is guided by the constructor’s parameter signature `TypeParamSig`:
+- For a parameter `TPS_Ty`, the argument elaborates to an object expression in the classifier and is stored as an object argument (`CAObj`).
+- For a parameter `TPS_Tm s`, the argument elaborates as a term of sort `s` (in the owner mode of `s`) and is stored as a term argument (`CATm`) as a `TermDiagram`.
+
+Surface type annotations additionally adopt the following convention:
+- If an identifier in type position is neither an in-scope explicit type metavariable nor a nullary type constructor in the classifier of the expected owner mode, it elaborates to an *implicit type metavariable* (a hole) of sort `U_m`.
+
+References (standard): Dybjer, “Internal Type Theory” (categories with families); Cartmell (contextual categories / generalized algebraic theories); and the literature relating CwFs, comprehension categories, and dependent type theory.
+
 ### 2.6 Worked Examples
 
 Two-layer example (`Ty` classifies `Tm`):
@@ -328,6 +345,22 @@ Well-formed term metavariable occurrences satisfy `length(spine) = scope(X)`.
 
 Implementation note: the internal term-expression AST uses a single constructor for metavariables, `TMMeta X spine`. The earlier special case “implicit metavariable with canonical-prefix arguments” is not a separate constructor; it is represented by `TMMeta X defaultSpine`, where `defaultSpine` is the mode-local prefix of length `scope` in the ambient term context.
 
+### Support contexts and context-inferred normalization
+
+In the categorical semantics of dependent type theory (e.g. categories with attributes / categories with families), types and terms are inherently **indexed by a context** and substitution is reindexing along context morphisms. In particular, the kernel’s object expressions (`Obj`) should be treated as *types-in-context*, even when their only dependence on the context is mediated through embedded term arguments.
+
+In llang, an `Obj` can contain embedded term arguments as `CATm TermDiagram` inside constructor applications. Each such `TermDiagram` carries an explicit term-context `dTmCtx`. Define the **support context** of an object expression `T`, written `supp(T)`, to be the least context `Γ` (least upper bound under the prefix order) such that for every embedded term argument `t` occurring anywhere inside `T`, the stored context `dTmCtx(t)` is a prefix of `Γ`.
+
+Deep normalization of objects is defined relative to this support context:
+
+* `normalizeObjDeep(T)  ≔  normalizeObjDeepWithCtx(tt, supp(T), T)`.
+
+Operationally, `supp(T)` is computed by collecting all `dTmCtx` lists from embedded `CATm` term arguments in `T` and merging them via prefix-compatible context join. If two embedded term arguments demand incompatible contexts (not prefix-compatible), then `T` is ill-formed as a type-in-context and deep normalization fails.
+
+This removes the previous implementation artifact where substitution/normalization of objects avoided deep normalization whenever an object contained open term arguments.
+
+(References: contextual categories/categories with attributes (Cartmell) and categories with families (Dybjer); contextual type theory for metavariables with explicit contexts and context-merging operations.)
+
 ### 5.3 Meta Substitution
 
 Kernel substitution is a single metavariable substitution environment.
@@ -558,3 +591,9 @@ No discipline lattice is consulted.
 ## 11. Restrictions
 
 See `RESTRICTIONS.md`.
+
+## References
+
+- Cartmell, *Generalised Algebraic Theories and Contextual Categories* (1986).
+- Dybjer, *Internal Type Theory* (1996).
+- Boespflug & Pientka, *Multi-Level Contextual Type Theory* (2011).

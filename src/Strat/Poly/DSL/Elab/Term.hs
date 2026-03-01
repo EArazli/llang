@@ -12,6 +12,7 @@ module Strat.Poly.DSL.Elab.Term
   , elabContextWithTables
   , elabObjExpr
   , elabObjExprWithTables
+  , elabObjExprWithTablesImplicitMetas
   , elabObjExprInferOwner
   , elabObjExprInferOwnerWithTables
   , elabTmTerm
@@ -233,6 +234,10 @@ elabObjExpr doc tyVars tmVars tmBound expectedOwnerMode expr = do
   ctorTables <- deriveCtorTables doc
   elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode expr
 
+data UnknownTypeNamePolicy
+  = UnknownTypeIsError
+  | UnknownTypeIsImplicitMeta
+
 elabObjExprWithTables
   :: Doctrine
   -> CtorTables
@@ -243,6 +248,31 @@ elabObjExprWithTables
   -> RawPolyObjExpr
   -> Either Text Obj
 elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode expr =
+  elabObjExprWithTables_ UnknownTypeIsError doc ctorTables tyVars tmVars tmBound expectedOwnerMode expr
+
+elabObjExprWithTablesImplicitMetas
+  :: Doctrine
+  -> CtorTables
+  -> [TmVar]
+  -> [TmVar]
+  -> M.Map Text (Int, Obj)
+  -> ModeName
+  -> RawPolyObjExpr
+  -> Either Text Obj
+elabObjExprWithTablesImplicitMetas doc ctorTables tyVars tmVars tmBound expectedOwnerMode expr =
+  elabObjExprWithTables_ UnknownTypeIsImplicitMeta doc ctorTables tyVars tmVars tmBound expectedOwnerMode expr
+
+elabObjExprWithTables_
+  :: UnknownTypeNamePolicy
+  -> Doctrine
+  -> CtorTables
+  -> [TmVar]
+  -> [TmVar]
+  -> M.Map Text (Int, Obj)
+  -> ModeName
+  -> RawPolyObjExpr
+  -> Either Text Obj
+elabObjExprWithTables_ pol doc ctorTables tyVars tmVars tmBound expectedOwnerMode expr =
   case expr of
     RPTVar name -> do
       case [v | v <- tyVars, tmvName v == name] of
@@ -253,8 +283,8 @@ elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode exp
             else Left "type variable mode mismatch"
         (_:_:_) -> Left ("duplicate type variable name: " <> name)
         [] -> do
-          ref <-
-            resolveTypeRefInClassifierInTables
+          mRef <-
+            resolveTypeRefInClassifierMaybeInTables
               doc
               ctorTables
               expectedOwnerMode
@@ -263,17 +293,25 @@ elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode exp
                 { rtrMode = Nothing
                 , rtrName = name
                 }
-          params <- lookupCtorSigForOwnerInTables doc ctorTables expectedOwnerMode ref
-          if null params
-            then Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTCon ref [] }
-            else Left "type constructor arity mismatch"
+          case mRef of
+            Just ref -> do
+              params <- lookupCtorSigForOwnerInTables doc ctorTables expectedOwnerMode ref
+              if null params
+                then Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTCon ref [] }
+                else Left "type constructor arity mismatch"
+            Nothing ->
+              case pol of
+                UnknownTypeIsError -> Left ("unknown type variable: " <> name)
+                UnknownTypeIsImplicitMeta -> do
+                  tv <- mkTypeMetaVar doc expectedOwnerMode name
+                  Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTMeta tv }
     RPTMod rawMe innerRaw -> do
       me <- elabRawModExpr (dModes doc) rawMe
       if meTgt me == expectedOwnerMode
         then Right ()
         else Left "modality application target/object mode mismatch"
       codeLift <- classifierLiftForModExpr (dModes doc) me
-      inner <- elabObjExprWithTables doc ctorTables tyVars tmVars tmBound (meSrc me) innerRaw
+      inner <- elabObjExprWithTables_ pol doc ctorTables tyVars tmVars tmBound (meSrc me) innerRaw
       if objOwnerMode inner /= meSrc me
         then Left "modality application source/argument mode mismatch"
         else
@@ -291,7 +329,7 @@ elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode exp
             then Right ()
             else Left "modality application target/object mode mismatch"
           codeLift <- classifierLiftForModExpr (dModes doc) me
-          inner <- elabObjExprWithTables doc ctorTables tyVars tmVars tmBound (meSrc me) innerRaw
+          inner <- elabObjExprWithTables_ pol doc ctorTables tyVars tmVars tmBound (meSrc me) innerRaw
           if objOwnerMode inner /= meSrc me
             then Left "modality application source/argument mode mismatch"
             else
@@ -313,7 +351,7 @@ elabObjExprWithTables doc ctorTables tyVars tmVars tmBound expectedOwnerMode exp
     classifierMode = modeClassifierMode (dModes doc) expectedOwnerMode
 
     elabOneArg _ (TPS_Ty m, rawArg) = do
-      argTy <- elabObjExprWithTables doc ctorTables tyVars tmVars tmBound m rawArg
+      argTy <- elabObjExprWithTables_ pol doc ctorTables tyVars tmVars tmBound m rawArg
       if objOwnerMode argTy == m
         then Right (CAObj argTy)
         else Left "type constructor argument mode mismatch"

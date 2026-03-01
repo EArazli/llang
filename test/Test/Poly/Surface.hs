@@ -16,7 +16,7 @@ import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (emptyEnv, ModuleEnv(..), TermDef(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.ModeTheory (ModeName(..), ClassificationDecl(..), ModeTheory(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), CodeArg(..), CodeTerm(..), mkCon, mkModeMetaVar)
+import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), CodeArg(..), CodeTerm(..), mkCon, mkModeMetaVar, boundTmIndicesTerm)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..))
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..))
@@ -45,6 +45,8 @@ tests =
     , testCase "surface resolves classified constructors in classifier mode with owner preserved" testSurfaceClassifiedTypeResolution
     , testCase "surface bare identifiers prefer nullary constructors over metas" testSurfaceBareIdentResolvesNullaryConstructor
     , testCase "surface elaborates constructor args in signature owner modes" testSurfaceConstructorArgOwnerModes
+    , testCase "surface type annotations support term-indexed constructor args" testSurfaceConstructorTermArgInTypeAnnotation
+    , testCase "surface term-indexed annotations can reference bound terms" testSurfaceConstructorTermArgUsesBoundBinder
     , testCase "template @TermName splice uses module term" testSurfaceTemplateSplice
     , testCase "surface elaboration eliminates to base doctrine" testSurfaceEliminatesToBaseDoctrine
     ]
@@ -701,6 +703,134 @@ testSurfaceConstructorArgOwnerModes = do
         CTCon bRef [] -> bRef @?= ObjRef nMode (ObjName "B")
         _ -> assertFailure "expected WrapN argument to elaborate as N.B constructor"
     _ -> assertFailure "expected WrapN(B) object code"
+
+testSurfaceConstructorTermArgInTypeAnnotation :: Assertion
+testSurfaceConstructorTermArgInTypeAnnotation = do
+  let src =
+        T.unlines
+          [ "doctrine SurfTermIndexed where {"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen Nat : [] -> [M.U_M] @M;"
+          , "  gen Z : [] -> [Nat] @M;"
+          , "  gen Vec(n : Nat) : [] -> [M.U_M] @M;"
+          , "}"
+          , "surface Surf where {"
+          , "  doctrine SurfTermIndexed;"
+          , "  mode M;"
+          , "  lexer {"
+          , "    keywords: term, in, out;"
+          , "    symbols: \"(\", \")\", \"{\", \"}\", \":\", \";\", \",\";"
+          , "  }"
+          , "  expr {"
+          , "    atom:"
+          , "      ident(name) \"(\" <expr> \")\" => $1 ; #name"
+          , "    | ident(name) => $name"
+          , "    | \"out\" <expr> => $1"
+          , "    | \"term\" \"{\" <expr> \"}\" => $1"
+          , "    | \"(\" <expr> \")\" => <expr>"
+          , "    ;"
+          , "    prefix:"
+          , "      \"in\" ident(name) \":\" <type>(ty) \";\" <expr> => <expr> bind in(name, ty, 1)"
+          , "    ;"
+          , "    infixr 10 \",\" => $1 * $2;"
+          , "  }"
+          , "}"
+          ]
+  env <- either (assertFailure . T.unpack) pure (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "SurfTermIndexed" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine SurfTermIndexed" >> fail "unreachable"
+      Just d -> pure d
+  surf <-
+    case M.lookup "Surf" (meSurfaces env) of
+      Nothing -> assertFailure "missing surface Surf" >> fail "unreachable"
+      Just s -> pure s
+  diag <-
+    either
+      (assertFailure . T.unpack)
+      pure
+      (elabSurfaceDiagram emptyEnv doc surf (T.unlines [ "term {", "  in x:Vec(Z);", "  out x", "}" ]))
+  inPort <-
+    case dIn diag of
+      [p] -> pure p
+      _ -> assertFailure "expected one input port" >> fail "unreachable"
+  inTy <-
+    case IM.lookup (unPortId inPort) (dPortObj diag) of
+      Nothing -> assertFailure "missing input port object" >> fail "unreachable"
+      Just ty -> pure ty
+  case objCode inTy of
+    CTCon ref [CATm _] -> ref @?= ObjRef (ModeName "M") (ObjName "Vec")
+    _ -> assertFailure "expected Vec(Z) to elaborate with a CATm term argument"
+
+testSurfaceConstructorTermArgUsesBoundBinder :: Assertion
+testSurfaceConstructorTermArgUsesBoundBinder = do
+  let src =
+        T.unlines
+          [ "doctrine SurfTermIndexed where {"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen Nat : [] -> [M.U_M] @M;"
+          , "  gen Z : [] -> [Nat] @M;"
+          , "  gen Vec(n : Nat) : [] -> [M.U_M] @M;"
+          , "}"
+          , "surface Surf where {"
+          , "  doctrine SurfTermIndexed;"
+          , "  mode M;"
+          , "  lexer {"
+          , "    keywords: term, in, out;"
+          , "    symbols: \"(\", \")\", \"{\", \"}\", \":\", \";\", \",\";"
+          , "  }"
+          , "  expr {"
+          , "    atom:"
+          , "      ident(name) \"(\" <expr> \")\" => $1 ; #name"
+          , "    | ident(name) => $name"
+          , "    | \"out\" <expr> => $1"
+          , "    | \"term\" \"{\" <expr> \"}\" => $1"
+          , "    | \"(\" <expr> \")\" => <expr>"
+          , "    ;"
+          , "    prefix:"
+          , "      \"in\" ident(name) \":\" <type>(ty) \";\" <expr> => <expr> bind in(name, ty, 1)"
+          , "    ;"
+          , "    infixr 10 \",\" => $1 * $2;"
+          , "  }"
+          , "}"
+          ]
+  env <- either (assertFailure . T.unpack) pure (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "SurfTermIndexed" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine SurfTermIndexed" >> fail "unreachable"
+      Just d -> pure d
+  surf <-
+    case M.lookup "Surf" (meSurfaces env) of
+      Nothing -> assertFailure "missing surface Surf" >> fail "unreachable"
+      Just s -> pure s
+  diag <-
+    either
+      (assertFailure . T.unpack)
+      pure
+      (elabSurfaceDiagram emptyEnv doc surf (T.unlines [ "term {", "  in n:Nat;", "  in x:Vec(n);", "  out n, x", "}" ]))
+  inPorts <-
+    case dIn diag of
+      [p0, p1] -> pure (p0, p1)
+      _ -> assertFailure "expected two input ports" >> fail "unreachable"
+  xTy <-
+    case IM.lookup (unPortId (snd inPorts)) (dPortObj diag) of
+      Nothing -> assertFailure "missing x input port object" >> fail "unreachable"
+      Just ty -> pure ty
+  case objCode xTy of
+    CTCon ref [CATm tm] -> do
+      ref @?= ObjRef (ModeName "M") (ObjName "Vec")
+      assertBool "expected Vec(n) term arg to reference an in-scope bound term" (not (S.null (boundTmIndicesTerm tm)))
+    _ -> assertFailure "expected Vec(n) to elaborate with a CATm bound-term argument"
 
 testSurfaceTemplateSplice :: Assertion
 testSurfaceTemplateSplice = do
