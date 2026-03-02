@@ -10,8 +10,11 @@ module Strat.Poly.Proof
   , SearchBudget(..)
   , defaultSearchBudget
   , renderSearchLimit
+  , checkRewriteStepWithMapper
   , checkRewriteStep
+  , checkRewritePathWithMapper
   , checkRewritePath
+  , checkJoinProofWithMapper
   , checkJoinProof
   ) where
 
@@ -22,7 +25,13 @@ import Strat.Poly.Diagram (Diagram(..))
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), canonDiagramRaw)
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Match (Match, findAllMatches)
-import Strat.Poly.Rewrite (RewriteRule(..), applyMatch, mkMatchConfig)
+import Strat.Poly.Rewrite
+  ( RewriteRule(..)
+  , SpliceMapper
+  , applyMatch
+  , applyMatchWithMapper
+  , mkMatchConfig
+  )
 import Strat.Poly.TypeTheory (TypeTheory)
 
 
@@ -88,8 +97,8 @@ renderSearchLimit lim =
     LimitTimeout -> "timeout budget exhausted"
     LimitExhausted -> "search exhausted without finding a join proof"
 
-checkRewriteStep :: TypeTheory -> [RewriteRule] -> Diagram -> RewriteStep -> Either Text Diagram
-checkRewriteStep tt rules current step = do
+checkRewriteStepWithMapper :: SpliceMapper -> TypeTheory -> [RewriteRule] -> Diagram -> RewriteStep -> Either Text Diagram
+checkRewriteStepWithMapper spliceMapper tt rules current step = do
   baseRule <-
     case drop (rsRuleIndex step) rules of
       (r:_) -> Right r
@@ -108,25 +117,29 @@ checkRewriteStep tt rules current step = do
 
     tryCandidates [] = Left "checkRewriteStep: step does not replay under any permitted orientation"
     tryCandidates (rule:rest) =
-      case applyAtFocus tt (rsFocus step) (rsMatch step) current rule of
+      case applyAtFocus spliceMapper tt (rsFocus step) (rsMatch step) current rule of
         Right out -> Right out
         Left _ -> tryCandidates rest
 
+checkRewriteStep :: TypeTheory -> [RewriteRule] -> Diagram -> RewriteStep -> Either Text Diagram
+checkRewriteStep = checkRewriteStepWithMapper (\_ d -> Right d)
+
 applyAtFocus
-  :: TypeTheory
+  :: SpliceMapper
+  -> TypeTheory
   -> RewriteFocus
   -> Match
   -> Diagram
   -> RewriteRule
   -> Either Text Diagram
-applyAtFocus tt focus match diag rule =
+applyAtFocus spliceMapper tt focus match diag rule =
   case focus of
-    FocusTop -> applyTop tt match diag rule
+    FocusTop -> applyTop spliceMapper tt match diag rule
     FocusInBox edgeKey innerFocus -> do
       edge <- requireEdge edgeKey diag
       case ePayload edge of
         PBox name inner -> do
-          inner' <- applyAtFocus tt innerFocus match inner rule
+          inner' <- applyAtFocus spliceMapper tt innerFocus match inner rule
           let edge' = edge { ePayload = PBox name inner' }
           canonDiagramRaw diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
         _ -> Left "checkRewriteStep: focus does not point to box payload"
@@ -134,7 +147,7 @@ applyAtFocus tt focus match diag rule =
       edge <- requireEdge edgeKey diag
       case ePayload edge of
         PFeedback inner -> do
-          inner' <- applyAtFocus tt innerFocus match inner rule
+          inner' <- applyAtFocus spliceMapper tt innerFocus match inner rule
           let edge' = edge { ePayload = PFeedback inner' }
           canonDiagramRaw diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
         _ -> Left "checkRewriteStep: focus does not point to feedback payload"
@@ -145,7 +158,7 @@ applyAtFocus tt focus match diag rule =
           barg <- requireBinderArg binderIx bargs
           case barg of
             BAConcrete inner -> do
-              inner' <- applyAtFocus tt innerFocus match inner rule
+              inner' <- applyAtFocus spliceMapper tt innerFocus match inner rule
               let bargs' = replaceAt binderIx (BAConcrete inner') bargs
               let edge' = edge { ePayload = PGen g attrs bargs' }
               canonDiagramRaw diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
@@ -153,28 +166,34 @@ applyAtFocus tt focus match diag rule =
               Left "checkRewriteStep: focus points to binder meta argument"
         _ -> Left "checkRewriteStep: focus does not point to generator payload"
 
-applyTop :: TypeTheory -> Match -> Diagram -> RewriteRule -> Either Text Diagram
-applyTop tt match diag rule = do
+applyTop :: SpliceMapper -> TypeTheory -> Match -> Diagram -> RewriteRule -> Either Text Diagram
+applyTop spliceMapper tt match diag rule = do
   matches <- findAllMatches (mkMatchConfig tt rule) (rrLHS rule) diag
   if match `elem` matches
     then Right ()
     else Left "checkRewriteStep: stored match is not valid at focused diagram"
-  out <- applyMatch tt rule match diag
+  out <- applyMatchWithMapper tt spliceMapper rule match diag
   canonDiagramRaw out
 
-checkRewritePath :: TypeTheory -> [RewriteRule] -> RewritePath -> Either Text Diagram
-checkRewritePath tt rules path = do
+checkRewritePathWithMapper :: SpliceMapper -> TypeTheory -> [RewriteRule] -> RewritePath -> Either Text Diagram
+checkRewritePathWithMapper spliceMapper tt rules path = do
   start <- canonDiagramRaw (rpStart path)
-  foldM (checkRewriteStep tt rules) start (rpSteps path)
+  foldM (checkRewriteStepWithMapper spliceMapper tt rules) start (rpSteps path)
 
-checkJoinProof :: TypeTheory -> [RewriteRule] -> JoinProof -> Either Text ()
-checkJoinProof tt rules proof = do
-  leftEnd <- checkRewritePath tt rules (jpLeft proof)
-  rightEnd <- checkRewritePath tt rules (jpRight proof)
+checkRewritePath :: TypeTheory -> [RewriteRule] -> RewritePath -> Either Text Diagram
+checkRewritePath = checkRewritePathWithMapper (\_ d -> Right d)
+
+checkJoinProofWithMapper :: SpliceMapper -> TypeTheory -> [RewriteRule] -> JoinProof -> Either Text ()
+checkJoinProofWithMapper spliceMapper tt rules proof = do
+  leftEnd <- checkRewritePathWithMapper spliceMapper tt rules (jpLeft proof)
+  rightEnd <- checkRewritePathWithMapper spliceMapper tt rules (jpRight proof)
   ok <- diagramIsoEq leftEnd rightEnd
   if ok
     then Right ()
     else Left "checkJoinProof: endpoints are not isomorphic"
+
+checkJoinProof :: TypeTheory -> [RewriteRule] -> JoinProof -> Either Text ()
+checkJoinProof = checkJoinProofWithMapper (\_ d -> Right d)
 
 flipRule :: RewriteRule -> RewriteRule
 flipRule rule =

@@ -114,7 +114,7 @@ payloadCompatible p h =
       g1 == g2 && M.keysSet attrs1 == M.keysSet attrs2 && length bargs1 == length bargs2
     (PBox _ _, PBox _ _) -> True
     (PFeedback _, PFeedback _) -> True
-    (PSplice x, PSplice y) -> x == y
+    (PSplice x me1, PSplice y me2) -> x == y && me1 == me2
     (PInternalDrop, PInternalDrop) -> True
     _ -> False
 
@@ -265,8 +265,8 @@ payloadSubsts tt flex attrFlex match patEdge hostEdge =
           d2
       pure [ (tySub', attrSub', mBinderSub match) | (tySub', attrSub') <- subs ]
 
-    (PSplice x, PSplice y)
-      | x == y -> Right [(mTySubst match, mAttrSubst match, mBinderSub match)]
+    (PSplice x me1, PSplice y me2)
+      | x == y && me1 == me2 -> Right [(mTySubst match, mAttrSubst match, mBinderSub match)]
       | otherwise -> Right []
 
     (PInternalDrop, PInternalDrop) ->

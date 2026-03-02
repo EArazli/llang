@@ -985,7 +985,8 @@ testMorphismSpliceRenamesToBinderMeta = do
   srcDiag0 <- either (assertFailure . T.unpack) pure (genD mode [aTy'] [aTy'] gName)
   srcDiag <- either (assertFailure . T.unpack) pure (setSingleEdgeBargs srcDiag0 [BAMeta xMeta])
   img0 <- either (assertFailure . T.unpack) pure (genD mode [aTy'] [aTy'] (GenName "tmp"))
-  img <- either (assertFailure . T.unpack) pure (setSingleEdgePayload img0 (PSplice b0))
+  let me = ModExpr { meSrc = mode, meTgt = mode, mePath = [] }
+  img <- either (assertFailure . T.unpack) pure (setSingleEdgePayload img0 (PSplice b0 me))
   compImgs <- either (assertFailure . T.unpack) pure (compIdentityImages mode aTy')
   let mor =
         Morphism
@@ -1011,7 +1012,7 @@ testMorphismSpliceRenamesToBinderMeta = do
   assertBool "expected mapped splice to contain ?X" (xMeta `S.member` metas)
   assertBool "expected mapped splice not to contain ?b0" (S.notMember b0 metas)
   case IM.elems (dEdges mapped) of
-    [Edge _ (PSplice x) _ _] -> x @?= xMeta
+    [Edge _ (PSplice x _) _ _] -> x @?= xMeta
     _ -> assertFailure "expected mapped image to be a single splice edge"
 
 testMorphismRejectsBadBinderHoleSignatures :: Assertion

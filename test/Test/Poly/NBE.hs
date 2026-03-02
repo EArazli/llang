@@ -25,6 +25,7 @@ import Strat.Poly.Doctrine
 import Strat.Poly.ModeTheory
   ( ModeTheory
   , ModeName(..)
+  , ModExpr(..)
   , DefEqEngine(..)
   , ClassificationDecl(..)
   , emptyModeTheory
@@ -239,7 +240,8 @@ testNBERejectsSplice = do
   (tt, aTy, _bTy) <- mkNbeTypeTheory
   let (x, d0) = freshPort aTy (emptyDiagram modeM [])
   let (y, d1) = freshPort aTy d0
-  d2 <- require (addEdgePayload (PSplice (BinderMetaVar "b0")) [x] [y] d1)
+  let me = ModExpr { meSrc = modeM, meTgt = modeM, mePath = [] }
+  d2 <- require (addEdgePayload (PSplice (BinderMetaVar "b0") me) [x] [y] d1)
   let diag = d2 { dIn = [x], dOut = [y] }
   _ <- require (validateDiagram diag)
   let tm = TermDiagram diag
@@ -357,7 +359,8 @@ mkClosedSpliceTerm mode sortTy seedGen = do
   let (mid, d0) = freshPort sortTy (emptyDiagram mode [])
   let (out, d1) = freshPort sortTy d0
   d2 <- addEdgePayload (PGen seedGen M.empty []) [] [mid] d1
-  d3 <- addEdgePayload (PSplice (BinderMetaVar "s0")) [mid] [out] d2
+  let me = ModExpr { meSrc = mode, meTgt = mode, mePath = [] }
+  d3 <- addEdgePayload (PSplice (BinderMetaVar "s0") me) [mid] [out] d2
   let diag = d3 { dIn = [], dOut = [out] }
   validateDiagram diag
   pure (TermDiagram diag)

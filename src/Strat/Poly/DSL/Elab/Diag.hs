@@ -470,7 +470,8 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
     mkSpliceDiag curTmCtx meta dom cod = do
       let (ins, d0) = allocPorts dom (emptyDiagram mode curTmCtx)
       let (outs, d1) = allocPorts cod d0
-      d2 <- addEdgePayload (PSplice meta) ins outs d1
+      let meId = ModExpr { meSrc = mode, meTgt = mode, mePath = [] }
+      d2 <- addEdgePayload (PSplice meta meId) ins outs d1
       let d3 = d2 { dIn = ins, dOut = outs }
       validateDiagram d3
       pure d3

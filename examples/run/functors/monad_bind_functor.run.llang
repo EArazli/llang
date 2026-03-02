@@ -1,0 +1,62 @@
+import "../../../stdlib/schema.monad.llang";
+
+doctrine IdMonad where {
+  mode C classifiedBy C via T(C.U_C);
+  gen comp_ctx_ext(a@C) : [a] -> [a] @C;
+  gen comp_var(a@C) : [a] -> [a] @C;
+  gen comp_reindex(a@C) : [a] -> [a] @C;
+  comprehension C where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  modality T : C -> C;
+  lift_classifier T = T;
+  mod_eq T.T -> T;
+  gen U_C : [] -> [T(C.U_C)] @C;
+  gen A : [] -> [T(C.U_C)] @C;
+
+  gen ret(a@C) : [a] -> [T(a)] @C;
+  gen join(a@C) : [T(T(a))] -> [T(a)] @C;
+
+  action T where {
+    gen comp_ctx_ext -> comp_ctx_ext
+    gen comp_var -> comp_var
+    gen comp_reindex -> comp_reindex
+    gen ret -> ret
+    gen join -> join
+  }
+
+  rule computational unit -> (a@C) : [T(a)] -> [T(a)] @C =
+    ret{T(a)} ; join{a} == id[T(a)]
+}
+
+morphism monadInst : SchemaMonad -> IdMonad where {
+  mode C -> C;
+  gen comp_ctx_ext @C -> comp_ctx_ext
+  gen comp_var @C -> comp_var
+  gen comp_reindex @C -> comp_reindex
+  modality T -> T;
+  gen ret @C -> ret
+  gen join @C -> join
+  check none;
+}
+
+doctrine_functor AddBind(M : SchemaMonad) where {
+  gen bind(a@M::C, b@M::C) :
+    [M::T(a), binder { x : a } : [M::T(b)]] -> [M::T(b)] @M::C;
+
+  rule computational bind_def -> (a@M::C, b@M::C) :
+    [M::T(a)] -> [M::T(b)] @M::C =
+    bind{a,b}[?K] == map[M::T](splice(?K)) ; M::join{b}
+}
+
+doctrine IdMonadBind = apply AddBind to IdMonad using { M = monadInst; };
+
+pipeline showBind where {
+  normalize { policy = "topmost"; fuel = 50; };
+  extract diagram;
+}
+
+run showBind using showBind where {
+  source doctrine IdMonadBind;
+  source mode C;
+}
+---
+U_C ; bind{C.U_C, C.U_C}[ret{C.U_C}]

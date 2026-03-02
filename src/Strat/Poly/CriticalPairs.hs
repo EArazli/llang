@@ -389,7 +389,7 @@ payloadSubsts tt flex attrFlex tySubst attrSubst p1 p2 =
       mapLeft
         fatalSubstError
         (DiagramIso.diagramIsoMatchWithVarsFrom tt flex attrFlex tySubst attrSubst d1 d2)
-    (PSplice x, PSplice y) | x == y -> Right [(tySubst, attrSubst)]
+    (PSplice x me1, PSplice y me2) | x == y && me1 == me2 -> Right [(tySubst, attrSubst)]
     (PTmMeta x, PTmMeta y)
       | sameTmVarId x y -> Right [(tySubst, attrSubst)]
     (PInternalDrop, PInternalDrop) -> Right [(tySubst, attrSubst)]
@@ -408,7 +408,7 @@ payloadCompatible p1 p2 =
       g1 == g2 && M.keysSet attrs1 == M.keysSet attrs2 && length bargs1 == length bargs2
     (PBox _ _, PBox _ _) -> True
     (PFeedback _, PFeedback _) -> True
-    (PSplice x, PSplice y) -> x == y
+    (PSplice x me1, PSplice y me2) -> x == y && me1 == me2
     (PTmMeta x, PTmMeta y) -> sameTmVarId x y
     (PInternalDrop, PInternalDrop) -> True
     _ -> False
@@ -631,7 +631,7 @@ renameBinderMetasDiagram renameMeta =
     onPayload payload =
       pure $
         case payload of
-          PSplice x -> PSplice (renameMeta x)
+          PSplice x me -> PSplice (renameMeta x) me
           _ -> payload
 
     onBArg barg =

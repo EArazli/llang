@@ -172,7 +172,7 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
                   Left "NbE: box nodes are unsupported in NbE definitional normalization"
                 PFeedback _ ->
                   Left "NbE: feedback nodes are unsupported in NbE definitional normalization"
-                PSplice _ ->
+                PSplice _ _ ->
                   Left "NbE: splice nodes are unsupported in NbE definitional normalization"
 
     producerEdge pid =
@@ -536,7 +536,7 @@ rejectUnsupportedDiagram cfg diag = do
         PInternalDrop -> Right ()
         PBox _ _ -> Left "NbE: box nodes are unsupported in definitional normalization"
         PFeedback _ -> Left "NbE: feedback nodes are unsupported in definitional normalization"
-        PSplice _ -> Left "NbE: splice nodes are unsupported in definitional normalization"
+        PSplice _ _ -> Left "NbE: splice nodes are unsupported in definitional normalization"
 
     checkBinderArg barg =
       case barg of

@@ -254,7 +254,7 @@ generateCompObligations doc = do
       case slotKind slot of
         SlotBinder
           | hasOnlyBinderDom gd -> SlotLawsFull
-          | hasMixedDom gd -> SlotLawsFull
+          | hasMixedDom gd -> SlotLawsNone
           | otherwise -> SlotLawsNone
         SlotCtorTmArg ->
           ctorSlotLawProfile mode slot

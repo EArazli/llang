@@ -49,8 +49,9 @@ import Strat.Poly.Graph
   , diagramPortObj
   )
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
+import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
+import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
 import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurfaceExpr)
 import Strat.Poly.Surface.Spec
@@ -147,7 +148,7 @@ eliminateToBase docS docB mode diag0 = do
         , surfaceMeasure sigma (rrLHS rr) > surfaceMeasure sigma (rrRHS rr)
         ]
   let fuel = surfaceMeasure sigma diag0
-  status <- normalize tt fuel rulesElim diag0
+  status <- normalizeWithMapper (applyModExpr docS) tt fuel rulesElim diag0
   let diagNorm =
         case status of
           Finished d -> d
@@ -182,7 +183,7 @@ gensInDiagram diag =
         PGen g _ bargs -> S.insert g (S.unions (map binderGens bargs))
         PBox _ inner -> gensInDiagram inner
         PFeedback inner -> gensInDiagram inner
-        PSplice _ -> S.empty
+        PSplice _ _ -> S.empty
         PTmMeta _ -> S.empty
         PInternalDrop -> S.empty
 
@@ -202,7 +203,7 @@ surfaceMeasure sigma diag =
            in own + sum (map binderMeasure bargs)
         PBox _ inner -> surfaceMeasure sigma inner
         PFeedback inner -> surfaceMeasure sigma inner
-        PSplice _ -> 0
+        PSplice _ _ -> 0
         PTmMeta _ -> 0
         PInternalDrop -> 0
 

@@ -26,13 +26,13 @@ import Strat.Poly.DiagramInterpretation
   ( DiagramInterpretation(..)
   , applySubstBinderSigs
   , binderHoleNames
-  , instantiateGenImageBinders
+  , instantiateGenImageBindersWithMapper
   , interpretDiagram
   , requirePortType
   , spliceEdge
   )
 import Strat.Poly.ModeTheory
-import Strat.Poly.Normalize (autoJoinProof)
+import Strat.Poly.Normalize (autoJoinProofWithMapper)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Proof
   ( JoinProof
@@ -41,7 +41,7 @@ import Strat.Poly.Proof
   , SearchOutcome(..)
   , defaultSearchBudget
   , renderSearchLimit
-  , checkJoinProof
+  , checkJoinProofWithMapper
   )
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Obj
@@ -99,7 +99,13 @@ validateActionSemanticsWithBudgetResult budget doc = do
           Nothing -> Left "validateDoctrine: action references unknown modality"
           Just d -> Right d
       let srcMode = mdSrc decl
-      let srcRules = [ c | c <- dCells2 doc, dMode (c2LHS c) == srcMode ]
+      let explicit = explicitActionGenSet srcMode action
+      let srcRules =
+            [ c
+            | c <- dCells2 doc
+            , dMode (c2LHS c) == srcMode
+            , ruleUsesOnly explicit c
+            ]
       let rules = rulesFromPolicy (maPolicy action) (dCells2 doc)
       checkRules tt modName rules srcRules
 
@@ -119,7 +125,7 @@ validateActionSemanticsWithBudgetResult budget doc = do
       cell' <- freshenRuleTyVars tt cell
       lhs <- applyAction doc modName (c2LHS cell')
       rhs <- applyAction doc modName (c2RHS cell')
-      proof <- autoJoinProof tt budget rules lhs rhs
+      proof <- autoJoinProofWithMapper (applyModExpr doc) tt budget rules lhs rhs
       case proof of
         SearchUndecided lim ->
           Right
@@ -128,7 +134,7 @@ validateActionSemanticsWithBudgetResult budget doc = do
                 lim
             )
         SearchProved witness -> do
-          checkJoinProof tt rules witness
+          checkJoinProofWithMapper (applyModExpr doc) tt rules witness
           Right (ActionSemanticsProved [("rule " <> c2Name cell, witness)])
 
     checkModEqn tt ctorTables eqn = do
@@ -137,16 +143,35 @@ validateActionSemanticsWithBudgetResult budget doc = do
       let mods = mePath lhs <> mePath rhs
       if all (`M.member` dActions doc) mods
         then do
+          explicitCommon <- explicitIntersection mods
           let srcMode = meSrc lhs
           let gens =
                 [ gd
                 | gd <- M.elems (M.findWithDefault M.empty srcMode (dGens doc))
+                , gdName gd `S.member` explicitCommon
                 , not (isTypeDeclGenNameInTables doc ctorTables srcMode (ObjName (renderGenName (gdName gd))))
                 ]
           let policy = choosePolicy mods
           let rules = rulesFromPolicy policy (dCells2 doc)
           checkGens tt lhs rhs rules gens
         else Right (ActionSemanticsProved [])
+      where
+        explicitIntersection modNames =
+          case mapM explicitForMod modNames of
+            Left err -> Left err
+            Right [] -> Right S.empty
+            Right (s:ss) -> Right (foldl S.intersection s ss)
+
+        explicitForMod modName = do
+          decl <-
+            case M.lookup modName (mtDecls (dModes doc)) of
+              Nothing -> Left "validateDoctrine: action references unknown modality"
+              Just d -> Right d
+          action <-
+            case M.lookup modName (dActions doc) of
+              Nothing -> Left "validateDoctrine: action references unknown modality"
+              Just a -> Right a
+          Right (explicitActionGenSet (mdSrc decl) action)
 
     checkGens _ _ _ _ [] = Right (ActionSemanticsProved [])
     checkGens tt lhs rhs rules (gd:rest) = do
@@ -164,7 +189,7 @@ validateActionSemanticsWithBudgetResult budget doc = do
       gDiag <- genericGenDiagram gd
       lhsMapped <- applyModExpr doc lhs gDiag
       rhsMapped <- applyModExpr doc rhs gDiag
-      proof <- autoJoinProof tt budget rules lhsMapped rhsMapped
+      proof <- autoJoinProofWithMapper (applyModExpr doc) tt budget rules lhsMapped rhsMapped
       case proof of
         SearchUndecided lim ->
           Right
@@ -173,7 +198,7 @@ validateActionSemanticsWithBudgetResult budget doc = do
                 lim
             )
         SearchProved witness -> do
-          checkJoinProof tt rules witness
+          checkJoinProofWithMapper (applyModExpr doc) tt rules witness
           Right (ActionSemanticsProved [("generator " <> renderGenName (gdName gd), witness)])
 
     choosePolicy mods =
@@ -184,6 +209,39 @@ validateActionSemanticsWithBudgetResult budget doc = do
               if all (== p) ps
                 then p
                 else UseStructuralAsBidirectional
+
+    explicitActionGenSet srcMode action =
+      S.fromList
+        [ g
+        | ((srcMode', g), _) <- M.toList (maGenMap action)
+        , srcMode' == srcMode
+        ]
+
+    ruleUsesOnly explicit cell =
+      S.isSubsetOf (diagramGens (c2LHS cell) `S.union` diagramGens (c2RHS cell)) explicit
+
+    diagramGens diag =
+      foldMap edgeGens (IM.elems (dEdges diag))
+
+    edgeGens edge =
+      case ePayload edge of
+        PGen g _ bargs ->
+          S.insert g (foldMap binderArgGens bargs)
+        PBox _ inner ->
+          diagramGens inner
+        PFeedback inner ->
+          diagramGens inner
+        PSplice _ _ ->
+          S.empty
+        PTmMeta _ ->
+          S.empty
+        PInternalDrop ->
+          S.empty
+
+    binderArgGens barg =
+      case barg of
+        BAConcrete inner -> diagramGens inner
+        BAMeta _ -> S.empty
 
 validateActionSemantics :: Doctrine -> Either Text ()
 validateActionSemantics = validateActionSemanticsWithBudget defaultSearchBudget
@@ -287,10 +345,6 @@ applyAction doc mName diagSrc = do
     case M.lookup mName (mtDecls (dModes doc)) of
       Nothing -> Left "map: unknown modality"
       Just d -> Right d
-  action <-
-    case M.lookup mName (dActions doc) of
-      Nothing -> Left "map: missing action declaration"
-      Just a -> Right a
   if dMode diagSrc /= mdSrc decl
     then Left "map: modality source mismatch"
     else pure ()
@@ -305,7 +359,21 @@ applyAction doc mName diagSrc = do
           , diMapTmCtxObj = mapTypeIfSource me codeLift
           , diMapPortObj = mapType me codeLift
           , diMapTmMetaSort = mapTypeIfSource me codeLift
-          , diOnGenEdge = onGenEdge tt action me codeLift
+          , diMapSplice = \x me0 -> do
+              if meTgt me0 == mdSrc decl
+                then Right ()
+                else Left "map: splice modality context target mismatch"
+              let composed =
+                    ModExpr
+                      { meSrc = meSrc me0
+                      , meTgt = mdTgt decl
+                      , mePath = mePath me0 <> [mName]
+                      }
+              let normalized = normalizeModExpr (dModes doc) composed
+              if meSrc normalized == meSrc me0 && meTgt normalized == mdTgt decl
+                then Right (x, normalized)
+                else Left "map: splice modality context normalization changed endpoints"
+          , diOnGenEdge = onGenEdge tt mName me codeLift
           }
   interpretDiagram interp diagSrc
   where
@@ -316,14 +384,11 @@ applyAction doc mName diagSrc = do
         then mapType me codeLift ty
         else pure ty
 
-    onGenEdge tt action me codeLift diagSrc0 diagTgt edgeKey edgeSrc mappedBargs =
+    onGenEdge tt modName me codeLift diagSrc0 diagTgt edgeKey edgeSrc mappedBargs =
       case ePayload edgeSrc of
         PGen g attrs _bargsSrc -> do
           genDecl <- lookupGenDeclInDoctrine "map: unknown source generator" doc (dMode diagSrc0) g
-          img0raw <-
-            case M.lookup (dMode diagSrc0, g) (maGenMap action) of
-              Nothing -> Left "map: missing generator image"
-              Just d -> Right d
+          img0raw <- actionImageForGenerator doc modName g
           img0 <- freshenImageTyVars tt diagTgt img0raw
           (img1, subst) <- instantiateImage tt diagTgt edgeKey img0
           let img2 = applyAttrSubstDiagram (actionAttrSubst genDecl attrs) img1
@@ -344,7 +409,7 @@ applyAction doc mName diagSrc = do
       sigs0 <- mapM mapBinderSig (M.fromList (zip holes slots))
       sigs <- applySubstBinderSigs typeTheory subst sigs0
       let holeSub = M.fromList (zip holes mappedBargs)
-      out <- instantiateGenImageBinders typeTheory sigs holeSub image
+      out <- instantiateGenImageBindersWithMapper typeTheory (applyModExpr doc) sigs holeSub image
       let remaining = S.intersection (M.keysSet sigs) (binderMetaVarsDiagram out)
       if S.null remaining
         then Right out
@@ -395,25 +460,6 @@ applyAction doc mName diagSrc = do
               ty' <- normalizeObjExpr (dModes doc) ty
               pure (IM.insert (unPortId pid) ty' mp)
 
-genericGenDiagram :: GenDecl -> Either Text Diagram
-genericGenDiagram gd = do
-  let mode = gdMode gd
-  let attrs = M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- gdAttrs gd ]
-  let binderSlots = [ bs | InBinder bs <- gdDom gd ]
-  let bargs = map BAMeta (binderHoleNames (length binderSlots))
-  let (ins, d0) = allocPorts (gdPlainDom gd) (emptyDiagram mode [])
-  let (outs, d1) = allocPorts (gdCod gd) d0
-  d2 <- addEdgePayload (PGen (gdName gd) attrs bargs) ins outs d1
-  let d3 = d2 { dIn = ins, dOut = outs }
-  validateDiagram d3
-  pure d3
-  where
-    allocPorts [] diag = ([], diag)
-    allocPorts (ty:rest) diag =
-      let (pid, diag1) = freshPort ty diag
-          (pids, diag2) = allocPorts rest diag1
-       in (pid : pids, diag2)
-
 actionAttrSubst :: GenDecl -> AttrMap -> AttrSubst
 actionAttrSubst genDecl attrs =
   M.fromList
@@ -463,8 +509,8 @@ normalizeDiagramObjExprs mt diag = do
         PTmMeta v -> do
           sort' <- normalizeObjExpr mt (tmvSort v)
           pure (PTmMeta v { tmvSort = sort' })
-        PSplice x ->
-          pure (PSplice x)
+        PSplice x me ->
+          pure (PSplice x me)
         PInternalDrop ->
           pure PInternalDrop
 

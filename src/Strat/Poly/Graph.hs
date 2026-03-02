@@ -43,7 +43,7 @@ import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 import Control.Monad (foldM)
 import qualified Data.List as L
-import Strat.Poly.ModeTheory (ModeName(..))
+import Strat.Poly.ModeTheory (ModeName(..), ModExpr)
 import Strat.Poly.Syntax
   ( PortId(..)
   , EdgeId(..)
@@ -328,7 +328,7 @@ validateDiagram diag = do
           if fbIn == fbOut
             then Right ()
             else Left "feedback: feedback input/output objects must match"
-        PSplice _ -> Right ()
+        PSplice _ _ -> Right ()
         PTmMeta v -> do
           outTy <-
             case eOuts edge of
@@ -571,7 +571,7 @@ shiftDiagram portOff edgeOff diag =
           PGen g attrs bargs -> PGen g attrs (map shiftBinderArg bargs)
           PBox name inner -> PBox name (shiftDiagram portOff edgeOff inner)
           PFeedback inner -> PFeedback (shiftDiagram portOff edgeOff inner)
-          PSplice x -> PSplice x
+          PSplice x me -> PSplice x me
           PTmMeta v -> PTmMeta v
           PInternalDrop -> PInternalDrop
       shiftBinderArg barg =
@@ -671,7 +671,7 @@ reindexDiagramForDisplay diag = do
         PFeedback inner -> do
           inner' <- reindexDiagramForDisplay inner
           Right (PFeedback inner')
-        PSplice x -> Right (PSplice x)
+        PSplice x me -> Right (PSplice x me)
         PTmMeta v -> Right (PTmMeta v)
         PInternalDrop -> Right PInternalDrop
     mapBinderArg barg =
@@ -705,7 +705,7 @@ data PayloadKey
   = PKGen GenName [(Text, AttrTerm)] [BinderArgKey]
   | PKBox ByteString
   | PKFeedback ByteString
-  | PKSplice BinderMetaVar
+  | PKSplice BinderMetaVar ModExpr
   | PKTmMeta Text Int
   | PKInternalDrop
   deriving (Eq, Ord, Show)
@@ -754,8 +754,8 @@ canonPayload payload =
     PFeedback inner -> do
       inner' <- canonDiagramRaw inner
       pure (PFeedback inner')
-    PSplice x ->
-      Right (PSplice x)
+    PSplice x me ->
+      Right (PSplice x me)
     PTmMeta v ->
       Right (PTmMeta v)
     PInternalDrop ->
@@ -859,8 +859,8 @@ colorKeyFor diag v =
           Right (PKBox (BS8.pack (show inner)))
         PFeedback inner ->
           Right (PKFeedback (BS8.pack (show inner)))
-        PSplice x ->
-          Right (PKSplice x)
+        PSplice x me ->
+          Right (PKSplice x me)
         PTmMeta tmv ->
           Right (PKTmMeta (tmvName tmv) (tmvScope tmv))
         PInternalDrop ->

@@ -77,7 +77,7 @@ renderEdges edges = do
                   <> " [" <> renderPortList (eIns e) <> "] -> [" <> renderPortList (eOuts e) <> "]"
           let body = indent innerTxt
           Right (header <> "\n" <> body)
-        PSplice x ->
+        PSplice x _ ->
           Right
             ( "  "
                 <> renderEdgeId (eId e)

@@ -37,7 +37,7 @@ import Strat.Poly.Graph (BinderArg(..), Edge(..), EdgePayload(..), diagramPortOb
 import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Morphism
-import Strat.Poly.Normalize (NormalizationStatus(..), autoJoinProof, normalize)
+import Strat.Poly.Normalize (NormalizationStatus(..), autoJoinProofWithMapper, normalizeWithMapper)
 import Strat.Poly.Obj
 import Strat.Poly.Proof
   ( JoinProof(..)
@@ -47,7 +47,7 @@ import Strat.Poly.Proof
   , SearchOutcome(..)
   , defaultSearchBudget
   , renderSearchLimit
-  , checkJoinProof
+  , checkJoinProofWithMapper
   )
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Slots
@@ -534,12 +534,12 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
         Nothing -> runJoin tt rules label lhs rhs
 
     runJoin tt rules label lhs rhs = do
-      proof <- autoJoinProof tt budget rules lhs rhs
+      proof <- autoJoinProofWithMapper (applyModExpr tgtDoc) tt budget rules lhs rhs
       case proof of
         SearchUndecided lim ->
           Right (ImplementsCheckUndecided label lim)
         SearchProved witness -> do
-          checkJoinProof tt rules witness
+          checkJoinProofWithMapper (applyModExpr tgtDoc) tt rules witness
           Right (ImplementsCheckProved [(label, ImplementsProofJoin witness)])
 
     tryGeneratedSeed tt rules label lhs rhs = do
@@ -553,22 +553,22 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
                   { jpLeft = RewritePath { rpStart = lhsSeed, rpSteps = [] }
                   , jpRight = RewritePath { rpStart = rhsSeed, rpSteps = [] }
                   }
-          checkJoinProof tt rules witness
+          checkJoinProofWithMapper (applyModExpr tgtDoc) tt rules witness
           Right (Just (ImplementsCheckProved [(label, ImplementsProofJoin witness)]))
         else do
-          seedProof <- autoJoinProof tt budget rules lhsSeed rhsSeed
+          seedProof <- autoJoinProofWithMapper (applyModExpr tgtDoc) tt budget rules lhsSeed rhsSeed
           case seedProof of
             SearchUndecided _ ->
               Right Nothing
             SearchProved witness -> do
-              checkJoinProof tt rules witness
+              checkJoinProofWithMapper (applyModExpr tgtDoc) tt rules witness
               Right (Just (ImplementsCheckProved [(label, ImplementsProofJoin witness)]))
 
     normalizeForGeneratedObligation tt _rules diag =
       case generatedCompRules of
         [] -> Right diag
         _ -> do
-          status <- normalize tt generatedSeedFuel generatedCompRules diag
+          status <- normalizeWithMapper (applyModExpr tgtDoc) tt generatedSeedFuel generatedCompRules diag
           pure $
             case status of
               Finished d -> d

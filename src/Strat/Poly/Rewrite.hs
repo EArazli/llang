@@ -1,8 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Rewrite
   ( RewriteRule(..)
+  , SpliceMapper
+  , rewriteOnceWithMapper
   , rewriteOnce
+  , rewriteAllWithMapper
   , rewriteAll
+  , applyMatchWithMapper
   , applyMatch
   , mkMatchConfig
   , rulesFromPolicy
@@ -25,6 +29,7 @@ import Strat.Poly.Cell2
 import Strat.Poly.UnifyObj (emptySubst)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
+import Strat.Poly.ModeSyntax (ModExpr(..))
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.Traversal (foldDiagram, traverseDiagram)
 
@@ -37,16 +42,28 @@ data RewriteRule = RewriteRule
   , rrTmVars :: [TmVar]
   } deriving (Eq, Show)
 
-rewriteOnce :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnce tt rules diag = do
+type SpliceMapper = ModExpr -> Diagram -> Either Text Diagram
+
+identitySpliceMapper :: SpliceMapper
+identitySpliceMapper me captured =
+  if null (mePath me) && meSrc me == dMode captured && meTgt me == dMode captured
+    then Right captured
+    else Left "rewriteOnce: splice requires modality-action mapping but no splice mapper is available"
+
+rewriteOnceWithMapper :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceWithMapper tt spliceMapper rules diag = do
   rejectSplice "rewriteOnce" diag
-  top <- rewriteOnceTop tt rules diag
+  top <- rewriteOnceTop tt spliceMapper rules diag
   case top of
     Just _ -> pure top
-    Nothing -> rewriteOnceNested tt rules diag
+    Nothing -> rewriteOnceNested tt spliceMapper rules diag
 
-rewriteOnceTop :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceTop tt rules diag = go rules
+rewriteOnce :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnce tt =
+  rewriteOnceWithMapper tt identitySpliceMapper
+
+rewriteOnceTop :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceTop tt spliceMapper rules diag = go rules
   where
     go [] = Right Nothing
     go (r:rs) = do
@@ -59,22 +76,22 @@ rewriteOnceTop tt rules diag = go rules
       where
         tryMatches [] = go rs
         tryMatches (m:ms) =
-          case applyMatch tt r m diag of
+          case applyMatchWithMapper tt spliceMapper r m diag of
             Left _ -> tryMatches ms
             Right d -> do
               canon <- canonDiagramRaw d
               pure (Just canon)
 
-rewriteOnceNested :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceNested tt rules diag =
+rewriteOnceNested :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceNested tt spliceMapper rules diag =
   go (IM.toAscList (dEdges diag))
   where
     go [] = Right Nothing
     go ((edgeKey, edge):rest) =
       case ePayload edge of
-        PSplice _ -> Left "rewriteOnce: splice nodes are not allowed in evaluation terms"
+        PSplice _ _ -> Left "rewriteOnce: splice nodes are not allowed in evaluation terms"
         PBox name inner -> do
-          innerRes <- rewriteOnce tt rules inner
+          innerRes <- rewriteOnceWithMapper tt spliceMapper rules inner
           case innerRes of
             Nothing -> go rest
             Just inner' -> do
@@ -83,7 +100,7 @@ rewriteOnceNested tt rules diag =
               canon <- canonDiagramRaw diag'
               pure (Just canon)
         PFeedback inner -> do
-          innerRes <- rewriteOnce tt rules inner
+          innerRes <- rewriteOnceWithMapper tt spliceMapper rules inner
           case innerRes of
             Nothing -> go rest
             Just inner' -> do
@@ -110,21 +127,21 @@ rewriteOnceNested tt rules diag =
       case b of
         BAMeta _ -> rewriteOnceBinderArgs bs
         BAConcrete inner -> do
-          res <- rewriteOnce tt rules inner
+          res <- rewriteOnceWithMapper tt spliceMapper rules inner
           case res of
             Just inner' -> Right (Just (BAConcrete inner' : bs))
             Nothing -> do
               rest <- rewriteOnceBinderArgs bs
               pure (fmap (b :) rest)
 
-rewriteAll :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
-rewriteAll tt cap rules diag = do
+rewriteAllWithMapper :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
+rewriteAllWithMapper tt spliceMapper cap rules diag = do
   rejectSplice "rewriteAll" diag
-  top <- rewriteAllTop tt rules diag
-  inner <- rewriteAllNested tt cap rules diag
+  top <- rewriteAllTop tt spliceMapper rules diag
+  inner <- rewriteAllNested tt spliceMapper cap rules diag
   pure (take cap (top <> inner))
   where
-    rewriteAllTop tt' rules' diag' = go [] rules'
+    rewriteAllTop tt' spliceMapper' rules' diag' = go [] rules'
       where
         go acc [] = Right acc
         go acc (r:rs) = do
@@ -140,21 +157,25 @@ rewriteAll tt cap rules diag = do
               case acc of
                 Left err -> Left err
                 Right ds ->
-                  case applyMatch tt' r m diag' of
+                  case applyMatchWithMapper tt' spliceMapper' r m diag' of
                     Left _ -> Right ds
                     Right d -> Right (ds <> [d])
 
-rewriteAllNested :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
-rewriteAllNested tt cap rules diag = do
-  let edges = IM.toAscList (dEdges diag)
-  fmap concat (mapM (rewriteInEdge tt cap rules diag) edges)
+rewriteAll :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
+rewriteAll tt =
+  rewriteAllWithMapper tt identitySpliceMapper
 
-rewriteInEdge :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> (Int, Edge) -> Either Text [Diagram]
-rewriteInEdge tt cap rules diag (edgeKey, edge) =
+rewriteAllNested :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
+rewriteAllNested tt spliceMapper cap rules diag = do
+  let edges = IM.toAscList (dEdges diag)
+  fmap concat (mapM (rewriteInEdge tt spliceMapper cap rules diag) edges)
+
+rewriteInEdge :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> (Int, Edge) -> Either Text [Diagram]
+rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
   case ePayload edge of
-    PSplice _ -> Left "rewriteAll: splice nodes are not allowed in evaluation terms"
+    PSplice _ _ -> Left "rewriteAll: splice nodes are not allowed in evaluation terms"
     PBox name inner -> do
-      innerRes <- rewriteAll tt cap rules inner
+      innerRes <- rewriteAllWithMapper tt spliceMapper cap rules inner
       mapM
         (\d -> do
           let edge' = edge { ePayload = PBox name d }
@@ -162,7 +183,7 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
           canonDiagramRaw diag')
         innerRes
     PFeedback inner -> do
-      innerRes <- rewriteAll tt cap rules inner
+      innerRes <- rewriteAllWithMapper tt spliceMapper cap rules inner
       mapM
         (\d -> do
           let edge' = edge { ePayload = PFeedback d }
@@ -174,7 +195,7 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
     PInternalDrop ->
       Right []
     PGen gen attrs bargs -> do
-      bargsRes <- rewriteAllBinderArgs tt cap rules bargs
+      bargsRes <- rewriteAllBinderArgs tt spliceMapper cap rules bargs
       mapM
         (\bargs' -> do
           let edge' = edge { ePayload = PGen gen attrs bargs' }
@@ -182,20 +203,20 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
           canonDiagramRaw diag')
         bargsRes
 
-rewriteAllBinderArgs :: TypeTheory -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [[BinderArg]]
-rewriteAllBinderArgs _ _ _ [] = Right []
-rewriteAllBinderArgs tt cap rules args =
+rewriteAllBinderArgs :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [[BinderArg]]
+rewriteAllBinderArgs _ _ _ _ [] = Right []
+rewriteAllBinderArgs tt spliceMapper cap rules args =
   fmap concat (mapM rewriteAt [0 .. length args - 1])
   where
     rewriteAt i =
       case splitAt i args of
         (pre, BAConcrete inner : post) -> do
-          res <- rewriteAll tt cap rules inner
+          res <- rewriteAllWithMapper tt spliceMapper cap rules inner
           pure [pre <> [BAConcrete inner'] <> post | inner' <- res]
         _ -> Right []
 
-applyMatch :: TypeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
-applyMatch tt rule match host = do
+applyMatchWithMapper :: TypeTheory -> SpliceMapper -> RewriteRule -> Match -> Diagram -> Either Text Diagram
+applyMatchWithMapper tt spliceMapper rule match host = do
   rejectSplice "rewrite host" host
   -- Normalize host boundary types before gluing so mergePorts compares
   -- canonicalized types (e.g. after modality/term equations).
@@ -204,7 +225,7 @@ applyMatch tt rule match host = do
   rhsSub <- applySubstDiagram tt (mTySubst match) (rrRHS rule)
   let rhs0 = applyAttrSubstDiagram (mAttrSubst match) rhsSub
   rhs1 <- instantiateBinderMetas (mBinderSub match) rhs0
-  rhs <- expandSplices (mBinderSub match) rhs1
+  rhs <- expandSplices spliceMapper (mBinderSub match) rhs1
   host1 <- deleteMatchedEdges hostNorm (M.elems (mEdgeMap match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPortMap match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs
@@ -224,6 +245,10 @@ applyMatch tt rule match host = do
         Nothing -> Left "rewriteOnce: missing boundary port mapping"
         Just hostPort -> Right (hostPort, rhsPort)
 
+applyMatch :: TypeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
+applyMatch tt =
+  applyMatchWithMapper tt identitySpliceMapper
+
 instantiateBinderMetas :: M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
 instantiateBinderMetas binderSub =
   traverseDiagram pure pure onBinderArg
@@ -236,37 +261,47 @@ instantiateBinderMetas binderSub =
             Nothing -> Left "rewriteOnce: RHS uses uncaptured binder meta"
             Just captured -> Right (BAConcrete captured)
 
-expandSplices :: M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
-expandSplices binderSub =
+expandSplices :: SpliceMapper -> M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
+expandSplices spliceMapper binderSub =
   traverseDiagram expandTop pure pure
   where
     expandTop diag =
       case findSpliceEdge diag of
         Nothing -> Right diag
-        Just (edgeKey, edge, x) -> do
+        Just (edgeKey, edge, x, me) -> do
           captured <-
             case M.lookup x binderSub of
               Nothing -> Left "rewriteOnce: splice uses uncaptured binder meta"
               Just d -> Right d
-          if dTmCtx captured /= dTmCtx diag
+          if dMode captured == meSrc me
+            then Right ()
+            else Left "rewriteOnce: splice mapper source-mode mismatch"
+          capturedMapped <-
+            if null (mePath me)
+              then Right captured
+              else spliceMapper me captured
+          if dMode capturedMapped == meTgt me
+            then Right ()
+            else Left "rewriteOnce: splice mapper target-mode mismatch"
+          if dTmCtx capturedMapped /= dTmCtx diag
             then Left "rewriteOnce: splice term-context mismatch"
             else Right ()
           domSplice <- mapM (requirePortType "rewriteOnce" diag) (eIns edge)
           codSplice <- mapM (requirePortType "rewriteOnce" diag) (eOuts edge)
-          domCaptured <- mapM (requirePortType "rewriteOnce" captured) (dIn captured)
-          codCaptured <- mapM (requirePortType "rewriteOnce" captured) (dOut captured)
+          domCaptured <- mapM (requirePortType "rewriteOnce" capturedMapped) (dIn capturedMapped)
+          codCaptured <- mapM (requirePortType "rewriteOnce" capturedMapped) (dOut capturedMapped)
           if domSplice /= domCaptured || codSplice /= codCaptured
             then Left "rewriteOnce: splice boundary mismatch"
             else Right ()
-          diagMerged <- spliceEdge diag edgeKey captured
+          diagMerged <- spliceEdge diag edgeKey capturedMapped
           expandTop diagMerged
 
-findSpliceEdge :: Diagram -> Maybe (Int, Edge, BinderMetaVar)
+findSpliceEdge :: Diagram -> Maybe (Int, Edge, BinderMetaVar, ModExpr)
 findSpliceEdge diag =
   case
-    [ (k, edge, x)
+    [ (k, edge, x, me)
     | (k, edge) <- IM.toAscList (dEdges diag)
-    , PSplice x <- [ePayload edge]
+    , PSplice x me <- [ePayload edge]
     ]
     of
       [] -> Nothing
@@ -348,7 +383,7 @@ hasSplice =
     onPayload payload =
       Any $
         case payload of
-          PSplice _ -> True
+          PSplice _ _ -> True
           _ -> False
 
 mkMatchConfig :: TypeTheory -> RewriteRule -> MatchConfig

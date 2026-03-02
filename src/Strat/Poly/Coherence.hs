@@ -12,7 +12,8 @@ import qualified Data.Text as T
 import qualified Data.List as L
 import qualified Data.IntMap.Strict as IM
 import Strat.Poly.CriticalPairs
-import Strat.Poly.Normalize (autoJoinProof)
+import Strat.Poly.ModAction (applyModExpr)
+import Strat.Poly.Normalize (autoJoinProofWithMapper)
 import Strat.Poly.Rewrite (rulesFromPolicy, RewriteRule)
 import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
 import Strat.Poly.Proof (JoinProof, SearchBudget, SearchOutcome(..), renderSearchLimit)
@@ -42,7 +43,7 @@ checkCoherence mode policy budget doc = do
   tt <- doctrineTypeTheory doc
   let obligations = concatMap (obligationsFor mode) cps
   let rules = rulesFromPolicy policy (dCells2 doc)
-  mapM (checkObligation tt budget rules) obligations
+  mapM (checkObligation doc tt budget rules) obligations
 
 obligationsFor :: CPMode -> CriticalPairInfo -> [Obligation]
 obligationsFor mode info =
@@ -53,9 +54,9 @@ obligationsFor mode info =
     (Computational, Computational) ->
       if mode == CP_All then [Obligation NeedsJoin (cpiPair info)] else []
 
-checkObligation :: TypeTheory -> SearchBudget -> [RewriteRule] -> Obligation -> Either Text ObligationResult
-checkObligation tt budget rules ob = do
-  outcome <- autoJoinProof tt budget rules (cpLeft (obCP ob)) (cpRight (obCP ob))
+checkObligation :: Doctrine -> TypeTheory -> SearchBudget -> [RewriteRule] -> Obligation -> Either Text ObligationResult
+checkObligation doc tt budget rules ob = do
+  outcome <- autoJoinProofWithMapper (applyModExpr doc) tt budget rules (cpLeft (obCP ob)) (cpRight (obCP ob))
   pure ObligationResult { orObligation = ob, orWitness = outcome }
 
 renderCoherenceReport :: [ObligationResult] -> Either Text Text

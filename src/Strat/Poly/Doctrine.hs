@@ -21,6 +21,8 @@ module Strat.Poly.Doctrine
   , lookupCtorSigForOwnerInTables
   , lookupCtorRefForOwnerInTables
   , lookupGenDeclInDoctrine
+  , actionImageForGenerator
+  , genericGenDiagram
   , checkType
   , checkModTransformWitness
   , doctrineCheck
@@ -51,7 +53,17 @@ import Strat.Poly.TypeTheory
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
 import Strat.Poly.Diagram
-import Strat.Poly.Graph (validateDiagram, Edge(..), EdgePayload(..), unPortId)
+import Strat.Poly.Graph
+  ( BinderArg(..)
+  , BinderMetaVar(..)
+  , Edge(..)
+  , EdgePayload(..)
+  , addEdgePayload
+  , emptyDiagram
+  , freshPort
+  , unPortId
+  , validateDiagram
+  )
 import Strat.Poly.Cell2
 import Strat.Poly.Tele (GenParam(..), teleTyVars, teleTmVars)
 import Strat.Poly.DSL.AST (RawOblExpr(..))
@@ -1375,6 +1387,7 @@ checkAction doc ctorTables (name, action) = do
       Just d -> Right d
   let srcMode = mdSrc decl
   let tgtMode = mdTgt decl
+  mapM_ (checkExplicitEntry srcMode tgtMode) (M.toList (maGenMap action))
   let srcGens =
         M.filterWithKey
           ( \gName _ ->
@@ -1388,15 +1401,69 @@ checkAction doc ctorTables (name, action) = do
           )
           (M.findWithDefault M.empty srcMode (dGens doc))
   let checkGenImage g = do
-        img <-
-          case M.lookup (srcMode, g) (maGenMap action) of
-            Nothing -> Left "validateDoctrine: action is missing a generator image"
-            Just d -> Right d
+        img <- actionImageForGenerator doc name g
         if dMode img == tgtMode
           then Right ()
           else Left "validateDoctrine: action generator image has wrong mode"
         validateDiagram img
   mapM_ checkGenImage (M.keys srcGens)
+  where
+    checkExplicitEntry srcMode tgtMode ((srcMode', g), img) = do
+      if srcMode' == srcMode
+        then Right ()
+        else Left "validateDoctrine: action image key mode mismatch"
+      _ <- lookupGenDeclInDoctrine "validateDoctrine: action references unknown source generator" doc srcMode g
+      if dMode img == tgtMode
+        then Right ()
+        else Left "validateDoctrine: action generator image has wrong mode"
+      validateDiagram img
+
+actionImageForGenerator :: Doctrine -> ModName -> GenName -> Either Text Diagram
+actionImageForGenerator doc modName genName = do
+  modDecl <-
+    case M.lookup modName (mtDecls (dModes doc)) of
+      Nothing -> Left "action: unknown modality"
+      Just decl -> Right decl
+  let srcMode = mdSrc modDecl
+  let tgtMode = mdTgt modDecl
+  _ <- lookupGenDeclInDoctrine "action: unknown source generator" doc srcMode genName
+  case M.lookup modName (dActions doc) >>= M.lookup (srcMode, genName) . maGenMap of
+    Just img -> Right img
+    Nothing -> canonicalActionImage doc tgtMode genName
+
+canonicalActionImage :: Doctrine -> ModeName -> GenName -> Either Text Diagram
+canonicalActionImage doc tgtMode genName = do
+  tgtGen <-
+    lookupGenDeclInDoctrine
+      "action: missing generator image and no canonical same-name target generator"
+      doc
+      tgtMode
+      genName
+  genericGenDiagram tgtGen
+
+genericGenDiagram :: GenDecl -> Either Text Diagram
+genericGenDiagram gd = do
+  let mode = gdMode gd
+  let attrs = M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- gdAttrs gd ]
+  let binderSlots = [ bs | InBinder bs <- gdDom gd ]
+  let bargs = map BAMeta (binderHoleNames (length binderSlots))
+  let (ins, d0) = allocPorts (gdPlainDom gd) (emptyDiagram mode [])
+  let (outs, d1) = allocPorts (gdCod gd) d0
+  d2 <- addEdgePayload (PGen (gdName gd) attrs bargs) ins outs d1
+  let d3 = d2 { dIn = ins, dOut = outs }
+  validateDiagram d3
+  pure d3
+  where
+    binderHoleNames n =
+      [ BinderMetaVar ("b" <> T.pack (show i))
+      | i <- [0 :: Int .. n - 1]
+      ]
+
+    allocPorts [] diag = ([], diag)
+    allocPorts (ty:rest) diag =
+      let (pid, diag1) = freshPort ty diag
+          (pids, diag2) = allocPorts rest diag1
+       in (pid : pids, diag2)
 
 checkModeTransform :: Doctrine -> ModTransformDecl -> Either Text ()
 checkModeTransform doc decl = do

@@ -122,7 +122,7 @@ foliate policy doc mode diag = do
               , stepIns = eIns edge
               , stepOuts = eOuts edge
               }
-        PSplice _ -> Left "foliate: splice is not allowed in runtime diagrams"
+        PSplice _ _ -> Left "foliate: splice is not allowed in runtime diagrams"
         PTmMeta _ -> Left "foliate: term-meta nodes are not allowed in runtime diagrams"
         PInternalDrop -> Left "foliate: internal drop nodes are not allowed in runtime diagrams"
 

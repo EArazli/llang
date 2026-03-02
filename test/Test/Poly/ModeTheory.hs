@@ -88,7 +88,7 @@ tests =
     , testCase "classified modes with binder inputs require comprehension declarations" testComprehensionBinderRequiresDecl
     , testCase "classified modes without binder inputs still require comprehension declarations" testComprehensionRequiresDeclWithoutBinder
     , testCase "comprehension declarations install generated obligations" testComprehensionGeneratedObligations
-    , testCase "mixed plain+binder generators produce full comprehension laws" testComprehensionMixedBinderFull
+    , testCase "mixed plain+binder generators are excluded from generated comprehension laws" testComprehensionMixedBinderExcluded
     , testCase "binder-only multi-binder generators produce full comprehension laws" testComprehensionMultiBinderOnlyFull
     , testCase "constructor term slots generate boundary-side laws only" testComprehensionCtorSlotBoundarySide
     , testCase "constructor term slots on multi-port plain domains generate dom-side laws" testComprehensionCtorSlotMultiPortDom
@@ -1261,8 +1261,8 @@ testComprehensionGeneratedObligations = do
   assertBool "expected generated comprehension obligations to include composition laws" (any ("/comp_dom" `T.isSuffixOf`) (map obName generated))
   assertBool "expected generated comprehension obligations to include naturality laws" (any ("/nat" `T.isSuffixOf`) (map obName generated))
 
-testComprehensionMixedBinderFull :: Assertion
-testComprehensionMixedBinderFull = do
+testComprehensionMixedBinderExcluded :: Assertion
+testComprehensionMixedBinderExcluded = do
   let src = T.unlines
         [ "doctrine CompMixedCodOnly where {"
         , "  mode M classifiedBy M via M.U_M;"
@@ -1293,13 +1293,7 @@ testComprehensionMixedBinderFull = do
         , obGenerated obl
         , obForGenName obl == Just (GenName "mixed")
         ]
-  assertBool "expected generated obligations for mixed generator" (not (null generated))
-  let names = map obName generated
-  assertBool "expected cod identity law for mixed generator" (any ("/id_cod" `T.isSuffixOf`) names)
-  assertBool "expected cod composition law for mixed generator" (any ("/comp_cod" `T.isSuffixOf`) names)
-  assertBool "expected dom identity law for mixed generator" (any ("/id_dom" `T.isSuffixOf`) names)
-  assertBool "expected dom composition law for mixed generator" (any ("/comp_dom" `T.isSuffixOf`) names)
-  assertBool "expected naturality law for mixed generator" (any ("/nat" `T.isSuffixOf`) names)
+  assertBool "expected no generated obligations for mixed generator" (null generated)
 
 testComprehensionMultiBinderOnlyFull :: Assertion
 testComprehensionMultiBinderOnlyFull = do

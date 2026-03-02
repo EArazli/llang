@@ -277,8 +277,8 @@ algoEq =
           recurse () d1 d2
         (PFeedback d1, PFeedback d2) ->
           recurse () d1 d2
-        (PSplice x, PSplice y)
-          | x == y ->
+        (PSplice x me1, PSplice y me2)
+          | x == y && me1 == me2 ->
               Right [()]
           | otherwise ->
               Right []
@@ -317,7 +317,7 @@ algoEq =
             && and (zipWith binderShape bargs1 bargs2)
         (PBox _ _, PBox _ _) -> True
         (PFeedback _, PFeedback _) -> True
-        (PSplice x, PSplice y) -> x == y
+        (PSplice x me1, PSplice y me2) -> x == y && me1 == me2
         (PTmMeta x, PTmMeta y) -> sameTmVarId x y
         (PInternalDrop, PInternalDrop) -> True
         _ -> False
@@ -406,8 +406,8 @@ algoMatch tt flex attrFlex =
           recurse extra d1 d2
         (PFeedback d1, PFeedback d2) ->
           recurse extra d1 d2
-        (PSplice x, PSplice y)
-          | x == y ->
+        (PSplice x me1, PSplice y me2)
+          | x == y && me1 == me2 ->
               Right [extra]
           | otherwise ->
               Right []
@@ -430,7 +430,7 @@ algoMatch tt flex attrFlex =
             && and (zipWith binderShape bargs1 bargs2)
         (PBox _ _, PBox _ _) -> True
         (PFeedback _, PFeedback _) -> True
-        (PSplice x, PSplice y) -> x == y
+        (PSplice x me1, PSplice y me2) -> x == y && me1 == me2
         (PTmMeta x, PTmMeta y) -> sameTmVarId x y
         (PInternalDrop, PInternalDrop) -> True
         _ -> False

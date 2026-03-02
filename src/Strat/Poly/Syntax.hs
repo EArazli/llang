@@ -4,6 +4,7 @@ module Strat.Poly.Syntax
   ( ObjName(..)
   , ObjRef(..)
   , mkModeMetaVar
+  , identityModExpr
   , TmVar(..)
   , tmVarOwner
   , sameTmVarId
@@ -27,7 +28,7 @@ module Strat.Poly.Syntax
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import Strat.Poly.Attr (AttrMap)
-import Strat.Poly.ModeSyntax (ModeName, ModExpr)
+import Strat.Poly.ModeSyntax (ModeName, ModExpr(..))
 import Strat.Poly.Names (BoxName, GenName)
 
 
@@ -58,7 +59,7 @@ data EdgePayload
   = PGen GenName AttrMap [BinderArg]
   | PBox BoxName Diagram
   | PFeedback Diagram
-  | PSplice BinderMetaVar
+  | PSplice BinderMetaVar ModExpr
   | PTmMeta TmVar
   | PInternalDrop
   deriving (Eq, Ord, Show)
@@ -118,6 +119,14 @@ mkModeMetaVar name mode =
     , tmvSort = metaSortObj mode
     , tmvScope = 0
     , tmvOwnerMode = Just mode
+    }
+
+identityModExpr :: ModeName -> ModExpr
+identityModExpr mode =
+  ModExpr
+    { meSrc = mode
+    , meTgt = mode
+    , mePath = []
     }
 
 tmVarOwner :: TmVar -> ModeName

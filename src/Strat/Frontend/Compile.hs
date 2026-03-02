@@ -15,9 +15,10 @@ import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
 import Strat.Poly.Diagram (Diagram, freeVarsDiagram)
+import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Obj (TmVar(..))
-import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
+import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Surface (PolySurfaceDef(..))
 import Strat.Poly.Surface.Elab (elabSurfaceExpr)
@@ -47,7 +48,7 @@ compileDiagramArtifact env targetName mMode mSurface uses morphs policy fuel exp
           Left err -> Left ("morphism chain did not reach target doctrine; " <> err)
   let rules = rulesFromPolicy policy (dCells2 docFinal)
   tt <- doctrineTypeTheory docFinal
-  status <- normalize tt fuel rules diagFinal
+  status <- normalizeWithMapper (applyModExpr docFinal) tt fuel rules diagFinal
   let norm =
         case status of
           Finished d -> d

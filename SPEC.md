@@ -516,7 +516,12 @@ Current witness constraints:
 
 `action <ModName> where { gen g -> <diag> }` defines the functorial map on generator edges.
 
-`map[<ModExpr>](<DiagExpr>)` elaborates by applying declared actions along the composed modality expression.
+`map[<ModExpr>](<DiagExpr>)` elaborates by applying modality actions along the composed modality expression, using:
+
+- explicit declared generator images when present, and
+- canonical same-name target-generator images as fallback when explicit images are absent.
+
+If neither exists for a needed generator image, elaboration fails.
 
 **Diagram interpretation principle.** Both modality actions and doctrine morphisms use the same universal construction: specifying the image of each generating edge (together with how boundary/object-types are transported) determines a unique extension to all diagrams by structural recursion on diagram shape (boxes/feedback/subdiagrams) and by *splicing* the chosen image at each generator-edge. This is the string-diagram/PROP analogue of how a polygraph/computad presentation freely generates a categorical structure, and an “interpretation of generators” extends uniquely to an interpretation of all composites/tensors.
 
@@ -562,6 +567,11 @@ Elaboration-time strictness for generated checks:
   - generated Beck-Chevalley obligations.
 - equivalently: these generated checks must be proved during doctrine elaboration for the doctrine to be accepted.
 
+Action-semantics proof scope (current cut):
+
+- rule/mod_eq preservation checks are enforced over the explicitly declared action-image fragment;
+- fallback-only generator behavior is operationally available to `map[...]` but is not yet proof-checked as part of action-semantics validation.
+
 Budgets are tooling-level search parameters (`SearchBudget`), not doctrine/morphism/obligation data.
 `sbTimeoutMs` is interpreted as a real wall-clock timeout for auto-proof search.
 
@@ -583,6 +593,12 @@ For each relevant slot on each source-mode generator (using the same slot-profil
 Current naming scheme:
 
 - generated names are `__bc/<mod>/<srcMode>/<gen>/<slotpath>/dom` or `.../cod`.
+
+Current slot-profile scope:
+
+- binder-only generator domains participate;
+- mixed-domain binder generators (plain ports plus binder slots) are currently excluded;
+- constructor term-argument slots participate on dom/cod sides according to slot position.
 
 Admission policy (current cut):
 
@@ -615,7 +631,8 @@ Functor namespace/use rules:
 
 - parameter-provided names must be referenced as `Param::Name` inside functor bodies
 - parameter mapping keys in `using { ... }` must exactly match the functor parameter set
-- parameter schemas are signature-only: modes/modalities/`mod_eq`, attrsort/gen/data declarations only
+- functor parameter schemas are full doctrines (they may include rules, actions, obligations, and `mod_transform`)
+- `apply` checks schema rules and obligations before pushout instantiation
 
 Removed legacy items:
 
@@ -631,6 +648,44 @@ Pushout/coproduct construction remains available and merges doctrine content wit
 `apply` computes a right-biased pushout where target names are preserved and colliding
 functor-body declarations are prefixed/freshened.
 The collision prefix is derived from the functor name (for example `F_...`).
+
+### 9.1 Doctrine Functors
+
+`doctrine_functor` parameters are full doctrine schemas, not signature-only fragments.
+For each parameter `(P : S)`, interface construction imports the entire schema doctrine `S`
+under the `P::` namespace.
+
+Namespacing renames all schema content:
+
+- modes
+- modalities
+- mode transforms
+- object constructors/types
+- generators
+- rewrite cells/rules
+- modality actions
+- obligations
+- attribute sorts
+
+`apply` builds one interface morphism `implIface : iface -> target` by:
+
+- taking each provided parameter morphism,
+- lifting its domain names to the corresponding `P::...` names,
+- merging the lifted maps into a single morphism.
+
+Before pushout, `apply` must check:
+
+1. `implIface` passes full morphism checking (`CheckAll`) against interface rules/cells.
+2. all interface obligations are discharged under `implIface`.
+
+If either check fails, or any obligation remains undecided under the active search budget,
+`apply` fails and no pushout is computed.
+If both checks succeed, pushout construction proceeds as before.
+
+References:
+
+- Diaconescu, *Structuring of Specification Modules*, 2015 (pushout technique for parameterized module instantiation).
+- Goguen and Burstall, *Institutions: Abstract Model Theory for Specification and Programming*, 1984 (colimits for combining theories).
 
 Collision renaming during `apply` covers:
 

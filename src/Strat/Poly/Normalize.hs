@@ -1,7 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Normalize
   ( NormalizationStatus(..)
+  , normalizeWithMapper
   , normalize
+  , autoJoinProofWithMapper
   , autoJoinProof
   ) where
 
@@ -27,9 +29,17 @@ import Strat.Poly.Proof
   , SearchLimit(..)
   , SearchOutcome(..)
   , SearchBudget(..)
-  , checkJoinProof
+  , checkJoinProofWithMapper
   )
-import Strat.Poly.Rewrite (RewriteRule, rrLHS, rrName, applyMatch, mkMatchConfig, rewriteOnce)
+import Strat.Poly.Rewrite
+  ( RewriteRule
+  , SpliceMapper
+  , rrLHS
+  , rrName
+  , applyMatchWithMapper
+  , mkMatchConfig
+  , rewriteOnceWithMapper
+  )
 import Strat.Poly.TypeTheory (TypeTheory)
 
 
@@ -38,8 +48,8 @@ data NormalizationStatus a
   | OutOfFuel a
   deriving (Eq, Show)
 
-normalize :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
-normalize tt fuel rules diag = do
+normalizeWithMapper :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
+normalizeWithMapper spliceMapper tt fuel rules diag = do
   start <- canonDiagramRaw diag
   go fuel start
   where
@@ -47,7 +57,7 @@ normalize tt fuel rules diag = do
       | remaining <= 0 =
           Right (OutOfFuel current)
       | otherwise = do
-          step <- rewriteOnce tt rules current
+          step <- rewriteOnceWithMapper tt spliceMapper rules current
           case step of
             Nothing ->
               Right (Finished current)
@@ -55,15 +65,18 @@ normalize tt fuel rules diag = do
               nextCanon <- canonDiagramRaw next
               go (remaining - 1) nextCanon
 
-autoJoinProof :: TypeTheory -> SearchBudget -> [RewriteRule] -> Diagram -> Diagram -> Either Text (SearchOutcome JoinProof)
-autoJoinProof tt budget rules d1 d2
+normalize :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
+normalize = normalizeWithMapper (\_ d -> Right d)
+
+autoJoinProofWithMapper :: SpliceMapper -> TypeTheory -> SearchBudget -> [RewriteRule] -> Diagram -> Diagram -> Either Text (SearchOutcome JoinProof)
+autoJoinProofWithMapper spliceMapper tt budget rules d1 d2
   | sbMaxDepth budget < 0 = Right (SearchUndecided LimitDepth)
   | sbMaxStates budget <= 0 = Right (SearchUndecided LimitStates)
   | sbTimeoutMs budget < 0 = Right (SearchUndecided LimitTimeout)
   | otherwise = do
       let cap = max 1 (min 100 (sbMaxStates budget))
-      reach1 <- reachableWithParents tt rules budget cap d1
-      reach2 <- reachableWithParents tt rules budget cap d2
+      reach1 <- reachableWithParents spliceMapper tt rules budget cap d1
+      reach2 <- reachableWithParents spliceMapper tt rules budget cap d2
       let nodes1 = rrNodes reach1
       let nodes2 = rrNodes reach2
       meet <- findMeet nodes1 nodes2
@@ -73,8 +86,11 @@ autoJoinProof tt budget rules d1 d2
           let leftPath = pathFrom nodes1 i1
           let rightPath = pathFrom nodes2 i2
           let proof = JoinProof { jpLeft = leftPath, jpRight = rightPath }
-          checkJoinProof tt rules proof
+          checkJoinProofWithMapper spliceMapper tt rules proof
           Right (SearchProved proof)
+
+autoJoinProof :: TypeTheory -> SearchBudget -> [RewriteRule] -> Diagram -> Diagram -> Either Text (SearchOutcome JoinProof)
+autoJoinProof = autoJoinProofWithMapper (\_ d -> Right d)
 
 data Node = Node
   { nodeCanon :: CanonDiagram
@@ -98,8 +114,8 @@ data ReachResult = ReachResult
 nodeDiag :: Node -> Diagram
 nodeDiag = unCanon . nodeCanon
 
-reachableWithParents :: TypeTheory -> [RewriteRule] -> SearchBudget -> Int -> Diagram -> Either Text ReachResult
-reachableWithParents tt rules budget cap start = do
+reachableWithParents :: SpliceMapper -> TypeTheory -> [RewriteRule] -> SearchBudget -> Int -> Diagram -> Either Text ReachResult
+reachableWithParents spliceMapper tt rules budget cap start = do
   startCanon <- canonDiagram start
   let startNode = Node startCanon Nothing Nothing 0
   go [startNode] (M.singleton startCanon 0) [0] False
@@ -121,7 +137,7 @@ reachableWithParents tt rules budget cap start = do
           if nodeDepth node >= sbMaxDepth budget
             then go nodes seen rest True
             else do
-              next0 <- rewriteAllWithProof tt cap rules (nodeDiag node)
+              next0 <- rewriteAllWithProof spliceMapper tt cap rules (nodeDiag node)
               next <- mapM canonPair next0
               (nodes', seen', newIdxs) <- foldl (insertIfNew idx (nodeDepth node + 1)) (Right (nodes, seen, [])) next
               go nodes' seen' (rest <> newIdxs) hitDepth
@@ -177,15 +193,15 @@ findMeet nodes1 nodes2 = go 0
                 Nothing -> go (i + 1)
                 Just j -> Right (Just (i, j))
 
-rewriteAllWithProof :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [(RewriteStep, Diagram)]
-rewriteAllWithProof tt cap rules diag = do
+rewriteAllWithProof :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [(RewriteStep, Diagram)]
+rewriteAllWithProof spliceMapper tt cap rules diag = do
   rejectSplice "rewriteAll" diag
-  top <- rewriteAllTopWithProof tt rules diag
-  inner <- rewriteAllNestedWithProof tt cap rules diag
+  top <- rewriteAllTopWithProof spliceMapper tt rules diag
+  inner <- rewriteAllNestedWithProof spliceMapper tt cap rules diag
   pure (take cap (top <> inner))
 
-rewriteAllTopWithProof :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text [(RewriteStep, Diagram)]
-rewriteAllTopWithProof tt rules diag =
+rewriteAllTopWithProof :: SpliceMapper -> TypeTheory -> [RewriteRule] -> Diagram -> Either Text [(RewriteStep, Diagram)]
+rewriteAllTopWithProof spliceMapper tt rules diag =
   foldl collect (Right []) (zip [0 :: Int ..] rules)
   where
     collect acc (ruleIndex, rule) = do
@@ -198,7 +214,7 @@ rewriteAllTopWithProof tt rules diag =
           Right (out <> steps)
 
     applyOne ruleIndex rule match =
-      case applyMatch tt rule match diag of
+      case applyMatchWithMapper tt spliceMapper rule match diag of
         Left _ -> Right []
         Right d -> do
           canon <- canonDiagramRaw d
@@ -212,27 +228,27 @@ rewriteAllTopWithProof tt rules diag =
                   }
           Right [(step, canon)]
 
-rewriteAllNestedWithProof :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [(RewriteStep, Diagram)]
-rewriteAllNestedWithProof tt cap rules diag = do
+rewriteAllNestedWithProof :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [(RewriteStep, Diagram)]
+rewriteAllNestedWithProof spliceMapper tt cap rules diag = do
   let edges = IM.toAscList (dEdges diag)
-  fmap concat (mapM (rewriteInEdge tt cap rules diag) edges)
+  fmap concat (mapM (rewriteInEdge spliceMapper tt cap rules diag) edges)
 
-rewriteInEdge :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> (Int, Edge) -> Either Text [(RewriteStep, Diagram)]
-rewriteInEdge tt cap rules diag (edgeKey, edge) =
+rewriteInEdge :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Diagram -> (Int, Edge) -> Either Text [(RewriteStep, Diagram)]
+rewriteInEdge spliceMapper tt cap rules diag (edgeKey, edge) =
   case ePayload edge of
-    PSplice _ -> Left "rewriteAll: splice nodes are not allowed in evaluation terms"
+    PSplice _ _ -> Left "rewriteAll: splice nodes are not allowed in evaluation terms"
     PBox name inner -> do
-      innerRes <- rewriteAllWithProof tt cap rules inner
+      innerRes <- rewriteAllWithProof spliceMapper tt cap rules inner
       mapM (replaceBox name) innerRes
     PFeedback inner -> do
-      innerRes <- rewriteAllWithProof tt cap rules inner
+      innerRes <- rewriteAllWithProof spliceMapper tt cap rules inner
       mapM replaceFeedback innerRes
     PTmMeta _ ->
       Right []
     PInternalDrop ->
       Right []
     PGen gen attrs bargs -> do
-      bargsRes <- rewriteAllBinderArgsWithProof tt cap rules bargs
+      bargsRes <- rewriteAllBinderArgsWithProof spliceMapper tt cap rules bargs
       mapM (replaceGen gen attrs) bargsRes
   where
     prefix focus step = step { rsFocus = focus (rsFocus step) }
@@ -255,15 +271,15 @@ rewriteInEdge tt cap rules diag (edgeKey, edge) =
       canon <- canonDiagramRaw diag'
       Right (prefix (FocusInBinder edgeKey binderIx) step, canon)
 
-rewriteAllBinderArgsWithProof :: TypeTheory -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [(Int, RewriteStep, [BinderArg])]
-rewriteAllBinderArgsWithProof _ _ _ [] = Right []
-rewriteAllBinderArgsWithProof tt cap rules args =
+rewriteAllBinderArgsWithProof :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [(Int, RewriteStep, [BinderArg])]
+rewriteAllBinderArgsWithProof _ _ _ _ [] = Right []
+rewriteAllBinderArgsWithProof spliceMapper tt cap rules args =
   fmap concat (mapM rewriteAt [0 .. length args - 1])
   where
     rewriteAt i =
       case splitAt i args of
         (pre, BAConcrete inner : post) -> do
-          res <- rewriteAllWithProof tt cap rules inner
+          res <- rewriteAllWithProof spliceMapper tt cap rules inner
           Right
             [ (i, step, pre <> [BAConcrete inner'] <> post)
             | (step, inner') <- res
@@ -281,7 +297,7 @@ hasSplice diag = any edgeHasSplice (IM.elems (dEdges diag))
   where
     edgeHasSplice edge =
       case ePayload edge of
-        PSplice _ -> True
+        PSplice _ _ -> True
         PBox _ inner -> hasSplice inner
         PFeedback inner -> hasSplice inner
         PGen _ _ bargs -> any bargHasSplice bargs

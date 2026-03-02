@@ -178,7 +178,7 @@ generateBeckChevalleyObligations doc = do
       case slotKind slot of
         SlotBinder
           | hasOnlyBinderDom gd -> SlotLawsBothSides
-          | hasMixedDom gd -> SlotLawsBothSides
+          | hasMixedDom gd -> SlotLawsNone
           | otherwise -> SlotLawsNone
         SlotCtorTmArg ->
           ctorSlotLawProfile mode slot

@@ -9,6 +9,7 @@ module Strat.Poly.DiagramInterpretation
   , updateEdgePayload
   , applySubstBinderSig
   , applySubstBinderSigs
+  , instantiateGenImageBindersWithMapper
   , instantiateGenImageBinders
   ) where
 
@@ -37,7 +38,7 @@ import Strat.Poly.Graph
   , shiftDiagram
   , validateDiagram
   )
-import Strat.Poly.ModeSyntax (ModeName)
+import Strat.Poly.ModeSyntax (ModeName, ModExpr(..))
 import Strat.Poly.Syntax
   ( BinderArg(..)
   , BinderMetaVar(..)
@@ -57,6 +58,7 @@ data DiagramInterpretation = DiagramInterpretation
   , diMapTmCtxObj :: Obj -> Either Text Obj
   , diMapPortObj :: Obj -> Either Text Obj
   , diMapTmMetaSort :: Obj -> Either Text Obj
+  , diMapSplice :: BinderMetaVar -> ModExpr -> Either Text (BinderMetaVar, ModExpr)
   , diOnGenEdge
       :: Diagram
       -> Diagram
@@ -104,8 +106,9 @@ interpretDiagram interp diagSrc = do
           sort' <- diMapTmMetaSort interp (tmvSort v)
           updateEdgePayload tgt edgeKey (PTmMeta v { tmvSort = sort' })
 
-        PSplice x ->
-          updateEdgePayload tgt edgeKey (PSplice x)
+        PSplice x me -> do
+          (x', me') <- diMapSplice interp x me
+          updateEdgePayload tgt edgeKey (PSplice x' me')
 
         PInternalDrop ->
           updateEdgePayload tgt edgeKey PInternalDrop
@@ -177,8 +180,8 @@ binderHoleNames n =
   ]
 
 data SpliceAction
-  = SpliceBindHole BinderMetaVar
-  | SpliceAlias BinderMetaVar
+  = SpliceBindHole Diagram
+  | SpliceAlias BinderMetaVar ModExpr
 
 instantiateGenImageBinders
   :: TypeTheory
@@ -186,7 +189,17 @@ instantiateGenImageBinders
   -> M.Map BinderMetaVar BinderArg
   -> Diagram
   -> Either Text Diagram
-instantiateGenImageBinders tt binderSigs holeSub diag0 = do
+instantiateGenImageBinders tt =
+  instantiateGenImageBindersWithMapper tt (\_ d -> Right d)
+
+instantiateGenImageBindersWithMapper
+  :: TypeTheory
+  -> (ModExpr -> Diagram -> Either Text Diagram)
+  -> M.Map BinderMetaVar BinderSig
+  -> M.Map BinderMetaVar BinderArg
+  -> Diagram
+  -> Either Text Diagram
+instantiateGenImageBindersWithMapper tt mapSplice binderSigs holeSub diag0 = do
   diag1 <- recurseDiagram diag0
   expandSplicesLoop diag1
   where
@@ -200,13 +213,13 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
           bargs' <- mapM recurseBinderArg bargs
           pure edge { ePayload = PGen g attrs bargs' }
         PBox name inner -> do
-          inner' <- instantiateGenImageBinders tt binderSigs holeSub inner
+          inner' <- instantiateGenImageBindersWithMapper tt mapSplice binderSigs holeSub inner
           pure edge { ePayload = PBox name inner' }
         PFeedback inner -> do
-          inner' <- instantiateGenImageBinders tt binderSigs holeSub inner
+          inner' <- instantiateGenImageBindersWithMapper tt mapSplice binderSigs holeSub inner
           pure edge { ePayload = PFeedback inner' }
-        PSplice x ->
-          pure edge { ePayload = PSplice x }
+        PSplice x me ->
+          pure edge { ePayload = PSplice x me }
         PTmMeta v ->
           pure edge { ePayload = PTmMeta v }
         PInternalDrop ->
@@ -215,7 +228,7 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
         recurseBinderArg barg =
           case barg of
             BAConcrete inner ->
-              BAConcrete <$> instantiateGenImageBinders tt binderSigs holeSub inner
+              BAConcrete <$> instantiateGenImageBindersWithMapper tt mapSplice binderSigs holeSub inner
             BAMeta x ->
               case M.lookup x holeSub of
                 Nothing ->
@@ -236,19 +249,14 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
         Nothing -> Right diag
         Just (edgeKey, action) ->
           case action of
-            SpliceAlias x' -> do
-              diag' <- updateEdgePayload diag edgeKey (PSplice x')
+            SpliceAlias x' me -> do
+              diag' <- updateEdgePayload diag edgeKey (PSplice x' me)
               expandSplicesLoop diag'
-            SpliceBindHole x -> do
-              resolved <- resolveSpliceHole x
-              case resolved of
-                BAConcrete d -> do
-                  edge <- requireEdge diag edgeKey
-                  checkSpliceInsertion diag edge d
-                  diag' <- spliceEdge diag edgeKey d
-                  expandSplicesLoop diag'
-                BAMeta _ ->
-                  Left "instantiateGenImageBinders: internal error: unresolved splice binding"
+            SpliceBindHole dMapped -> do
+              edge <- requireEdge diag edgeKey
+              checkSpliceInsertion diag edge dMapped
+              diag' <- spliceEdge diag edgeKey dMapped
+              expandSplicesLoop diag'
 
     findExpandableSplice diag =
       go (IM.toAscList (dEdges diag))
@@ -256,16 +264,17 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
         go [] = Right Nothing
         go ((edgeKey, edge):rest) =
           case ePayload edge of
-            PSplice hole -> do
+            PSplice hole me -> do
               resolved <- resolveSpliceHole hole
               case resolved of
                 BAMeta x'
-                  | x' /= hole -> Right (Just (edgeKey, SpliceAlias x'))
+                  | x' /= hole -> Right (Just (edgeKey, SpliceAlias x' me))
                   | otherwise -> go rest
                 BAConcrete d -> do
                   checkConcreteAgainstSig hole d
-                  checkSpliceInsertion diag edge d
-                  Right (Just (edgeKey, SpliceBindHole hole))
+                  dMapped <- mapSpliceForHole me d
+                  checkSpliceInsertion diag edge dMapped
+                  Right (Just (edgeKey, SpliceBindHole dMapped))
             _ -> go rest
 
     requireEdge diag edgeKey =
@@ -293,6 +302,18 @@ instantiateGenImageBinders tt binderSigs holeSub diag0 = do
                   if M.member y binderSigs
                     then Left "instantiateGenImageBinders: missing binder-hole substitution"
                     else Right (BAMeta y)
+
+    mapSpliceForHole me d = do
+      if dMode d == meSrc me
+        then Right ()
+        else Left "instantiateGenImageBinders: splice mapper source-mode mismatch"
+      dMapped <-
+        if null (mePath me)
+          then Right d
+          else mapSplice me d
+      if dMode dMapped == meTgt me
+        then Right dMapped
+        else Left "instantiateGenImageBinders: splice mapper target-mode mismatch"
 
     checkSpliceInsertion diag edge d = do
       if dMode d == dMode diag

@@ -28,7 +28,7 @@ foldDiagram onDiag onPayload onBArg = goDiag
           PGen _ _ bargs -> foldMap goBArg bargs
           PBox _ inner -> goDiag inner
           PFeedback inner -> goDiag inner
-          PSplice _ -> mempty
+          PSplice _ _ -> mempty
           PTmMeta _ -> mempty
           PInternalDrop -> mempty
 
@@ -68,8 +68,8 @@ traverseDiagram onDiag onPayload onBArg = goDiag
           PFeedback inner -> do
             inner' <- goDiag inner
             pure (PFeedback inner')
-          PSplice x ->
-            pure (PSplice x)
+          PSplice x me ->
+            pure (PSplice x me)
           PTmMeta v ->
             pure (PTmMeta v)
           PInternalDrop ->

@@ -39,7 +39,7 @@ import Strat.Poly.DiagramInterpretation
   , applySubstBinderSig
   , applySubstBinderSigs
   , binderHoleNames
-  , instantiateGenImageBinders
+  , instantiateGenImageBindersWithMapper
   , interpretDiagram
   , requirePortType
   , spliceEdge
@@ -52,7 +52,8 @@ import Strat.Poly.DefEq (normalizeObjDeep, defEqObj)
 import Strat.Poly.Attr
 import Strat.Poly.Rewrite
 import Strat.Poly.ObjClassifier (modeUniverseObj, modeClassifierMode)
-import Strat.Poly.Normalize (autoJoinProof)
+import Strat.Poly.Normalize (autoJoinProofWithMapper)
+import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Proof
   ( JoinProof
   , SearchBudget
@@ -60,7 +61,7 @@ import Strat.Poly.Proof
   , SearchOutcome(..)
   , defaultSearchBudget
   , renderSearchLimit
-  , checkJoinProof
+  , checkJoinProofWithMapper
   )
 import Strat.Poly.ModeTheory
   ( ModeName(..)
@@ -343,6 +344,10 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
           , diMapTmCtxObj = mapType
           , diMapPortObj = mapType
           , diMapTmMetaSort = mapType
+          , diMapSplice = \x me ->
+              do
+                me' <- applyMorphismModExpr mor me
+                pure (x, me')
           , diOnGenEdge = onGenEdge
           }
   interpretDiagram interp diagSrc
@@ -380,7 +385,7 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
               instImage0 <- applySubstDiagram tgtTheory substTgt image
               instHoleSigs0 <- applySubstBinderSigs tgtTheory substTgt (giBinderSigs image0)
               let instImage1 = applyAttrSubstDiagram attrSubst instImage0
-              instImage <- instantiateGenImageBinders tgtTheory instHoleSigs0 holeSub instImage1
+              instImage <- instantiateGenImageBindersWithMapper tgtTheory (applyModExpr (morTgt mor)) instHoleSigs0 holeSub instImage1
               let holeKeys = S.fromList (binderHoleNames (length (binderSlots genDecl)))
               let remaining = S.intersection holeKeys (binderMetaVarsDiagram instImage)
               if S.null remaining
@@ -998,12 +1003,12 @@ checkCell budget ttSrc ttTgt tgtCtorTables mor cell = do
   lhs <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables mor (c2LHS cell)
   rhs <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables mor (c2RHS cell)
   let rules = rulesFromPolicy (morPolicy mor) (dCells2 (morTgt mor))
-  proof <- autoJoinProof ttTgt budget rules lhs rhs
+  proof <- autoJoinProofWithMapper (applyModExpr (morTgt mor)) ttTgt budget rules lhs rhs
   case proof of
     SearchUndecided lim ->
       Right (MorphismCheckUndecided (c2Name cell) lim)
     SearchProved witness -> do
-      checkJoinProof ttTgt rules witness
+      checkJoinProofWithMapper (applyModExpr (morTgt mor)) ttTgt rules witness
       Right (MorphismCheckProved [(c2Name cell, witness)])
 
 inclusionFastPath :: CtorTables -> Morphism -> Either Text Bool

@@ -41,37 +41,65 @@ definitional normalization.
 `boundTmIndicesTerm` reports bound indices reachable from term outputs.
 Disconnected dead subgraphs do not contribute to reported bound indices.
 
-## 6. Doctrine Functors
+## 6. Doctrine Functors and `apply`
 
-- **Persistent restriction (kept intentionally):** functor parameter schemas are signature-only.
-  Allowed: modes, modalities, `mod_eq`, attrsort/type/gen/data declarations.
-  Disallowed (compiler error): cells/rules, actions, obligations, and `mod_transform`.
+- Functor parameter schemas are full doctrines (including rules, actions, obligations, and `mod_transform`).
+- `apply` is checked before pushout: it must pass a full morphism check (`CheckAll`) for the merged interface morphism and discharge all interface obligations.
+- Any failed check or undecided obligation proof search result rejects `apply`.
+- `apply` checking is budget-sensitive: tighter search budgets can produce undecided failures even when a proof exists with a larger budget.
+- `using { ... }` keys must exactly match the functor parameter set.
 
-## 7. Transform Restrictions (Phase 2)
+## 7. Action-System Strictness
+
+- `map[...]` uses an effective action image per generator:
+  explicit action images when declared, otherwise a canonical same-name generator image in the modality target mode.
+- This means `map[mu](...)` does not require explicit `action` declarations for every modality in `mu`, but it still fails if any needed generator has neither an explicit image nor a canonical same-name target generator.
+- Action declarations may be partial; explicit images are validated and canonical fallback fills missing generator images.
+- Action images (explicit or canonical) must elaborate/typecheck in the modality target mode.
+- For generators with binder inputs, action images must provide concrete binder arguments with matching boundaries.
+- Binder metavariables are not allowed in action diagrams (they are only allowed in rule diagrams), so generic binder-hole passthrough action images are not expressible today.
+- Action-semantics proof checking currently targets the explicitly declared image fragment (rules/generators that only mention explicitly mapped generators), not fallback-only generator behavior.
+
+## 8. Pushout/`apply` Merge Strictness for Actions and Obligations
+
+- When two branches define actions for the same modality name, merge combines them if:
+  - rewrite policies agree, and
+  - overlapping generator-image entries are diagram-isomorphic.
+  Otherwise pushout/`apply` fails.
+- When two branches define obligations with the same `obName`, merge requires exact obligation equality; otherwise pushout/`apply` fails.
+
+## 9. Transform Restrictions (Phase 2)
 
 - `mod_transform` does not rewrite modalities and does not change `mod_eq`.
 - The witness must be a generator with exactly one type variable, no term vars, no attrs, one input port, and one output type.
 - Witness shape is constrained to `mu(A) -> nu(A)` (checked after modality/type normalization).
 - No automatic transform coercion insertion is performed; witnesses must be used explicitly.
 
-## 8. NbE Fragment Coverage Is Intentionally Narrow
+## 10. NbE Fragment Coverage Is Intentionally Narrow
 
 Current NbE normalization targets a strict lambda-calculus fragment for definitional equality.
 Unsupported constructs (for now) include box/feedback/splice nodes, generator attrs, and binder metavariables; non-lambda generators cannot carry binder args.
 This is a scope restriction, not a fundamental limitation, and should be revisited after core NbE stability and soundness are locked in.
 Follow-up work item: expand supported definitional fragment after NbE core stability/soundness are established.
 
-## 9. Classification Graph Limits
+## 11. Generated Structural Obligations (Current Scope)
+
+- Auto-generated comprehension/Beck-Chevalley slot obligations currently apply to:
+  - binder-only generator domains, and
+  - constructor term-argument slots (dom/cod side according to slot position).
+- Mixed-domain binder generators (having both plain ports and binder slots) are currently excluded from these auto-generated slot-law obligations.
+
+## 12. Classification Graph Limits
 
 - Non-self classification cycles are rejected. Allowing longer cycles would require an explicit universe-level stratification design and implementation.
 
-## 10. Constructor/Surface Caveats
+## 13. Constructor/Surface Caveats
 
 - Constructor term-parameter sorts are required to be closed with respect to the generator's type parameters.
 - Surface type annotations support constructor parameters of kind `TPS_Tm`.
   Such arguments are elaborated with the same term elaboration path used by doctrine elaboration (including in-scope surface term binders): the raw argument is elaborated as a term-expression `RawPolyObjExpr` to a `TermDiagram` at the required sort and stored as `CATm`.
 
-## 11. Mode Equations
+## 14. Mode Equations
 
 Mode theory `mod_eq` declarations are treated as an oriented rewrite system used to normalize modality expressions (so that definitional equality is equality of normal forms).
 

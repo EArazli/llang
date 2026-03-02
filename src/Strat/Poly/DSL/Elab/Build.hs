@@ -216,8 +216,8 @@ materializeResolvedUniverses ops st doc =
           PBox name (rewriteDiagram inner)
         PFeedback inner ->
           PFeedback (rewriteDiagram inner)
-        PSplice mv ->
-          PSplice mv
+        PSplice mv me ->
+          PSplice mv me
         PTmMeta v ->
           PTmMeta (rewriteTmVar v)
         PInternalDrop ->

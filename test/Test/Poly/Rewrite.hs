@@ -389,7 +389,8 @@ mkBoxWithSplice :: BinderMetaVar -> Either Text Diagram
 mkBoxWithSplice hole = do
   let (inP, d0) = freshPort aTy (emptyDiagram modeName [])
   let (outP, d1) = freshPort aTy d0
-  d2 <- addEdgePayload (PSplice hole) [inP] [outP] d1
+  let me = ModExpr { meSrc = modeName, meTgt = modeName, mePath = [] }
+  d2 <- addEdgePayload (PSplice hole me) [inP] [outP] d1
   let inner = d2 { dIn = [inP], dOut = [outP] }
   validateDiagram inner
   mkBoxDiagram "spliceBox" inner aTy

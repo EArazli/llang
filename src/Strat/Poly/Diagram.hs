@@ -189,7 +189,7 @@ spliceMetaVarsDiagram =
   where
     onPayload payload =
       case payload of
-        PSplice x -> S.singleton x
+        PSplice x _ -> S.singleton x
         _ -> mempty
 
 binderMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar

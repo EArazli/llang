@@ -17,7 +17,7 @@ import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (meDoctrines)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
-import Strat.Poly.ModeTheory (ModeName(..), addMode, emptyModeTheory)
+import Strat.Poly.ModeTheory (ModeName(..), ModExpr(..), addMode, emptyModeTheory)
 import Strat.Poly.Doctrine (doctrineTypeTheory)
 import Strat.Poly.Obj
   ( Obj(..)
@@ -575,7 +575,8 @@ mkSpliceRHS :: ModeName -> Obj -> BinderMetaVar -> Either Text Diagram
 mkSpliceRHS mode aTy meta = do
   let (x, d0) = freshPort aTy (emptyDiagram mode [])
   let (y, d1) = freshPort aTy d0
-  d2 <- addEdgePayload (PSplice meta) [x] [y] d1
+  let me = ModExpr { meSrc = mode, meTgt = mode, mePath = [] }
+  d2 <- addEdgePayload (PSplice meta me) [x] [y] d1
   let diag = d2 { dIn = [x], dOut = [y] }
   validateDiagram diag
   pure diag

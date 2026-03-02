@@ -88,6 +88,7 @@ import Strat.Poly.Pushout
   , computePolyPushoutPreferRight
   , computePolyCoproduct
   , mkInclusionMorphism
+  , renameDoctrine
   )
 import Strat.Poly.Surface (elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
@@ -141,7 +142,7 @@ elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
           env' <- elabDoctrineFunctor budget env functorDecl
           pure (env', rawTerms, rawRuns)
         DeclDoctrineApply applyDecl -> do
-          env' <- elabDoctrineApply env applyDecl
+          env' <- elabDoctrineApply budget env applyDecl
           pure (env', rawTerms, rawRuns)
         DeclDoctrineEffects name base effects -> do
           env' <- elabDoctrineEffects budget env name base effects
@@ -308,13 +309,22 @@ elabDoctrineFunctor budget env raw = do
       pure (FunctorParamDef paramName schemaName, doc)
 
 
-elabDoctrineApply :: ModuleEnv -> RawDoctrineApply -> Either Text ModuleEnv
-elabDoctrineApply env raw = do
+elabDoctrineApply :: SearchBudget -> ModuleEnv -> RawDoctrineApply -> Either Text ModuleEnv
+elabDoctrineApply budget env raw = do
   ensureAbsent "doctrine" (rdaName raw) (meDoctrines env)
   functorDef <- lookupFunctor env (rdaFunctor raw)
   targetDoc <- lookupDoctrine env (rdaTarget raw)
   implMorphs <- resolveApplyMorphisms env functorDef targetDoc (rdaUsing raw)
+  let ifaceDoc = dfIface functorDef
   implIface <- buildIfaceImplMorphism raw functorDef targetDoc implMorphs
+  case PolyMorph.checkMorphismWithBudget budget implIface of
+    Left err -> Left ("apply: interface morphism check failed: " <> err)
+    Right () -> Right ()
+  implResult <- checkImplementsObligationsWithBudget budget env targetDoc implIface ifaceDoc
+  case implResult of
+    ImplementsCheckProved _ -> Right ()
+    ImplementsCheckUndecided label lim ->
+      Left ("apply: interface obligation undecided: " <> label <> " (" <> renderSearchLimit lim <> ")")
   PolyPushoutResult doc inl inr _glueIface <-
     computePolyPushoutPreferRight (rdaName raw) (dfName functorDef) (dfIncl functorDef) implIface
   let glueMorphs =
@@ -739,92 +749,65 @@ ensureDistinctFunctorParams params =
       | otherwise = go (S.insert (rfpName p) seen) rest
 
 validateFunctorSchema :: Doctrine -> Either Text ()
-validateFunctorSchema schema = do
-  case forbidden of
-    [] -> Right ()
-    _ ->
-      Left
-        ( "doctrine_functor: schema "
-            <> dName schema
-            <> " must be signature-only; forbidden items: "
-            <> T.intercalate ", " forbidden
-        )
-  where
-    forbidden =
-      concat
-        [ [ "actions" | not (M.null (dActions schema)) ]
-        , [ "obligations" | not (null (dObligations schema)) ]
-        , [ "mod_transforms" | not (M.null (mtTransforms (dModes schema))) ]
-        , [ "cells/rules" | not (null (dCells2 schema)) ]
-        ]
+validateFunctorSchema _ = Right ()
 
 namespaceDoctrineWithParam :: Text -> Doctrine -> Either Text Doctrine
-namespaceDoctrineWithParam param doc = do
+namespaceDoctrineWithParam paramName doc = do
   ctorDecls <- allTypeDeclsForDoc doc
-  let prefix t = param <> "::" <> t
-      renameMode (ModeName t) = ModeName (prefix t)
-      renameMod (ModName t) = ModName (prefix t)
-      renameSort (AttrSort t) = AttrSort (prefix t)
-      renameTypeName (ObjName t) = ObjName (prefix t)
-      renameTypeRef ref =
-        ObjRef
-          { orMode = renameMode (orMode ref)
-          , orName = renameTypeName (orName ref)
-          }
+  let prefix t = paramName <> "::" <> t
+      renameModeName (ModeName t) = ModeName (prefix t)
+      renameModName (ModName t) = ModName (prefix t)
+      renameAttrSort (AttrSort t) = AttrSort (prefix t)
+      renameObjName (ObjName t) = ObjName (prefix t)
       renameGenName (GenName t) = GenName (prefix t)
-      modeRenMap = M.fromList [ (m, renameMode m) | m <- M.keys (mtModes (dModes doc)) ]
-      modRenMap = M.fromList [ (m, renameMod m) | m <- M.keys (mtDecls (dModes doc)) ]
-      sortRenMap = M.fromList [ (s, renameSort s) | s <- M.keys (dAttrSorts doc) ]
+      renameTransformName (ModTransformName t) = ModTransformName (prefix t)
+      modeRenMap =
+        M.fromList [ (m, renameModeName m) | m <- M.keys (mtModes (dModes doc)) ]
+      modRenMap =
+        M.fromList [ (m, renameModName m) | m <- M.keys (mtDecls (dModes doc)) ]
+      sortRenMap =
+        M.fromList [ (s, renameAttrSort s) | s <- M.keys (dAttrSorts doc) ]
       typeRenMap =
         M.fromList
-          [ (ref, renameTypeRef ref)
-          | (ref, _) <- ctorDecls
+          [ ( ObjRef mode ctor
+            , ObjRef (M.findWithDefault mode mode modeRenMap) (renameObjName ctor)
+            )
+          | (ObjRef mode ctor, _) <- ctorDecls
           ]
       genRenMap =
         M.fromList
-          [ ((mode, gdName gd), renameGenName (gdName gd))
+          [ ((mode, gdName genDecl), renameGenName (gdName genDecl))
           | (mode, table) <- M.toList (dGens doc)
-          , gd <- M.elems table
+          , genDecl <- M.elems table
           ]
-      renameGenTables tables =
-        foldM addGen M.empty
-          [ (mode, gen)
-          | (mode, table) <- M.toList tables
-          , gen <- M.elems table
-          ]
-        where
-          addGen acc (mode, gen) = do
-            gen' <- renameGenDecl modeRenMap modRenMap typeRenMap sortRenMap genRenMap gen
-            let mode' = M.findWithDefault mode mode modeRenMap
-            let key' = gdName gen'
-            let table0 = M.findWithDefault M.empty mode' acc
-            case M.lookup key' table0 of
-              Nothing ->
-                let table' = M.insert key' gen' table0
-                in Right (M.insert mode' table' acc)
-              Just existing
-                | existing == gen' -> Right acc
-                | otherwise -> Left "doctrine_functor: namespaced generator collision"
-  modeTheory' <- renameModeTheory modeRenMap modRenMap typeRenMap genRenMap (dModes doc)
-  gens' <- renameGenTables (dGens doc)
-  let attrSorts' =
+      cellRenMap =
         M.fromList
-          [ (renameSort (asName decl), decl { asName = renameSort (asName decl) })
-          | decl <- M.elems (dAttrSorts doc)
+          [ ((dMode (c2LHS c), c2Name c), prefix (c2Name c))
+          | c <- dCells2 doc
           ]
-  let acyclic' =
-        S.fromList
-          [ renameMode mode
-          | mode <- S.toList (dAcyclicModes doc)
+      oblRenMap =
+        M.fromList
+          [ (obName o, prefix (obName o))
+          | o <- dObligations doc
           ]
-  pure
-    doc
-      { dName = prefix (dName doc)
-      , dModes = modeTheory'
-      , dAcyclicModes = acyclic'
-      , dAttrSorts = attrSorts'
-      , dGens = gens'
-      }
+      transformRenMap =
+        M.fromList
+          [ (tr, renameTransformName tr)
+          | tr <- M.keys (mtTransforms (dModes doc))
+          ]
+  doc' <-
+    renameDoctrine
+      modeRenMap
+      modRenMap
+      sortRenMap
+      typeRenMap
+      M.empty
+      genRenMap
+      cellRenMap
+      oblRenMap
+      transformRenMap
+      doc
+  pure $ doc' { dName = prefix (dName doc) }
 
 mergeIfaceDoctrines :: Text -> [(FunctorParamDef, Doctrine)] -> Either Text Doctrine
 mergeIfaceDoctrines name params =
@@ -948,207 +931,6 @@ freshTextName base used =
       in if candidate `S.member` used
         then go (n + 1)
         else (candidate, S.insert candidate used)
-
-renameModeTheory
-  :: Map ModeName ModeName
-  -> Map ModName ModName
-  -> Map ObjRef ObjRef
-  -> Map (ModeName, GenName) GenName
-  -> ModeTheory
-  -> Either Text ModeTheory
-renameModeTheory modeRen modRen typeRen genRen mt = do
-  classifiedBy <- foldM addClassification M.empty (M.toList (mtClassifiedBy mt))
-  classifierLifts <- foldM addClassifierLiftRenamed M.empty (M.toList (mtClassifierLifts mt))
-  Right
-    ModeTheory
-      { mtModes =
-          M.fromList
-            [ (mode', info { miName = mode' })
-            | (mode, info) <- M.toList (mtModes mt)
-            , let mode' = M.findWithDefault mode mode modeRen
-            ]
-      , mtDecls =
-          M.fromList
-            [ (name', decl { mdName = name', mdSrc = renMode (mdSrc decl), mdTgt = renMode (mdTgt decl) })
-            | (name, decl) <- M.toList (mtDecls mt)
-            , let name' = renMod name
-            ]
-      , mtEqns =
-          [ ModEqn
-              { meLHS = renExpr (meLHS eqn)
-              , meRHS = renExpr (meRHS eqn)
-              }
-          | eqn <- mtEqns mt
-          ]
-      , mtTransforms =
-          M.fromList
-            [ (renTransform name, decl { mtdName = renTransform name, mtdFrom = renExpr (mtdFrom decl), mtdTo = renExpr (mtdTo decl) })
-            | (name, decl) <- M.toList (mtTransforms mt)
-            ]
-      , mtClassifiedBy = classifiedBy
-      , mtClassifierLifts = classifierLifts
-      }
-  where
-    renMode mode = M.findWithDefault mode mode modeRen
-    renMod name = M.findWithDefault name name modRen
-    renTransform (ModTransformName t) = ModTransformName t
-    renExpr me =
-      me
-        { meSrc = renMode (meSrc me)
-        , meTgt = renMode (meTgt me)
-        , mePath = map renMod (mePath me)
-        }
-    addClassification acc (mode, decl) = do
-      universe' <- renameObjExpr modeRen modRen typeRen (cdUniverse decl)
-      comp' <- traverse (renameComp mode) (cdComp decl)
-      let mode' = renMode mode
-      let decl' =
-            decl
-              { cdClassifier = renMode (cdClassifier decl)
-              , cdUniverse = universe'
-              , cdComp = comp'
-              }
-      case M.lookup mode' acc of
-        Nothing -> Right (M.insert mode' decl' acc)
-        Just existing
-          | existing == decl' -> Right acc
-          | otherwise -> Left "namespace: classifiedBy collision after renaming"
-
-    addClassifierLiftRenamed acc (name, me) =
-      let name' = renMod name
-          me' = renExpr me
-       in case M.lookup name' acc of
-            Nothing -> Right (M.insert name' me' acc)
-            Just existing
-              | existing == me' -> Right acc
-              | otherwise -> Left "namespace: classifier_lift collision after renaming"
-
-    renameComp mode comp =
-      let renameGen g = M.findWithDefault g (mode, g) genRen
-       in Right
-            comp
-              { compCtxExt = renameGen (compCtxExt comp)
-              , compVar = renameGen (compVar comp)
-              , compReindex = renameGen (compReindex comp)
-              }
-
-renameGenDecl
-  :: Map ModeName ModeName
-  -> Map ModName ModName
-  -> Map ObjRef ObjRef
-  -> Map AttrSort AttrSort
-  -> Map (ModeName, GenName) GenName
-  -> GenDecl
-  -> Either Text GenDecl
-renameGenDecl modeRen modRen typeRen sortRen genRen gen = do
-  let mode0 = gdMode gen
-  params' <- mapM renParam (gdParams gen)
-  dom' <- mapM renInput (gdDom gen)
-  cod' <- mapM (renameObjExpr modeRen modRen typeRen) (gdCod gen)
-  let attrs' = [ (field, M.findWithDefault sortName sortName sortRen) | (field, sortName) <- gdAttrs gen ]
-  let genName' = M.findWithDefault (gdName gen) (mode0, gdName gen) genRen
-  pure
-    gen
-      { gdName = genName'
-      , gdMode = M.findWithDefault mode0 mode0 modeRen
-      , gdParams = params'
-      , gdDom = dom'
-      , gdCod = cod'
-      , gdAttrs = attrs'
-      }
-  where
-    renTyVar tv = do
-      sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tv)
-      Right tv { tmvSort = sort', tmvOwnerMode = renVarOwner (tmvOwnerMode tv) }
-    renTmVar tm = do
-      sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tm)
-      Right tm { tmvSort = sort', tmvOwnerMode = renVarOwner (tmvOwnerMode tm) }
-    renParam gp =
-      case gp of
-        GP_Ty v -> GP_Ty <$> renTyVar v
-        GP_Tm v -> GP_Tm <$> renTmVar v
-    renVarOwner owner = fmap (\m -> M.findWithDefault m m modeRen) owner
-    renInput shape =
-      case shape of
-        InPort ty -> InPort <$> renameObjExpr modeRen modRen typeRen ty
-        InBinder bs -> do
-          tmCtx' <- mapM (renameObjExpr modeRen modRen typeRen) (bsTmCtx bs)
-          dom' <- mapM (renameObjExpr modeRen modRen typeRen) (bsDom bs)
-          cod' <- mapM (renameObjExpr modeRen modRen typeRen) (bsCod bs)
-          Right (InBinder bs { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' })
-
-renameObjExpr
-  :: Map ModeName ModeName
-  -> Map ModName ModName
-  -> Map ObjRef ObjRef
-  -> Obj
-  -> Either Text Obj
-renameObjExpr modeRen modRen typeRen ty = do
-  code' <- renCode (objCode ty)
-  let owner' = renMode (objOwnerMode ty)
-  pure Obj { objOwnerMode = owner', objCode = code' }
-  where
-    renMode mode = M.findWithDefault mode mode modeRen
-
-    renCode code =
-      case code of
-        CTMeta tv -> do
-          sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tv)
-          let tv' =
-                tv
-                  { tmvSort = sort'
-                  , tmvOwnerMode = Just (renMode (tmVarOwner tv))
-                  }
-          Right (CTMeta tv')
-        CTLift me inner -> do
-          inner' <- renCode inner
-          Right
-            ( CTLift
-                me
-                  { meSrc = renMode (meSrc me)
-                  , meTgt = renMode (meTgt me)
-                  , mePath = map (\m -> M.findWithDefault m m modRen) (mePath me)
-                  }
-                inner'
-            )
-        CTCon ref args -> do
-          args' <- mapM renArg args
-          let ref' = M.findWithDefault ref ref typeRen
-          pure (CTCon ref' args')
-
-    renArg arg =
-      case arg of
-        OAObj t -> OAObj <$> renameObjExpr modeRen modRen typeRen t
-        OATm tm -> OATm <$> renameTermDiagram modeRen modRen typeRen tm
-
-renameTermDiagram
-  :: Map ModeName ModeName
-  -> Map ModName ModName
-  -> Map ObjRef ObjRef
-  -> TermDiagram
-  -> Either Text TermDiagram
-renameTermDiagram modeRen modRen typeRen (TermDiagram diag) = do
-  tmCtx' <- mapM (renameObjExpr modeRen modRen typeRen) (dTmCtx diag)
-  portTy' <- mapM (renameObjExpr modeRen modRen typeRen) (dPortObj diag)
-  edges' <- mapM renEdge (dEdges diag)
-  pure
-    ( TermDiagram
-        diag
-          { dMode = M.findWithDefault (dMode diag) (dMode diag) modeRen
-          , dTmCtx = tmCtx'
-          , dPortObj = portTy'
-          , dEdges = edges'
-          }
-    )
-  where
-    renEdge edge =
-      case ePayload edge of
-        PTmMeta tm -> do
-          sort' <- renameObjExpr modeRen modRen typeRen (tmvSort tm)
-          let owner' = fmap (\m -> M.findWithDefault m m modeRen) (tmvOwnerMode tm)
-          pure edge { ePayload = PTmMeta tm { tmvSort = sort', tmvOwnerMode = owner' } }
-        _ -> pure edge
-
 
 elabDoctrineEffects :: SearchBudget -> ModuleEnv -> Text -> Text -> [Text] -> Either Text ModuleEnv
 elabDoctrineEffects budget env name baseName effects = do

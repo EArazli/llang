@@ -32,7 +32,8 @@ import Strat.Poly.TypeTheory (TypeTheory(..), ttCtorTablesByOwner)
 import qualified Strat.Poly.Morphism as Morph
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Poly.Foliation (SSA(..), SSAStep(..), foliate, forgetSSA)
-import Strat.Poly.Normalize (NormalizationStatus(..), normalize)
+import Strat.Poly.ModAction (applyModExpr)
+import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (rulesFromPolicy)
 
 
@@ -169,7 +170,7 @@ runPhase env art phase =
         ArtDiagram doc diag -> do
           let rules = rulesFromPolicy policy (dCells2 doc)
           tt <- doctrineTypeTheory doc
-          status <- normalize tt fuel rules diag
+          status <- normalizeWithMapper (applyModExpr doc) tt fuel rules diag
           let diag' =
                 case status of
                   Finished d -> d
@@ -552,7 +553,7 @@ evalArtifactDiagram diag = do
         PGen _ _ _ -> Left "extract value: unsupported generator"
         PBox _ _ -> Left "extract value: boxes are not supported"
         PFeedback _ -> Left "extract value: feedback is not supported"
-        PSplice _ -> Left "extract value: splice is not supported"
+        PSplice _ _ -> Left "extract value: splice is not supported"
         PTmMeta _ -> Left "extract value: term-meta nodes are not supported"
         PInternalDrop -> Left "extract value: internal drop nodes are not supported"
 

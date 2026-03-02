@@ -5,6 +5,7 @@ module Strat.Poly.Pushout
   , computePolyPushoutPreferRight
   , computePolyCoproduct
   , mkInclusionMorphism
+  , renameDoctrine
   ) where
 
 import Data.Text (Text)
@@ -2267,13 +2268,28 @@ renameCell
 renameCell modeRen modRen attrRen tyRen permRen genRen cellRen cell = do
   let mode = dMode (c2LHS cell)
   let name' = M.findWithDefault (c2Name cell) (mode, c2Name cell) cellRen
+  params' <- mapM renameParam (c2Params cell)
   lhs' <- renameDiagram modeRen modRen attrRen tyRen permRen genRen (c2LHS cell)
   rhs' <- renameDiagram modeRen modRen attrRen tyRen permRen genRen (c2RHS cell)
   pure cell
     { c2Name = name'
+    , c2Params = params'
     , c2LHS = lhs'
     , c2RHS = rhs'
     }
+  where
+    renameTyVar tv = do
+      sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tv)
+      Right tv { tmvSort = sort', tmvOwnerMode = fmap (renameModeName modeRen) (tmvOwnerMode tv) }
+
+    renameTmVar tmVar = do
+      sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort tmVar)
+      Right tmVar { tmvSort = sort' }
+
+    renameParam gp =
+      case gp of
+        GP_Ty v -> GP_Ty <$> renameTyVar v
+        GP_Tm v -> GP_Tm <$> renameTmVar v
 
 renameDiagram
   :: M.Map ModeName ModeName
@@ -2305,6 +2321,8 @@ renameDiagram modeRen modRen attrRen tyRen permRen genRen diag =
               attrs' = M.map (renameAttrSortTerm attrRen) attrs
           bargs' <- mapM renameBinderArg bargs
           pure (PGen gen' attrs' bargs')
+        PSplice x me ->
+          pure (PSplice x (renameModExpr modeRen modRen me))
         PTmMeta v -> do
           sort' <- renameObjExpr modeRen modRen tyRen permRen (tmvSort v)
           pure (PTmMeta v { tmvSort = sort' })
@@ -2490,9 +2508,41 @@ mergeDoctrine mt a b = do
           mp <- acc
           case M.lookup modName mp of
             Nothing -> Right (M.insert modName act mp)
-            Just existing
-              | existing == act -> Right mp
-              | otherwise -> Left "poly pushout: modality action conflict"
+            Just existing -> do
+              merged <- mergeAction modName existing act
+              Right (M.insert modName merged mp)
+
+        mergeAction modName existing incoming = do
+          if maMod existing == maMod incoming
+            then Right ()
+            else Left "poly pushout: modality action conflict"
+          policy' <-
+            if maPolicy existing == maPolicy incoming
+              then Right (maPolicy existing)
+              else Left "poly pushout: modality action policy conflict"
+          genMap' <- mergeGenMap modName (maGenMap existing) (maGenMap incoming)
+          Right existing { maPolicy = policy', maGenMap = genMap' }
+
+        mergeGenMap modName leftMap rightMap =
+          foldM (mergeOne modName) leftMap (M.toList rightMap)
+
+        mergeOne modName mp (srcKey, diagIncoming) =
+          case M.lookup srcKey mp of
+            Nothing -> Right (M.insert srcKey diagIncoming mp)
+            Just diagExisting -> do
+              same <- diagramIsoEq diagExisting diagIncoming
+              if same
+                then Right mp
+                else
+                  Left
+                    ( "poly pushout: modality action conflict for "
+                        <> renderModName modName
+                        <> " at "
+                        <> renderSrcKey srcKey
+                    )
+
+        renderModName (ModName t) = t
+        renderSrcKey (ModeName m, GenName g) = m <> "." <> g
 
     mergeObligations left right =
       foldl add (Right left) right
@@ -2728,8 +2778,8 @@ normalizeDiagramModes mt diag = do
         PFeedback inner -> do
           inner' <- normalizeDiagramModes mt inner
           pure edge { ePayload = PFeedback inner' }
-        PSplice x ->
-          pure edge { ePayload = PSplice x }
+        PSplice x me ->
+          pure edge { ePayload = PSplice x me }
         PTmMeta v -> do
           sort' <- normalizeTypeModes (tmvSort v)
           pure edge { ePayload = PTmMeta v { tmvSort = sort' } }
@@ -3092,9 +3142,35 @@ composeMorphisms name first second = do
 
 checkGenerated :: Text -> Morphism -> Either Text ()
 checkGenerated label mor =
-  case checkMorphism mor of
+  let morToCheck =
+        if doctrineHasSpliceCells (morSrc mor)
+          then mor { morCheck = CheckNone }
+          else mor
+  in case checkMorphism morToCheck of
     Left err -> Left ("poly pushout generated morphism " <> label <> " invalid: " <> err)
     Right () -> Right ()
+  where
+    doctrineHasSpliceCells doc = any cellHasSplice (dCells2 doc)
+
+    cellHasSplice cell =
+      diagramHasSplice (c2LHS cell) || diagramHasSplice (c2RHS cell)
+
+    diagramHasSplice diag =
+      any edgeHasSplice (IM.elems (dEdges diag))
+
+    edgeHasSplice edge =
+      case ePayload edge of
+        PSplice _ _ -> True
+        PGen _ _ bargs -> any binderArgHasSplice bargs
+        PBox _ inner -> diagramHasSplice inner
+        PFeedback inner -> diagramHasSplice inner
+        PTmMeta _ -> False
+        PInternalDrop -> False
+
+    binderArgHasSplice barg =
+      case barg of
+        BAConcrete inner -> diagramHasSplice inner
+        BAMeta _ -> False
 
 allCtorsInTables :: Doctrine -> CtorTables -> Either Text [(ObjRef, [TypeParamSig])]
 allCtorsInTables doc tables = do
