@@ -15,14 +15,6 @@ doctrine IdMonad where {
   gen ret(a@C) : [a] -> [T(a)] @C;
   gen join(a@C) : [T(T(a))] -> [T(a)] @C;
 
-  action T where {
-    gen comp_ctx_ext -> comp_ctx_ext
-    gen comp_var -> comp_var
-    gen comp_reindex -> comp_reindex
-    gen ret -> ret
-    gen join -> join
-  }
-
   rule computational unit -> (a@C) : [T(a)] -> [T(a)] @C =
     ret{T(a)} ; join{a} == id[T(a)]
 }

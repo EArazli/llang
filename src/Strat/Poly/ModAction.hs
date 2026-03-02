@@ -388,7 +388,7 @@ applyAction doc mName diagSrc = do
       case ePayload edgeSrc of
         PGen g attrs _bargsSrc -> do
           genDecl <- lookupGenDeclInDoctrine "map: unknown source generator" doc (dMode diagSrc0) g
-          img0raw <- actionImageForGenerator doc modName g
+          img0raw <- actionImageForGenerator tt doc modName g
           img0 <- freshenImageTyVars tt diagTgt img0raw
           (img1, subst) <- instantiateImage tt diagTgt edgeKey img0
           let img2 = applyAttrSubstDiagram (actionAttrSubst genDecl attrs) img1

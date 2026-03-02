@@ -67,7 +67,7 @@ import Strat.Poly.Graph
 import Strat.Poly.Cell2
 import Strat.Poly.Tele (GenParam(..), teleTyVars, teleTmVars)
 import Strat.Poly.DSL.AST (RawOblExpr(..))
-import Strat.Poly.UnifyObj (unifyCtx)
+import Strat.Poly.UnifyObj (Subst, applySubstCtx, composeSubst, emptySubst, mkSubst, unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.Poly.DefEq
   ( checkCodeWellFormed
@@ -772,7 +772,7 @@ validateDoctrine doc = do
   mapM_ checkAttrSortDecl (M.toList (dAttrSorts doc))
   mapM_ (checkGenTable doc tt) (M.toList (dGens doc))
   mapM_ (checkCell doc tt) (dCells2 doc)
-  mapM_ (checkAction doc ctorTables) (M.toList (dActions doc))
+  mapM_ (checkAction doc tt ctorTables) (M.toList (dActions doc))
   mapM_ (checkModeTransform doc) (M.elems (mtTransforms (dModes doc)))
   mapM_ (checkObligation doc tt) (dObligations doc)
   pure ()
@@ -1376,8 +1376,8 @@ checkGenAttrs doc gd = do
         then Right ()
         else Left ("validateDoctrine: unknown attribute sort in generator " <> renderGen (gdName gd))
 
-checkAction :: Doctrine -> CtorTables -> (ModName, ModAction) -> Either Text ()
-checkAction doc ctorTables (name, action) = do
+checkAction :: Doctrine -> TypeTheory -> CtorTables -> (ModName, ModAction) -> Either Text ()
+checkAction doc tt ctorTables (name, action) = do
   if maMod action == name
     then Right ()
     else Left "validateDoctrine: action declaration name mismatch"
@@ -1401,7 +1401,7 @@ checkAction doc ctorTables (name, action) = do
           )
           (M.findWithDefault M.empty srcMode (dGens doc))
   let checkGenImage g = do
-        img <- actionImageForGenerator doc name g
+        img <- actionImageForGenerator tt doc name g
         if dMode img == tgtMode
           then Right ()
           else Left "validateDoctrine: action generator image has wrong mode"
@@ -1418,28 +1418,136 @@ checkAction doc ctorTables (name, action) = do
         else Left "validateDoctrine: action generator image has wrong mode"
       validateDiagram img
 
-actionImageForGenerator :: Doctrine -> ModName -> GenName -> Either Text Diagram
-actionImageForGenerator doc modName genName = do
+actionImageForGenerator :: TypeTheory -> Doctrine -> ModName -> GenName -> Either Text Diagram
+actionImageForGenerator tt doc modName genName = do
   modDecl <-
     case M.lookup modName (mtDecls (dModes doc)) of
       Nothing -> Left "action: unknown modality"
       Just decl -> Right decl
   let srcMode = mdSrc modDecl
-  let tgtMode = mdTgt modDecl
-  _ <- lookupGenDeclInDoctrine "action: unknown source generator" doc srcMode genName
+  srcGen <- lookupGenDeclInDoctrine "action: unknown source generator" doc srcMode genName
   case M.lookup modName (dActions doc) >>= M.lookup (srcMode, genName) . maGenMap of
     Just img -> Right img
-    Nothing -> canonicalActionImage doc tgtMode genName
+    Nothing -> canonicalActionImage tt doc modDecl srcGen
 
-canonicalActionImage :: Doctrine -> ModeName -> GenName -> Either Text Diagram
-canonicalActionImage doc tgtMode genName = do
+canonicalActionImage :: TypeTheory -> Doctrine -> ModDecl -> GenDecl -> Either Text Diagram
+canonicalActionImage tt doc modDecl srcGen = do
+  let tgtMode = mdTgt modDecl
+  let genName = gdName srcGen
   tgtGen <-
     lookupGenDeclInDoctrine
       "action: missing generator image and no canonical same-name target generator"
       doc
       tgtMode
       genName
+  ensureCanonicalActionFallbackCompatible tt doc modDecl srcGen tgtGen
   genericGenDiagram tgtGen
+
+ensureCanonicalActionFallbackCompatible
+  :: TypeTheory
+  -> Doctrine
+  -> ModDecl
+  -> GenDecl
+  -> GenDecl
+  -> Either Text ()
+ensureCanonicalActionFallbackCompatible tt doc modDecl srcGen tgtGen = do
+  if attrs srcGen == attrs tgtGen
+    then Right ()
+    else mismatch "attribute schema mismatch"
+  (targetTySubst, targetTyFlex) <- freshenTargetTyVars
+  codeLift <- classifierLiftForModExpr (dModes doc) me
+  domSection <- mkSection targetTySubst "domain" codeLift (gdPlainDom srcGen) (gdPlainDom tgtGen)
+  codSection <- mkSection targetTySubst "codomain" codeLift (gdCod srcGen) (gdCod tgtGen)
+  let srcBinders = [ bs | InBinder bs <- gdDom srcGen ]
+  let tgtBinders = [ bs | InBinder bs <- gdDom tgtGen ]
+  binderSections <-
+    if length srcBinders == length tgtBinders
+      then fmap concat (mapM (uncurry (mkBinderSections targetTySubst codeLift)) (zip [0 :: Int ..] (zip srcBinders tgtBinders)))
+      else mismatch "binder arity mismatch"
+  let allSections = domSection : codSection : binderSections
+  _ <- foldM (unifySection targetTyFlex) emptySubst allSections
+  Right ()
+  where
+    srcMode = mdSrc modDecl
+    tgtMode = mdTgt modDecl
+    me = ModExpr { meSrc = srcMode, meTgt = tgtMode, mePath = [mdName modDecl] }
+    label =
+      "action: canonical fallback for modality "
+        <> renderModName (mdName modDecl)
+        <> " generator "
+        <> renderGen (gdName srcGen)
+
+    attrs gd = M.fromList (gdAttrs gd)
+
+    mismatch detail =
+      Left (label <> ": " <> detail <> "; provide an explicit action image")
+
+    mkSection targetTySubst section codeLift srcCtx tgtCtx =
+      if length srcCtx == length tgtCtx
+        then do
+          mapped <- mapM (mapSourceObj codeLift) srcCtx
+          tgtCtx' <- applySubstCtx tt targetTySubst tgtCtx
+          pure (section, mapped, tgtCtx')
+        else mismatch (section <> " arity mismatch")
+
+    mkBinderSections targetTySubst codeLift i (srcBs, tgtBs) = do
+      tmctx <- mkSection targetTySubst ("binder[" <> T.pack (show i) <> "].tmctx") codeLift (bsTmCtx srcBs) (bsTmCtx tgtBs)
+      dom <- mkSection targetTySubst ("binder[" <> T.pack (show i) <> "].dom") codeLift (bsDom srcBs) (bsDom tgtBs)
+      cod <- mkSection targetTySubst ("binder[" <> T.pack (show i) <> "].cod") codeLift (bsCod srcBs) (bsCod tgtBs)
+      pure [tmctx, dom, cod]
+
+    unifySection :: S.Set TmVar -> Subst -> (Text, Context, Context) -> Either Text Subst
+    unifySection targetTyFlex subst (section, mappedSrc, tgtCtx) = do
+      let flex = S.union targetTyFlex (S.fromList (gdTmVars tgtGen))
+      mappedSrc' <- applySubstCtx tt subst mappedSrc
+      tgtCtx' <- applySubstCtx tt subst tgtCtx
+      solved <-
+        case unifyCtx tt [] flex tgtCtx' mappedSrc' of
+          Left _ -> mismatch (section <> " type mismatch")
+          Right s -> Right s
+      composeSubst tt solved subst
+
+    mapSourceObj codeLift srcTy =
+      if objOwnerMode srcTy == srcMode
+        then
+          pure
+            Obj
+              { objOwnerMode = tgtMode
+              , objCode = CTLift codeLift (objCode srcTy)
+              }
+        else Left "action: source generator contains non-source-mode boundary object"
+
+    freshenTargetTyVars = do
+      let tgtTyVars = gdTyVars tgtGen
+      if null tgtTyVars
+        then Right (emptySubst, S.empty)
+        else do
+          let used0 =
+                S.fromList
+                  [ (tyVarOwnerMode v, tmvName v)
+                  | v <- gdTyVars srcGen <> tgtTyVars
+                  ]
+          let (_, pairsRev) = foldl freshOne (used0, []) tgtTyVars
+          let pairs = reverse pairsRev
+          subst <- mkSubst [ (old, CAObj (OVar new)) | (old, new) <- pairs ]
+          pure (subst, S.fromList (map snd pairs))
+      where
+        freshOne (used, acc) v =
+          let base = tmvName v <> "_tgt"
+              mode = tyVarOwnerMode v
+              name' = pickFresh used mode base (0 :: Int)
+              v' = v { tmvName = name' }
+              used' = S.insert (mode, name') used
+           in (used', (v, v') : acc)
+
+        pickFresh used mode base n =
+          let suffix = if n == (0 :: Int) then "" else T.pack (show n)
+              candidate = base <> suffix
+           in if (mode, candidate) `S.member` used
+                then pickFresh used mode base (n + 1)
+                else candidate
+
+    renderModName (ModName n) = n
 
 genericGenDiagram :: GenDecl -> Either Text Diagram
 genericGenDiagram gd = do

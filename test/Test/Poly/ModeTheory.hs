@@ -66,6 +66,8 @@ tests =
     , testCase "modality rewrite normalizes nested modality type" testNormalizeObjExprByModEq
     , testCase "substitution re-normalizes modality type" testSubstReNormalizes
     , testCase "action declarations elaborate and validate" testActionElab
+    , testCase "canonical action fallback rejects binder-incompatible same-name generators" testActionFallbackBinderMismatchRejected
+    , testCase "canonical action fallback accepts binder-compatible same-name generators" testActionFallbackBinderCompatibleAccepted
     , testCase "applyAction preserves non-source tmctx and unifies using diagram tmctx" testApplyActionUsesDiagramTmCtx
     , testCase "applyAction weakens image term-context prefixes before splice" testApplyActionWeakenImageTmCtx
     , testCase "map elaborates inner expression at modality source mode" testMapCrossModeElab
@@ -596,6 +598,47 @@ testActionElab = do
   case M.lookup (ModName "F") (dActions doc) >>= M.lookup (ModeName "A", GenName "g") . maGenMap of
     Nothing -> assertFailure "missing action image for g under F"
     Just _ -> pure ()
+
+testActionFallbackBinderMismatchRejected :: Assertion
+testActionFallbackBinderMismatchRejected = do
+  let src = T.unlines
+        [ "doctrine ActFallbackBad where {"
+        , "  mode A;"
+        , "  mode B;"
+        , "  modality F : A -> B;"
+        , "  gen g : [] -> [] @A;"
+        , "  gen g : [binder { } : []] -> [] @B;"
+        , "  action F where {}"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err -> do
+      assertBool
+        ("expected canonical fallback rejection, got: " <> T.unpack err)
+        ("canonical fallback" `T.isInfixOf` err)
+      assertBool
+        ("expected binder-arity diagnostic, got: " <> T.unpack err)
+        ("binder arity mismatch" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected elaboration to reject binder-incompatible canonical action fallback"
+
+testActionFallbackBinderCompatibleAccepted :: Assertion
+testActionFallbackBinderCompatibleAccepted = do
+  let src = T.unlines
+        [ "doctrine ActFallbackGood where {"
+        , "  mode A;"
+        , "  mode B;"
+        , "  modality F : A -> B;"
+        , "  gen g : [binder { } : []] -> [] @A;"
+        , "  gen g : [binder { } : []] -> [] @B;"
+        , "  action F where {}"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertFailure ("expected elaboration success for binder-compatible canonical fallback, got: " <> T.unpack err)
+    Right _ ->
+      pure ()
 
 testDefFragmentsCoverModes :: Assertion
 testDefFragmentsCoverModes = do
