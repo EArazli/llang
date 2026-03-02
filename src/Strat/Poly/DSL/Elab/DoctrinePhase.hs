@@ -28,9 +28,11 @@ import Strat.Poly.DSL.Elab.Build
   , seedDoctrine
   )
 import Strat.Poly.DSL.Elab.Diag
-  ( elabDiagExpr
+  ( BinderMetaMode(..)
+  , elabDiagExprWith
   , elabRuleLHS
   , elabRuleRHS
+  , ensureAcyclicMode
   , ensureMode
   , lookupGen
   , mkForGenDiag
@@ -57,10 +59,11 @@ import Strat.Poly.DSL.Elab.Term
   , provisionalCtorSort
   )
 import Strat.Poly.Diagram
+import Strat.Poly.DiagramInterpretation (binderHoleNames)
 import Strat.Poly.Doctrine
 import Strat.Poly.Graph (BinderMetaVar(..))
 import Strat.Poly.ModeTheory
-import Strat.Poly.ModAction (ActionSemanticsResult(..), validateActionSemanticsWithBudgetResult)
+import Strat.Poly.ModAction (ActionSemanticsResult(..), mapTypeByModExprWithLift, validateActionSemanticsWithBudgetResult)
 import Strat.Poly.Morphism
 import Strat.Poly.Names
 import Strat.Poly.Obj
@@ -335,7 +338,7 @@ elabPolyItem env st item =
           Just d -> Right d
       let srcMode = mdSrc modDecl
       let tgtMode = mdTgt modDecl
-      imgs <- mapM (elabActionImage env doc tgtMode) (radGenMap decl)
+      imgs <- mapM (elabActionImage env doc modName srcMode tgtMode) (radGenMap decl)
       let action =
             ModAction
               { maMod = modName
@@ -692,10 +695,46 @@ resolveAttrField doc (fieldName, sortName) = do
     then Right (fieldName, sortRef)
     else Left "unknown attribute sort"
 
-elabActionImage :: ModuleEnv -> Doctrine -> ModeName -> (Text, RawDiagExpr) -> Either Text (GenName, Diagram)
-elabActionImage env doc tgtMode (genName, rhs) = do
-  d <- elabDiagExpr env doc tgtMode [] rhs
-  pure (GenName genName, d)
+elabActionImage
+  :: ModuleEnv
+  -> Doctrine
+  -> ModName
+  -> ModeName
+  -> ModeName
+  -> (Text, RawDiagExpr)
+  -> Either Text (GenName, Diagram)
+elabActionImage env doc modName srcMode tgtMode (genNameTxt, rhs) = do
+  let g = GenName genNameTxt
+  genDecl <-
+    lookupGenDeclInDoctrine
+      ("Unknown generator in action image: " <> genNameTxt <> " @" <> renderMode srcMode)
+      doc
+      srcMode
+      g
+  let slots = [ bs | InBinder bs <- gdDom genDecl ]
+  let holes = binderHoleNames (length slots)
+  let me = ModExpr { meSrc = srcMode, meTgt = tgtMode, mePath = [modName] }
+  codeLift <- classifierLiftForModExpr (dModes doc) me
+  let mapObj = mapTypeByModExprWithLift doc me codeLift
+  let mapTmCtxObj ty =
+        if objOwnerMode ty == srcMode
+          then mapObj ty
+          else Right ty
+  let mapBinderSig bs = do
+        tmCtx' <- mapM mapTmCtxObj (bsTmCtx bs)
+        dom' <- mapM mapObj (bsDom bs)
+        cod' <- mapM mapObj (bsCod bs)
+        pure bs { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
+  mappedSlots <- mapM mapBinderSig slots
+  let binderSigs = M.fromList (zip holes mappedSlots)
+  let tyVars = gdTyVars genDecl
+  let tmVars = gdTmVars genDecl
+  (d, _) <- elabDiagExprWith env doc tgtMode [] tyVars tmVars binderSigs BMUse True rhs
+  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram d)
+  ensureAcyclicMode doc tgtMode d
+  pure (g, d)
+  where
+    renderMode (ModeName name) = name
 
 validateObligationExprMode :: Doctrine -> ModeName -> Bool -> RawOblExpr -> Either Text ()
 validateObligationExprMode doc mode allowGen = go mode

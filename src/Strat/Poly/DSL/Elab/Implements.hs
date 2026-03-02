@@ -131,14 +131,30 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
       genDiag <- mkForGenDiag modeTgt gen
       lhs0 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obLHSExpr obl)
       rhs0 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obRHSExpr obl)
-      dom <- diagramDom genDiag
-      cod <- diagramCod genDiag
       let rigidTy = S.fromList (gdTyVars gen)
       let rigidTm = S.fromList (gdTmVars gen)
-      lhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod lhs0
-      rhs <- unifyBoundary ttTgt rigidTy rigidTm dom cod rhs0
-      let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
       let label = obName obl <> "[" <> renderGenName (gdName gen) <> "]"
+      (lhsCommon, rhsCommon) <- inferCommonForGenBoundary ttTgt rigidTy rigidTm lhs0 rhs0
+      (lhs, rhs) <-
+        if obGenerated obl
+          then Right (lhsCommon, rhsCommon)
+          else do
+            domGen <- diagramDom genDiag
+            codGen <- diagramCod genDiag
+            lhsLocked <-
+              case unifyBoundary ttTgt rigidTy rigidTm domGen codGen lhsCommon of
+                Left err ->
+                  Left ("implements obligation " <> label <> ": boundary lock failed on lhs: " <> err)
+                Right lhs' ->
+                  Right lhs'
+            rhsLocked <-
+              case unifyBoundary ttTgt rigidTy rigidTm domGen codGen rhsCommon of
+                Left err ->
+                  Left ("implements obligation " <> label <> ": boundary lock failed on rhs: " <> err)
+                Right rhs' ->
+                  Right rhs'
+            pure (lhsLocked, rhsLocked)
+      let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
       generatedSlotOutcome <- checkGeneratedSlot ttTgt slotsByGen modeTgt gen obl label lhs rhs
       case generatedSlotOutcome of
         Just out -> Right out
@@ -257,6 +273,30 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
       | lhsCtx `L.isPrefixOf` rhsCtx = Just rhsCtx
       | rhsCtx `L.isPrefixOf` lhsCtx = Just lhsCtx
       | otherwise = Nothing
+
+    inferCommonForGenBoundary tt rigidTy rigidTm lhs0 rhs0 = do
+      hostTmCtx <-
+        case chooseHostTmCtx (dTmCtx lhs0) (dTmCtx rhs0) of
+          Nothing ->
+            Left "implements obligation: for_gen sides have incompatible term contexts"
+          Just tmCtx ->
+            Right tmCtx
+      lhsHost <- weakenDiagramTmCtxTo hostTmCtx lhs0
+      rhsHost <- weakenDiagramTmCtxTo hostTmCtx rhs0
+      domL <- diagramDom lhsHost
+      domR <- diagramDom rhsHost
+      let rigid = S.union rigidTy rigidTm
+      let flex0 = S.difference (S.union (freeVarsDiagram lhsHost) (freeVarsDiagram rhsHost)) rigid
+      sDom <- U.unifyCtx tt hostTmCtx flex0 domL domR
+      lhs1 <- applySubstDiagram tt sDom lhsHost
+      rhs1 <- applySubstDiagram tt sDom rhsHost
+      codL <- diagramCod lhs1
+      codR <- diagramCod rhs1
+      let flex1 = S.difference (S.union (freeVarsDiagram lhs1) (freeVarsDiagram rhs1)) rigid
+      sCod <- U.unifyCtx tt hostTmCtx flex1 codL codR
+      lhs2 <- applySubstDiagram tt sCod lhs1
+      rhs2 <- applySubstDiagram tt sCod rhs1
+      pure (lhs2, rhs2)
 
     generatedSlotFor slotsByGen modeTgt gen obl = do
       slots <- M.lookup (modeTgt, gdName gen) slotsByGen
@@ -692,19 +732,31 @@ evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mod
         then Right genDiag
         else Left "obligation: @gen mode mismatch"
     ROELiftDom rawOp ->
-      evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverDom rawOp
+      evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverDom rawOp
     ROELiftCod rawOp ->
-      evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverCod rawOp
+      evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverCod rawOp
     ROEComp a b -> do
-      d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
-      d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
-      compD ttTgt d2 d1
+      case (a, b) of
+        (ROELiftDom _rawDom, ROELiftCod _rawCod) ->
+          Left "obligation: ambiguous composition anchor for lift_dom ; lift_cod"
+        (ROELiftDom rawDom, _) -> do
+          d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
+          d1 <- evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars d2 LiftOverDom rawDom
+          compD ttTgt d2 d1
+        (_, ROELiftCod rawCod) -> do
+          d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+          d2 <- evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars d1 LiftOverCod rawCod
+          compD ttTgt d2 d1
+        _ -> do
+          d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+          d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
+          compD ttTgt d2 d1
     ROETensor a b -> do
       d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
       d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
       tensorD d1 d2
 
-evalLiftedForGen
+evalLiftedForAnchor
   :: TypeTheory
   -> TypeTheory
   -> CtorTables
@@ -720,14 +772,14 @@ evalLiftedForGen
   -> LiftBoundary
   -> RawDiagExpr
   -> Either Text Diagram
-evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc _tgtDoc morph modeSrc modeTgt tyVars tmVars genDiag liftSide rawOp = do
+evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc _tgtDoc morph modeSrc modeTgt tyVars tmVars anchorDiag liftSide rawOp = do
   let ttDoc = ttTgt
   ctx <- case liftSide of
-    LiftOverDom -> diagramDom genDiag
-    LiftOverCod -> diagramCod genDiag
-  ops <- mapM (instantiateAt ttDoc (dTmCtx genDiag)) ctx
+    LiftOverDom -> diagramDom anchorDiag
+    LiftOverCod -> diagramCod anchorDiag
+  ops <- mapM (instantiateAt ttDoc (dTmCtx anchorDiag)) ctx
   case ops of
-    [] -> Right (idDTm modeTgt (dTmCtx genDiag) [])
+    [] -> Right (idDTm modeTgt (dTmCtx anchorDiag) [])
     (d0:rest) -> foldM tensorD d0 rest
   where
     rigidTy = S.fromList tyVars
@@ -740,7 +792,7 @@ evalLiftedForGen ttSrc ttTgt tgtCtorTables env ifaceDoc _tgtDoc morph modeSrc mo
     instantiateAt ttDoc tmCtx argTy = do
       opSrc <- elabObligationDiag env ifaceDoc modeSrc tmCtx tyVars tmVars rawOp
       opTgt0 <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables morph opSrc
-      opTgt <- weakenDiagramTmCtxTo (dTmCtx genDiag) opTgt0
+      opTgt <- weakenDiagramTmCtxTo (dTmCtx anchorDiag) opTgt0
       if dMode opTgt == modeTgt
         then Right ()
         else Left "obligation: mapped diagram mode mismatch after morphism application"

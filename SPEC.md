@@ -523,6 +523,24 @@ Current witness constraints:
 
 If neither exists for a needed generator image, elaboration fails.
 
+#### Binder holes in action images (second-order action)
+
+Generators may have **binder inputs** in their domain (written `binder { ... } : [...]`). A binder input represents an *open subdiagram* living in an extended term context, i.e. a higher-order (second-order) argument rather than an ordinary port.
+
+To make modality actions definable on such generators, llang supports **binder holes** inside *action images*.
+
+- If a generator `g` has `k` binder inputs, then its action image may mention the binder metavariables:
+  - `?b0`, `?b1`, …, `?b(k-1)`
+  in positional order (left-to-right order of binder inputs in `g`'s declared domain).
+
+- These binder metavariables are *not* free holes: each `?bi` has a **binder signature** determined by the corresponding binder input of `g`, with object boundaries transported along the modality.
+
+- Action images may also contain **splices** of the form `splice(?bi)`, which insert the mapped binder argument diagram into the surrounding image diagram.
+
+- No binder metavariables other than the required `?b0..` are permitted in an action image. An action image that mentions an out-of-range or undeclared binder metavariable is ill-formed.
+
+Operationally, `map[m](d)` interprets a diagram by replacing each generator-edge `g` with its action image and simultaneously performing a **second-order substitution**: the mapped binder arguments of `g` are substituted for `?b0..` (and `splice(?b0..)` occurrences) before splicing into the surrounding diagram.
+
 **Diagram interpretation principle.** Both modality actions and doctrine morphisms use the same universal construction: specifying the image of each generating edge (together with how boundary/object-types are transported) determines a unique extension to all diagrams by structural recursion on diagram shape (boxes/feedback/subdiagrams) and by *splicing* the chosen image at each generator-edge. This is the string-diagram/PROP analogue of how a polygraph/computad presentation freely generates a categorical structure, and an “interpretation of generators” extends uniquely to an interpretation of all composites/tensors.
 
 Reference: explicit action semantics are described in [[https://arxiv.org/abs/2305.05958](https://arxiv.org/abs/2305.05958)]. Background on string diagrams as an internal language for (strict) monoidal categories: Joyal & Street, *The Geometry of Tensor Calculus I* (1991). Background on polygraphs/computads as presentations: Burroni (1993) and Ara–Maltsiniotis et al., *Polygraphs* (PolyBook).

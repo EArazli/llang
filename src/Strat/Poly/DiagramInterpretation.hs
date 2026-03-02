@@ -4,6 +4,9 @@ module Strat.Poly.DiagramInterpretation
   ( DiagramInterpretation(..)
   , interpretDiagram
   , binderHoleNames
+  , binderHoleCaptureRiskMetasDiagram
+  , stableHoleCaptureRenaming
+  , renameBinderArgMetas
   , requirePortType
   , spliceEdge
   , updateEdgePayload
@@ -14,6 +17,7 @@ module Strat.Poly.DiagramInterpretation
   ) where
 
 import Control.Monad (foldM)
+import qualified Data.List as L
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
@@ -46,6 +50,7 @@ import Strat.Poly.Syntax
   , TmVar(..)
   )
 import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.Traversal (foldDiagram)
 import Strat.Poly.UnifyObj
   ( Subst
   , applySubstCtx
@@ -178,6 +183,52 @@ binderHoleNames n =
   [ BinderMetaVar ("b" <> T.pack (show i))
   | i <- [0 .. n - 1]
   ]
+
+binderHoleCaptureRiskMetasDiagram :: Diagram -> S.Set BinderMetaVar
+binderHoleCaptureRiskMetasDiagram =
+  foldDiagram (\_ -> mempty) onPayload (\_ -> mempty)
+  where
+    onPayload payload =
+      case payload of
+        PGen _ _ bargs ->
+          let holes = S.fromList (binderHoleNames (length bargs))
+              edgeMetas = S.fromList [ x | BAMeta x <- bargs ]
+           in S.intersection holes edgeMetas
+        _ ->
+          mempty
+
+stableHoleCaptureRenaming :: S.Set BinderMetaVar -> S.Set BinderMetaVar -> M.Map BinderMetaVar BinderMetaVar
+stableHoleCaptureRenaming holeMetas metas =
+  let conflicts = L.sort (S.toList (S.intersection holeMetas metas))
+      used0 = S.union holeMetas metas
+   in freshenBinderMetas used0 conflicts
+
+freshenBinderMetas :: S.Set BinderMetaVar -> [BinderMetaVar] -> M.Map BinderMetaVar BinderMetaVar
+freshenBinderMetas used0 conflicts =
+  snd (foldl freshenOne (used0, M.empty) conflicts)
+  where
+    freshenOne (used, renaming) x =
+      let x' = pickFreshMeta used x 0
+       in (S.insert x' used, M.insert x x' renaming)
+
+    pickFreshMeta used (BinderMetaVar name) n =
+      let suffix =
+            if n == (0 :: Int)
+              then "_arg"
+              else "_arg" <> T.pack (show n)
+          candidate = BinderMetaVar (name <> suffix)
+       in if candidate `S.member` used
+            then pickFreshMeta used (BinderMetaVar name) (n + 1)
+            else candidate
+
+renameBinderArgMetas :: M.Map BinderMetaVar BinderMetaVar -> [BinderArg] -> [BinderArg]
+renameBinderArgMetas renaming =
+  map renameOne
+  where
+    renameOne barg =
+      case barg of
+        BAConcrete d -> BAConcrete d
+        BAMeta x -> BAMeta (M.findWithDefault x x renaming)
 
 data SpliceAction
   = SpliceBindHole Diagram

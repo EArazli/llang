@@ -37,10 +37,13 @@ import Strat.Poly.Doctrine
   )
 import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), modeOnlyTypeTheory)
 import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Syntax (BinderMetaVar(..))
 import Strat.Poly.Diagram (genDTm, genD, diagramDom, diagramCod)
 import Strat.Poly.Graph (Diagram(..))
 import Strat.Poly.ModAction (applyAction, mapTypeByModExpr)
+import Strat.Poly.DiagramInterpretation (stableHoleCaptureRenaming)
 import Strat.Poly.DefEq (normalizeObjDeepWithCtx)
+import Strat.Poly.Foliation (canonicalizeDiagram)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Strat.Poly.Proof (defaultSearchBudget)
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
@@ -66,8 +69,14 @@ tests =
     , testCase "modality rewrite normalizes nested modality type" testNormalizeObjExprByModEq
     , testCase "substitution re-normalizes modality type" testSubstReNormalizes
     , testCase "action declarations elaborate and validate" testActionElab
+    , testCase "action images can reference binder holes for binder-slot generators" testActionBinderHoles
+    , testCase "stable hole-capture renaming skips non-conflicting canonical metas" testStableHoleCaptureRenamingSkipsNonConflictingCanonicalMetas
+    , testCase "action images reject out-of-range binder holes" testActionBinderHolesOutOfRangeRejected
+    , testCase "action images reject unknown splice binder holes" testActionBinderSpliceUnknownRejected
     , testCase "canonical action fallback rejects binder-incompatible same-name generators" testActionFallbackBinderMismatchRejected
     , testCase "canonical action fallback accepts binder-compatible same-name generators" testActionFallbackBinderCompatibleAccepted
+    , testCase "canonical action fallback allows cross-mode binder tmctx objects" testActionFallbackCrossModeTmCtxAccepted
+    , testCase "beck-chevalley obligations constrain target reindex under action" testBeckChevalleyConstrainsTargetReindex
     , testCase "applyAction preserves non-source tmctx and unifies using diagram tmctx" testApplyActionUsesDiagramTmCtx
     , testCase "applyAction weakens image term-context prefixes before splice" testApplyActionWeakenImageTmCtx
     , testCase "map elaborates inner expression at modality source mode" testMapCrossModeElab
@@ -77,6 +86,8 @@ tests =
     , testCase "for_gen obligations map schema generator refs through morphism" testForGenSchemaRefsMapped
     , testCase "for_gen lift_cod instantiates polymorphic operators by domain" testForGenPolyLiftInstantiation
     , testCase "for_gen lift operators allow codomain arity changes" testForGenLiftAllowsCodArityChange
+    , testCase "for_gen lift_dom comp anchors to right operand boundary" testForGenLiftDomCompositionAnchoring
+    , testCase "for_gen non-generated obligations are boundary-locked to @gen" testForGenBoundaryLockedForUserObligations
     , testCase "for_gen rejects @gen under mode-changing map context" testForGenGenPlacementRejected
     , testCase "@gen outside for_gen is rejected" testGenOutsideForGenRejected
     , testCase "doctrine type theory builds definitional fragments for all modes" testDefFragmentsCoverModes
@@ -599,6 +610,128 @@ testActionElab = do
     Nothing -> assertFailure "missing action image for g under F"
     Just _ -> pure ()
 
+testActionBinderHoles :: Assertion
+testActionBinderHoles = do
+  let src =
+        T.unlines
+          [ "doctrine ActionBinderHoles where {"
+          , "  mode M classifiedBy M via Box(M.U_M);"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , "  modality Box : M -> M;"
+          , "  lift_classifier Box = Box;"
+          , "  mod_eq Box.Box -> Box;"
+          , "  gen U_M : [] -> [Box(M.U_M)] @M;"
+          , "  gen A : [] -> [Box(M.U_M)] @M;"
+          , "  gen lam  : [binder { x : A } : [A]] -> [A] @M;"
+          , "  gen app  : [A, A] -> [A] @M;"
+          , "  gen lamB : [binder { x : Box(A) } : [Box(A)]] -> [Box(A)] @M;"
+          , "  gen appB : [Box(A), Box(A)] -> [Box(A)] @M;"
+          , "  action Box where {"
+          , "    gen lam -> lamB[?b0]"
+          , "    gen app -> appB"
+          , "  }"
+          , "}"
+          ]
+
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "ActionBinderHoles" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine ActionBinderHoles" >> fail "unreachable"
+      Just d -> pure d
+
+  let modeM = ModeName "M"
+  rawMapped <- requireEither (parseDiagExpr "map[Box]((lam[id[A]] * id[A]) ; app)")
+  diagMapped <- requireEither (elabDiagExpr emptyEnv doc modeM [] rawMapped)
+
+  rawExpected <- requireEither (parseDiagExpr "(lamB[id[Box(A)]] * id[Box(A)]) ; appB")
+  diagExpected <- requireEither (elabDiagExpr emptyEnv doc modeM [] rawExpected)
+
+  assertEqual
+    "map[Box] should translate binder-slot generator lam using binder-hole passthrough"
+    (canonicalizeDiagram diagExpected)
+    (canonicalizeDiagram diagMapped)
+
+testStableHoleCaptureRenamingSkipsNonConflictingCanonicalMetas :: Assertion
+testStableHoleCaptureRenamingSkipsNonConflictingCanonicalMetas = do
+  let b0 = BinderMetaVar "b0"
+  let b1 = BinderMetaVar "b1"
+  let holes = S.fromList [b0]
+  let metasNoConflict = S.fromList [b1, BinderMetaVar "bx"]
+  stableHoleCaptureRenaming holes metasNoConflict @?= M.empty
+
+  let renamingWithConflict = stableHoleCaptureRenaming holes (S.insert b0 metasNoConflict)
+  M.lookup b0 renamingWithConflict @?= Just (BinderMetaVar "b0_arg")
+  assertBool "non-conflicting canonical binder meta b1 should remain unchanged" (M.notMember b1 renamingWithConflict)
+
+testActionBinderHolesOutOfRangeRejected :: Assertion
+testActionBinderHolesOutOfRangeRejected = do
+  let src =
+        T.unlines
+          [ "doctrine ActionBinderHolesBadIndex where {"
+          , "  mode M classifiedBy M via Box(M.U_M);"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , "  modality Box : M -> M;"
+          , "  lift_classifier Box = Box;"
+          , "  mod_eq Box.Box -> Box;"
+          , "  gen U_M : [] -> [Box(M.U_M)] @M;"
+          , "  gen A : [] -> [Box(M.U_M)] @M;"
+          , "  gen lam  : [binder { x : A } : [A]] -> [A] @M;"
+          , "  gen app  : [A, A] -> [A] @M;"
+          , "  gen lamB : [binder { x : Box(A) } : [Box(A)]] -> [Box(A)] @M;"
+          , "  gen appB : [Box(A), Box(A)] -> [Box(A)] @M;"
+          , "  action Box where {"
+          , "    gen lam -> lamB[?b1]"
+          , "    gen app -> appB"
+          , "  }"
+          , "}"
+          ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected out-of-range binder-hole rejection, got: " <> T.unpack err)
+        ("unknown binder meta" `T.isInfixOf` err || "RHS introduces unknown binder meta" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected elaboration to reject out-of-range action binder hole ?b1"
+
+testActionBinderSpliceUnknownRejected :: Assertion
+testActionBinderSpliceUnknownRejected = do
+  let src =
+        T.unlines
+          [ "doctrine ActionBinderSpliceUnknown where {"
+          , "  mode M classifiedBy M via Box(M.U_M);"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , "  modality Box : M -> M;"
+          , "  lift_classifier Box = Box;"
+          , "  mod_eq Box.Box -> Box;"
+          , "  gen U_M : [] -> [Box(M.U_M)] @M;"
+          , "  gen A : [] -> [Box(M.U_M)] @M;"
+          , "  gen lam  : [binder { x : A } : [A]] -> [A] @M;"
+          , "  gen app  : [A, A] -> [A] @M;"
+          , "  gen lamB : [binder { x : Box(A) } : [Box(A)]] -> [Box(A)] @M;"
+          , "  gen appB : [Box(A), Box(A)] -> [Box(A)] @M;"
+          , "  action Box where {"
+          , "    gen lam -> splice(?bx)"
+          , "    gen app -> appB"
+          , "  }"
+          , "}"
+          ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected unknown-splice binder-hole rejection, got: " <> T.unpack err)
+        ("splice references unknown binder meta" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected elaboration to reject splice(?bx) in action image"
+
 testActionFallbackBinderMismatchRejected :: Assertion
 testActionFallbackBinderMismatchRejected = do
   let src = T.unlines
@@ -639,6 +772,61 @@ testActionFallbackBinderCompatibleAccepted = do
       assertFailure ("expected elaboration success for binder-compatible canonical fallback, got: " <> T.unpack err)
     Right _ ->
       pure ()
+
+testActionFallbackCrossModeTmCtxAccepted :: Assertion
+testActionFallbackCrossModeTmCtxAccepted = do
+  let src = T.unlines
+        [ "doctrine ActFallbackCrossTmCtx where {"
+        , "  mode A;"
+        , "  mode B;"
+        , "  mode C classifiedBy C via C.U_C;"
+        , "  gen U_C : [] -> [C.U_C] @C;"
+        , "  gen c_ctx_ext(a@C) : [a] -> [a] @C;"
+        , "  gen c_var(a@C) : [a] -> [a] @C;"
+        , "  gen c_reindex(a@C) : [a] -> [a] @C;"
+        , "  comprehension C where { ctx_ext = c_ctx_ext; var = c_var; reindex = c_reindex; };"
+        , "  modality F : A -> B;"
+        , "  gen g(a@C) : [binder { x : a } : []] -> [] @A;"
+        , "  gen g(a@C) : [binder { x : a } : []] -> [] @B;"
+        , "  action F where {}"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertFailure ("expected canonical fallback success for cross-mode binder tmctx, got: " <> T.unpack err)
+    Right _ ->
+      pure ()
+
+testBeckChevalleyConstrainsTargetReindex :: Assertion
+testBeckChevalleyConstrainsTargetReindex = do
+  let src = T.unlines
+        [ "doctrine BadBCAction where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen comp_var(a@M) : [a] -> [a] @M;"
+        , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+        , "  modality F : M -> M;"
+        , "  lift_classifier F = id@M;"
+        , "  gen A : [] -> [M.U_M] @M;"
+        , "  gen bad_reindex(a@M) : [a] -> [a] @M;"
+        , "  gen lam : [binder { x : A } : [A]] -> [A] @M;"
+        , "  action F where {"
+        , "    gen comp_reindex -> bad_reindex"
+        , "    gen lam -> lam[?b0]"
+        , "  }"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err -> do
+      assertBool
+        ("expected Beck-Chevalley generated-obligation failure, got: " <> T.unpack err)
+        ( "__bc/" `T.isInfixOf` err
+            || "Beck-Chevalley semantics undecided" `T.isInfixOf` err
+        )
+    Right _ ->
+      assertFailure "expected doctrine elaboration failure when action maps reindex incompatibly with Beck-Chevalley obligations"
 
 testDefFragmentsCoverModes :: Assertion
 testDefFragmentsCoverModes = do
@@ -1069,6 +1257,83 @@ testForGenLiftAllowsCodArityChange = do
   assertBool
     "expected lift_dom to accept operators with non-unary codomain arity"
     (M.member ("FGSchemaDropLift", "FGTgtDropLift") (meImplDefaults env))
+
+testForGenLiftDomCompositionAnchoring :: Assertion
+testForGenLiftDomCompositionAnchoring = do
+  let src = T.unlines
+        [ "doctrine FGCompAnchor where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  gen Y : [] -> [M.U_M] @M;"
+        , "  gen op(a@M) : [a] -> [a] @M;"
+        , "  gen eraseY : [M.Y] -> [] @M;"
+        , "  gen unit : [] -> [] @M;"
+        , "  obligation anchored for_gen @M ="
+        , "    lift_dom(op) ; eraseY == lift_dom(op) ; eraseY"
+        , "}"
+        ]
+  env <- requireEither (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "FGCompAnchor" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine FGCompAnchor" >> fail "unreachable"
+      Just d -> pure d
+  let generated = [ obl { obGenerated = True } | obl <- dObligations doc ]
+  let schemaDoc = doc { dObligations = generated }
+  identity <- requireEither (identityMorphismFor doc)
+  result <- requireEither (checkImplementsObligationsWithBudget defaultSearchBudget env doc identity schemaDoc)
+  case result of
+    ImplementsCheckUndecided label _ ->
+      assertFailure ("expected anchored lift_dom composition to be decidable, got undecided: " <> T.unpack label)
+    ImplementsCheckProved _ ->
+      pure ()
+
+testForGenBoundaryLockedForUserObligations :: Assertion
+testForGenBoundaryLockedForUserObligations = do
+  let src = T.unlines
+        [ "doctrine FGSchemaBoundaryLock where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  gen X : [] -> [M.U_M] @M;"
+        , "  gen keep : [M.X] -> [M.X] @M;"
+        , "  obligation vacuous for_gen @M ="
+        , "    id[M.X] == id[M.X]"
+        , "}"
+        , "doctrine FGTgtBoundaryLock where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  gen X : [] -> [M.U_M] @M;"
+        , "  gen keep : [M.X] -> [M.X] @M;"
+        , "  gen bad : [M.X] -> [] @M;"
+        , "}"
+        , "morphism fgBoundaryInst : FGSchemaBoundaryLock -> FGTgtBoundaryLock where {"
+        , "  mode M -> M;"
+        , "  gen ctx_ext @M -> ctx_ext"
+        , "  gen var @M -> var"
+        , "  gen reindex @M -> reindex"
+        , "  gen keep @M -> keep"
+        , "  check none;"
+        , "}"
+        , "implements FGSchemaBoundaryLock for FGTgtBoundaryLock using fgBoundaryInst;"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      if "implements obligation vacuous[bad]: boundary lock failed" `T.isInfixOf` err
+        then pure ()
+        else assertFailure ("expected boundary-lock failure for vacuous[bad], got: " <> T.unpack err)
+    Right _ ->
+      assertFailure "expected user-authored for_gen obligation to remain boundary-locked to @gen"
 
 testForGenGenPlacementRejected :: Assertion
 testForGenGenPlacementRejected = do

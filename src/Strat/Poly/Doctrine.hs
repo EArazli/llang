@@ -1456,8 +1456,8 @@ ensureCanonicalActionFallbackCompatible tt doc modDecl srcGen tgtGen = do
     else mismatch "attribute schema mismatch"
   (targetTySubst, targetTyFlex) <- freshenTargetTyVars
   codeLift <- classifierLiftForModExpr (dModes doc) me
-  domSection <- mkSection targetTySubst "domain" codeLift (gdPlainDom srcGen) (gdPlainDom tgtGen)
-  codSection <- mkSection targetTySubst "codomain" codeLift (gdCod srcGen) (gdCod tgtGen)
+  domSection <- mkSection targetTySubst "domain" (mapSourceObj codeLift) (gdPlainDom srcGen) (gdPlainDom tgtGen)
+  codSection <- mkSection targetTySubst "codomain" (mapSourceObj codeLift) (gdCod srcGen) (gdCod tgtGen)
   let srcBinders = [ bs | InBinder bs <- gdDom srcGen ]
   let tgtBinders = [ bs | InBinder bs <- gdDom tgtGen ]
   binderSections <-
@@ -1482,18 +1482,18 @@ ensureCanonicalActionFallbackCompatible tt doc modDecl srcGen tgtGen = do
     mismatch detail =
       Left (label <> ": " <> detail <> "; provide an explicit action image")
 
-    mkSection targetTySubst section codeLift srcCtx tgtCtx =
+    mkSection targetTySubst section mapObj srcCtx tgtCtx =
       if length srcCtx == length tgtCtx
         then do
-          mapped <- mapM (mapSourceObj codeLift) srcCtx
+          mapped <- mapM mapObj srcCtx
           tgtCtx' <- applySubstCtx tt targetTySubst tgtCtx
           pure (section, mapped, tgtCtx')
         else mismatch (section <> " arity mismatch")
 
     mkBinderSections targetTySubst codeLift i (srcBs, tgtBs) = do
-      tmctx <- mkSection targetTySubst ("binder[" <> T.pack (show i) <> "].tmctx") codeLift (bsTmCtx srcBs) (bsTmCtx tgtBs)
-      dom <- mkSection targetTySubst ("binder[" <> T.pack (show i) <> "].dom") codeLift (bsDom srcBs) (bsDom tgtBs)
-      cod <- mkSection targetTySubst ("binder[" <> T.pack (show i) <> "].cod") codeLift (bsCod srcBs) (bsCod tgtBs)
+      tmctx <- mkSection targetTySubst ("binder[" <> T.pack (show i) <> "].tmctx") (mapSourceTmCtxObj codeLift) (bsTmCtx srcBs) (bsTmCtx tgtBs)
+      dom <- mkSection targetTySubst ("binder[" <> T.pack (show i) <> "].dom") (mapSourceObj codeLift) (bsDom srcBs) (bsDom tgtBs)
+      cod <- mkSection targetTySubst ("binder[" <> T.pack (show i) <> "].cod") (mapSourceObj codeLift) (bsCod srcBs) (bsCod tgtBs)
       pure [tmctx, dom, cod]
 
     unifySection :: S.Set TmVar -> Subst -> (Text, Context, Context) -> Either Text Subst
@@ -1516,6 +1516,11 @@ ensureCanonicalActionFallbackCompatible tt doc modDecl srcGen tgtGen = do
               , objCode = CTLift codeLift (objCode srcTy)
               }
         else Left "action: source generator contains non-source-mode boundary object"
+
+    mapSourceTmCtxObj codeLift srcTy =
+      if objOwnerMode srcTy == srcMode
+        then mapSourceObj codeLift srcTy
+        else Right srcTy
 
     freshenTargetTyVars = do
       let tgtTyVars = gdTyVars tgtGen

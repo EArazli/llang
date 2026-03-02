@@ -273,7 +273,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                   Just bs -> Right bs
               diag <- liftEither (mkSpliceDiag curTmCtx meta (bsDom sig) (bsCod sig))
               pure (diag, binderSigs)
-            else liftEither (Left "splice is only allowed in rule RHS")
+            else liftEither (Left "splice is only allowed in RHS-like templates (rule RHS, morphism images, action images)")
         RDBox name innerExpr -> do
           (inner, binderSigs') <- build ttDoc ctorTables curTmCtx binderSigs innerExpr
           dom <- liftEither (diagramDom inner)
@@ -410,7 +410,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
             RBAMeta name ->
               case metaMode of
                 BMNoMeta ->
-                  liftEither (Left "binder metavariables are only allowed in rule diagrams")
+                  liftEither (Left "binder metavariables are only allowed in rule diagrams and generator-image templates (morphisms/actions)")
                 BMCollect -> do
                   let key = BinderMetaVar name
                   case M.lookup key bsMap of

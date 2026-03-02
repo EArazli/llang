@@ -56,8 +56,9 @@ Disconnected dead subgraphs do not contribute to reported bound indices.
 - This means `map[mu](...)` does not require explicit `action` declarations for every modality in `mu`, but it still fails if any needed generator has neither an explicit image nor a canonical same-name target generator.
 - Action declarations may be partial; explicit images are validated and canonical fallback fills missing generator images.
 - Action images (explicit or canonical) must elaborate/typecheck in the modality target mode.
-- For generators with binder inputs, action images must provide concrete binder arguments with matching boundaries.
-- Binder metavariables are not allowed in action diagrams (they are only allowed in rule diagrams), so generic binder-hole passthrough action images are not expressible today.
+- For generators with binder inputs, action images must provide binder arguments with matching boundaries (either concrete diagrams or the generator's allowed binder holes).
+- Action images may use binder holes only for the generator's own binder inputs (`?b0`, `?b1`, ...) and may use `splice(?bi)`.
+- Action images may not introduce any other binder metavariables.
 - Action-semantics proof checking currently targets the explicitly declared image fragment (rules/generators that only mention explicitly mapped generators), not fallback-only generator behavior.
 
 ## 8. Pushout/`apply` Merge Strictness for Actions and Obligations

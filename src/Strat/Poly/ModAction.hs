@@ -2,6 +2,7 @@
 module Strat.Poly.ModAction
   ( applyModExpr
   , mapTypeByModExpr
+  , mapTypeByModExprWithLift
   , applyAction
   , ActionSemanticsResult(..)
   , validateActionSemanticsWithBudgetResult
@@ -25,11 +26,14 @@ import Strat.Poly.Diagram
 import Strat.Poly.DiagramInterpretation
   ( DiagramInterpretation(..)
   , applySubstBinderSigs
+  , binderHoleCaptureRiskMetasDiagram
   , binderHoleNames
   , instantiateGenImageBindersWithMapper
   , interpretDiagram
+  , renameBinderArgMetas
   , requirePortType
   , spliceEdge
+  , stableHoleCaptureRenaming
   )
 import Strat.Poly.ModeTheory
 import Strat.Poly.Normalize (autoJoinProofWithMapper)
@@ -309,6 +313,10 @@ renderGenName (GenName g) = g
 mapTypeByModExpr :: Doctrine -> ModExpr -> Obj -> Either Text Obj
 mapTypeByModExpr doc me ty = do
   codeLift <- classifierLiftForModExpr (dModes doc) me
+  mapTypeByModExprWithLift doc me codeLift ty
+
+mapTypeByModExprWithLift :: Doctrine -> ModExpr -> ModExpr -> Obj -> Either Text Obj
+mapTypeByModExprWithLift doc me codeLift ty =
   mapTypeWithLift (dModes doc) me codeLift ty
 
 mapTypeWithLift :: ModeTheory -> ModExpr -> ModExpr -> Obj -> Either Text Obj
@@ -377,6 +385,11 @@ applyAction doc mName diagSrc = do
           }
   interpretDiagram interp diagSrc
   where
+    stableCaptureRenaming =
+      stableHoleCaptureRenaming
+        (binderHoleCaptureRiskMetasDiagram diagSrc)
+        (binderArgMetaVarsDiagram diagSrc)
+
     mapType me codeLift = mapTypeWithLift (dModes doc) me codeLift
 
     mapTypeIfSource me codeLift ty =
@@ -389,10 +402,10 @@ applyAction doc mName diagSrc = do
         PGen g attrs _bargsSrc -> do
           genDecl <- lookupGenDeclInDoctrine "map: unknown source generator" doc (dMode diagSrc0) g
           img0raw <- actionImageForGenerator tt doc modName g
-          img0 <- freshenImageTyVars tt diagTgt img0raw
+          (img0, renameSubst) <- freshenImageTyVars tt diagTgt img0raw
           (img1, subst) <- instantiateImage tt diagTgt edgeKey img0
           let img2 = applyAttrSubstDiagram (actionAttrSubst genDecl attrs) img1
-          img3 <- instantiateMappedBinders tt me codeLift genDecl mappedBargs subst img2
+          img3 <- instantiateMappedBinders tt me codeLift genDecl mappedBargs renameSubst subst img2
           img4 <- weakenDiagramTmCtxTo (dTmCtx diagTgt) img3
           diagTgtNorm <- normalizeBoundaryPorts (eIns edgeSrc <> eOuts edgeSrc) diagTgt
           img4Norm <- normalizeDiagramObjExprs (dModes doc) img4
@@ -400,15 +413,27 @@ applyAction doc mName diagSrc = do
         _ ->
           Left "map: internal error: diOnGenEdge called on non-PGen"
 
-    instantiateMappedBinders typeTheory me codeLift genDecl mappedBargs subst image = do
+    instantiateMappedBinders
+      :: TypeTheory
+      -> ModExpr
+      -> ModExpr
+      -> GenDecl
+      -> [BinderArg]
+      -> Subst
+      -> Subst
+      -> Diagram
+      -> Either Text Diagram
+    instantiateMappedBinders typeTheory me codeLift genDecl mappedBargs renameSubst subst image = do
       let slots = [ bs | InBinder bs <- gdDom genDecl ]
       if length slots /= length mappedBargs
         then Left "map: source binder argument arity mismatch"
         else Right ()
       let holes = binderHoleNames (length slots)
+      let mappedBargs' = renameBinderArgMetas stableCaptureRenaming mappedBargs
       sigs0 <- mapM mapBinderSig (M.fromList (zip holes slots))
-      sigs <- applySubstBinderSigs typeTheory subst sigs0
-      let holeSub = M.fromList (zip holes mappedBargs)
+      sigs1 <- applySubstBinderSigs typeTheory renameSubst sigs0
+      sigs <- applySubstBinderSigs typeTheory subst sigs1
+      let holeSub = M.fromList (zip holes mappedBargs')
       out <- instantiateGenImageBindersWithMapper typeTheory (applyModExpr doc) sigs holeSub image
       let remaining = S.intersection (M.keysSet sigs) (binderMetaVarsDiagram out)
       if S.null remaining
@@ -421,15 +446,23 @@ applyAction doc mName diagSrc = do
           cod <- mapM (mapType me codeLift) (bsCod sig)
           pure sig { bsTmCtx = tmCtx, bsDom = dom, bsCod = cod }
 
+    freshenImageTyVars
+      :: TypeTheory
+      -> Diagram
+      -> Diagram
+      -> Either Text (Diagram, Subst)
     freshenImageTyVars typeTheory host image = do
       let vars = S.toList (freeVarsDiagram image)
       if null vars
-        then Right image
+        then do
+          subst <- mkSubst []
+          pure (image, subst)
         else do
           let used0 = S.fromList [ (tmVarOwner v, tmvName v) | v <- S.toList (freeVarsDiagram host) ]
           let (_, pairsRev) = foldl freshOne (used0, []) vars
           subst <- mkSubst [ (v, CAObj t) | (v, t) <- reverse pairsRev ]
-          applySubstDiagram typeTheory subst image
+          image' <- applySubstDiagram typeTheory subst image
+          pure (image', subst)
       where
         freshOne (used, acc) v =
           let name' = pickFresh used (tyVarMode v) (tmvName v <> "_img") 0

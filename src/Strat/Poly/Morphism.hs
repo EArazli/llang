@@ -38,11 +38,14 @@ import Strat.Poly.DiagramInterpretation
   ( DiagramInterpretation(..)
   , applySubstBinderSig
   , applySubstBinderSigs
+  , binderHoleCaptureRiskMetasDiagram
   , binderHoleNames
   , instantiateGenImageBindersWithMapper
   , interpretDiagram
+  , renameBinderArgMetas
   , requirePortType
   , spliceEdge
+  , stableHoleCaptureRenaming
   )
 import Strat.Poly.Names
 import Strat.Poly.Obj
@@ -352,6 +355,11 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
           }
   interpretDiagram interp diagSrc
   where
+    stableCaptureRenaming =
+      stableHoleCaptureRenaming
+        (binderHoleCaptureRiskMetasDiagram diagSrc)
+        (binderArgMetaVarsDiagram diagSrc)
+
     binderSlots gen =
       [ bs
       | InBinder bs <- gdDom gen
@@ -363,7 +371,8 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
         then Left "applyMorphismDiagram: source binder argument arity mismatch"
       else Right ()
       let holes = binderHoleNames (length bargs)
-      pure (M.fromList (zip holes bargs))
+      let bargs' = renameBinderArgMetas stableCaptureRenaming bargs
+      pure (M.fromList (zip holes bargs'))
 
     onGenEdge diagSrc0 diagTgt edgeKey edgeSrc mappedBargs =
       case ePayload edgeSrc of
@@ -381,10 +390,10 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
                 then Left "applyMorphismDiagram: generator mapping mode mismatch"
                 else Right ()
               attrSubst <- instantiateAttrSubst mor genDecl attrsSrc
-              holeSub <- buildBinderHoleSub genDecl mappedBargs
               instImage0 <- applySubstDiagram tgtTheory substTgt image
               instHoleSigs0 <- applySubstBinderSigs tgtTheory substTgt (giBinderSigs image0)
               let instImage1 = applyAttrSubstDiagram attrSubst instImage0
+              holeSub <- buildBinderHoleSub genDecl mappedBargs
               instImage <- instantiateGenImageBindersWithMapper tgtTheory (applyModExpr (morTgt mor)) instHoleSigs0 holeSub instImage1
               let holeKeys = S.fromList (binderHoleNames (length (binderSlots genDecl)))
               let remaining = S.intersection holeKeys (binderMetaVarsDiagram instImage)

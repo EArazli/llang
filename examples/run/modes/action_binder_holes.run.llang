@@ -1,0 +1,37 @@
+doctrine ActionBinderHoles where {
+  mode M classifiedBy M via Box(M.U_M);
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+
+  modality Box : M -> M;
+  lift_classifier Box = Box;
+  mod_eq Box.Box -> Box;
+
+  gen U_M : [] -> [Box(M.U_M)] @M;
+  gen A : [] -> [Box(M.U_M)] @M;
+
+  gen lam : [binder { x : A } : [A]] -> [A] @M;
+  gen app : [A, A] -> [A] @M;
+
+  gen lamB : [binder { x : Box(A) } : [Box(A)]] -> [Box(A)] @M;
+  gen appB : [Box(A), Box(A)] -> [Box(A)] @M;
+
+  action Box where {
+    gen lam -> lamB[?b0]
+    gen app -> appB
+  }
+}
+
+pipeline debug where {
+  extract diagram;
+};
+
+run main using debug where {
+  source doctrine ActionBinderHoles;
+  source mode M;
+}
+
+---
+map[Box]((lam[id[A]] * id[A]) ; app)
