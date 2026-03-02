@@ -144,13 +144,76 @@ Traceability note:
 
 - canonical doctrine coverage claims are intentionally scoped to the named artifacts in `docs/CANONICAL_COVERAGE.md`.
 
-### 2.7 Classifier Dependency Order
+### 2.7 Data declarations and catamorphisms
+
+llang’s `data` declaration presents an inductive type in an owner mode (`M`) by giving its constructors. Categorically, such a presentation corresponds to an **initial algebra** for a (strictly) **polynomial endofunctor**, and the associated elimination principle is the **catamorphism** ("fold") out of that initial algebra.
+
+#### Expansion of `data`
+
+A declaration:
+
+- `data T(α₁,…,αₙ) @M where { C₁ : Γ₁; …; C_k : Γ_k; }`
+
+expands into:
+
+1. A **type constructor** generator `T` in the **classifier mode** (`Class(M)`) returning the universe `U_M` (as already specified by the classification/universe mechanism).
+
+2. For each constructor `C_i`, a generator in owner mode `M`:
+
+- `C_i(α₁,…,αₙ) : Γ_i -> [T(α₁,…,αₙ)] @M`
+
+#### Generated catamorphism `fold_T`
+
+In addition, `data` generates a **non-dependent catamorphism** generator in owner mode `M`:
+
+- Name: `fold_T`
+- Parameters: the original type parameters `(α₁,…,αₙ)` plus an additional result type parameter `(ρ@M)`
+- Plain input: one scrutinee of type `T(α₁,…,αₙ)`
+- One binder input per constructor, in constructor declaration order
+
+Formally:
+
+- `fold_T(α₁,…,αₙ, ρ) : [ T(α₁,…,αₙ), binder{…} : [ρ] (for C₁), …, binder{…} : [ρ] (for C_k) ] -> [ρ] @M`
+
+Each constructor binder domain is derived from the constructor’s argument context `Γ_i` by replacing each **direct recursive occurrence** of the scrutinee type `T(α₁,…,αₙ)` with the result type `ρ`. That is, if:
+
+- `Γ_i = [A_{i1}, …, A_{im}]`
+
+then the corresponding binder domain is:
+
+- `Γ'_i = [A'_{i1}, …, A'_{im}]`
+
+where:
+
+- `A'_{ij} = ρ` if `A_{ij}` is syntactically `T(α₁,…,αₙ)`
+- otherwise `A'_{ij} = A_{ij}`
+
+No attempt is made (in this macro) to detect nested recursive occurrences under other type formers, nor to enforce strict positivity.
+
+#### β-computation rules for `fold_T`
+
+For each constructor `C_i`, `data` generates a **computational** (left-to-right) β-rule expressing fold-on-constructor reduction. Intuitively, this states that folding a constructor value applies the corresponding algebra branch, after recursively folding each recursive field.
+
+Let the binder metavariables be `?case_C1, …, ?case_Ck` in constructor order. Then for each constructor `C_i : Γ_i -> T`, the macro generates a rule of the form:
+
+- `C_i{α} ; fold_T{α,ρ}[?case_C1,…,?case_Ck] == mapArgs_i ; splice(?case_Ci)`
+
+where `mapArgs_i : Γ_i -> Γ'_i` is the tensor product (in argument order) of:
+
+- identity on non-recursive arguments, and
+- the recursive call `fold_T{α,ρ}[?case_C1,…,?case_Ck]` on each recursive argument.
+
+Because these β-rules use `splice` and (for recursive constructors) mention `fold_T` recursively, they are **operational** computation rules and are not part of the admissible first-order TRS fragment used for definitional equality/termination checking.
+
+This subsection documents the mathematical meaning (initial algebra + catamorphism) and the exact kernel-level artifacts (a generated generator plus generated computational rules) introduced by the `data` macro extension.
+
+### 2.8 Classifier Dependency Order
 
 For doctrine validation and later normalization/unification environment construction, the kernel SHALL compute a classifier dependency order `order : [ModeName]` such that:
 
 - if `M classifiedBy K` and `M != K`, then `K` appears before `M` in `order`.
 
-### 2.8 Pending Universe Resolution (Current)
+### 2.9 Pending Universe Resolution (Current)
 
 During elaboration, a `classifiedBy ... via ...` universe expression can be temporarily unresolved.
 
@@ -163,7 +226,7 @@ Current behavior:
 
 This means complex universe expressions (including constructor applications with arguments) are supported in the current elaboration pipeline; they are not restricted to names/nullary constructors.
 
-### 2.9 Comprehension Declarations (Current Cut)
+### 2.10 Comprehension Declarations (Current Cut)
 
 The DSL supports:
 

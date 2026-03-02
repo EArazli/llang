@@ -12,9 +12,12 @@ import qualified Data.Text as T
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
 import Strat.Frontend.Env (meDoctrines)
+import Strat.Poly.Cell2 (c2Name)
 import Strat.Poly.Doctrine
-  ( Doctrine(..)
+  ( BinderSig (..)
+  , Doctrine(..)
   , GenDecl(..)
+  , InputShape (..)
   , deriveCtorTables
   , gdPlainDom
   , gdTyVars
@@ -42,6 +45,7 @@ tests =
     "Poly.DataMacro"
     [ testCase "data macro expands to constructors" testDataMacroElab
     , testCase "data macro rejects constructor collision" testDataMacroCollision
+    , testCase "data macro rejects generated fold rule collision" testDataMacroFoldRuleCollision
     ]
 
 testDataMacroElab :: Assertion
@@ -93,6 +97,28 @@ testDataMacroElab = do
   gdCod nilGen @?= [listTy]
   gdPlainDom consGen @?= [OVar (aVar), listTy]
   gdCod consGen @?= [listTy]
+  foldGen <- case M.lookup (GenName "fold_List") gens of
+    Nothing -> assertFailure "expected fold_List generator"
+    Just g -> pure g
+  gdMode foldGen @?= mode
+  rFold <- case gdTyVars foldGen of
+    [_aFold, r] -> pure r
+    _ -> assertFailure "expected fold_List to carry two type metavariables"
+  tmvName rFold @?= "r_List"
+  let rVar = OVar rFold
+  case gdDom foldGen of
+    [InPort tScrut, InBinder bsNil, InBinder bsCons] -> do
+      tScrut @?= listTy
+      bsTmCtx bsNil @?= []
+      bsTmCtx bsCons @?= []
+      bsDom bsNil @?= []
+      bsCod bsNil @?= [rVar]
+      bsDom bsCons @?= [OVar aVar, rVar]
+      bsCod bsCons @?= [rVar]
+    _ -> assertFailure "fold_List did not have expected input shape"
+  let cellNames = map c2Name (dCells2 doc)
+  "fold_List_Nil" `elem` cellNames @?= True
+  "fold_List_Cons" `elem` cellNames @?= True
 
 testDataMacroCollision :: Assertion
 testDataMacroCollision = do
@@ -116,3 +142,29 @@ testDataMacroCollision = do
       case elabRawFile rf of
         Left err -> assertBool "expected constructor collision" ("constructor name conflicts" `T.isInfixOf` err)
         Right _ -> assertFailure "expected data macro to fail"
+
+testDataMacroFoldRuleCollision :: Assertion
+testDataMacroFoldRuleCollision = do
+  let src = T.unlines
+        [ "doctrine D where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen comp_var(a@M) : [a] -> [a] @M;"
+        , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen A : [] -> [U_M] @M;"
+        , "  rule structural fold_List_Nil -> : [A] -> [A] @M ="
+        , "    id[A] == id[A]"
+        , "  data List (a@M) @M where {"
+        , "    Nil : [];"
+        , "    Cons : [a, List(a)];"
+        , "  }"
+        , "}"
+        ]
+  case parseRawFile src of
+    Left err -> assertFailure (T.unpack err)
+    Right rf ->
+      case elabRawFile rf of
+        Left err -> assertBool "expected fold rule collision" ("duplicate rule name" `T.isInfixOf` err)
+        Right _ -> assertFailure "expected data macro to fail on fold rule collision"

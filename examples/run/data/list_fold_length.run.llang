@@ -1,0 +1,25 @@
+import "../../../stdlib/data/list.llang";
+
+doctrine NatList extends ListData where {
+  data Nat @M where {
+    Zero : [];
+    Succ : [Nat];
+  }
+
+  gen A : [] -> [U_M] @M;
+  gen drop(a@M) : [a] -> [] @M;
+  gen a : [] -> [A] @M;
+  gen b : [] -> [A] @M;
+}
+
+pipeline P where {
+  normalize { policy = "computational_lr"; fuel = 50; };
+  extract diagram;
+}
+
+run main using P where {
+  source doctrine NatList;
+  source mode M;
+}
+---
+a * (b * Nil{A} ; Cons{A}) ; Cons{A} ; fold_List{A, Nat}[Zero, drop{A} * id[Nat] ; Succ]

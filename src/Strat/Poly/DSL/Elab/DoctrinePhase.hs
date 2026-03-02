@@ -13,7 +13,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import Strat.Common.Rules (RewritePolicy(..))
+import Strat.Common.Rules (Orientation (..), RewritePolicy (..), RuleClass (..))
 import Strat.Frontend.Env (ModuleEnv(..))
 import Strat.Poly.Attr
 import Strat.Poly.BeckChevalleyObligations (installGeneratedBeckChevalleyObligations, isGeneratedBeckChevalleyObligation)
@@ -483,10 +483,23 @@ elabPolyItem env st item =
               }
       let st' = st { esDoc = doc' }
       let ctors = map (mkCtor modeName typeName (rpdTyVars decl)) (rpdCtors decl)
-      foldM (elabPolyItemWithRefresh env) st' (map RPGen ctors)
+      let (foldGen, foldRules) =
+            mkFoldBundle
+              modeName
+              typeName
+              (rpdTyVars decl)
+              (rpdCtors decl)
+      let items =
+            (map RPGen ctors)
+              <> [RPGen foldGen]
+              <> (map RPRule foldRules)
+      foldM (elabPolyItemWithRefresh env) st' items
     RPRule decl -> do
       let mode = ModeName (rprMode decl)
       ensureMode doc mode
+      if any ((== rprName decl) . c2Name) (dCells2 doc)
+        then Left "duplicate rule name"
+        else Right ()
       params <- elabParamDecls doc mode (rprVars decl)
       let ruleTyVars = [ v | GP_Ty v <- params ]
       let ruleTmVars = [ v | GP_Tm v <- params ]
@@ -575,6 +588,102 @@ mkCtor modeName tyName vars ctor =
       , rpgCod = cod
       , rpgMode = modeName
       }
+
+freshWithPrimes :: S.Set Text -> Text -> Text
+freshWithPrimes used base =
+  if base `S.member` used then freshWithPrimes used (base <> "'") else base
+
+mkFoldBundle
+  :: Text
+  -> Text
+  -> [RawTyVarDecl]
+  -> [RawPolyCtorDecl]
+  -> (RawPolyGenDecl, [RawPolyRuleDecl])
+mkFoldBundle modeName tyName tyVars ctors =
+  (foldGen, foldRules)
+  where
+    foldName = "fold_" <> tyName
+    resTyBase = "r_" <> tyName
+    resTyName = freshWithPrimes (S.fromList (map rtvName tyVars)) resTyBase
+    resTyVarDecl =
+      RawTyVarDecl
+        { rtvName = resTyName
+        , rtvMode = Just modeName
+        }
+    typeRef = RawTypeRef { rtrMode = Nothing, rtrName = tyName }
+    typeArgs = map (RPTVar . rtvName) tyVars
+    selfArgs = typeArgs
+    selfTyCon = RPTCon typeRef selfArgs
+    caseNames = map (\ctorDecl -> "case_" <> rpcName ctorDecl) ctors
+    foldCall =
+      RDGen
+        foldName
+        (Just (typeArgs <> [RPTVar resTyName]))
+        Nothing
+        (Just (map RBAMeta caseNames))
+
+    isRecursiveArg arg =
+      arg == selfTyCon
+        || (null selfArgs && arg == RPTVar tyName)
+
+    foldGen =
+      RawPolyGenDecl
+        { rpgName = foldName
+        , rpgVars = map RPDType tyVars <> [RPDType resTyVarDecl]
+        , rpgAttrs = []
+        , rpgDom = RIPort selfTyCon : map foldBinder ctors
+        , rpgCod = [RPTVar resTyName]
+        , rpgMode = modeName
+        }
+
+    foldBinder ctorDecl =
+      let convertedArgs =
+            map
+              (\arg -> if isRecursiveArg arg then RPTVar resTyName else arg)
+              (rpcArgs ctorDecl)
+          binderVars =
+            zipWith
+              (\i ty ->
+                  RawBinderVarDecl
+                    { rbvName = "x" <> T.pack (show i)
+                    , rbvType = ty
+                    }
+              )
+              [0 :: Int ..]
+              convertedArgs
+       in RIBinder binderVars [RPTVar resTyName]
+
+    foldRules = zipWith mkFoldRule ctors caseNames
+
+    mkFoldRule ctorDecl thisCaseName =
+      let ctorName = rpcName ctorDecl
+          ruleName = foldName <> "_" <> ctorName
+          ctorCall = RDGen ctorName (Just typeArgs) Nothing Nothing
+          lhs = RDComp ctorCall foldCall
+          perArg arg =
+            if isRecursiveArg arg
+              then foldCall
+              else RDId [arg]
+          mappedArgs =
+            case map perArg (rpcArgs ctorDecl) of
+              [] -> RDId []
+              ds -> tensorMany ds
+          rhs = RDComp mappedArgs (RDSplice thisCaseName)
+       in RawPolyRuleDecl
+            { rprClass = Computational
+            , rprName = ruleName
+            , rprOrient = LR
+            , rprVars = map RPDType tyVars <> [RPDType resTyVarDecl]
+            , rprDom = rpcArgs ctorDecl
+            , rprCod = [RPTVar resTyName]
+            , rprMode = modeName
+            , rprLHS = lhs
+            , rprRHS = rhs
+            }
+
+    tensorMany [] = RDId []
+    tensorMany [d] = d
+    tensorMany (d:ds) = RDTensor d (tensorMany ds)
 
 resolveAttrField :: Doctrine -> (Text, Text) -> Either Text (AttrName, AttrSort)
 resolveAttrField doc (fieldName, sortName) = do

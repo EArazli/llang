@@ -15,6 +15,7 @@ This project treats "canonical doctrine coverage" as an explicit list of named a
 | Foliation + forget roundtrip behavior | `examples/run/foliation/basic_foliate.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`foliation+forget target`), `test/Test/Frontend/Pipeline.hs` |
 | Codegen pipeline behavior | `examples/run/codegen/simple_codegen.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`codegen target`), `test/Test/Frontend/ExampleCodegen.hs` |
 | Data macro doctrine path | `examples/run/data/list.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`data macro target`), `test/Test/Poly/DataMacro.hs` |
+| Data folds (catamorphisms) | `examples/run/data/list_fold_length.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`data fold target`), `test/Test/Poly/DataMacro.hs` |
 | Adjunction schema artifact elaboration | `stdlib/schema.adjunction.llang` | `test/Test/Frontend/CanonicalCoverage.hs` (`schema adjunction target`) |
 | Monad schema artifact elaboration | `stdlib/schema.monad.llang` | `test/Test/Frontend/CanonicalCoverage.hs` (`schema monad target`) |
 

@@ -79,6 +79,11 @@ canonicalRuns =
       , raPath = "examples/run/data/list.run.llang"
       , raRunName = Just "main"
       }
+  , RunArtifact
+      { raLabel = "data fold target"
+      , raPath = "examples/run/data/list_fold_length.run.llang"
+      , raRunName = Just "main"
+      }
   ]
 
 canonicalLoads :: [LoadArtifact]
