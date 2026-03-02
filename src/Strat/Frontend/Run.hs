@@ -28,7 +28,7 @@ import Strat.Poly.Graph
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Attr
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeTheory (TypeTheory(..), ttCtorTablesByOwner)
+import Strat.Poly.TypeTheory (ttCtorTablesByOwner)
 import qualified Strat.Poly.Morphism as Morph
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Poly.Foliation (SSA(..), SSAStep(..), foliate, forgetSSA)
@@ -198,9 +198,9 @@ runPhase env art phase =
     ExtractValue doctrineName extractorSpec ->
       case art of
         ArtDiagram doc diag -> do
-          if not (extractorDoctrineMatches doctrineName doc)
-            then Left ("pipeline: extractor doctrine mismatch, expected " <> doctrineName)
-            else extractValue extractorSpec doc diag
+          case ensureExtractorSupported doctrineName doc (dMode diag) of
+            Left err -> Left ("pipeline: " <> err)
+            Right () -> extractValue extractorSpec doc diag
         ArtSSA{} -> Left "pipeline: extract value expects a diagram artifact"
         ArtExtracted{} -> Left "pipeline: value already extracted"
     ExtractDiagramPretty ->
@@ -257,10 +257,187 @@ lookupDoctrine env name =
     Just doc -> Right doc
 
 
-extractorDoctrineMatches :: Text -> Doctrine -> Bool
-extractorDoctrineMatches doctrineName doc =
-  dName doc == doctrineName
-    || (dName doc == "Artifact" && (doctrineName == "Doc" || doctrineName == "FileTree"))
+ensureExtractorSupported :: Text -> Doctrine -> ModeName -> Either Text ()
+ensureExtractorSupported extractorName doc mode =
+  case extractorName of
+    "Doc" -> ensureDocFragment doc mode
+    "FileTree" -> ensureFileTreeFragment doc mode
+    other -> Left ("extract: unknown extractor " <> other)
+
+
+ensureDocFragment :: Doctrine -> ModeName -> Either Text ()
+ensureDocFragment = ensureDocFragmentWithLabel "extract Doc"
+
+
+ensureDocFragmentWithLabel :: Text -> Doctrine -> ModeName -> Either Text ()
+ensureDocFragmentWithLabel label doc mode = do
+  let docTy = mkCon (ObjRef mode (ObjName "Doc")) []
+  _ <- requireFragmentGen label doc mode (GenName "empty") [] [docTy]
+  textDecl <- requireFragmentGen label doc mode (GenName "text") [] [docTy]
+  _ <- requireFragmentGen label doc mode (GenName "line") [] [docTy]
+  _ <- requireFragmentGen label doc mode (GenName "cat") [docTy, docTy] [docTy]
+  indentDecl <- requireFragmentGen label doc mode (GenName "indent") [docTy] [docTy]
+  requireAttrLitKind label doc "s" LKString textDecl
+  requireAttrLitKind label doc "n" LKInt indentDecl
+
+
+ensureFileTreeFragment :: Doctrine -> ModeName -> Either Text ()
+ensureFileTreeFragment doc mode = do
+  ensureDocFragmentWithLabel "extract FileTree" doc mode
+  let label = "extract FileTree"
+      docTy = mkCon (ObjRef mode (ObjName "Doc")) []
+      ftTy = mkCon (ObjRef mode (ObjName "FileTree")) []
+  singleFileDecl <- requireFragmentGen label doc mode (GenName "singleFile") [docTy] [ftTy]
+  _ <- requireFragmentGen label doc mode (GenName "concatTree") [ftTy, ftTy] [ftTy]
+  requireAttrLitKind label doc "path" LKString singleFileDecl
+
+
+requireFragmentGen :: Text -> Doctrine -> ModeName -> GenName -> [Obj] -> [Obj] -> Either Text GenDecl
+requireFragmentGen label doc mode name expectedDom expectedCod = do
+  gd <- lookupGenInMode doc mode name
+    `prefixErr` (label <> ": ")
+  requireGenSig label mode name expectedDom expectedCod gd
+  pure gd
+
+
+lookupGenInMode :: Doctrine -> ModeName -> GenName -> Either Text GenDecl
+lookupGenInMode doc mode genName =
+  case M.lookup mode (dGens doc) >>= M.lookup genName of
+    Nothing ->
+      Left
+        ( "missing generator '"
+            <> renderGenNameText genName
+            <> "' in mode "
+            <> renderModeName mode
+        )
+    Just gd -> Right gd
+
+
+requireNoParamsNoBinders :: Text -> GenDecl -> Either Text ()
+requireNoParamsNoBinders label gd =
+  if null (gdParams gd) && all isPort (gdDom gd)
+    then Right ()
+    else
+      Left
+        ( label
+            <> ": generator '"
+            <> renderGenNameText (gdName gd)
+            <> "' must have no parameters and no binder inputs"
+        )
+  where
+    isPort sh =
+      case sh of
+        InPort _ -> True
+        InBinder _ -> False
+
+
+requireGenSig
+  :: Text
+  -> ModeName
+  -> GenName
+  -> [Obj]
+  -> [Obj]
+  -> GenDecl
+  -> Either Text ()
+requireGenSig label mode genName expectedDom expectedCod gd = do
+  if gdMode gd /= mode
+    then
+      Left
+        ( label
+            <> ": generator '"
+            <> renderGenNameText genName
+            <> "' is in mode "
+            <> renderModeName (gdMode gd)
+            <> ", expected mode "
+            <> renderModeName mode
+        )
+    else Right ()
+  requireNoParamsNoBinders label gd
+  let expectedDomShape = map InPort expectedDom
+  if gdDom gd == expectedDomShape && gdCod gd == expectedCod
+    then Right ()
+    else
+      Left
+        ( label
+            <> ": generator '"
+            <> renderGenNameText genName
+            <> "' has wrong signature; expected "
+            <> renderSig expectedDom expectedCod
+            <> " in mode "
+            <> renderModeName mode
+        )
+  where
+    renderSig dom cod = "[" <> renderObjList dom <> "]->[" <> renderObjList cod <> "]"
+    renderObjList xs = T.intercalate "," (map renderObj xs)
+    renderObj ty =
+      case ty of
+        OCon (ObjRef _ (ObjName n)) [] -> n
+        _ -> "<obj>"
+
+
+requireAttrLitKind
+  :: Text
+  -> Doctrine
+  -> AttrName
+  -> AttrLitKind
+  -> GenDecl
+  -> Either Text ()
+requireAttrLitKind label doc key expectedKind gd = do
+  attrSort <-
+    case lookup key (gdAttrs gd) of
+      Nothing ->
+        Left
+          ( label
+              <> ": generator '"
+              <> renderGenNameText (gdName gd)
+              <> "' missing attribute '"
+              <> key
+              <> "'"
+          )
+      Just sortName -> Right sortName
+  decl <-
+    case M.lookup attrSort (dAttrSorts doc) of
+      Nothing ->
+        Left
+          ( label
+              <> ": generator '"
+              <> renderGenNameText (gdName gd)
+              <> "' attribute '"
+              <> key
+              <> "' refers to unknown sort "
+              <> renderAttrSort attrSort
+          )
+      Just d -> Right d
+  if asLitKind decl == Just expectedKind
+    then Right ()
+    else
+      Left
+        ( label
+            <> ": generator '"
+            <> renderGenNameText (gdName gd)
+            <> "' attribute '"
+            <> key
+            <> "' must have "
+            <> litKindLabel expectedKind
+            <> " literal kind"
+        )
+  where
+    litKindLabel lk =
+      case lk of
+        LKString -> "string"
+        LKInt -> "int"
+        LKBool -> "bool"
+
+
+prefixErr :: Either Text a -> Text -> Either Text a
+prefixErr res prefix =
+  case res of
+    Left err -> Left (prefix <> err)
+    Right x -> Right x
+
+
+renderGenNameText :: GenName -> Text
+renderGenNameText (GenName name) = name
 
 
 ensureAcyclicIfRequired :: Doctrine -> Diagram -> Either Text ()
@@ -540,7 +717,6 @@ evalArtifactDiagram diag = do
           body <-
             case ins of
               [v] -> expectDoc v
-              [] -> DText <$> attrString "content" attrs
               _ -> Left "extract FileTree: singleFile expects 1 Doc input"
           Right [RVFileTree (FTFile path body)]
         PGen (GenName "concatTree") _ _ ->

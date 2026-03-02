@@ -1,0 +1,19 @@
+doctrine JSArtifact extends Artifact where {
+  gen jsHello : [] -> [Doc] @Artifact;
+
+  rule computational jsHello_def -> : [] -> [Doc] @Artifact =
+    jsHello == text(s="console.log('hello');")
+}
+
+pipeline main where {
+  normalize { policy = "computational_lr"; fuel = 50; };
+  extract FileTree { root = "./out" };
+}
+
+run main using main where {
+  source doctrine JSArtifact;
+  source mode Artifact;
+}
+---
+jsHello; singleFile(path="main.mjs")
+---

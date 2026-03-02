@@ -28,7 +28,7 @@ import Strat.Poly.Match (Match, findAllMatches)
 import Strat.Poly.Rewrite
   ( RewriteRule(..)
   , SpliceMapper
-  , applyMatch
+  , defaultSpliceMapper
   , applyMatchWithMapper
   , mkMatchConfig
   )
@@ -122,7 +122,7 @@ checkRewriteStepWithMapper spliceMapper tt rules current step = do
         Left _ -> tryCandidates rest
 
 checkRewriteStep :: TypeTheory -> [RewriteRule] -> Diagram -> RewriteStep -> Either Text Diagram
-checkRewriteStep = checkRewriteStepWithMapper (\_ d -> Right d)
+checkRewriteStep = checkRewriteStepWithMapper defaultSpliceMapper
 
 applyAtFocus
   :: SpliceMapper
@@ -181,7 +181,7 @@ checkRewritePathWithMapper spliceMapper tt rules path = do
   foldM (checkRewriteStepWithMapper spliceMapper tt rules) start (rpSteps path)
 
 checkRewritePath :: TypeTheory -> [RewriteRule] -> RewritePath -> Either Text Diagram
-checkRewritePath = checkRewritePathWithMapper (\_ d -> Right d)
+checkRewritePath = checkRewritePathWithMapper defaultSpliceMapper
 
 checkJoinProofWithMapper :: SpliceMapper -> TypeTheory -> [RewriteRule] -> JoinProof -> Either Text ()
 checkJoinProofWithMapper spliceMapper tt rules proof = do
@@ -193,7 +193,7 @@ checkJoinProofWithMapper spliceMapper tt rules proof = do
     else Left "checkJoinProof: endpoints are not isomorphic"
 
 checkJoinProof :: TypeTheory -> [RewriteRule] -> JoinProof -> Either Text ()
-checkJoinProof = checkJoinProofWithMapper (\_ d -> Right d)
+checkJoinProof = checkJoinProofWithMapper defaultSpliceMapper
 
 flipRule :: RewriteRule -> RewriteRule
 flipRule rule =

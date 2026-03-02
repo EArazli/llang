@@ -190,7 +190,14 @@ instantiateGenImageBinders
   -> Diagram
   -> Either Text Diagram
 instantiateGenImageBinders tt =
-  instantiateGenImageBindersWithMapper tt (\_ d -> Right d)
+  instantiateGenImageBindersWithMapper tt defaultSpliceMapper
+
+
+defaultSpliceMapper :: ModExpr -> Diagram -> Either Text Diagram
+defaultSpliceMapper me captured =
+  if null (mePath me) && meSrc me == dMode captured && meTgt me == dMode captured
+    then Right captured
+    else Left "instantiateGenImageBinders: splice requires modality-action mapping but no splice mapper is available"
 
 instantiateGenImageBindersWithMapper
   :: TypeTheory

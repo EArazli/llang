@@ -778,7 +778,48 @@ For derived doctrines declared as `derived doctrine D_SSA = foliated D mode M`, 
 
 The sort `__ssa_str` is reserved for SSA-introduced names (for example port/box names) and must denote string literals.
 
-## 12. Restrictions
+## 12. Artifact extraction
+
+llang provides host-backed extractors for producing runnable artifacts from diagrams:
+
+- `extract Doc { stdout = ... }`
+- `extract FileTree { root = ... }`
+
+These extractors interpret diagrams into a fixed semantic algebra implemented by the kernel. The interpretation is only defined on a small “artifact fragment” of generators and types.
+
+### 12.1 Extractable fragments
+
+Let `D` be a doctrine and `M` a mode of `D`. Write `Doc_M` for the nullary type constructor `Doc` in mode `M` and `FileTree_M` for the nullary type constructor `FileTree` in mode `M`.
+
+A doctrine `D` supports **Doc extraction in mode `M`** iff `D` contains, in mode `M`, generators with the following signatures (with no parameters and no binder inputs):
+
+- `empty : [] -> [Doc_M]`
+- `text { s : Str } : [] -> [Doc_M]` where `Str` is an attribute sort whose literal kind is `string`
+- `line : [] -> [Doc_M]`
+- `cat : [Doc_M, Doc_M] -> [Doc_M]`
+- `indent { n : Int } : [Doc_M] -> [Doc_M]` where `Int` is an attribute sort whose literal kind is `int`
+
+A doctrine `D` supports **FileTree extraction in mode `M`** iff it supports Doc extraction in mode `M` and also contains, in mode `M`, generators (again with no parameters and no binder inputs):
+
+- `singleFile { path : Str } : [Doc_M] -> [FileTree_M]` where `Str` is an attribute sort of literal kind `string`
+- `concatTree : [FileTree_M, FileTree_M] -> [FileTree_M]`
+
+### 12.2 Pipeline semantics
+
+Given a pipeline phase `extract Doc` or `extract FileTree` applied to an artifact `(D, d)`:
+
+1. Let `M = mode(d)`. The kernel checks that `D` supports the corresponding extractable fragment in `M`.
+2. The diagram must have no open inputs, and all declared outputs must be produced (extraction fails on open input/output ports).
+3. Evaluation is defined only for the generator subset above. Any other generator, as well as boxes, feedback, splice, term-meta, or internal-drop payloads, causes extraction to fail.
+4. Evaluation proceeds by topologically ordering edges and interpreting each supported generator into a host `Doc` / `FileTree` value.
+
+### 12.3 Conservative extensions
+
+Extraction depends only on the presence of the extractable fragment in the diagram’s mode, not on the doctrine’s global name.
+
+Therefore, a doctrine may conservatively extend `Doc`/`Artifact` with additional generators and equations (e.g. derived pretty-printing combinators) and still be extractable after normalization into the extractable fragment.
+
+## 13. Restrictions
 
 See `RESTRICTIONS.md`.
 

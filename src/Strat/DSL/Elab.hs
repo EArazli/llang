@@ -278,7 +278,6 @@ elabDoctrineFunctor budget env raw = do
   ensureAbsent "doctrine_functor" (rdfName raw) (meFunctors env)
   ensureDistinctFunctorParams (rdfParams raw)
   paramsWithSchemas <- mapM lookupParamSchema (rdfParams raw)
-  mapM_ (\(_, _, schemaDoc) -> validateFunctorSchema schemaDoc) paramsWithSchemas
   renamedSchemas <- mapM namespaceParamSchema paramsWithSchemas
   ifaceDoc <- mergeIfaceDoctrines (rdfName raw <> ".__iface") renamedSchemas
   let rawBody =
@@ -321,8 +320,8 @@ elabDoctrineApply budget env raw = do
     Left err -> Left ("apply: interface morphism check failed: " <> err)
     Right () -> Right ()
   implResult <- checkImplementsObligationsWithBudget budget env targetDoc implIface ifaceDoc
-  case implResult of
-    ImplementsCheckProved _ -> Right ()
+  proofCount <- case implResult of
+    ImplementsCheckProved proofs -> Right (length proofs)
     ImplementsCheckUndecided label lim ->
       Left ("apply: interface obligation undecided: " <> label <> " (" <> renderSearchLimit lim <> ")")
   PolyPushoutResult doc inl inr _glueIface <-
@@ -340,10 +339,12 @@ elabDoctrineApply budget env raw = do
           (M.insert (PolyMorph.morName inr) inr (M.insert (PolyMorph.morName inl) inl (meMorphisms env)))
           glueMorphs
   pure
-    env
-      { meDoctrines = M.insert (rdaName raw) doc (meDoctrines env)
-      , meMorphisms = morphisms'
-      }
+    ( addImplementsProofCount proofCount
+        env
+          { meDoctrines = M.insert (rdaName raw) doc (meDoctrines env)
+          , meMorphisms = morphisms'
+          }
+    )
 
 
 lookupFunctor :: ModuleEnv -> Text -> Either Text DoctrineFunctorDef
@@ -747,9 +748,6 @@ ensureDistinctFunctorParams params =
     go seen (p:rest)
       | rfpName p `S.member` seen = Left ("doctrine_functor: duplicate parameter name " <> rfpName p)
       | otherwise = go (S.insert (rfpName p) seen) rest
-
-validateFunctorSchema :: Doctrine -> Either Text ()
-validateFunctorSchema _ = Right ()
 
 namespaceDoctrineWithParam :: Text -> Doctrine -> Either Text Doctrine
 namespaceDoctrineWithParam paramName doc = do

@@ -2,6 +2,7 @@
 module Strat.Poly.Rewrite
   ( RewriteRule(..)
   , SpliceMapper
+  , defaultSpliceMapper
   , rewriteOnceWithMapper
   , rewriteOnce
   , rewriteAllWithMapper
@@ -44,8 +45,8 @@ data RewriteRule = RewriteRule
 
 type SpliceMapper = ModExpr -> Diagram -> Either Text Diagram
 
-identitySpliceMapper :: SpliceMapper
-identitySpliceMapper me captured =
+defaultSpliceMapper :: SpliceMapper
+defaultSpliceMapper me captured =
   if null (mePath me) && meSrc me == dMode captured && meTgt me == dMode captured
     then Right captured
     else Left "rewriteOnce: splice requires modality-action mapping but no splice mapper is available"
@@ -60,7 +61,7 @@ rewriteOnceWithMapper tt spliceMapper rules diag = do
 
 rewriteOnce :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
 rewriteOnce tt =
-  rewriteOnceWithMapper tt identitySpliceMapper
+  rewriteOnceWithMapper tt defaultSpliceMapper
 
 rewriteOnceTop :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
 rewriteOnceTop tt spliceMapper rules diag = go rules
@@ -163,7 +164,7 @@ rewriteAllWithMapper tt spliceMapper cap rules diag = do
 
 rewriteAll :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
 rewriteAll tt =
-  rewriteAllWithMapper tt identitySpliceMapper
+  rewriteAllWithMapper tt defaultSpliceMapper
 
 rewriteAllNested :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
 rewriteAllNested tt spliceMapper cap rules diag = do
@@ -247,7 +248,7 @@ applyMatchWithMapper tt spliceMapper rule match host = do
 
 applyMatch :: TypeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyMatch tt =
-  applyMatchWithMapper tt identitySpliceMapper
+  applyMatchWithMapper tt defaultSpliceMapper
 
 instantiateBinderMetas :: M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
 instantiateBinderMetas binderSub =

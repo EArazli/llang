@@ -34,6 +34,7 @@ import Strat.Poly.Proof
 import Strat.Poly.Rewrite
   ( RewriteRule
   , SpliceMapper
+  , defaultSpliceMapper
   , rrLHS
   , rrName
   , applyMatchWithMapper
@@ -66,7 +67,7 @@ normalizeWithMapper spliceMapper tt fuel rules diag = do
               go (remaining - 1) nextCanon
 
 normalize :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
-normalize = normalizeWithMapper (\_ d -> Right d)
+normalize = normalizeWithMapper defaultSpliceMapper
 
 autoJoinProofWithMapper :: SpliceMapper -> TypeTheory -> SearchBudget -> [RewriteRule] -> Diagram -> Diagram -> Either Text (SearchOutcome JoinProof)
 autoJoinProofWithMapper spliceMapper tt budget rules d1 d2
@@ -90,7 +91,7 @@ autoJoinProofWithMapper spliceMapper tt budget rules d1 d2
           Right (SearchProved proof)
 
 autoJoinProof :: TypeTheory -> SearchBudget -> [RewriteRule] -> Diagram -> Diagram -> Either Text (SearchOutcome JoinProof)
-autoJoinProof = autoJoinProofWithMapper (\_ d -> Right d)
+autoJoinProof = autoJoinProofWithMapper defaultSpliceMapper
 
 data Node = Node
   { nodeCanon :: CanonDiagram
