@@ -1386,7 +1386,7 @@ ident :: Parser Text
 ident = scopedIdent
 
 identRaw :: Parser Text
-identRaw = T.pack <$> ((:) <$> letterChar <*> many identChar)
+identRaw = T.pack <$> ((:) <$> (letterChar <|> char '_') <*> many identChar)
 
 identChar :: Parser Char
 identChar = alphaNumChar <|> char '_' <|> char '-' <|> char '\''

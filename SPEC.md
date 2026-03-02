@@ -625,7 +625,42 @@ Surface elaboration is capability-driven:
 
 No discipline lattice is consulted.
 
-## 11. Restrictions
+## 11. Foliation as SSA and term-graph reification
+
+For derived doctrines declared as `derived doctrine D_SSA = foliated D mode M`, foliation is only available for modes declared acyclic in `D`.
+
+`D_SSA` is a generated doctrine that reifies SSA steps as typed constructors and supports ordinary morphism-based compilation.
+
+1. **Signature of `D_SSA`:**
+
+- `PortRef`, `PortList`, `Step`, `StepList`, `SSA` as nullary object constructors in mode `M`.
+- `portRef { name : __ssa_str } : [] -> [PortRef]`
+- `portsNil : [] -> [PortList]`, `portsCons : [PortRef, PortList] -> [PortList]`
+- `stepsNil : [] -> [StepList]`, `stepsCons : [Step, StepList] -> [StepList]`
+- `ssaProgram : [PortList(in), PortList(out), StepList] -> [SSA]`
+- `stepBox { name : __ssa_str } : [PortList(out), PortList(in), SSA] -> [Step]`
+- `stepFeedback : [PortList(out), PortList(in), SSA] -> [Step]`
+- For each generator `g` of `D` in mode `M`, a generated constructor `step_g`.
+
+2. **Generated step constructors:**
+
+- If `g : Γ -> Δ` has `m = |Δ|` outputs, `n` non-binder inputs, and `k` binder arguments, then:
+- `step_g : [PortRef]^m ⊗ [PortRef]^n ⊗ [SSA]^k -> [Step]`
+- `step_g` carries exactly the attribute list of `g`.
+
+3. **Reification function (pipeline semantics):**
+
+- `extract foliate into D_SSA` computes SSA (ports, ordered steps, naming) from a diagram in `(D, M)`.
+- Applying a morphism whose source is `D_SSA` reifies SSA through the constructors above (`encodeSSAArtifact`), including generator attributes, binder SSA subprograms, and inner SSA for box/feedback steps.
+- This is the explicit term-graph/SSA boundary: steps are ordered and named in the reified object.
+
+4. **Mathematical note:**
+
+- This corresponds to representing acyclic computations as labeled DAGs (term graphs), i.e. the free gs-monoidal/term-graph style encoding of sharing.
+
+The sort `__ssa_str` is reserved for SSA-introduced names (for example port/box names) and must denote string literals.
+
+## 12. Restrictions
 
 See `RESTRICTIONS.md`.
 
@@ -634,3 +669,5 @@ See `RESTRICTIONS.md`.
 - Cartmell, *Generalised Algebraic Theories and Contextual Categories* (1986).
 - Dybjer, *Internal Type Theory* (1996).
 - Boespflug & Pientka, *Multi-Level Contextual Type Theory* (2011).
+- Andrea Corradini and Fabio Gadducci. *An Algebraic Presentation of Term Graphs, via GS-Monoidal Categories.* Applied Categorical Structures 7(3), 1999.
+- Jad Ghalayini and Neel Krishnaswami. *The Denotational Semantics of SSA.* arXiv:2411.09347, 2024.

@@ -358,64 +358,79 @@ encodeSSAArtifact doc ssa = do
           then pure (mkCon ref [])
           else Left ("pipeline: SSA constructor " <> tName <> " must be nullary")
       requireGen gName =
-        case M.lookup mode (dGens doc) >>= M.lookup (GenName gName) of
-          Nothing -> Left ("pipeline: derived doctrine missing SSA generator " <> gName)
+        case M.lookup mode (dGens doc) >>= M.lookup gName of
+          Nothing -> Left ("pipeline: derived doctrine missing SSA generator " <> renderGenName gName)
           Just _ -> Right ()
+      stepCtorName (GenName g) = GenName ("step_" <> g)
       portName pid =
         case M.lookup pid (ssaPortNames ssa) of
           Just name -> name
           Nothing ->
             case pid of
               PortId i -> "p" <> T.pack (show i)
+      renderGenName (GenName name) = name
+      renderBoxName (BoxName name) = name
   portTy <- requireType0 "PortRef"
   portsTy <- requireType0 "PortList"
   stepTy <- requireType0 "Step"
   stepsTy <- requireType0 "StepList"
   ssaTy <- requireType0 "SSA"
   mapM_ requireGen
-    [ "portRef"
-    , "portsNil"
-    , "portsCons"
-    , "stepGen"
-    , "stepBox"
-    , "stepFeedback"
-    , "stepsNil"
-    , "stepsCons"
-    , "ssaProgram"
+    [ GenName "portRef"
+    , GenName "portsNil"
+    , GenName "portsCons"
+    , GenName "stepBox"
+    , GenName "stepFeedback"
+    , GenName "stepsNil"
+    , GenName "stepsCons"
+    , GenName "ssaProgram"
     ]
-  let mkPortList names =
+  let tensorMany ds =
+        case ds of
+          [] -> Right (idD mode [])
+          d0:rest -> foldM tensorD d0 rest
+      mkPortRef name =
+        genDWithAttrs mode [] [portTy] (GenName "portRef") (M.singleton "name" (ATLit (ALString name)))
+      mkPortList names =
         case names of
           [] -> genD mode [] [portsTy] (GenName "portsNil")
           n:rest -> do
-            headPort <- genDWithAttrs mode [] [portTy] (GenName "portRef") (M.singleton "name" (ATLit (ALString n)))
+            headPort <- mkPortRef n
             tailPorts <- mkPortList rest
             pair <- tensorD headPort tailPorts
             cons <- genD mode [portTy, portsTy] [portsTy] (GenName "portsCons")
             compD tt cons pair
-      mkStepEdge st =
+      applyStepCtor ctor attrs domCtx argDiags = do
+        _ <- requireGen ctor
+        ctorDiag <- genDWithAttrs mode domCtx [stepTy] ctor attrs
+        tuple <- tensorMany argDiags
+        compD tt ctorDiag tuple
+      mkStep st =
         case st of
-          StepGen _ gen _ _ _ _ ->
-            genDWithAttrs
-              mode
-              [portsTy, portsTy]
-              [stepTy]
-              (GenName "stepGen")
-              (M.singleton "name" (ATLit (ALString (renderGenName gen))))
-          StepBox _ box _ _ _ ->
-            genDWithAttrs
-              mode
-              [portsTy, portsTy]
-              [stepTy]
-              (GenName "stepBox")
-              (M.singleton "name" (ATLit (ALString (renderBoxName box))))
-          StepFeedback{} ->
-            genD mode [portsTy, portsTy] [stepTy] (GenName "stepFeedback")
-      mkStep st = do
-        ins <- mkPortList (map portName (stepIns st))
-        outs <- mkPortList (map portName (stepOuts st))
-        pair <- tensorD ins outs
-        mk <- mkStepEdge st
-        compD tt mk pair
+          StepGen _ gen attrs ins outs binders -> do
+            let ctor = stepCtorName gen
+            outRefs <- mapM (mkPortRef . portName) outs
+            inRefs <- mapM (mkPortRef . portName) ins
+            binderDiags <- mapM (encodeSSAArtifact doc) binders
+            let argDiags = outRefs <> inRefs <> binderDiags
+            let domCtx =
+                  replicate (length outs + length ins) portTy
+                    <> replicate (length binders) ssaTy
+            applyStepCtor ctor attrs domCtx argDiags
+          StepBox _ box inner ins outs -> do
+            outPorts <- mkPortList (map portName outs)
+            inPorts <- mkPortList (map portName ins)
+            innerSSA <- encodeSSAArtifact doc inner
+            tuple <- tensorMany [outPorts, inPorts, innerSSA]
+            ctor <- genDWithAttrs mode [portsTy, portsTy, ssaTy] [stepTy] (GenName "stepBox") (M.singleton "name" (ATLit (ALString (renderBoxName box))))
+            compD tt ctor tuple
+          StepFeedback _ body ins outs -> do
+            outPorts <- mkPortList (map portName outs)
+            inPorts <- mkPortList (map portName ins)
+            innerSSA <- encodeSSAArtifact doc body
+            tuple <- tensorMany [outPorts, inPorts, innerSSA]
+            ctor <- genD mode [portsTy, portsTy, ssaTy] [stepTy] (GenName "stepFeedback")
+            compD tt ctor tuple
       mkStepList steps =
         case steps of
           [] -> genD mode [] [stepsTy] (GenName "stepsNil")
@@ -425,8 +440,6 @@ encodeSSAArtifact doc ssa = do
             pair <- tensorD headStep tailSteps
             cons <- genD mode [stepTy, stepsTy] [stepsTy] (GenName "stepsCons")
             compD tt cons pair
-      renderGenName (GenName name) = name
-      renderBoxName (BoxName name) = name
   inPorts <- mkPortList (map portName (ssaInputs ssa))
   outPorts <- mkPortList (map portName (ssaOutputs ssa))
   steps <- mkStepList (ssaSteps ssa)

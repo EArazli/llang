@@ -1230,6 +1230,15 @@ insertDerivedDoctrine env raw = do
 buildFoliatedDoctrine :: Text -> Doctrine -> ModeName -> Either Text Doctrine
 buildFoliatedDoctrine name baseDoc mode = do
   mt0 <- addMode mode emptyModeTheory
+  let ssaStrSort = AttrSort "__ssa_str"
+  derivedAttrSorts <-
+    case M.lookup ssaStrSort (dAttrSorts baseDoc) of
+      Nothing ->
+        Right (M.insert ssaStrSort (AttrSortDecl ssaStrSort (Just LKString)) (dAttrSorts baseDoc))
+      Just decl ->
+        if asLitKind decl == Just LKString
+          then Right (dAttrSorts baseDoc)
+          else Left "derived doctrine: reserved attrsort __ssa_str must be declared as string in base doctrine"
   let ModeName modeTok = mode
       universeName = "U_" <> modeTok
       universeTy = mkCon (ObjRef mode (ObjName universeName)) []
@@ -1241,49 +1250,75 @@ buildFoliatedDoctrine name baseDoc mode = do
           , cdComp = Nothing
           }
       mt = mt0 { mtClassifiedBy = M.singleton mode classDecl }
-  let strSort = AttrSort "Str"
-      portTy = ty "PortRef"
+  let portTy = ty "PortRef"
       portsTy = ty "PortList"
       stepTy = ty "Step"
       stepsTy = ty "StepList"
       ssaTy = ty "SSA"
       ty tName = mkCon (ObjRef mode (ObjName tName)) []
-      mkCtor cName = mkGen cName [] [universeTy] []
-      mkGen gName dom cod attrs =
+      mkCtor cName = mkGenDecl cName [] [universeTy] []
+      mkGen gName dom cod attrs = mkGenDecl gName (map InPort dom) cod attrs
+      mkGenDecl gName dom cod attrs =
         ( GenName gName
         , GenDecl
             { gdName = GenName gName
             , gdMode = mode
             , gdParams = []
-            , gdDom = map InPort dom
+            , gdDom = dom
             , gdCod = cod
             , gdAttrs = attrs
             }
         )
-      gens =
-        M.fromList
-          [ mkCtor universeName
-          , mkCtor "PortRef"
-          , mkCtor "PortList"
-          , mkCtor "Step"
-          , mkCtor "StepList"
-          , mkCtor "SSA"
-          , mkGen "portRef" [] [portTy] [("name", strSort)]
-          , mkGen "portsNil" [] [portsTy] []
-          , mkGen "portsCons" [portTy, portsTy] [portsTy] []
-          , mkGen "stepGen" [portsTy, portsTy] [stepTy] [("name", strSort)]
-          , mkGen "stepBox" [portsTy, portsTy] [stepTy] [("name", strSort)]
-          , mkGen "stepFeedback" [portsTy, portsTy] [stepTy] []
-          , mkGen "stepsNil" [] [stepsTy] []
-          , mkGen "stepsCons" [stepTy, stepsTy] [stepsTy] []
-          , mkGen "ssaProgram" [portsTy, portsTy, stepsTy] [ssaTy] []
-          ]
+      utilityGens =
+        [ mkCtor universeName
+        , mkCtor "PortRef"
+        , mkCtor "PortList"
+        , mkCtor "Step"
+        , mkCtor "StepList"
+        , mkCtor "SSA"
+        , mkGen "portRef" [] [portTy] [("name", ssaStrSort)]
+        , mkGen "portsNil" [] [portsTy] []
+        , mkGen "portsCons" [portTy, portsTy] [portsTy] []
+        , mkGen "stepBox" [portsTy, portsTy, ssaTy] [stepTy] [("name", ssaStrSort)]
+        , mkGen "stepFeedback" [portsTy, portsTy, ssaTy] [stepTy] []
+        , mkGen "stepsNil" [] [stepsTy] []
+        , mkGen "stepsCons" [stepTy, stepsTy] [stepsTy] []
+        , mkGen "ssaProgram" [portsTy, portsTy, stepsTy] [ssaTy] []
+        ]
+      utilityNames = S.fromList (map fst utilityGens)
+      modeGens = M.toList (M.findWithDefault M.empty mode (dGens baseDoc))
+      mkStepCtor (GenName gTok, gDecl) =
+        let stepName@(GenName stepTok) = GenName ("step_" <> gTok)
+            m = length (gdCod gDecl)
+            n = length [ () | InPort _ <- gdDom gDecl ]
+            k = length [ () | InBinder _ <- gdDom gDecl ]
+            dom =
+              replicate m (InPort portTy)
+                <> replicate n (InPort portTy)
+                <> replicate k (InPort ssaTy)
+         in if stepName `S.member` utilityNames
+              then
+                Left
+                  ( "derived doctrine "
+                      <> name
+                      <> " mode "
+                      <> renderMode mode
+                      <> " has generator-name collision: "
+                      <> stepTok
+                      <> " (generated from base generator "
+                      <> gTok
+                      <> ") collides with a reserved SSA utility generator"
+                  )
+              else Right (mkGenDecl stepTok dom [stepTy] (gdAttrs gDecl))
+      renderMode (ModeName mTok) = mTok
+  stepCtors <- mapM mkStepCtor modeGens
+  let gens = M.fromList (utilityGens <> stepCtors)
   pure
     Doctrine
       { dName = name
       , dModes = mt
       , dAcyclicModes = S.singleton mode
-      , dAttrSorts = M.singleton strSort (AttrSortDecl strSort (Just LKString))
+      , dAttrSorts = derivedAttrSorts
       , dGens = M.singleton mode gens
       , dCells2 = []
       , dActions = M.empty

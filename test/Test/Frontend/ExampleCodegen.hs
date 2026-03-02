@@ -16,6 +16,7 @@ tests =
     "Frontend.ExampleCodegen"
     [ testCase "logic_full_adder_codegen main emits structured JavaScript" testLogicFullAdderMain
     , testCase "logic_full_adder_codegen ssa shows attrs and producer links" testLogicFullAdderSsa
+    , testCase "ssa_js_codegen main emits js-like SSA statements" testSsaJsMain
     ]
 
 
@@ -42,6 +43,19 @@ testLogicFullAdderSsa = do
   assertBool "expected var attribute for b" ("attrs={s=\"b\"}" `T.isInfixOf` out)
   assertBool "expected xor step" (" xor " `T.isInfixOf` out)
   assertBool "expected producer links in inputs" (" <- e" `T.isInfixOf` out)
+
+testSsaJsMain :: Assertion
+testSsaJsMain = do
+  env <- requireIO =<< loadModule "examples/run/codegen/ssa_js_codegen.run.llang"
+  runDef <- require (selectRun env (Just "main"))
+  result <- require (runWithEnv env runDef)
+  let out = prOutput result
+  assertBool "expected const binding statements" ("const " `T.isInfixOf` out)
+  assertBool "expected assignment in emitted code" (" = " `T.isInfixOf` out)
+  assertBool "expected add operation call in emitted code" ("add(" `T.isInfixOf` out)
+  assertBool "expected dup operation call in emitted code" ("dup(" `T.isInfixOf` out)
+  assertBool "expected console.log statement" ("console.log(" `T.isInfixOf` out)
+  assertBool "expected statement separators" (";\n" `T.isInfixOf` out)
 
 
 require :: Either T.Text a -> IO a

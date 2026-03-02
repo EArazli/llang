@@ -235,7 +235,7 @@ scopedIdentRaw :: Parser Text
 scopedIdentRaw = T.intercalate "::" <$> sepBy1 identRaw (string "::")
 
 identRaw :: Parser Text
-identRaw = T.pack <$> ((:) <$> letterChar <*> many identChar)
+identRaw = T.pack <$> ((:) <$> (letterChar <|> char '_') <*> many identChar)
 
 identChar :: Parser Char
 identChar = alphaNumChar <|> char '_' <|> char '-' <|> char '\''
