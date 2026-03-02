@@ -21,6 +21,7 @@ import System.IO (stderr)
 data CLIOptions = CLIOptions
   { optFile :: FilePath
   , optRun  :: Maybe Text
+  , optOutput :: Bool
   , optSearchBudget :: SearchBudget
   }
   deriving (Eq, Show)
@@ -28,7 +29,7 @@ data CLIOptions = CLIOptions
 parseArgs :: [String] -> Either Text CLIOptions
 parseArgs args =
   case args of
-    (file:rest) -> parseRest (CLIOptions file Nothing defaultSearchBudget) rest
+    (file:rest) -> parseRest (CLIOptions file Nothing False defaultSearchBudget) rest
     _ -> Left usage
   where
     parseRest opts rest =
@@ -38,6 +39,10 @@ parseArgs args =
           case optRun opts of
             Just _ -> Left "duplicate --run flag"
             Nothing -> parseRest opts { optRun = Just (T.pack name) } xs
+        "--output" : xs ->
+          if optOutput opts
+            then Left "duplicate --output flag"
+            else parseRest opts { optOutput = True } xs
         "--max-depth" : nTxt : xs -> do
           n <- parseInt "--max-depth" nTxt
           if n < 0
@@ -73,7 +78,9 @@ runCLI opts = do
             Left err -> pure (Left err)
             Right res -> do
               TIO.hPutStrLn stderr (renderProofSummary (meProofStats env))
-              writeExtractedFiles (prArtifact res)
+              if optOutput opts
+                then writeExtractedFiles (prArtifact res)
+                else pure ()
               pure (Right (prOutput res))
 
 writeExtractedFiles :: Artifact -> IO ()
@@ -90,8 +97,9 @@ writeExtractedFiles art =
 usage :: Text
 usage =
   T.unlines
-    [ "Usage: llang-exe FILE [--run NAME] [--max-depth N] [--max-states N] [--timeout-ms N]"
+    [ "Usage: llang-exe FILE [--run NAME] [--output] [--max-depth N] [--max-states N] [--timeout-ms N]"
     , "Run a named run in FILE (default: main or the only run)."
+    , "--output enables writing extracted FileTree artifacts to disk."
     , "Search-budget flags tune auto-proof search during module elaboration/checking."
     ]
 

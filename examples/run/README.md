@@ -19,3 +19,5 @@ Notes:
   `run ... using ... where { source ... }`.
 - Some files define multiple `run` blocks. For those, pass `--run <name>`:
   `stack run -- <path-to-run-file> --run <name>`.
+- To materialize `FileTree` artifacts to disk, pass `--output`; otherwise the
+  CLI only prints the extracted file listing/content.

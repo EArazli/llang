@@ -9,3 +9,5 @@ Examples:
   `stack run -- examples/run/codegen/logic_full_adder_codegen.run.llang --run main`
 - SSA schedule debug view for the same example:
   `stack run -- examples/run/codegen/logic_full_adder_codegen.run.llang --run ssa`
+- Write extracted `FileTree` artifacts to disk (only when `--output` is passed):
+  `stack run -- examples/run/codegen/jsartifact_filetree_hello.run.llang --output`
