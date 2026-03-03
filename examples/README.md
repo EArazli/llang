@@ -4,6 +4,7 @@ This directory is split into libraries and runnable entrypoints:
 
 - `examples/lib/**`: shared doctrines, morphisms, surfaces, templates. No `run` blocks.
 - `examples/run/**`: runnable example files (usually wrappers that import `lib`).
+- `examples/endtoend/**`: self-contained runnable pipelines built fully in userland.
 - `examples/run/xfail/**`: runnable files that are expected to fail.
 
 See `examples/run/README.md` for execution details.

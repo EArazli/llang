@@ -1,0 +1,645 @@
+doctrine Calc where {
+  mode M acyclic classifiedBy M via M.U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_M : [] -> [M.U_M] @M;
+
+  attrsort Str = string;
+
+  gen Expr : [] -> [M.U_M] @M;
+  gen Step : [] -> [M.U_M] @M;
+  gen Comp : [] -> [M.U_M] @M;
+  gen Program : [] -> [M.U_M] @M;
+
+  gen var { name:Str } : [] -> [Expr] @M;
+  gen zero : [] -> [Expr] @M;
+  gen strLit { value:Str } : [] -> [Expr] @M;
+
+  gen plusExpr : [Expr, Expr] -> [Expr] @M;
+  gen toIntExpr : [Expr] -> [Expr] @M;
+  gen isEmptyExpr : [Expr] -> [Expr] @M;
+  gen isDigitExpr : [Expr] -> [Expr] @M;
+  gen isPlusExpr : [Expr] -> [Expr] @M;
+  gen isSpaceExpr : [Expr] -> [Expr] @M;
+
+  gen letStmt { name:Str } : [Expr] -> [Step] @M;
+  gen setStmt { name:Str } : [Expr] -> [Step] @M;
+  gen ifStmt : [Expr, Step] -> [Step] @M;
+  gen forStmt { name:Str } : [Expr, Step] -> [Step] @M;
+  gen continueStmt : [] -> [Step] @M;
+  gen failStmt { message:Str } : [] -> [Step] @M;
+  gen printStmt : [Expr] -> [Step] @M;
+
+  gen then : [Step, Step] -> [Step] @M;
+
+  gen retComp : [Expr] -> [Comp] @M;
+  gen bindComp { name:Str } : [Comp, Comp] -> [Comp] @M;
+  gen readComp : [] -> [Comp] @M;
+  gen runComp : [Step] -> [Comp] @M;
+
+  gen toProgram : [Comp] -> [Program] @M;
+}
+
+surface CalcSurface where {
+  doctrine Calc;
+  mode M;
+
+  lexer {
+    keywords: program, bind, run, ret, let, set, if, for, in, continue, fail, print, read, toInt, empty, digit, plus, space;
+    symbols: "(", ")", "{", "}", ";", "=", "<-", "+", "0";
+  }
+
+  expr {
+    -- `Comp` forms
+    atom:
+      "program" "{" <expr> "}" => $1 ; toProgram
+    | "bind" ident(name) "<-" "(" <expr> ")" ";" <expr> => ($2 * $1) ; bindComp(name = #name)
+    | "run" "{" <expr> "}" => $1 ; runComp
+    | "ret" "(" <expr> ")" => $1 ; retComp
+    | "read" "(" ")" => readComp
+    ;
+
+    -- `Step` forms
+    atom:
+      "let" ident(name) "=" "(" <expr> ")" => $1 ; letStmt(name = #name)
+    | "set" ident(name) "=" "(" <expr> ")" => $1 ; setStmt(name = #name)
+    | "if" "(" <expr> ")" "{" <expr> "}" => ($1 * $2) ; ifStmt
+    | "for" ident(name) "in" "(" <expr> ")" "{" <expr> "}" => ($1 * $2) ; forStmt(name = #name)
+    | "continue" => continueStmt
+    | "fail" "(" string(msg) ")" => failStmt(message = #msg)
+    | "print" "(" <expr> ")" => $1 ; printStmt
+    ;
+
+    -- `Expr` forms
+    atom:
+      "toInt" "(" <expr> ")" => $1 ; toIntExpr
+    | "empty" "(" <expr> ")" => $1 ; isEmptyExpr
+    | "digit" "(" <expr> ")" => $1 ; isDigitExpr
+    | "plus" "(" <expr> ")" => $1 ; isPlusExpr
+    | "space" "(" <expr> ")" => $1 ; isSpaceExpr
+    | "0" => zero
+    | string(s) => strLit(value = #s)
+    | ident(name) => var(name = #name)
+    | "(" <expr> ")" => <expr>
+    ;
+
+    infixl 40 "+" => ($1 * $2) ; plusExpr;
+    infixl 5 ";" => ($1 * $2) ; then;
+  }
+}
+
+doctrine JSAst where {
+  mode M acyclic classifiedBy M via M.U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_M : [] -> [M.U_M] @M;
+
+  attrsort Str = string;
+
+  gen JExpr : [] -> [M.U_M] @M;
+  gen JStmt : [] -> [M.U_M] @M;
+  gen JBlock : [] -> [M.U_M] @M;
+  gen JsProgram : [] -> [M.U_M] @M;
+
+  gen varRef { name:Str } : [] -> [JExpr] @M;
+  gen zeroLit : [] -> [JExpr] @M;
+  gen intLit { value:Str } : [] -> [JExpr] @M;
+  gen stringLit { value:Str } : [] -> [JExpr] @M;
+
+  gen readInputExpr : [] -> [JExpr] @M;
+  gen plusExpr : [JExpr, JExpr] -> [JExpr] @M;
+  gen eqExpr : [JExpr, JExpr] -> [JExpr] @M;
+  gen gteExpr : [JExpr, JExpr] -> [JExpr] @M;
+  gen lteExpr : [JExpr, JExpr] -> [JExpr] @M;
+  gen andExpr : [JExpr, JExpr] -> [JExpr] @M;
+  gen toIntExpr : [JExpr] -> [JExpr] @M;
+  gen isEmptyExpr : [JExpr] -> [JExpr] @M;
+  gen isDigitExpr : [JExpr] -> [JExpr] @M;
+  gen isSpaceExpr : [JExpr] -> [JExpr] @M;
+  gen lengthExpr : [JExpr] -> [JExpr] @M;
+  gen charCodeAt0Expr : [JExpr] -> [JExpr] @M;
+  gen lambda1 { arg:Str } : [JExpr] -> [JExpr] @M;
+  gen bindApplyExpr : [JExpr, JExpr] -> [JExpr] @M;
+  gen runBlockExpr : [JBlock] -> [JExpr] @M;
+  gen varLenEqZero { name:Str } : [] -> [JExpr] @M;
+  gen varBetweenStr { name:Str, low:Str, high:Str } : [] -> [JExpr] @M;
+  gen varCharCodeAt0LteInt { name:Str, max:Str } : [] -> [JExpr] @M;
+  gen constLambda1 { name:Str, arg:Str } : [JExpr] -> [JStmt] @M;
+
+  gen constDecl { name:Str } : [JExpr] -> [JStmt] @M;
+  gen letDecl { name:Str } : [JExpr] -> [JStmt] @M;
+  gen assignDecl { name:Str } : [JExpr] -> [JStmt] @M;
+  gen continueStmt : [] -> [JStmt] @M;
+  gen failStmt { message:Str } : [] -> [JStmt] @M;
+  gen printStmt : [JExpr] -> [JStmt] @M;
+  gen ifStmt : [JExpr, JBlock] -> [JStmt] @M;
+  gen forOfStmt { name:Str } : [JExpr, JBlock] -> [JStmt] @M;
+
+  gen blockOne : [JStmt] -> [JBlock] @M;
+  gen blockSnoc : [JBlock, JStmt] -> [JBlock] @M;
+  gen blockAppend : [JBlock, JBlock] -> [JBlock] @M;
+
+  gen toProgram : [JBlock, JExpr] -> [JsProgram] @M;
+
+  rule computational varLenEqZero_def -> : [] -> [JExpr] @M =
+    varLenEqZero(name = n) ==
+      ((varRef(name = n) ; lengthExpr) * zeroLit) ; eqExpr
+
+  rule computational varBetweenStr_def -> : [] -> [JExpr] @M =
+    varBetweenStr(name = n, low = lo, high = hi) ==
+      (
+        ((varRef(name = n) * stringLit(value = lo)) ; gteExpr)
+        *
+        ((varRef(name = n) * stringLit(value = hi)) ; lteExpr)
+      ) ; andExpr
+
+  rule computational varCharCodeAt0LteInt_def -> : [] -> [JExpr] @M =
+    varCharCodeAt0LteInt(name = n, max = m) ==
+      ((varRef(name = n) ; charCodeAt0Expr) * intLit(value = m)) ; lteExpr
+
+  rule computational constLambda1_def -> : [JExpr] -> [JStmt] @M =
+    constLambda1(name = n, arg = a) ==
+      lambda1(arg = a) ; constDecl(name = n)
+}
+
+doctrine PrettyArtifact extends Artifact where {
+  gen append : [Doc, Doc] -> [Doc] @Artifact;
+  gen prefix { s:Str } : [Doc] -> [Doc] @Artifact;
+  gen suffix { s:Str } : [Doc] -> [Doc] @Artifact;
+  gen wrap { open:Str, close:Str } : [Doc] -> [Doc] @Artifact;
+  gen joinWith { sep:Str } : [Doc, Doc] -> [Doc] @Artifact;
+
+  gen quoted : [Doc] -> [Doc] @Artifact;
+  gen call1 { fn:Str } : [Doc] -> [Doc] @Artifact;
+  gen apply1 : [Doc, Doc] -> [Doc] @Artifact;
+  gen infix { op:Str } : [Doc, Doc] -> [Doc] @Artifact;
+  gen field { name:Str } : [Doc] -> [Doc] @Artifact;
+  gen charCodeAt0 : [Doc] -> [Doc] @Artifact;
+  gen lambda1 { arg:Str } : [Doc] -> [Doc] @Artifact;
+  gen iifeBlock : [Doc] -> [Doc] @Artifact;
+  gen decl { kw:Str, name:Str } : [Doc] -> [Doc] @Artifact;
+  gen assign { name:Str } : [Doc] -> [Doc] @Artifact;
+  gen ifHead : [Doc] -> [Doc] @Artifact;
+  gen forOfHead { name:Str } : [Doc] -> [Doc] @Artifact;
+  gen blockWithHead : [Doc, Doc] -> [Doc] @Artifact;
+  gen ifBlock : [Doc, Doc] -> [Doc] @Artifact;
+  gen forOfBlock { name:Str } : [Doc, Doc] -> [Doc] @Artifact;
+  gen stmtTerm : [Doc] -> [Doc] @Artifact;
+  gen lineJoin2 : [Doc, Doc] -> [Doc] @Artifact;
+
+  rule computational append_def -> : [Doc, Doc] -> [Doc] @Artifact =
+    append == cat
+
+  rule computational prefix_def -> : [Doc] -> [Doc] @Artifact =
+    prefix(s = p) ==
+      (text(s = p) * id[Doc]) ; append
+
+  rule computational suffix_def -> : [Doc] -> [Doc] @Artifact =
+    suffix(s = p) ==
+      (id[Doc] * text(s = p)) ; append
+
+  rule computational wrap_def -> : [Doc] -> [Doc] @Artifact =
+    wrap(open = l, close = r) ==
+      prefix(s = l) ; suffix(s = r)
+
+  rule computational joinWith_def -> : [Doc, Doc] -> [Doc] @Artifact =
+    joinWith(sep = s) ==
+      (((id[Doc] * text(s = s)) ; append) * id[Doc]) ; append
+
+  rule computational quoted_def -> : [Doc] -> [Doc] @Artifact =
+    quoted == wrap(open = "\"", close = "\"")
+
+  rule computational call1_def -> : [Doc] -> [Doc] @Artifact =
+    call1(fn = f) ==
+      prefix(s = "(") ; prefix(s = f) ; suffix(s = ")")
+
+  rule computational apply1_def -> : [Doc, Doc] -> [Doc] @Artifact =
+    apply1 ==
+      ((id[Doc] ; wrap(open = "(", close = ")")) * (id[Doc] ; wrap(open = "(", close = ")")))
+      ; joinWith(sep = "")
+
+  rule computational infix_def -> : [Doc, Doc] -> [Doc] @Artifact =
+    infix(op = o) ==
+      joinWith(sep = o) ; wrap(open = "(", close = ")")
+
+  rule computational field_def -> : [Doc] -> [Doc] @Artifact =
+    field(name = n) == suffix(s = ".") ; suffix(s = n)
+
+  rule computational charCodeAt0_def -> : [Doc] -> [Doc] @Artifact =
+    charCodeAt0 == suffix(s = ".charCodeAt(0)")
+
+  rule computational lambda1_def -> : [Doc] -> [Doc] @Artifact =
+    lambda1(arg = a) == prefix(s = " => ") ; prefix(s = a)
+
+  rule computational iifeBlock_def -> : [Doc] -> [Doc] @Artifact =
+    iifeBlock == (id[Doc] ; indent(n = 2)) ; prefix(s = "(() => {") ; suffix(s = "\n})()")
+
+  rule computational decl_def -> : [Doc] -> [Doc] @Artifact =
+    decl(kw = k, name = n) == prefix(s = " = ") ; prefix(s = n) ; prefix(s = " ") ; prefix(s = k)
+
+  rule computational assign_def -> : [Doc] -> [Doc] @Artifact =
+    assign(name = n) == prefix(s = " = ") ; prefix(s = n)
+
+  rule computational ifHead_def -> : [Doc] -> [Doc] @Artifact =
+    ifHead == prefix(s = "(") ; prefix(s = "if ") ; suffix(s = ")")
+
+  rule computational forOfHead_def -> : [Doc] -> [Doc] @Artifact =
+    forOfHead(name = n) ==
+      prefix(s = " of ") ; prefix(s = n) ; prefix(s = "const ") ; prefix(s = "(") ; prefix(s = "for ") ; suffix(s = ")")
+
+  rule computational blockWithHead_def -> : [Doc, Doc] -> [Doc] @Artifact =
+    blockWithHead ==
+      (((id[Doc] ; suffix(s = " {")) * (id[Doc] ; indent(n = 2))) ; append) ; suffix(s = "\n}")
+
+  rule computational ifBlock_def -> : [Doc, Doc] -> [Doc] @Artifact =
+    ifBlock == (((id[Doc] ; ifHead) * id[Doc]) ; blockWithHead)
+
+  rule computational forOfBlock_def -> : [Doc, Doc] -> [Doc] @Artifact =
+    forOfBlock(name = n) == (((id[Doc] ; forOfHead(name = n)) * id[Doc]) ; blockWithHead)
+
+  rule computational stmtTerm_def -> : [Doc] -> [Doc] @Artifact =
+    stmtTerm == suffix(s = ";")
+
+  rule computational lineJoin2_def -> : [Doc, Doc] -> [Doc] @Artifact =
+    lineJoin2 == joinWith(sep = "\n")
+}
+
+morphism lowerCalc : Calc -> JSAst where {
+  check structural;
+
+  mode M -> M;
+  attrsort Str -> Str;
+
+  gen comp_ctx_ext @M -> comp_ctx_ext
+  gen comp_var @M -> comp_var
+  gen comp_reindex @M -> comp_reindex
+
+  type Expr @M -> JExpr @M;
+  type Step @M -> JBlock @M;
+  type Comp @M -> JExpr @M;
+  type Program @M -> JsProgram @M;
+
+  gen var @M -> varRef(name = name)
+  gen zero @M -> zeroLit
+  gen strLit @M -> stringLit(value = value)
+
+  gen plusExpr @M -> plusExpr
+  gen toIntExpr @M -> toIntExpr
+  gen isEmptyExpr @M -> isEmptyExpr
+  gen isDigitExpr @M -> isDigitExpr
+  gen isPlusExpr @M ->
+    (id[JExpr] * stringLit(value = "+")) ; eqExpr
+  gen isSpaceExpr @M -> isSpaceExpr
+
+  gen letStmt @M -> letDecl(name = name) ; blockOne
+  gen setStmt @M -> assignDecl(name = name) ; blockOne
+
+  gen ifStmt @M -> ifStmt ; blockOne
+  gen forStmt @M -> forOfStmt(name = name) ; blockOne
+
+  gen continueStmt @M -> continueStmt ; blockOne
+  gen failStmt @M -> failStmt(message = message) ; blockOne
+  gen printStmt @M -> printStmt ; blockOne
+
+  gen then @M -> blockAppend
+
+  gen retComp @M -> id[JExpr]
+  gen bindComp @M ->
+    ((id[JExpr] ; lambda1(arg = name)) * id[JExpr]) ; bindApplyExpr
+  gen readComp @M -> readInputExpr
+  gen runComp @M -> runBlockExpr
+
+  gen toProgram @M ->
+    (
+      (
+        (
+          (
+            (
+              varLenEqZero(name = "s")
+              ; constLambda1(name = "isEmpty", arg = "s")
+              ; blockOne
+            )
+            *
+            (
+              varBetweenStr(name = "ch", low = "0", high = "9")
+              ; constLambda1(name = "isDigitChar", arg = "ch")
+            )
+          ) ; blockSnoc
+        )
+        *
+        (
+          varCharCodeAt0LteInt(name = "ch", max = "32")
+          ; constLambda1(name = "isWhitespace", arg = "ch")
+        )
+      )
+      ; blockSnoc
+    )
+    *
+    id[JExpr]
+    ; toProgram
+}
+
+morphism emitJS : JSAst -> PrettyArtifact where {
+  check structural;
+
+  mode M -> Artifact;
+  attrsort Str -> Str;
+
+  gen comp_ctx_ext @M -> comp_ctx_ext
+  gen comp_var @M -> comp_var
+  gen comp_reindex @M -> comp_reindex
+
+  type JExpr @M -> Doc @Artifact;
+  type JStmt @M -> Doc @Artifact;
+  type JBlock @M -> Doc @Artifact;
+  type JsProgram @M -> FileTree @Artifact;
+
+  gen varRef @M -> text(s = name)
+
+  gen zeroLit @M -> text(s = "0")
+  gen intLit @M -> text(s = value)
+
+  gen stringLit @M -> text(s = value) ; quoted
+
+  gen readInputExpr @M -> text(s = "__input")
+
+  gen plusExpr @M -> infix(op = " + ")
+  gen eqExpr @M -> infix(op = " === ")
+  gen gteExpr @M -> infix(op = " >= ")
+  gen lteExpr @M -> infix(op = " <= ")
+  gen andExpr @M -> infix(op = " && ")
+  gen toIntExpr @M -> call1(fn = "Number")
+  gen isEmptyExpr @M -> call1(fn = "isEmpty")
+  gen isDigitExpr @M -> call1(fn = "isDigitChar")
+  gen isSpaceExpr @M -> call1(fn = "isWhitespace")
+  gen lengthExpr @M -> field(name = "length")
+  gen charCodeAt0Expr @M -> charCodeAt0
+  gen lambda1 @M -> lambda1(arg = arg)
+  gen bindApplyExpr @M -> apply1
+  gen runBlockExpr @M -> iifeBlock
+  gen varLenEqZero @M ->
+    (
+      (text(s = name) ; field(name = "length"))
+      * text(s = "0")
+    ) ; infix(op = " === ")
+  gen varBetweenStr @M ->
+    (
+      (
+        text(s = name)
+        * (text(s = low) ; quoted)
+      ) ; infix(op = " >= ")
+    )
+    *
+    (
+      (
+        text(s = name)
+        * (text(s = high) ; quoted)
+      ) ; infix(op = " <= ")
+    )
+    ; infix(op = " && ")
+  gen varCharCodeAt0LteInt @M ->
+    (
+      (text(s = name) ; charCodeAt0)
+      * text(s = max)
+    ) ; infix(op = " <= ")
+  gen constLambda1 @M -> lambda1(arg = arg) ; decl(kw = "const", name = name) ; stmtTerm
+
+  gen constDecl @M -> decl(kw = "const", name = name) ; stmtTerm
+  gen letDecl @M -> decl(kw = "let", name = name) ; stmtTerm
+  gen assignDecl @M -> assign(name = name) ; stmtTerm
+
+  gen continueStmt @M ->
+    text(s = "continue")
+    ; stmtTerm
+
+  gen failStmt @M ->
+    (
+      text(s = message)
+      ; quoted
+      ; call1(fn = "console.error")
+      ; stmtTerm
+    )
+    *
+    (
+      text(s = "process.exit(1)")
+      ; stmtTerm
+    )
+    ; lineJoin2
+
+  gen printStmt @M -> id[Doc] ; call1(fn = "String") ; call1(fn = "console.log") ; stmtTerm
+
+  gen ifStmt @M -> ifBlock
+  gen forOfStmt @M -> forOfBlock(name = name)
+
+  gen blockOne @M -> (line * id[Doc]) ; cat
+  gen blockSnoc @M -> lineJoin2
+  gen blockAppend @M -> cat
+
+  gen toProgram @M ->
+    (
+      (
+        text(s = "import fs from 'node:fs';\nconst __input = fs.readFileSync(0, 'utf8').trim();")
+        * id[Doc]
+      ) ; cat
+    )
+    *
+    (
+      id[Doc]
+      ; stmtTerm
+    )
+    ; lineJoin2
+    ; singleFile(path = "calc.mjs")
+}
+
+morphism erasePretty : PrettyArtifact -> Artifact where {
+  check structural;
+
+  mode Artifact -> Artifact;
+  attrsort Str -> Str;
+  attrsort Int -> Int;
+
+  gen comp_ctx_ext @Artifact -> comp_ctx_ext
+  gen comp_var @Artifact -> comp_var
+  gen comp_reindex @Artifact -> comp_reindex
+
+  gen empty @Artifact -> empty
+  gen text @Artifact -> text(s = s)
+  gen cat @Artifact -> cat
+  gen line @Artifact -> line
+  gen indent @Artifact -> indent(n = n)
+  gen singleFile @Artifact -> singleFile(path = path)
+  gen concatTree @Artifact -> concatTree
+
+  gen append @Artifact -> cat
+  gen prefix @Artifact -> (text(s = s) * id[Doc]) ; cat
+  gen suffix @Artifact -> (id[Doc] * text(s = s)) ; cat
+  gen wrap @Artifact ->
+    (text(s = open) * id[Doc]) ; cat ;
+    (id[Doc] * text(s = close)) ; cat
+  gen joinWith @Artifact ->
+    (((id[Doc] * text(s = sep)) ; cat) * id[Doc]) ; cat
+
+  gen quoted @Artifact ->
+    (text(s = "\"") * id[Doc]) ; cat ;
+    (id[Doc] * text(s = "\"")) ; cat
+
+  gen call1 @Artifact ->
+    (((text(s = fn) * text(s = "(")) ; cat) * id[Doc]) ; cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen apply1 @Artifact ->
+    (
+      ((text(s = "(") * id[Doc]) ; cat) ;
+      (id[Doc] * text(s = ")")) ; cat
+    )
+    *
+    (
+      ((text(s = "(") * id[Doc]) ; cat) ;
+      (id[Doc] * text(s = ")")) ; cat
+    )
+    ; cat
+
+  gen infix @Artifact ->
+    (((text(s = "(") * id[Doc]) ; cat) * id[Doc]) ;
+    (((id[Doc] * text(s = op)) ; cat) * id[Doc]) ;
+    cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen field @Artifact ->
+    (id[Doc] * text(s = ".")) ; cat ;
+    (id[Doc] * text(s = name)) ; cat
+
+  gen charCodeAt0 @Artifact ->
+    (id[Doc] * text(s = ".charCodeAt(0)")) ; cat
+
+  gen lambda1 @Artifact ->
+    (((text(s = arg) * text(s = " => ")) ; cat) * id[Doc]) ; cat
+
+  gen iifeBlock @Artifact ->
+    (text(s = "(() => {") * (id[Doc] ; indent(n = 2))) ; cat ;
+    (id[Doc] * text(s = "\n})()")) ; cat
+
+  gen decl @Artifact ->
+    (
+      (
+        (
+          (
+            (
+              (text(s = kw) * text(s = " ")) ; cat
+            ) * text(s = name)
+          ) ; cat
+        ) * text(s = " = ")
+      ) ; cat
+    ) * id[Doc] ; cat
+
+  gen assign @Artifact ->
+    (((text(s = name) * text(s = " = ")) ; cat) * id[Doc]) ; cat
+
+  gen ifHead @Artifact ->
+    ((text(s = "if (") * id[Doc]) ; cat) ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen forOfHead @Artifact ->
+    (
+      (
+        (
+          (
+            (text(s = "for (const ") * text(s = name)) ; cat
+          ) * text(s = " of ")
+        ) ; cat
+      ) * id[Doc]
+    ) ; cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen blockWithHead @Artifact ->
+    (((id[Doc] * text(s = " {")) ; cat) * id[Doc]) ;
+    (id[Doc] * indent(n = 2)) ;
+    cat ;
+    (id[Doc] * line) ; cat ;
+    (id[Doc] * text(s = "}")) ; cat
+
+  gen ifBlock @Artifact ->
+    (((text(s = "if (") * id[Doc]) ; cat) * id[Doc]) ;
+    (((id[Doc] * text(s = ") {")) ; cat) * id[Doc]) ;
+    (id[Doc] * indent(n = 2)) ;
+    cat ;
+    (id[Doc] * line) ; cat ;
+    (id[Doc] * text(s = "}")) ; cat
+
+  gen forOfBlock @Artifact ->
+    (
+      (
+        (
+          (
+            (
+              (text(s = "for (const ") * text(s = name)) ; cat
+            ) * text(s = " of ")
+          ) ; cat
+        ) * id[Doc]
+      ) ; cat
+    ) * id[Doc] ;
+    (((id[Doc] * text(s = ") {")) ; cat) * id[Doc]) ;
+    (id[Doc] * indent(n = 2)) ;
+    cat ;
+    (id[Doc] * line) ; cat ;
+    (id[Doc] * text(s = "}")) ; cat
+
+  gen stmtTerm @Artifact ->
+    (id[Doc] * text(s = ";")) ; cat
+
+  gen lineJoin2 @Artifact ->
+    (((id[Doc] * line) ; cat) * id[Doc]) ; cat
+}
+
+pipeline build where {
+  normalize { policy = "topmost"; fuel = 120; };
+  apply lowerCalc;
+  normalize { policy = "computational_lr"; fuel = 240; };
+  apply emitJS;
+  apply erasePretty;
+  extract FileTree { root = "./examples/endtoend/out" };
+}
+run main using build where {
+  source doctrine Calc;
+  source mode M;
+  source surface CalcSurface;
+}
+---
+program {
+  bind src <- (read());
+  run {
+    if (empty(src)) {
+      fail("error: expected expression like 1+2+3")
+    };
+    let total = (0);
+    let current = ("");
+    for ch in (src) {
+      if (digit(ch)) {
+        set current = (current + ch);
+        continue
+      };
+      if (plus(ch)) {
+        if (empty(current)) {
+          fail("error: malformed expression; expected integer before +")
+        };
+        set total = (total + toInt(current));
+        set current = ("");
+        continue
+      };
+      if (space(ch)) {
+        continue
+      };
+      fail("error: unexpected character")
+    };
+    if (empty(current)) {
+      fail("error: expression cannot end with +")
+    };
+    set total = (total + toInt(current));
+    print(total)
+  }
+}
+---
