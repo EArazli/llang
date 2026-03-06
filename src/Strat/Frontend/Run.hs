@@ -621,9 +621,9 @@ encodeSSAArtifact doc ssa = do
   inPorts <- mkPortList (map portName (ssaInputs ssa))
   outPorts <- mkPortList (map portName (ssaOutputs ssa))
   steps <- mkStepList (ssaSteps ssa)
-  tuple2 <- tensorD inPorts outPorts
-  tuple3 <- tensorD tuple2 steps
-  build <- genD mode [portsTy, portsTy, stepsTy] [ssaTy] (GenName "ssaProgram")
+  tuple2 <- tensorD inPorts steps
+  tuple3 <- tensorD tuple2 outPorts
+  build <- genD mode [portsTy, stepsTy, portsTy] [ssaTy] (GenName "ssaProgram")
   compD tt build tuple3
 
 

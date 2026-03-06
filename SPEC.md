@@ -773,7 +773,7 @@ For derived doctrines declared as `derived doctrine D_SSA = foliated D mode M`, 
 - `portRef { name : __ssa_str } : [] -> [PortRef]`
 - `portsNil : [] -> [PortList]`, `portsCons : [PortRef, PortList] -> [PortList]`
 - `stepsNil : [] -> [StepList]`, `stepsCons : [Step, StepList] -> [StepList]`
-- `ssaProgram : [PortList(in), PortList(out), StepList] -> [SSA]`
+- `ssaProgram : [PortList(in), StepList, PortList(out)] -> [SSA]`
 - `stepBox { name : __ssa_str } : [PortList(out), PortList(in), SSA] -> [Step]`
 - `stepFeedback : [PortList(out), PortList(in), SSA] -> [Step]`
 - For each generator `g` of `D` in mode `M`, a generated constructor `step_g`.

@@ -1234,11 +1234,17 @@ checkCell doc tt cell = do
       ctxL <- diagramDom (c2LHS cell)
       ctxR <- diagramDom (c2RHS cell)
       let flexDom = S.unions (map freeVarsObj (ctxL <> ctxR))
-      _ <- unifyCtx tt tmCtx flexDom ctxL ctxR
+      _ <-
+        case unifyCtx tt tmCtx flexDom ctxL ctxR of
+          Left err -> Left ("validateDoctrine: cell " <> c2Name cell <> " domain mismatch: " <> err)
+          Right subst -> Right subst
       codL <- diagramCod (c2LHS cell)
       codR <- diagramCod (c2RHS cell)
       let flexCod = S.unions (map freeVarsObj (codL <> codR))
-      _ <- unifyCtx tt tmCtx flexCod codL codR
+      _ <-
+        case unifyCtx tt tmCtx flexCod codL codR of
+          Left err -> Left ("validateDoctrine: cell " <> c2Name cell <> " codomain mismatch: " <> err)
+          Right subst -> Right subst
       let lhsVars = freeVarsDiagram (c2LHS cell)
       let rhsVars = freeVarsDiagram (c2RHS cell)
       let declaredVars = S.fromList (c2TyVars cell <> c2TmVars cell)

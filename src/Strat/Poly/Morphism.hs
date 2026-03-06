@@ -974,8 +974,14 @@ checkGenMapping tgtCtorTables ttSrc ttTgt mor gen = do
         else do
           domImg <- diagramDom image
           codImg <- diagramCod image
-          _ <- unifyCtxCompat ttTgt [] dom domImg
-          _ <- unifyCtxCompat ttTgt [] cod codImg
+          _ <-
+            case unifyCtxCompat ttTgt [] dom domImg of
+              Left err -> Left ("checkMorphism: generator mapping domain mismatch for " <> renderGen (gdName gen) <> ": " <> err)
+              Right subst -> Right subst
+          _ <-
+            case unifyCtxCompat ttTgt [] cod codImg of
+              Left err -> Left ("checkMorphism: generator mapping codomain mismatch for " <> renderGen (gdName gen) <> ": " <> err)
+              Right subst -> Right subst
           let binderSlotsSrc =
                 [ bs
                 | InBinder bs <- gdDom gen
@@ -992,6 +998,8 @@ checkGenMapping tgtCtorTables ttSrc ttTgt mor gen = do
             then Right ()
             else Left "checkMorphism: generator mapping uses undeclared binder metas"
           pure ()
+  where
+    renderGen (GenName name) = name
 
 checkCells :: SearchBudget -> TypeTheory -> TypeTheory -> CtorTables -> Morphism -> [Cell2] -> Either Text MorphismCheckResult
 checkCells _ _ _ _ _ [] = Right (MorphismCheckProved [])

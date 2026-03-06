@@ -513,8 +513,14 @@ elabPolyItem env st item =
       let rigidTy = S.fromList ruleTyVars
       let rigidTm = S.fromList ruleTmVars
       tt <- doctrineTypeTheory doc
-      lhs' <- unifyBoundary tt rigidTy rigidTm dom cod lhs
-      rhs' <- unifyBoundary tt rigidTy rigidTm dom cod rhs
+      lhs' <-
+        case unifyBoundary tt rigidTy rigidTm dom cod lhs of
+          Left err -> Left ("rule " <> rprName decl <> ": lhs boundary mismatch: " <> err)
+          Right diag -> Right diag
+      rhs' <-
+        case unifyBoundary tt rigidTy rigidTm dom cod rhs of
+          Left err -> Left ("rule " <> rprName decl <> ": rhs boundary mismatch: " <> err)
+          Right diag -> Right diag
       let free = S.union (freeVarsDiagram lhs') (freeVarsDiagram rhs')
       let allowed = S.fromList (ruleTyVars <> ruleTmVars)
       if S.isSubsetOf free allowed

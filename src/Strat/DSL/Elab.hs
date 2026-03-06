@@ -1063,7 +1063,7 @@ buildFoliatedDoctrine name baseDoc mode = do
         , mkGen "stepFeedback" [portsTy, portsTy, ssaTy] [stepTy] []
         , mkGen "stepsNil" [] [stepsTy] []
         , mkGen "stepsCons" [stepTy, stepsTy] [stepsTy] []
-        , mkGen "ssaProgram" [portsTy, portsTy, stepsTy] [ssaTy] []
+        , mkGen "ssaProgram" [portsTy, stepsTy, portsTy] [ssaTy] []
         ]
       utilityNames = S.fromList (map fst utilityGens)
       modeGens = M.toList (M.findWithDefault M.empty mode (dGens baseDoc))

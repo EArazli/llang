@@ -11,6 +11,7 @@ doctrine SmoothLam where {
   gen R : [] -> [M.U_M] @M;
   gen Pair(a@M, b@M) : [] -> [M.U_M] @M;
   gen Arr(a@M, b@M) : [] -> [M.U_M] @M;
+  gen Program : [] -> [M.U_M] @M;
   gen dup(a@M) : [a] -> [a, a] @M;
   gen mkPair(a@M, b@M) : [a, b] -> [Pair(a, b)] @M;
   gen fst(a@M, b@M) : [Pair(a, b)] -> [a] @M;
@@ -27,6 +28,7 @@ doctrine SmoothLam where {
   gen sin : [R] -> [R] @M;
   gen cos : [R] -> [R] @M;
   gen neg : [R] -> [R] @M;
+  gen emitUnaryModule(a@M, b@M) { fn:Str, path:Str } : [Arr(a, b)] -> [Program] @M;
 
 }
 
@@ -47,6 +49,7 @@ morphism forwardAD : SmoothLam -> SmoothLam where {
   gen snd @M -> snd
   gen lam @M -> lam[?b0]
   gen app @M -> app
+  gen emitUnaryModule @M -> emitUnaryModule(fn = fn, path = path)
 
   gen add @M ->
     (mkPair{Pair(R, R), Pair(R, R)}
@@ -108,9 +111,262 @@ morphism forwardAD : SmoothLam -> SmoothLam where {
     ; mkPair{R, R})
 }
 
+derived doctrine SmoothLam_SSA = foliated SmoothLam mode M;
+
+doctrine PairJSDoc extends Doc where {
+  gen NameList : [] -> [Doc.U_Doc] @Doc;
+  gen append : [Doc, Doc] -> [Doc] @Doc;
+  gen prefix { s:Str } : [Doc] -> [Doc] @Doc;
+  gen suffix { s:Str } : [Doc] -> [Doc] @Doc;
+  gen wrap { open:Str, close:Str } : [Doc] -> [Doc] @Doc;
+  gen joinWith { sep:Str } : [Doc, Doc] -> [Doc] @Doc;
+  gen lineJoin : [Doc, Doc] -> [Doc] @Doc;
+  gen stmtTerm : [Doc] -> [Doc] @Doc;
+  gen returnStmt : [Doc] -> [Doc] @Doc;
+  gen declConst : [Doc, Doc] -> [Doc] @Doc;
+  gen assignCopy : [Doc, Doc] -> [Doc] @Doc;
+  gen assignPairJS : [Doc, Doc, Doc] -> [Doc] @Doc;
+  gen assignIndex { idx:Str } : [Doc, Doc] -> [Doc] @Doc;
+  gen assignUnaryJS { fn:Str } : [Doc, Doc] -> [Doc] @Doc;
+  gen assignNegJS : [Doc, Doc] -> [Doc] @Doc;
+  gen assignBinaryJS { op:Str } : [Doc, Doc, Doc] -> [Doc] @Doc;
+  gen assignCallJS : [Doc, Doc, Doc] -> [Doc] @Doc;
+  gen dupStmt : [Doc, Doc, Doc] -> [Doc] @Doc;
+  gen index0 : [Doc] -> [Doc] @Doc;
+  gen index1 : [Doc] -> [Doc] @Doc;
+  gen unaryCall { fn:Str } : [Doc] -> [Doc] @Doc;
+  gen unaryNeg : [Doc] -> [Doc] @Doc;
+  gen binaryInfix { op:Str } : [Doc, Doc] -> [Doc] @Doc;
+  gen pairDoc : [Doc, Doc] -> [Doc] @Doc;
+  gen callDoc : [Doc, Doc] -> [Doc] @Doc; 
+  gen namesNil : [] -> [NameList] @Doc;
+  gen namesCons : [Doc, NameList] -> [NameList] @Doc;
+  gen renderNames : [NameList] -> [Doc] @Doc;
+  gen lambdaExpr : [Doc, Doc] -> [Doc] @Doc;
+  gen lambdaBody : [Doc, Doc] -> [Doc] @Doc;
+  gen renderProgram : [NameList, Doc, NameList] -> [Doc] @Doc;
+  gen constUndefined : [Doc] -> [Doc] @Doc;
+  gen unsupportedBox { tag:Str } : [NameList, NameList, Doc] -> [Doc] @Doc;
+  gen unsupportedFeedback { tag:Str } : [NameList, NameList, Doc] -> [Doc] @Doc;
+  gen exportUnary { fn:Str } : [Doc] -> [Doc] @Doc;
+  gen exportSeededUnary { fn:Str } : [Doc, Doc] -> [Doc] @Doc;
+
+  rule computational append_def -> : [Doc, Doc] -> [Doc] @Doc =
+    append == cat
+
+  rule computational prefix_def -> : [Doc] -> [Doc] @Doc =
+    prefix(s = p) ==
+      (text(s = p) * id[Doc]) ; cat
+
+  rule computational suffix_def -> : [Doc] -> [Doc] @Doc =
+    suffix(s = p) ==
+      (id[Doc] * text(s = p)) ; cat
+
+  rule computational wrap_def -> : [Doc] -> [Doc] @Doc =
+    (?d) ; wrap(open = l, close = r) ==
+      (((text(s = l) * ?d) ; cat) * text(s = r)) ; cat
+
+  rule computational joinWith_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?l * ?r) ; joinWith(sep = s) ==
+      ((((?l * text(s = s)) ; cat) * ?r) ; cat)
+
+  rule computational lineJoin_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?l * ?r) ; lineJoin ==
+      ((((?l * line) ; cat) * ?r) ; cat)
+
+  rule computational stmtTerm_def -> : [Doc] -> [Doc] @Doc =
+    (?d) ; stmtTerm ==
+      ((?d * text(s = ";")) ; cat)
+
+  rule computational returnStmt_def -> : [Doc] -> [Doc] @Doc =
+    (?d) ; returnStmt ==
+      ((((text(s = "return ") * ?d) ; cat) * text(s = ";")) ; cat)
+
+  rule computational declConst_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?name * ?expr) ; declConst ==
+      ((((((text(s = "const ") * ?name) ; cat) * text(s = " = ")) ; cat) * ?expr) ; cat)
+      ; (id[Doc] * text(s = ";")) ; cat
+
+  rule computational assignCopy_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?out * ?expr) ; assignCopy ==
+      ((((((text(s = "const ") * ?out) ; cat) * text(s = " = ")) ; cat) * ?expr) ; cat)
+      ; (id[Doc] * text(s = ";")) ; cat
+
+  rule computational assignPairJS_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
+    (?out * ?l * ?r) ; assignPairJS ==
+      ((((((((((text(s = "const ") * ?out) ; cat) * text(s = " = [")) ; cat) * ?l) ; cat) * text(s = ", ")) ; cat) * ?r) ; cat)
+      ; (id[Doc] * text(s = "];")) ; cat
+
+  rule computational assignIndex_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?out * ?expr) ; assignIndex(idx = i) ==
+      ((((((text(s = "const ") * ?out) ; cat) * text(s = " = ")) ; cat) * ?expr) ; cat)
+      ; (id[Doc] * text(s = i)) ; cat
+      ; (id[Doc] * text(s = ";")) ; cat
+
+  rule computational assignUnaryJS_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?out * ?expr) ; assignUnaryJS(fn = f) ==
+      ((((((((((text(s = "const ") * ?out) ; cat) * text(s = " = ")) ; cat) * text(s = f)) ; cat) * text(s = "(")) ; cat) * ?expr) ; cat)
+      ; (id[Doc] * text(s = ");")) ; cat
+
+  rule computational assignNegJS_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?out * ?expr) ; assignNegJS ==
+      ((((((text(s = "const ") * ?out) ; cat) * text(s = " = (-")) ; cat) * ?expr) ; cat)
+      ; (id[Doc] * text(s = ");")) ; cat
+
+  rule computational assignBinaryJS_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
+    (?out * ?l * ?r) ; assignBinaryJS(op = o) ==
+      ((((((((((text(s = "const ") * ?out) ; cat) * text(s = " = (")) ; cat) * ?l) ; cat) * text(s = o)) ; cat) * ?r) ; cat)
+      ; (id[Doc] * text(s = ");")) ; cat
+
+  rule computational assignCallJS_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
+    (?out * ?f * ?x) ; assignCallJS ==
+      ((((((((((text(s = "const ") * ?out) ; cat) * text(s = " = ")) ; cat) * ?f) ; cat) * text(s = "(")) ; cat) * ?x) ; cat)
+      ; (id[Doc] * text(s = ");")) ; cat
+
+  rule computational dupStmt_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
+    (?o1 * ?o2 * ?i) ; dupStmt ==
+      (((((((((text(s = "const [") * ?o1) ; cat) * text(s = ", ")) ; cat) * ?o2) ; cat) * text(s = "] = dup(")) ; cat)
+      * ?i) ; cat
+      ; (id[Doc] * text(s = ");")) ; cat
+
+  rule computational index0_def -> : [Doc] -> [Doc] @Doc =
+    (?d) ; index0 ==
+      ((?d * text(s = "[0]")) ; cat)
+
+  rule computational index1_def -> : [Doc] -> [Doc] @Doc =
+    (?d) ; index1 ==
+      ((?d * text(s = "[1]")) ; cat)
+
+  rule computational unaryCall_def -> : [Doc] -> [Doc] @Doc =
+    (?d) ; unaryCall(fn = f) ==
+      (((((text(s = f) * text(s = "(")) ; cat) * ?d) ; cat) * text(s = ")")) ; cat
+
+  rule computational unaryNeg_def -> : [Doc] -> [Doc] @Doc =
+    (?d) ; unaryNeg ==
+      ((((text(s = "(-") * ?d) ; cat) * text(s = ")")) ; cat)
+
+  rule computational binaryInfix_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?l * ?r) ; binaryInfix(op = o) ==
+      ((((((text(s = "(") * ?l) ; cat) * text(s = o)) ; cat) * ?r) ; cat)
+      ; (id[Doc] * text(s = ")")) ; cat
+
+  rule computational pairDoc_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?l * ?r) ; pairDoc ==
+      ((((((text(s = "[") * ?l) ; cat) * text(s = ", ")) ; cat) * ?r) ; cat)
+      ; (id[Doc] * text(s = "]")) ; cat
+
+  rule computational callDoc_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?f * ?x) ; callDoc ==
+      (((((?f * text(s = "(")) ; cat) * ?x) ; cat) * text(s = ")")) ; cat
+
+  rule computational renderNames_nil_def -> : [] -> [Doc] @Doc =
+    namesNil ; renderNames == empty
+
+  rule computational renderNames_cons_one_def -> : [Doc] -> [Doc] @Doc =
+    (?x * namesNil) ; namesCons ; renderNames == ?x
+
+  rule computational renderNames_cons_many_def -> : [Doc, Doc, NameList] -> [Doc] @Doc =
+    (?x * ((?y * ?ys) ; namesCons)) ; namesCons ; renderNames ==
+      (?x * (((?y * ?ys) ; namesCons) ; renderNames)) ; joinWith(sep = ", ")
+
+  rule computational lambdaBody_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?steps * ?outs) ; lambdaBody ==
+      ((((?steps * line) ; cat) * ((((text(s = "return ") * ?outs) ; cat) * text(s = ";")) ; cat)) ; cat)
+
+  rule computational lambdaExpr_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?params * ?body) ; lambdaExpr ==
+      ((((((text(s = "(") * ?params) ; cat) * text(s = ") => {\n")) ; cat) * (?body ; indent(n = 2))) ; cat)
+      ; (id[Doc] * text(s = "\n}")) ; cat
+
+  rule computational renderProgram_module_def -> : [Doc, NameList] -> [Doc] @Doc =
+    (namesNil * ?steps * ?outs) ; renderProgram ==
+      ((?steps * (?outs ; renderNames ; prefix(s = "// outputs: "))) ; lineJoin)
+
+  rule computational renderProgram_lambda_def -> : [Doc, NameList, Doc, NameList] -> [Doc] @Doc =
+    (((?x * ?xs) ; namesCons) * ?steps * ?outs) ; renderProgram ==
+      ((((?x * ?xs) ; namesCons) ; renderNames) * ((?steps * (?outs ; renderNames)) ; lambdaBody)) ; lambdaExpr
+
+  rule computational constUndefined_def -> : [Doc] -> [Doc] @Doc =
+    (?name) ; constUndefined ==
+      ((((text(s = "const ") * ?name) ; cat) * text(s = " = undefined;")) ; cat)
+
+  rule computational exportUnary_def -> : [Doc] -> [Doc] @Doc =
+    (?fnDoc) ; exportUnary(fn = f) ==
+      (((((text(s = "export const ") * text(s = f)) ; cat) * text(s = " = x => ")) ; cat)
+      * (((?fnDoc * text(s = "[x, 1]")) ; callDoc) ; (id[Doc] * text(s = ";")) ; cat))
+      ; cat
+
+  rule computational exportSeededUnary_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?out * ?fnDoc) ; exportSeededUnary(fn = f) ==
+      ((((text(s = "const dup = x => [x, x];") * line) ; cat)
+      * (((?out ; prefix(s = "// export port: ")) * (?fnDoc ; exportUnary(fn = f))) ; lineJoin))
+      ; lineJoin)
+}
+
+morphism emitJS : SmoothLam_SSA -> PairJSDoc where {
+  mode M -> Doc;
+  attrsort __ssa_str -> Str;
+  attrsort Str -> Str;
+
+  type PortRef @M -> Doc @Doc;
+  type PortList @M -> NameList @Doc;
+  type Step @M -> Doc @Doc;
+  type StepList @M -> Doc @Doc;
+  type SSA @M -> Doc @Doc;
+
+  gen portRef @M -> text(s = name)
+  gen portsNil @M -> namesNil
+  gen portsCons @M -> namesCons
+  gen stepsNil @M -> empty
+  gen stepsCons @M -> (((id[Doc] * line) ; cat) * id[Doc]) ; cat
+  gen ssaProgram @M -> renderProgram
+
+  gen step_U_M @M -> constUndefined
+  gen step_R @M -> constUndefined
+  gen step_Pair @M -> constUndefined
+  gen step_Arr @M -> constUndefined
+  gen step_Program @M -> constUndefined
+  gen step_comp_ctx_ext @M -> assignCopy
+  gen step_comp_var @M -> assignCopy
+  gen step_comp_reindex @M -> assignCopy
+
+  gen step_dup @M -> dupStmt
+  gen step_mkPair @M -> assignPairJS
+  gen step_fst @M -> assignIndex(idx = "[0]")
+  gen step_snd @M -> assignIndex(idx = "[1]")
+  gen step_lam @M -> assignCopy
+  gen step_app @M -> assignCallJS
+  gen step_add @M -> assignBinaryJS(op = " + ")
+  gen step_mul @M -> assignBinaryJS(op = " * ")
+  gen step_sin @M -> assignUnaryJS(fn = "Math.sin")
+  gen step_cos @M -> assignUnaryJS(fn = "Math.cos")
+  gen step_neg @M -> assignNegJS
+  gen step_emitUnaryModule @M -> exportSeededUnary(fn = fn)
+
+  gen stepBox @M -> unsupportedBox(tag = "box")
+  gen stepFeedback @M -> unsupportedFeedback(tag = "feedback")
+}
+
 pipeline core where {
   apply forwardAD;
   normalize { policy = "computational_lr"; fuel = 500; };
+  extract diagram;
+}
+
+pipeline build where {
+  apply forwardAD;
+  normalize { policy = "computational_lr"; fuel = 500; };
+  extract foliate into SmoothLam_SSA;
+  apply emitJS;
+  normalize { policy = "topmost"; fuel = 500; };
+  extract Doc { stdout = true; };
+}
+
+pipeline js_debug where {
+  apply forwardAD;
+  normalize { policy = "computational_lr"; fuel = 500; };
+  extract foliate into SmoothLam_SSA;
+  apply emitJS;
   extract diagram;
 }
 
@@ -118,8 +374,29 @@ pipeline core2 where {
   apply forwardAD;
   apply forwardAD;
   normalize { policy = "computational_lr"; fuel = 500; };
-  extract diagram;
+  extract foliate into SmoothLam_SSA;
+  apply emitJS;
+  normalize { policy = "topmost"; fuel = 500; };
+  extract Doc { stdout = true; };
 }
+
+run main using build where {
+  source doctrine SmoothLam;
+  source mode M;
+}
+---
+lam{R, R}[(lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul] * id[R]) ; app{R, R}]
+; emitUnaryModule{R, R}(fn = "timesSinPair", path = "times_sin_pair.mjs")
+---
+
+run js_debug using js_debug where {
+  source doctrine SmoothLam;
+  source mode M;
+}
+---
+lam{R, R}[(lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul] * id[R]) ; app{R, R}]
+; emitUnaryModule{R, R}(fn = "timesSinPair", path = "times_sin_pair.mjs")
+---
 
 run core using core where {
   source doctrine SmoothLam;
