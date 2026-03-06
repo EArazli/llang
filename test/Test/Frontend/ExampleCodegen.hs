@@ -29,6 +29,7 @@ tests =
     [ testCase "logic_full_adder_codegen main emits structured JavaScript" testLogicFullAdderMain
     , testCase "logic_full_adder_codegen ssa shows attrs and producer links" testLogicFullAdderSsa
     , testCase "ssa_js_codegen main emits js-like SSA statements" testSsaJsMain
+    , testCase "end-to-end autodiff example emits differentiated JavaScript" testEndToEndAutodiffMain
     , testCase "CLI does not write FileTree outputs without --output" testCliNoOutputFlagSkipsWrites
     , testCase "CLI writes FileTree outputs with --output" testCliOutputFlagWrites
     ]
@@ -70,6 +71,19 @@ testSsaJsMain = do
   assertBool "expected dup operation call in emitted code" ("dup(" `T.isInfixOf` out)
   assertBool "expected console.log statement" ("console.log(" `T.isInfixOf` out)
   assertBool "expected statement separators" (";\n" `T.isInfixOf` out)
+
+testEndToEndAutodiffMain :: Assertion
+testEndToEndAutodiffMain = do
+  env <- requireIO =<< loadModule "examples/endtoend/autodiff_times_sin.run.llang"
+  runDef <- require (selectRun env (Just "main"))
+  result <- require (runWithEnv env runDef)
+  let out = prOutput result
+  assertBool "expected exported unary function block" ("export const timesSin = x => {" `T.isInfixOf` out)
+  assertBool "expected shared tangent binding" ("const dx = { value: x, derivative: 1 };" `T.isInfixOf` out)
+  assertBool "expected named product helper" ("const mulDual = (l, r) =>" `T.isInfixOf` out)
+  assertBool "expected named sin helper" ("const sinDual = u =>" `T.isInfixOf` out)
+  assertBool "expected product helper call in body" ("return mulDual(dx, sinDual(dx));" `T.isInfixOf` out)
+  assertBool "expected reusable module without CLI side effect" (not ("console.log(" `T.isInfixOf` out))
 
 
 testCliNoOutputFlagSkipsWrites :: Assertion

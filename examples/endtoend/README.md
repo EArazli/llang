@@ -34,3 +34,43 @@ Run generated calculator:
 Expected output:
 
   50
+
+## Categorical Auto-Diff (`\x -> x * sin(x)`)
+
+`autodiff_times_sin.run.llang` stages a tiny lambda/CCC fragment through
+forward-mode AD and emits `times_sin.mjs`.
+
+This example is fully userland and explicitly staged:
+
+- `SmoothLam` doctrine: a cartesian/lambda fragment with `Arr`, `lam`, `app`,
+  `dup`, `mul`, `sin`, beta, and a small packaging generator
+- `forwardAD : SmoothLam -> DualLam`: a real type-changing morphism with
+  `R -> Dual`, preserving `dup`/`lam`/`app` and mapping only smooth primitives
+  (`mul`, `sin`) to differentiated ones (`dmul`, `dsin`)
+- `emitJS : DualLam -> DualJS`: a separate backend morphism; the remaining
+  rewrite rules are only for JavaScript rendering and module packaging
+- the example now exercises real lambda application: the outer function applies
+  an inner helper `\y -> y * sin(y)` to its argument, and beta reduction
+  happens in the staged lambda fragment rather than in JavaScript
+- the emitted artifact is now a reusable module with named `mulDual`/`sinDual`
+  helpers and shared `dx`, instead of an inline residual blob plus top-level IO
+- pipeline: `apply forwardAD -> apply emitJS -> normalize(computational_lr) -> extract FileTree`
+
+Build (preview extracted file content):
+
+  stack run -- examples/endtoend/autodiff_times_sin.run.llang
+
+Build and write output to disk:
+
+  stack run -- examples/endtoend/autodiff_times_sin.run.llang --output
+
+Evaluate the generated module at `x = 1`:
+
+  node --input-type=module -e 'import { timesSin } from "./examples/endtoend/out/times_sin.mjs"; console.log(JSON.stringify(timesSin(1), null, 2));'
+
+Expected output:
+
+  {
+    "value": 0.8414709848078965,
+    "derivative": 1.3817732906760363
+  }

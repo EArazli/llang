@@ -40,6 +40,8 @@ tests =
     , testCase "morphism instantiation fails on dependent substitution errors" testMorphismInstantiationSubstFailure
     , testCase "binder generator identity morphism preserves binder arguments" testBinderIdentityMorphismPreservesBinders
     , testCase "morphism rewrites splice binder holes to substituted binder metas" testMorphismSpliceRenamesToBinderMeta
+    , testCase "DSL morphism elaboration accepts polymorphic binder-hole images" testDslMorphismAcceptsPolymorphicBinderHoleImage
+    , testCase "DSL morphism elaboration accepts type-changing CCC images" testDslMorphismAcceptsTypeChangingCccImage
     , testCase "morphism checker rejects incorrect binder-hole signatures" testMorphismRejectsBadBinderHoleSignatures
     , testCase "morphism rejects cyclic type templates" testTypeTemplateCycleRejected
     , testCase "morphism rejects term-template sort mismatch in same mode" testTermTemplateSortMismatch
@@ -1014,6 +1016,112 @@ testMorphismSpliceRenamesToBinderMeta = do
   case IM.elems (dEdges mapped) of
     [Edge _ (PSplice x _) _ _] -> x @?= xMeta
     _ -> assertFailure "expected mapped image to be a single splice edge"
+
+testDslMorphismAcceptsPolymorphicBinderHoleImage :: Assertion
+testDslMorphismAcceptsPolymorphicBinderHoleImage = do
+  let src =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen A : [] -> [M.U_M] @M;"
+          , "  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;"
+          , "  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;"
+          , "  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;"
+          , "}"
+          , "doctrine T where {"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen A : [] -> [M.U_M] @M;"
+          , "  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;"
+          , "  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;"
+          , "  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;"
+          , "}"
+          , "morphism m : S -> T where {"
+          , "  mode M -> M;"
+          , "  gen comp_ctx_ext @M -> comp_ctx_ext"
+          , "  gen comp_var @M -> comp_var"
+          , "  gen comp_reindex @M -> comp_reindex"
+          , "  gen lam @M -> lam[?b0]"
+          , "  gen app @M -> app"
+          , "}"
+          ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertFailure ("expected polymorphic binder-hole morphism elaboration to succeed, got: " <> T.unpack err)
+    Right _ ->
+      pure ()
+
+testDslMorphismAcceptsTypeChangingCccImage :: Assertion
+testDslMorphismAcceptsTypeChangingCccImage = do
+  let src =
+        T.unlines
+          [ "doctrine S where {"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen R : [] -> [M.U_M] @M;"
+          , "  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;"
+          , "  gen dup(a@M) : [a] -> [a, a] @M;"
+          , "  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;"
+          , "  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;"
+          , "  gen mul : [R, R] -> [R] @M;"
+          , "  gen sin : [R] -> [R] @M;"
+          , "}"
+          , "doctrine T where {"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , "  gen Dual : [] -> [M.U_M] @M;"
+          , "  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;"
+          , "  gen dup(a@M) : [a] -> [a, a] @M;"
+          , "  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;"
+          , "  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;"
+          , "  gen dmul : [Dual, Dual] -> [Dual] @M;"
+          , "  gen dsin : [Dual] -> [Dual] @M;"
+          , "}"
+          , "morphism D : S -> T where {"
+          , "  mode M -> M;"
+          , "  gen comp_ctx_ext @M -> comp_ctx_ext"
+          , "  gen comp_var @M -> comp_var"
+          , "  gen comp_reindex @M -> comp_reindex"
+          , "  type R @M -> Dual @M;"
+          , "  gen dup @M -> dup"
+          , "  gen lam @M -> lam[?b0]"
+          , "  gen app @M -> app"
+          , "  gen mul @M -> dmul"
+          , "  gen sin @M -> dsin"
+          , "}"
+          , "pipeline build where {"
+          , "  apply D;"
+          , "}"
+          , "run main using build where {"
+          , "  source doctrine S;"
+          , "  source mode M;"
+          , "}"
+          , "---"
+          , "lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul]"
+          , "---"
+          ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertFailure ("expected type-changing CCC morphism elaboration to succeed, got: " <> T.unpack err)
+    Right _ ->
+      pure ()
 
 testMorphismRejectsBadBinderHoleSignatures :: Assertion
 testMorphismRejectsBadBinderHoleSignatures = do

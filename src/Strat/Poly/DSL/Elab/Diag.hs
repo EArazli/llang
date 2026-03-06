@@ -77,6 +77,63 @@ ensureAttrSort doc sortName =
     then Right ()
     else Left "unknown attribute sort"
 
+data AlphaVarState = AlphaVarState
+  { avsForward :: M.Map TmVar TmVar
+  , avsBackward :: M.Map TmVar TmVar
+  }
+
+binderSigAlphaEq :: BinderSig -> BinderSig -> Bool
+binderSigAlphaEq lhs rhs =
+  case alphaCtx alphaEmpty (bsTmCtx lhs) (bsTmCtx rhs) of
+    Nothing -> False
+    Just st1 ->
+      case alphaCtx st1 (bsDom lhs) (bsDom rhs) of
+        Nothing -> False
+        Just st2 -> maybe False (const True) (alphaCtx st2 (bsCod lhs) (bsCod rhs))
+  where
+    alphaEmpty = AlphaVarState M.empty M.empty
+
+    alphaCtx st xs ys
+      | length xs /= length ys = Nothing
+      | otherwise = foldM (\st' (x, y) -> alphaObj st' x y) st (zip xs ys)
+
+    alphaArg st argL argR =
+      case (argL, argR) of
+        (OAObj objL, OAObj objR) -> alphaObj st objL objR
+        (OATm tmL, OATm tmR)
+          | tmL == tmR -> Just st
+          | otherwise -> Nothing
+        _ -> Nothing
+
+    alphaVar st vL vR =
+      if tmVarOwner vL /= tmVarOwner vR
+        then Nothing
+        else
+          case (M.lookup vL (avsForward st), M.lookup vR (avsBackward st)) of
+            (Just mapped, Just mappedBack)
+              | mapped == vR && mappedBack == vL -> Just st
+              | otherwise -> Nothing
+            (Nothing, Nothing) -> do
+              st' <- alphaObj st (tmvSort vL) (tmvSort vR)
+              Just
+                st'
+                  { avsForward = M.insert vL vR (avsForward st')
+                  , avsBackward = M.insert vR vL (avsBackward st')
+                  }
+            _ -> Nothing
+
+    alphaObj st objL objR =
+      case (objL, objR) of
+        (OVar vL, OVar vR) -> alphaVar st vL vR
+        (OCon refL argsL, OCon refR argsR)
+          | refL == refR && length argsL == length argsR ->
+              foldM (\st' (x, y) -> alphaArg st' x y) st (zip argsL argsR)
+          | otherwise -> Nothing
+        (OLift meL innerL, OLift meR innerR)
+          | meL == meR -> alphaObj st innerL innerR
+          | otherwise -> Nothing
+        _ -> Nothing
+
 data BinderMetaMode
   = BMNoMeta
   | BMCollect
@@ -416,14 +473,14 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                   case M.lookup key bsMap of
                     Nothing -> pure (acc <> [BAMeta key], M.insert key slot bsMap)
                     Just slot'
-                      | slot' == slot -> pure (acc <> [BAMeta key], bsMap)
+                      | binderSigAlphaEq slot' slot -> pure (acc <> [BAMeta key], bsMap)
                       | otherwise -> liftEither (Left "binder meta reused with inconsistent signature")
                 BMUse -> do
                   let key = BinderMetaVar name
                   case M.lookup key bsMap of
                     Nothing -> liftEither (Left "RHS introduces unknown binder meta")
                     Just slot'
-                      | slot' == slot -> pure (acc <> [BAMeta key], bsMap)
+                      | binderSigAlphaEq slot' slot -> pure (acc <> [BAMeta key], bsMap)
                       | otherwise -> liftEither (Left "binder meta used with inconsistent signature")
 
     elabTmArg ttDoc curTmCtx v rawArg =
