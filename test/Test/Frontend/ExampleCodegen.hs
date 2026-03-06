@@ -30,6 +30,9 @@ tests =
     , testCase "logic_full_adder_codegen ssa shows attrs and producer links" testLogicFullAdderSsa
     , testCase "ssa_js_codegen main emits js-like SSA statements" testSsaJsMain
     , testCase "end-to-end autodiff example emits differentiated JavaScript" testEndToEndAutodiffMain
+    , testCase "end-to-end autodiff core run exposes differentiated target IR" testEndToEndAutodiffCore
+    , testCase "pair-based autodiff core stays in the source doctrine after one pass" testPairAutodiffCore
+    , testCase "pair-based autodiff core stays closed after two passes" testPairAutodiffCore2
     , testCase "CLI does not write FileTree outputs without --output" testCliNoOutputFlagSkipsWrites
     , testCase "CLI writes FileTree outputs with --output" testCliOutputFlagWrites
     ]
@@ -84,6 +87,44 @@ testEndToEndAutodiffMain = do
   assertBool "expected named sin helper" ("const sinDual = u =>" `T.isInfixOf` out)
   assertBool "expected product helper call in body" ("return mulDual(dx, sinDual(dx));" `T.isInfixOf` out)
   assertBool "expected reusable module without CLI side effect" (not ("console.log(" `T.isInfixOf` out))
+
+testEndToEndAutodiffCore :: Assertion
+testEndToEndAutodiffCore = do
+  env <- requireIO =<< loadModule "examples/endtoend/autodiff_times_sin.run.llang"
+  runDef <- require (selectRun env (Just "core"))
+  result <- require (runWithEnv env runDef)
+  let out = prOutput result
+  assertBool "expected normalized dual constructor" ("mkDual" `T.isInfixOf` out)
+  assertBool "expected normalized dual split" ("splitDual" `T.isInfixOf` out)
+  assertBool "expected normalized cosine node" ("cosR" `T.isInfixOf` out)
+  assertBool "expected normalized addition node" ("addR" `T.isInfixOf` out)
+  assertBool "expected normalized multiplication node" ("mulR" `T.isInfixOf` out)
+  assertBool "expected differentiated core to eliminate dsin" (not (" dsin " `T.isInfixOf` out))
+  assertBool "expected differentiated core to eliminate dmul" (not (" dmul " `T.isInfixOf` out))
+
+testPairAutodiffCore :: Assertion
+testPairAutodiffCore = do
+  env <- requireIO =<< loadModule "examples/endtoend/autodiff_times_sin_pair_core.run.llang"
+  runDef <- require (selectRun env (Just "core"))
+  result <- require (runWithEnv env runDef)
+  let out = prOutput result
+  assertBool "expected pair-valued arrow output" ("M.Arr(M.Pair(M.R, M.R), M.Pair(M.R, M.R))" `T.isInfixOf` out)
+  assertBool "expected explicit pair constructor" (" mkPair " `T.isInfixOf` out)
+  assertBool "expected explicit projection structure" (" fst " `T.isInfixOf` out)
+  assertBool "expected explicit cosine node" (" cos " `T.isInfixOf` out)
+  assertBool "expected explicit addition node" (" add " `T.isInfixOf` out)
+
+testPairAutodiffCore2 :: Assertion
+testPairAutodiffCore2 = do
+  env <- requireIO =<< loadModule "examples/endtoend/autodiff_times_sin_pair_core.run.llang"
+  runDef <- require (selectRun env (Just "core2"))
+  result <- require (runWithEnv env runDef)
+  let out = prOutput result
+  assertBool "expected nested pair-valued arrow output" ("M.Arr(M.Pair(M.Pair(M.R, M.R), M.Pair(M.R, M.R))" `T.isInfixOf` out)
+  assertBool "expected repeated pair constructors" (" mkPair " `T.isInfixOf` out)
+  assertBool "expected sine nodes to remain in second-order core" (" sin " `T.isInfixOf` out)
+  assertBool "expected cosine nodes to remain in second-order core" (" cos " `T.isInfixOf` out)
+  assertBool "expected multiplication nodes in second-order core" (" mul " `T.isInfixOf` out)
 
 
 testCliNoOutputFlagSkipsWrites :: Assertion

@@ -1,0 +1,138 @@
+doctrine SmoothLam where {
+  mode M acyclic classifiedBy M via M.U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_M : [] -> [M.U_M] @M;
+
+  attrsort Str = string;
+
+  gen R : [] -> [M.U_M] @M;
+  gen Pair(a@M, b@M) : [] -> [M.U_M] @M;
+  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;
+  gen dup(a@M) : [a] -> [a, a] @M;
+  gen mkPair(a@M, b@M) : [a, b] -> [Pair(a, b)] @M;
+  gen fst(a@M, b@M) : [Pair(a, b)] -> [a] @M;
+  gen snd(a@M, b@M) : [Pair(a, b)] -> [b] @M;
+
+  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;
+  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;
+
+  rule computational beta -> (a@M, b@M) : [a] -> [b] @M =
+    (lam{a, b}[?Body] * id[a]) ; app{a, b} == splice(?Body)
+
+  gen add : [R, R] -> [R] @M;
+  gen mul : [R, R] -> [R] @M;
+  gen sin : [R] -> [R] @M;
+  gen cos : [R] -> [R] @M;
+  gen neg : [R] -> [R] @M;
+
+}
+
+morphism forwardAD : SmoothLam -> SmoothLam where {
+  check structural;
+
+  mode M -> M;
+  attrsort Str -> Str;
+  type R @M -> Pair(R, R) @M;
+
+  gen comp_ctx_ext @M -> comp_ctx_ext
+  gen comp_var @M -> comp_var
+  gen comp_reindex @M -> comp_reindex
+
+  gen dup @M -> dup
+  gen mkPair @M -> mkPair
+  gen fst @M -> fst
+  gen snd @M -> snd
+  gen lam @M -> lam[?b0]
+  gen app @M -> app
+
+  gen add @M ->
+    (mkPair{Pair(R, R), Pair(R, R)}
+    ; dup{Pair(Pair(R, R), Pair(R, R))}
+    ; (
+        (dup{Pair(Pair(R, R), Pair(R, R))}
+          ; ((fst{Pair(R, R), Pair(R, R)} ; fst{R, R}) * (snd{Pair(R, R), Pair(R, R)} ; fst{R, R}))
+          ; add)
+        *
+        (dup{Pair(Pair(R, R), Pair(R, R))}
+          ; ((fst{Pair(R, R), Pair(R, R)} ; snd{R, R}) * (snd{Pair(R, R), Pair(R, R)} ; snd{R, R}))
+          ; add)
+      )
+    ; mkPair{R, R})
+
+  gen mul @M ->
+    (mkPair{Pair(R, R), Pair(R, R)}
+    ; dup{Pair(Pair(R, R), Pair(R, R))}
+    ; (
+        (dup{Pair(Pair(R, R), Pair(R, R))}
+          ; ((fst{Pair(R, R), Pair(R, R)} ; fst{R, R}) * (snd{Pair(R, R), Pair(R, R)} ; fst{R, R}))
+          ; mul)
+        *
+        (dup{Pair(Pair(R, R), Pair(R, R))}
+          ; (
+              (dup{Pair(Pair(R, R), Pair(R, R))}
+                ; ((fst{Pair(R, R), Pair(R, R)} ; fst{R, R}) * (snd{Pair(R, R), Pair(R, R)} ; snd{R, R}))
+                ; mul)
+              *
+              (dup{Pair(Pair(R, R), Pair(R, R))}
+                ; ((fst{Pair(R, R), Pair(R, R)} ; snd{R, R}) * (snd{Pair(R, R), Pair(R, R)} ; fst{R, R}))
+                ; mul)
+            )
+            ; add)
+      )
+    ; mkPair{R, R})
+
+  gen sin @M ->
+    (dup{Pair(R, R)}
+    ; (
+        (fst{R, R} ; sin)
+        *
+        (dup{Pair(R, R)} ; ((fst{R, R} ; cos) * snd{R, R}) ; mul)
+      )
+    ; mkPair{R, R})
+
+  gen cos @M ->
+    (dup{Pair(R, R)}
+    ; (
+        (fst{R, R} ; cos)
+        *
+        (dup{Pair(R, R)} ; ((fst{R, R} ; sin) * snd{R, R}) ; mul ; neg)
+      )
+    ; mkPair{R, R})
+
+  gen neg @M ->
+    (dup{Pair(R, R)}
+    ; ((fst{R, R} ; neg) * (snd{R, R} ; neg))
+    ; mkPair{R, R})
+}
+
+pipeline core where {
+  apply forwardAD;
+  normalize { policy = "computational_lr"; fuel = 500; };
+  extract diagram;
+}
+
+pipeline core2 where {
+  apply forwardAD;
+  apply forwardAD;
+  normalize { policy = "computational_lr"; fuel = 500; };
+  extract diagram;
+}
+
+run core using core where {
+  source doctrine SmoothLam;
+  source mode M;
+}
+---
+lam{R, R}[(lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul] * id[R]) ; app{R, R}]
+---
+
+run core2 using core2 where {
+  source doctrine SmoothLam;
+  source mode M;
+}
+---
+lam{R, R}[(lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul] * id[R]) ; app{R, R}]
+---

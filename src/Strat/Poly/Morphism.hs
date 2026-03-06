@@ -896,6 +896,7 @@ findTemplateCycle mor =
           [ dep
           | dep <- S.toList (typeRefsInType (ttBody tmpl))
           , dep `S.member` keys
+          , dep /= ref
           ]
 
     cycleFrom ref stack =

@@ -44,17 +44,24 @@ This example is fully userland and explicitly staged:
 
 - `SmoothLam` doctrine: a cartesian/lambda fragment with `Arr`, `lam`, `app`,
   `dup`, `mul`, `sin`, beta, and a small packaging generator
-- `forwardAD : SmoothLam -> DualLam`: a real type-changing morphism with
-  `R -> Dual`, preserving `dup`/`lam`/`app` and mapping only smooth primitives
-  (`mul`, `sin`) to differentiated ones (`dmul`, `dsin`)
-- `emitJS : DualLam -> DualJS`: a separate backend morphism; the remaining
-  rewrite rules are only for JavaScript rendering and module packaging
+- `DualCore` doctrine: a genuine differentiated target with `Dual`,
+  low-level dual-number structure (`mkDual`, `splitDual`, `addR`, `mulR`,
+  `sinR`, `cosR`), and differentiated primitives `dmul`/`dsin`
+- `forwardAD : SmoothLam -> DualCore`: a real type-changing morphism with
+  `R -> Dual`, preserving `dup`/`lam`/`app` and mapping smooth primitives
+  into the differentiated core (`mul -> dmul`, `sin -> dsin`)
+- `DualCore` itself carries the AD equations:
+  normalizing after `forwardAD` expands `dmul` and `dsin` into explicit
+  product-rule and chain-rule diagrams over the low-level dual-number core
+- `emitJS : DualCore -> DualJS`: a separate backend morphism; JavaScript now
+  only lowers the differentiated target IR and does not define the AD meaning
 - the example now exercises real lambda application: the outer function applies
   an inner helper `\y -> y * sin(y)` to its argument, and beta reduction
   happens in the staged lambda fragment rather than in JavaScript
 - the emitted artifact is now a reusable module with named `mulDual`/`sinDual`
   helpers and shared `dx`, instead of an inline residual blob plus top-level IO
-- pipeline: `apply forwardAD -> apply emitJS -> normalize(computational_lr) -> extract FileTree`
+- `main` pipeline: `apply forwardAD -> apply emitJS -> normalize(computational_lr) -> extract FileTree`
+- `core` pipeline: `apply forwardAD -> normalize(computational_lr) -> extract diagram`
 
 Build (preview extracted file content):
 
@@ -63,6 +70,10 @@ Build (preview extracted file content):
 Build and write output to disk:
 
   stack run -- examples/endtoend/autodiff_times_sin.run.llang --output
+
+Inspect the differentiated categorical core before codegen:
+
+  stack run -- examples/endtoend/autodiff_times_sin.run.llang --run core
 
 Evaluate the generated module at `x = 1`:
 
@@ -74,3 +85,48 @@ Expected output:
     "value": 0.8414709848078965,
     "derivative": 1.3817732906760363
   }
+
+## Pair-Based Endomorphic AD Core
+
+`autodiff_times_sin_pair_core.run.llang` isolates the pair-based endomorphic AD
+story without the JS backend.
+
+- `SmoothLam` is closed under differentiation by adding `Pair`, `mkPair`,
+  `fst`, `snd`, `add`, `cos`, and `neg`
+- `forwardAD : SmoothLam -> SmoothLam` is an actual endomorphism with
+  `R -> Pair(R, R)` and primitive images expressed as composites in the same
+  doctrine
+- `core` shows the first differentiated CCC term
+- `core2` applies `forwardAD` twice, demonstrating that the transformed
+  doctrine stays closed under repeated AD
+
+Inspect the first-order pair core:
+
+  stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run core
+
+Inspect the second-order pair core:
+
+  stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run core2
+
+Current limitation:
+
+  The pair-preserving JS backend is not landed yet, so the compilable JS path
+  remains `autodiff_times_sin.run.llang` while this example focuses on the
+  endomorphic categorical AD transform itself.
+
+Why the SSA route still stops short:
+
+  I tried the obvious userland path here: reintroduce source-level packaging,
+  foliate the differentiated term, and lower SSA to `Artifact`.
+
+  The remaining blocker is lambda-body ordering. A lambda SSA block naturally
+  wants `parameter, body, return-variable`, but the current `Artifact`-level
+  userland toolbox does not provide a reliable way to permute those inputs when
+  rendering. In particular, a user-defined swap/permutation generator over
+  multiple outputs does not normalize in the way the JS backend needs, and the
+  fallback rewrite-based encodings still leave the renderer unable to put
+  “statements first, return last” cleanly.
+
+  So the current limitation is not the endomorphic `forwardAD` pass. The pair
+  core itself is fine. The blocker is the final lambda-aware SSA-to-JS lowering
+  layer in userland.

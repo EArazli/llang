@@ -6,7 +6,8 @@ This directory is split into libraries and runnable entrypoints:
 - `examples/run/**`: runnable example files (usually wrappers that import `lib`).
 - `examples/endtoend/**`: self-contained runnable pipelines built fully in userland.
   - `calc_plus_int.run.llang` (surface -> JS calculator)
-  - `autodiff_times_sin.run.llang` (type-changing CCC forward AD morphism -> JS module)
+  - `autodiff_times_sin.run.llang` (type-changing CCC forward AD morphism -> differentiated core -> JS module)
+  - `autodiff_times_sin_pair_core.run.llang` (pair-based endomorphic forward AD core, first- and second-order; README documents why the SSA-to-JS path is still blocked in userland)
 - `examples/run/xfail/**`: runnable files that are expected to fail.
 
 See `examples/run/README.md` for execution details.

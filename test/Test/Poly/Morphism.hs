@@ -42,6 +42,7 @@ tests =
     , testCase "morphism rewrites splice binder holes to substituted binder metas" testMorphismSpliceRenamesToBinderMeta
     , testCase "DSL morphism elaboration accepts polymorphic binder-hole images" testDslMorphismAcceptsPolymorphicBinderHoleImage
     , testCase "DSL morphism elaboration accepts type-changing CCC images" testDslMorphismAcceptsTypeChangingCccImage
+    , testCase "DSL morphism elaboration accepts self-recursive endomorphic type images" testDslMorphismAcceptsSelfRecursiveEndomorphicTypeImage
     , testCase "morphism checker rejects incorrect binder-hole signatures" testMorphismRejectsBadBinderHoleSignatures
     , testCase "morphism rejects cyclic type templates" testTypeTemplateCycleRejected
     , testCase "morphism rejects term-template sort mismatch in same mode" testTermTemplateSortMismatch
@@ -1120,6 +1121,80 @@ testDslMorphismAcceptsTypeChangingCccImage = do
   case parseRawFile src >>= elabRawFile of
     Left err ->
       assertFailure ("expected type-changing CCC morphism elaboration to succeed, got: " <> T.unpack err)
+    Right _ ->
+      pure ()
+
+testDslMorphismAcceptsSelfRecursiveEndomorphicTypeImage :: Assertion
+testDslMorphismAcceptsSelfRecursiveEndomorphicTypeImage = do
+  let src =
+        T.unlines
+          [ "doctrine D where {"
+          , "  mode M classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+          , "  gen comp_var(a@M) : [a] -> [a] @M;"
+          , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+          , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , "  gen U_M : [] -> [M.U_M] @M;"
+          , ""
+          , "  mode O classifiedBy M via M.U_M;"
+          , "  gen comp_ctx_ext(a@O) : [a] -> [a] @O;"
+          , "  gen comp_var(a@O) : [a] -> [a] @O;"
+          , "  gen comp_reindex(a@O) : [a] -> [a] @O;"
+          , "  comprehension O where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+          , ""
+          , "  modality quote : M -> O;"
+          , "  modality splice : O -> M;"
+          , "  lift_classifier quote = id@M;"
+          , "  lift_classifier splice = id@M;"
+          , "  mod_eq splice.quote -> id@M;"
+          , ""
+          , "  attrsort Str = string;"
+          , "  gen R : [] -> [M.U_M] @M;"
+          , "  gen Pair(a@M, b@M) : [] -> [M.U_M] @M;"
+          , "  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;"
+          , "  gen Module : [] -> [M.U_M] @M;"
+          , "  gen dup(a@M) : [a] -> [a, a] @M;"
+          , "  gen mkPair(a@M, b@M) : [a, b] -> [Pair(a, b)] @M;"
+          , "  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;"
+          , "  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;"
+          , "  gen emitUnaryModule(a@M) { fn:Str, path:Str } : [Arr(a, a)] -> [Module] @M;"
+          , "  gen emitUnaryModule(a@M) { fn:Str, path:Str } : [quote(Arr(a, a))] -> [quote(Module)] @O;"
+          , "}"
+          , "morphism f : D -> D where {"
+          , "  check none;"
+          , "  mode M -> M;"
+          , "  mode O -> O;"
+          , "  modality quote -> quote;"
+          , "  modality splice -> splice;"
+          , "  attrsort Str -> Str;"
+          , "  type R @M -> Pair(R, R) @M;"
+          , "  gen comp_ctx_ext @M -> comp_ctx_ext"
+          , "  gen comp_var @M -> comp_var"
+          , "  gen comp_reindex @M -> comp_reindex"
+          , "  gen comp_ctx_ext @O -> comp_ctx_ext"
+          , "  gen comp_var @O -> comp_var"
+          , "  gen comp_reindex @O -> comp_reindex"
+          , "  gen dup @M -> dup"
+          , "  gen mkPair @M -> mkPair"
+          , "  gen lam @M -> lam[?b0]"
+          , "  gen app @M -> app"
+          , "  gen emitUnaryModule @M -> emitUnaryModule(fn = fn, path = path)"
+          , "  gen emitUnaryModule @O -> emitUnaryModule(fn = fn, path = path)"
+          , "}"
+          , "pipeline build where {"
+          , "  apply f;"
+          , "}"
+          , "run main using build where {"
+          , "  source doctrine D;"
+          , "  source mode M;"
+          , "}"
+          , "---"
+          , "lam{R, Pair(R, R)}[dup{R} ; mkPair{R, R}]"
+          , "---"
+          ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertFailure ("expected self-recursive endomorphic morphism elaboration to succeed, got: " <> T.unpack err)
     Right _ ->
       pure ()
 

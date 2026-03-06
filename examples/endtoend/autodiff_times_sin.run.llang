@@ -26,7 +26,7 @@ doctrine SmoothLam where {
   gen emitUnaryModule { fn:Str, path:Str } : [Arr(R, R)] -> [Program] @M;
 }
 
-doctrine DualLam where {
+doctrine DualCore where {
   mode M acyclic classifiedBy M via M.U_M;
   gen comp_ctx_ext(a@M) : [a] -> [a] @M;
   gen comp_var(a@M) : [a] -> [a] @M;
@@ -36,11 +36,13 @@ doctrine DualLam where {
 
   attrsort Str = string;
 
+  gen R : [] -> [M.U_M] @M;
   gen Dual : [] -> [M.U_M] @M;
   gen Arr(a@M, b@M) : [] -> [M.U_M] @M;
   gen Program : [] -> [M.U_M] @M;
 
   gen dup(a@M) : [a] -> [a, a] @M;
+  gen swap(a@M, b@M) : [a, b] -> [b, a] @M;
 
   gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;
   gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;
@@ -48,8 +50,35 @@ doctrine DualLam where {
   rule computational beta -> (a@M, b@M) : [a] -> [b] @M =
     (lam{a, b}[?Body] * id[a]) ; app{a, b} == splice(?Body)
 
+  gen mkDual : [R, R] -> [Dual] @M;
+  gen splitDual : [Dual] -> [R, R] @M;
+  gen addR : [R, R] -> [R] @M;
+  gen mulR : [R, R] -> [R] @M;
+  gen sinR : [R] -> [R] @M;
+  gen cosR : [R] -> [R] @M;
+
   gen dmul : [Dual, Dual] -> [Dual] @M;
   gen dsin : [Dual] -> [Dual] @M;
+
+  rule computational dsin_def -> : [Dual] -> [Dual] @M =
+    dsin ==
+      splitDual
+      ; (dup{R} * id[R])
+      ; (sinR * (cosR * id[R]))
+      ; (id[R] * mulR)
+      ; mkDual
+
+  rule computational dmul_def -> : [Dual, Dual] -> [Dual] @M =
+    dmul ==
+      (splitDual * splitDual)
+      ; (dup{R} * id[R] * id[R] * id[R])
+      ; (id[R] * id[R] * id[R] * dup{R} * id[R])
+      ; (id[R] * swap{R, R} * id[R] * id[R] * id[R])
+      ; (id[R] * swap{R, R} * id[R] * id[R] * id[R])
+      ; (id[R] * id[R] * id[R] * id[R] * swap{R, R})
+      ; (id[R] * id[R] * id[R] * swap{R, R} * id[R])
+      ; (mulR * ((mulR * mulR) ; addR))
+      ; mkDual
 
   gen emitUnaryModule { fn:Str, path:Str } : [Arr(Dual, Dual)] -> [Program] @M;
 }
@@ -65,6 +94,7 @@ doctrine DualJS where {
   attrsort Str = string;
   attrsort Int = int;
 
+  gen R : [] -> [M.U_M] @M;
   gen Dual : [] -> [M.U_M] @M;
   gen Arr(a@M, b@M) : [] -> [M.U_M] @M;
   gen Doc : [] -> [M.U_M] @M;
@@ -80,12 +110,20 @@ doctrine DualJS where {
 
   gen inputDual { name:Str } : [] -> [Dual] @M;
   gen dup(a@M) : [a] -> [a, a] @M;
+  gen swap(a@M, b@M) : [a, b] -> [b, a] @M;
 
   gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;
   gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;
 
   rule computational beta -> (a@M, b@M) : [a] -> [b] @M =
     (lam{a, b}[?Body] * id[a]) ; app{a, b} == splice(?Body)
+
+  gen mkDual : [R, R] -> [Dual] @M;
+  gen splitDual : [Dual] -> [R, R] @M;
+  gen addR : [R, R] -> [R] @M;
+  gen mulR : [R, R] -> [R] @M;
+  gen sinR : [R] -> [R] @M;
+  gen cosR : [R] -> [R] @M;
 
   gen dmul : [Dual, Dual] -> [Dual] @M;
   gen dsin : [Dual] -> [Dual] @M;
@@ -122,7 +160,9 @@ doctrine DualJS where {
       ; singleFile(path = p)
 }
 
-morphism forwardAD : SmoothLam -> DualLam where {
+morphism forwardAD : SmoothLam -> DualCore where {
+  check structural;
+
   mode M -> M;
   attrsort Str -> Str;
   type R @M -> Dual @M;
@@ -139,7 +179,9 @@ morphism forwardAD : SmoothLam -> DualLam where {
   gen emitUnaryModule @M -> emitUnaryModule(fn = fn, path = path)
 }
 
-morphism emitJS : DualLam -> DualJS where {
+morphism emitJS : DualCore -> DualJS where {
+  check structural;
+
   mode M -> M;
   attrsort Str -> Str;
 
@@ -150,8 +192,15 @@ morphism emitJS : DualLam -> DualJS where {
   type Program @M -> FileTree @M;
 
   gen dup @M -> dup
+  gen swap @M -> swap
   gen lam @M -> lam[?b0]
   gen app @M -> app
+  gen mkDual @M -> mkDual
+  gen splitDual @M -> splitDual
+  gen addR @M -> addR
+  gen mulR @M -> mulR
+  gen sinR @M -> sinR
+  gen cosR @M -> cosR
   gen dmul @M -> dmul
   gen dsin @M -> dsin
   gen emitUnaryModule @M -> emitUnaryModule(fn = fn, path = path)
@@ -164,7 +213,22 @@ pipeline build where {
   extract FileTree { root = "./examples/endtoend/out" };
 }
 
+pipeline showCore where {
+  apply forwardAD;
+  normalize { policy = "computational_lr"; fuel = 300; };
+  extract diagram;
+}
+
 run main using build where {
+  source doctrine SmoothLam;
+  source mode M;
+}
+---
+lam{R, R}[(lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul] * id[R]) ; app{R, R}]
+; emitUnaryModule(fn = "timesSin", path = "times_sin.mjs")
+---
+
+run core using showCore where {
   source doctrine SmoothLam;
   source mode M;
 }
