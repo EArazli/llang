@@ -90,9 +90,8 @@ testSimpleRewrite = do
   case res of
     Nothing -> assertFailure "expected rewrite"
     Just d -> do
-      got <- require (renderDiagram d)
-      expected <- require (renderDiagram (rrRHS rule))
-      got @?= expected
+      iso <- require (diagramIsoEq d (rrRHS rule))
+      assertBool "expected rewrite result to match RHS up to isomorphism" iso
 
 testSubdiagramRewrite :: Assertion
 testSubdiagramRewrite = do

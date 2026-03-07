@@ -3,6 +3,8 @@ module Strat.Poly.Rewrite
   ( RewriteRule(..)
   , SpliceMapper
   , defaultSpliceMapper
+  , rewriteOnceRawWithMapper
+  , rewriteOnceRaw
   , rewriteOnceWithMapper
   , rewriteOnce
   , rewriteAllWithMapper
@@ -19,15 +21,20 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Monoid (Any(..), getAny)
 import Strat.Poly.Graph
-import Strat.Poly.Diagram
+import Strat.Poly.Diagram hiding (applySubstDiagram)
 import Strat.Poly.DiagramInterpretation
   ( requirePortType
   , spliceEdge
   )
 import Strat.Poly.Match
-import Strat.Poly.Obj (TmVar)
+import Strat.Poly.Obj (TmVar(..))
 import Strat.Poly.Cell2
-import Strat.Poly.UnifyObj (emptySubst)
+import Strat.Poly.UnifyObj
+  ( applySubstCtx
+  , applySubstDiagram
+  , applySubstObj
+  , emptySubst
+  )
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
 import Strat.Poly.ModeSyntax (ModExpr(..))
@@ -51,20 +58,31 @@ defaultSpliceMapper me captured =
     then Right captured
     else Left "rewriteOnce: splice requires modality-action mapping but no splice mapper is available"
 
-rewriteOnceWithMapper :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceWithMapper tt spliceMapper rules diag = do
+rewriteOnceRawWithMapper :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceRawWithMapper tt spliceMapper rules diag = do
   rejectSplice "rewriteOnce" diag
-  top <- rewriteOnceTop tt spliceMapper rules diag
+  top <- rewriteOnceTopRaw tt spliceMapper rules diag
   case top of
     Just _ -> pure top
-    Nothing -> rewriteOnceNested tt spliceMapper rules diag
+    Nothing -> rewriteOnceNestedRaw tt spliceMapper rules diag
+
+rewriteOnceRaw :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceRaw tt =
+  rewriteOnceRawWithMapper tt defaultSpliceMapper
+
+rewriteOnceWithMapper :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceWithMapper tt spliceMapper rules diag = do
+  step <- rewriteOnceRawWithMapper tt spliceMapper rules diag
+  case step of
+    Nothing -> Right Nothing
+    Just next -> Just <$> canonDiagramRaw next
 
 rewriteOnce :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
 rewriteOnce tt =
   rewriteOnceWithMapper tt defaultSpliceMapper
 
-rewriteOnceTop :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceTop tt spliceMapper rules diag = go rules
+rewriteOnceTopRaw :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceTopRaw tt spliceMapper rules diag = go rules
   where
     go [] = Right Nothing
     go (r:rs) = do
@@ -79,12 +97,11 @@ rewriteOnceTop tt spliceMapper rules diag = go rules
         tryMatches (m:ms) =
           case applyMatchWithMapper tt spliceMapper r m diag of
             Left _ -> tryMatches ms
-            Right d -> do
-              canon <- canonDiagramRaw d
-              pure (Just canon)
+            Right d ->
+              pure (Just d)
 
-rewriteOnceNested :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceNested tt spliceMapper rules diag =
+rewriteOnceNestedRaw :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceNestedRaw tt spliceMapper rules diag =
   go (IM.toAscList (dEdges diag))
   where
     go [] = Right Nothing
@@ -92,23 +109,21 @@ rewriteOnceNested tt spliceMapper rules diag =
       case ePayload edge of
         PSplice _ _ -> Left "rewriteOnce: splice nodes are not allowed in evaluation terms"
         PBox name inner -> do
-          innerRes <- rewriteOnceWithMapper tt spliceMapper rules inner
+          innerRes <- rewriteOnceRawWithMapper tt spliceMapper rules inner
           case innerRes of
             Nothing -> go rest
             Just inner' -> do
               let edge' = edge { ePayload = PBox name inner' }
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-              canon <- canonDiagramRaw diag'
-              pure (Just canon)
+              pure (Just diag')
         PFeedback inner -> do
-          innerRes <- rewriteOnceWithMapper tt spliceMapper rules inner
+          innerRes <- rewriteOnceRawWithMapper tt spliceMapper rules inner
           case innerRes of
             Nothing -> go rest
             Just inner' -> do
               let edge' = edge { ePayload = PFeedback inner' }
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-              canon <- canonDiagramRaw diag'
-              pure (Just canon)
+              pure (Just diag')
         PTmMeta _ ->
           go rest
         PInternalDrop ->
@@ -120,15 +135,14 @@ rewriteOnceNested tt spliceMapper rules diag =
             Just bargs' -> do
               let edge' = edge { ePayload = PGen gen attrs bargs' }
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-              canon <- canonDiagramRaw diag'
-              pure (Just canon)
+              pure (Just diag')
 
     rewriteOnceBinderArgs [] = Right Nothing
     rewriteOnceBinderArgs (b:bs) =
       case b of
         BAMeta _ -> rewriteOnceBinderArgs bs
         BAConcrete inner -> do
-          res <- rewriteOnceWithMapper tt spliceMapper rules inner
+          res <- rewriteOnceRawWithMapper tt spliceMapper rules inner
           case res of
             Just inner' -> Right (Just (BAConcrete inner' : bs))
             Nothing -> do
@@ -219,10 +233,11 @@ rewriteAllBinderArgs tt spliceMapper cap rules args =
 applyMatchWithMapper :: TypeTheory -> SpliceMapper -> RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyMatchWithMapper tt spliceMapper rule match host = do
   rejectSplice "rewrite host" host
-  -- Normalize host boundary types before gluing so mergePorts compares
-  -- canonicalized types (e.g. after modality/term equations).
-  hostNorm <- applySubstDiagram tt emptySubst host
   let lhs = rrLHS rule
+  let lhsBoundary = dIn lhs <> dOut lhs
+  hostBoundary <- mapM boundaryHostPort lhsBoundary
+  hostCtxNorm <- normalizeDiagramCtxOnly tt host
+  hostNorm <- normalizeMergeSupport tt (S.fromList hostBoundary) hostCtxNorm
   rhsSub <- applySubstDiagram tt (mTySubst match) (rrRHS rule)
   let rhs0 = applyAttrSubstDiagram (mAttrSubst match) rhsSub
   rhs1 <- instantiateBinderMetas (mBinderSub match) rhs0
@@ -231,7 +246,6 @@ applyMatchWithMapper tt spliceMapper rule match host = do
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPortMap match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs
   host3 <- unionDiagram host2 rhsShift
-  let lhsBoundary = dIn lhs <> dOut lhs
   let rhsBoundary = dIn rhsShift <> dOut rhsShift
   if length lhsBoundary /= length rhsBoundary
     then Left "rewriteOnce: boundary length mismatch"
@@ -241,6 +255,11 @@ applyMatchWithMapper tt spliceMapper rule match host = do
       validateDiagram host4
       pure host4
   where
+    boundaryHostPort lhsPort =
+      case M.lookup lhsPort (mPortMap match) of
+        Nothing -> Left "rewriteOnce: missing boundary port mapping"
+        Just hostPort -> Right hostPort
+
     toBoundaryPair (lhsPort, rhsPort) =
       case M.lookup lhsPort (mPortMap match) of
         Nothing -> Left "rewriteOnce: missing boundary port mapping"
@@ -249,6 +268,104 @@ applyMatchWithMapper tt spliceMapper rule match host = do
 applyMatch :: TypeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyMatch tt =
   applyMatchWithMapper tt defaultSpliceMapper
+
+normalizeDiagramCtxOnly :: TypeTheory -> Diagram -> Either Text Diagram
+normalizeDiagramCtxOnly tt =
+  traverseDiagram onDiag pure pure
+  where
+    onDiag d = do
+      tmCtx' <- applySubstCtx tt emptySubst (dTmCtx d)
+      pure d { dTmCtx = tmCtx' }
+
+normalizeDiagramObjsOnly :: TypeTheory -> Diagram -> Either Text Diagram
+normalizeDiagramObjsOnly tt =
+  traverseDiagram onDiag onPayload pure
+  where
+    onDiag d = do
+      dPortObj' <- IM.traverseWithKey (\_ ty -> applySubstObj tt emptySubst ty) (dPortObj d)
+      pure d { dPortObj = dPortObj' }
+
+    onPayload payload =
+      case payload of
+        PTmMeta v -> do
+          sort' <- applySubstObj tt emptySubst (tmvSort v)
+          pure (PTmMeta (v { tmvSort = sort' }))
+        _ ->
+          pure payload
+
+normalizeMergeSupport :: TypeTheory -> S.Set PortId -> Diagram -> Either Text Diagram
+normalizeMergeSupport tt seedPorts diag = do
+  let affectedPorts = closeAffectedPorts seedPorts
+  let affectedMetaKeys = metaKeysForPorts affectedPorts
+  dPortObj' <-
+    IM.traverseWithKey
+      (\k ty ->
+        if PortId k `S.member` affectedPorts
+          then applySubstObj tt emptySubst ty
+          else Right ty
+      )
+      (dPortObj diag)
+  dEdges' <- IM.traverseWithKey (\_ edge -> normalizeEdge affectedPorts affectedMetaKeys edge) (dEdges diag)
+  pure diag { dPortObj = dPortObj', dEdges = dEdges' }
+  where
+    closeAffectedPorts ports =
+      let ports' = ports `S.union` affectedMetaPorts ports `S.union` affectedStructuredPorts ports
+       in if ports' == ports
+            then ports
+            else closeAffectedPorts ports'
+
+    affectedMetaPorts ports =
+      let keys = metaKeysForPorts ports
+       in S.fromList
+            [ pid
+            | edge <- IM.elems (dEdges diag)
+            , PTmMeta v <- [ePayload edge]
+            , tmVarKey v `S.member` keys
+            , pid <- eOuts edge
+            ]
+
+    affectedStructuredPorts ports =
+      S.fromList
+        [ pid
+        | edge <- IM.elems (dEdges diag)
+        , isStructuredEdge edge
+        , edgeTouches ports edge
+        , pid <- eIns edge <> eOuts edge
+        ]
+
+    metaKeysForPorts ports =
+      S.fromList
+        [ tmVarKey v
+        | edge <- IM.elems (dEdges diag)
+        , PTmMeta v <- [ePayload edge]
+        , any (`S.member` ports) (eOuts edge)
+        ]
+
+    normalizeEdge ports metaKeys edge =
+      case ePayload edge of
+        PBox name inner
+          | edgeTouches ports edge ->
+              (\inner' -> edge { ePayload = PBox name inner' }) <$> normalizeDiagramObjsOnly tt inner
+        PFeedback inner
+          | edgeTouches ports edge ->
+              (\inner' -> edge { ePayload = PFeedback inner' }) <$> normalizeDiagramObjsOnly tt inner
+        PTmMeta v
+          | tmVarKey v `S.member` metaKeys -> do
+              sort' <- applySubstObj tt emptySubst (tmvSort v)
+              pure edge { ePayload = PTmMeta (v { tmvSort = sort' }) }
+        _ ->
+          pure edge
+
+    edgeTouches ports edge =
+      any (`S.member` ports) (eIns edge <> eOuts edge)
+
+    isStructuredEdge edge =
+      case ePayload edge of
+        PBox _ _ -> True
+        PFeedback _ -> True
+        _ -> False
+
+    tmVarKey v = (tmvName v, tmvScope v)
 
 instantiateBinderMetas :: M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
 instantiateBinderMetas binderSub =

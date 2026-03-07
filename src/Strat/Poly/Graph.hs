@@ -993,6 +993,9 @@ data CanonCandidate = CanonCandidate
   , ccPerm :: [Int]
   }
 
+newtype CellSignature = CellSignature [(Int, Int)]
+  deriving (Eq)
+
 pickBetter :: Maybe CanonCandidate -> CanonCandidate -> CanonCandidate
 pickBetter existing candidate =
   case existing of
@@ -1029,6 +1032,23 @@ individualize cells idx v =
       rest = filter (/= v) cell
    in before <> [[v], rest] <> after
 
+instance Ord CellSignature where
+  compare (CellSignature xs) (CellSignature ys) = compareDenseSignatures xs ys
+
+compareDenseSignatures :: [(Int, Int)] -> [(Int, Int)] -> Ordering
+compareDenseSignatures xs ys =
+  case (xs, ys) of
+    ([], []) -> EQ
+    ([], (_, countY) : _) -> compare 0 countY
+    ((_, countX) : _, []) -> compare countX 0
+    ((ixX, countX) : restX, (ixY, countY) : restY)
+      | ixX == ixY ->
+          case compare countX countY of
+            EQ -> compareDenseSignatures restX restY
+            ord -> ord
+      | ixX < ixY -> compare countX 0
+      | otherwise -> compare 0 countY
+
 refinePartition :: IM.IntMap IS.IntSet -> [[Int]] -> [[Int]]
 refinePartition adj part =
   let refined = refineOnce part
@@ -1037,22 +1057,44 @@ refinePartition adj part =
         else refinePartition adj refined
   where
     refineOnce cells =
-      let cellSets = map IS.fromList cells
-          signature v =
-            [ countNeighbors v cset
-            | cset <- cellSets
-            ]
-          splitCell cell =
-            map L.sort
-              [ vs
-              | (_, vs) <- M.toAscList (M.fromListWith (<>) [ (signature v, [v]) | v <- cell ])
+      let vertexCellIx =
+            IM.fromList
+              [ (v, cellIx)
+              | (cellIx, cell) <- zip [0 :: Int ..] cells
+              , v <- cell
               ]
+          signatures =
+            IM.map
+              ( \nbrs ->
+                  CellSignature $
+                    sparseSignature
+                    ( IS.foldl'
+                        ( \counts nbr ->
+                            case IM.lookup nbr vertexCellIx of
+                              Nothing -> counts
+                              Just cellIx -> IM.insertWith (+) cellIx (1 :: Int) counts
+                        )
+                        (IM.empty :: IM.IntMap Int)
+                        nbrs
+                    )
+              )
+              adj
+          splitCell cell =
+            map L.sort $
+              M.elems $
+                L.foldl'
+                  ( \groups v ->
+                      M.insertWith (++) (IM.findWithDefault (CellSignature []) v signatures) [v] groups
+                  )
+                  M.empty
+                  cell
        in concatMap splitCell cells
 
-    countNeighbors v cellSet =
-      case IM.lookup v adj of
-        Nothing -> 0
-        Just nbrs -> IS.size (IS.intersection nbrs cellSet)
+    sparseSignature counts =
+      [ (cellIx, count)
+      | (cellIx, count) <- IM.toAscList counts
+      , count /= 0
+      ]
 
 rebuildCanonicalDiagram :: Diagram -> [PortId] -> [EdgeId] -> Either Text Diagram
 rebuildCanonicalDiagram diag portOrder edgeOrder = do

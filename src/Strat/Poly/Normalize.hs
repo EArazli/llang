@@ -39,7 +39,7 @@ import Strat.Poly.Rewrite
   , rrName
   , applyMatchWithMapper
   , mkMatchConfig
-  , rewriteOnceWithMapper
+  , rewriteOnceRawWithMapper
   )
 import Strat.Poly.TypeTheory (TypeTheory)
 
@@ -58,7 +58,7 @@ normalizeWithMapper spliceMapper tt fuel rules diag = do
       | remaining <= 0 =
           Right (OutOfFuel current)
       | otherwise = do
-          step <- rewriteOnceWithMapper tt spliceMapper rules current
+          step <- rewriteOnceRawWithMapper tt spliceMapper rules current
           case step of
             Nothing ->
               Right (Finished current)
@@ -218,7 +218,6 @@ rewriteAllTopWithProof spliceMapper tt rules diag =
       case applyMatchWithMapper tt spliceMapper rule match diag of
         Left _ -> Right []
         Right d -> do
-          canon <- canonDiagramRaw d
           let step =
                 RewriteStep
                   { rsRuleName = rrName rule
@@ -227,7 +226,7 @@ rewriteAllTopWithProof spliceMapper tt rules diag =
                   , rsMatch = match
                   , rsFocus = FocusTop
                   }
-          Right [(step, canon)]
+          Right [(step, d)]
 
 rewriteAllNestedWithProof :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [(RewriteStep, Diagram)]
 rewriteAllNestedWithProof spliceMapper tt cap rules diag = do
@@ -257,20 +256,17 @@ rewriteInEdge spliceMapper tt cap rules diag (edgeKey, edge) =
     replaceBox name (step, inner') = do
       let edge' = edge { ePayload = PBox name inner' }
       let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-      canon <- canonDiagramRaw diag'
-      Right (prefix (FocusInBox edgeKey) step, canon)
+      Right (prefix (FocusInBox edgeKey) step, diag')
 
     replaceFeedback (step, inner') = do
       let edge' = edge { ePayload = PFeedback inner' }
       let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-      canon <- canonDiagramRaw diag'
-      Right (prefix (FocusInFeedback edgeKey) step, canon)
+      Right (prefix (FocusInFeedback edgeKey) step, diag')
 
     replaceGen gen attrs (binderIx, step, bargs') = do
       let edge' = edge { ePayload = PGen gen attrs bargs' }
       let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-      canon <- canonDiagramRaw diag'
-      Right (prefix (FocusInBinder edgeKey binderIx) step, canon)
+      Right (prefix (FocusInBinder edgeKey binderIx) step, diag')
 
 rewriteAllBinderArgsWithProof :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [(Int, RewriteStep, [BinderArg])]
 rewriteAllBinderArgsWithProof _ _ _ _ [] = Right []
