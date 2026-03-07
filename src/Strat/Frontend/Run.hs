@@ -35,6 +35,7 @@ import Strat.Poly.Foliation (SSA(..), SSAStep(..), foliate, forgetSSA)
 import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.SSAOptimize (defaultSSAOptimizePolicy, optimizeSSA)
 
 
 data Artifact
@@ -179,6 +180,12 @@ runPhase env art phase =
           pure (ArtDiagram doc diag')
         ArtSSA{} -> Left "pipeline: normalize expects a diagram artifact"
         ArtExtracted{} -> Left "pipeline: cannot normalize extracted host value"
+    OptimizeSSA ->
+      case art of
+        ArtSSA baseDoc derivedName ssa ->
+          pure (ArtSSA baseDoc derivedName (optimizeSSA defaultSSAOptimizePolicy baseDoc ssa))
+        ArtDiagram{} -> Left "pipeline: optimize ssa expects an SSA artifact"
+        ArtExtracted{} -> Left "pipeline: cannot optimize extracted host value"
     ExtractFoliation targetName mFolPolicy ->
       case art of
         ArtDiagram doc diag -> do

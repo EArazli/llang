@@ -1137,6 +1137,7 @@ elabPhase raw =
       policy <- parsePipelinePolicy (rnoPolicy opts)
       let fuel = maybe 50 id (rnoFuel opts)
       Right (Normalize policy fuel)
+    RPOptimizeSSA -> Right OptimizeSSA
     RPExtractFoliate targetName mOpts ->
       case mOpts of
         Nothing ->

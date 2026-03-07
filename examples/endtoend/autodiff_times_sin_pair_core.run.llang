@@ -138,7 +138,7 @@ doctrine PairJSDoc extends Doc where {
   gen unaryNeg : [Doc] -> [Doc] @Doc;
   gen binaryInfix { op:Str } : [Doc, Doc] -> [Doc] @Doc;
   gen pairDoc : [Doc, Doc] -> [Doc] @Doc;
-  gen callDoc : [Doc, Doc] -> [Doc] @Doc; 
+  gen callDoc : [Doc, Doc] -> [Doc] @Doc;
   gen namesNil : [] -> [NameList] @Doc;
   gen namesCons : [Doc, NameList] -> [NameList] @Doc;
   gen renderNames : [NameList] -> [Doc] @Doc;
@@ -225,9 +225,8 @@ doctrine PairJSDoc extends Doc where {
 
   rule computational dupStmt_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
     (?o1 * ?o2 * ?i) ; dupStmt ==
-      (((((((((text(s = "const [") * ?o1) ; cat) * text(s = ", ")) ; cat) * ?o2) ; cat) * text(s = "] = dup(")) ; cat)
-      * ?i) ; cat
-      ; (id[Doc] * text(s = ");")) ; cat
+      (((((((((((text(s = "const [") * ?o1) ; cat) * text(s = ", ")) ; cat) * ?o2) ; cat) * text(s = "] = Array(2).fill(")) ; cat) * ?i) ; cat)
+      * text(s = ");")) ; cat
 
   rule computational index0_def -> : [Doc] -> [Doc] @Doc =
     (?d) ; index0 ==
@@ -298,9 +297,7 @@ doctrine PairJSDoc extends Doc where {
 
   rule computational exportSeededUnary_def -> : [Doc, Doc] -> [Doc] @Doc =
     (?out * ?fnDoc) ; exportSeededUnary(fn = f) ==
-      ((((text(s = "const dup = x => [x, x];") * line) ; cat)
-      * (((?out ; prefix(s = "// export port: ")) * (?fnDoc ; exportUnary(fn = f))) ; lineJoin))
-      ; lineJoin)
+      (((?out ; prefix(s = "// export port: ")) * (?fnDoc ; exportUnary(fn = f))) ; lineJoin)
 }
 
 morphism emitJS : SmoothLam_SSA -> PairJSDoc where {
@@ -357,6 +354,7 @@ pipeline build where {
   apply forwardAD;
   normalize { policy = "computational_lr"; fuel = 500; };
   extract foliate into SmoothLam_SSA;
+  optimize ssa;
   apply emitJS;
   normalize { policy = "topmost"; fuel = 500; };
   extract Doc { stdout = true; };
@@ -366,6 +364,7 @@ pipeline js_debug where {
   apply forwardAD;
   normalize { policy = "computational_lr"; fuel = 500; };
   extract foliate into SmoothLam_SSA;
+  optimize ssa;
   apply emitJS;
   extract diagram;
 }
@@ -375,6 +374,7 @@ pipeline core2 where {
   apply forwardAD;
   normalize { policy = "computational_lr"; fuel = 500; };
   extract foliate into SmoothLam_SSA;
+  optimize ssa;
   apply emitJS;
   normalize { policy = "topmost"; fuel = 500; };
   extract Doc { stdout = true; };

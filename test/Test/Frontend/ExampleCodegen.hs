@@ -31,6 +31,7 @@ tests =
     , testCase "ssa_js_codegen main emits js-like SSA statements" testSsaJsMain
     , testCase "end-to-end autodiff example emits differentiated JavaScript" testEndToEndAutodiffMain
     , testCase "end-to-end autodiff core run exposes differentiated target IR" testEndToEndAutodiffCore
+    , testCase "pair-based autodiff main emits cleaned JavaScript" testPairAutodiffMain
     , testCase "pair-based autodiff core stays in the source doctrine after one pass" testPairAutodiffCore
     , testCase "CLI does not write FileTree outputs without --output" testCliNoOutputFlagSkipsWrites
     , testCase "CLI writes FileTree outputs with --output" testCliOutputFlagWrites
@@ -100,6 +101,18 @@ testEndToEndAutodiffCore = do
   assertBool "expected normalized multiplication node" ("mulR" `T.isInfixOf` out)
   assertBool "expected differentiated core to eliminate dsin" (not (" dsin " `T.isInfixOf` out))
   assertBool "expected differentiated core to eliminate dmul" (not (" dmul " `T.isInfixOf` out))
+
+testPairAutodiffMain :: Assertion
+testPairAutodiffMain = do
+  env <- requireIO =<< loadModule "examples/endtoend/autodiff_times_sin_pair_core.run.llang"
+  runDef <- require (selectRun env (Just "main"))
+  result <- require (runWithEnv env runDef)
+  let out = prOutput result
+  assertBool "expected exported unary pair function" ("export const timesSinPair = x =>" `T.isInfixOf` out)
+  assertBool "expected sine call in emitted code" ("Math.sin(" `T.isInfixOf` out)
+  assertBool "expected cosine call in emitted code" ("Math.cos(" `T.isInfixOf` out)
+  assertBool "expected optimized backend to remove explicit dup helper" (not ("dup(" `T.isInfixOf` out))
+  assertBool "expected optimized backend to remove Array.fill duplication" (not ("Array(2).fill" `T.isInfixOf` out))
 
 testPairAutodiffCore :: Assertion
 testPairAutodiffCore = do

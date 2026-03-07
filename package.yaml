@@ -153,6 +153,7 @@ library:
   - Strat.Poly.Kernel
   - Strat.Poly.ModeSyntax
   - Strat.Poly.ObjResolve
+  - Strat.Poly.SSAOptimize
   - Strat.Poly.Tele
   - Strat.Poly.Term.Confluence
   - Strat.Poly.Term.Termination

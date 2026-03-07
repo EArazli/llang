@@ -84,6 +84,7 @@ data RawValueExtractOpts = RawValueExtractOpts
 data RawPhase
   = RPApply Text
   | RPNormalize RawNormalizeOpts
+  | RPOptimizeSSA
   | RPExtractFoliate Text (Maybe RawFoliationOpts)
   | RPExtractValue Text RawValueExtractOpts
   | RPExtractDiagramPretty

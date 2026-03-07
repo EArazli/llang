@@ -1027,6 +1027,7 @@ pipelineItem :: Parser RawPhase
 pipelineItem =
   pipelineApplyItem
     <|> pipelineNormalizeItem
+    <|> pipelineOptimizeSsaItem
     <|> try pipelineExtractFoliateItem
     <|> pipelineExtractItem
 
@@ -1043,6 +1044,13 @@ pipelineNormalizeItem = do
   opts <- option (RawNormalizeOpts Nothing Nothing) normalizeOptsBlock
   optionalSemi
   pure (RPNormalize opts)
+
+pipelineOptimizeSsaItem :: Parser RawPhase
+pipelineOptimizeSsaItem = do
+  _ <- symbol "optimize"
+  _ <- symbol "ssa"
+  optionalSemi
+  pure RPOptimizeSSA
 
 normalizeOptsBlock :: Parser RawNormalizeOpts
 normalizeOptsBlock = do

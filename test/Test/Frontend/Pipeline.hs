@@ -13,7 +13,8 @@ import Strat.DSL.Elab (elabRawFileWithEnv)
 import Strat.Frontend.Env (ModuleEnv, emptyEnv, meDoctrines, meMorphisms)
 import Strat.Frontend.Prelude (preludeDoctrines)
 import Strat.Frontend.Run (selectRun, runWithEnv, RunResult(..), Artifact(..))
-import Strat.Poly.Foliation (SSA(..))
+import Strat.Poly.Foliation (SSA(..), SSAStep(..))
+import Strat.Poly.Names (GenName(..))
 
 
 tests :: TestTree
@@ -23,6 +24,7 @@ tests =
     [ testCase "pipeline foliate + forget roundtrip smoke" testPipelineRoundtrip
     , testCase "derived doctrine requires acyclic mode" testDerivedRequiresAcyclic
     , testCase "extract foliate without with{} uses derived default policy" testDerivedDefaultPolicy
+    , testCase "optimize ssa removes explicit dup steps" testOptimizeSsaRemovesDup
     , testCase "derived doctrine reserves and materializes .forget" testDerivedForgetReservedAndMaterialized
     , testCase "ArtSSA can apply morphism sourced from derived doctrine" testApplyDerivedSourceMorphism
     , testCase "ArtSSA preserves generator attrs through step constructors" testApplyDerivedAttrReflection
@@ -58,6 +60,25 @@ testDerivedDefaultPolicy = do
       assertBool "expected reserved p0 to be honored via derived default policy" ("p0_1" `elem` M.elems (ssaPortNames ssa))
     _ ->
       assertFailure "expected ArtSSA result"
+
+
+testOptimizeSsaRemovesDup :: Assertion
+testOptimizeSsaRemovesDup = do
+  env <- require (elabProgram optimizeSsaProgram)
+  runDef <- require (selectRun env (Just "main"))
+  result <- require (runWithEnv env runDef)
+  case prArtifact result of
+    ArtSSA _ _ ssa ->
+      assertBool
+        "expected dup step to be eliminated after optimize ssa"
+        (not (any isDupStep (ssaSteps ssa)))
+    _ ->
+      assertFailure "expected ArtSSA result"
+  where
+    isDupStep step =
+      case step of
+        StepGen{} -> stepGen step == GenName "dup"
+        _ -> False
 
 
 testDerivedForgetReservedAndMaterialized :: Assertion
@@ -177,6 +198,33 @@ defaultPolicyProgram =
     <> "}\n"
     <> "---\n"
     <> "a\n"
+    <> "---\n"
+
+
+optimizeSsaProgram :: Text
+optimizeSsaProgram =
+  "doctrine D where {\n"
+    <> "  mode M acyclic classifiedBy M via U_M;\n"
+    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
+    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
+    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
+    <> "  gen U_M : [] -> [U_M] @M;\n"
+    <> "  gen T : [] -> [U_M] @M;\n"
+    <> "  gen dup(a@M) : [a] -> [a, a] @M;\n"
+    <> "  gen a : [] -> [T] @M;\n"
+    <> "}\n"
+    <> "derived doctrine D_SSA = foliated D mode M;\n"
+    <> "pipeline p where {\n"
+    <> "  extract foliate into D_SSA;\n"
+    <> "  optimize ssa;\n"
+    <> "}\n"
+    <> "run main using p where {\n"
+    <> "  source doctrine D;\n"
+    <> "  source mode M;\n"
+    <> "}\n"
+    <> "---\n"
+    <> "a; dup{T}\n"
     <> "---\n"
 
 

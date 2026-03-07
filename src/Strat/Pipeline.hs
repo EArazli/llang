@@ -52,6 +52,7 @@ data ValueExtractorSpec
 data Phase
   = ApplyMorph Text
   | Normalize RewritePolicy Int
+  | OptimizeSSA
   | ExtractFoliation { target :: Text, policy :: Maybe FoliationPolicy }
   | ExtractValue { doctrine :: Text, extractor :: ValueExtractorSpec }
   | ExtractDiagramPretty
