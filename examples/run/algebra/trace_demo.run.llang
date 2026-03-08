@@ -12,10 +12,13 @@ doctrine TraceDemo where {
   gen step2 : [T, T] -> [T, T] @M;
 }
 
-derived doctrine TraceDemo_SSA = foliated TraceDemo mode M;
+fragment ShareTrace in TraceDemo mode M where {
+}
+
+derived doctrine TraceDemo_Share = letgraph ShareTrace;
 
 pipeline main where {
-  extract foliate into TraceDemo_SSA;
+  quote into TraceDemo_Share;
   extract diagram;
 }
 

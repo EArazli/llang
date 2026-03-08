@@ -12,7 +12,7 @@ This project treats "canonical doctrine coverage" as an explicit list of named a
 | Pushout doctrine composition | `examples/run/pushout/nat_bool_plus.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`pushout doctrine target`), `test/Test/Poly/Pushout.hs` |
 | Classified modalities / classifier-lift coherence | `examples/run/modes/adjunction_real.run.llang` (`run triangle_left`) | `test/Test/Frontend/CanonicalCoverage.hs` (`classified modality target`), `test/Test/Poly/ModeTheory.hs`, `test/Test/Poly/ModeTransforms.hs` |
 | Effects composition via functor/apply | `examples/run/effects/combined_with_handler.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`effects composition target`), `test/Test/Frontend/StdlibIntegration.hs` |
-| Foliation + forget roundtrip behavior | `examples/run/foliation/basic_foliate.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`foliation+forget target`), `test/Test/Frontend/Pipeline.hs` |
+| Explicit sharing quotation behavior | `examples/run/sharing/basic_quote.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`sharing quote target`), `test/Test/Frontend/Pipeline.hs` |
 | Codegen pipeline behavior | `examples/run/codegen/simple_codegen.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`codegen target`), `test/Test/Frontend/ExampleCodegen.hs` |
 | Data macro doctrine path | `examples/run/data/list.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`data macro target`), `test/Test/Poly/DataMacro.hs` |
 | Data folds (catamorphisms) | `examples/run/data/list_fold_length.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`data fold target`), `test/Test/Poly/DataMacro.hs` |

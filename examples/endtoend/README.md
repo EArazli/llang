@@ -89,44 +89,44 @@ Expected output:
 ## Pair-Based Endomorphic AD Core
 
 `autodiff_times_sin_pair_core.run.llang` isolates the pair-based endomorphic AD
-story without the JS backend.
+story while still lowering the quoted result through a small JS backend.
 
 - `SmoothLam` is closed under differentiation by adding `Pair`, `mkPair`,
   `fst`, `snd`, `add`, `cos`, and `neg`
 - `forwardAD : SmoothLam -> SmoothLam` is an actual endomorphism with
   `R -> Pair(R, R)` and primitive images expressed as composites in the same
   doctrine
-- `core` shows the first differentiated CCC term
-- `core2` applies `forwardAD` twice, demonstrating that the transformed
-  doctrine stays closed under repeated AD
+- the source run is an open core term `dup ; (id * (id ; sin)) ; mul`, so after
+  one AD pass the emitted JS is a lambda from a seeded pair input `p0` to
+  `[value, derivative]`
+- `main` runs:
+  `apply forwardAD -> normalize -> quote into SmoothLam_Share -> apply lowerJS -> normalize -> apply emitJS -> normalize -> extract Doc`
+- `main2` uses the exact same path, with the only semantic difference being a
+  second `apply forwardAD` before normalization
 
-Inspect the first-order pair core:
+Build the first-order JS module:
 
-  stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run core
+  stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run main
 
-Inspect the second-order pair core:
+Build the second-order JS module through the same backend:
 
-  stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run core2
+  stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run main2
 
-Current limitation:
+Current status:
 
-  The pair-preserving JS backend is not landed yet, so the compilable JS path
-  remains `autodiff_times_sin.run.llang` while this example focuses on the
-  endomorphic categorical AD transform itself.
+  This example now lands the userland sharing path directly in the Milestone 2
+  presentation. The differentiated term is quoted into `SmoothLam_Share` with
+  nested `let_*` / `returnRefs` structure, then lowered through an ordinary
+  morphism `lowerJS : SmoothLam_Share -> PairJS`, rendered by an ordinary
+  `emitJS : PairJS -> PairJSDoc`, and finally extracted with `extract Doc`.
 
-Why the SSA route still stops short:
+  There is no language-level JS extractor in this path. The backend cleanup is
+  userland too: `PairJS` carries the explicit expression/program structure, its
+  local computational rules inline obviously safe return patterns and recover
+  nearby pair destructuring from sibling `[0]` / `[1]` projections, and the
+  final `PairJSDoc` stage renders the JS module through ordinary `Doc`
+  combinators.
 
-  I tried the obvious userland path here: reintroduce source-level packaging,
-  foliate the differentiated term, and lower SSA to `Artifact`.
-
-  The remaining blocker is lambda-body ordering. A lambda SSA block naturally
-  wants `parameter, body, return-variable`, but the current `Artifact`-level
-  userland toolbox does not provide a reliable way to permute those inputs when
-  rendering. In particular, a user-defined swap/permutation generator over
-  multiple outputs does not normalize in the way the JS backend needs, and the
-  fallback rewrite-based encodings still leave the renderer unable to put
-  “statements first, return last” cleanly.
-
-  So the current limitation is not the endomorphic `forwardAD` pass. The pair
-  core itself is fine. The blocker is the final lambda-aware SSA-to-JS lowering
-  layer in userland.
+  So `main` and `main2` differ only by the extra `forwardAD` application in the
+  pipeline. They share the same quoting, letgraph optimization, `PairJS`
+  lowering, `PairJSDoc` rendering, and `Doc` extraction path.

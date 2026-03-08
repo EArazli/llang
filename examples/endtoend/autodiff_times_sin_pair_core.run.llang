@@ -11,7 +11,6 @@ doctrine SmoothLam where {
   gen R : [] -> [M.U_M] @M;
   gen Pair(a@M, b@M) : [] -> [M.U_M] @M;
   gen Arr(a@M, b@M) : [] -> [M.U_M] @M;
-  gen Program : [] -> [M.U_M] @M;
   gen dup(a@M) : [a] -> [a, a] @M;
   gen mkPair(a@M, b@M) : [a, b] -> [Pair(a, b)] @M;
   gen fst(a@M, b@M) : [Pair(a, b)] -> [a] @M;
@@ -28,8 +27,6 @@ doctrine SmoothLam where {
   gen sin : [R] -> [R] @M;
   gen cos : [R] -> [R] @M;
   gen neg : [R] -> [R] @M;
-  gen emitUnaryModule(a@M, b@M) { fn:Str, path:Str } : [Arr(a, b)] -> [Program] @M;
-
 }
 
 morphism forwardAD : SmoothLam -> SmoothLam where {
@@ -49,7 +46,6 @@ morphism forwardAD : SmoothLam -> SmoothLam where {
   gen snd @M -> snd
   gen lam @M -> lam[?b0]
   gen app @M -> app
-  gen emitUnaryModule @M -> emitUnaryModule(fn = fn, path = path)
 
   gen add @M ->
     (mkPair{Pair(R, R), Pair(R, R)}
@@ -111,10 +107,156 @@ morphism forwardAD : SmoothLam -> SmoothLam where {
     ; mkPair{R, R})
 }
 
-derived doctrine SmoothLam_SSA = foliated SmoothLam mode M;
+fragment SharePair in SmoothLam mode M where {
+  product mkPair = fst, snd;
+  gen comp_ctx_ext = alias;
+  gen comp_var = alias;
+  gen comp_reindex = alias;
+  gen dup = duplicate;
+  gen mkPair = share;
+  gen fst = share;
+  gen snd = share;
+  gen add = share;
+  gen mul = share;
+  gen sin = share;
+  gen cos = share;
+  gen neg = share;
+  recurse binders = true;
+  recurse boxes = true;
+  recurse feedback = true;
+}
+
+derived doctrine SmoothLam_Share = letgraph SharePair with {
+  naming = "boundary_labels_first";
+};
+
+doctrine PairJS where {
+  mode M acyclic classifiedBy M via M.U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_M : [] -> [M.U_M] @M;
+
+  attrsort Str = string;
+
+  gen Expr : [] -> [M.U_M] @M;
+  gen ExprList : [] -> [M.U_M] @M;
+  gen Program : [] -> [M.U_M] @M;
+
+  gen exprVar { name:Str } : [] -> [Expr] @M;
+  gen exprUndefined : [] -> [Expr] @M;
+  gen exprIndex { idx:Str } : [Expr] -> [Expr] @M;
+  gen exprUnary { fn:Str } : [Expr] -> [Expr] @M;
+  gen exprNeg : [Expr] -> [Expr] @M;
+  gen exprBinary { op:Str } : [Expr, Expr] -> [Expr] @M;
+  gen exprCall : [Expr, Expr] -> [Expr] @M;
+  gen exprPair : [Expr, Expr] -> [Expr] @M;
+
+  gen exprsNil : [] -> [ExprList] @M;
+  gen exprsCons : [Expr, ExprList] -> [ExprList] @M;
+
+  gen programReturn : [ExprList] -> [Program] @M;
+  gen programLet : [Expr, Expr, Program] -> [Program] @M;
+  gen programLetPair : [Expr, Expr, Expr, Program] -> [Program] @M;
+  gen programOpen : [ExprList, Program] -> [Program] @M;
+
+  gen makeLetUndefined : [Expr, Program] -> [Program] @M;
+  gen makeLetCopy : [Expr, Expr, Program] -> [Program] @M;
+  gen makeLetDup : [Expr, Expr, Expr, Program] -> [Program] @M;
+  gen makeLetIndex { idx:Str } : [Expr, Expr, Program] -> [Program] @M;
+  gen makeLetUnary { fn:Str } : [Expr, Expr, Program] -> [Program] @M;
+  gen makeLetNeg : [Expr, Expr, Program] -> [Program] @M;
+  gen makeLetBinary { op:Str } : [Expr, Expr, Expr, Program] -> [Program] @M;
+  gen makeLetCall : [Expr, Expr, Expr, Program] -> [Program] @M;
+  gen makeLetPair : [Expr, Expr, Expr, Program] -> [Program] @M;
+  gen makeLetUnsupported { tag:Str } : [ExprList, ExprList, Program, Program] -> [Program] @M;
+  gen makeLetLambda { tag:Str } : [Expr, Program, Program] -> [Program] @M;
+
+  rule computational makeLetUndefined_def -> : [Expr, Program] -> [Program] @M =
+    (?out * ?body) ; makeLetUndefined ==
+      (?out * exprUndefined * ?body) ; programLet
+
+  rule computational makeLetCopy_def -> : [Expr, Expr, Program] -> [Program] @M =
+    (?out * ?expr * ?body) ; makeLetCopy ==
+      (?out * ?expr * ?body) ; programLet
+
+  rule computational makeLetIndex_def -> : [Expr, Expr, Program] -> [Program] @M =
+    (?out * ?expr * ?body) ; makeLetIndex(idx = i) ==
+      (?out * (?expr ; exprIndex(idx = i)) * ?body) ; programLet
+
+  rule computational makeLetUnary_def -> : [Expr, Expr, Program] -> [Program] @M =
+    (?out * ?expr * ?body) ; makeLetUnary(fn = f) ==
+      (?out * (?expr ; exprUnary(fn = f)) * ?body) ; programLet
+
+  rule computational makeLetNeg_def -> : [Expr, Expr, Program] -> [Program] @M =
+    (?out * ?expr * ?body) ; makeLetNeg ==
+      (?out * (?expr ; exprNeg) * ?body) ; programLet
+
+  rule computational makeLetBinary_def -> : [Expr, Expr, Expr, Program] -> [Program] @M =
+    (?out * ?left * ?right * ?body) ; makeLetBinary(op = o) ==
+      (?out * ((?left * ?right) ; exprBinary(op = o)) * ?body) ; programLet
+
+  rule computational makeLetCall_def -> : [Expr, Expr, Expr, Program] -> [Program] @M =
+    (?out * ?fun * ?arg * ?body) ; makeLetCall ==
+      (?out * ((?fun * ?arg) ; exprCall) * ?body) ; programLet
+
+  rule computational makeLetPair_def -> : [Expr, Expr, Expr, Program] -> [Program] @M =
+    (?out * ?left * ?right * ?body) ; makeLetPair ==
+      (?out * ((?left * ?right) ; exprPair) * ?body) ; programLet
+
+  rule computational inline_return_var_def -> : [Expr] -> [Program] @M =
+    (exprVar(name = n) * ?expr * (((exprVar(name = n) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
+      ((?expr * exprsNil) ; exprsCons) ; programReturn
+
+  rule computational inline_return_index_def -> : [Expr] -> [Program] @M =
+    (exprVar(name = n) * ?expr * ((((exprVar(name = n) ; exprIndex(idx = i)) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
+      ((((?expr ; exprIndex(idx = i)) * exprsNil) ; exprsCons) ; programReturn)
+
+  rule computational inline_return_unary_def -> : [Expr] -> [Program] @M =
+    (exprVar(name = n) * ?expr * ((((exprVar(name = n) ; exprUnary(fn = f)) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
+      ((((?expr ; exprUnary(fn = f)) * exprsNil) ; exprsCons) ; programReturn)
+
+  rule computational inline_return_neg_def -> : [Expr] -> [Program] @M =
+    (exprVar(name = n) * ?expr * ((((exprVar(name = n) ; exprNeg) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
+      ((((?expr ; exprNeg) * exprsNil) ; exprsCons) ; programReturn)
+
+  rule computational inline_return_binary_l_def -> : [Expr, Expr] -> [Program] @M =
+    (exprVar(name = n) * ?expr * (((((exprVar(name = n) * ?rhs) ; exprBinary(op = o)) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
+      (((((?expr * ?rhs) ; exprBinary(op = o)) * exprsNil) ; exprsCons) ; programReturn)
+
+  rule computational inline_return_binary_r_def -> : [Expr, Expr] -> [Program] @M =
+    (exprVar(name = n) * ?expr * (((((?lhs * exprVar(name = n)) ; exprBinary(op = o)) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
+      (((((?lhs * ?expr) ; exprBinary(op = o)) * exprsNil) ; exprsCons) ; programReturn)
+
+  rule computational inline_return_call_fn_def -> : [Expr, Expr] -> [Program] @M =
+    (exprVar(name = n) * ?expr * (((((exprVar(name = n) * ?arg) ; exprCall) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
+      (((((?expr * ?arg) ; exprCall) * exprsNil) ; exprsCons) ; programReturn)
+
+  rule computational inline_return_call_arg_def -> : [Expr, Expr] -> [Program] @M =
+    (exprVar(name = n) * ?expr * (((((?fun * exprVar(name = n)) ; exprCall) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
+      (((((?fun * ?expr) ; exprCall) * exprsNil) ; exprsCons) ; programReturn)
+
+  rule computational fuse_pair_projections_adjacent_lr_def -> : [Expr, Expr, Program] -> [Program] @M =
+    (?left * (exprVar(name = p) ; exprIndex(idx = "[0]")) * ((?right * (exprVar(name = p) ; exprIndex(idx = "[1]")) * ?body) ; programLet)) ; programLet ==
+      (?left * ?right * exprVar(name = p) * ?body) ; programLetPair
+
+  rule computational fuse_pair_projections_adjacent_rl_def -> : [Expr, Expr, Program] -> [Program] @M =
+    (?right * (exprVar(name = p) ; exprIndex(idx = "[1]")) * ((?left * (exprVar(name = p) ; exprIndex(idx = "[0]")) * ?body) ; programLet)) ; programLet ==
+      (?left * ?right * exprVar(name = p) * ?body) ; programLetPair
+
+  rule computational fuse_pair_projections_after_unary_lr_def -> : [Expr, Program] -> [Program] @M =
+    (exprVar(name = l) * (exprVar(name = p) ; exprIndex(idx = "[0]")) * ((exprVar(name = m) * (exprVar(name = l) ; exprUnary(fn = f)) * ((?right * (exprVar(name = p) ; exprIndex(idx = "[1]")) * ?body) ; programLet)) ; programLet)) ; programLet ==
+      (exprVar(name = l) * ?right * exprVar(name = p) * ((exprVar(name = m) * (exprVar(name = l) ; exprUnary(fn = f)) * ?body) ; programLet)) ; programLetPair
+
+  rule computational fuse_pair_projections_after_two_unary_lr_def -> : [Expr, Program] -> [Program] @M =
+    (exprVar(name = l) * (exprVar(name = p) ; exprIndex(idx = "[0]")) * ((exprVar(name = m1) * (exprVar(name = l) ; exprUnary(fn = f1)) * ((exprVar(name = m2) * (exprVar(name = l) ; exprUnary(fn = f2)) * ((?right * (exprVar(name = p) ; exprIndex(idx = "[1]")) * ?body) ; programLet)) ; programLet)) ; programLet)) ; programLet ==
+      (exprVar(name = l) * ?right * exprVar(name = p) * ((exprVar(name = m1) * (exprVar(name = l) ; exprUnary(fn = f1)) * ((exprVar(name = m2) * (exprVar(name = l) ; exprUnary(fn = f2)) * ?body) ; programLet)) ; programLet)) ; programLetPair
+
+}
 
 doctrine PairJSDoc extends Doc where {
-  gen NameList : [] -> [Doc.U_Doc] @Doc;
+  gen DocList : [] -> [Doc.U_Doc] @Doc;
   gen append : [Doc, Doc] -> [Doc] @Doc;
   gen prefix { s:Str } : [Doc] -> [Doc] @Doc;
   gen suffix { s:Str } : [Doc] -> [Doc] @Doc;
@@ -124,292 +266,253 @@ doctrine PairJSDoc extends Doc where {
   gen stmtTerm : [Doc] -> [Doc] @Doc;
   gen returnStmt : [Doc] -> [Doc] @Doc;
   gen declConst : [Doc, Doc] -> [Doc] @Doc;
-  gen assignCopy : [Doc, Doc] -> [Doc] @Doc;
-  gen assignPairJS : [Doc, Doc, Doc] -> [Doc] @Doc;
-  gen assignIndex { idx:Str } : [Doc, Doc] -> [Doc] @Doc;
-  gen assignUnaryJS { fn:Str } : [Doc, Doc] -> [Doc] @Doc;
-  gen assignNegJS : [Doc, Doc] -> [Doc] @Doc;
-  gen assignBinaryJS { op:Str } : [Doc, Doc, Doc] -> [Doc] @Doc;
-  gen assignCallJS : [Doc, Doc, Doc] -> [Doc] @Doc;
-  gen dupStmt : [Doc, Doc, Doc] -> [Doc] @Doc;
-  gen index0 : [Doc] -> [Doc] @Doc;
-  gen index1 : [Doc] -> [Doc] @Doc;
+  gen letStmt : [Doc, Doc, Doc] -> [Doc] @Doc;
+  gen indexDoc { idx:Str } : [Doc] -> [Doc] @Doc;
   gen unaryCall { fn:Str } : [Doc] -> [Doc] @Doc;
-  gen unaryNeg : [Doc] -> [Doc] @Doc;
-  gen binaryInfix { op:Str } : [Doc, Doc] -> [Doc] @Doc;
-  gen pairDoc : [Doc, Doc] -> [Doc] @Doc;
+  gen negDoc : [Doc] -> [Doc] @Doc;
+  gen binaryDoc { op:Str } : [Doc, Doc] -> [Doc] @Doc;
   gen callDoc : [Doc, Doc] -> [Doc] @Doc;
-  gen namesNil : [] -> [NameList] @Doc;
-  gen namesCons : [Doc, NameList] -> [NameList] @Doc;
-  gen renderNames : [NameList] -> [Doc] @Doc;
-  gen lambdaExpr : [Doc, Doc] -> [Doc] @Doc;
-  gen lambdaBody : [Doc, Doc] -> [Doc] @Doc;
-  gen renderProgram : [NameList, Doc, NameList] -> [Doc] @Doc;
-  gen constUndefined : [Doc] -> [Doc] @Doc;
-  gen unsupportedBox { tag:Str } : [NameList, NameList, Doc] -> [Doc] @Doc;
-  gen unsupportedFeedback { tag:Str } : [NameList, NameList, Doc] -> [Doc] @Doc;
-  gen exportUnary { fn:Str } : [Doc] -> [Doc] @Doc;
-  gen exportSeededUnary { fn:Str } : [Doc, Doc] -> [Doc] @Doc;
+  gen pairDoc : [Doc, Doc] -> [Doc] @Doc;
+  gen pairPattern : [Doc, Doc] -> [Doc] @Doc;
+  gen docsNil : [] -> [DocList] @Doc;
+  gen docsCons : [Doc, DocList] -> [DocList] @Doc;
+  gen renderComma : [DocList] -> [Doc] @Doc;
+  gen renderArray : [DocList] -> [Doc] @Doc;
+  gen returnExprs : [DocList] -> [Doc] @Doc;
+  gen moduleHead { fn:Str } : [DocList] -> [Doc] @Doc;
+  gen moduleOpen { fn:Str } : [DocList, Doc] -> [Doc] @Doc;
+  gen letPairStmt : [Doc, Doc, Doc, Doc] -> [Doc] @Doc;
+  gen unsupportedProgram { tag:Str } : [DocList, DocList, Doc, Doc] -> [Doc] @Doc;
+  gen lambdaUnsupported { tag:Str } : [Doc, Doc, Doc] -> [Doc] @Doc;
 
   rule computational append_def -> : [Doc, Doc] -> [Doc] @Doc =
     append == cat
 
   rule computational prefix_def -> : [Doc] -> [Doc] @Doc =
-    prefix(s = p) ==
-      (text(s = p) * id[Doc]) ; cat
+    prefix(s = p) == (text(s = p) * id[Doc]) ; append
 
   rule computational suffix_def -> : [Doc] -> [Doc] @Doc =
-    suffix(s = p) ==
-      (id[Doc] * text(s = p)) ; cat
+    suffix(s = p) == (id[Doc] * text(s = p)) ; append
 
   rule computational wrap_def -> : [Doc] -> [Doc] @Doc =
     (?d) ; wrap(open = l, close = r) ==
-      (((text(s = l) * ?d) ; cat) * text(s = r)) ; cat
+      (((text(s = l) * ?d) ; append) * text(s = r)) ; append
 
   rule computational joinWith_def -> : [Doc, Doc] -> [Doc] @Doc =
     (?l * ?r) ; joinWith(sep = s) ==
-      ((((?l * text(s = s)) ; cat) * ?r) ; cat)
+      ((((?l * text(s = s)) ; append) * ?r) ; append)
 
   rule computational lineJoin_def -> : [Doc, Doc] -> [Doc] @Doc =
     (?l * ?r) ; lineJoin ==
-      ((((?l * line) ; cat) * ?r) ; cat)
+      ((((?l * line) ; append) * ?r) ; append)
 
   rule computational stmtTerm_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; stmtTerm ==
-      ((?d * text(s = ";")) ; cat)
+    (?d) ; stmtTerm == (?d ; suffix(s = ";"))
 
   rule computational returnStmt_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; returnStmt ==
-      ((((text(s = "return ") * ?d) ; cat) * text(s = ";")) ; cat)
+    (?d) ; returnStmt == (?d ; prefix(s = "return ") ; stmtTerm)
 
   rule computational declConst_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?name * ?expr) ; declConst ==
-      ((((((text(s = "const ") * ?name) ; cat) * text(s = " = ")) ; cat) * ?expr) ; cat)
-      ; (id[Doc] * text(s = ";")) ; cat
+    (?lhs * ?rhs) ; declConst ==
+      ((((((text(s = "const ") * ?lhs) ; append) * text(s = " = ")) ; append) * ?rhs) ; append) ; stmtTerm
 
-  rule computational assignCopy_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?out * ?expr) ; assignCopy ==
-      ((((((text(s = "const ") * ?out) ; cat) * text(s = " = ")) ; cat) * ?expr) ; cat)
-      ; (id[Doc] * text(s = ";")) ; cat
+  rule computational letStmt_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
+    (?lhs * ?rhs * ?body) ; letStmt ==
+      ((((?lhs * ?rhs) ; declConst) * ?body) ; lineJoin)
 
-  rule computational assignPairJS_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
-    (?out * ?l * ?r) ; assignPairJS ==
-      ((((((((((text(s = "const ") * ?out) ; cat) * text(s = " = [")) ; cat) * ?l) ; cat) * text(s = ", ")) ; cat) * ?r) ; cat)
-      ; (id[Doc] * text(s = "];")) ; cat
-
-  rule computational assignIndex_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?out * ?expr) ; assignIndex(idx = i) ==
-      ((((((text(s = "const ") * ?out) ; cat) * text(s = " = ")) ; cat) * ?expr) ; cat)
-      ; (id[Doc] * text(s = i)) ; cat
-      ; (id[Doc] * text(s = ";")) ; cat
-
-  rule computational assignUnaryJS_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?out * ?expr) ; assignUnaryJS(fn = f) ==
-      ((((((((((text(s = "const ") * ?out) ; cat) * text(s = " = ")) ; cat) * text(s = f)) ; cat) * text(s = "(")) ; cat) * ?expr) ; cat)
-      ; (id[Doc] * text(s = ");")) ; cat
-
-  rule computational assignNegJS_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?out * ?expr) ; assignNegJS ==
-      ((((((text(s = "const ") * ?out) ; cat) * text(s = " = (-")) ; cat) * ?expr) ; cat)
-      ; (id[Doc] * text(s = ");")) ; cat
-
-  rule computational assignBinaryJS_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
-    (?out * ?l * ?r) ; assignBinaryJS(op = o) ==
-      ((((((((((text(s = "const ") * ?out) ; cat) * text(s = " = (")) ; cat) * ?l) ; cat) * text(s = o)) ; cat) * ?r) ; cat)
-      ; (id[Doc] * text(s = ");")) ; cat
-
-  rule computational assignCallJS_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
-    (?out * ?f * ?x) ; assignCallJS ==
-      ((((((((((text(s = "const ") * ?out) ; cat) * text(s = " = ")) ; cat) * ?f) ; cat) * text(s = "(")) ; cat) * ?x) ; cat)
-      ; (id[Doc] * text(s = ");")) ; cat
-
-  rule computational dupStmt_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
-    (?o1 * ?o2 * ?i) ; dupStmt ==
-      (((((((((((text(s = "const [") * ?o1) ; cat) * text(s = ", ")) ; cat) * ?o2) ; cat) * text(s = "] = Array(2).fill(")) ; cat) * ?i) ; cat)
-      * text(s = ");")) ; cat
-
-  rule computational index0_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; index0 ==
-      ((?d * text(s = "[0]")) ; cat)
-
-  rule computational index1_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; index1 ==
-      ((?d * text(s = "[1]")) ; cat)
+  rule computational indexDoc_def -> : [Doc] -> [Doc] @Doc =
+    (?d) ; indexDoc(idx = i) == (?d ; suffix(s = i))
 
   rule computational unaryCall_def -> : [Doc] -> [Doc] @Doc =
     (?d) ; unaryCall(fn = f) ==
-      (((((text(s = f) * text(s = "(")) ; cat) * ?d) ; cat) * text(s = ")")) ; cat
+      ((((text(s = f) * text(s = "(")) ; append) * ?d) ; append) ; suffix(s = ")")
 
-  rule computational unaryNeg_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; unaryNeg ==
-      ((((text(s = "(-") * ?d) ; cat) * text(s = ")")) ; cat)
+  rule computational negDoc_def -> : [Doc] -> [Doc] @Doc =
+    (?d) ; negDoc == (?d ; prefix(s = "(-") ; suffix(s = ")"))
 
-  rule computational binaryInfix_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?l * ?r) ; binaryInfix(op = o) ==
-      ((((((text(s = "(") * ?l) ; cat) * text(s = o)) ; cat) * ?r) ; cat)
-      ; (id[Doc] * text(s = ")")) ; cat
-
-  rule computational pairDoc_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?l * ?r) ; pairDoc ==
-      ((((((text(s = "[") * ?l) ; cat) * text(s = ", ")) ; cat) * ?r) ; cat)
-      ; (id[Doc] * text(s = "]")) ; cat
+  rule computational binaryDoc_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?l * ?r) ; binaryDoc(op = o) == (?l * ?r) ; joinWith(sep = o) ; wrap(open = "(", close = ")")
 
   rule computational callDoc_def -> : [Doc, Doc] -> [Doc] @Doc =
     (?f * ?x) ; callDoc ==
-      (((((?f * text(s = "(")) ; cat) * ?x) ; cat) * text(s = ")")) ; cat
+      ((((?f * text(s = "(")) ; append) * ?x) ; append) ; suffix(s = ")")
 
-  rule computational renderNames_nil_def -> : [] -> [Doc] @Doc =
-    namesNil ; renderNames == empty
+  rule computational pairDoc_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?l * ?r) ; pairDoc ==
+      (?r * ?l) ; joinWith(sep = ", ") ; wrap(open = "[", close = "]")
 
-  rule computational renderNames_cons_one_def -> : [Doc] -> [Doc] @Doc =
-    (?x * namesNil) ; namesCons ; renderNames == ?x
+  rule computational pairPattern_def -> : [Doc, Doc] -> [Doc] @Doc =
+    (?l * ?r) ; pairPattern ==
+      (?l * ?r) ; joinWith(sep = ", ") ; wrap(open = "[", close = "]")
 
-  rule computational renderNames_cons_many_def -> : [Doc, Doc, NameList] -> [Doc] @Doc =
-    (?x * ((?y * ?ys) ; namesCons)) ; namesCons ; renderNames ==
-      (?x * (((?y * ?ys) ; namesCons) ; renderNames)) ; joinWith(sep = ", ")
+  rule computational renderComma_nil_def -> : [] -> [Doc] @Doc =
+    docsNil ; renderComma == empty
 
-  rule computational lambdaBody_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?steps * ?outs) ; lambdaBody ==
-      ((((?steps * line) ; cat) * ((((text(s = "return ") * ?outs) ; cat) * text(s = ";")) ; cat)) ; cat)
+  rule computational renderComma_one_def -> : [Doc] -> [Doc] @Doc =
+    (?x * docsNil) ; docsCons ; renderComma == ?x
 
-  rule computational lambdaExpr_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?params * ?body) ; lambdaExpr ==
-      ((((((text(s = "(") * ?params) ; cat) * text(s = ") => {\n")) ; cat) * (?body ; indent(n = 2))) ; cat)
-      ; (id[Doc] * text(s = "\n}")) ; cat
+  rule computational renderComma_many_def -> : [Doc, Doc, DocList] -> [Doc] @Doc =
+    (?x * ((?y * ?ys) ; docsCons)) ; docsCons ; renderComma ==
+      (?x * (((?y * ?ys) ; docsCons) ; renderComma)) ; joinWith(sep = ", ")
 
-  rule computational renderProgram_module_def -> : [Doc, NameList] -> [Doc] @Doc =
-    (namesNil * ?steps * ?outs) ; renderProgram ==
-      ((?steps * (?outs ; renderNames ; prefix(s = "// outputs: "))) ; lineJoin)
+  rule computational renderArray_def -> : [DocList] -> [Doc] @Doc =
+    (?xs) ; renderArray == (?xs ; renderComma ; wrap(open = "[", close = "]"))
 
-  rule computational renderProgram_lambda_def -> : [Doc, NameList, Doc, NameList] -> [Doc] @Doc =
-    (((?x * ?xs) ; namesCons) * ?steps * ?outs) ; renderProgram ==
-      ((((?x * ?xs) ; namesCons) ; renderNames) * ((?steps * (?outs ; renderNames)) ; lambdaBody)) ; lambdaExpr
+  rule computational returnExprs_nil_def -> : [] -> [Doc] @Doc =
+    docsNil ; returnExprs == text(s = "return undefined;")
 
-  rule computational constUndefined_def -> : [Doc] -> [Doc] @Doc =
-    (?name) ; constUndefined ==
-      ((((text(s = "const ") * ?name) ; cat) * text(s = " = undefined;")) ; cat)
+  rule computational returnExprs_one_def -> : [Doc] -> [Doc] @Doc =
+    (?x * docsNil) ; docsCons ; returnExprs == (?x ; returnStmt)
 
-  rule computational exportUnary_def -> : [Doc] -> [Doc] @Doc =
-    (?fnDoc) ; exportUnary(fn = f) ==
-      (((((text(s = "export const ") * text(s = f)) ; cat) * text(s = " = x => ")) ; cat)
-      * (((?fnDoc * text(s = "[x, 1]")) ; callDoc) ; (id[Doc] * text(s = ";")) ; cat))
-      ; cat
+  rule computational returnExprs_many_def -> : [Doc, Doc, DocList] -> [Doc] @Doc =
+    (?x * ((?y * ?ys) ; docsCons)) ; docsCons ; returnExprs ==
+      ((?x * ((?y * ?ys) ; docsCons)) ; docsCons) ; renderArray ; returnStmt
 
-  rule computational exportSeededUnary_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?out * ?fnDoc) ; exportSeededUnary(fn = f) ==
-      (((?out ; prefix(s = "// export port: ")) * (?fnDoc ; exportUnary(fn = f))) ; lineJoin)
+  rule computational moduleHead_def -> : [DocList] -> [Doc] @Doc =
+    (?params) ; moduleHead(fn = f) ==
+      (((text(s = "export const ") * text(s = f)) ; append) * ((?params ; renderComma) ; prefix(s = " = (") ; suffix(s = ") => {"))) ; append
+
+  rule computational moduleOpen_def -> : [DocList, Doc] -> [Doc] @Doc =
+    (?params * ?body) ; moduleOpen(fn = f) ==
+      (((?params ; moduleHead(fn = f)) * (?body ; indent(n = 2))) ; lineJoin) ; suffix(s = "\n};")
+
+  rule computational letPairStmt_def -> : [Doc, Doc, Doc, Doc] -> [Doc] @Doc =
+    (?left * ?right * ?pair * ?body) ; letPairStmt ==
+      (((((?left * ?right) ; pairPattern) * ?pair) ; declConst) * ?body) ; lineJoin
+
 }
 
-morphism emitJS : SmoothLam_SSA -> PairJSDoc where {
-  mode M -> Doc;
-  attrsort __ssa_str -> Str;
+morphism lowerJS : SmoothLam_Share -> PairJS where {
+  check structural;
+
+  mode M -> M;
+  attrsort __quote_str -> Str;
   attrsort Str -> Str;
 
-  type PortRef @M -> Doc @Doc;
-  type PortList @M -> NameList @Doc;
-  type Step @M -> Doc @Doc;
-  type StepList @M -> Doc @Doc;
-  type SSA @M -> Doc @Doc;
+  type Ref @M -> Expr @M;
+  type RefList @M -> ExprList @M;
+  type LetGraph @M -> Program @M;
 
-  gen portRef @M -> text(s = name)
-  gen portsNil @M -> namesNil
-  gen portsCons @M -> namesCons
-  gen stepsNil @M -> empty
-  gen stepsCons @M -> (((id[Doc] * line) ; cat) * id[Doc]) ; cat
-  gen ssaProgram @M -> renderProgram
+  gen ref @M -> exprVar(name = name)
+  gen refsNil @M -> exprsNil
+  gen refsCons @M -> exprsCons
+  gen returnRefs @M -> programReturn
+  gen letGraphProgram @M -> programOpen
 
-  gen step_U_M @M -> constUndefined
-  gen step_R @M -> constUndefined
-  gen step_Pair @M -> constUndefined
-  gen step_Arr @M -> constUndefined
-  gen step_Program @M -> constUndefined
-  gen step_comp_ctx_ext @M -> assignCopy
-  gen step_comp_var @M -> assignCopy
-  gen step_comp_reindex @M -> assignCopy
+  gen let_U_M @M -> (id[Expr] * splice(?b0)) ; makeLetUndefined
+  gen let_R @M -> (id[Expr] * splice(?b0)) ; makeLetUndefined
+  gen let_Pair @M -> (id[Expr] * splice(?b0)) ; makeLetUndefined
+  gen let_Arr @M -> (id[Expr] * splice(?b0)) ; makeLetUndefined
+  gen let_comp_ctx_ext @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetCopy
+  gen let_comp_var @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetCopy
+  gen let_comp_reindex @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetCopy
 
-  gen step_dup @M -> dupStmt
-  gen step_mkPair @M -> assignPairJS
-  gen step_fst @M -> assignIndex(idx = "[0]")
-  gen step_snd @M -> assignIndex(idx = "[1]")
-  gen step_lam @M -> assignCopy
-  gen step_app @M -> assignCallJS
-  gen step_add @M -> assignBinaryJS(op = " + ")
-  gen step_mul @M -> assignBinaryJS(op = " * ")
-  gen step_sin @M -> assignUnaryJS(fn = "Math.sin")
-  gen step_cos @M -> assignUnaryJS(fn = "Math.cos")
-  gen step_neg @M -> assignNegJS
-  gen step_emitUnaryModule @M -> exportSeededUnary(fn = fn)
+  gen let_dup @M -> (id[Expr] * id[Expr] * id[Expr] * splice(?b0)) ; makeLetDup
+  gen let_mkPair @M -> (id[Expr] * id[Expr] * id[Expr] * splice(?b0)) ; makeLetPair
+  gen let_fst @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetIndex(idx = "[0]")
+  gen let_snd @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetIndex(idx = "[1]")
+  gen let_lam @M -> (id[Expr] * id[Program] * splice(?b0)) ; makeLetLambda(tag = "lambda")
+  gen let_app @M -> (id[Expr] * id[Expr] * id[Expr] * splice(?b0)) ; makeLetCall
+  gen let_add @M -> (id[Expr] * id[Expr] * id[Expr] * splice(?b0)) ; makeLetBinary(op = " + ")
+  gen let_mul @M -> (id[Expr] * id[Expr] * id[Expr] * splice(?b0)) ; makeLetBinary(op = " * ")
+  gen let_sin @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetUnary(fn = "Math.sin")
+  gen let_cos @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetUnary(fn = "Math.cos")
+  gen let_neg @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetNeg
 
-  gen stepBox @M -> unsupportedBox(tag = "box")
-  gen stepFeedback @M -> unsupportedFeedback(tag = "feedback")
+  gen letBox @M -> (id[ExprList] * id[ExprList] * id[Program] * splice(?b0)) ; makeLetUnsupported(tag = "box")
+  gen letFeedback @M -> (id[ExprList] * id[ExprList] * id[Program] * splice(?b0)) ; makeLetUnsupported(tag = "feedback")
 }
 
-pipeline core where {
-  apply forwardAD;
-  normalize { policy = "computational_lr"; fuel = 500; };
-  extract diagram;
+morphism emitJS : PairJS -> PairJSDoc where {
+  check structural;
+
+  mode M -> Doc;
+  attrsort Str -> Str;
+
+  gen comp_ctx_ext @M -> comp_ctx_ext
+  gen comp_var @M -> comp_var
+  gen comp_reindex @M -> comp_reindex
+
+  type Expr @M -> Doc @Doc;
+  type ExprList @M -> DocList @Doc;
+  type Program @M -> Doc @Doc;
+
+  gen exprVar @M -> text(s = name)
+  gen exprUndefined @M -> text(s = "undefined")
+  gen exprIndex @M -> indexDoc(idx = idx)
+  gen exprUnary @M -> unaryCall(fn = fn)
+  gen exprNeg @M -> negDoc
+  gen exprBinary @M -> binaryDoc(op = op)
+  gen exprCall @M -> callDoc
+  gen exprPair @M -> pairDoc
+
+  gen exprsNil @M -> docsNil
+  gen exprsCons @M -> docsCons
+
+  gen programReturn @M -> returnExprs
+  gen programLet @M -> letStmt
+  gen programLetPair @M -> letPairStmt
+  gen programOpen @M -> moduleOpen(fn = "timesSinPair")
+
+  gen makeLetUndefined @M ->
+    (id[Doc] * text(s = "undefined") * id[Doc]) ; letStmt
+  gen makeLetCopy @M ->
+    (id[Doc] * id[Doc] * id[Doc]) ; letStmt
+  gen makeLetDup @M ->
+    (id[Doc] * ((id[Doc] * id[Doc]) ; pairDoc) * id[Doc]) ; letStmt
+  gen makeLetIndex @M ->
+    (id[Doc] * (id[Doc] ; indexDoc(idx = idx)) * id[Doc]) ; letStmt
+  gen makeLetUnary @M ->
+    (id[Doc] * (id[Doc] ; unaryCall(fn = fn)) * id[Doc]) ; letStmt
+  gen makeLetNeg @M ->
+    (id[Doc] * (id[Doc] ; negDoc) * id[Doc]) ; letStmt
+  gen makeLetBinary @M ->
+    (id[Doc] * ((id[Doc] * id[Doc]) ; binaryDoc(op = op)) * id[Doc]) ; letStmt
+  gen makeLetCall @M ->
+    (id[Doc] * ((id[Doc] * id[Doc]) ; callDoc) * id[Doc]) ; letStmt
+  gen makeLetPair @M ->
+    (id[Doc] * ((id[Doc] * id[Doc]) ; pairDoc) * id[Doc]) ; letStmt
+  gen makeLetUnsupported @M ->
+    unsupportedProgram(tag = tag)
+  gen makeLetLambda @M ->
+    lambdaUnsupported(tag = tag)
 }
 
-pipeline build where {
+pipeline js_single where {
   apply forwardAD;
   normalize { policy = "computational_lr"; fuel = 500; };
-  extract foliate into SmoothLam_SSA;
-  optimize ssa;
+  quote into SmoothLam_Share;
+  apply lowerJS;
+  normalize { policy = "computational_lr"; fuel = 500; };
   apply emitJS;
-  normalize { policy = "topmost"; fuel = 500; };
+  normalize { policy = "computational_lr"; fuel = 5000; };
   extract Doc { stdout = true; };
 }
 
-pipeline js_debug where {
-  apply forwardAD;
-  normalize { policy = "computational_lr"; fuel = 500; };
-  extract foliate into SmoothLam_SSA;
-  optimize ssa;
-  apply emitJS;
-  extract diagram;
-}
-
-pipeline core2 where {
+pipeline js_double where {
   apply forwardAD;
   apply forwardAD;
   normalize { policy = "computational_lr"; fuel = 500; };
-  extract foliate into SmoothLam_SSA;
-  optimize ssa;
+  quote into SmoothLam_Share;
+  apply lowerJS;
+  normalize { policy = "computational_lr"; fuel = 500; };
   apply emitJS;
-  normalize { policy = "topmost"; fuel = 500; };
+  normalize { policy = "computational_lr"; fuel = 5000; };
   extract Doc { stdout = true; };
 }
 
-run main using build where {
+run main using js_single where {
   source doctrine SmoothLam;
   source mode M;
 }
 ---
-lam{R, R}[(lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul] * id[R]) ; app{R, R}]
-; emitUnaryModule{R, R}(fn = "timesSinPair", path = "times_sin_pair.mjs")
+dup{R} ; (id[R] * (id[R] ; sin)) ; mul
 ---
 
-run js_debug using js_debug where {
+run main2 using js_double where {
   source doctrine SmoothLam;
   source mode M;
 }
 ---
-lam{R, R}[(lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul] * id[R]) ; app{R, R}]
-; emitUnaryModule{R, R}(fn = "timesSinPair", path = "times_sin_pair.mjs")
----
-
-run core using core where {
-  source doctrine SmoothLam;
-  source mode M;
-}
----
-lam{R, R}[(lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul] * id[R]) ; app{R, R}]
----
-
-run core2 using core2 where {
-  source doctrine SmoothLam;
-  source mode M;
-}
----
-lam{R, R}[(lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul] * id[R]) ; app{R, R}]
+dup{R} ; (id[R] * (id[R] ; sin)) ; mul
 ---

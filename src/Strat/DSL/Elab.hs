@@ -61,6 +61,7 @@ import Strat.Poly.Doctrine
   , doctrineTypeTheoryFromTables
   , gdPlainDom
   , isTypeDeclGenNameInTables
+  , lookupGenDeclInDoctrine
   , validateDoctrine
   )
 import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
@@ -146,6 +147,9 @@ elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
           pure (env', rawTerms, rawRuns)
         DeclDoctrineEffects name base effects -> do
           env' <- elabDoctrineEffects budget env name base effects
+          pure (env', rawTerms, rawRuns)
+        DeclFragment rawFragment -> do
+          env' <- insertFragmentDecl env rawFragment
           pure (env', rawTerms, rawRuns)
         DeclDerivedDoctrine rawDerived -> do
           env' <- insertDerivedDoctrine env rawDerived
@@ -978,47 +982,201 @@ insertDerivedDoctrine :: ModuleEnv -> RawDerivedDoctrine -> Either Text ModuleEn
 insertDerivedDoctrine env raw = do
   ensureAbsent "derived doctrine" (rddName raw) (meDerivedDoctrines env)
   ensureAbsent "doctrine" (rddName raw) (meDoctrines env)
-  baseDoc <- lookupDoctrine env (rddBase raw)
-  let mode = ModeName (rddMode raw)
+  fragment <- lookupFragment env (rddFragment raw)
+  baseDoc <- lookupDoctrine env (frBase fragment)
+  let mode = ModeName (frMode fragment)
   if M.member mode (mtModes (dModes baseDoc))
     then Right ()
     else Left "derived doctrine: unknown mode"
   if mode `S.member` dAcyclicModes baseDoc
     then Right ()
     else Left "derived doctrine: mode is not declared acyclic in base doctrine"
-  policy <- elabFoliationPolicy (rddPolicy raw)
-  let forgetName = rddName raw <> ".forget"
-  ensureAbsent "morphism" forgetName (meMorphisms env)
-  derivedDoc <- buildFoliatedDoctrine (rddName raw) baseDoc mode
-  let forgetMorph = buildDerivedForgetMorphism forgetName derivedDoc baseDoc mode
+  policy <- elabQuotePolicy (rddPolicy raw)
+  derivedDoc <- buildLetGraphDoctrine (rddName raw) baseDoc mode
   let dd =
-        DerivedFoliated
+        DerivedTransform
           { ddName = rddName raw
-          , ddBase = rddBase raw
-          , ddMode = rddMode raw
-          , ddDefaultPolicy = policy
+          , ddBase = frBase fragment
+          , ddMode = frMode fragment
+          , ddFragment = rddFragment raw
+          , ddKind = TkLetGraph
+          , ddDefaultQuotePolicy = policy
           }
   let env' =
         env
           { meDoctrines = M.insert (rddName raw) derivedDoc (meDoctrines env)
-          , meMorphisms = M.insert forgetName forgetMorph (meMorphisms env)
           , meDerivedDoctrines = M.insert (rddName raw) dd (meDerivedDoctrines env)
           }
   pure env'
 
 
-buildFoliatedDoctrine :: Text -> Doctrine -> ModeName -> Either Text Doctrine
-buildFoliatedDoctrine name baseDoc mode = do
+insertFragmentDecl :: ModuleEnv -> RawFragmentDecl -> Either Text ModuleEnv
+insertFragmentDecl env raw = do
+  ensureAbsent "fragment" (rfdName raw) (meFragments env)
+  baseDoc <- lookupDoctrine env (rfdBase raw)
+  let mode = ModeName (rfdMode raw)
+  if M.member mode (mtModes (dModes baseDoc))
+    then Right ()
+    else Left "fragment: unknown mode"
+  let insertRole acc (name, rawRole) = do
+        let genName = GenName name
+        if M.member genName acc
+          then Left ("fragment: duplicate generator role for " <> name)
+          else do
+            role <- elabFragmentRole rawRole
+            validateFragmentRole baseDoc mode genName role
+            pure (M.insert genName role acc)
+  roles <- foldM insertRole M.empty [ (name, role) | RFGenRole name role <- rfdItems raw ]
+  products <- elabFragmentProducts baseDoc mode roles [ (ctor, projLeft, projRight) | RFProduct ctor projLeft projRight <- rfdItems raw ]
+  recurseBinders <- singletonFlag False "fragment: duplicate recurse binders setting" [ b | RFRecurseBinders b <- rfdItems raw ]
+  recurseBoxes <- singletonFlag False "fragment: duplicate recurse boxes setting" [ b | RFRecurseBoxes b <- rfdItems raw ]
+  recurseFeedback <- singletonFlag False "fragment: duplicate recurse feedback setting" [ b | RFRecurseFeedback b <- rfdItems raw ]
+  let fragment =
+        FragmentDecl
+          { frName = rfdName raw
+          , frBase = rfdBase raw
+          , frMode = rfdMode raw
+          , frGenRoles = roles
+          , frProducts = products
+          , frRecurseBinders = recurseBinders
+          , frRecurseBoxes = recurseBoxes
+          , frRecurseFeedback = recurseFeedback
+          }
+  pure env { meFragments = M.insert (rfdName raw) fragment (meFragments env) }
+
+singletonFlag :: a -> Text -> [a] -> Either Text a
+singletonFlag def _ [] = Right def
+singletonFlag _ _ [x] = Right x
+singletonFlag _ err (_:_:_) = Left err
+
+
+elabFragmentRole :: RawFragmentRole -> Either Text FragmentRole
+elabFragmentRole role =
+  case role of
+    RFRShare -> Right FragShare
+    RFRAlias -> Right FragAlias
+    RFRDuplicate -> Right FragDuplicate
+    RFRDiscard -> Right FragDiscard
+
+
+validateFragmentRole :: Doctrine -> ModeName -> GenName -> FragmentRole -> Either Text ()
+validateFragmentRole baseDoc mode genName role = do
+  gd <-
+    lookupGenDeclInDoctrine
+      ("fragment: unknown generator " <> renderGenNameText genName)
+      baseDoc
+      mode
+      genName
+  case role of
+    FragShare -> Right ()
+    FragResidual -> Right ()
+    FragAlias ->
+      requireRoleShape gd 1 (Just 1) True "fragment: alias role requires exactly one input, one output, and no binders"
+    FragDuplicate ->
+      requireRoleShape gd 1 Nothing True "fragment: duplicate role requires exactly one input and no binders"
+    FragDiscard ->
+      requireRoleShape gd 1 (Just 0) True "fragment: discard role requires exactly one input, zero outputs, and no binders"
+
+elabFragmentProducts :: Doctrine -> ModeName -> Map GenName FragmentRole -> [(Text, Text, Text)] -> Either Text [FragmentProduct]
+elabFragmentProducts baseDoc mode roles = foldM insertProduct []
+  where
+    insertProduct acc (ctorName, projLeftName, projRightName) = do
+      let productWitness =
+            FragmentProduct
+              { fpPairCtor = GenName ctorName
+              , fpProjLeft = GenName projLeftName
+              , fpProjRight = GenName projRightName
+              }
+      validateFragmentProduct baseDoc mode roles productWitness
+      ensureUniqueProduct acc productWitness
+      pure (acc <> [productWitness])
+
+    ensureUniqueProduct acc productWitness =
+      let mentioned =
+            concatMap
+              (\prod -> [fpPairCtor prod, fpProjLeft prod, fpProjRight prod])
+              acc
+          current =
+            [ fpPairCtor productWitness
+            , fpProjLeft productWitness
+            , fpProjRight productWitness
+            ]
+       in case [ gen | gen <- current, gen `elem` mentioned ] of
+            [] -> Right ()
+            (dupGen:_) ->
+              Left ("fragment: product generator is declared multiple times: " <> renderGenNameText dupGen)
+
+validateFragmentProduct :: Doctrine -> ModeName -> Map GenName FragmentRole -> FragmentProduct -> Either Text ()
+validateFragmentProduct baseDoc mode roles productWitness = do
+  let pairCtor = fpPairCtor productWitness
+      projLeft = fpProjLeft productWitness
+      projRight = fpProjRight productWitness
+  if pairCtor == projLeft || pairCtor == projRight || projLeft == projRight
+    then Left "fragment: product declaration requires three distinct generators"
+    else Right ()
+  validateProductRole pairCtor
+  validateProductRole projLeft
+  validateProductRole projRight
+  pairDecl <-
+    lookupGenDeclInDoctrine
+      ("fragment: unknown generator " <> renderGenNameText pairCtor)
+      baseDoc
+      mode
+      pairCtor
+  leftDecl <-
+    lookupGenDeclInDoctrine
+      ("fragment: unknown generator " <> renderGenNameText projLeft)
+      baseDoc
+      mode
+      projLeft
+  rightDecl <-
+    lookupGenDeclInDoctrine
+      ("fragment: unknown generator " <> renderGenNameText projRight)
+      baseDoc
+      mode
+      projRight
+  requireRoleShape pairDecl 2 (Just 1) True "fragment: product constructor requires exactly two inputs, one output, and no binders"
+  requireRoleShape leftDecl 1 (Just 1) True "fragment: product left projection requires exactly one input, one output, and no binders"
+  requireRoleShape rightDecl 1 (Just 1) True "fragment: product right projection requires exactly one input, one output, and no binders"
+  where
+    validateProductRole genName =
+      case M.lookup genName roles of
+        Just FragAlias ->
+          Left ("fragment: product generator cannot use alias role: " <> renderGenNameText genName)
+        Just FragDuplicate ->
+          Left ("fragment: product generator cannot use duplicate role: " <> renderGenNameText genName)
+        Just FragDiscard ->
+          Left ("fragment: product generator cannot use discard role: " <> renderGenNameText genName)
+        _ ->
+          Right ()
+
+
+requireRoleShape :: GenDecl -> Int -> Maybe Int -> Bool -> Text -> Either Text ()
+requireRoleShape gd reqInputs reqOutputs noBinders err = do
+  let portInputs = length [ () | InPort _ <- gdDom gd ]
+      binderInputs = length [ () | InBinder _ <- gdDom gd ]
+      outputs = length (gdCod gd)
+      outputsOk =
+        case reqOutputs of
+          Nothing -> True
+          Just n -> outputs == n
+  if portInputs == reqInputs && outputsOk && (not noBinders || binderInputs == 0)
+    then Right ()
+    else Left err
+
+
+buildLetGraphDoctrine :: Text -> Doctrine -> ModeName -> Either Text Doctrine
+buildLetGraphDoctrine name baseDoc mode = do
   mt0 <- addMode mode emptyModeTheory
-  let ssaStrSort = AttrSort "__ssa_str"
+  let quoteStrSort = AttrSort "__quote_str"
   derivedAttrSorts <-
-    case M.lookup ssaStrSort (dAttrSorts baseDoc) of
+    case M.lookup quoteStrSort (dAttrSorts baseDoc) of
       Nothing ->
-        Right (M.insert ssaStrSort (AttrSortDecl ssaStrSort (Just LKString)) (dAttrSorts baseDoc))
+        Right (M.insert quoteStrSort (AttrSortDecl quoteStrSort (Just LKString)) (dAttrSorts baseDoc))
       Just decl ->
         if asLitKind decl == Just LKString
           then Right (dAttrSorts baseDoc)
-          else Left "derived doctrine: reserved attrsort __ssa_str must be declared as string in base doctrine"
+          else Left "derived doctrine: reserved attrsort __quote_str must be declared as string in base doctrine"
   let ModeName modeTok = mode
       universeName = "U_" <> modeTok
       universeTy = mkCon (ObjRef mode (ObjName universeName)) []
@@ -1030,14 +1188,13 @@ buildFoliatedDoctrine name baseDoc mode = do
           , cdComp = Nothing
           }
       mt = mt0 { mtClassifiedBy = M.singleton mode classDecl }
-  let portTy = ty "PortRef"
-      portsTy = ty "PortList"
-      stepTy = ty "Step"
-      stepsTy = ty "StepList"
-      ssaTy = ty "SSA"
+  let refTy = ty "Ref"
+      refsTy = ty "RefList"
+      letGraphTy = ty "LetGraph"
       ty tName = mkCon (ObjRef mode (ObjName tName)) []
       mkCtor cName = mkGenDecl cName [] [universeTy] []
       mkGen gName dom cod attrs = mkGenDecl gName (map InPort dom) cod attrs
+      mkGenShapes gName dom cod attrs = mkGenDecl gName dom cod attrs
       mkGenDecl gName dom cod attrs =
         ( GenName gName
         , GenDecl
@@ -1051,32 +1208,30 @@ buildFoliatedDoctrine name baseDoc mode = do
         )
       utilityGens =
         [ mkCtor universeName
-        , mkCtor "PortRef"
-        , mkCtor "PortList"
-        , mkCtor "Step"
-        , mkCtor "StepList"
-        , mkCtor "SSA"
-        , mkGen "portRef" [] [portTy] [("name", ssaStrSort)]
-        , mkGen "portsNil" [] [portsTy] []
-        , mkGen "portsCons" [portTy, portsTy] [portsTy] []
-        , mkGen "stepBox" [portsTy, portsTy, ssaTy] [stepTy] [("name", ssaStrSort)]
-        , mkGen "stepFeedback" [portsTy, portsTy, ssaTy] [stepTy] []
-        , mkGen "stepsNil" [] [stepsTy] []
-        , mkGen "stepsCons" [stepTy, stepsTy] [stepsTy] []
-        , mkGen "ssaProgram" [portsTy, stepsTy, portsTy] [ssaTy] []
+        , mkCtor "Ref"
+        , mkCtor "RefList"
+        , mkCtor "LetGraph"
+        , mkGen "ref" [] [refTy] [("name", quoteStrSort)]
+        , mkGen "refsNil" [] [refsTy] []
+        , mkGen "refsCons" [refTy, refsTy] [refsTy] []
+        , mkGen "returnRefs" [refsTy] [letGraphTy] []
+        , mkGenShapes "letBox" [InPort refsTy, InPort refsTy, InPort letGraphTy, continuationBinder] [letGraphTy] [("name", quoteStrSort)]
+        , mkGenShapes "letFeedback" [InPort refsTy, InPort refsTy, InPort letGraphTy, continuationBinder] [letGraphTy] []
+        , mkGen "letGraphProgram" [refsTy, letGraphTy] [letGraphTy] []
         ]
       utilityNames = S.fromList (map fst utilityGens)
       modeGens = M.toList (M.findWithDefault M.empty mode (dGens baseDoc))
       mkStepCtor (GenName gTok, gDecl) =
-        let stepName@(GenName stepTok) = GenName ("step_" <> gTok)
+        let bindingName@(GenName bindingTok) = GenName ("let_" <> gTok)
             m = length (gdCod gDecl)
             n = length [ () | InPort _ <- gdDom gDecl ]
             k = length [ () | InBinder _ <- gdDom gDecl ]
             dom =
-              replicate m (InPort portTy)
-                <> replicate n (InPort portTy)
-                <> replicate k (InPort ssaTy)
-         in if stepName `S.member` utilityNames
+              replicate m (InPort refTy)
+                <> replicate n (InPort refTy)
+                <> replicate k (InPort letGraphTy)
+                <> [continuationBinder]
+         in if bindingName `S.member` utilityNames
               then
                 Left
                   ( "derived doctrine "
@@ -1084,13 +1239,20 @@ buildFoliatedDoctrine name baseDoc mode = do
                       <> " mode "
                       <> renderMode mode
                       <> " has generator-name collision: "
-                      <> stepTok
+                      <> bindingTok
                       <> " (generated from base generator "
                       <> gTok
-                      <> ") collides with a reserved SSA utility generator"
+                      <> ") collides with a reserved quote utility generator"
                   )
-              else Right (mkGenDecl stepTok dom [stepTy] (gdAttrs gDecl))
+              else Right (mkGenDecl bindingTok dom [letGraphTy] (gdAttrs gDecl))
       renderMode (ModeName mTok) = mTok
+      continuationBinder =
+        InBinder
+          BinderSig
+            { bsTmCtx = []
+            , bsDom = []
+            , bsCod = [letGraphTy]
+            }
   stepCtors <- mapM mkStepCtor modeGens
   let gens = M.fromList (utilityGens <> stepCtors)
   pure
@@ -1104,23 +1266,6 @@ buildFoliatedDoctrine name baseDoc mode = do
       , dActions = M.empty
       , dObligations = []
       }
-
-
-buildDerivedForgetMorphism :: Text -> Doctrine -> Doctrine -> ModeName -> PolyMorph.Morphism
-buildDerivedForgetMorphism name srcDoc tgtDoc mode =
-  PolyMorph.Morphism
-    { PolyMorph.morName = name
-    , PolyMorph.morSrc = srcDoc
-    , PolyMorph.morTgt = tgtDoc
-    , PolyMorph.morIsCoercion = False
-    , PolyMorph.morModeMap = M.singleton mode mode
-    , PolyMorph.morModMap = M.empty
-    , PolyMorph.morAttrSortMap = M.empty
-    , PolyMorph.morTypeMap = M.empty
-    , PolyMorph.morGenMap = M.empty
-    , PolyMorph.morCheck = PolyMorph.CheckNone
-    , PolyMorph.morPolicy = UseStructuralAsBidirectional
-    }
 
 
 elabPipeline :: RawPipeline -> Either Text Pipeline
@@ -1137,14 +1282,13 @@ elabPhase raw =
       policy <- parsePipelinePolicy (rnoPolicy opts)
       let fuel = maybe 50 id (rnoFuel opts)
       Right (Normalize policy fuel)
-    RPOptimizeSSA -> Right OptimizeSSA
-    RPExtractFoliate targetName mOpts ->
+    RPQuoteInto targetName mOpts ->
       case mOpts of
         Nothing ->
-          Right (ExtractFoliation targetName Nothing)
+          Right (QuoteInto targetName Nothing)
         Just opts -> do
-          foliatePolicy <- elabFoliationPolicy opts
-          Right (ExtractFoliation targetName (Just foliatePolicy))
+          quotePolicy <- elabQuotePolicy opts
+          Right (QuoteInto targetName (Just quotePolicy))
     RPExtractValue doctrineName opts ->
       case doctrineName of
         "Doc" ->
@@ -1165,23 +1309,23 @@ parsePipelinePolicy mName =
     other -> parsePolicy other
 
 
-elabFoliationPolicy :: RawFoliationOpts -> Either Text FoliationPolicy
-elabFoliationPolicy raw = do
+elabQuotePolicy :: RawQuoteOpts -> Either Text QuotePolicy
+elabQuotePolicy raw = do
   orderKey <-
-    case rfoPolicy raw of
+    case rqoPolicy raw of
       Nothing -> Right StableEdgeId
       Just "stable_edge_id" -> Right StableEdgeId
-      Just _ -> Left "foliation: unsupported policy"
+      Just _ -> Left "quote: unsupported policy"
   naming <-
-    case rfoNaming raw of
+    case rqoNaming raw of
       Nothing -> Right BoundaryLabelsFirst
       Just "boundary_labels_first" -> Right BoundaryLabelsFirst
-      Just _ -> Left "foliation: unsupported naming policy"
+      Just _ -> Left "quote: unsupported naming policy"
   pure
-    FoliationPolicy
-      { fpOrderKey = orderKey
-      , fpNaming = naming
-      , fpReserved = S.fromList (rfoReserved raw)
+    QuotePolicy
+      { qpOrderKey = orderKey
+      , qpNaming = naming
+      , qpReserved = S.fromList (rqoReserved raw)
       }
 
 
@@ -1192,11 +1336,22 @@ lookupDoctrine env name =
     Just doc -> Right doc
 
 
+lookupFragment :: ModuleEnv -> Text -> Either Text FragmentDecl
+lookupFragment env name =
+  case M.lookup name (meFragments env) of
+    Nothing -> Left ("Unknown fragment: " <> name)
+    Just fragment -> Right fragment
+
+
 lookupMorphism :: ModuleEnv -> Text -> Either Text PolyMorph.Morphism
 lookupMorphism env name =
   case M.lookup name (meMorphisms env) of
     Nothing -> Left ("Unknown morphism: " <> name)
     Just mor -> Right mor
+
+
+renderGenNameText :: GenName -> Text
+renderGenNameText (GenName name) = name
 
 
 elabImplements :: SearchBudget -> ModuleEnv -> Text -> Text -> Text -> Either Text (((Text, Text), Text), Int)

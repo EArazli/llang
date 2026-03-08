@@ -15,7 +15,6 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
-import Data.List (findIndex)
 import Strat.Frontend.Loader (loadModule)
 import Strat.Frontend.Env
 import Strat.Frontend.Compile (compileSourceDiagram)
@@ -25,28 +24,21 @@ import Strat.Poly.Kernel (Obj(..), pattern OCon, ObjRef(..), ObjName(..))
 import Strat.Poly.Obj (mkCon)
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
-import Strat.Poly.Names (GenName(..), BoxName(..))
+import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Attr
 import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.TypeTheory (ttCtorTablesByOwner)
 import qualified Strat.Poly.Morphism as Morph
 import Strat.Poly.Pretty (renderDiagram)
-import Strat.Poly.Foliation (SSA(..), SSAStep(..), foliate, forgetSSA)
+import Strat.Poly.Quote (quoteDiagram)
 import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (rulesFromPolicy)
-import Strat.Poly.SSAOptimize (defaultSSAOptimizePolicy, optimizeSSA)
 
 
 data Artifact
   = ArtDiagram
       { artDoctrine :: Doctrine
       , artDiagram :: Diagram
-      }
-  | ArtSSA
-      { artBaseDoctrine :: Doctrine
-      , artFoliatedName :: Text
-      , artSSA :: SSA
       }
   | ArtExtracted
       { artStdout :: Text
@@ -121,49 +113,15 @@ runPhase env art phase =
   case phase of
     ApplyMorph name ->
       case art of
-        ArtDiagram doc diag ->
-          if ".forget" `T.isSuffixOf` name
-            then
-              Left
-                ( "cannot apply `"
-                    <> name
-                    <> "` to a diagram; `.forget` is only defined on SSA artifacts produced by `extract foliate`."
-                )
+        ArtDiagram doc diag -> do
+          mor <- lookupMorphism env name
+          if dName (Morph.morSrc mor) /= dName doc
+            then Left ("pipeline: morphism source mismatch for " <> name)
             else do
-              mor <- lookupMorphism env name
-              if dName (Morph.morSrc mor) /= dName doc
-                then Left ("pipeline: morphism source mismatch for " <> name)
-                else do
-                  diag' <- Morph.applyMorphismDiagram mor diag
-                  let doc' = Morph.morTgt mor
-                  ensureAcyclicIfRequired doc' diag'
-                  pure (ArtDiagram doc' diag')
-        ArtSSA baseDoc derivedName ssa ->
-          if name == derivedName <> ".forget"
-            then do
-              let diag = forgetSSA ssa
-              ensureAcyclicIfRequired baseDoc diag
-              pure (ArtDiagram baseDoc diag)
-            else do
-              mor <- lookupMorphism env name
-              let srcName = dName (Morph.morSrc mor)
-              if srcName == derivedName
-                then do
-                  derivedDoc <- lookupDoctrine env derivedName
-                  ssaDiag <- encodeSSAArtifact derivedDoc ssa
-                  diag' <- Morph.applyMorphismDiagram mor ssaDiag
-                  let doc' = Morph.morTgt mor
-                  ensureAcyclicIfRequired doc' diag'
-                  pure (ArtDiagram doc' diag')
-                else
-                  if srcName == dName baseDoc
-                    then do
-                      let diagBase = forgetSSA ssa
-                      diag' <- Morph.applyMorphismDiagram mor diagBase
-                      let doc' = Morph.morTgt mor
-                      ensureAcyclicIfRequired doc' diag'
-                      pure (ArtDiagram doc' diag')
-                    else Left ("pipeline: morphism source mismatch for " <> name)
+              diag' <- Morph.applyMorphismDiagram mor diag
+              let doc' = Morph.morTgt mor
+              ensureAcyclicIfRequired doc' diag'
+              pure (ArtDiagram doc' diag')
         ArtExtracted{} ->
           Left "pipeline: cannot apply morphism after extraction"
     Normalize policy fuel ->
@@ -178,45 +136,36 @@ runPhase env art phase =
                   OutOfFuel d -> d
           ensureAcyclicIfRequired doc diag'
           pure (ArtDiagram doc diag')
-        ArtSSA{} -> Left "pipeline: normalize expects a diagram artifact"
         ArtExtracted{} -> Left "pipeline: cannot normalize extracted host value"
-    OptimizeSSA ->
-      case art of
-        ArtSSA baseDoc derivedName ssa ->
-          pure (ArtSSA baseDoc derivedName (optimizeSSA defaultSSAOptimizePolicy baseDoc ssa))
-        ArtDiagram{} -> Left "pipeline: optimize ssa expects an SSA artifact"
-        ArtExtracted{} -> Left "pipeline: cannot optimize extracted host value"
-    ExtractFoliation targetName mFolPolicy ->
+    QuoteInto targetName mQuotePolicy ->
       case art of
         ArtDiagram doc diag -> do
           derived <- lookupDerivedDoctrine env targetName
           if ddBase derived /= dName doc
-            then Left "pipeline: foliation target base doctrine mismatch"
+            then Left "pipeline: quote target base doctrine mismatch"
             else do
               let expectedMode = ddMode derived
               if expectedMode /= renderModeName (dMode diag)
-                then Left "pipeline: foliation target mode mismatch"
+                then Left "pipeline: quote target mode mismatch"
                 else do
-                  let folPolicy = maybe (ddDefaultPolicy derived) id mFolPolicy
-                  ssa <- foliate folPolicy doc (dMode diag) diag
-                  pure (ArtSSA doc targetName ssa)
-        ArtSSA{} -> Left "pipeline: foliate expects a diagram artifact"
-        ArtExtracted{} -> Left "pipeline: cannot foliate extracted host value"
+                  fragment <- lookupFragment env (ddFragment derived)
+                  derivedDoc <- lookupDoctrine env targetName
+                  let quotePolicy = maybe (ddDefaultQuotePolicy derived) id mQuotePolicy
+                  quoted <- quoteDiagram quotePolicy doc derivedDoc (dMode diag) fragment diag
+                  pure (ArtDiagram derivedDoc quoted)
+        ArtExtracted{} -> Left "pipeline: cannot quote extracted host value"
     ExtractValue doctrineName extractorSpec ->
       case art of
         ArtDiagram doc diag -> do
           case ensureExtractorSupported doctrineName doc (dMode diag) of
             Left err -> Left ("pipeline: " <> err)
             Right () -> extractValue extractorSpec doc diag
-        ArtSSA{} -> Left "pipeline: extract value expects a diagram artifact"
         ArtExtracted{} -> Left "pipeline: value already extracted"
     ExtractDiagramPretty ->
       case art of
         ArtDiagram _ diag -> do
           txt <- renderDiagram diag
           pure (ArtExtracted txt M.empty)
-        ArtSSA _ _ ssa ->
-          pure (ArtExtracted (renderSSA ssa) M.empty)
         ArtExtracted{} -> Right art
 
 
@@ -224,7 +173,6 @@ renderRunResult :: Artifact -> Either Text Text
 renderRunResult art =
   case art of
     ArtDiagram _ diag -> renderDiagram diag
-    ArtSSA _ _ ssa -> Right (renderSSA ssa)
     ArtExtracted out files ->
       if M.null files
         then Right out
@@ -255,6 +203,13 @@ lookupDerivedDoctrine env name =
   case M.lookup name (meDerivedDoctrines env) of
     Nothing -> Left ("Unknown derived doctrine: " <> name)
     Just dd -> Right dd
+
+
+lookupFragment :: ModuleEnv -> Text -> Either Text FragmentDecl
+lookupFragment env name =
+  case M.lookup name (meFragments env) of
+    Nothing -> Left ("Unknown fragment: " <> name)
+    Just fragment -> Right fragment
 
 
 lookupDoctrine :: ModuleEnv -> Text -> Either Text Doctrine
@@ -527,113 +482,6 @@ topologicalEdges diag =
     portInt (PortId i) = i
 
 
-encodeSSAArtifact :: Doctrine -> SSA -> Either Text Diagram
-encodeSSAArtifact doc ssa = do
-  tt <- doctrineTypeTheory doc
-  let ctorTables = ttCtorTablesByOwner tt
-  let mode = ssaMode ssa
-      requireType0 tName = do
-        let mRef = lookupCtorRefForOwnerInTables doc ctorTables mode (ObjName tName)
-        ref <-
-          case mRef of
-            Nothing -> Left ("pipeline: derived doctrine missing SSA constructor " <> tName)
-            Just out -> Right out
-        sig <- lookupCtorSigForOwnerInTables doc ctorTables mode ref
-        if null sig
-          then pure (mkCon ref [])
-          else Left ("pipeline: SSA constructor " <> tName <> " must be nullary")
-      requireGen gName =
-        case M.lookup mode (dGens doc) >>= M.lookup gName of
-          Nothing -> Left ("pipeline: derived doctrine missing SSA generator " <> renderGenName gName)
-          Just _ -> Right ()
-      stepCtorName (GenName g) = GenName ("step_" <> g)
-      portName pid =
-        case M.lookup pid (ssaPortNames ssa) of
-          Just name -> name
-          Nothing ->
-            case pid of
-              PortId i -> "p" <> T.pack (show i)
-      renderGenName (GenName name) = name
-      renderBoxName (BoxName name) = name
-  portTy <- requireType0 "PortRef"
-  portsTy <- requireType0 "PortList"
-  stepTy <- requireType0 "Step"
-  stepsTy <- requireType0 "StepList"
-  ssaTy <- requireType0 "SSA"
-  mapM_ requireGen
-    [ GenName "portRef"
-    , GenName "portsNil"
-    , GenName "portsCons"
-    , GenName "stepBox"
-    , GenName "stepFeedback"
-    , GenName "stepsNil"
-    , GenName "stepsCons"
-    , GenName "ssaProgram"
-    ]
-  let tensorMany ds =
-        case ds of
-          [] -> Right (idD mode [])
-          d0:rest -> foldM tensorD d0 rest
-      mkPortRef name =
-        genDWithAttrs mode [] [portTy] (GenName "portRef") (M.singleton "name" (ATLit (ALString name)))
-      mkPortList names =
-        case names of
-          [] -> genD mode [] [portsTy] (GenName "portsNil")
-          n:rest -> do
-            headPort <- mkPortRef n
-            tailPorts <- mkPortList rest
-            pair <- tensorD headPort tailPorts
-            cons <- genD mode [portTy, portsTy] [portsTy] (GenName "portsCons")
-            compD tt cons pair
-      applyStepCtor ctor attrs domCtx argDiags = do
-        _ <- requireGen ctor
-        ctorDiag <- genDWithAttrs mode domCtx [stepTy] ctor attrs
-        tuple <- tensorMany argDiags
-        compD tt ctorDiag tuple
-      mkStep st =
-        case st of
-          StepGen _ gen attrs ins outs binders -> do
-            let ctor = stepCtorName gen
-            outRefs <- mapM (mkPortRef . portName) outs
-            inRefs <- mapM (mkPortRef . portName) ins
-            binderDiags <- mapM (encodeSSAArtifact doc) binders
-            let argDiags = outRefs <> inRefs <> binderDiags
-            let domCtx =
-                  replicate (length outs + length ins) portTy
-                    <> replicate (length binders) ssaTy
-            applyStepCtor ctor attrs domCtx argDiags
-          StepBox _ box inner ins outs -> do
-            outPorts <- mkPortList (map portName outs)
-            inPorts <- mkPortList (map portName ins)
-            innerSSA <- encodeSSAArtifact doc inner
-            tuple <- tensorMany [outPorts, inPorts, innerSSA]
-            ctor <- genDWithAttrs mode [portsTy, portsTy, ssaTy] [stepTy] (GenName "stepBox") (M.singleton "name" (ATLit (ALString (renderBoxName box))))
-            compD tt ctor tuple
-          StepFeedback _ body ins outs -> do
-            outPorts <- mkPortList (map portName outs)
-            inPorts <- mkPortList (map portName ins)
-            innerSSA <- encodeSSAArtifact doc body
-            tuple <- tensorMany [outPorts, inPorts, innerSSA]
-            ctor <- genD mode [portsTy, portsTy, ssaTy] [stepTy] (GenName "stepFeedback")
-            compD tt ctor tuple
-      mkStepList steps =
-        case steps of
-          [] -> genD mode [] [stepsTy] (GenName "stepsNil")
-          st:rest -> do
-            headStep <- mkStep st
-            tailSteps <- mkStepList rest
-            pair <- tensorD headStep tailSteps
-            cons <- genD mode [stepTy, stepsTy] [stepsTy] (GenName "stepsCons")
-            compD tt cons pair
-  inPorts <- mkPortList (map portName (ssaInputs ssa))
-  outPorts <- mkPortList (map portName (ssaOutputs ssa))
-  steps <- mkStepList (ssaSteps ssa)
-  tuple2 <- tensorD inPorts steps
-  tuple3 <- tensorD tuple2 outPorts
-  build <- genD mode [portsTy, stepsTy, portsTy] [ssaTy] (GenName "ssaProgram")
-  compD tt build tuple3
-
-
 extractValue :: ValueExtractorSpec -> Doctrine -> Diagram -> Either Text Artifact
 extractValue extractorSpec _doc diag =
   case extractorSpec of
@@ -677,7 +525,6 @@ extractFileTree diag = do
             then Left "extract FileTree: duplicate file path"
             else Right (M.insert path (renderDoc bodyDoc) acc)
         FTConcat xs -> foldM mergeOne acc xs
-
 
 evalArtifactDiagram :: Diagram -> Either Text (M.Map PortId RuntimeValue)
 evalArtifactDiagram diag = do
@@ -804,112 +651,6 @@ attrInt key attrs =
   case M.lookup key attrs of
     Just (ATLit (ALInt n)) -> Right n
     _ -> Left ("missing or non-int attribute: " <> key)
-
-
-renderSSA :: SSA -> Text
-renderSSA ssa =
-  T.unlines
-    ( [ "SSA " <> ssaBaseDoctrine ssa <> " {"
-      , "  steps = " <> T.pack (show (length (ssaSteps ssa)))
-      , "  inputs = " <> renderPorts (ssaInputs ssa)
-      , "  outputs = " <> renderPorts (ssaOutputs ssa)
-      ]
-        <> map renderStep (ssaSteps ssa)
-        <> ["}"]
-    )
-  where
-    diag = ssaOriginal ssa
-    inIndex = M.fromList (zip (ssaInputs ssa) [0 :: Int ..])
-
-    renderStep st =
-      case st of
-        StepGen eid gen attrs ins outs binders ->
-          "  gen "
-            <> renderEdgeId eid
-            <> " "
-            <> renderGenName gen
-            <> renderAttrs attrs
-            <> " in="
-            <> renderInputs ins
-            <> " out="
-            <> renderPorts outs
-            <> renderBinderCount binders
-        StepBox eid box inner ins outs ->
-          "  box "
-            <> renderEdgeId eid
-            <> " "
-            <> renderBoxName box
-            <> " in="
-            <> renderInputs ins
-            <> " out="
-            <> renderPorts outs
-            <> " innerSteps="
-            <> T.pack (show (length (ssaSteps inner)))
-        StepFeedback eid body ins outs ->
-          "  feedback "
-            <> renderEdgeId eid
-            <> " in="
-            <> renderInputs ins
-            <> " out="
-            <> renderPorts outs
-            <> " bodySteps="
-            <> T.pack (show (length (ssaSteps body)))
-
-    renderGenName (GenName n) = n
-    renderBoxName (BoxName n) = n
-    renderEdgeId (EdgeId i) = "e" <> T.pack (show i)
-    renderPortId (PortId i) = "p" <> T.pack (show i)
-
-    renderPort pid =
-      let pidTxt = renderPortId pid
-          nm = M.findWithDefault pidTxt pid (ssaPortNames ssa)
-       in if nm == pidTxt then pidTxt else pidTxt <> ":" <> nm
-
-    renderPorts ps = "[" <> T.intercalate ", " (map renderPort ps) <> "]"
-
-    renderInputs ps = "[" <> T.intercalate ", " (map renderInput ps) <> "]"
-
-    renderInput pid = renderPort pid <> " <- " <> renderProducer pid
-
-    renderProducer pid =
-      case IM.lookup (portInt pid) (dProd diag) of
-        Just (Just eid) ->
-          case IM.lookup (edgeInt eid) (dEdges diag) of
-            Just edge ->
-              case findIndex (== pid) (eOuts edge) of
-                Just outPos -> renderEdgeId eid <> "#" <> T.pack (show outPos)
-                Nothing -> renderEdgeId eid
-            Nothing -> "<missing-edge>"
-        _ ->
-          case M.lookup pid inIndex of
-            Just ix -> "input#" <> T.pack (show ix)
-            Nothing -> "<open>"
-
-    renderAttrs attrs
-      | M.null attrs = " attrs={}"
-      | otherwise =
-          " attrs={"
-            <> T.intercalate ", " (map renderOne (M.toList attrs))
-            <> "}"
-      where
-        renderOne (k, v) = k <> "=" <> renderAttrTerm v
-
-    renderAttrTerm term =
-      case term of
-        ATVar v -> "$" <> avName v
-        ATLit lit ->
-          case lit of
-            ALInt n -> T.pack (show n)
-            ALString s -> T.pack (show s)
-            ALBool b -> if b then "true" else "false"
-
-    renderBinderCount binders =
-      if null binders
-        then ""
-        else " binders=" <> T.pack (show (length binders))
-
-    portInt (PortId i) = i
-    edgeInt (EdgeId i) = i
 
 
 renderModeName :: ModeName -> Text

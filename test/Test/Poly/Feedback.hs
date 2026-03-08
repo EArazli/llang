@@ -11,16 +11,16 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import Strat.Frontend.Env (emptyEnv)
-import Strat.Pipeline (defaultFoliationPolicy)
+import Strat.Pipeline (FragmentDecl(..), defaultQuotePolicy)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
-import Strat.Poly.Foliation (foliate, SSAStep(..), SSA(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), ePayload, emptyDiagram, freshPort, addEdgePayload, validateDiagram)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
+import Strat.Poly.Quote (SharedBinding(..), SharedProgram(..), quoteProgram)
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 
 
@@ -44,12 +44,12 @@ testFeedbackElab = do
   raw <- require (parseDiagExpr "loop { step }")
   diag <- require (elabDiagExpr emptyEnv doc modeM [] raw)
   assertBool "expected feedback edge in outer graph" (hasFeedback diag)
-  ssa <- require (foliate defaultFoliationPolicy doc modeM diag)
-  assertBool "expected StepFeedback in SSA" (any isFeedbackStep (ssaSteps ssa))
+  program <- require (quoteProgram defaultQuotePolicy doc modeM fragmentResidual diag)
+  assertBool "expected BindFeedback in quoted program" (any isFeedbackBinding (spBindings program))
   where
-    isFeedbackStep step =
-      case step of
-        StepFeedback {} -> True
+    isFeedbackBinding binding =
+      case binding of
+        BindFeedback {} -> True
         _ -> False
 
 testTraceElab :: Assertion
@@ -58,12 +58,12 @@ testTraceElab = do
   raw <- require (parseDiagExpr "trace 1 { step2 }")
   diag <- require (elabDiagExpr emptyEnv doc modeM [] raw)
   assertBool "expected feedback edge with one outer input and one outer output" (hasFeedbackWithIO 1 1 diag)
-  ssa <- require (foliate defaultFoliationPolicy doc modeM diag)
-  assertBool "expected StepFeedback with one input and one output" (any isFeedbackStep (ssaSteps ssa))
+  program <- require (quoteProgram defaultQuotePolicy doc modeM fragmentResidual diag)
+  assertBool "expected BindFeedback with one input and one output" (any isFeedbackBinding (spBindings program))
   where
-    isFeedbackStep step =
-      case step of
-        StepFeedback { stepIns = ins, stepOuts = outs } -> length ins == 1 && length outs == 1
+    isFeedbackBinding binding =
+      case binding of
+        BindFeedback { sbIns = ins, sbOuts = outs } -> length ins == 1 && length outs == 1
         _ -> False
 
 testTraceRejectsZeroArity :: Assertion
@@ -189,6 +189,20 @@ tyT = mkCon (ObjRef modeM (ObjName "T")) []
 
 tyU :: Obj
 tyU = mkCon (ObjRef modeM (ObjName "U")) []
+
+
+fragmentResidual :: FragmentDecl
+fragmentResidual =
+  FragmentDecl
+    { frName = "Frag"
+    , frBase = "D"
+    , frMode = "M"
+    , frGenRoles = M.empty
+    , frProducts = []
+    , frRecurseBinders = False
+    , frRecurseBoxes = False
+    , frRecurseFeedback = True
+    }
 
 
 expectLeftContains :: Text -> Either Text a -> Assertion

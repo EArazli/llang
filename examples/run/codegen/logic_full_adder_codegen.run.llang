@@ -29,7 +29,10 @@ doctrine LogicJS where {
   gen concat : [P, P] -> [P] @M;
 }
 
-derived doctrine LogicJS_SSA = foliated LogicJS mode M;
+fragment ShareLogic in LogicJS mode M where {
+}
+
+derived doctrine LogicJS_Share = letgraph ShareLogic;
 
 morphism emitJS : LogicJS -> Doc where {
   check structural;
@@ -103,8 +106,8 @@ pipeline js_codegen where {
   extract Doc { stdout = true; };
 }
 
-pipeline show_ssa where {
-  extract foliate into LogicJS_SSA;
+pipeline show_share where {
+  quote into LogicJS_Share;
   extract diagram;
 }
 
@@ -140,7 +143,7 @@ run main using js_codegen where {
 ) ; concat
 ---
 
-run ssa using show_ssa where {
+run share using show_share where {
   source doctrine LogicJS;
   source mode M;
 }

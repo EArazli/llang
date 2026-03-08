@@ -69,7 +69,7 @@ data-files:
 - examples/run/dependent/lambda_beta.run.llang
 - examples/run/doc/hello_doc.run.llang
 - examples/run/effects/combined_with_handler.run.llang
-- examples/run/foliation/basic_foliate.run.llang
+- examples/run/sharing/basic_quote.run.llang
 - examples/run/dependent/vec.run.llang
 - examples/run/modes/dual_discipline_term_surface.run.llang
 - examples/run/modes/lnl.counit.run.llang
@@ -153,7 +153,6 @@ library:
   - Strat.Poly.Kernel
   - Strat.Poly.ModeSyntax
   - Strat.Poly.ObjResolve
-  - Strat.Poly.SSAOptimize
   - Strat.Poly.Tele
   - Strat.Poly.Term.Confluence
   - Strat.Poly.Term.Termination
@@ -200,7 +199,7 @@ tests:
     - Test.Poly.Dependent
     - Test.Poly.NBE
     - Test.Poly.Helpers
-    - Test.Poly.Foliation
+    - Test.Poly.Quote
     - Test.Poly.Acyclic
     - Test.Poly.Feedback
     - Test.Poly.ModeTheory

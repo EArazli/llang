@@ -2,8 +2,12 @@
 module Strat.Pipeline
   ( OrderKey(..)
   , NamingPolicy(..)
-  , FoliationPolicy(..)
-  , defaultFoliationPolicy
+  , FragmentRole(..)
+  , FragmentProduct(..)
+  , FragmentDecl(..)
+  , QuotePolicy(..)
+  , defaultQuotePolicy
+  , TransformerKind(..)
   , ValueExtractorSpec(..)
   , Phase(..)
   , Pipeline(..)
@@ -12,8 +16,10 @@ module Strat.Pipeline
   ) where
 
 import Data.Text (Text)
+import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Common.Rules (RewritePolicy)
+import Strat.Poly.Names (GenName)
 
 
 data OrderKey
@@ -25,22 +31,53 @@ data NamingPolicy
   = BoundaryLabelsFirst
   deriving (Eq, Ord, Show)
 
+data FragmentRole
+  = FragShare
+  | FragAlias
+  | FragDuplicate
+  | FragDiscard
+  | FragResidual
+  deriving (Eq, Ord, Show)
 
-data FoliationPolicy = FoliationPolicy
-  { fpOrderKey :: OrderKey
-  , fpNaming :: NamingPolicy
-  , fpReserved :: S.Set Text
+data FragmentProduct = FragmentProduct
+  { fpPairCtor :: GenName
+  , fpProjLeft :: GenName
+  , fpProjRight :: GenName
+  }
+  deriving (Eq, Ord, Show)
+
+data FragmentDecl = FragmentDecl
+  { frName :: Text
+  , frBase :: Text
+  , frMode :: Text
+  , frGenRoles :: M.Map GenName FragmentRole
+  , frProducts :: [FragmentProduct]
+  , frRecurseBinders :: Bool
+  , frRecurseBoxes :: Bool
+  , frRecurseFeedback :: Bool
+  }
+  deriving (Eq, Show)
+
+data QuotePolicy = QuotePolicy
+  { qpOrderKey :: OrderKey
+  , qpNaming :: NamingPolicy
+  , qpReserved :: S.Set Text
   }
   deriving (Eq, Show)
 
 
-defaultFoliationPolicy :: FoliationPolicy
-defaultFoliationPolicy =
-  FoliationPolicy
-    { fpOrderKey = StableEdgeId
-    , fpNaming = BoundaryLabelsFirst
-    , fpReserved = S.empty
+defaultQuotePolicy :: QuotePolicy
+defaultQuotePolicy =
+  QuotePolicy
+    { qpOrderKey = StableEdgeId
+    , qpNaming = BoundaryLabelsFirst
+    , qpReserved = S.empty
     }
+
+
+data TransformerKind
+  = TkLetGraph
+  deriving (Eq, Ord, Show)
 
 
 data ValueExtractorSpec
@@ -52,8 +89,7 @@ data ValueExtractorSpec
 data Phase
   = ApplyMorph Text
   | Normalize RewritePolicy Int
-  | OptimizeSSA
-  | ExtractFoliation { target :: Text, policy :: Maybe FoliationPolicy }
+  | QuoteInto { target :: Text, policy :: Maybe QuotePolicy }
   | ExtractValue { doctrine :: Text, extractor :: ValueExtractorSpec }
   | ExtractDiagramPretty
   deriving (Eq, Show)
@@ -79,10 +115,12 @@ data Run = Run
 
 
 data DerivedDoctrine
-  = DerivedFoliated
+  = DerivedTransform
       { ddName :: Text
       , ddBase :: Text
       , ddMode :: Text
-      , ddDefaultPolicy :: FoliationPolicy
+      , ddFragment :: Text
+      , ddKind :: TransformerKind
+      , ddDefaultQuotePolicy :: QuotePolicy
       }
   deriving (Eq, Show)

@@ -761,40 +761,55 @@ Surface elaboration is capability-driven:
 
 No discipline lattice is consulted.
 
-## 11. Foliation as SSA and term-graph reification
+## 11. Fragment quotation as explicit-sharing reification
 
-For derived doctrines declared as `derived doctrine D_SSA = foliated D mode M`, foliation is only available for modes declared acyclic in `D`.
+For derived doctrines declared as `derived doctrine D_Share = letgraph Frag [with { ... }]`, quotation is available only when:
 
-`D_SSA` is a generated doctrine that reifies SSA steps as typed constructors and supports ordinary morphism-based compilation.
+- `Frag` names a fragment declared over base doctrine `D` and mode `M`, and
+- `M` is declared acyclic in `D`.
 
-1. **Signature of `D_SSA`:**
+`D_Share` is a generated doctrine that reifies an explicit-sharing letgraph as an ordinary doctrine, so subsequent compilation or analysis is just ordinary morphism application.
 
-- `PortRef`, `PortList`, `Step`, `StepList`, `SSA` as nullary object constructors in mode `M`.
-- `portRef { name : __ssa_str } : [] -> [PortRef]`
-- `portsNil : [] -> [PortList]`, `portsCons : [PortRef, PortList] -> [PortList]`
-- `stepsNil : [] -> [StepList]`, `stepsCons : [Step, StepList] -> [StepList]`
-- `ssaProgram : [PortList(in), StepList, PortList(out)] -> [SSA]`
-- `stepBox { name : __ssa_str } : [PortList(out), PortList(in), SSA] -> [Step]`
-- `stepFeedback : [PortList(out), PortList(in), SSA] -> [Step]`
-- For each generator `g` of `D` in mode `M`, a generated constructor `step_g`.
+1. **Signature of `D_Share`:**
 
-2. **Generated step constructors:**
+- `Ref`, `RefList`, `LetGraph` as nullary object constructors in mode `M`.
+- `ref { name : __quote_str } : [] -> [Ref]`
+- `refsNil : [] -> [RefList]`, `refsCons : [Ref, RefList] -> [RefList]`
+- `returnRefs : [RefList(out)] -> [LetGraph]`
+- `letGraphProgram : [RefList(in), LetGraph(body)] -> [LetGraph]`
+- `letBox { name : __quote_str } : [RefList(out), RefList(in), LetGraph(inner), binder { } : [LetGraph]] -> [LetGraph]`
+- `letFeedback : [RefList(out), RefList(in), LetGraph(body), binder { } : [LetGraph]] -> [LetGraph]`
+- For each generator `g` of `D` in mode `M`, a generated constructor `let_g`.
+
+2. **Generated let constructors:**
 
 - If `g : Γ -> Δ` has `m = |Δ|` outputs, `n` non-binder inputs, and `k` binder arguments, then:
-- `step_g : [PortRef]^m ⊗ [PortRef]^n ⊗ [SSA]^k -> [Step]`
-- `step_g` carries exactly the attribute list of `g`.
+- `let_g : [Ref]^m ⊗ [Ref]^n ⊗ [LetGraph]^k ⊗ binder { } : [LetGraph] -> [LetGraph]`
+- `let_g` carries exactly the attribute list of `g`.
 
-3. **Reification function (pipeline semantics):**
+3. **Quotation semantics (pipeline):**
 
-- `extract foliate into D_SSA` computes SSA (ports, ordered steps, naming) from a diagram in `(D, M)`.
-- Applying a morphism whose source is `D_SSA` reifies SSA through the constructors above (`encodeSSAArtifact`), including generator attributes, binder SSA subprograms, and inner SSA for box/feedback steps.
-- This is the explicit term-graph/SSA boundary: steps are ordered and named in the reified object.
+- `quote into D_Share` computes a named, topologically ordered explicit-sharing program from a diagram in `(D, M)`, using the fragment roles and the doctrine's default quote policy unless overridden in `with { ... }`.
+- The quotation result is an ordinary diagram in `D_Share`; there is no privileged runtime artifact for quoted programs.
+- The encoded program is a nested binder-style letgraph: quotation folds the ordered bindings into `let_*` / `letBox` / `letFeedback` nodes whose empty-domain continuation binder contains the rest of the program, ending in `returnRefs`.
+- `share` generators participate in exact memoized sharing recovery.
+- `residual` generators always materialize as fresh `let_g` nodes.
+- `alias`, `duplicate`, and `discard` generators are internalized structurally during quotation and do not force emitted bindings; any attributes on those generators are ignored by quotation.
+- Binder, box, and feedback subprograms are recursively quoted only when the fragment enables the corresponding recursion flag.
 
-4. **Mathematical note:**
+4. **Ordinary elimination:**
 
-- This corresponds to representing acyclic computations as labeled DAGs (term graphs), i.e. the free gs-monoidal/term-graph style encoding of sharing.
+- Applying a morphism whose source is `D_Share` reifies the quoted program through the constructors above.
+- Generator attributes, binder subprograms, and inner quoted programs for boxes/feedback are preserved in the generated diagram.
+- Continuation structure is explicit in binder arguments, while ref names remain explicit data; this is the current Milestone 2 compromise from `llang_sharing_quote_refactor_spec.md`, not yet a fully context-polymorphic intrinsic let calculus.
+- This is the explicit term-graph boundary in the kernel: sharing is reified in an ordinary doctrine rather than a special SSA runtime representation.
 
-The sort `__ssa_str` is reserved for SSA-introduced names (for example port/box names) and must denote string literals.
+5. **Mathematical note:**
+
+- This corresponds to representing acyclic computations as labeled DAGs (term graphs), i.e. a free explicit-sharing / gs-monoidal style encoding of sharing.
+- Richer userland presentations, including SSA-like doctrines, can be built on top of this layer rather than being privileged by the kernel.
+
+The sort `__quote_str` is reserved for quotation-introduced names (for example refs and box names) and must denote string literals.
 
 ## 12. Artifact extraction
 

@@ -21,7 +21,7 @@ import qualified Test.Poly.Slots as PolySlots
 import qualified Test.Poly.DataMacro as PolyDataMacro
 import qualified Test.Poly.Dependent as PolyDependent
 import qualified Test.Poly.NBE as PolyNBE
-import qualified Test.Poly.Foliation as PolyFoliation
+import qualified Test.Poly.Quote as PolyQuote
 import qualified Test.Poly.Acyclic as PolyAcyclic
 import qualified Test.Poly.Feedback as PolyFeedback
 import qualified Test.DSL.Functors as DSLFunctors
@@ -57,7 +57,7 @@ main =
       , PolyDataMacro.tests
       , PolyDependent.tests
       , PolyNBE.tests
-      , PolyFoliation.tests
+      , PolyQuote.tests
       , PolyAcyclic.tests
       , PolyFeedback.tests
       , DSLFunctors.tests

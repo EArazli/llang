@@ -6,8 +6,11 @@ module Strat.DSL.AST
   , RawPipeline(..)
   , RawPhase(..)
   , RawNormalizeOpts(..)
-  , RawFoliationOpts(..)
+  , RawQuoteOpts(..)
   , RawValueExtractOpts(..)
+  , RawFragmentRole(..)
+  , RawFragmentItem(..)
+  , RawFragmentDecl(..)
   , RawDerivedDoctrine(..)
   , RawRun(..)
   , RawNamedRun(..)
@@ -43,6 +46,7 @@ data RawDecl
       }
   | DeclDoctrineFunctor RawDoctrineFunctor
   | DeclDoctrineApply RawDoctrineApply
+  | DeclFragment RawFragmentDecl
   | DeclDerivedDoctrine RawDerivedDoctrine
   | DeclSurface Text SurfaceSpec
   | DeclPipeline RawPipeline
@@ -68,10 +72,10 @@ data RawNormalizeOpts = RawNormalizeOpts
   } deriving (Eq, Show)
 
 
-data RawFoliationOpts = RawFoliationOpts
-  { rfoPolicy :: Maybe Text
-  , rfoNaming :: Maybe Text
-  , rfoReserved :: [Text]
+data RawQuoteOpts = RawQuoteOpts
+  { rqoPolicy :: Maybe Text
+  , rqoNaming :: Maybe Text
+  , rqoReserved :: [Text]
   } deriving (Eq, Show)
 
 
@@ -84,18 +88,38 @@ data RawValueExtractOpts = RawValueExtractOpts
 data RawPhase
   = RPApply Text
   | RPNormalize RawNormalizeOpts
-  | RPOptimizeSSA
-  | RPExtractFoliate Text (Maybe RawFoliationOpts)
+  | RPQuoteInto Text (Maybe RawQuoteOpts)
   | RPExtractValue Text RawValueExtractOpts
   | RPExtractDiagramPretty
   deriving (Eq, Show)
 
+data RawFragmentRole
+  = RFRShare
+  | RFRAlias
+  | RFRDuplicate
+  | RFRDiscard
+  deriving (Eq, Show)
+
+data RawFragmentItem
+  = RFGenRole Text RawFragmentRole
+  | RFProduct Text Text Text
+  | RFRecurseBinders Bool
+  | RFRecurseBoxes Bool
+  | RFRecurseFeedback Bool
+  deriving (Eq, Show)
+
+data RawFragmentDecl = RawFragmentDecl
+  { rfdName :: Text
+  , rfdBase :: Text
+  , rfdMode :: Text
+  , rfdItems :: [RawFragmentItem]
+  } deriving (Eq, Show)
+
 
 data RawDerivedDoctrine = RawDerivedDoctrine
   { rddName :: Text
-  , rddBase :: Text
-  , rddMode :: Text
-  , rddPolicy :: RawFoliationOpts
+  , rddFragment :: Text
+  , rddPolicy :: RawQuoteOpts
   } deriving (Eq, Show)
 
 

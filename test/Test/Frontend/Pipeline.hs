@@ -8,12 +8,14 @@ import Test.Tasty.HUnit
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFileWithEnv)
-import Strat.Frontend.Env (ModuleEnv, emptyEnv, meDoctrines, meMorphisms)
+import Strat.Frontend.Env (ModuleEnv, emptyEnv, meDoctrines)
 import Strat.Frontend.Prelude (preludeDoctrines)
 import Strat.Frontend.Run (selectRun, runWithEnv, RunResult(..), Artifact(..))
-import Strat.Poly.Foliation (SSA(..), SSAStep(..))
+import Strat.Poly.Attr (AttrLit(..), AttrTerm(..))
+import Strat.Poly.Graph (BinderArg(..), Diagram(..), Edge(..), EdgePayload(..))
 import Strat.Poly.Names (GenName(..))
 
 
@@ -21,24 +23,16 @@ tests :: TestTree
 tests =
   testGroup
     "Frontend.Pipeline"
-    [ testCase "pipeline foliate + forget roundtrip smoke" testPipelineRoundtrip
-    , testCase "derived doctrine requires acyclic mode" testDerivedRequiresAcyclic
-    , testCase "extract foliate without with{} uses derived default policy" testDerivedDefaultPolicy
-    , testCase "optimize ssa removes explicit dup steps" testOptimizeSsaRemovesDup
-    , testCase "derived doctrine reserves and materializes .forget" testDerivedForgetReservedAndMaterialized
-    , testCase "ArtSSA can apply morphism sourced from derived doctrine" testApplyDerivedSourceMorphism
-    , testCase "ArtSSA preserves generator attrs through step constructors" testApplyDerivedAttrReflection
-    , testCase "ArtSSA preserves binder subprograms through step constructors" testApplyDerivedBinderReflection
-    , testCase ".forget rejects diagram artifacts" testForgetRejectsDiagramArtifact
+    [ testCase "derived transform requires acyclic mode" testDerivedRequiresAcyclic
+    , testCase "quote without with{} uses derived default policy" testDerivedDefaultPolicy
+    , testCase "quoted diagrams can feed ordinary morphisms from the derived doctrine" testApplyDerivedSourceMorphism
+    , testCase "let_g preserves generator attrs" testApplyDerivedAttrReflection
+    , testCase "let_g preserves binder subprograms" testApplyDerivedBinderReflection
+    , testCase "quote internalizes duplicate role" testDuplicateRoleInternalized
+    , testCase "quote internalizes alias role" testAliasRoleInternalized
+    , testCase "quote memoizes exact repeated shareable subterms" testShareMemoized
+    , testCase "quote leaves repeated residual subterms duplicated" testResidualDuplicated
     ]
-
-
-testPipelineRoundtrip :: Assertion
-testPipelineRoundtrip = do
-  env <- require (elabProgram program)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  assertBool "expected diagram output" ("edges:" `T.isInfixOf` prOutput result)
 
 
 testDerivedRequiresAcyclic :: Assertion
@@ -52,372 +46,374 @@ testDerivedRequiresAcyclic =
 
 testDerivedDefaultPolicy :: Assertion
 testDerivedDefaultPolicy = do
-  env <- require (elabProgram defaultPolicyProgram)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  case prArtifact result of
-    ArtSSA _ _ ssa ->
-      assertBool "expected reserved p0 to be honored via derived default policy" ("p0_1" `elem` M.elems (ssaPortNames ssa))
-    _ ->
-      assertFailure "expected ArtSSA result"
-
-
-testOptimizeSsaRemovesDup :: Assertion
-testOptimizeSsaRemovesDup = do
-  env <- require (elabProgram optimizeSsaProgram)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  case prArtifact result of
-    ArtSSA _ _ ssa ->
-      assertBool
-        "expected dup step to be eliminated after optimize ssa"
-        (not (any isDupStep (ssaSteps ssa)))
-    _ ->
-      assertFailure "expected ArtSSA result"
-  where
-    isDupStep step =
-      case step of
-        StepGen{} -> stepGen step == GenName "dup"
-        _ -> False
-
-
-testDerivedForgetReservedAndMaterialized :: Assertion
-testDerivedForgetReservedAndMaterialized = do
-  env <- require (elabProgram derivedMaterializedProgram)
-  assertBool "expected synthesized D_SSA.forget morphism" (M.member "D_SSA.forget" (meMorphisms env))
-  case elabProgram forgetCollisionProgram of
-    Left _ ->
-      pure ()
-    Right _ ->
-      assertFailure "expected derived doctrine insertion to reject preexisting D_SSA.forget"
+  result <- runNamed defaultPolicyProgram "main"
+  diag <- requireDiagram result
+  assertBool "expected reserved p0 to be honored via derived default policy" (hasRefNamed "p0_1" diag)
 
 
 testApplyDerivedSourceMorphism :: Assertion
 testApplyDerivedSourceMorphism = do
-  env <- require (elabProgram derivedSourceMorphismProgram)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  assertBool "expected SSA morphism output to mention generator a" ("a" `T.isInfixOf` prOutput result)
-  assertBool "expected SSA morphism output to mention generator b" ("b" `T.isInfixOf` prOutput result)
+  result <- runNamed derivedSourceMorphismProgram "main"
+  assertBool "expected quoted morphism output to mention generator a" ("a" `T.isInfixOf` prOutput result)
+  assertBool "expected quoted morphism output to mention generator b" ("b" `T.isInfixOf` prOutput result)
+
 
 testApplyDerivedAttrReflection :: Assertion
 testApplyDerivedAttrReflection = do
-  env <- require (elabProgram derivedAttrReflectionProgram)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  assertBool "expected SSA morphism output to contain literal payload" ("hello" `T.isInfixOf` prOutput result)
+  result <- runNamed derivedAttrReflectionProgram "main"
+  assertBool "expected quoted morphism output to contain literal payload" ("hello" `T.isInfixOf` prOutput result)
+
 
 testApplyDerivedBinderReflection :: Assertion
 testApplyDerivedBinderReflection = do
-  env <- require (elabProgram derivedBinderReflectionProgram)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  assertBool "expected SSA morphism output to include binder step marker" ("wrap" `T.isInfixOf` prOutput result)
-  assertBool "expected SSA morphism output to include binder body payload" ("inner" `T.isInfixOf` prOutput result)
-
-testForgetRejectsDiagramArtifact :: Assertion
-testForgetRejectsDiagramArtifact = do
-  env <- require (elabProgram forgetDiagramProgram)
-  runDef <- require (selectRun env (Just "main"))
-  case runWithEnv env runDef of
-    Left err ->
-      assertBool
-        "expected explicit .forget-on-diagram rejection"
-        ("only defined on SSA artifacts produced by `extract foliate`" `T.isInfixOf` err)
-    Right _ ->
-      assertFailure "expected .forget to reject diagram artifacts"
+  result <- runNamed derivedBinderReflectionProgram "main"
+  assertBool "expected quoted morphism output to include binder step marker" ("wrap" `T.isInfixOf` prOutput result)
+  assertBool "expected quoted morphism output to include binder body payload" ("inner" `T.isInfixOf` prOutput result)
 
 
-program :: Text
-program =
-  "doctrine D where {\n"
-    <> "  mode M acyclic classifiedBy M via U_M;\n"
-    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
-    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
-    <> "  gen U_M : [] -> [U_M] @M;\n"
-    <> "  gen T : [] -> [U_M] @M;\n"
-    <> "  gen a : [] -> [T] @M;\n"
-    <> "  gen b : [T] -> [T] @M;\n"
-    <> "}\n"
-    <> "derived doctrine D_SSA = foliated D mode M with {\n"
-    <> "  policy = \"stable_edge_id\";\n"
-    <> "  naming = \"boundary_labels_first\";\n"
-    <> "};\n"
-    <> "pipeline p where {\n"
-    <> "  extract foliate into D_SSA;\n"
-    <> "  apply D_SSA.forget;\n"
-    <> "  extract diagram;\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine D;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "a; b\n"
-    <> "---\n"
+testDuplicateRoleInternalized :: Assertion
+testDuplicateRoleInternalized = do
+  result <- runNamed duplicateInternalizedProgram "main"
+  diag <- requireDiagram result
+  assertEqual "expected duplicate role to suppress let_dup" 0 (countGenEdges "let_dup" diag)
+
+
+testAliasRoleInternalized :: Assertion
+testAliasRoleInternalized = do
+  result <- runNamed aliasInternalizedProgram "main"
+  diag <- requireDiagram result
+  assertEqual "expected alias role to suppress let_idLike" 0 (countGenEdges "let_idLike" diag)
+
+
+testShareMemoized :: Assertion
+testShareMemoized = do
+  result <- runNamed shareMemoizedProgram "main"
+  diag <- requireDiagram result
+  assertEqual "expected one let_f in quoted diagram" 1 (countGenEdges "let_f" diag)
+  assertEqual "expected duplicate role to suppress let_dup" 0 (countGenEdges "let_dup" diag)
+
+
+testResidualDuplicated :: Assertion
+testResidualDuplicated = do
+  result <- runNamed residualDuplicatedProgram "main"
+  diag <- requireDiagram result
+  assertEqual "expected two let_f edges in quoted diagram" 2 (countGenEdges "let_f" diag)
+
+
+runNamed :: Text -> Text -> IO RunResult
+runNamed src runName = do
+  env <- require (elabProgram src)
+  runDef <- require (selectRun env (Just runName))
+  require (runWithEnv env runDef)
+
+
+requireDiagram :: RunResult -> IO Diagram
+requireDiagram result =
+  case prArtifact result of
+    ArtDiagram _ diag -> pure diag
+    ArtExtracted{} -> assertFailure "expected quoted diagram artifact" >> fail "unreachable"
+
+
+countGenEdges :: Text -> Diagram -> Int
+countGenEdges name diag =
+  sum (map countEdge (IM.elems (dEdges diag)))
+  where
+    countEdge edge =
+      case ePayload edge of
+        PGen (GenName g) _ bargs ->
+          (if g == name then 1 else 0) + sum (map countBinderArg bargs)
+        PBox _ inner -> countGenEdges name inner
+        PFeedback inner -> countGenEdges name inner
+        _ -> 0
+
+    countBinderArg barg =
+      case barg of
+        BAConcrete inner -> countGenEdges name inner
+        BAMeta _ -> 0
+
+
+hasRefNamed :: Text -> Diagram -> Bool
+hasRefNamed target diag =
+  any isNamed (IM.elems (dEdges diag))
+  where
+    isNamed edge =
+      case ePayload edge of
+        PGen (GenName "ref") attrs _ ->
+          case M.lookup "name" attrs of
+            Just (ATLit (ALString s)) -> s == target
+            _ -> False
+        _ -> False
 
 
 nonAcyclicDerivedProgram :: Text
 nonAcyclicDerivedProgram =
-  "doctrine D where {\n"
-    <> "  mode M classifiedBy M via U_M;\n"
-    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
-    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
-    <> "  gen U_M : [] -> [U_M] @M;\n"
-    <> "  gen T : [] -> [U_M] @M;\n"
-    <> "  gen a : [] -> [T] @M;\n"
-    <> "}\n"
-    <> "derived doctrine D_SSA = foliated D mode M;\n"
+  T.unlines
+    [ "doctrine D where {"
+    , "  mode M classifiedBy M via U_M;"
+    , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+    , "  gen comp_var(a@M) : [a] -> [a] @M;"
+    , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+    , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+    , "  gen U_M : [] -> [U_M] @M;"
+    , "  gen T : [] -> [U_M] @M;"
+    , "  gen a : [] -> [T] @M;"
+    , "}"
+    , "fragment Share in D mode M where {"
+    , "}"
+    , "derived doctrine D_Share = letgraph Share;"
+    ]
 
 
 defaultPolicyProgram :: Text
 defaultPolicyProgram =
-  "doctrine D where {\n"
-    <> "  mode M acyclic classifiedBy M via U_M;\n"
-    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
-    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
-    <> "  gen U_M : [] -> [U_M] @M;\n"
-    <> "  gen T : [] -> [U_M] @M;\n"
-    <> "  gen a : [T] -> [T] @M;\n"
-    <> "}\n"
-    <> "derived doctrine D_SSA = foliated D mode M with {\n"
-    <> "  reserved = [\"p0\"];\n"
-    <> "};\n"
-    <> "pipeline p where {\n"
-    <> "  extract foliate into D_SSA;\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine D;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "a\n"
-    <> "---\n"
-
-
-optimizeSsaProgram :: Text
-optimizeSsaProgram =
-  "doctrine D where {\n"
-    <> "  mode M acyclic classifiedBy M via U_M;\n"
-    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
-    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
-    <> "  gen U_M : [] -> [U_M] @M;\n"
-    <> "  gen T : [] -> [U_M] @M;\n"
-    <> "  gen dup(a@M) : [a] -> [a, a] @M;\n"
-    <> "  gen a : [] -> [T] @M;\n"
-    <> "}\n"
-    <> "derived doctrine D_SSA = foliated D mode M;\n"
-    <> "pipeline p where {\n"
-    <> "  extract foliate into D_SSA;\n"
-    <> "  optimize ssa;\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine D;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "a; dup{T}\n"
-    <> "---\n"
-
-
-derivedMaterializedProgram :: Text
-derivedMaterializedProgram =
-  "doctrine D where {\n"
-    <> "  mode M acyclic classifiedBy M via U_M;\n"
-    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
-    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
-    <> "  gen U_M : [] -> [U_M] @M;\n"
-    <> "  gen T : [] -> [U_M] @M;\n"
-    <> "  gen a : [] -> [T] @M;\n"
-    <> "}\n"
-    <> "derived doctrine D_SSA = foliated D mode M;\n"
-
-
-forgetCollisionProgram :: Text
-forgetCollisionProgram =
-  "doctrine D where {\n"
-    <> "  mode M acyclic classifiedBy M via U_M;\n"
-    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
-    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
-    <> "  gen U_M : [] -> [U_M] @M;\n"
-    <> "  gen T : [] -> [U_M] @M;\n"
-    <> "  gen a : [] -> [T] @M;\n"
-    <> "}\n"
-    <> "morphism D_SSA.forget : D -> D where {\n"
-    <> "  mode M -> M;\n"
-    <> "  type T @M -> T @M;\n"
-    <> "  gen a @M -> a;\n"
-    <> "}\n"
-    <> "derived doctrine D_SSA = foliated D mode M;\n"
-
-ssaDocPreludeMappings :: Text
-ssaDocPreludeMappings =
-  "  type PortRef @M -> Doc @Doc;\n"
-    <> "  type PortList @M -> Doc @Doc;\n"
-    <> "  type Step @M -> Doc @Doc;\n"
-    <> "  type StepList @M -> Doc @Doc;\n"
-    <> "  type SSA @M -> Doc @Doc;\n"
-    <> "  gen portRef @M -> text(s = name)\n"
-    <> "  gen portsNil @M -> empty\n"
-    <> "  gen portsCons @M -> cat\n"
-    <> "  gen stepsNil @M -> empty\n"
-    <> "  gen stepsCons @M -> cat\n"
-    <> "  gen ssaProgram @M -> ((id[Doc] * id[Doc]) ; cat) * id[Doc] ; cat\n"
-
-ssaDocStructuralStepMappings :: Text
-ssaDocStructuralStepMappings =
-  "  gen step_U_M @M -> id[Doc]\n"
-    <> "  gen step_I @M -> id[Doc]\n"
-    <> "  gen step_comp_ctx_ext @M -> (id[Doc] * id[Doc]) ; cat\n"
-    <> "  gen step_comp_var @M -> (id[Doc] * id[Doc]) ; cat\n"
-    <> "  gen step_comp_reindex @M -> (id[Doc] * id[Doc]) ; cat\n"
-    <> "  gen stepBox @M -> (((id[Doc] * id[Doc]) ; cat) * id[Doc]) ; cat\n"
-    <> "  gen stepFeedback @M -> (((id[Doc] * id[Doc]) ; cat) * id[Doc]) ; cat\n"
+  T.concat
+    [ baseDoctrine
+    , "fragment Share in D mode M where {\n}\n"
+    , "derived doctrine D_Share = letgraph Share with {\n"
+    , "  reserved = [\"p0\"];\n"
+    , "};\n"
+    , "pipeline p where {\n"
+    , "  quote into D_Share;\n"
+    , "}\n"
+    , runHeader "p"
+    , "a\n"
+    , runFooter
+    ]
 
 
 derivedSourceMorphismProgram :: Text
 derivedSourceMorphismProgram =
-  "doctrine D where {\n"
-    <> "  mode M acyclic classifiedBy M via U_M;\n"
-    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
-    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
-    <> "  gen U_M : [] -> [U_M] @M;\n"
-    <> "  gen I : [] -> [U_M] @M;\n"
-    <> "  gen a : [] -> [I] @M;\n"
-    <> "  gen b : [I] -> [I] @M;\n"
-    <> "}\n"
-    <> "derived doctrine D_SSA = foliated D mode M;\n"
-    <> "morphism emitSSA : D_SSA -> Doc where {\n"
-    <> "  mode M -> Doc;\n"
-    <> "  attrsort __ssa_str -> Str;\n"
-    <> ssaDocPreludeMappings
-    <> ssaDocStructuralStepMappings
-    <> "  gen step_a @M -> (text(s = \"a\") * id[Doc]) ; cat\n"
-    <> "  gen step_b @M -> (((text(s = \"b\") * id[Doc]) ; cat) * id[Doc]) ; cat\n"
-    <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  extract foliate into D_SSA;\n"
-    <> "  apply emitSSA;\n"
-    <> "  extract Doc { stdout = true; };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine D;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "a; b\n"
-    <> "---\n"
+  T.concat
+    [ doctrineWithOps ["gen a : [] -> [I] @M;", "gen b : [I] -> [I] @M;"]
+    , "fragment Share in D mode M where {\n}\n"
+    , "derived doctrine D_Share = letgraph Share;\n"
+    , "morphism emitShare : D_Share -> Doc where {\n"
+    , "  mode M -> Doc;\n"
+    , "  attrsort __quote_str -> Str;\n"
+    , shareDocPreludeMappings
+    , shareDocStructuralMappings
+    , "  gen let_a @M -> ((((text(s = \"a\") * id[Doc]) ; cat) * splice(?b0)) ; cat)\n"
+    , "  gen let_b @M -> ((((((text(s = \"b\") * id[Doc]) ; cat) * id[Doc]) ; cat) * splice(?b0)) ; cat)\n"
+    , "}\n"
+    , "pipeline p where {\n"
+    , "  quote into D_Share;\n"
+    , "  apply emitShare;\n"
+    , "  extract Doc { stdout = true; };\n"
+    , "}\n"
+    , runHeader "p"
+    , "a; b\n"
+    , runFooter
+    ]
+
 
 derivedAttrReflectionProgram :: Text
 derivedAttrReflectionProgram =
-  "doctrine D where {\n"
-    <> "  mode M acyclic classifiedBy M via U_M;\n"
-    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
-    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
-    <> "  attrsort Str = string;\n"
-    <> "  gen U_M : [] -> [U_M] @M;\n"
-    <> "  gen I : [] -> [U_M] @M;\n"
-    <> "  gen lit { n:Str } : [] -> [I] @M;\n"
-    <> "}\n"
-    <> "derived doctrine D_SSA = foliated D mode M;\n"
-    <> "morphism emitSSA : D_SSA -> Doc where {\n"
-    <> "  mode M -> Doc;\n"
-    <> "  attrsort __ssa_str -> Str;\n"
-    <> "  attrsort Str -> Str;\n"
-    <> ssaDocPreludeMappings
-    <> ssaDocStructuralStepMappings
-    <> "  gen step_lit @M -> (text(s = n) * id[Doc]) ; cat\n"
-    <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  extract foliate into D_SSA;\n"
-    <> "  apply emitSSA;\n"
-    <> "  extract Doc { stdout = true; };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine D;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "lit(n = \"hello\")\n"
-    <> "---\n"
+  T.concat
+    [ doctrineWithOps
+        [ "attrsort Str = string;"
+        , "gen lit { n:Str } : [] -> [I] @M;"
+        ]
+    , "fragment Share in D mode M where {\n}\n"
+    , "derived doctrine D_Share = letgraph Share;\n"
+    , "morphism emitShare : D_Share -> Doc where {\n"
+    , "  mode M -> Doc;\n"
+    , "  attrsort __quote_str -> Str;\n"
+    , "  attrsort Str -> Str;\n"
+    , shareDocPreludeMappings
+    , shareDocStructuralMappings
+    , "  gen let_lit @M -> ((((text(s = n) * id[Doc]) ; cat) * splice(?b0)) ; cat)\n"
+    , "}\n"
+    , "pipeline p where {\n"
+    , "  quote into D_Share;\n"
+    , "  apply emitShare;\n"
+    , "  extract Doc { stdout = true; };\n"
+    , "}\n"
+    , runHeader "p"
+    , "lit(n = \"hello\")\n"
+    , runFooter
+    ]
+
 
 derivedBinderReflectionProgram :: Text
 derivedBinderReflectionProgram =
-  "doctrine D where {\n"
-    <> "  mode M acyclic classifiedBy M via U_M;\n"
-    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
-    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
-    <> "  attrsort Str = string;\n"
-    <> "  gen U_M : [] -> [U_M] @M;\n"
-    <> "  gen I : [] -> [U_M] @M;\n"
-    <> "  gen lit { n:Str } : [] -> [I] @M;\n"
-    <> "  gen wrap : [binder { } : [I]] -> [I] @M;\n"
-    <> "}\n"
-    <> "derived doctrine D_SSA = foliated D mode M;\n"
-    <> "morphism emitSSA : D_SSA -> Doc where {\n"
-    <> "  mode M -> Doc;\n"
-    <> "  attrsort __ssa_str -> Str;\n"
-    <> "  attrsort Str -> Str;\n"
-    <> ssaDocPreludeMappings
-    <> ssaDocStructuralStepMappings
-    <> "  gen step_lit @M -> (text(s = n) * id[Doc]) ; cat\n"
-    <> "  gen step_wrap @M -> (((text(s = \"wrap \") * id[Doc]) ; cat) * id[Doc]) ; cat\n"
-    <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  extract foliate into D_SSA;\n"
-    <> "  apply emitSSA;\n"
-    <> "  extract Doc { stdout = true; };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine D;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "wrap [lit(n = \"inner\")]\n"
-    <> "---\n"
+  T.concat
+    [ doctrineWithOps
+        [ "attrsort Str = string;"
+        , "gen lit { n:Str } : [] -> [I] @M;"
+        , "gen wrap : [binder { } : [I]] -> [I] @M;"
+        ]
+    , "fragment Share in D mode M where {\n"
+    , "  recurse binders = true;\n"
+    , "}\n"
+    , "derived doctrine D_Share = letgraph Share;\n"
+    , "morphism emitShare : D_Share -> Doc where {\n"
+    , "  mode M -> Doc;\n"
+    , "  attrsort __quote_str -> Str;\n"
+    , "  attrsort Str -> Str;\n"
+    , shareDocPreludeMappings
+    , shareDocStructuralMappings
+    , "  gen let_lit @M -> ((((text(s = n) * id[Doc]) ; cat) * splice(?b0)) ; cat)\n"
+    , "  gen let_wrap @M -> ((((((text(s = \"wrap \") * id[Doc]) ; cat) * id[Doc]) ; cat) * splice(?b0)) ; cat)\n"
+    , "}\n"
+    , "pipeline p where {\n"
+    , "  quote into D_Share;\n"
+    , "  apply emitShare;\n"
+    , "  extract Doc { stdout = true; };\n"
+    , "}\n"
+    , runHeader "p"
+    , "wrap [lit(n = \"inner\")]\n"
+    , runFooter
+    ]
 
-forgetDiagramProgram :: Text
-forgetDiagramProgram =
-  "doctrine D where {\n"
-    <> "  mode M acyclic classifiedBy M via U_M;\n"
-    <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
-    <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
-    <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
-    <> "  gen U_M : [] -> [U_M] @M;\n"
-    <> "  gen T : [] -> [U_M] @M;\n"
-    <> "  gen a : [] -> [T] @M;\n"
-    <> "}\n"
-    <> "derived doctrine D_SSA = foliated D mode M;\n"
-    <> "pipeline p where {\n"
-    <> "  apply D_SSA.forget;\n"
-    <> "  extract diagram;\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine D;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "a\n"
-    <> "---\n"
+
+duplicateInternalizedProgram :: Text
+duplicateInternalizedProgram =
+  T.concat
+    [ doctrineWithOps
+        [ "gen a : [] -> [I] @M;"
+        ]
+    , "fragment Share in D mode M where {\n"
+    , "  gen dup = duplicate;\n"
+    , "}\n"
+    , "derived doctrine D_Share = letgraph Share;\n"
+    , "pipeline p where {\n"
+    , "  quote into D_Share;\n"
+    , "}\n"
+    , runHeader "p"
+    , "a ; dup{I}\n"
+    , runFooter
+    ]
+
+
+aliasInternalizedProgram :: Text
+aliasInternalizedProgram =
+  T.concat
+    [ doctrineWithOps
+        [ "gen a : [] -> [I] @M;"
+        ]
+    , "fragment Share in D mode M where {\n"
+    , "  gen idLike = alias;\n"
+    , "}\n"
+    , "derived doctrine D_Share = letgraph Share;\n"
+    , "pipeline p where {\n"
+    , "  quote into D_Share;\n"
+    , "}\n"
+    , runHeader "p"
+    , "a ; idLike\n"
+    , runFooter
+    ]
+
+
+shareMemoizedProgram :: Text
+shareMemoizedProgram =
+  T.concat
+    [ doctrineWithOps
+        [ "gen a : [] -> [I] @M;"
+        ]
+    , "fragment Share in D mode M where {\n"
+    , "  gen dup = duplicate;\n"
+    , "  gen f = share;\n"
+    , "}\n"
+    , "derived doctrine D_Share = letgraph Share;\n"
+    , "pipeline p where {\n"
+    , "  quote into D_Share;\n"
+    , "}\n"
+    , runHeader "p"
+    , "a ; dup{I} ; (f * f)\n"
+    , runFooter
+    ]
+
+
+residualDuplicatedProgram :: Text
+residualDuplicatedProgram =
+  T.concat
+    [ doctrineWithOps
+        [ "gen a : [] -> [I] @M;"
+        ]
+    , "fragment Share in D mode M where {\n"
+    , "  gen dup = duplicate;\n"
+    , "}\n"
+    , "derived doctrine D_Share = letgraph Share;\n"
+    , "pipeline p where {\n"
+    , "  quote into D_Share;\n"
+    , "}\n"
+    , runHeader "p"
+    , "a ; dup{I} ; (f * f)\n"
+    , runFooter
+    ]
+
+
+baseDoctrine :: Text
+baseDoctrine =
+  doctrineWithOps ["gen a : [I] -> [I] @M;"]
+
+
+doctrineWithOps :: [Text] -> Text
+doctrineWithOps ops =
+  T.unlines
+    ( [ "doctrine D where {"
+      , "  mode M acyclic classifiedBy M via U_M;"
+      , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+      , "  gen comp_var(a@M) : [a] -> [a] @M;"
+      , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+      , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+      , "  gen U_M : [] -> [U_M] @M;"
+      , "  gen I : [] -> [U_M] @M;"
+      , "  gen dup(a@M) : [a] -> [a, a] @M;"
+      , "  gen idLike : [I] -> [I] @M;"
+      , "  gen f : [I] -> [I] @M;"
+      ]
+        <> map ("  " <>) ops
+        <> ["}"]
+    )
+
+
+shareDocPreludeMappings :: Text
+shareDocPreludeMappings =
+  T.unlines
+    [ "  type Ref @M -> Doc @Doc;"
+    , "  type RefList @M -> Doc @Doc;"
+    , "  type LetGraph @M -> Doc @Doc;"
+    , "  gen ref @M -> text(s = name)"
+    , "  gen refsNil @M -> empty"
+    , "  gen refsCons @M -> cat"
+    , "  gen returnRefs @M -> id[Doc]"
+    , "  gen letGraphProgram @M -> (id[Doc] * id[Doc]) ; cat"
+    ]
+
+
+shareDocStructuralMappings :: Text
+shareDocStructuralMappings =
+  T.unlines
+    [ "  gen let_U_M @M -> (id[Doc] * splice(?b0)) ; cat"
+    , "  gen let_I @M -> (id[Doc] * splice(?b0)) ; cat"
+    , "  gen let_comp_ctx_ext @M -> ((((id[Doc] * id[Doc]) ; cat) * splice(?b0)) ; cat)"
+    , "  gen let_comp_var @M -> ((((id[Doc] * id[Doc]) ; cat) * splice(?b0)) ; cat)"
+    , "  gen let_comp_reindex @M -> ((((id[Doc] * id[Doc]) ; cat) * splice(?b0)) ; cat)"
+    , "  gen let_dup @M -> ((((((id[Doc] * id[Doc]) ; cat) * id[Doc]) ; cat) * splice(?b0)) ; cat)"
+    , "  gen let_idLike @M -> ((((id[Doc] * id[Doc]) ; cat) * splice(?b0)) ; cat)"
+    , "  gen let_f @M -> ((((id[Doc] * id[Doc]) ; cat) * splice(?b0)) ; cat)"
+    , "  gen letBox @M -> ((((((id[Doc] * id[Doc]) ; cat) * id[Doc]) ; cat) * splice(?b0)) ; cat)"
+    , "  gen letFeedback @M -> ((((((id[Doc] * id[Doc]) ; cat) * id[Doc]) ; cat) * splice(?b0)) ; cat)"
+    ]
+
+
+runHeader :: Text -> Text
+runHeader pipelineName =
+  T.unlines
+    [ "run main using " <> pipelineName <> " where {"
+    , "  source doctrine D;"
+    , "  source mode M;"
+    , "}"
+    , "---"
+    ]
+
+
+runFooter :: Text
+runFooter =
+  T.unlines
+    [ "---"
+    ]
 
 
 elabProgram :: Text -> Either Text ModuleEnv

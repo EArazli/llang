@@ -40,6 +40,7 @@ decl =
   importDecl
     <|> doctrineFunctorDecl
     <|> doctrineDecl
+    <|> fragmentDecl
     <|> derivedDoctrineDecl
     <|> morphismDecl
     <|> surfaceDecl
@@ -160,19 +161,30 @@ surfaceDecl = do
   optionalSemi
   pure (DeclSurface name spec)
 
+fragmentDecl :: Parser RawDecl
+fragmentDecl = do
+  _ <- symbol "fragment"
+  name <- scopedIdent
+  _ <- symbol "in"
+  base <- scopedIdent
+  _ <- symbol "mode"
+  modeName <- scopedIdent
+  _ <- symbol "where"
+  items <- fragmentBlock
+  optionalSemi
+  pure (DeclFragment (RawFragmentDecl name base modeName items))
+
 derivedDoctrineDecl :: Parser RawDecl
 derivedDoctrineDecl = do
   _ <- symbol "derived"
   _ <- symbol "doctrine"
   name <- scopedIdent
   _ <- symbol "="
-  _ <- symbol "foliated"
-  base <- scopedIdent
-  _ <- symbol "mode"
-  modeName <- scopedIdent
-  opts <- option (RawFoliationOpts Nothing Nothing []) (symbol "with" *> foliationOptsBlock)
+  _ <- symbol "letgraph"
+  fragmentName <- scopedIdent
+  opts <- option (RawQuoteOpts Nothing Nothing []) (symbol "with" *> quoteOptsBlock)
   optionalSemi
-  pure (DeclDerivedDoctrine (RawDerivedDoctrine name base modeName opts))
+  pure (DeclDerivedDoctrine (RawDerivedDoctrine name fragmentName opts))
 
 pipelineDecl :: Parser RawDecl
 pipelineDecl = do
@@ -1027,8 +1039,7 @@ pipelineItem :: Parser RawPhase
 pipelineItem =
   pipelineApplyItem
     <|> pipelineNormalizeItem
-    <|> pipelineOptimizeSsaItem
-    <|> try pipelineExtractFoliateItem
+    <|> try pipelineQuoteItem
     <|> pipelineExtractItem
 
 pipelineApplyItem :: Parser RawPhase
@@ -1044,13 +1055,6 @@ pipelineNormalizeItem = do
   opts <- option (RawNormalizeOpts Nothing Nothing) normalizeOptsBlock
   optionalSemi
   pure (RPNormalize opts)
-
-pipelineOptimizeSsaItem :: Parser RawPhase
-pipelineOptimizeSsaItem = do
-  _ <- symbol "optimize"
-  _ <- symbol "ssa"
-  optionalSemi
-  pure RPOptimizeSSA
 
 normalizeOptsBlock :: Parser RawNormalizeOpts
 normalizeOptsBlock = do
@@ -1087,15 +1091,14 @@ normalizeItem =
       optionalSemi
       pure (NormFuel n)
 
-pipelineExtractFoliateItem :: Parser RawPhase
-pipelineExtractFoliateItem = do
-  _ <- symbol "extract"
-  _ <- symbol "foliate"
+pipelineQuoteItem :: Parser RawPhase
+pipelineQuoteItem = do
+  _ <- symbol "quote"
   _ <- symbol "into"
   target <- ident
-  opts <- optional (symbol "with" *> foliationOptsBlock)
+  opts <- optional (symbol "with" *> quoteOptsBlock)
   optionalSemi
-  pure (RPExtractFoliate target opts)
+  pure (RPQuoteInto target opts)
 
 pipelineExtractItem :: Parser RawPhase
 pipelineExtractItem = do
@@ -1110,28 +1113,28 @@ pipelineExtractItem = do
       optionalSemi
       pure (RPExtractValue doctrineName opts)
 
-foliationOptsBlock :: Parser RawFoliationOpts
-foliationOptsBlock = do
+quoteOptsBlock :: Parser RawQuoteOpts
+quoteOptsBlock = do
   _ <- symbol "{"
-  items <- many foliationOptItem
+  items <- many quoteOptItem
   _ <- symbol "}"
   pure
-    RawFoliationOpts
-      { rfoPolicy = firstJust [ p | FOPolicy p <- items ]
-      , rfoNaming = firstJust [ p | FONaming p <- items ]
-      , rfoReserved = concat [ xs | FOReserved xs <- items ]
+    RawQuoteOpts
+      { rqoPolicy = firstJust [ p | QOPolicy p <- items ]
+      , rqoNaming = firstJust [ p | QONaming p <- items ]
+      , rqoReserved = concat [ xs | QOReserved xs <- items ]
       }
   where
     firstJust [] = Nothing
     firstJust (x:_) = Just x
 
-data FoliationOptItem
-  = FOPolicy Text
-  | FONaming Text
-  | FOReserved [Text]
+data QuoteOptItem
+  = QOPolicy Text
+  | QONaming Text
+  | QOReserved [Text]
 
-foliationOptItem :: Parser FoliationOptItem
-foliationOptItem =
+quoteOptItem :: Parser QuoteOptItem
+quoteOptItem =
   foPolicy <|> foNaming <|> foReserved
   where
     foPolicy = do
@@ -1139,13 +1142,13 @@ foliationOptItem =
       _ <- symbol "="
       txt <- stringLiteral
       optionalSemi
-      pure (FOPolicy txt)
+      pure (QOPolicy txt)
     foNaming = do
       _ <- symbol "naming"
       _ <- symbol "="
       txt <- stringLiteral
       optionalSemi
-      pure (FONaming txt)
+      pure (QONaming txt)
     foReserved = do
       _ <- symbol "reserved"
       _ <- symbol "="
@@ -1153,7 +1156,54 @@ foliationOptItem =
       xs <- stringLiteral `sepBy` symbol ","
       _ <- symbol "]"
       optionalSemi
-      pure (FOReserved xs)
+      pure (QOReserved xs)
+
+fragmentBlock :: Parser [RawFragmentItem]
+fragmentBlock = do
+  _ <- symbol "{"
+  items <- many fragmentItem
+  _ <- symbol "}"
+  pure items
+
+fragmentItem :: Parser RawFragmentItem
+fragmentItem =
+  fragmentProductItem
+    <|> fragmentGenRoleItem
+    <|> fragmentRecurseItem
+
+fragmentProductItem :: Parser RawFragmentItem
+fragmentProductItem = do
+  _ <- symbol "product"
+  ctor <- ident
+  _ <- symbol "="
+  projLeft <- ident
+  _ <- symbol ","
+  projRight <- ident
+  optionalSemi
+  pure (RFProduct ctor projLeft projRight)
+
+fragmentGenRoleItem :: Parser RawFragmentItem
+fragmentGenRoleItem = do
+  _ <- symbol "gen"
+  name <- ident
+  _ <- symbol "="
+  role <-
+    (RFRShare <$ symbol "share")
+      <|> (RFRAlias <$ symbol "alias")
+      <|> (RFRDuplicate <$ symbol "duplicate")
+      <|> (RFRDiscard <$ symbol "discard")
+  optionalSemi
+  pure (RFGenRole name role)
+
+fragmentRecurseItem :: Parser RawFragmentItem
+fragmentRecurseItem = do
+  _ <- symbol "recurse"
+  item <-
+    (RFRecurseBinders <$> (symbol "binders" *> symbol "=" *> boolLiteral))
+      <|> (RFRecurseBoxes <$> (symbol "boxes" *> symbol "=" *> boolLiteral))
+      <|> (RFRecurseFeedback <$> (symbol "feedback" *> symbol "=" *> boolLiteral))
+  optionalSemi
+  pure item
 
 valueExtractOptsBlock :: Parser RawValueExtractOpts
 valueExtractOptsBlock = do

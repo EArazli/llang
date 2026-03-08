@@ -27,12 +27,12 @@ tests =
   testGroup
     "Frontend.ExampleCodegen"
     [ testCase "logic_full_adder_codegen main emits structured JavaScript" testLogicFullAdderMain
-    , testCase "logic_full_adder_codegen ssa shows attrs and producer links" testLogicFullAdderSsa
-    , testCase "ssa_js_codegen main emits js-like SSA statements" testSsaJsMain
+    , testCase "logic_full_adder_codegen share shows quoted bindings and attrs" testLogicFullAdderShare
+    , testCase "letgraph_js_codegen main emits js-like shared bindings" testLetGraphJsMain
     , testCase "end-to-end autodiff example emits differentiated JavaScript" testEndToEndAutodiffMain
     , testCase "end-to-end autodiff core run exposes differentiated target IR" testEndToEndAutodiffCore
     , testCase "pair-based autodiff main emits cleaned JavaScript" testPairAutodiffMain
-    , testCase "pair-based autodiff core stays in the source doctrine after one pass" testPairAutodiffCore
+    , testCase "pair-based autodiff main2 emits cleaned JavaScript" testPairAutodiffMain2
     , testCase "CLI does not write FileTree outputs without --output" testCliNoOutputFlagSkipsWrites
     , testCase "CLI writes FileTree outputs with --output" testCliOutputFlagWrites
     ]
@@ -51,29 +51,29 @@ testLogicFullAdderMain = do
   assertBool "expected or emission" ("||" `T.isInfixOf` out)
   assertBool "expected cin lookup" ("env[\"cin\"]" `T.isInfixOf` out)
 
-testLogicFullAdderSsa :: Assertion
-testLogicFullAdderSsa = do
+testLogicFullAdderShare :: Assertion
+testLogicFullAdderShare = do
   env <- requireIO =<< loadModule "examples/run/codegen/logic_full_adder_codegen.run.llang"
-  runDef <- require (selectRun env (Just "ssa"))
+  runDef <- require (selectRun env (Just "share"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected var attribute for a" ("attrs={s=\"a\"}" `T.isInfixOf` out)
-  assertBool "expected var attribute for b" ("attrs={s=\"b\"}" `T.isInfixOf` out)
-  assertBool "expected xor step" (" xor " `T.isInfixOf` out)
-  assertBool "expected producer links in inputs" (" <- e" `T.isInfixOf` out)
+  assertBool "expected var attribute for a" ("let_var(s=\"a\")" `T.isInfixOf` out)
+  assertBool "expected var attribute for b" ("let_var(s=\"b\")" `T.isInfixOf` out)
+  assertBool "expected quoted xor binding" ("let_xor" `T.isInfixOf` out)
+  assertBool "expected quoted and binding" ("let_and" `T.isInfixOf` out)
 
-testSsaJsMain :: Assertion
-testSsaJsMain = do
-  env <- requireIO =<< loadModule "examples/run/codegen/ssa_js_codegen.run.llang"
+testLetGraphJsMain :: Assertion
+testLetGraphJsMain = do
+  env <- requireIO =<< loadModule "examples/run/codegen/letgraph_js_codegen.run.llang"
   runDef <- require (selectRun env (Just "main"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
   assertBool "expected const binding statements" ("const " `T.isInfixOf` out)
   assertBool "expected assignment in emitted code" (" = " `T.isInfixOf` out)
   assertBool "expected add operation call in emitted code" ("add(" `T.isInfixOf` out)
-  assertBool "expected dup operation call in emitted code" ("dup(" `T.isInfixOf` out)
+  assertBool "expected duplicate role to suppress dup helper calls" (not ("dup(" `T.isInfixOf` out))
   assertBool "expected console.log statement" ("console.log(" `T.isInfixOf` out)
-  assertBool "expected statement separators" (";\n" `T.isInfixOf` out)
+  assertBool "expected statement separators" (";" `T.isInfixOf` out)
 
 testEndToEndAutodiffMain :: Assertion
 testEndToEndAutodiffMain = do
@@ -108,23 +108,32 @@ testPairAutodiffMain = do
   runDef <- require (selectRun env (Just "main"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected exported unary pair function" ("export const timesSinPair = x =>" `T.isInfixOf` out)
-  assertBool "expected sine call in emitted code" ("Math.sin(" `T.isInfixOf` out)
-  assertBool "expected cosine call in emitted code" ("Math.cos(" `T.isInfixOf` out)
+  assertBool "expected named exported function" ("export const timesSinPair = (p0) => {" `T.isInfixOf` out)
+  assertBool "expected pair destructuring of the seeded input" ("const [t32, t29] = p0;" `T.isInfixOf` out)
+  assertBool "expected sine temporary in emitted code" ("const t34 = Math.sin(t32);" `T.isInfixOf` out)
+  assertBool "expected cosine temporary in emitted code" ("const t35 = Math.cos(t32);" `T.isInfixOf` out)
+  assertBool "expected final value/derivative return pair" ("return [t33, t25];" `T.isInfixOf` out)
   assertBool "expected optimized backend to remove explicit dup helper" (not ("dup(" `T.isInfixOf` out))
   assertBool "expected optimized backend to remove Array.fill duplication" (not ("Array(2).fill" `T.isInfixOf` out))
 
-testPairAutodiffCore :: Assertion
-testPairAutodiffCore = do
+testPairAutodiffMain2 :: Assertion
+testPairAutodiffMain2 = do
   env <- requireIO =<< loadModule "examples/endtoend/autodiff_times_sin_pair_core.run.llang"
-  runDef <- require (selectRun env (Just "core"))
+  runDef <- require (selectRun env (Just "main2"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected pair-valued arrow output" ("M.Arr(M.Pair(M.R, M.R), M.Pair(M.R, M.R))" `T.isInfixOf` out)
-  assertBool "expected explicit pair constructor" (" mkPair " `T.isInfixOf` out)
-  assertBool "expected explicit projection structure" (" fst " `T.isInfixOf` out)
-  assertBool "expected explicit cosine node" (" cos " `T.isInfixOf` out)
-  assertBool "expected explicit addition node" (" add " `T.isInfixOf` out)
+  assertBool "expected named exported second-order function" ("export const timesSinPair = (p0) => {" `T.isInfixOf` out)
+  assertBool "expected first nested projection" ("const t87 = p0[0];" `T.isInfixOf` out)
+  assertBool "expected second nested projection" ("const t161 = t87[0];" `T.isInfixOf` out)
+  assertBool "expected reused cosine temporary" ("const t169 = Math.cos(t161);" `T.isInfixOf` out)
+  assertBool "expected reused sine temporary" ("const t168 = Math.sin(t161);" `T.isInfixOf` out)
+  assertBool "expected inner pair binding" ("const t79 = [t162, t133];" `T.isInfixOf` out)
+  assertBool "expected outer pair binding" ("const t115 = [t167, t137];" `T.isInfixOf` out)
+  assertBool "expected sine call in emitted code" ("Math.sin(" `T.isInfixOf` out)
+  assertBool "expected cosine call in emitted code" ("Math.cos(" `T.isInfixOf` out)
+  assertBool "expected direct return of nested pair result" ("return [t115, t79];" `T.isInfixOf` out)
+  assertBool "expected duplicate helper to stay eliminated" (not ("Array(2).fill" `T.isInfixOf` out))
+  assertBool "expected no backend placeholders" (not ("unsupported" `T.isInfixOf` out))
 
 
 testCliNoOutputFlagSkipsWrites :: Assertion

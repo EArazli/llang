@@ -9,14 +9,18 @@ doctrine D where {
   gen a : [] -> [T] @M;
   gen b : [T] -> [T] @M;
   gen c : [T] -> [] @M;
+  gen dup(a@M) : [a] -> [a, a] @M;
 }
 
-derived doctrine D_SSA = foliated D mode M;
+fragment Share in D mode M where {
+  gen dup = duplicate;
+}
+
+derived doctrine D_Share = letgraph Share;
 
 pipeline p where {
   normalize { policy = "topmost"; fuel = 50; };
-  extract foliate into D_SSA;
-  apply D_SSA.forget;
+  quote into D_Share;
   extract diagram;
 }
 
@@ -25,5 +29,5 @@ run main using p where {
   source mode M;
 }
 ---
-a ; b ; c
+a ; dup{T} ; (b * b) ; (c * c)
 ---

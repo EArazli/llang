@@ -32,7 +32,7 @@ This means:
 
 5. **Structural discipline, effects, and modalities are part of the doctrine, not hardcoded.** Whether a mode admits copying (cartesian), discarding, or neither is determined by which structural interfaces the doctrine implements — not by a built-in discipline lattice. Effects are doctrines. Modalities (functors between modes with 2-cell structure) mediate the interaction between fragments with different disciplines. Modal dependent types allow types in one mode to be indexed by terms in another.
 
-6. **Evaluation strategy is a property of the mode theory, not a global switch.** Which subexpressions can be evaluated at which phase is determined by the mode structure: modes correspond to evaluation phases, modalities correspond to phase transitions, and foliation computes the most eager evaluation order consistent with the mode theory. Partial evaluation is the morphism from the composite doctrine to the residualized doctrine, with correctness guaranteed by the morphism laws.
+6. **Evaluation strategy is a property of the mode theory, not a global switch.** Which subexpressions can be evaluated at which phase is determined by the mode structure: modes correspond to evaluation phases, modalities correspond to phase transitions, and fragment-driven quotation can reify explicit sharing inside chosen acyclic fragments when a pipeline needs that view. Partial evaluation is the morphism from the composite doctrine to the residualized doctrine, with correctness guaranteed by the morphism laws.
 
 ## The endgame
 

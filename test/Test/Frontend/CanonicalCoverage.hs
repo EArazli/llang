@@ -65,8 +65,8 @@ canonicalRuns =
       , raRunName = Just "main"
       }
   , RunArtifact
-      { raLabel = "foliation+forget target"
-      , raPath = "examples/run/foliation/basic_foliate.run.llang"
+      { raLabel = "sharing quote target"
+      , raPath = "examples/run/sharing/basic_quote.run.llang"
       , raRunName = Just "main"
       }
   , RunArtifact

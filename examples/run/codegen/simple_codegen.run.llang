@@ -11,8 +11,6 @@ doctrine IR where {
   gen add : [I, I] -> [I] @M;
 }
 
-derived doctrine IR_SSA = foliated IR mode M;
-
 morphism emitDoc : IR -> Doc where {
   mode M -> Doc;
   gen comp_ctx_ext @M -> comp_ctx_ext
@@ -26,8 +24,6 @@ morphism emitDoc : IR -> Doc where {
 
 pipeline compile_doc where {
   normalize { policy = "topmost"; fuel = 50; };
-  extract foliate into IR_SSA;
-  apply IR_SSA.forget;
   apply emitDoc;
   extract Doc { stdout = true };
 }

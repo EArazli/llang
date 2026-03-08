@@ -9,14 +9,14 @@ import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T
-import Strat.Pipeline (defaultFoliationPolicy)
-import Strat.Poly.Foliation (foliate)
+import Strat.Pipeline (FragmentDecl(..), defaultQuotePolicy)
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
 import Strat.Poly.Graph (EdgePayload(..), addEdgePayload, emptyDiagram, freshPort)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
+import Strat.Poly.Quote (quoteProgram)
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 
 
@@ -36,11 +36,11 @@ testRejectCycle = do
   d2 <- require (addEdgePayload (PGen (GenName "f") M.empty []) [p0] [p1] d1)
   d3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [p1] [p0] d2)
   let cyc = d3 { dIn = [], dOut = [] }
-  case foliate defaultFoliationPolicy doc modeM cyc of
+  case quoteProgram defaultQuotePolicy doc modeM fragmentResidual cyc of
     Left err ->
       assertBool ("expected acyclic-cycle error, got: " <> T.unpack err) ("cyclic" `T.isInfixOf` T.toLower err)
     Right _ ->
-      assertFailure "expected foliation to reject cycle"
+      assertFailure "expected quoteProgram to reject cycle"
 
 
 mkDoctrine :: Doctrine
@@ -65,6 +65,20 @@ modeM = ModeName "M"
 
 tyT :: Obj
 tyT = mkCon (ObjRef modeM (ObjName "T")) []
+
+
+fragmentResidual :: FragmentDecl
+fragmentResidual =
+  FragmentDecl
+    { frName = "Frag"
+    , frBase = "D"
+    , frMode = "M"
+    , frGenRoles = M.empty
+    , frProducts = []
+    , frRecurseBinders = False
+    , frRecurseBoxes = False
+    , frRecurseFeedback = False
+    }
 
 
 require :: Either Text a -> IO a
