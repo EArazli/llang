@@ -9,7 +9,7 @@ import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T
-import Strat.Pipeline (FragmentDecl(..), defaultQuotePolicy)
+import Strat.Pipeline (FragmentDecl(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
 import Strat.Poly.Graph (EdgePayload(..), addEdgePayload, emptyDiagram, freshPort)
@@ -36,7 +36,7 @@ testRejectCycle = do
   d2 <- require (addEdgePayload (PGen (GenName "f") M.empty []) [p0] [p1] d1)
   d3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [p1] [p0] d2)
   let cyc = d3 { dIn = [], dOut = [] }
-  case quoteProgram defaultQuotePolicy doc modeM fragmentResidual cyc of
+  case quoteProgram doc modeM fragmentResidual cyc of
     Left err ->
       assertBool ("expected acyclic-cycle error, got: " <> T.unpack err) ("cyclic" `T.isInfixOf` T.toLower err)
     Right _ ->
@@ -73,11 +73,10 @@ fragmentResidual =
     { frName = "Frag"
     , frBase = "D"
     , frMode = "M"
-    , frGenRoles = M.empty
-    , frProducts = []
-    , frRecurseBinders = False
-    , frRecurseBoxes = False
-    , frRecurseFeedback = False
+    , frIncludedGens = S.empty
+    , frCrossBinders = False
+    , frCrossBoxes = False
+    , frCrossFeedback = False
     }
 
 

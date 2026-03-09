@@ -1,6 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Strat.Poly.Quote
-  ( SharedProgram(..)
+  ( RefId(..)
+  , SharedBindingKind(..)
+  , SharedProgram(..)
   , SharedBinding(..)
   , quoteProgram
   , encodeSharedProgram
@@ -9,22 +12,17 @@ module Strat.Poly.Quote
   ) where
 
 import Control.Monad (foldM)
-import Data.Char (isAlphaNum)
 import Data.Text (Text)
-import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Pipeline
   ( FragmentDecl(..)
-  , FragmentProduct(..)
-  , FragmentRole(..)
-  , NamingPolicy(..)
-  , QuotePolicy(..)
+  , QuoteTargetLayout(..)
   )
-import Strat.Poly.Attr (AttrMap, AttrLit(..), AttrTerm(..))
-import Strat.Poly.Diagram (Diagram, compD, genD, genDWithAttrs, idD, tensorD)
-import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
+import Strat.Poly.Attr (AttrMap)
+import Strat.Poly.Diagram (Diagram, unionDiagram)
+import Strat.Poly.Doctrine (Doctrine(..), lookupGenDeclInDoctrine)
 import Strat.Poly.Graph
   ( BinderArg(..)
   , Diagram(..)
@@ -32,92 +30,116 @@ import Strat.Poly.Graph
   , EdgeId(..)
   , EdgePayload(..)
   , PortId(..)
+  , unEdgeId
+  , unPortId
   , addEdgePayload
   , canonDiagramRaw
   , emptyDiagram
   , freshPort
-  , getPortLabel
+  , shiftDiagram
   , validateDiagram
   )
-import Strat.Poly.Kernel (ObjName(..))
 import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.Names (BoxName(..), GenName(..))
-import Strat.Poly.Obj (mkCon)
-import Strat.Poly.TypeTheory (ttCtorTablesByOwner)
-import Strat.Poly.Doctrine (lookupCtorRefForOwnerInTables, lookupCtorSigForOwnerInTables)
+import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Obj (Obj(OVar, OCon), ObjRef(..), ObjName(..), mkCon, pattern OAObj)
 
+
+newtype RefId = RefId Int
+  deriving (Eq, Ord, Show)
+
+data SharedBindingKind
+  = SBIncluded
+  | SBResidual
+  deriving (Eq, Ord, Show)
 
 data SharedProgram = SharedProgram
   { spBaseDoctrine :: Text
   , spMode :: ModeName
-  , spInputs :: [PortId]
+  , spInputs :: [RefId]
   , spBindings :: [SharedBinding]
-  , spOutputs :: [PortId]
-  , spPortNames :: M.Map PortId Text
+  , spOutputs :: [RefId]
+  , spRefTypes :: M.Map RefId Obj
   }
   deriving (Eq, Ord, Show)
 
-
 data SharedBinding
   = BindGen
-      { sbEdgeId :: EdgeId
+      { sbKind :: SharedBindingKind
+      , sbEdgeId :: EdgeId
+      , sbScope :: [RefId]
       , sbGen :: GenName
       , sbAttrs :: AttrMap
-      , sbIns :: [PortId]
-      , sbOuts :: [PortId]
+      , sbIns :: [RefId]
+      , sbOuts :: [RefId]
       , sbBinders :: [SharedProgram]
       }
   | BindBox
       { sbEdgeId :: EdgeId
-      , sbBoxName :: BoxName
+      , sbScope :: [RefId]
+      , sbIns :: [RefId]
+      , sbOuts :: [RefId]
       , sbInner :: SharedProgram
-      , sbIns :: [PortId]
-      , sbOuts :: [PortId]
       }
   | BindFeedback
       { sbEdgeId :: EdgeId
+      , sbScope :: [RefId]
+      , sbIns :: [RefId]
+      , sbOuts :: [RefId]
       , sbBody :: SharedProgram
-      , sbIns :: [PortId]
-      , sbOuts :: [PortId]
       }
   deriving (Eq, Ord, Show)
 
-
 data BindingKey
-  = KeyGen GenName AttrMap [Text] [SharedProgram]
-  | KeyBox BoxName [Text] [Text] SharedProgram
-  | KeyFeedback [Text] [Text] SharedProgram
+  = KeyGen GenName AttrMap [RefId] [SharedProgram]
   deriving (Eq, Ord, Show)
 
-
 data QuoteState = QuoteState
-  { qsNames :: M.Map PortId Text
+  { qsNextRef :: Int
+  , qsScope :: [RefId]
+  , qsPortRefs :: M.Map PortId RefId
+  , qsRefTypes :: M.Map RefId Obj
   , qsBindingsRev :: [SharedBinding]
-  , qsMemo :: M.Map BindingKey [Text]
+  , qsMemo :: M.Map BindingKey [RefId]
+  }
+
+data NewRefSource
+  = NoNewRefs
+  | NewRefsDirect [(RefId, PortId)]
+  | NewRefsBundled [RefId] PortId
+
+data LocalAccess = LocalAccess
+  { laMode :: ModeName
+  , laDoctrine :: Doctrine
+  , laLayout :: QuoteTargetLayout
+  , laRefTypes :: M.Map RefId Obj
+  , laBoundary :: [PortId]
+  , laCurrentScope :: [RefId]
+  , laOldScope :: [RefId]
+  , laOldBundlePort :: PortId
+  , laNewRefs :: NewRefSource
   }
 
 
 quoteDiagram
-  :: QuotePolicy
+  :: QuoteTargetLayout
   -> Doctrine
   -> Doctrine
   -> ModeName
   -> FragmentDecl
   -> Diagram
   -> Either Text Diagram
-quoteDiagram policy baseDoc derivedDoc mode fragment diag = do
-  program <- quoteProgram policy baseDoc mode fragment diag
-  encodeSharedProgram derivedDoc program
+quoteDiagram layout baseDoc derivedDoc mode fragment diag = do
+  program <- quoteProgram baseDoc mode fragment diag
+  encodeSharedProgram layout derivedDoc program
 
 
 quoteProgram
-  :: QuotePolicy
-  -> Doctrine
+  :: Doctrine
   -> ModeName
   -> FragmentDecl
   -> Diagram
   -> Either Text SharedProgram
-quoteProgram policy doc mode fragment diag = do
+quoteProgram doc mode fragment diag = do
   diag0 <- canonicalizeDiagram diag
   if mode /= dMode diag0
     then Left "quote: mode mismatch"
@@ -125,471 +147,678 @@ quoteProgram policy doc mode fragment diag = do
   if mode `S.member` dAcyclicModes doc
     then Right ()
     else Left "quote: mode is not declared acyclic"
+  let inputs = dIn diag0
+  (inputRefs, refTypes0) <- allocBoundaryRefs diag0 inputs
   ordered <- topoOrder diag0
-  baseNames <- assignPortNames policy diag0
-  let boundaryRefs = M.fromList [ (p, refName baseNames p) | p <- dIn diag0 ]
-      initialState =
+  let initialState =
         QuoteState
-          { qsNames = boundaryRefs
+          { qsNextRef = length inputRefs
+          , qsScope = inputRefs
+          , qsPortRefs = M.fromList (zip inputs inputRefs)
+          , qsRefTypes = refTypes0
           , qsBindingsRev = []
           , qsMemo = M.empty
           }
-  st <- foldM (quoteEdge doc mode fragment policy baseNames) initialState ordered
+  st <- foldM (quoteEdge doc mode fragment diag0) initialState ordered
+  outputRefs <- mapM (requirePortRef st) (dOut diag0)
   pure
-    ( optimizeSharedProgram fragment
-        SharedProgram
-          { spBaseDoctrine = dName doc
-          , spMode = mode
-          , spInputs = dIn diag0
-          , spBindings = reverse (qsBindingsRev st)
-          , spOutputs = dOut diag0
-          , spPortNames = qsNames st
+    SharedProgram
+      { spBaseDoctrine = dName doc
+      , spMode = mode
+      , spInputs = inputRefs
+      , spBindings = reverse (qsBindingsRev st)
+      , spOutputs = outputRefs
+      , spRefTypes = qsRefTypes st
+      }
+
+
+encodeSharedProgram :: QuoteTargetLayout -> Doctrine -> SharedProgram -> Either Text Diagram
+encodeSharedProgram layout doc program = do
+  ensureTargetLayout doc layout program
+  let mode = spMode program
+      inputCtx = map (requireRefTy program) (spInputs program)
+  let initialBundleTy = refsTy layout mode inputCtx
+  let (bundlePort, diag0) = freshPort initialBundleTy (emptyDiagram mode [])
+  diag1 <- addEdgePayload (PGen (GenName (qtlInputRefsGen layout)) M.empty []) [] [bundlePort] diag0
+  let access =
+        LocalAccess
+          { laMode = mode
+          , laDoctrine = doc
+          , laLayout = layout
+          , laRefTypes = spRefTypes program
+          , laBoundary = []
+          , laCurrentScope = spInputs program
+          , laOldScope = spInputs program
+          , laOldBundlePort = bundlePort
+          , laNewRefs = NoNewRefs
           }
-    )
-
-
-encodeSharedProgram :: Doctrine -> SharedProgram -> Either Text Diagram
-encodeSharedProgram doc program = do
-  tt <- doctrineTypeTheory doc
-  let ctorTables = ttCtorTablesByOwner tt
-      mode = spMode program
-      requireType0 tName = do
-        let mRef = lookupCtorRefForOwnerInTables doc ctorTables mode (ObjName tName)
-        ref <-
-          case mRef of
-            Nothing -> Left ("quote: derived doctrine missing constructor " <> tName)
-            Just out -> Right out
-        sig <- lookupCtorSigForOwnerInTables doc ctorTables mode ref
-        if null sig
-          then pure (mkCon ref [])
-          else Left ("quote: constructor " <> tName <> " must be nullary")
-      requireGen gName =
-        case M.lookup mode (dGens doc) >>= M.lookup gName of
-          Nothing -> Left ("quote: derived doctrine missing generator " <> renderGenNameText gName)
-          Just _ -> Right ()
-      bindingCtorName (GenName g) = GenName ("let_" <> g)
-      portName pid = refName (spPortNames program) pid
-  refTy <- requireType0 "Ref"
-  refsTy <- requireType0 "RefList"
-  letGraphTy <- requireType0 "LetGraph"
-  let tensorMany ds =
-        case ds of
-          [] -> Right (idD mode [])
-          d0:rest -> foldM tensorD d0 rest
-      genDWithAttrsBinders domCtx codCtx genName attrs bargs = do
-        let (inPorts, diag1) = allocPorts domCtx (emptyDiagram mode [])
-        let (outPorts, diag2) = allocPorts codCtx diag1
-        diag3 <- addEdgePayload (PGen genName attrs bargs) inPorts outPorts diag2
-        let diagFinal = diag3 { dIn = inPorts, dOut = outPorts }
-        validateDiagram diagFinal
-        pure diagFinal
-      allocPorts [] diag = ([], diag)
-      allocPorts (ty:rest) diag =
-        let (pid, diag1) = freshPort ty diag
-            (pids, diag2) = allocPorts rest diag1
-         in (pid : pids, diag2)
-      mkRef name =
-        genDWithAttrs mode [] [refTy] (GenName "ref") (M.singleton "name" (ATLit (ALString name)))
-      mkRefList names =
-        case names of
-          [] -> genD mode [] [refsTy] (GenName "refsNil")
-          n:rest -> do
-            headRef <- mkRef n
-            tailRefs <- mkRefList rest
-            pair <- tensorD headRef tailRefs
-            cons <- genD mode [refTy, refsTy] [refsTy] (GenName "refsCons")
-            compD tt cons pair
-      applyBindingCtor ctor attrs domCtx binderArgs argDiags = do
-        _ <- requireGen ctor
-        ctorDiag <- genDWithAttrsBinders domCtx [letGraphTy] ctor attrs binderArgs
-        tuple <- tensorMany argDiags
-        compD tt ctorDiag tuple
-      mkReturnRefs names = do
-        refs <- mkRefList names
-        ret <- genD mode [refsTy] [letGraphTy] (GenName "returnRefs")
-        compD tt ret refs
-      mkBinding contDiag binding =
-        case binding of
-          BindGen _ gen attrs ins outs binders -> do
-            let ctor = bindingCtorName gen
-            outRefs <- mapM (mkRef . portName) outs
-            inRefs <- mapM (mkRef . portName) ins
-            binderDiags <- mapM (encodeSharedProgram doc) binders
-            let argDiags = outRefs <> inRefs <> binderDiags
-                domCtx =
-                  replicate (length outs + length ins) refTy
-                    <> replicate (length binders) letGraphTy
-            applyBindingCtor ctor attrs domCtx [BAConcrete contDiag] argDiags
-          BindBox _ box inner ins outs -> do
-            outRefs <- mkRefList (map portName outs)
-            inRefs <- mkRefList (map portName ins)
-            innerDiag <- encodeSharedProgram doc inner
-            tuple <- tensorMany [outRefs, inRefs, innerDiag]
-            ctor <- genDWithAttrsBinders [refsTy, refsTy, letGraphTy] [letGraphTy] (GenName "letBox") (M.singleton "name" (ATLit (ALString (renderBoxName box)))) [BAConcrete contDiag]
-            compD tt ctor tuple
-          BindFeedback _ body ins outs -> do
-            outRefs <- mkRefList (map portName outs)
-            inRefs <- mkRefList (map portName ins)
-            bodyProgDiag <- encodeSharedProgram doc body
-            tuple <- tensorMany [outRefs, inRefs, bodyProgDiag]
-            ctor <- genDWithAttrsBinders [refsTy, refsTy, letGraphTy] [letGraphTy] (GenName "letFeedback") M.empty [BAConcrete contDiag]
-            compD tt ctor tuple
-  mapM_ requireGen
-    [ GenName "ref"
-    , GenName "refsNil"
-    , GenName "refsCons"
-    , GenName "returnRefs"
-    , GenName "letBox"
-    , GenName "letFeedback"
-    , GenName "letGraphProgram"
-    ]
-  inRefs <- mkRefList (map portName (spInputs program))
-  finalBody <- mkReturnRefs (map portName (spOutputs program))
-  nestedBody <- foldM mkBinding finalBody (reverse (spBindings program))
-  tuple <- tensorD inRefs nestedBody
-  build <- genD mode [refsTy, letGraphTy] [letGraphTy] (GenName "letGraphProgram")
-  compD tt build tuple
-  where
-    renderBoxName (BoxName name) = name
-    renderGenNameText (GenName name) = name
+  (progPort, diag2) <- encodeProgramLocal program access diag1 (spBindings program)
+  let final = diag2 { dIn = [], dOut = [progPort] }
+  validateDiagram final
+  pure final
 
 
 quoteEdge
   :: Doctrine
   -> ModeName
   -> FragmentDecl
-  -> QuotePolicy
-  -> M.Map PortId Text
+  -> Diagram
   -> QuoteState
   -> Edge
   -> Either Text QuoteState
-quoteEdge doc mode fragment policy baseNames st edge =
+quoteEdge doc mode fragment sourceDiag st edge =
   case ePayload edge of
     PGen gen attrs bargs -> do
-      binders <- mapM (quoteBinderProgram doc mode fragment policy) bargs
-      let role = M.findWithDefault FragResidual gen (frGenRoles fragment)
-      case role of
-        FragAlias -> aliasOutputs (eIns edge) (eOuts edge) st
-        FragDuplicate -> duplicateOutputs (eIns edge) (eOuts edge) st
-        FragDiscard -> pure st
-        FragShare -> shareBinding gen attrs binders
-        FragResidual -> emitBinding gen attrs binders
-    PBox name inner -> do
-      innerProgram <- quoteNestedProgram doc mode fragment policy (frRecurseBoxes fragment) inner
-      let binding =
-            BindBox
-              { sbEdgeId = eId edge
-              , sbBoxName = name
-              , sbInner = innerProgram
-              , sbIns = eIns edge
-              , sbOuts = eOuts edge
-              }
-      emitFreshBinding binding st
+      binders <- mapM (quoteBinderProgram doc mode fragment) bargs
+      let included = gen `S.member` frIncludedGens fragment
+      if included
+        then shareBinding gen attrs binders
+        else emitBinding SBResidual gen attrs binders
+    PBox _ inner -> do
+      innerProgram <- quoteNestedProgram doc mode fragment (frCrossBoxes fragment) inner
+      inputRefs <- mapPortRefs (eIns edge)
+      emitStructuredBinding
+        BindBox
+          { sbEdgeId = eId edge
+          , sbScope = qsScope st
+          , sbIns = inputRefs
+          , sbOuts = []
+          , sbInner = innerProgram
+          }
     PFeedback body -> do
-      bodyProgram <- quoteNestedProgram doc mode fragment policy (frRecurseFeedback fragment) body
-      let binding =
-            BindFeedback
-              { sbEdgeId = eId edge
-              , sbBody = bodyProgram
-              , sbIns = eIns edge
-              , sbOuts = eOuts edge
-              }
-      emitFreshBinding binding st
+      bodyProgram <- quoteNestedProgram doc mode fragment (frCrossFeedback fragment) body
+      inputRefs <- mapPortRefs (eIns edge)
+      emitStructuredBinding
+        BindFeedback
+          { sbEdgeId = eId edge
+          , sbScope = qsScope st
+          , sbIns = inputRefs
+          , sbOuts = []
+          , sbBody = bodyProgram
+          }
     PSplice _ _ -> Left "quote: splice is not allowed in runtime diagrams"
     PTmMeta _ -> Left "quote: term-meta nodes are not allowed in runtime diagrams"
     PInternalDrop -> Left "quote: internal drop nodes are not allowed in runtime diagrams"
   where
+    mapPortRefs = mapM (requirePortRef st)
+
     shareBinding gen attrs binders = do
-      inputRefs <- mapM (requirePortRef st) (eIns edge)
+      inputRefs <- mapPortRefs (eIns edge)
       let key = KeyGen gen attrs inputRefs binders
       case M.lookup key (qsMemo st) of
-        Just outputRefs ->
-          aliasNamedOutputs outputRefs (eOuts edge) st
-        Nothing -> do
-          let binding =
-                BindGen
-                  { sbEdgeId = eId edge
-                  , sbGen = gen
-                  , sbAttrs = attrs
-                  , sbIns = eIns edge
-                  , sbOuts = eOuts edge
-                  , sbBinders = binders
-                  }
-          st' <- emitFreshBinding binding st
-          let outputRefs = map (refName (qsNames st')) (eOuts edge)
-          pure st' { qsMemo = M.insert key outputRefs (qsMemo st') }
+        Just priorOuts ->
+          aliasOutputs priorOuts (eOuts edge) st
+        Nothing ->
+          doEmit SBIncluded gen attrs binders
 
-    emitBinding gen attrs binders =
-      emitFreshBinding
-        BindGen
-          { sbEdgeId = eId edge
-          , sbGen = gen
-          , sbAttrs = attrs
-          , sbIns = eIns edge
-          , sbOuts = eOuts edge
-          , sbBinders = binders
-          }
-        st
+    emitBinding kind gen attrs binders =
+      doEmit kind gen attrs binders
 
-    aliasOutputs ins outs st0 =
-      case ins of
-        [inp] -> do
-          ref <- requirePortRef st0 inp
-          aliasNamedOutputs (replicate (length outs) ref) outs st0
-        _ -> Left "quote: alias role expects exactly one input"
+    doEmit kind gen attrs binders = do
+      (outs, st1) <- allocOutputRefs sourceDiag st (eOuts edge)
+      let inputRefs = mapPortRefs' (eIns edge)
+          binding =
+            BindGen
+              { sbKind = kind
+              , sbEdgeId = eId edge
+              , sbScope = qsScope st
+              , sbGen = gen
+              , sbAttrs = attrs
+              , sbIns = inputRefs
+              , sbOuts = outs
+              , sbBinders = binders
+              }
+          st2 =
+            st1
+              { qsBindingsRev = binding : qsBindingsRev st1
+              , qsScope = outs <> qsScope st1
+              }
+      let memo' =
+            case kind of
+              SBIncluded ->
+                M.insert (KeyGen gen attrs inputRefs binders) outs (qsMemo st2)
+              SBResidual ->
+                qsMemo st2
+      pure st2 { qsMemo = memo' }
 
-    duplicateOutputs ins outs st0 =
-      case ins of
-        [inp] -> do
-          ref <- requirePortRef st0 inp
-          aliasNamedOutputs (replicate (length outs) ref) outs st0
-        _ -> Left "quote: duplicate role expects exactly one input"
+    mapPortRefs' ports =
+      [ requirePortRefUnsafe st pid
+      | pid <- ports
+      ]
 
-    quoteBinderProgram doc0 mode0 fragment0 policy0 barg =
-      case barg of
-        BAConcrete inner -> quoteNestedProgram doc0 mode0 fragment0 policy0 (frRecurseBinders fragment0) inner
-        BAMeta _ -> Left "quote: binder metavariable is not allowed in runtime diagrams"
-
-    quoteNestedProgram doc0 mode0 fragment0 policy0 recurse inner =
-      quoteProgram policy0 doc0 mode0 (if recurse then fragment0 else residualFragment fragment0) inner
-
-    emitFreshBinding binding st0 = do
-      let outs = bindingOuts binding
-      names <- foldM assignFreshName (qsNames st0) outs
+    emitStructuredBinding mkBinding = do
+      (outs, st1) <- allocOutputRefs sourceDiag st (eOuts edge)
+      let binding = (mkBinding { sbOuts = outs })
       pure
-        st0
-          { qsNames = names
-          , qsBindingsRev = binding : qsBindingsRev st0
+        st1
+          { qsBindingsRev = binding : qsBindingsRev st1
+          , qsScope = outs <> qsScope st1
           }
 
-    assignFreshName acc pid =
-      if M.member pid acc
-        then Right acc
-        else Right (M.insert pid (refName baseNames pid) acc)
+
+quoteBinderProgram
+  :: Doctrine
+  -> ModeName
+  -> FragmentDecl
+  -> BinderArg
+  -> Either Text SharedProgram
+quoteBinderProgram doc mode fragment barg =
+  case barg of
+    BAConcrete inner ->
+      quoteNestedProgram doc mode fragment (frCrossBinders fragment) inner
+    BAMeta _ ->
+      Left "quote: binder metavariable is not allowed in runtime diagrams"
 
 
-bindingOuts :: SharedBinding -> [PortId]
-bindingOuts binding =
-  case binding of
-    BindGen { sbOuts = outs } -> outs
-    BindBox { sbOuts = outs } -> outs
-    BindFeedback { sbOuts = outs } -> outs
-
-
-aliasNamedOutputs :: [Text] -> [PortId] -> QuoteState -> Either Text QuoteState
-aliasNamedOutputs refs outs st
-  | length refs == length outs =
-      Right st { qsNames = foldl (\acc (pid, ref) -> M.insert pid ref acc) (qsNames st) (zip outs refs) }
-  | otherwise =
-      Left "quote: alias arity mismatch"
-
-
-requirePortRef :: QuoteState -> PortId -> Either Text Text
-requirePortRef st pid =
-  case M.lookup pid (qsNames st) of
-    Nothing -> Left "quote: internal missing quoted input ref"
-    Just ref -> Right ref
+quoteNestedProgram
+  :: Doctrine
+  -> ModeName
+  -> FragmentDecl
+  -> Bool
+  -> Diagram
+  -> Either Text SharedProgram
+quoteNestedProgram doc mode fragment shouldCross inner =
+  quoteProgram doc mode (if shouldCross then fragment else residualFragment fragment) inner
 
 
 residualFragment :: FragmentDecl -> FragmentDecl
 residualFragment fragment =
-  fragment { frGenRoles = M.empty }
+  fragment
+    { frIncludedGens = S.empty
+    , frCrossBinders = False
+    , frCrossBoxes = False
+    , frCrossFeedback = False
+    }
 
 
-optimizeSharedProgram :: FragmentDecl -> SharedProgram -> SharedProgram
-optimizeSharedProgram fragment =
-  prunePortNames
-    . eliminateDeadBindings
-    . coalesceSharedBindings fragment
-    . eliminateProductProjections (frProducts fragment)
-    . optimizeNestedPrograms fragment
-
-
-optimizeNestedPrograms :: FragmentDecl -> SharedProgram -> SharedProgram
-optimizeNestedPrograms fragment program =
-  program { spBindings = map optimizeBinding (spBindings program) }
+allocBoundaryRefs :: Diagram -> [PortId] -> Either Text ([RefId], M.Map RefId Obj)
+allocBoundaryRefs diag ports = do
+  refs <- mapM allocOne (zip [0 ..] ports)
+  pure (map fst refs, M.fromList refs)
   where
-    optimizeBinding binding =
+    allocOne (i, pid) = do
+      ty <- lookupPortTy diag pid
+      pure (RefId i, ty)
+
+
+allocOutputRefs :: Diagram -> QuoteState -> [PortId] -> Either Text ([RefId], QuoteState)
+allocOutputRefs diag st ports = do
+  pairs <- mapM allocOne (zip [qsNextRef st ..] ports)
+  let outs = map fst pairs
+      refTypes' = foldr (uncurry M.insert) (qsRefTypes st) pairs
+      portRefs' = foldr (\(refId, pid) acc -> M.insert pid refId acc) (qsPortRefs st) (zip outs ports)
+  pure
+    ( outs
+    , st
+        { qsNextRef = qsNextRef st + length outs
+        , qsRefTypes = refTypes'
+        , qsPortRefs = portRefs'
+        }
+    )
+  where
+    allocOne (i, pid) = do
+      ty <- lookupPortTy diag pid
+      pure (RefId i, ty)
+
+
+aliasOutputs :: [RefId] -> [PortId] -> QuoteState -> Either Text QuoteState
+aliasOutputs refs outs st
+  | length refs == length outs =
+      Right st { qsPortRefs = foldl (\acc (pid, refId) -> M.insert pid refId acc) (qsPortRefs st) (zip outs refs) }
+  | otherwise =
+      Left "quote: internal output alias arity mismatch"
+
+
+requirePortRef :: QuoteState -> PortId -> Either Text RefId
+requirePortRef st pid =
+  case M.lookup pid (qsPortRefs st) of
+    Nothing -> Left "quote: missing quoted ref for source port"
+    Just refId -> Right refId
+
+
+requirePortRefUnsafe :: QuoteState -> PortId -> RefId
+requirePortRefUnsafe st pid =
+  case M.lookup pid (qsPortRefs st) of
+    Nothing -> error "quote: internal missing ref id"
+    Just refId -> refId
+
+
+lookupPortTy :: Diagram -> PortId -> Either Text Obj
+lookupPortTy diag pid =
+  case IM.lookup (unPortId pid) (dPortObj diag) of
+    Nothing -> Left "quote: missing source port type"
+    Just ty -> Right ty
+
+
+ensureTargetLayout :: Doctrine -> QuoteTargetLayout -> SharedProgram -> Either Text ()
+ensureTargetLayout doc layout program = do
+  let mode = spMode program
+  let requireGen name =
+        case lookupGenDeclInDoctrine ("quote: target doctrine is missing generator " <> name) doc mode (GenName name) of
+          Left err -> Left err
+          Right _ -> Right ()
+  mapM_ requireGen
+    [ qtlInputRefsGen layout
+    , qtlRefsNilGen layout
+    , qtlRefsConsGen layout
+    , qtlRefsHeadGen layout
+    , qtlRefsTailGen layout
+    , qtlDupRefsGen layout
+    , qtlDropRefsGen layout
+    , qtlReturnRefsGen layout
+    , qtlResidualBoxGen layout
+    , qtlResidualFeedbackGen layout
+    ]
+  mapM_ requireBindingGen (spBindings program)
+  pure ()
+  where
+    requireBindingGen binding =
       case binding of
-        BindGen {} ->
-          binding { sbBinders = map (optimizeSharedProgram fragment) (sbBinders binding) }
+        BindGen { sbKind = kind, sbGen = gen } ->
+          case lookupGenDeclInDoctrine ("quote: target doctrine is missing generator " <> bindingGenName layout kind gen) doc (spMode program) (GenName (bindingGenName layout kind gen)) of
+            Left err -> Left err
+            Right _ -> Right ()
         BindBox {} ->
-          binding { sbInner = optimizeSharedProgram fragment (sbInner binding) }
+          Right ()
         BindFeedback {} ->
-          binding { sbBody = optimizeSharedProgram fragment (sbBody binding) }
+          Right ()
 
 
-data PairSource = PairSource
-  { psProduct :: FragmentProduct
-  , psLeftInput :: Text
-  , psRightInput :: Text
-  }
-
-
-eliminateProductProjections :: [FragmentProduct] -> SharedProgram -> SharedProgram
-eliminateProductProjections products program =
-  program
-    { spBindings = reverse keptRev
-    , spPortNames = names'
-    }
-  where
-    productByCtor = M.fromList [(fpPairCtor productWitness, productWitness) | productWitness <- products]
-    leftProjMap = M.fromList [(fpProjLeft productWitness, productWitness) | productWitness <- products]
-    rightProjMap = M.fromList [(fpProjRight productWitness, productWitness) | productWitness <- products]
-    (keptRev, names', _) = foldl' step ([], spPortNames program, M.empty) (spBindings program)
-
-    step (acc, names, pairs) binding =
-      case binding of
-        BindGen { sbGen = gen, sbAttrs = attrs, sbIns = [leftIn, rightIn], sbOuts = [pairOut], sbBinders = [] } ->
-          case M.lookup gen productByCtor of
-            Just productWitness | M.null attrs ->
-              let pairRef = refForPort names pairOut
-                  leftRef = refForPort names leftIn
-                  rightRef = refForPort names rightIn
-               in
-              ( binding : acc
-              , names
-              , M.insert pairRef (PairSource productWitness leftRef rightRef) pairs
-              )
-            _ ->
-              (binding : acc, names, pairs)
-        BindGen { sbGen = gen, sbAttrs = attrs, sbIns = [pairIn], sbOuts = [projOut], sbBinders = [] } ->
-          case M.lookup (refForPort names pairIn) pairs of
-            Just pairSource | M.null attrs ->
-              case projectionSourceRef gen pairSource of
-                Just sourceRef ->
-                  let oldRef = refForPort names projOut
-                   in
-                  ( acc
-                  , substituteRef oldRef sourceRef names
-                  , substitutePairSourceRef oldRef sourceRef pairs
-                  )
-                Nothing ->
-                  (binding : acc, names, pairs)
-            _ ->
-              (binding : acc, names, pairs)
-        _ ->
-          (binding : acc, names, pairs)
-
-    projectionSourceRef gen pairSource
-      | Just productWitness <- M.lookup gen leftProjMap
-      , productWitness == psProduct pairSource =
-          Just (psLeftInput pairSource)
-      | Just productWitness <- M.lookup gen rightProjMap
-      , productWitness == psProduct pairSource =
-          Just (psRightInput pairSource)
-      | otherwise =
-          Nothing
-
-    substitutePairSourceRef oldRef newRef =
-      M.map
-        ( \pairSource ->
-            pairSource
-              { psLeftInput = rewrite (psLeftInput pairSource)
-              , psRightInput = rewrite (psRightInput pairSource)
-              }
-        )
-      where
-        rewrite ref = if ref == oldRef then newRef else ref
-
-
-coalesceSharedBindings :: FragmentDecl -> SharedProgram -> SharedProgram
-coalesceSharedBindings fragment program =
-  program
-    { spBindings = reverse keptRev
-    , spPortNames = names'
-    }
-  where
-    (keptRev, names', _) = foldl' step ([], spPortNames program, M.empty) (spBindings program)
-
-    step (acc, names, memo) binding =
-      case binding of
-        BindGen { sbGen = gen, sbAttrs = attrs, sbIns = ins, sbOuts = outs, sbBinders = binders }
-          | M.findWithDefault FragResidual gen (frGenRoles fragment) == FragShare
-          , not (null outs) ->
-              let inputRefs = map (refForPort names) ins
-                  outputRefs = map (refForPort names) outs
-                  key = KeyGen gen attrs inputRefs binders
-               in case M.lookup key memo of
-                    Just priorOutputRefs
-                      | length priorOutputRefs == length outputRefs ->
-                          let rewrites = zip outputRefs priorOutputRefs
-                           in
-                            ( acc
-                            , foldl' (\accNames (oldRef, newRef) -> substituteRef oldRef newRef accNames) names rewrites
-                            , foldl' (\accMemo (oldRef, newRef) -> substituteMemoRef oldRef newRef accMemo) memo rewrites
-                            )
-                    _ ->
-                      (binding : acc, names, M.insert key outputRefs memo)
-        _ ->
-          (binding : acc, names, memo)
-
-
-substituteMemoRef :: Text -> Text -> M.Map BindingKey [Text] -> M.Map BindingKey [Text]
-substituteMemoRef oldRef newRef =
-  M.fromListWith preferExisting . map rewriteEntry . M.toList
-  where
-    preferExisting existing _ = existing
-    rewriteEntry (key, outs) = (rewriteKey key, map rewriteRef outs)
-    rewriteRef ref = if ref == oldRef then newRef else ref
-    rewriteKey key =
-      case key of
-        KeyGen gen attrs ins binders ->
-          KeyGen gen attrs (map rewriteRef ins) binders
-        KeyBox box outs ins inner ->
-          KeyBox box (map rewriteRef outs) (map rewriteRef ins) inner
-        KeyFeedback outs ins inner ->
-          KeyFeedback (map rewriteRef outs) (map rewriteRef ins) inner
-
-
-eliminateDeadBindings :: SharedProgram -> SharedProgram
-eliminateDeadBindings program =
-  program { spBindings = kept }
-  where
-    names = spPortNames program
-    (_, kept) = foldl' step (S.fromList (map (refForPort names) (spOutputs program)), []) (reverse (spBindings program))
-
-    step (live, acc) binding =
-      let outRefs = map (refForPort names) (bindingOuts binding)
-       in if null outRefs || any (`S.member` live) outRefs
-        then
-          ( live `S.union` S.fromList (map (refForPort names) (bindingInputs binding))
-          , binding : acc
-          )
+encodeProgramLocal
+  :: SharedProgram
+  -> LocalAccess
+  -> Diagram
+  -> [SharedBinding]
+  -> Either Text (PortId, Diagram)
+encodeProgramLocal program access diag bindings =
+  case bindings of
+    [] -> do
+      outBundle <- buildSelectedBundleFromCurrent access diag (spOutputs program)
+      let progTy = programTy (laLayout access) (laMode access) program
+      let (progPort, diag1) = freshPort progTy (snd outBundle)
+      diag2 <- addEdgePayload (PGen (GenName (qtlReturnRefsGen (laLayout access))) M.empty []) [fst outBundle] [progPort] diag1
+      pure (progPort, diag2)
+    binding:rest ->
+      if sbScope binding /= laCurrentScope access
+        then Left "quote: internal scope mismatch during encoding"
         else
-          (live, acc)
+          case binding of
+            BindGen {} ->
+              encodeGenBinding program access diag binding rest
+            BindBox {} ->
+              encodeBoxLikeBinding program access diag binding rest (GenName (qtlResidualBoxGen (laLayout access))) (sbInner binding)
+            BindFeedback {} ->
+              encodeBoxLikeBinding program access diag binding rest (GenName (qtlResidualFeedbackGen (laLayout access))) (sbBody binding)
 
 
-bindingInputs :: SharedBinding -> [PortId]
-bindingInputs binding =
-  case binding of
-    BindGen { sbIns = ins } -> ins
-    BindBox { sbIns = ins } -> ins
-    BindFeedback { sbIns = ins } -> ins
+encodeGenBinding
+  :: SharedProgram
+  -> LocalAccess
+  -> Diagram
+  -> SharedBinding
+  -> [SharedBinding]
+  -> Either Text (PortId, Diagram)
+encodeGenBinding program access diag binding rest = do
+  currentBundle <- buildCurrentBundlePort access diag
+  let currentScope = laCurrentScope access
+      currentCtx = scopeCtx access currentScope
+      bundleCopiesNeeded = 1 + length (sbIns binding)
+  (bundleCopies, diag1) <- duplicateBundleCopies access currentCtx bundleCopiesNeeded (fst currentBundle) (snd currentBundle)
+  (bundleForCtor, inputCopies) <-
+    case bundleCopies of
+      [] -> Left "quote: internal missing current bundle copies"
+      bundleForCtor':restCopies -> Right (bundleForCtor', restCopies)
+  (inputPorts, diag2) <- projectRefsWithCopies access currentScope inputCopies diag1 (sbIns binding)
+  (binderPorts, diag3) <- embedPrograms access diag2 (sbBinders binding)
+  cont <- encodeContinuationDirect program access binding rest
+  let progTy = programTy (laLayout access) (laMode access) program
+      ctorName = GenName (bindingGenName (laLayout access) (sbKind binding) (sbGen binding))
+      ins = bundleForCtor : inputPorts <> binderPorts
+      (progPort, diag4) = freshPort progTy diag3
+  diag5 <- addEdgePayload (PGen ctorName (sbAttrs binding) [BAConcrete cont]) ins [progPort] diag4
+  pure (progPort, diag5)
 
 
-prunePortNames :: SharedProgram -> SharedProgram
-prunePortNames program =
-  program { spPortNames = M.restrictKeys (spPortNames program) usedPorts }
+encodeBoxLikeBinding
+  :: SharedProgram
+  -> LocalAccess
+  -> Diagram
+  -> SharedBinding
+  -> [SharedBinding]
+  -> GenName
+  -> SharedProgram
+  -> Either Text (PortId, Diagram)
+encodeBoxLikeBinding program access diag binding rest ctorName innerProgram = do
+  currentBundle <- buildCurrentBundlePort access diag
+  (bundleForCtor, inputBundlePort, diag1) <-
+    if null (sbIns binding)
+      then do
+        (emptyBundle, diag0) <- buildBundleFromPorts access (snd currentBundle) []
+        pure (fst currentBundle, emptyBundle, diag0)
+      else do
+        let currentCtx = scopeCtx access (laCurrentScope access)
+        (copies, diag0) <- duplicateBundleCopies access currentCtx 2 (fst currentBundle) (snd currentBundle)
+        case copies of
+          [bundleForCtor', bundleForInputs] -> do
+            (inputBundlePort', diag2) <- buildSelectedBundleFromBundle access (laCurrentScope access) bundleForInputs diag0 (sbIns binding)
+            pure (bundleForCtor', inputBundlePort', diag2)
+          _ ->
+            Left "quote: internal invalid bundle duplication result"
+  innerDiag <- encodeSharedProgram (laLayout access) (laDoctrine access) innerProgram
+  (diag2, innerPort) <- embedClosedDiagram diag1 innerDiag
+  cont <- encodeContinuationBundled program access binding rest
+  let progTy = programTy (laLayout access) (laMode access) program
+      ins = [bundleForCtor, inputBundlePort, innerPort]
+      (progPort, diag3) = freshPort progTy diag2
+  diag4 <- addEdgePayload (PGen ctorName M.empty [BAConcrete cont]) ins [progPort] diag3
+  pure (progPort, diag4)
+
+
+encodeContinuationDirect :: SharedProgram -> LocalAccess -> SharedBinding -> [SharedBinding] -> Either Text Diagram
+encodeContinuationDirect program access binding rest = do
+  let mode = laMode access
+      layout = laLayout access
+      oldScope = sbScope binding
+      outs = sbOuts binding
+      oldBundleTy = refsTy layout mode (scopeCtx access oldScope)
+      outTypes = map (requireRefTy program) outs
+      inTypes = [oldBundleTy] <> map (refTy layout mode) outTypes
+      (ports, diag0) = allocPortsLocal mode inTypes
+      oldBundlePort = head ports
+      outPorts = zip outs (tail ports)
+      contAccess =
+        LocalAccess
+          { laMode = mode
+          , laDoctrine = laDoctrine access
+          , laLayout = layout
+          , laRefTypes = spRefTypes program
+          , laBoundary = ports
+          , laCurrentScope = outs <> oldScope
+          , laOldScope = oldScope
+          , laOldBundlePort = oldBundlePort
+          , laNewRefs = NewRefsDirect outPorts
+          }
+  (progPort, diag1) <- encodeProgramLocal program contAccess diag0 rest
+  let final = diag1 { dIn = ports, dOut = [progPort] }
+  validateDiagram final
+  pure final
+
+
+encodeContinuationBundled :: SharedProgram -> LocalAccess -> SharedBinding -> [SharedBinding] -> Either Text Diagram
+encodeContinuationBundled program access binding rest = do
+  let mode = laMode access
+      layout = laLayout access
+      oldScope = sbScope binding
+      outs = sbOuts binding
+      oldBundleTy = refsTy layout mode (scopeCtx access oldScope)
+      outBundleTy = refsTy layout mode (map (requireRefTy program) outs)
+      inTypes = [oldBundleTy, outBundleTy]
+      (ports, diag0) = allocPortsLocal mode inTypes
+      oldBundlePort = head ports
+      outBundlePort = ports !! 1
+      contAccess =
+        LocalAccess
+          { laMode = mode
+          , laDoctrine = laDoctrine access
+          , laLayout = layout
+          , laRefTypes = spRefTypes program
+          , laBoundary = ports
+          , laCurrentScope = outs <> oldScope
+          , laOldScope = oldScope
+          , laOldBundlePort = oldBundlePort
+          , laNewRefs = NewRefsBundled outs outBundlePort
+          }
+  (progPort, diag1) <- encodeProgramLocal program contAccess diag0 rest
+  let final = diag1 { dIn = ports, dOut = [progPort] }
+  validateDiagram final
+  pure final
+
+
+embedPrograms :: LocalAccess -> Diagram -> [SharedProgram] -> Either Text ([PortId], Diagram)
+embedPrograms access host0 programs = foldM step ([], host0) programs
   where
-    usedPorts =
-      S.fromList
-        ( spInputs program
-            <> spOutputs program
-            <> concatMap (\binding -> bindingInputs binding <> bindingOuts binding) (spBindings program)
-        )
+    step (ports, host) program = do
+      diag <- encodeSharedProgram (laLayout access) (laDoctrine access) program
+      (host', outPort) <- embedClosedDiagram host diag
+      pure (ports <> [outPort], host')
 
 
-refForPort :: M.Map PortId Text -> PortId -> Text
-refForPort names pid =
-  case M.lookup pid names of
-    Nothing -> error "quote: internal missing quoted ref name during optimization"
-    Just ref -> ref
+embedClosedDiagram :: Diagram -> Diagram -> Either Text (Diagram, PortId)
+embedClosedDiagram host sub
+  | not (null (dIn sub)) = Left "quote: expected closed subprogram diagram"
+  | length (dOut sub) /= 1 = Left "quote: expected single-output subprogram diagram"
+  | otherwise = do
+      let shifted = shiftDiagram (dNextPort host) (dNextEdge host) sub
+      merged <- unionDiagram host shifted
+      pure (merged, head (dOut shifted))
 
 
-substituteRef :: Text -> Text -> M.Map PortId Text -> M.Map PortId Text
-substituteRef oldRef newRef =
-  M.map (\ref -> if ref == oldRef then newRef else ref)
+buildCurrentBundlePort :: LocalAccess -> Diagram -> Either Text (PortId, Diagram)
+buildCurrentBundlePort access diag =
+  case laNewRefs access of
+    NoNewRefs ->
+      pure (laOldBundlePort access, diag)
+    NewRefsDirect refs ->
+      foldr consOne (Right (laOldBundlePort access, diag)) refs
+    NewRefsBundled outs bundlePort ->
+      if null outs
+        then pure (laOldBundlePort access, diag)
+        else do
+        (refPorts, diag0) <- projectRefsFromBundle access outs bundlePort diag outs
+        foldr consBundled (Right (laOldBundlePort access, diag0)) refPorts
+  where
+    consBundled refPort acc = do
+      (tailPort, diag0) <- acc
+      consRefPort access refPort tailPort diag0
+    consOne (refId, refPort) acc = do
+      (tailPort, diag0) <- acc
+      let _ = refId
+      consRefPort access refPort tailPort diag0
+
+
+buildSelectedBundleFromCurrent :: LocalAccess -> Diagram -> [RefId] -> Either Text (PortId, Diagram)
+buildSelectedBundleFromCurrent access diag [] = do
+  if null (laCurrentScope access)
+    then buildBundleFromPorts access diag []
+    else do
+      (currentBundle, diag0) <- buildCurrentBundlePort access diag
+      diag1 <- dropBundlePort access (scopeCtx access (laCurrentScope access)) currentBundle diag0
+      buildBundleFromPorts access diag1 []
+buildSelectedBundleFromCurrent access diag refs = do
+  (currentBundle, diag0) <- buildCurrentBundlePort access diag
+  buildSelectedBundleFromBundle access (laCurrentScope access) currentBundle diag0 refs
+
+
+buildSelectedBundleFromBundle :: LocalAccess -> [RefId] -> PortId -> Diagram -> [RefId] -> Either Text (PortId, Diagram)
+buildSelectedBundleFromBundle access scopeIds bundlePort diag [] = do
+  diag0 <- dropBundlePort access (scopeCtx access scopeIds) bundlePort diag
+  buildBundleFromPorts access diag0 []
+buildSelectedBundleFromBundle access scopeIds bundlePort diag refs = do
+  (refPorts, diag0) <- projectRefsFromBundle access scopeIds bundlePort diag refs
+  buildBundleFromPorts access diag0 refPorts
+
+
+buildBundleFromPorts :: LocalAccess -> Diagram -> [PortId] -> Either Text (PortId, Diagram)
+buildBundleFromPorts access diag refs = do
+  let mode = laMode access
+      layout = laLayout access
+      nilTy = refsTy layout mode []
+      (nilPort, diag0) = freshPort nilTy diag
+  diag1 <- addEdgePayload (PGen (GenName (qtlRefsNilGen layout)) M.empty []) [] [nilPort] diag0
+  foldr consRef (Right (nilPort, diag1)) refs
+  where
+    consRef refPort acc = do
+      (tailPort, diag0) <- acc
+      consRefPort access refPort tailPort diag0
+
+
+projectRefsFromBundle :: LocalAccess -> [RefId] -> PortId -> Diagram -> [RefId] -> Either Text ([PortId], Diagram)
+projectRefsFromBundle access scopeIds bundlePort diag0 refIds = do
+  let ctx = scopeCtx access scopeIds
+  (copies, diag1) <- duplicateBundleCopies access ctx (length refIds) bundlePort diag0
+  projectRefsWithCopies access scopeIds copies diag1 refIds
+
+
+projectRefsWithCopies :: LocalAccess -> [RefId] -> [PortId] -> Diagram -> [RefId] -> Either Text ([PortId], Diagram)
+projectRefsWithCopies access scopeIds bundleCopies diag0 refIds
+  | length bundleCopies /= length refIds =
+      Left "quote: internal bundle copy arity mismatch"
+  | otherwise =
+      foldM step ([], diag0) (zip bundleCopies refIds)
+  where
+    ctx = scopeCtx access scopeIds
+    step (ports, diag) (bundleCopy, refId) = do
+      (pid, diag1) <- projectRefFromBundle access scopeIds ctx bundleCopy refId diag
+      pure (ports <> [pid], diag1)
+
+duplicateBundleCopies :: LocalAccess -> [Obj] -> Int -> PortId -> Diagram -> Either Text ([PortId], Diagram)
+duplicateBundleCopies _ _ n _ diag
+  | n < 0 =
+      Left "quote: internal negative bundle copy request"
+duplicateBundleCopies _ _ 0 _ diag = Right ([], diag)
+duplicateBundleCopies _ _ 1 bundlePort diag = Right ([bundlePort], diag)
+duplicateBundleCopies access ctx n bundlePort diag = do
+  let layout = laLayout access
+      mode = laMode access
+      bundleTy = refsTy layout mode ctx
+      (lhsPort, diag1) = freshPort bundleTy diag
+      (rhsPort, diag2) = freshPort bundleTy diag1
+  diag3 <- addEdgePayload (PGen (GenName (qtlDupRefsGen layout)) M.empty []) [bundlePort] [lhsPort, rhsPort] diag2
+  (rest, diag4) <- duplicateBundleCopies access ctx (n - 1) rhsPort diag3
+  pure (lhsPort : rest, diag4)
+
+
+dropBundlePort :: LocalAccess -> [Obj] -> PortId -> Diagram -> Either Text Diagram
+dropBundlePort access ctx bundlePort diag = do
+  let layout = laLayout access
+      mode = laMode access
+      _bundleTy = refsTy layout mode ctx
+  addEdgePayload (PGen (GenName (qtlDropRefsGen layout)) M.empty []) [bundlePort] [] diag
+
+
+projectRefFromBundle :: LocalAccess -> [RefId] -> [Obj] -> PortId -> RefId -> Diagram -> Either Text (PortId, Diagram)
+projectRefFromBundle access scopeIds ctx bundlePort refId diag = do
+  idx <-
+    case elemIndex refId scopeIds of
+      Nothing -> Left "quote: missing ref in current scope"
+      Just i -> Right i
+  go ctx bundlePort idx diag
+  where
+    go (ty:rest) port 0 diag0 = do
+      let outTy = refTy (laLayout access) (laMode access) ty
+          (outPort, diag1) = freshPort outTy diag0
+      diag2 <- addEdgePayload (PGen (GenName (qtlRefsHeadGen (laLayout access))) M.empty []) [port] [outPort] diag1
+      pure (outPort, diag2)
+    go (_:rest) port n diag0 = do
+      let tailTy = refsTy (laLayout access) (laMode access) rest
+          (tailPort, diag1) = freshPort tailTy diag0
+      diag2 <- addEdgePayload (PGen (GenName (qtlRefsTailGen (laLayout access))) M.empty []) [port] [tailPort] diag1
+      go rest tailPort (n - 1) diag2
+    go [] _ _ _ =
+      Left "quote: attempted to project past the end of a refs bundle"
+
+
+consRefPort :: LocalAccess -> PortId -> PortId -> Diagram -> Either Text (PortId, Diagram)
+consRefPort access refPort tailPort diag = do
+  refTy0 <- lookupPortDiagTy diag refPort
+  tailTy <- lookupPortDiagTy diag tailPort
+  ctxTail <-
+    case tailTy of
+      OCon ref [OAObj ctxTy]
+        | ref == ObjRef (laMode access) (ObjName (qtlRefsCtor (laLayout access))) ->
+            Right (contextFromRefsType (laLayout access) (laMode access) ctxTy)
+      _ ->
+        Left "quote: expected refs bundle type during refsCons encoding"
+  let (outPort, diag1) =
+        freshPort
+          (refsTy (laLayout access) (laMode access) (refTy0 : ctxTail))
+          diag
+  diag2 <- addEdgePayload (PGen (GenName (qtlRefsConsGen (laLayout access))) M.empty []) [refPort, tailPort] [outPort] diag1
+  pure (outPort, diag2)
+
+
+allocPortsLocal :: ModeName -> [Obj] -> ([PortId], Diagram)
+allocPortsLocal mode tys = go tys (emptyDiagram mode [])
+  where
+    go [] diag = ([], diag)
+    go (ty:rest) diag =
+      let (pid, diag1) = freshPort ty diag
+          (pids, diag2) = go rest diag1
+       in (pid : pids, diag2)
+
+
+bindingGenName :: QuoteTargetLayout -> SharedBindingKind -> GenName -> Text
+bindingGenName layout kind (GenName g) =
+  case kind of
+    SBIncluded -> qtlBindingPrefix layout <> g
+    SBResidual -> qtlResidualPrefix layout <> g
+
+
+programTy :: QuoteTargetLayout -> ModeName -> SharedProgram -> Obj
+programTy layout mode program =
+  progTy layout mode (map (requireRefTy program) (spInputs program)) (map (requireRefTy program) (spOutputs program))
+
+
+progTy :: QuoteTargetLayout -> ModeName -> [Obj] -> [Obj] -> Obj
+progTy layout mode inCtx outCtx =
+  mkCon
+    (ObjRef mode (ObjName (qtlProgCtor layout)))
+    [ OAObj (ctxTy layout mode inCtx)
+    , OAObj (ctxTy layout mode outCtx)
+    ]
+
+
+refTy :: QuoteTargetLayout -> ModeName -> Obj -> Obj
+refTy layout mode ty =
+  mkCon (ObjRef mode (ObjName (qtlRefCtor layout))) [OAObj ty]
+
+
+refsTy :: QuoteTargetLayout -> ModeName -> [Obj] -> Obj
+refsTy layout mode ctx =
+  mkCon (ObjRef mode (ObjName (qtlRefsCtor layout))) [OAObj (ctxTy layout mode ctx)]
+
+
+ctxTy :: QuoteTargetLayout -> ModeName -> [Obj] -> Obj
+ctxTy layout mode = foldr step nilTy
+  where
+    nilTy = mkCon (ObjRef mode (ObjName (qtlCtxNilCtor layout))) []
+    step ty acc = mkCon (ObjRef mode (ObjName (qtlCtxConsCtor layout))) [OAObj ty, OAObj acc]
+
+
+contextFromRefsType :: QuoteTargetLayout -> ModeName -> Obj -> [Obj]
+contextFromRefsType layout mode ty =
+  case ty of
+    OCon ref []
+      | ref == ObjRef mode (ObjName (qtlCtxNilCtor layout)) ->
+          []
+    OCon ref [OAObj headTy, OAObj tailTy]
+      | ref == ObjRef mode (ObjName (qtlCtxConsCtor layout)) ->
+          headTy : contextFromRefsType layout mode tailTy
+    _ ->
+      error "quote: expected explicit-sharing context type"
+
+
+scopeCtx :: LocalAccess -> [RefId] -> [Obj]
+scopeCtx access = map refTyFor
+  where
+    refTyFor refId =
+      case M.lookup refId (laRefTypes access) of
+        Nothing -> error "quote: internal missing ref type"
+        Just ty -> ty
+
+
+requireRefTy :: SharedProgram -> RefId -> Obj
+requireRefTy program refId =
+  case M.lookup refId (spRefTypes program) of
+    Nothing -> error "quote: internal missing ref type in program"
+    Just ty -> ty
+
+
+lookupPortDiagTy :: Diagram -> PortId -> Either Text Obj
+lookupPortDiagTy diag pid =
+  case IM.lookup (unPortId pid) (dPortObj diag) of
+    Nothing -> Left "quote: missing encoded port type"
+    Just ty -> Right ty
 
 
 topoOrder :: Diagram -> Either Text [Edge]
@@ -603,7 +832,6 @@ topoOrder diag =
     edgeTable = dEdges diag
     edges = IM.elems edgeTable
     edgeIds = map eId edges
-
     deps0 = M.fromList [(eid, depsFor eid) | eid <- edgeIds]
     dependents = foldl insertDeps M.empty (M.toList deps0)
 
@@ -630,15 +858,12 @@ topoOrder diag =
     orderedIds = go ready0 deps0 []
 
     go ready deps acc =
-      case nextReady ready of
+      case S.lookupMin ready of
         Nothing -> reverse acc
-        Just (eid, readyRest) ->
-          let out = M.findWithDefault S.empty eid dependents
-              (deps', ready') =
-                S.foldl'
-                  (dropDep eid)
-                  (deps, readyRest)
-                  out
+        Just eid ->
+          let readyRest = S.deleteMin ready
+              out = M.findWithDefault S.empty eid dependents
+              (deps', ready') = S.foldl' (dropDep eid) (deps, readyRest) out
            in go ready' deps' (eid : acc)
 
     dropDep done (deps, ready) target =
@@ -648,14 +873,8 @@ topoOrder diag =
           ready' = if S.null new then S.insert target ready else ready
        in (deps', ready')
 
-    nextReady ready =
-      case S.lookupMin ready of
-        Nothing -> Nothing
-        Just eid -> Just (eid, S.deleteMin ready)
-
     findEdge eid =
-      let EdgeId k = eid
-       in IM.lookup k edgeTable
+      IM.lookup (unEdgeId eid) edgeTable
 
     lookupEdge eid =
       case findEdge eid of
@@ -665,78 +884,14 @@ topoOrder diag =
     portInt (PortId i) = i
 
 
-assignPortNames :: QuotePolicy -> Diagram -> Either Text (M.Map PortId Text)
-assignPortNames pol diag = go S.empty M.empty ordered
-  where
-    ordered = boundaryItems <> internalItems
-
-    boundaryItems =
-      zipWith (\i p -> (p, True, i)) [0 :: Int ..] boundaryOrder
-
-    internalItems =
-      zipWith (\i p -> (p, False, i)) [0 :: Int ..] internalOrder
-
-    boundaryOrder = dedupePorts (dIn diag <> dOut diag)
-    boundarySet = S.fromList boundaryOrder
-
-    internalOrder =
-      [ PortId k
-      | k <- IM.keys (dPortObj diag)
-      , PortId k `S.notMember` boundarySet
-      ]
-
-    go _ acc [] = Right acc
-    go used acc ((p, isBoundary, i):ps)
-      | M.member p acc = go used acc ps
-      | otherwise = do
-          base <-
-            case qpNaming pol of
-              BoundaryLabelsFirst ->
-                if isBoundary
-                  then
-                    case getPortLabel diag p of
-                      Just lbl | not (T.null lbl) -> Right (sanitize lbl)
-                      _ -> Right ("p" <> T.pack (show i))
-                  else
-                    Right ("t" <> T.pack (show i))
-          name <- uniqueName used base
-          go (S.insert name used) (M.insert p name acc) ps
-
-    sanitize txt =
-      let mapped = T.map mapChar txt
-       in if T.null mapped then "p" else mapped
-
-    mapChar c = if isAlphaNum c || c == '_' then c else '_'
-
-    uniqueName used base =
-      if base `S.member` reserved
-        then trySuffix 1
-        else Right base
-      where
-        reserved = used `S.union` qpReserved pol
-
-        trySuffix n =
-          let candidate = base <> "_" <> T.pack (show n)
-           in if candidate `S.member` reserved
-                then trySuffix (n + 1)
-                else Right candidate
-
-    dedupePorts = goDedupe S.empty []
-      where
-        goDedupe _ acc [] = reverse acc
-        goDedupe seen acc (p:ps)
-          | p `S.member` seen = goDedupe seen acc ps
-          | otherwise = goDedupe (S.insert p seen) (p : acc) ps
-
-
-refName :: M.Map PortId Text -> PortId -> Text
-refName names pid =
-  case M.lookup pid names of
-    Just name -> name
-    Nothing ->
-      case pid of
-        PortId i -> "p" <> T.pack (show i)
-
-
 canonicalizeDiagram :: Diagram -> Either Text Diagram
 canonicalizeDiagram = canonDiagramRaw
+
+
+elemIndex :: Eq a => a -> [a] -> Maybe Int
+elemIndex x = go 0
+  where
+    go _ [] = Nothing
+    go i (y:ys)
+      | x == y = Just i
+      | otherwise = go (i + 1) ys

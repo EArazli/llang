@@ -1,0 +1,38 @@
+import "../../../stdlib/transformers/explicit_sharing.llang";
+
+doctrine Arith where {
+  mode M acyclic classifiedBy M via U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  attrsort Str = string;
+  gen U_M : [] -> [U_M] @M;
+  gen I : [] -> [U_M] @M;
+  gen lit { n:Str } : [] -> [I] @M;
+  gen add : [I, I] -> [I] @M;
+  gen dup : [I] -> [I, I] @M;
+  gen print : [I] -> [] @M;
+}
+
+fragment ShareArith in Arith mode M where {
+  include gen dup;
+  cross binders = false;
+  cross boxes = false;
+  cross feedback = false;
+}
+
+derived doctrine Arith_Share = transform explicit_sharing using ShareArith;
+
+pipeline main where {
+  quote into Arith_Share;
+  extract diagram;
+}
+
+run main using main where {
+  source doctrine Arith;
+  source mode M;
+}
+---
+lit(n = "1") * lit(n = "2") ; add ; dup ; add ; print
+---

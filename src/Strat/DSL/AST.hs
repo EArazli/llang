@@ -6,11 +6,15 @@ module Strat.DSL.AST
   , RawPipeline(..)
   , RawPhase(..)
   , RawNormalizeOpts(..)
-  , RawQuoteOpts(..)
   , RawValueExtractOpts(..)
-  , RawFragmentRole(..)
   , RawFragmentItem(..)
   , RawFragmentDecl(..)
+  , RawTransformTypeParam(..)
+  , RawTransformObjectDecl(..)
+  , RawTransformUtility(..)
+  , RawTransformLoopItem(..)
+  , RawTransformerItem(..)
+  , RawTransformerDecl(..)
   , RawDerivedDoctrine(..)
   , RawRun(..)
   , RawNamedRun(..)
@@ -47,6 +51,7 @@ data RawDecl
   | DeclDoctrineFunctor RawDoctrineFunctor
   | DeclDoctrineApply RawDoctrineApply
   | DeclFragment RawFragmentDecl
+  | DeclTransformer RawTransformerDecl
   | DeclDerivedDoctrine RawDerivedDoctrine
   | DeclSurface Text SurfaceSpec
   | DeclPipeline RawPipeline
@@ -72,13 +77,6 @@ data RawNormalizeOpts = RawNormalizeOpts
   } deriving (Eq, Show)
 
 
-data RawQuoteOpts = RawQuoteOpts
-  { rqoPolicy :: Maybe Text
-  , rqoNaming :: Maybe Text
-  , rqoReserved :: [Text]
-  } deriving (Eq, Show)
-
-
 data RawValueExtractOpts = RawValueExtractOpts
   { rveStdout :: Maybe Bool
   , rveRoot :: Maybe FilePath
@@ -88,24 +86,16 @@ data RawValueExtractOpts = RawValueExtractOpts
 data RawPhase
   = RPApply Text
   | RPNormalize RawNormalizeOpts
-  | RPQuoteInto Text (Maybe RawQuoteOpts)
+  | RPQuoteInto Text
   | RPExtractValue Text RawValueExtractOpts
   | RPExtractDiagramPretty
   deriving (Eq, Show)
 
-data RawFragmentRole
-  = RFRShare
-  | RFRAlias
-  | RFRDuplicate
-  | RFRDiscard
-  deriving (Eq, Show)
-
 data RawFragmentItem
-  = RFGenRole Text RawFragmentRole
-  | RFProduct Text Text Text
-  | RFRecurseBinders Bool
-  | RFRecurseBoxes Bool
-  | RFRecurseFeedback Bool
+  = RFIncludeGen Text
+  | RFCrossBinders Bool
+  | RFCrossBoxes Bool
+  | RFCrossFeedback Bool
   deriving (Eq, Show)
 
 data RawFragmentDecl = RawFragmentDecl
@@ -115,11 +105,55 @@ data RawFragmentDecl = RawFragmentDecl
   , rfdItems :: [RawFragmentItem]
   } deriving (Eq, Show)
 
+data RawTransformTypeParam = RawTransformTypeParam
+  { rttpName :: Text
+  , rttpModeVar :: Text
+  } deriving (Eq, Show)
+
+data RawTransformObjectDecl = RawTransformObjectDecl
+  { rtodName :: Text
+  , rtodParams :: [RawTransformTypeParam]
+  } deriving (Eq, Show)
+
+data RawTransformUtility
+  = RTUInputRefs
+  | RTURefsNil
+  | RTURefsCons
+  | RTURefsHead
+  | RTURefsTail
+  | RTUDupRefs
+  | RTUDropRefs
+  | RTUReturnRefs
+  | RTUResidualBox
+  | RTUResidualFeedback
+  deriving (Eq, Show)
+
+data RawTransformLoopItem
+  = RTLBindingPrefix Text
+  | RTLResidualPrefix Text
+  deriving (Eq, Show)
+
+data RawTransformerItem
+  = RTISourceDoctrine Text
+  | RTISourceMode Text
+  | RTISourceFragment Text
+  | RTICopyDoctrine Text
+  | RTIEmitObject RawTransformObjectDecl
+  | RTIEmitUtility RawTransformUtility
+  | RTIForIncludedGenerators Text Text [RawTransformLoopItem]
+  | RTIForExcludedGenerators Text Text Text Text [RawTransformLoopItem]
+  deriving (Eq, Show)
+
+data RawTransformerDecl = RawTransformerDecl
+  { rtdName :: Text
+  , rtdItems :: [RawTransformerItem]
+  } deriving (Eq, Show)
+
 
 data RawDerivedDoctrine = RawDerivedDoctrine
   { rddName :: Text
+  , rddTransformer :: Text
   , rddFragment :: Text
-  , rddPolicy :: RawQuoteOpts
   } deriving (Eq, Show)
 
 

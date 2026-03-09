@@ -41,6 +41,7 @@ decl =
     <|> doctrineFunctorDecl
     <|> doctrineDecl
     <|> fragmentDecl
+    <|> transformerDecl
     <|> derivedDoctrineDecl
     <|> morphismDecl
     <|> surfaceDecl
@@ -174,17 +175,27 @@ fragmentDecl = do
   optionalSemi
   pure (DeclFragment (RawFragmentDecl name base modeName items))
 
+transformerDecl :: Parser RawDecl
+transformerDecl = do
+  _ <- symbol "transformer"
+  name <- scopedIdent
+  _ <- symbol "where"
+  items <- transformerBlock
+  optionalSemi
+  pure (DeclTransformer (RawTransformerDecl name items))
+
 derivedDoctrineDecl :: Parser RawDecl
 derivedDoctrineDecl = do
   _ <- symbol "derived"
   _ <- symbol "doctrine"
   name <- scopedIdent
   _ <- symbol "="
-  _ <- symbol "letgraph"
+  _ <- symbol "transform"
+  transformerName <- scopedIdent
+  _ <- symbol "using"
   fragmentName <- scopedIdent
-  opts <- option (RawQuoteOpts Nothing Nothing []) (symbol "with" *> quoteOptsBlock)
   optionalSemi
-  pure (DeclDerivedDoctrine (RawDerivedDoctrine name fragmentName opts))
+  pure (DeclDerivedDoctrine (RawDerivedDoctrine name transformerName fragmentName))
 
 pipelineDecl :: Parser RawDecl
 pipelineDecl = do
@@ -1096,9 +1107,8 @@ pipelineQuoteItem = do
   _ <- symbol "quote"
   _ <- symbol "into"
   target <- ident
-  opts <- optional (symbol "with" *> quoteOptsBlock)
   optionalSemi
-  pure (RPQuoteInto target opts)
+  pure (RPQuoteInto target)
 
 pipelineExtractItem :: Parser RawPhase
 pipelineExtractItem = do
@@ -1113,51 +1123,6 @@ pipelineExtractItem = do
       optionalSemi
       pure (RPExtractValue doctrineName opts)
 
-quoteOptsBlock :: Parser RawQuoteOpts
-quoteOptsBlock = do
-  _ <- symbol "{"
-  items <- many quoteOptItem
-  _ <- symbol "}"
-  pure
-    RawQuoteOpts
-      { rqoPolicy = firstJust [ p | QOPolicy p <- items ]
-      , rqoNaming = firstJust [ p | QONaming p <- items ]
-      , rqoReserved = concat [ xs | QOReserved xs <- items ]
-      }
-  where
-    firstJust [] = Nothing
-    firstJust (x:_) = Just x
-
-data QuoteOptItem
-  = QOPolicy Text
-  | QONaming Text
-  | QOReserved [Text]
-
-quoteOptItem :: Parser QuoteOptItem
-quoteOptItem =
-  foPolicy <|> foNaming <|> foReserved
-  where
-    foPolicy = do
-      _ <- symbol "policy"
-      _ <- symbol "="
-      txt <- stringLiteral
-      optionalSemi
-      pure (QOPolicy txt)
-    foNaming = do
-      _ <- symbol "naming"
-      _ <- symbol "="
-      txt <- stringLiteral
-      optionalSemi
-      pure (QONaming txt)
-    foReserved = do
-      _ <- symbol "reserved"
-      _ <- symbol "="
-      _ <- symbol "["
-      xs <- stringLiteral `sepBy` symbol ","
-      _ <- symbol "]"
-      optionalSemi
-      pure (QOReserved xs)
-
 fragmentBlock :: Parser [RawFragmentItem]
 fragmentBlock = do
   _ <- symbol "{"
@@ -1167,43 +1132,163 @@ fragmentBlock = do
 
 fragmentItem :: Parser RawFragmentItem
 fragmentItem =
-  fragmentProductItem
-    <|> fragmentGenRoleItem
-    <|> fragmentRecurseItem
+  fragmentIncludeItem <|> fragmentCrossItem
 
-fragmentProductItem :: Parser RawFragmentItem
-fragmentProductItem = do
-  _ <- symbol "product"
-  ctor <- ident
-  _ <- symbol "="
-  projLeft <- ident
-  _ <- symbol ","
-  projRight <- ident
-  optionalSemi
-  pure (RFProduct ctor projLeft projRight)
-
-fragmentGenRoleItem :: Parser RawFragmentItem
-fragmentGenRoleItem = do
+fragmentIncludeItem :: Parser RawFragmentItem
+fragmentIncludeItem = do
+  _ <- symbol "include"
   _ <- symbol "gen"
   name <- ident
-  _ <- symbol "="
-  role <-
-    (RFRShare <$ symbol "share")
-      <|> (RFRAlias <$ symbol "alias")
-      <|> (RFRDuplicate <$ symbol "duplicate")
-      <|> (RFRDiscard <$ symbol "discard")
   optionalSemi
-  pure (RFGenRole name role)
+  pure (RFIncludeGen name)
 
-fragmentRecurseItem :: Parser RawFragmentItem
-fragmentRecurseItem = do
-  _ <- symbol "recurse"
+fragmentCrossItem :: Parser RawFragmentItem
+fragmentCrossItem = do
+  _ <- symbol "cross"
   item <-
-    (RFRecurseBinders <$> (symbol "binders" *> symbol "=" *> boolLiteral))
-      <|> (RFRecurseBoxes <$> (symbol "boxes" *> symbol "=" *> boolLiteral))
-      <|> (RFRecurseFeedback <$> (symbol "feedback" *> symbol "=" *> boolLiteral))
+    (RFCrossBinders <$> (symbol "binders" *> symbol "=" *> boolLiteral))
+      <|> (RFCrossBoxes <$> (symbol "boxes" *> symbol "=" *> boolLiteral))
+      <|> (RFCrossFeedback <$> (symbol "feedback" *> symbol "=" *> boolLiteral))
   optionalSemi
   pure item
+
+transformerBlock :: Parser [RawTransformerItem]
+transformerBlock = do
+  _ <- symbol "{"
+  items <- many transformerItem
+  _ <- symbol "}"
+  pure items
+
+transformerItem :: Parser RawTransformerItem
+transformerItem =
+  transformerSourceItem
+    <|> transformerCopyItem
+    <|> try transformerEmitObjectItem
+    <|> try transformerEmitUtilityItem
+    <|> try transformerForIncludedItem
+    <|> transformerForExcludedItem
+
+transformerSourceItem :: Parser RawTransformerItem
+transformerSourceItem = do
+  _ <- symbol "source"
+  (do
+      _ <- symbol "doctrine"
+      name <- scopedIdent
+      optionalSemi
+      pure (RTISourceDoctrine name))
+    <|> do
+      _ <- symbol "mode"
+      name <- scopedIdent
+      optionalSemi
+      pure (RTISourceMode name)
+    <|> do
+      _ <- symbol "fragment"
+      name <- scopedIdent
+      optionalSemi
+      pure (RTISourceFragment name)
+
+transformerCopyItem :: Parser RawTransformerItem
+transformerCopyItem = do
+  _ <- symbol "copy"
+  _ <- symbol "doctrine"
+  name <- scopedIdent
+  optionalSemi
+  pure (RTICopyDoctrine name)
+
+transformerEmitObjectItem :: Parser RawTransformerItem
+transformerEmitObjectItem = do
+  _ <- symbol "emit"
+  _ <- symbol "object"
+  obj <- transformObjectDecl
+  optionalSemi
+  pure (RTIEmitObject obj)
+
+transformerEmitUtilityItem :: Parser RawTransformerItem
+transformerEmitUtilityItem = do
+  _ <- symbol "emit"
+  _ <- symbol "utility"
+  util <-
+    (RTUInputRefs <$ symbol "input_refs")
+      <|> (RTURefsNil <$ symbol "refs_nil")
+      <|> (RTURefsCons <$ symbol "refs_cons")
+      <|> (RTURefsHead <$ symbol "refs_head")
+      <|> (RTURefsTail <$ symbol "refs_tail")
+      <|> (RTUDupRefs <$ symbol "dup_refs")
+      <|> (RTUDropRefs <$ symbol "drop_refs")
+      <|> (RTUReturnRefs <$ symbol "return_refs")
+      <|> (RTUResidualBox <$ symbol "residual_box")
+      <|> (RTUResidualFeedback <$ symbol "residual_feedback")
+  optionalSemi
+  pure (RTIEmitUtility util)
+
+transformerForIncludedItem :: Parser RawTransformerItem
+transformerForIncludedItem = do
+  _ <- symbol "for"
+  _ <- symbol "included"
+  _ <- symbol "generator"
+  genVar <- ident
+  _ <- symbol "in"
+  fragmentVar <- scopedIdent
+  items <- transformerLoopBlock
+  pure (RTIForIncludedGenerators genVar fragmentVar items)
+
+transformerForExcludedItem :: Parser RawTransformerItem
+transformerForExcludedItem = do
+  _ <- symbol "for"
+  _ <- symbol "excluded"
+  _ <- symbol "generator"
+  genVar <- ident
+  _ <- symbol "in"
+  doctrineVar <- scopedIdent
+  _ <- symbol "mode"
+  modeVar <- scopedIdent
+  _ <- symbol "relative"
+  _ <- symbol "to"
+  fragmentVar <- scopedIdent
+  items <- transformerLoopBlock
+  pure (RTIForExcludedGenerators genVar doctrineVar modeVar fragmentVar items)
+
+transformerLoopBlock :: Parser [RawTransformLoopItem]
+transformerLoopBlock = do
+  _ <- symbol "{"
+  items <- many transformerLoopItem
+  _ <- symbol "}"
+  pure items
+
+transformerLoopItem :: Parser RawTransformLoopItem
+transformerLoopItem =
+  do
+    _ <- symbol "emit"
+    (do
+        _ <- symbol "binding"
+        _ <- symbol "prefix"
+        prefix <- stringLiteral
+        optionalSemi
+        pure (RTLBindingPrefix prefix))
+      <|> do
+        _ <- symbol "residual"
+        _ <- symbol "prefix"
+        prefix <- stringLiteral
+        optionalSemi
+        pure (RTLResidualPrefix prefix)
+
+transformObjectDecl :: Parser RawTransformObjectDecl
+transformObjectDecl = do
+  name <- ident
+  params <-
+    option [] $
+      between
+        (symbol "(")
+        (symbol ")")
+        (transformTypeParam `sepBy1` symbol ",")
+  pure (RawTransformObjectDecl name params)
+
+transformTypeParam :: Parser RawTransformTypeParam
+transformTypeParam = do
+  name <- ident
+  _ <- symbol "@"
+  modeVar <- ident
+  pure (RawTransformTypeParam name modeVar)
 
 valueExtractOptsBlock :: Parser RawValueExtractOpts
 valueExtractOptsBlock = do

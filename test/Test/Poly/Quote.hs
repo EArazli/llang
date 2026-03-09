@@ -8,13 +8,32 @@ import Test.Tasty.HUnit
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Pipeline (FragmentDecl(..), FragmentProduct(..), FragmentRole(..), defaultQuotePolicy)
+import Strat.Pipeline (FragmentDecl(..))
 import Strat.Poly.Doctrine
-import Strat.Poly.Graph (Diagram(..), EdgePayload(..), PortId, addEdgePayload, emptyDiagram, freshPort, validateDiagram)
+  ( BinderSig(..)
+  , Doctrine(..)
+  , GenDecl(..)
+  , InputShape(..)
+  )
+import Strat.Poly.Graph
+  ( BinderArg(..)
+  , Diagram(..)
+  , EdgePayload(..)
+  , addEdgePayload
+  , emptyDiagram
+  , freshPort
+  , validateDiagram
+  )
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
-import Strat.Poly.Quote (SharedBinding(..), SharedProgram(..), canonicalizeDiagram, quoteProgram)
+import Strat.Poly.Quote
+  ( SharedBinding(..)
+  , SharedBindingKind(..)
+  , SharedProgram(..)
+  , canonicalizeDiagram
+  , quoteProgram
+  )
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 
 
@@ -23,103 +42,111 @@ tests =
   testGroup
     "Poly.Quote"
     [ testCase "quotation is deterministic" testDeterminism
-    , testCase "port naming keeps unsuffixed boundary/internal names" testUnsuffixedPortNames
-    , testCase "duplicate role is internalized" testDuplicateRoleInternalized
-    , testCase "exact repeated shareable subterms are memoized" testExactShareMemoized
-    , testCase "residual repeated subterms stay duplicated" testResidualRepeatedDuplicated
-    , testCase "declared product witnesses eliminate pack-then-project churn" testProductWitnessEliminatesProjectionChurn
+    , testCase "included generators are memoized structurally" testIncludedMemoized
+    , testCase "excluded generators stay residual and duplicated" testExcludedDuplicated
+    , testCase "cross binders false leaves nested syntax residual" testCrossBindersFalse
+    , testCase "cross binders true recursively quotes nested syntax" testCrossBindersTrue
     ]
 
 
 testDeterminism :: Assertion
 testDeterminism = do
   let doc = mkDoctrine
-  diag <- require (mkTwoStepDiag)
-  q1 <- require (quoteProgram defaultQuotePolicy doc modeM fragmentResidual diag)
-  q2 <- require (quoteProgram defaultQuotePolicy doc modeM fragmentResidual diag)
+  diag <- require mkRepeatedNullaryDiag
+  q1 <- require (quoteProgram doc modeM (mkFragment ["a", "f"] False) diag)
+  q2 <- require (quoteProgram doc modeM (mkFragment ["a", "f"] False) diag)
   q1 @?= q2
 
 
-testUnsuffixedPortNames :: Assertion
-testUnsuffixedPortNames = do
+testIncludedMemoized :: Assertion
+testIncludedMemoized = do
   let doc = mkDoctrine
-  diag <- require mkTwoStepDiag
-  quoted <- require (quoteProgram defaultQuotePolicy doc modeM fragmentResidual diag)
-  let names = M.elems (spPortNames quoted)
-  assertBool "expected boundary name p0" ("p0" `elem` names)
-  assertBool "expected boundary name p1" ("p1" `elem` names)
-  assertBool "expected internal name t0" ("t0" `elem` names)
-  assertBool "did not expect suffixed t0_1" ("t0_1" `notElem` names)
+  diag <- require mkRepeatedNullaryDiag
+  quoted <- require (quoteProgram doc modeM (mkFragment ["a", "f"] False) diag)
+  assertEqual "expected one included a binding" 1 (countBinding SBIncluded "a" quoted)
+  assertEqual "expected one included f binding" 1 (countBinding SBIncluded "f" quoted)
+  assertEqual "expected no residual f bindings" 0 (countBinding SBResidual "f" quoted)
 
 
-testDuplicateRoleInternalized :: Assertion
-testDuplicateRoleInternalized = do
+testExcludedDuplicated :: Assertion
+testExcludedDuplicated = do
   let doc = mkDoctrine
-  diag <- require mkRepeatedFDiag
-  quoted <- require (quoteProgram defaultQuotePolicy doc modeM fragmentShare diag)
-  assertEqual "expected no binding for duplicate role" 0 (countBinding "dup" quoted)
+  diag <- require mkRepeatedNullaryDiag
+  quoted <- require (quoteProgram doc modeM (mkFragment ["a"] False) diag)
+  assertEqual "expected one included a binding" 1 (countBinding SBIncluded "a" quoted)
+  assertEqual "expected two residual f bindings" 2 (countBinding SBResidual "f" quoted)
 
 
-testExactShareMemoized :: Assertion
-testExactShareMemoized = do
+testCrossBindersFalse :: Assertion
+testCrossBindersFalse = do
   let doc = mkDoctrine
-  diag <- require mkRepeatedFDiag
-  quoted <- require (quoteProgram defaultQuotePolicy doc modeM fragmentShare diag)
-  assertEqual "expected one shared binding_f" 1 (countBinding "f" quoted)
+  diag <- require mkWrapDiag
+  quoted <- require (quoteProgram doc modeM (mkFragment ["a"] False) diag)
+  inner <- requireInnerProgram quoted
+  assertEqual "expected nested a binding to stay residual" 1 (countBinding SBResidual "a" inner)
+  assertEqual "expected nested a binding not to be included" 0 (countBinding SBIncluded "a" inner)
 
 
-testResidualRepeatedDuplicated :: Assertion
-testResidualRepeatedDuplicated = do
+testCrossBindersTrue :: Assertion
+testCrossBindersTrue = do
   let doc = mkDoctrine
-  diag <- require mkRepeatedFDiag
-  quoted <- require (quoteProgram defaultQuotePolicy doc modeM fragmentResidualizedF diag)
-  assertEqual "expected repeated residual binding_f" 2 (countBinding "f" quoted)
+  diag <- require mkWrapDiag
+  quoted <- require (quoteProgram doc modeM (mkFragment ["a"] True) diag)
+  inner <- requireInnerProgram quoted
+  assertEqual "expected nested a binding to be included" 1 (countBinding SBIncluded "a" inner)
+  assertEqual "expected no residual nested a binding" 0 (countBinding SBResidual "a" inner)
 
 
-testProductWitnessEliminatesProjectionChurn :: Assertion
-testProductWitnessEliminatesProjectionChurn = do
-  let doc = mkDoctrine
-  diag <- require mkPackProjectDiag
-  quoted <- require (quoteProgram defaultQuotePolicy doc modeM fragmentProduct diag)
-  assertEqual "expected pack-then-project to disappear" [] (spBindings quoted)
-  assertEqual "expected final outputs to alias original inputs" ["p0", "p1"] (map (refName (spPortNames quoted)) (spOutputs quoted))
-
-
-countBinding :: Text -> SharedProgram -> Int
-countBinding name program =
+countBinding :: SharedBindingKind -> Text -> SharedProgram -> Int
+countBinding kind name program =
   length
     [ ()
-    | BindGen { sbGen = GenName gen } <- spBindings program
+    | BindGen { sbKind = bindingKind, sbGen = GenName gen } <- spBindings program
+    , bindingKind == kind
     , gen == name
     ]
 
 
-mkTwoStepDiag :: Either Text Diagram
-mkTwoStepDiag = do
-  let (pIn, d0) = freshPort tyT (emptyDiagram modeM [])
-  let (pMid, d1) = freshPort tyT d0
-  let (pOut, d2) = freshPort tyT d1
-  d3 <- addEdgePayload (PGen (GenName "b") M.empty []) [pIn] [pMid] d2
-  d4 <- addEdgePayload (PGen (GenName "b") M.empty []) [pMid] [pOut] d3
-  let diag = d4 { dIn = [pIn], dOut = [pOut] }
+requireInnerProgram :: SharedProgram -> IO SharedProgram
+requireInnerProgram program =
+  case spBindings program of
+    [BindGen { sbGen = GenName "wrap", sbBinders = [inner] }] -> pure inner
+    other -> assertFailure ("expected one residual wrap binding, got " <> show other) >> fail "unreachable"
+
+
+mkRepeatedNullaryDiag :: Either Text Diagram
+mkRepeatedNullaryDiag = do
+  let (pA1, d0) = freshPort tyT (emptyDiagram modeM [])
+  let (pF1, d1) = freshPort tyT d0
+  let (pA2, d2) = freshPort tyT d1
+  let (pF2, d3) = freshPort tyT d2
+  d4 <- addEdgePayload (PGen (GenName "a") M.empty []) [] [pA1] d3
+  d5 <- addEdgePayload (PGen (GenName "f") M.empty []) [pA1] [pF1] d4
+  d6 <- addEdgePayload (PGen (GenName "a") M.empty []) [] [pA2] d5
+  d7 <- addEdgePayload (PGen (GenName "f") M.empty []) [pA2] [pF2] d6
+  let diag = d7 { dIn = [], dOut = [pF1, pF2] }
+  diag' <- canonicalizeDiagram diag
+  validateDiagram diag'
+  pure diag'
+
+
+mkWrapDiag :: Either Text Diagram
+mkWrapDiag = do
+  let (pOut, d0) = freshPort tyT (emptyDiagram modeM [])
+  inner <- mkInnerA
+  d1 <- addEdgePayload (PGen (GenName "wrap") M.empty [BAConcrete inner]) [] [pOut] d0
+  let diag = d1 { dIn = [], dOut = [pOut] }
   validateDiagram diag
   pure diag
 
 
-mkRepeatedFDiag :: Either Text Diagram
-mkRepeatedFDiag = do
-  let (pIn, d0) = freshPort tyT (emptyDiagram modeM [])
-  let (pDupL, d1) = freshPort tyT d0
-  let (pDupR, d2) = freshPort tyT d1
-  let (pOutL, d3) = freshPort tyT d2
-  let (pOutR, d4) = freshPort tyT d3
-  d5 <- addEdgePayload (PGen (GenName "dup") M.empty []) [pIn] [pDupL, pDupR] d4
-  d6 <- addEdgePayload (PGen (GenName "f") M.empty []) [pDupL] [pOutL] d5
-  d7 <- addEdgePayload (PGen (GenName "f") M.empty []) [pDupR] [pOutR] d6
-  let diag = d7 { dIn = [pIn], dOut = [pOutL, pOutR] }
-  diag' <- canonicalizeDiagram diag
-  validateDiagram diag'
-  pure diag'
+mkInnerA :: Either Text Diagram
+mkInnerA = do
+  let (pOut, d0) = freshPort tyT (emptyDiagram modeM [])
+  d1 <- addEdgePayload (PGen (GenName "a") M.empty []) [] [pOut] d0
+  let diag = d1 { dIn = [], dOut = [pOut] }
+  validateDiagram diag
+  pure diag
 
 
 mkDoctrine :: Doctrine
@@ -135,12 +162,9 @@ mkDoctrine =
           M.fromList
             [ ( modeM
               , M.fromList
-                  [ (GenName "b", genUnary "b")
-                  , (GenName "dup", genDup)
+                  [ (GenName "a", genNullary "a")
                   , (GenName "f", genUnary "f")
-                  , (GenName "mkPair", genPair)
-                  , (GenName "fst", genFst)
-                  , (GenName "snd", genSnd)
+                  , (GenName "wrap", genWrap)
                   ]
               )
             ]
@@ -148,6 +172,18 @@ mkDoctrine =
       , dActions = M.empty
       , dObligations = []
       }
+
+
+genNullary :: Text -> GenDecl
+genNullary name =
+  GenDecl
+    { gdName = GenName name
+    , gdMode = modeM
+    , gdParams = []
+    , gdDom = []
+    , gdCod = [tyT]
+    , gdAttrs = []
+    }
 
 
 genUnary :: Text -> GenDecl
@@ -162,100 +198,35 @@ genUnary name =
     }
 
 
-genDup :: GenDecl
-genDup =
+genWrap :: GenDecl
+genWrap =
   GenDecl
-    { gdName = GenName "dup"
+    { gdName = GenName "wrap"
     , gdMode = modeM
     , gdParams = []
-    , gdDom = [InPort tyT]
-    , gdCod = [tyT, tyT]
-    , gdAttrs = []
-    }
-
-
-genPair :: GenDecl
-genPair =
-  GenDecl
-    { gdName = GenName "mkPair"
-    , gdMode = modeM
-    , gdParams = []
-    , gdDom = [InPort tyT, InPort tyT]
+    , gdDom =
+        [ InBinder
+            BinderSig
+              { bsTmCtx = []
+              , bsDom = []
+              , bsCod = [tyT]
+              }
+        ]
     , gdCod = [tyT]
     , gdAttrs = []
     }
 
 
-genFst :: GenDecl
-genFst =
-  GenDecl
-    { gdName = GenName "fst"
-    , gdMode = modeM
-    , gdParams = []
-    , gdDom = [InPort tyT]
-    , gdCod = [tyT]
-    , gdAttrs = []
-    }
-
-
-genSnd :: GenDecl
-genSnd =
-  GenDecl
-    { gdName = GenName "snd"
-    , gdMode = modeM
-    , gdParams = []
-    , gdDom = [InPort tyT]
-    , gdCod = [tyT]
-    , gdAttrs = []
-    }
-
-
-fragmentResidual :: FragmentDecl
-fragmentResidual =
+mkFragment :: [Text] -> Bool -> FragmentDecl
+mkFragment included crossBinders =
   FragmentDecl
-    { frName = "FragResidual"
+    { frName = "Frag"
     , frBase = "D"
     , frMode = "M"
-    , frGenRoles = M.empty
-    , frProducts = []
-    , frRecurseBinders = False
-    , frRecurseBoxes = False
-    , frRecurseFeedback = False
-    }
-
-
-fragmentResidualizedF :: FragmentDecl
-fragmentResidualizedF =
-  fragmentResidual
-    { frName = "FragResidualizedF"
-    , frGenRoles = M.fromList [(GenName "dup", FragDuplicate)]
-    }
-
-
-fragmentShare :: FragmentDecl
-fragmentShare =
-  fragmentResidual
-    { frName = "FragShare"
-    , frGenRoles =
-        M.fromList
-          [ (GenName "dup", FragDuplicate)
-          , (GenName "f", FragShare)
-          ]
-    }
-
-
-fragmentProduct :: FragmentDecl
-fragmentProduct =
-  fragmentResidual
-    { frName = "FragProduct"
-    , frGenRoles = M.fromList [(GenName "dup", FragDuplicate)]
-    , frProducts =
-        [ FragmentProduct
-            { fpPairCtor = GenName "mkPair"
-            , fpProjLeft = GenName "fst"
-            , fpProjRight = GenName "snd"
-            }
-        ]
+    , frIncludedGens = S.fromList [ GenName name | name <- included ]
+    , frCrossBinders = crossBinders
+    , frCrossBoxes = False
+    , frCrossFeedback = False
     }
 
 
@@ -265,31 +236,6 @@ modeM = ModeName "M"
 
 tyT :: Obj
 tyT = mkCon (ObjRef modeM (ObjName "T")) []
-
-
-mkPackProjectDiag :: Either Text Diagram
-mkPackProjectDiag = do
-  let (pInL, d0) = freshPort tyT (emptyDiagram modeM [])
-  let (pInR, d1) = freshPort tyT d0
-  let (pPair, d2) = freshPort tyT d1
-  let (pDupL, d3) = freshPort tyT d2
-  let (pDupR, d4) = freshPort tyT d3
-  let (pOutL, d5) = freshPort tyT d4
-  let (pOutR, d6) = freshPort tyT d5
-  d7 <- addEdgePayload (PGen (GenName "mkPair") M.empty []) [pInL, pInR] [pPair] d6
-  d8 <- addEdgePayload (PGen (GenName "dup") M.empty []) [pPair] [pDupL, pDupR] d7
-  d9 <- addEdgePayload (PGen (GenName "fst") M.empty []) [pDupL] [pOutL] d8
-  d10 <- addEdgePayload (PGen (GenName "snd") M.empty []) [pDupR] [pOutR] d9
-  let diag = d10 { dIn = [pInL, pInR], dOut = [pOutL, pOutR] }
-  validateDiagram diag
-  pure diag
-
-
-refName :: M.Map PortId Text -> PortId -> Text
-refName names pid =
-  case M.lookup pid names of
-    Nothing -> error "missing quoted port name in test"
-    Just name -> name
 
 
 require :: Either Text a -> IO a

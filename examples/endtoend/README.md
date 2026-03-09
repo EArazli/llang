@@ -1,7 +1,8 @@
 End-to-end examples
 
-This directory contains self-contained userland examples that do not import
-`examples/lib/**` or `stdlib/**`.
+This directory contains end-to-end userland examples. Most are self-contained;
+the explicit-sharing quotation examples import the standard-library transformer
+module from `stdlib/transformers/**`.
 
 ## Plus Calculator (integers + `+`)
 
@@ -89,7 +90,7 @@ Expected output:
 ## Pair-Based Endomorphic AD Core
 
 `autodiff_times_sin_pair_core.run.llang` isolates the pair-based endomorphic AD
-story while still lowering the quoted result through a small JS backend.
+story at the explicit-sharing quotation boundary.
 
 - `SmoothLam` is closed under differentiation by adding `Pair`, `mkPair`,
   `fst`, `snd`, `add`, `cos`, and `neg`
@@ -97,36 +98,26 @@ story while still lowering the quoted result through a small JS backend.
   `R -> Pair(R, R)` and primitive images expressed as composites in the same
   doctrine
 - the source run is an open core term `dup ; (id * (id ; sin)) ; mul`, so after
-  one AD pass the emitted JS is a lambda from a seeded pair input `p0` to
-  `[value, derivative]`
+  one AD pass quotation targets a `Prog(Pair(R, R), Pair(R, R))` object in the
+  generated explicit-sharing doctrine
 - `main` runs:
-  `apply forwardAD -> normalize -> quote into SmoothLam_Share -> apply lowerJS -> normalize -> apply emitJS -> normalize -> extract Doc`
+  `apply forwardAD -> normalize -> quote into SmoothLam_Share -> extract diagram`
 - `main2` uses the exact same path, with the only semantic difference being a
   second `apply forwardAD` before normalization
 
-Build the first-order JS module:
+Inspect the first-order quoted program:
 
   stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run main
 
-Build the second-order JS module through the same backend:
+Inspect the second-order quoted program through the same path:
 
   stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run main2
 
 Current status:
 
-  This example now lands the userland sharing path directly in the Milestone 2
-  presentation. The differentiated term is quoted into `SmoothLam_Share` with
-  nested `let_*` / `returnRefs` structure, then lowered through an ordinary
-  morphism `lowerJS : SmoothLam_Share -> PairJS`, rendered by an ordinary
-  `emitJS : PairJS -> PairJSDoc`, and finally extracted with `extract Doc`.
-
-  There is no language-level JS extractor in this path. The backend cleanup is
-  userland too: `PairJS` carries the explicit expression/program structure, its
-  local computational rules inline obviously safe return patterns and recover
-  nearby pair destructuring from sibling `[0]` / `[1]` projections, and the
-  final `PairJSDoc` stage renders the JS module through ordinary `Doc`
-  combinators.
-
   So `main` and `main2` differ only by the extra `forwardAD` application in the
-  pipeline. They share the same quoting, letgraph optimization, `PairJS`
-  lowering, `PairJSDoc` rendering, and `Doc` extraction path.
+  pipeline. They share the same fragment, the same
+  `transform explicit_sharing using SharePair` target, and the same
+  fragment-relative quotation algorithm. The output is the actual typed mixed
+  explicit-sharing IR with `Prog`, `Refs`, `let_*`, `res_*`, and `returnRefs`
+  nodes.

@@ -1,3 +1,5 @@
+import "../../../stdlib/transformers/explicit_sharing.llang";
+
 doctrine D where {
   mode M acyclic classifiedBy M via M.U_M;
   gen comp_ctx_ext(a@M) : [a] -> [a] @M;
@@ -13,10 +15,14 @@ doctrine D where {
 }
 
 fragment Share in D mode M where {
-  gen dup = duplicate;
+  include gen dup;
+  include gen b;
+  cross binders = false;
+  cross boxes = false;
+  cross feedback = false;
 }
 
-derived doctrine D_Share = letgraph Share;
+derived doctrine D_Share = transform explicit_sharing using Share;
 
 pipeline p where {
   normalize { policy = "topmost"; fuel = 50; };

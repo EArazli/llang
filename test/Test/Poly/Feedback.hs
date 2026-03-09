@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import Strat.Frontend.Env (emptyEnv)
-import Strat.Pipeline (FragmentDecl(..), defaultQuotePolicy)
+import Strat.Pipeline (FragmentDecl(..))
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.Doctrine
@@ -44,7 +44,7 @@ testFeedbackElab = do
   raw <- require (parseDiagExpr "loop { step }")
   diag <- require (elabDiagExpr emptyEnv doc modeM [] raw)
   assertBool "expected feedback edge in outer graph" (hasFeedback diag)
-  program <- require (quoteProgram defaultQuotePolicy doc modeM fragmentResidual diag)
+  program <- require (quoteProgram doc modeM fragmentResidual diag)
   assertBool "expected BindFeedback in quoted program" (any isFeedbackBinding (spBindings program))
   where
     isFeedbackBinding binding =
@@ -58,7 +58,7 @@ testTraceElab = do
   raw <- require (parseDiagExpr "trace 1 { step2 }")
   diag <- require (elabDiagExpr emptyEnv doc modeM [] raw)
   assertBool "expected feedback edge with one outer input and one outer output" (hasFeedbackWithIO 1 1 diag)
-  program <- require (quoteProgram defaultQuotePolicy doc modeM fragmentResidual diag)
+  program <- require (quoteProgram doc modeM fragmentResidual diag)
   assertBool "expected BindFeedback with one input and one output" (any isFeedbackBinding (spBindings program))
   where
     isFeedbackBinding binding =
@@ -197,11 +197,10 @@ fragmentResidual =
     { frName = "Frag"
     , frBase = "D"
     , frMode = "M"
-    , frGenRoles = M.empty
-    , frProducts = []
-    , frRecurseBinders = False
-    , frRecurseBoxes = False
-    , frRecurseFeedback = True
+    , frIncludedGens = S.empty
+    , frCrossBinders = False
+    , frCrossBoxes = False
+    , frCrossFeedback = True
     }
 
 

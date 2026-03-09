@@ -28,11 +28,11 @@ tests =
     "Frontend.ExampleCodegen"
     [ testCase "logic_full_adder_codegen main emits structured JavaScript" testLogicFullAdderMain
     , testCase "logic_full_adder_codegen share shows quoted bindings and attrs" testLogicFullAdderShare
-    , testCase "letgraph_js_codegen main emits js-like shared bindings" testLetGraphJsMain
+    , testCase "explicit_sharing_js_codegen main exposes mixed quoted bindings" testExplicitSharingJsMain
     , testCase "end-to-end autodiff example emits differentiated JavaScript" testEndToEndAutodiffMain
     , testCase "end-to-end autodiff core run exposes differentiated target IR" testEndToEndAutodiffCore
-    , testCase "pair-based autodiff main emits cleaned JavaScript" testPairAutodiffMain
-    , testCase "pair-based autodiff main2 emits cleaned JavaScript" testPairAutodiffMain2
+    , testCase "pair-based autodiff main exposes quoted explicit-sharing IR" testPairAutodiffMain
+    , testCase "pair-based autodiff main2 exposes quoted second-order IR" testPairAutodiffMain2
     , testCase "CLI does not write FileTree outputs without --output" testCliNoOutputFlagSkipsWrites
     , testCase "CLI writes FileTree outputs with --output" testCliOutputFlagWrites
     ]
@@ -57,23 +57,23 @@ testLogicFullAdderShare = do
   runDef <- require (selectRun env (Just "share"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected var attribute for a" ("let_var(s=\"a\")" `T.isInfixOf` out)
-  assertBool "expected var attribute for b" ("let_var(s=\"b\")" `T.isInfixOf` out)
-  assertBool "expected quoted xor binding" ("let_xor" `T.isInfixOf` out)
-  assertBool "expected quoted and binding" ("let_and" `T.isInfixOf` out)
+  assertBool "expected residual var for a" ("res_var(s=\"a\")" `T.isInfixOf` out)
+  assertBool "expected residual var for b" ("res_var(s=\"b\")" `T.isInfixOf` out)
+  assertBool "expected residual xor binding" ("res_xor" `T.isInfixOf` out)
+  assertBool "expected residual and binding" ("res_and" `T.isInfixOf` out)
 
-testLetGraphJsMain :: Assertion
-testLetGraphJsMain = do
-  env <- requireIO =<< loadModule "examples/run/codegen/letgraph_js_codegen.run.llang"
+testExplicitSharingJsMain :: Assertion
+testExplicitSharingJsMain = do
+  env <- requireIO =<< loadModule "examples/run/codegen/explicit_sharing_js_codegen.run.llang"
   runDef <- require (selectRun env (Just "main"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected const binding statements" ("const " `T.isInfixOf` out)
-  assertBool "expected assignment in emitted code" (" = " `T.isInfixOf` out)
-  assertBool "expected add operation call in emitted code" ("add(" `T.isInfixOf` out)
-  assertBool "expected duplicate role to suppress dup helper calls" (not ("dup(" `T.isInfixOf` out))
-  assertBool "expected console.log statement" ("console.log(" `T.isInfixOf` out)
-  assertBool "expected statement separators" (";" `T.isInfixOf` out)
+  assertBool "expected explicit-sharing program output" ("M.Prog(" `T.isInfixOf` out)
+  assertBool "expected shared duplicate binding" ("let_dup" `T.isInfixOf` out)
+  assertBool "expected residual add binding" ("res_add" `T.isInfixOf` out)
+  assertBool "expected residual print binding" ("res_print" `T.isInfixOf` out)
+  assertBool "expected quote bundle plumbing" ("returnRefs" `T.isInfixOf` out)
+  assertBool "expected no old naming attrsorts" (not ("__quote_str" `T.isInfixOf` out))
 
 testEndToEndAutodiffMain :: Assertion
 testEndToEndAutodiffMain = do
@@ -108,13 +108,13 @@ testPairAutodiffMain = do
   runDef <- require (selectRun env (Just "main"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected named exported function" ("export const timesSinPair = (p0) => {" `T.isInfixOf` out)
-  assertBool "expected pair destructuring of the seeded input" ("const [t32, t29] = p0;" `T.isInfixOf` out)
-  assertBool "expected sine temporary in emitted code" ("const t34 = Math.sin(t32);" `T.isInfixOf` out)
-  assertBool "expected cosine temporary in emitted code" ("const t35 = Math.cos(t32);" `T.isInfixOf` out)
-  assertBool "expected final value/derivative return pair" ("return [t33, t25];" `T.isInfixOf` out)
-  assertBool "expected optimized backend to remove explicit dup helper" (not ("dup(" `T.isInfixOf` out))
-  assertBool "expected optimized backend to remove Array.fill duplication" (not ("Array(2).fill" `T.isInfixOf` out))
+  assertBool "expected quoted program output" ("M.Prog(" `T.isInfixOf` out)
+  assertBool "expected residual duplication nodes" ("res_dup" `T.isInfixOf` out)
+  assertBool "expected shared sine binding" ("let_sin" `T.isInfixOf` out)
+  assertBool "expected shared cosine binding" ("let_cos" `T.isInfixOf` out)
+  assertBool "expected shared multiplication binding" ("let_mul" `T.isInfixOf` out)
+  assertBool "expected quoted program terminator" ("returnRefs" `T.isInfixOf` out)
+  assertBool "expected no legacy quote-name sort" (not ("__quote_str" `T.isInfixOf` out))
 
 testPairAutodiffMain2 :: Assertion
 testPairAutodiffMain2 = do
@@ -122,18 +122,14 @@ testPairAutodiffMain2 = do
   runDef <- require (selectRun env (Just "main2"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected named exported second-order function" ("export const timesSinPair = (p0) => {" `T.isInfixOf` out)
-  assertBool "expected first nested projection" ("const t87 = p0[0];" `T.isInfixOf` out)
-  assertBool "expected second nested projection" ("const t161 = t87[0];" `T.isInfixOf` out)
-  assertBool "expected reused cosine temporary" ("const t169 = Math.cos(t161);" `T.isInfixOf` out)
-  assertBool "expected reused sine temporary" ("const t168 = Math.sin(t161);" `T.isInfixOf` out)
-  assertBool "expected inner pair binding" ("const t79 = [t162, t133];" `T.isInfixOf` out)
-  assertBool "expected outer pair binding" ("const t115 = [t167, t137];" `T.isInfixOf` out)
-  assertBool "expected sine call in emitted code" ("Math.sin(" `T.isInfixOf` out)
-  assertBool "expected cosine call in emitted code" ("Math.cos(" `T.isInfixOf` out)
-  assertBool "expected direct return of nested pair result" ("return [t115, t79];" `T.isInfixOf` out)
-  assertBool "expected duplicate helper to stay eliminated" (not ("Array(2).fill" `T.isInfixOf` out))
-  assertBool "expected no backend placeholders" (not ("unsupported" `T.isInfixOf` out))
+  assertBool "expected quoted program output" ("M.Prog(" `T.isInfixOf` out)
+  assertBool "expected second-order pair input type" ("M.Pair(M.Pair(M.R, M.R), M.Pair(M.R, M.R))" `T.isInfixOf` out)
+  assertBool "expected residual duplication nodes" ("res_dup" `T.isInfixOf` out)
+  assertBool "expected shared sine binding" ("let_sin" `T.isInfixOf` out)
+  assertBool "expected shared cosine binding" ("let_cos" `T.isInfixOf` out)
+  assertBool "expected shared addition binding" ("let_add" `T.isInfixOf` out)
+  assertBool "expected quoted program terminator" ("returnRefs" `T.isInfixOf` out)
+  assertBool "expected no legacy quote-name sort" (not ("__quote_str" `T.isInfixOf` out))
 
 
 testCliNoOutputFlagSkipsWrites :: Assertion

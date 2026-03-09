@@ -151,6 +151,9 @@ elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
         DeclFragment rawFragment -> do
           env' <- insertFragmentDecl env rawFragment
           pure (env', rawTerms, rawRuns)
+        DeclTransformer rawTransformer -> do
+          env' <- insertTransformerDecl env rawTransformer
+          pure (env', rawTerms, rawRuns)
         DeclDerivedDoctrine rawDerived -> do
           env' <- insertDerivedDoctrine env rawDerived
           pure (env', rawTerms, rawRuns)
@@ -982,6 +985,7 @@ insertDerivedDoctrine :: ModuleEnv -> RawDerivedDoctrine -> Either Text ModuleEn
 insertDerivedDoctrine env raw = do
   ensureAbsent "derived doctrine" (rddName raw) (meDerivedDoctrines env)
   ensureAbsent "doctrine" (rddName raw) (meDoctrines env)
+  transformer <- lookupTransformer env (rddTransformer raw)
   fragment <- lookupFragment env (rddFragment raw)
   baseDoc <- lookupDoctrine env (frBase fragment)
   let mode = ModeName (frMode fragment)
@@ -991,16 +995,16 @@ insertDerivedDoctrine env raw = do
   if mode `S.member` dAcyclicModes baseDoc
     then Right ()
     else Left "derived doctrine: mode is not declared acyclic in base doctrine"
-  policy <- elabQuotePolicy (rddPolicy raw)
-  derivedDoc <- buildLetGraphDoctrine (rddName raw) baseDoc mode
+  quoteLayout <- quoteLayoutFromTransformer transformer
+  derivedDoc <- applyTransformerDecl (rddName raw) transformer fragment baseDoc mode
   let dd =
         DerivedTransform
           { ddName = rddName raw
           , ddBase = frBase fragment
           , ddMode = frMode fragment
           , ddFragment = rddFragment raw
-          , ddKind = TkLetGraph
-          , ddDefaultQuotePolicy = policy
+          , ddTransformer = rddTransformer raw
+          , ddQuoteLayout = quoteLayout
           }
   let env' =
         env
@@ -1018,254 +1022,115 @@ insertFragmentDecl env raw = do
   if M.member mode (mtModes (dModes baseDoc))
     then Right ()
     else Left "fragment: unknown mode"
-  let insertRole acc (name, rawRole) = do
+  let insertIncluded acc name = do
         let genName = GenName name
-        if M.member genName acc
-          then Left ("fragment: duplicate generator role for " <> name)
+        if genName `S.member` acc
+          then Left ("fragment: duplicate include for " <> name)
           else do
-            role <- elabFragmentRole rawRole
-            validateFragmentRole baseDoc mode genName role
-            pure (M.insert genName role acc)
-  roles <- foldM insertRole M.empty [ (name, role) | RFGenRole name role <- rfdItems raw ]
-  products <- elabFragmentProducts baseDoc mode roles [ (ctor, projLeft, projRight) | RFProduct ctor projLeft projRight <- rfdItems raw ]
-  recurseBinders <- singletonFlag False "fragment: duplicate recurse binders setting" [ b | RFRecurseBinders b <- rfdItems raw ]
-  recurseBoxes <- singletonFlag False "fragment: duplicate recurse boxes setting" [ b | RFRecurseBoxes b <- rfdItems raw ]
-  recurseFeedback <- singletonFlag False "fragment: duplicate recurse feedback setting" [ b | RFRecurseFeedback b <- rfdItems raw ]
+            _ <-
+              lookupGenDeclInDoctrine
+                ("fragment: unknown generator " <> name)
+                baseDoc
+                mode
+                genName
+            pure (S.insert genName acc)
+  included <- foldM insertIncluded S.empty [ name | RFIncludeGen name <- rfdItems raw ]
+  crossBinders <- singletonFlag False "fragment: duplicate cross binders setting" [ b | RFCrossBinders b <- rfdItems raw ]
+  crossBoxes <- singletonFlag False "fragment: duplicate cross boxes setting" [ b | RFCrossBoxes b <- rfdItems raw ]
+  crossFeedback <- singletonFlag False "fragment: duplicate cross feedback setting" [ b | RFCrossFeedback b <- rfdItems raw ]
   let fragment =
         FragmentDecl
           { frName = rfdName raw
           , frBase = rfdBase raw
           , frMode = rfdMode raw
-          , frGenRoles = roles
-          , frProducts = products
-          , frRecurseBinders = recurseBinders
-          , frRecurseBoxes = recurseBoxes
-          , frRecurseFeedback = recurseFeedback
+          , frIncludedGens = included
+          , frCrossBinders = crossBinders
+          , frCrossBoxes = crossBoxes
+          , frCrossFeedback = crossFeedback
           }
   pure env { meFragments = M.insert (rfdName raw) fragment (meFragments env) }
+
+insertTransformerDecl :: ModuleEnv -> RawTransformerDecl -> Either Text ModuleEnv
+insertTransformerDecl env raw = do
+  ensureAbsent "transformer" (rtdName raw) (meTransformers env)
+  sourceDoctrineVar <- singletonVar "transformer: expected exactly one source doctrine declaration" [ name | RTISourceDoctrine name <- rtdItems raw ]
+  sourceModeVar <- singletonVar "transformer: expected exactly one source mode declaration" [ name | RTISourceMode name <- rtdItems raw ]
+  sourceFragmentVar <- singletonVar "transformer: expected exactly one source fragment declaration" [ name | RTISourceFragment name <- rtdItems raw ]
+  items <- mapM elabTransformerItem [ item | item <- rtdItems raw, not (isSourceItem item) ]
+  let transformer =
+        TransformerDecl
+          { tdName = rtdName raw
+          , tdSourceDoctrineVar = sourceDoctrineVar
+          , tdSourceModeVar = sourceModeVar
+          , tdSourceFragmentVar = sourceFragmentVar
+          , tdItems = items
+          }
+  pure env { meTransformers = M.insert (rtdName raw) transformer (meTransformers env) }
+  where
+    isSourceItem item =
+      case item of
+        RTISourceDoctrine _ -> True
+        RTISourceMode _ -> True
+        RTISourceFragment _ -> True
+        _ -> False
+
+    singletonVar err xs =
+      case xs of
+        [x] -> Right x
+        _ -> Left err
 
 singletonFlag :: a -> Text -> [a] -> Either Text a
 singletonFlag def _ [] = Right def
 singletonFlag _ _ [x] = Right x
 singletonFlag _ err (_:_:_) = Left err
 
+elabTransformerItem :: RawTransformerItem -> Either Text TransformerItem
+elabTransformerItem raw =
+  case raw of
+    RTISourceDoctrine _ -> Left "transformer: internal unexpected source doctrine item"
+    RTISourceMode _ -> Left "transformer: internal unexpected source mode item"
+    RTISourceFragment _ -> Left "transformer: internal unexpected source fragment item"
+    RTICopyDoctrine name -> Right (TICopyDoctrine name)
+    RTIEmitObject rawObj -> TIEmitObject <$> elabTransformObject rawObj
+    RTIEmitUtility rawUtil -> Right (TIEmitUtility (elabTransformUtility rawUtil))
+    RTIForIncludedGenerators genVar fragmentVar rawItems ->
+      TIForIncludedGenerators genVar fragmentVar <$> mapM elabTransformLoopItem rawItems
+    RTIForExcludedGenerators genVar doctrineVar modeVar fragmentVar rawItems ->
+      TIForExcludedGenerators genVar doctrineVar modeVar fragmentVar <$> mapM elabTransformLoopItem rawItems
 
-elabFragmentRole :: RawFragmentRole -> Either Text FragmentRole
-elabFragmentRole role =
-  case role of
-    RFRShare -> Right FragShare
-    RFRAlias -> Right FragAlias
-    RFRDuplicate -> Right FragDuplicate
-    RFRDiscard -> Right FragDiscard
-
-
-validateFragmentRole :: Doctrine -> ModeName -> GenName -> FragmentRole -> Either Text ()
-validateFragmentRole baseDoc mode genName role = do
-  gd <-
-    lookupGenDeclInDoctrine
-      ("fragment: unknown generator " <> renderGenNameText genName)
-      baseDoc
-      mode
-      genName
-  case role of
-    FragShare -> Right ()
-    FragResidual -> Right ()
-    FragAlias ->
-      requireRoleShape gd 1 (Just 1) True "fragment: alias role requires exactly one input, one output, and no binders"
-    FragDuplicate ->
-      requireRoleShape gd 1 Nothing True "fragment: duplicate role requires exactly one input and no binders"
-    FragDiscard ->
-      requireRoleShape gd 1 (Just 0) True "fragment: discard role requires exactly one input, zero outputs, and no binders"
-
-elabFragmentProducts :: Doctrine -> ModeName -> Map GenName FragmentRole -> [(Text, Text, Text)] -> Either Text [FragmentProduct]
-elabFragmentProducts baseDoc mode roles = foldM insertProduct []
-  where
-    insertProduct acc (ctorName, projLeftName, projRightName) = do
-      let productWitness =
-            FragmentProduct
-              { fpPairCtor = GenName ctorName
-              , fpProjLeft = GenName projLeftName
-              , fpProjRight = GenName projRightName
+elabTransformObject :: RawTransformObjectDecl -> Either Text TransformObjectDecl
+elabTransformObject raw =
+  Right
+    TransformObjectDecl
+      { todName = rtodName raw
+      , todParams =
+          [ TransformTypeParam
+              { ttpName = rttpName p
+              , ttpModeVar = rttpModeVar p
               }
-      validateFragmentProduct baseDoc mode roles productWitness
-      ensureUniqueProduct acc productWitness
-      pure (acc <> [productWitness])
-
-    ensureUniqueProduct acc productWitness =
-      let mentioned =
-            concatMap
-              (\prod -> [fpPairCtor prod, fpProjLeft prod, fpProjRight prod])
-              acc
-          current =
-            [ fpPairCtor productWitness
-            , fpProjLeft productWitness
-            , fpProjRight productWitness
-            ]
-       in case [ gen | gen <- current, gen `elem` mentioned ] of
-            [] -> Right ()
-            (dupGen:_) ->
-              Left ("fragment: product generator is declared multiple times: " <> renderGenNameText dupGen)
-
-validateFragmentProduct :: Doctrine -> ModeName -> Map GenName FragmentRole -> FragmentProduct -> Either Text ()
-validateFragmentProduct baseDoc mode roles productWitness = do
-  let pairCtor = fpPairCtor productWitness
-      projLeft = fpProjLeft productWitness
-      projRight = fpProjRight productWitness
-  if pairCtor == projLeft || pairCtor == projRight || projLeft == projRight
-    then Left "fragment: product declaration requires three distinct generators"
-    else Right ()
-  validateProductRole pairCtor
-  validateProductRole projLeft
-  validateProductRole projRight
-  pairDecl <-
-    lookupGenDeclInDoctrine
-      ("fragment: unknown generator " <> renderGenNameText pairCtor)
-      baseDoc
-      mode
-      pairCtor
-  leftDecl <-
-    lookupGenDeclInDoctrine
-      ("fragment: unknown generator " <> renderGenNameText projLeft)
-      baseDoc
-      mode
-      projLeft
-  rightDecl <-
-    lookupGenDeclInDoctrine
-      ("fragment: unknown generator " <> renderGenNameText projRight)
-      baseDoc
-      mode
-      projRight
-  requireRoleShape pairDecl 2 (Just 1) True "fragment: product constructor requires exactly two inputs, one output, and no binders"
-  requireRoleShape leftDecl 1 (Just 1) True "fragment: product left projection requires exactly one input, one output, and no binders"
-  requireRoleShape rightDecl 1 (Just 1) True "fragment: product right projection requires exactly one input, one output, and no binders"
-  where
-    validateProductRole genName =
-      case M.lookup genName roles of
-        Just FragAlias ->
-          Left ("fragment: product generator cannot use alias role: " <> renderGenNameText genName)
-        Just FragDuplicate ->
-          Left ("fragment: product generator cannot use duplicate role: " <> renderGenNameText genName)
-        Just FragDiscard ->
-          Left ("fragment: product generator cannot use discard role: " <> renderGenNameText genName)
-        _ ->
-          Right ()
-
-
-requireRoleShape :: GenDecl -> Int -> Maybe Int -> Bool -> Text -> Either Text ()
-requireRoleShape gd reqInputs reqOutputs noBinders err = do
-  let portInputs = length [ () | InPort _ <- gdDom gd ]
-      binderInputs = length [ () | InBinder _ <- gdDom gd ]
-      outputs = length (gdCod gd)
-      outputsOk =
-        case reqOutputs of
-          Nothing -> True
-          Just n -> outputs == n
-  if portInputs == reqInputs && outputsOk && (not noBinders || binderInputs == 0)
-    then Right ()
-    else Left err
-
-
-buildLetGraphDoctrine :: Text -> Doctrine -> ModeName -> Either Text Doctrine
-buildLetGraphDoctrine name baseDoc mode = do
-  mt0 <- addMode mode emptyModeTheory
-  let quoteStrSort = AttrSort "__quote_str"
-  derivedAttrSorts <-
-    case M.lookup quoteStrSort (dAttrSorts baseDoc) of
-      Nothing ->
-        Right (M.insert quoteStrSort (AttrSortDecl quoteStrSort (Just LKString)) (dAttrSorts baseDoc))
-      Just decl ->
-        if asLitKind decl == Just LKString
-          then Right (dAttrSorts baseDoc)
-          else Left "derived doctrine: reserved attrsort __quote_str must be declared as string in base doctrine"
-  let ModeName modeTok = mode
-      universeName = "U_" <> modeTok
-      universeTy = mkCon (ObjRef mode (ObjName universeName)) []
-      classDecl =
-        ClassificationDecl
-          { cdClassifier = mode
-          , cdUniverse = universeTy
-          
-          , cdComp = Nothing
-          }
-      mt = mt0 { mtClassifiedBy = M.singleton mode classDecl }
-  let refTy = ty "Ref"
-      refsTy = ty "RefList"
-      letGraphTy = ty "LetGraph"
-      ty tName = mkCon (ObjRef mode (ObjName tName)) []
-      mkCtor cName = mkGenDecl cName [] [universeTy] []
-      mkGen gName dom cod attrs = mkGenDecl gName (map InPort dom) cod attrs
-      mkGenShapes gName dom cod attrs = mkGenDecl gName dom cod attrs
-      mkGenDecl gName dom cod attrs =
-        ( GenName gName
-        , GenDecl
-            { gdName = GenName gName
-            , gdMode = mode
-            , gdParams = []
-            , gdDom = dom
-            , gdCod = cod
-            , gdAttrs = attrs
-            }
-        )
-      utilityGens =
-        [ mkCtor universeName
-        , mkCtor "Ref"
-        , mkCtor "RefList"
-        , mkCtor "LetGraph"
-        , mkGen "ref" [] [refTy] [("name", quoteStrSort)]
-        , mkGen "refsNil" [] [refsTy] []
-        , mkGen "refsCons" [refTy, refsTy] [refsTy] []
-        , mkGen "returnRefs" [refsTy] [letGraphTy] []
-        , mkGenShapes "letBox" [InPort refsTy, InPort refsTy, InPort letGraphTy, continuationBinder] [letGraphTy] [("name", quoteStrSort)]
-        , mkGenShapes "letFeedback" [InPort refsTy, InPort refsTy, InPort letGraphTy, continuationBinder] [letGraphTy] []
-        , mkGen "letGraphProgram" [refsTy, letGraphTy] [letGraphTy] []
-        ]
-      utilityNames = S.fromList (map fst utilityGens)
-      modeGens = M.toList (M.findWithDefault M.empty mode (dGens baseDoc))
-      mkStepCtor (GenName gTok, gDecl) =
-        let bindingName@(GenName bindingTok) = GenName ("let_" <> gTok)
-            m = length (gdCod gDecl)
-            n = length [ () | InPort _ <- gdDom gDecl ]
-            k = length [ () | InBinder _ <- gdDom gDecl ]
-            dom =
-              replicate m (InPort refTy)
-                <> replicate n (InPort refTy)
-                <> replicate k (InPort letGraphTy)
-                <> [continuationBinder]
-         in if bindingName `S.member` utilityNames
-              then
-                Left
-                  ( "derived doctrine "
-                      <> name
-                      <> " mode "
-                      <> renderMode mode
-                      <> " has generator-name collision: "
-                      <> bindingTok
-                      <> " (generated from base generator "
-                      <> gTok
-                      <> ") collides with a reserved quote utility generator"
-                  )
-              else Right (mkGenDecl bindingTok dom [letGraphTy] (gdAttrs gDecl))
-      renderMode (ModeName mTok) = mTok
-      continuationBinder =
-        InBinder
-          BinderSig
-            { bsTmCtx = []
-            , bsDom = []
-            , bsCod = [letGraphTy]
-            }
-  stepCtors <- mapM mkStepCtor modeGens
-  let gens = M.fromList (utilityGens <> stepCtors)
-  pure
-    Doctrine
-      { dName = name
-      , dModes = mt
-      , dAcyclicModes = S.singleton mode
-      , dAttrSorts = derivedAttrSorts
-      , dGens = M.singleton mode gens
-      , dCells2 = []
-      , dActions = M.empty
-      , dObligations = []
+          | p <- rtodParams raw
+          ]
       }
+
+elabTransformUtility :: RawTransformUtility -> TransformUtility
+elabTransformUtility raw =
+  case raw of
+    RTUInputRefs -> TUInputRefs
+    RTURefsNil -> TURefsNil
+    RTURefsCons -> TURefsCons
+    RTURefsHead -> TURefsHead
+    RTURefsTail -> TURefsTail
+    RTUDupRefs -> TUDupRefs
+    RTUDropRefs -> TUDropRefs
+    RTUReturnRefs -> TUReturnRefs
+    RTUResidualBox -> TUResidualBox
+    RTUResidualFeedback -> TUResidualFeedback
+
+elabTransformLoopItem :: RawTransformLoopItem -> Either Text TransformLoopItem
+elabTransformLoopItem raw =
+  case raw of
+    RTLBindingPrefix prefix -> Right (TLEmitBindingPrefix prefix)
+    RTLResidualPrefix prefix -> Right (TLEmitResidualPrefix prefix)
 
 
 elabPipeline :: RawPipeline -> Either Text Pipeline
@@ -1282,13 +1147,8 @@ elabPhase raw =
       policy <- parsePipelinePolicy (rnoPolicy opts)
       let fuel = maybe 50 id (rnoFuel opts)
       Right (Normalize policy fuel)
-    RPQuoteInto targetName mOpts ->
-      case mOpts of
-        Nothing ->
-          Right (QuoteInto targetName Nothing)
-        Just opts -> do
-          quotePolicy <- elabQuotePolicy opts
-          Right (QuoteInto targetName (Just quotePolicy))
+    RPQuoteInto targetName ->
+      Right (QuoteInto targetName)
     RPExtractValue doctrineName opts ->
       case doctrineName of
         "Doc" ->
@@ -1309,24 +1169,411 @@ parsePipelinePolicy mName =
     other -> parsePolicy other
 
 
-elabQuotePolicy :: RawQuoteOpts -> Either Text QuotePolicy
-elabQuotePolicy raw = do
-  orderKey <-
-    case rqoPolicy raw of
-      Nothing -> Right StableEdgeId
-      Just "stable_edge_id" -> Right StableEdgeId
-      Just _ -> Left "quote: unsupported policy"
-  naming <-
-    case rqoNaming raw of
-      Nothing -> Right BoundaryLabelsFirst
-      Just "boundary_labels_first" -> Right BoundaryLabelsFirst
-      Just _ -> Left "quote: unsupported naming policy"
-  pure
-    QuotePolicy
-      { qpOrderKey = orderKey
-      , qpNaming = naming
-      , qpReserved = S.fromList (rqoReserved raw)
-      }
+quoteLayoutFromTransformer :: TransformerDecl -> Either Text (Maybe QuoteTargetLayout)
+quoteLayoutFromTransformer transformer =
+  if null utilityItems && null loopItems && null objectItems
+    then Right Nothing
+    else do
+      let objectNames = S.fromList (map todName objectItems)
+      requireObject "CtxNil" objectNames
+      requireObject "CtxCons" objectNames
+      requireObject "Ref" objectNames
+      requireObject "Refs" objectNames
+      requireObject "Prog" objectNames
+      let utilitySet = S.fromList utilityItems
+      requireUtility TUInputRefs utilitySet
+      requireUtility TURefsNil utilitySet
+      requireUtility TURefsCons utilitySet
+      requireUtility TURefsHead utilitySet
+      requireUtility TURefsTail utilitySet
+      requireUtility TUDupRefs utilitySet
+      requireUtility TUDropRefs utilitySet
+      requireUtility TUReturnRefs utilitySet
+      requireUtility TUResidualBox utilitySet
+      requireUtility TUResidualFeedback utilitySet
+      bindingPrefix <- singletonLoop "transformer: expected exactly one included binding prefix" [ prefix | TLEmitBindingPrefix prefix <- loopItems ]
+      residualPrefix <- singletonLoop "transformer: expected exactly one excluded residual prefix" [ prefix | TLEmitResidualPrefix prefix <- loopItems ]
+      pure
+        ( Just
+            QuoteTargetLayout
+              { qtlCtxNilCtor = "CtxNil"
+              , qtlCtxConsCtor = "CtxCons"
+              , qtlRefCtor = "Ref"
+              , qtlRefsCtor = "Refs"
+              , qtlProgCtor = "Prog"
+              , qtlInputRefsGen = "inputRefs"
+              , qtlRefsNilGen = "refsNil"
+              , qtlRefsConsGen = "refsCons"
+              , qtlRefsHeadGen = "refsHead"
+              , qtlRefsTailGen = "refsTail"
+              , qtlDupRefsGen = "dupRefs"
+              , qtlDropRefsGen = "dropRefs"
+              , qtlReturnRefsGen = "returnRefs"
+              , qtlResidualBoxGen = "resBox"
+              , qtlResidualFeedbackGen = "resFeedback"
+              , qtlBindingPrefix = bindingPrefix
+              , qtlResidualPrefix = residualPrefix
+              }
+        )
+  where
+    objectItems = [ obj | TIEmitObject obj <- tdItems transformer ]
+    utilityItems = [ util | TIEmitUtility util <- tdItems transformer ]
+    loopItems =
+      concat
+        [ items
+        | item <- tdItems transformer
+        , items <-
+            case item of
+              TIForIncludedGenerators { tigItems = xs } -> [xs]
+              TIForExcludedGenerators { tegItems = xs } -> [xs]
+              _ -> []
+        ]
+    requireObject name names =
+      if name `S.member` names
+        then Right ()
+        else Left ("transformer: quote-compatible transformer is missing object " <> name)
+    requireUtility util utils =
+      if util `S.member` utils
+        then Right ()
+        else Left ("transformer: quote-compatible transformer is missing utility " <> renderUtility util)
+    singletonLoop err xs =
+      case xs of
+        [x] -> Right x
+        _ -> Left err
+    renderUtility util =
+      case util of
+        TUInputRefs -> "input_refs"
+        TURefsNil -> "refs_nil"
+        TURefsCons -> "refs_cons"
+        TURefsHead -> "refs_head"
+        TURefsTail -> "refs_tail"
+        TUDupRefs -> "dup_refs"
+        TUDropRefs -> "drop_refs"
+        TUReturnRefs -> "return_refs"
+        TUResidualBox -> "residual_box"
+        TUResidualFeedback -> "residual_feedback"
+
+
+applyTransformerDecl
+  :: Text
+  -> TransformerDecl
+  -> FragmentDecl
+  -> Doctrine
+  -> ModeName
+  -> Either Text Doctrine
+applyTransformerDecl targetName transformer fragment baseDoc mode = do
+  ensureTransformerMatchesSource transformer fragment
+  layout <-
+    maybe
+      (Left "derived doctrine: transformer does not define a quote-compatible explicit-sharing layout")
+      Right
+      =<< quoteLayoutFromTransformer transformer
+  copied <- copyBaseDoctrine targetName transformer baseDoc
+  docWithObjects <- foldM (emitTransformObject mode transformer) copied [ obj | TIEmitObject obj <- tdItems transformer ]
+  docWithUtilities <- foldM (emitTransformUtility mode layout) docWithObjects [ util | TIEmitUtility util <- tdItems transformer ]
+  docWithLoops <- foldM (emitTransformLoop mode layout fragment baseDoc) docWithUtilities (tdItems transformer)
+  validateDoctrine docWithLoops
+  pure docWithLoops
+
+
+ensureTransformerMatchesSource :: TransformerDecl -> FragmentDecl -> Either Text ()
+ensureTransformerMatchesSource transformer fragment = do
+  mapM_ requireItem (tdItems transformer)
+  pure ()
+  where
+    requireItem item =
+      case item of
+        TICopyDoctrine name
+          | name == tdSourceDoctrineVar transformer -> Right ()
+          | otherwise -> Left "transformer: copy doctrine must reference the declared source doctrine variable"
+        TIForIncludedGenerators { tigFragmentVar = name }
+          | name == tdSourceFragmentVar transformer -> Right ()
+          | otherwise -> Left "transformer: included-generator loop must reference the declared source fragment variable"
+        TIForExcludedGenerators { tegDoctrineVar = dName', tegModeVar = mName, tegFragmentVar = fName }
+          | dName' == tdSourceDoctrineVar transformer
+          , mName == tdSourceModeVar transformer
+          , fName == tdSourceFragmentVar transformer ->
+              Right ()
+          | otherwise ->
+              Left "transformer: excluded-generator loop must reference the declared source doctrine/mode/fragment variables"
+        TIEmitObject obj ->
+          mapM_ requireParamMode (todParams obj)
+        _ ->
+          Right ()
+    requireParamMode param =
+      if ttpModeVar param == tdSourceModeVar transformer
+        then Right ()
+        else Left "transformer: emitted object parameters must use the declared source mode variable"
+
+
+copyBaseDoctrine :: Text -> TransformerDecl -> Doctrine -> Either Text Doctrine
+copyBaseDoctrine targetName transformer baseDoc =
+  if any isCopyDoctrine (tdItems transformer)
+    then Right baseDoc { dName = targetName }
+    else Left "transformer: expected `copy doctrine` item"
+  where
+    isCopyDoctrine item =
+      case item of
+        TICopyDoctrine name -> name == tdSourceDoctrineVar transformer
+        _ -> False
+
+
+emitTransformObject :: ModeName -> TransformerDecl -> Doctrine -> TransformObjectDecl -> Either Text Doctrine
+emitTransformObject mode transformer doc objDecl = do
+  universeTy <-
+    case modeUniverseObj (dModes doc) mode of
+      Nothing -> Left "transformer: source mode must be classified to emit object constructors"
+      Just u -> Right u
+  params <- mapM (mkTypeParam universeTy) (todParams objDecl)
+  let decl =
+        GenDecl
+          { gdName = GenName (todName objDecl)
+          , gdMode = mode
+          , gdParams = params
+          , gdDom = []
+          , gdCod = [universeTy]
+          , gdAttrs = []
+          }
+  insertGeneratedGen doc mode decl
+  where
+    mkTypeParam universeTy param =
+      if ttpModeVar param == tdSourceModeVar transformer
+        then
+          Right
+            ( GP_Ty
+                TmVar
+                  { tmvName = ttpName param
+                  , tmvSort = universeTy
+                  , tmvScope = 0
+                  , tmvOwnerMode = Just mode
+                  }
+            )
+        else Left "transformer: object parameter mode does not match source mode variable"
+
+
+emitTransformUtility :: ModeName -> QuoteTargetLayout -> Doctrine -> TransformUtility -> Either Text Doctrine
+emitTransformUtility mode layout doc util =
+  case util of
+    TUInputRefs ->
+      insertUtilityGen doc mode
+        (mkSimpleGen (qtlInputRefsGen layout) [gammaParam "g"] [] [refsTy (OVar gammaVar)])
+    TURefsNil ->
+      insertUtilityGen doc mode
+        (mkSimpleGen (qtlRefsNilGen layout) [] [] [refsTy ctxNilTy])
+    TURefsCons ->
+      insertUtilityGen doc mode
+        ( mkSimpleGen
+            (qtlRefsConsGen layout)
+            [aParam, gammaParam "g"]
+            [refTy (OVar aVar), refsTy (OVar gammaVar)]
+            [refsTy (ctxConsTy (OVar aVar) (OVar gammaVar))]
+        )
+    TURefsHead ->
+      insertUtilityGen doc mode
+        ( mkSimpleGen
+            (qtlRefsHeadGen layout)
+            [aParam, gammaParam "g"]
+            [refsTy (ctxConsTy (OVar aVar) (OVar gammaVar))]
+            [refTy (OVar aVar)]
+        )
+    TURefsTail ->
+      insertUtilityGen doc mode
+        ( mkSimpleGen
+            (qtlRefsTailGen layout)
+            [aParam, gammaParam "g"]
+            [refsTy (ctxConsTy (OVar aVar) (OVar gammaVar))]
+            [refsTy (OVar gammaVar)]
+        )
+    TUDupRefs ->
+      insertUtilityGen doc mode
+        ( mkSimpleGen
+            (qtlDupRefsGen layout)
+            [gammaParam "g"]
+            [refsTy (OVar gammaVar)]
+            [refsTy (OVar gammaVar), refsTy (OVar gammaVar)]
+        )
+    TUDropRefs ->
+      insertUtilityGen doc mode
+        ( mkSimpleGen
+            (qtlDropRefsGen layout)
+            [gammaParam "g"]
+            [refsTy (OVar gammaVar)]
+            []
+        )
+    TUReturnRefs ->
+      insertUtilityGen doc mode
+        ( mkSimpleGen
+            (qtlReturnRefsGen layout)
+            [gammaParam "gIn", gammaParam "gOut"]
+            [refsTy (OVar gammaOutVar)]
+            [progTy (OVar gammaInVar) (OVar gammaOutVar)]
+        )
+    TUResidualBox ->
+      insertUtilityGen doc mode (residualStructuredGen (qtlResidualBoxGen layout))
+    TUResidualFeedback ->
+      insertUtilityGen doc mode (residualStructuredGen (qtlResidualFeedbackGen layout))
+  where
+    universeTy =
+      case modeUniverseObj (dModes doc) mode of
+        Nothing -> error "emitTransformUtility: classified mode required"
+        Just u -> u
+    mkTyVar name =
+      TmVar
+        { tmvName = name
+        , tmvSort = universeTy
+        , tmvScope = 0
+        , tmvOwnerMode = Just mode
+        }
+    gammaVar = mkTyVar "g"
+    gammaInVar = mkTyVar "gIn"
+    gammaOutVar = mkTyVar "gOut"
+    aVar = mkTyVar "a"
+    gammaParam name = GP_Ty (mkTyVar name)
+    aParam = GP_Ty aVar
+    typeRef name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
+    ctxNilTy = typeRef (qtlCtxNilCtor layout) []
+    ctxConsTy a g = typeRef (qtlCtxConsCtor layout) [a, g]
+    refTy a = typeRef (qtlRefCtor layout) [a]
+    refsTy g = typeRef (qtlRefsCtor layout) [g]
+    progTy gIn gOut = typeRef (qtlProgCtor layout) [gIn, gOut]
+    mkSimpleGen name params dom cod =
+      GenDecl
+        { gdName = GenName name
+        , gdMode = mode
+        , gdParams = params
+        , gdDom = map InPort dom
+        , gdCod = cod
+        , gdAttrs = []
+        }
+    residualStructuredGen name =
+      let oldGamma = mkTyVar "gOld"
+          edgeIn = mkTyVar "gEdgeIn"
+          edgeOut = mkTyVar "gEdgeOut"
+          bodyIn = mkTyVar "gBodyIn"
+          bodyOut = mkTyVar "gBodyOut"
+          progIn = mkTyVar "gProgIn"
+          progOut = mkTyVar "gProgOut"
+          binderSig =
+            BinderSig
+              { bsTmCtx = []
+              , bsDom = [refsTy (OVar oldGamma), refsTy (OVar edgeOut)]
+              , bsCod = [progTy (OVar progIn) (OVar progOut)]
+              }
+       in GenDecl
+            { gdName = GenName name
+            , gdMode = mode
+            , gdParams = map GP_Ty [oldGamma, edgeIn, edgeOut, bodyIn, bodyOut, progIn, progOut]
+            , gdDom =
+                [ InPort (refsTy (OVar oldGamma))
+                , InPort (refsTy (OVar edgeIn))
+                , InPort (progTy (OVar bodyIn) (OVar bodyOut))
+                , InBinder binderSig
+                ]
+            , gdCod = [progTy (OVar progIn) (OVar progOut)]
+            , gdAttrs = []
+            }
+
+
+emitTransformLoop :: ModeName -> QuoteTargetLayout -> FragmentDecl -> Doctrine -> Doctrine -> TransformerItem -> Either Text Doctrine
+emitTransformLoop mode layout fragment baseDoc doc item =
+  case item of
+    TIForIncludedGenerators { tigItems = items } ->
+      foldM emitIncludedItem doc items
+    TIForExcludedGenerators { tegItems = items } ->
+      foldM emitExcludedItem doc items
+    _ ->
+      Right doc
+  where
+    sourceGens = M.toAscList (M.findWithDefault M.empty mode (dGens baseDoc))
+    includedGens = [ pair | pair@(g, _) <- sourceGens, g `S.member` frIncludedGens fragment ]
+    excludedGens = sourceGens
+    emitIncludedItem acc loopItem =
+      case loopItem of
+        TLEmitBindingPrefix prefix ->
+          foldM (\d pair -> insertGeneratedGen d mode (mkStepGen prefix pair)) acc includedGens
+        TLEmitResidualPrefix prefix ->
+          foldM (\d pair -> insertGeneratedGen d mode (mkStepGen prefix pair)) acc includedGens
+    emitExcludedItem acc loopItem =
+      case loopItem of
+        TLEmitBindingPrefix prefix ->
+          foldM (\d pair -> insertGeneratedGen d mode (mkStepGen prefix pair)) acc excludedGens
+        TLEmitResidualPrefix prefix ->
+          foldM (\d pair -> insertGeneratedGen d mode (mkStepGen prefix pair)) acc excludedGens
+    mkStepGen prefix (GenName gName, gDecl) =
+      let universeTy =
+            case modeUniverseObj (dModes doc) mode of
+              Nothing -> error "emitTransformLoop: classified mode required"
+              Just u -> u
+          mkTyVar name =
+            TmVar
+              { tmvName = name
+              , tmvSort = universeTy
+              , tmvScope = 0
+              , tmvOwnerMode = Just mode
+              }
+          gammaOld = mkTyVar "__gOld"
+          gammaProgIn = mkTyVar "__gProgIn"
+          gammaProgOut = mkTyVar "__gProgOut"
+          typeRef name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
+          refTy ty = typeRef (qtlRefCtor layout) [ty]
+          refsTy gamma = typeRef (qtlRefsCtor layout) [gamma]
+          progTy gammaIn gammaOut' = typeRef (qtlProgCtor layout) [gammaIn, gammaOut']
+          oldCtxTy = OVar gammaOld
+          binderProgramTy bs = progTy (contextTy layout mode (bsDom bs)) (contextTy layout mode (bsCod bs))
+          continuationBinder =
+            InBinder
+              BinderSig
+                { bsTmCtx = []
+                , bsDom = [refsTy oldCtxTy] <> map refTy (gdCod gDecl)
+                , bsCod = [progTy (OVar gammaProgIn) (OVar gammaProgOut)]
+                }
+       in GenDecl
+            { gdName = GenName (prefix <> gName)
+            , gdMode = mode
+            , gdParams = gdParams gDecl <> [GP_Ty gammaOld, GP_Ty gammaProgIn, GP_Ty gammaProgOut]
+            , gdDom =
+                [InPort (refsTy oldCtxTy)]
+                  <> [ InPort (refTy ty) | ty <- gdPlainDom gDecl ]
+                  <> [ InPort (binderProgramTy bs) | InBinder bs <- gdDom gDecl ]
+                  <> [continuationBinder]
+            , gdCod = [progTy (OVar gammaProgIn) (OVar gammaProgOut)]
+            , gdAttrs = gdAttrs gDecl
+            }
+
+
+insertGeneratedGen :: Doctrine -> ModeName -> GenDecl -> Either Text Doctrine
+insertGeneratedGen doc mode decl =
+  let modeGens = M.findWithDefault M.empty mode (dGens doc)
+      genName = gdName decl
+   in if M.member genName modeGens
+        then Left ("transformer: generated generator collision: " <> renderGenNameText genName)
+        else
+          Right
+            doc
+              { dGens = M.insert mode (M.insert genName decl modeGens) (dGens doc) }
+
+
+insertUtilityGen :: Doctrine -> ModeName -> GenDecl -> Either Text Doctrine
+insertUtilityGen = insertGeneratedGen
+
+
+contextTy :: QuoteTargetLayout -> ModeName -> [Obj] -> Obj
+contextTy layout mode = prependContext layout mode (mkCon (ObjRef mode (ObjName (qtlCtxNilCtor layout))) [])
+
+
+prependContext :: QuoteTargetLayout -> ModeName -> Obj -> [Obj] -> Obj
+prependContext layout mode oldCtx extra =
+  foldr step oldCtx extra
+  where
+    step ty acc =
+      mkCon (ObjRef mode (ObjName (qtlCtxConsCtor layout))) [OAObj ty, OAObj acc]
+
+
+lookupTransformer :: ModuleEnv -> Text -> Either Text TransformerDecl
+lookupTransformer env name =
+  case M.lookup name (meTransformers env) of
+    Nothing -> Left ("Unknown transformer: " <> name)
+    Just transformer -> Right transformer
 
 
 lookupDoctrine :: ModuleEnv -> Text -> Either Text Doctrine

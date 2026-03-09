@@ -137,7 +137,7 @@ runPhase env art phase =
           ensureAcyclicIfRequired doc diag'
           pure (ArtDiagram doc diag')
         ArtExtracted{} -> Left "pipeline: cannot normalize extracted host value"
-    QuoteInto targetName mQuotePolicy ->
+    QuoteInto targetName ->
       case art of
         ArtDiagram doc diag -> do
           derived <- lookupDerivedDoctrine env targetName
@@ -150,8 +150,11 @@ runPhase env art phase =
                 else do
                   fragment <- lookupFragment env (ddFragment derived)
                   derivedDoc <- lookupDoctrine env targetName
-                  let quotePolicy = maybe (ddDefaultQuotePolicy derived) id mQuotePolicy
-                  quoted <- quoteDiagram quotePolicy doc derivedDoc (dMode diag) fragment diag
+                  layout <-
+                    case ddQuoteLayout derived of
+                      Nothing -> Left "pipeline: quote target does not define a quote-compatible layout"
+                      Just qtl -> Right qtl
+                  quoted <- quoteDiagram layout doc derivedDoc (dMode diag) fragment diag
                   pure (ArtDiagram derivedDoc quoted)
         ArtExtracted{} -> Left "pipeline: cannot quote extracted host value"
     ExtractValue doctrineName extractorSpec ->

@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Pipeline
-  ( OrderKey(..)
-  , NamingPolicy(..)
-  , FragmentRole(..)
-  , FragmentProduct(..)
-  , FragmentDecl(..)
-  , QuotePolicy(..)
-  , defaultQuotePolicy
-  , TransformerKind(..)
+  ( FragmentDecl(..)
+  , QuoteTargetLayout(..)
+  , TransformTypeParam(..)
+  , TransformObjectDecl(..)
+  , TransformUtility(..)
+  , TransformLoopItem(..)
+  , TransformerItem(..)
+  , TransformerDecl(..)
   , ValueExtractorSpec(..)
   , Phase(..)
   , Pipeline(..)
@@ -16,67 +16,98 @@ module Strat.Pipeline
   ) where
 
 import Data.Text (Text)
-import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Common.Rules (RewritePolicy)
 import Strat.Poly.Names (GenName)
 
 
-data OrderKey
-  = StableEdgeId
-  deriving (Eq, Ord, Show)
-
-
-data NamingPolicy
-  = BoundaryLabelsFirst
-  deriving (Eq, Ord, Show)
-
-data FragmentRole
-  = FragShare
-  | FragAlias
-  | FragDuplicate
-  | FragDiscard
-  | FragResidual
-  deriving (Eq, Ord, Show)
-
-data FragmentProduct = FragmentProduct
-  { fpPairCtor :: GenName
-  , fpProjLeft :: GenName
-  , fpProjRight :: GenName
-  }
-  deriving (Eq, Ord, Show)
-
 data FragmentDecl = FragmentDecl
   { frName :: Text
   , frBase :: Text
   , frMode :: Text
-  , frGenRoles :: M.Map GenName FragmentRole
-  , frProducts :: [FragmentProduct]
-  , frRecurseBinders :: Bool
-  , frRecurseBoxes :: Bool
-  , frRecurseFeedback :: Bool
+  , frIncludedGens :: S.Set GenName
+  , frCrossBinders :: Bool
+  , frCrossBoxes :: Bool
+  , frCrossFeedback :: Bool
   }
   deriving (Eq, Show)
 
-data QuotePolicy = QuotePolicy
-  { qpOrderKey :: OrderKey
-  , qpNaming :: NamingPolicy
-  , qpReserved :: S.Set Text
+data QuoteTargetLayout = QuoteTargetLayout
+  { qtlCtxNilCtor :: Text
+  , qtlCtxConsCtor :: Text
+  , qtlRefCtor :: Text
+  , qtlRefsCtor :: Text
+  , qtlProgCtor :: Text
+  , qtlInputRefsGen :: Text
+  , qtlRefsNilGen :: Text
+  , qtlRefsConsGen :: Text
+  , qtlRefsHeadGen :: Text
+  , qtlRefsTailGen :: Text
+  , qtlDupRefsGen :: Text
+  , qtlDropRefsGen :: Text
+  , qtlReturnRefsGen :: Text
+  , qtlResidualBoxGen :: Text
+  , qtlResidualFeedbackGen :: Text
+  , qtlBindingPrefix :: Text
+  , qtlResidualPrefix :: Text
   }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
+data TransformTypeParam = TransformTypeParam
+  { ttpName :: Text
+  , ttpModeVar :: Text
+  }
+  deriving (Eq, Ord, Show)
 
-defaultQuotePolicy :: QuotePolicy
-defaultQuotePolicy =
-  QuotePolicy
-    { qpOrderKey = StableEdgeId
-    , qpNaming = BoundaryLabelsFirst
-    , qpReserved = S.empty
-    }
+data TransformObjectDecl = TransformObjectDecl
+  { todName :: Text
+  , todParams :: [TransformTypeParam]
+  }
+  deriving (Eq, Ord, Show)
 
+data TransformUtility
+  = TUInputRefs
+  | TURefsNil
+  | TURefsCons
+  | TURefsHead
+  | TURefsTail
+  | TUDupRefs
+  | TUDropRefs
+  | TUReturnRefs
+  | TUResidualBox
+  | TUResidualFeedback
+  deriving (Eq, Ord, Show)
 
-data TransformerKind
-  = TkLetGraph
+data TransformLoopItem
+  = TLEmitBindingPrefix Text
+  | TLEmitResidualPrefix Text
+  deriving (Eq, Ord, Show)
+
+data TransformerItem
+  = TICopyDoctrine Text
+  | TIEmitObject TransformObjectDecl
+  | TIEmitUtility TransformUtility
+  | TIForIncludedGenerators
+      { tigGenVar :: Text
+      , tigFragmentVar :: Text
+      , tigItems :: [TransformLoopItem]
+      }
+  | TIForExcludedGenerators
+      { tegGenVar :: Text
+      , tegDoctrineVar :: Text
+      , tegModeVar :: Text
+      , tegFragmentVar :: Text
+      , tegItems :: [TransformLoopItem]
+      }
+  deriving (Eq, Ord, Show)
+
+data TransformerDecl = TransformerDecl
+  { tdName :: Text
+  , tdSourceDoctrineVar :: Text
+  , tdSourceModeVar :: Text
+  , tdSourceFragmentVar :: Text
+  , tdItems :: [TransformerItem]
+  }
   deriving (Eq, Ord, Show)
 
 
@@ -89,7 +120,7 @@ data ValueExtractorSpec
 data Phase
   = ApplyMorph Text
   | Normalize RewritePolicy Int
-  | QuoteInto { target :: Text, policy :: Maybe QuotePolicy }
+  | QuoteInto { target :: Text }
   | ExtractValue { doctrine :: Text, extractor :: ValueExtractorSpec }
   | ExtractDiagramPretty
   deriving (Eq, Show)
@@ -120,7 +151,7 @@ data DerivedDoctrine
       , ddBase :: Text
       , ddMode :: Text
       , ddFragment :: Text
-      , ddKind :: TransformerKind
-      , ddDefaultQuotePolicy :: QuotePolicy
+      , ddTransformer :: Text
+      , ddQuoteLayout :: Maybe QuoteTargetLayout
       }
   deriving (Eq, Show)

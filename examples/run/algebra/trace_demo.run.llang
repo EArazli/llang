@@ -1,3 +1,5 @@
+import "../../../stdlib/transformers/explicit_sharing.llang";
+
 doctrine TraceDemo where {
   mode M acyclic classifiedBy M via M.U_M;
   gen comp_ctx_ext(a@M) : [a] -> [a] @M;
@@ -15,7 +17,7 @@ doctrine TraceDemo where {
 fragment ShareTrace in TraceDemo mode M where {
 }
 
-derived doctrine TraceDemo_Share = letgraph ShareTrace;
+derived doctrine TraceDemo_Share = transform explicit_sharing using ShareTrace;
 
 pipeline main where {
   quote into TraceDemo_Share;

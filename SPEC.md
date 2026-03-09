@@ -763,53 +763,52 @@ No discipline lattice is consulted.
 
 ## 11. Fragment quotation as explicit-sharing reification
 
-For derived doctrines declared as `derived doctrine D_Share = letgraph Frag [with { ... }]`, quotation is available only when:
+Quotation is available for derived doctrines declared via a transformer application:
+
+- `derived doctrine D_Share = transform explicit_sharing using Frag;`
+
+This requires:
 
 - `Frag` names a fragment declared over base doctrine `D` and mode `M`, and
 - `M` is declared acyclic in `D`.
 
-`D_Share` is a generated doctrine that reifies an explicit-sharing letgraph as an ordinary doctrine, so subsequent compilation or analysis is just ordinary morphism application.
+Fragments are purely syntactic subpresentations:
 
-1. **Signature of `D_Share`:**
+- `include gen g;` places `g` inside the quoted fragment,
+- omitted generators are residual by omission,
+- `cross binders`, `cross boxes`, and `cross feedback` control whether quotation
+  recursively crosses those boundaries.
 
-- `Ref`, `RefList`, `LetGraph` as nullary object constructors in mode `M`.
-- `ref { name : __quote_str } : [] -> [Ref]`
-- `refsNil : [] -> [RefList]`, `refsCons : [Ref, RefList] -> [RefList]`
-- `returnRefs : [RefList(out)] -> [LetGraph]`
-- `letGraphProgram : [RefList(in), LetGraph(body)] -> [LetGraph]`
-- `letBox { name : __quote_str } : [RefList(out), RefList(in), LetGraph(inner), binder { } : [LetGraph]] -> [LetGraph]`
-- `letFeedback : [RefList(out), RefList(in), LetGraph(body), binder { } : [LetGraph]] -> [LetGraph]`
-- For each generator `g` of `D` in mode `M`, a generated constructor `let_g`.
+The generated explicit-sharing doctrine is typed and name-free. Its added
+presentation includes:
 
-2. **Generated let constructors:**
+- context objects `CtxNil` and `CtxCons(a, g)`,
+- typed references `Ref(a)`,
+- typed reference bundles `Refs(g)`,
+- typed programs `Prog(gIn, gOut)`,
+- utility generators `inputRefs`, `refsNil`, `refsCons`, `refsHead`,
+  `refsTail`, `dupRefs`, `dropRefs`, `returnRefs`, `resBox`, and
+  `resFeedback`,
+- for each source generator `g`, an included constructor `let_g` and a
+  residual constructor `res_g`.
 
-- If `g : Γ -> Δ` has `m = |Δ|` outputs, `n` non-binder inputs, and `k` binder arguments, then:
-- `let_g : [Ref]^m ⊗ [Ref]^n ⊗ [LetGraph]^k ⊗ binder { } : [LetGraph] -> [LetGraph]`
-- `let_g` carries exactly the attribute list of `g`.
+Quotation semantics:
 
-3. **Quotation semantics (pipeline):**
+- `quote into D_Share` computes a deterministic, topologically ordered ordinary
+  diagram in `D_Share`; there is no privileged runtime quote artifact,
+- included generators become `let_g` nodes and participate in exact structural
+  sharing recovery,
+- excluded generators become `res_g` nodes with no quote-time algebraic
+  cleanup,
+- quotation is relative rather than total: if a boundary is not crossed, the
+  nested subprogram remains residual in the mixed target via `res_*`,
+  `resBox`, or `resFeedback`,
+- names, reserved words, and ordering policies are not part of quotation
+  semantics.
 
-- `quote into D_Share` computes a named, topologically ordered explicit-sharing program from a diagram in `(D, M)`, using the fragment roles and the doctrine's default quote policy unless overridden in `with { ... }`.
-- The quotation result is an ordinary diagram in `D_Share`; there is no privileged runtime artifact for quoted programs.
-- The encoded program is a nested binder-style letgraph: quotation folds the ordered bindings into `let_*` / `letBox` / `letFeedback` nodes whose empty-domain continuation binder contains the rest of the program, ending in `returnRefs`.
-- `share` generators participate in exact memoized sharing recovery.
-- `residual` generators always materialize as fresh `let_g` nodes.
-- `alias`, `duplicate`, and `discard` generators are internalized structurally during quotation and do not force emitted bindings; any attributes on those generators are ignored by quotation.
-- Binder, box, and feedback subprograms are recursively quoted only when the fragment enables the corresponding recursion flag.
-
-4. **Ordinary elimination:**
-
-- Applying a morphism whose source is `D_Share` reifies the quoted program through the constructors above.
-- Generator attributes, binder subprograms, and inner quoted programs for boxes/feedback are preserved in the generated diagram.
-- Continuation structure is explicit in binder arguments, while ref names remain explicit data; this is the current Milestone 2 compromise from `llang_sharing_quote_refactor_spec.md`, not yet a fully context-polymorphic intrinsic let calculus.
-- This is the explicit term-graph boundary in the kernel: sharing is reified in an ordinary doctrine rather than a special SSA runtime representation.
-
-5. **Mathematical note:**
-
-- This corresponds to representing acyclic computations as labeled DAGs (term graphs), i.e. a free explicit-sharing / gs-monoidal style encoding of sharing.
-- Richer userland presentations, including SSA-like doctrines, can be built on top of this layer rather than being privileged by the kernel.
-
-The sort `__quote_str` is reserved for quotation-introduced names (for example refs and box names) and must denote string literals.
+This explicit-sharing doctrine is then consumed by ordinary userland morphisms,
+rewrites, or extractors. Backend-local naming or cleanup belongs there, not in
+quotation.
 
 ## 12. Artifact extraction
 

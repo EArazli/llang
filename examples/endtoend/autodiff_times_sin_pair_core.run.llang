@@ -1,3 +1,5 @@
+import "../../stdlib/transformers/explicit_sharing.llang";
+
 doctrine SmoothLam where {
   mode M acyclic classifiedBy M via M.U_M;
   gen comp_ctx_ext(a@M) : [a] -> [a] @M;
@@ -108,400 +110,37 @@ morphism forwardAD : SmoothLam -> SmoothLam where {
 }
 
 fragment SharePair in SmoothLam mode M where {
-  product mkPair = fst, snd;
-  gen comp_ctx_ext = alias;
-  gen comp_var = alias;
-  gen comp_reindex = alias;
-  gen dup = duplicate;
-  gen mkPair = share;
-  gen fst = share;
-  gen snd = share;
-  gen add = share;
-  gen mul = share;
-  gen sin = share;
-  gen cos = share;
-  gen neg = share;
-  recurse binders = true;
-  recurse boxes = true;
-  recurse feedback = true;
+  include gen mkPair;
+  include gen fst;
+  include gen snd;
+  include gen add;
+  include gen mul;
+  include gen sin;
+  include gen cos;
+  include gen neg;
+  cross binders = true;
+  cross boxes = true;
+  cross feedback = true;
 }
 
-derived doctrine SmoothLam_Share = letgraph SharePair with {
-  naming = "boundary_labels_first";
-};
+derived doctrine SmoothLam_Share = transform explicit_sharing using SharePair;
 
-doctrine PairJS where {
-  mode M acyclic classifiedBy M via M.U_M;
-  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
-  gen comp_var(a@M) : [a] -> [a] @M;
-  gen comp_reindex(a@M) : [a] -> [a] @M;
-  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
-  gen U_M : [] -> [M.U_M] @M;
-
-  attrsort Str = string;
-
-  gen Expr : [] -> [M.U_M] @M;
-  gen ExprList : [] -> [M.U_M] @M;
-  gen Program : [] -> [M.U_M] @M;
-
-  gen exprVar { name:Str } : [] -> [Expr] @M;
-  gen exprUndefined : [] -> [Expr] @M;
-  gen exprIndex { idx:Str } : [Expr] -> [Expr] @M;
-  gen exprUnary { fn:Str } : [Expr] -> [Expr] @M;
-  gen exprNeg : [Expr] -> [Expr] @M;
-  gen exprBinary { op:Str } : [Expr, Expr] -> [Expr] @M;
-  gen exprCall : [Expr, Expr] -> [Expr] @M;
-  gen exprPair : [Expr, Expr] -> [Expr] @M;
-
-  gen exprsNil : [] -> [ExprList] @M;
-  gen exprsCons : [Expr, ExprList] -> [ExprList] @M;
-
-  gen programReturn : [ExprList] -> [Program] @M;
-  gen programLet : [Expr, Expr, Program] -> [Program] @M;
-  gen programLetPair : [Expr, Expr, Expr, Program] -> [Program] @M;
-  gen programOpen : [ExprList, Program] -> [Program] @M;
-
-  gen makeLetUndefined : [Expr, Program] -> [Program] @M;
-  gen makeLetCopy : [Expr, Expr, Program] -> [Program] @M;
-  gen makeLetDup : [Expr, Expr, Expr, Program] -> [Program] @M;
-  gen makeLetIndex { idx:Str } : [Expr, Expr, Program] -> [Program] @M;
-  gen makeLetUnary { fn:Str } : [Expr, Expr, Program] -> [Program] @M;
-  gen makeLetNeg : [Expr, Expr, Program] -> [Program] @M;
-  gen makeLetBinary { op:Str } : [Expr, Expr, Expr, Program] -> [Program] @M;
-  gen makeLetCall : [Expr, Expr, Expr, Program] -> [Program] @M;
-  gen makeLetPair : [Expr, Expr, Expr, Program] -> [Program] @M;
-  gen makeLetUnsupported { tag:Str } : [ExprList, ExprList, Program, Program] -> [Program] @M;
-  gen makeLetLambda { tag:Str } : [Expr, Program, Program] -> [Program] @M;
-
-  rule computational makeLetUndefined_def -> : [Expr, Program] -> [Program] @M =
-    (?out * ?body) ; makeLetUndefined ==
-      (?out * exprUndefined * ?body) ; programLet
-
-  rule computational makeLetCopy_def -> : [Expr, Expr, Program] -> [Program] @M =
-    (?out * ?expr * ?body) ; makeLetCopy ==
-      (?out * ?expr * ?body) ; programLet
-
-  rule computational makeLetIndex_def -> : [Expr, Expr, Program] -> [Program] @M =
-    (?out * ?expr * ?body) ; makeLetIndex(idx = i) ==
-      (?out * (?expr ; exprIndex(idx = i)) * ?body) ; programLet
-
-  rule computational makeLetUnary_def -> : [Expr, Expr, Program] -> [Program] @M =
-    (?out * ?expr * ?body) ; makeLetUnary(fn = f) ==
-      (?out * (?expr ; exprUnary(fn = f)) * ?body) ; programLet
-
-  rule computational makeLetNeg_def -> : [Expr, Expr, Program] -> [Program] @M =
-    (?out * ?expr * ?body) ; makeLetNeg ==
-      (?out * (?expr ; exprNeg) * ?body) ; programLet
-
-  rule computational makeLetBinary_def -> : [Expr, Expr, Expr, Program] -> [Program] @M =
-    (?out * ?left * ?right * ?body) ; makeLetBinary(op = o) ==
-      (?out * ((?left * ?right) ; exprBinary(op = o)) * ?body) ; programLet
-
-  rule computational makeLetCall_def -> : [Expr, Expr, Expr, Program] -> [Program] @M =
-    (?out * ?fun * ?arg * ?body) ; makeLetCall ==
-      (?out * ((?fun * ?arg) ; exprCall) * ?body) ; programLet
-
-  rule computational makeLetPair_def -> : [Expr, Expr, Expr, Program] -> [Program] @M =
-    (?out * ?left * ?right * ?body) ; makeLetPair ==
-      (?out * ((?left * ?right) ; exprPair) * ?body) ; programLet
-
-  rule computational inline_return_var_def -> : [Expr] -> [Program] @M =
-    (exprVar(name = n) * ?expr * (((exprVar(name = n) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
-      ((?expr * exprsNil) ; exprsCons) ; programReturn
-
-  rule computational inline_return_index_def -> : [Expr] -> [Program] @M =
-    (exprVar(name = n) * ?expr * ((((exprVar(name = n) ; exprIndex(idx = i)) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
-      ((((?expr ; exprIndex(idx = i)) * exprsNil) ; exprsCons) ; programReturn)
-
-  rule computational inline_return_unary_def -> : [Expr] -> [Program] @M =
-    (exprVar(name = n) * ?expr * ((((exprVar(name = n) ; exprUnary(fn = f)) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
-      ((((?expr ; exprUnary(fn = f)) * exprsNil) ; exprsCons) ; programReturn)
-
-  rule computational inline_return_neg_def -> : [Expr] -> [Program] @M =
-    (exprVar(name = n) * ?expr * ((((exprVar(name = n) ; exprNeg) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
-      ((((?expr ; exprNeg) * exprsNil) ; exprsCons) ; programReturn)
-
-  rule computational inline_return_binary_l_def -> : [Expr, Expr] -> [Program] @M =
-    (exprVar(name = n) * ?expr * (((((exprVar(name = n) * ?rhs) ; exprBinary(op = o)) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
-      (((((?expr * ?rhs) ; exprBinary(op = o)) * exprsNil) ; exprsCons) ; programReturn)
-
-  rule computational inline_return_binary_r_def -> : [Expr, Expr] -> [Program] @M =
-    (exprVar(name = n) * ?expr * (((((?lhs * exprVar(name = n)) ; exprBinary(op = o)) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
-      (((((?lhs * ?expr) ; exprBinary(op = o)) * exprsNil) ; exprsCons) ; programReturn)
-
-  rule computational inline_return_call_fn_def -> : [Expr, Expr] -> [Program] @M =
-    (exprVar(name = n) * ?expr * (((((exprVar(name = n) * ?arg) ; exprCall) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
-      (((((?expr * ?arg) ; exprCall) * exprsNil) ; exprsCons) ; programReturn)
-
-  rule computational inline_return_call_arg_def -> : [Expr, Expr] -> [Program] @M =
-    (exprVar(name = n) * ?expr * (((((?fun * exprVar(name = n)) ; exprCall) * exprsNil) ; exprsCons) ; programReturn)) ; programLet ==
-      (((((?fun * ?expr) ; exprCall) * exprsNil) ; exprsCons) ; programReturn)
-
-  rule computational fuse_pair_projections_adjacent_lr_def -> : [Expr, Expr, Program] -> [Program] @M =
-    (?left * (exprVar(name = p) ; exprIndex(idx = "[0]")) * ((?right * (exprVar(name = p) ; exprIndex(idx = "[1]")) * ?body) ; programLet)) ; programLet ==
-      (?left * ?right * exprVar(name = p) * ?body) ; programLetPair
-
-  rule computational fuse_pair_projections_adjacent_rl_def -> : [Expr, Expr, Program] -> [Program] @M =
-    (?right * (exprVar(name = p) ; exprIndex(idx = "[1]")) * ((?left * (exprVar(name = p) ; exprIndex(idx = "[0]")) * ?body) ; programLet)) ; programLet ==
-      (?left * ?right * exprVar(name = p) * ?body) ; programLetPair
-
-  rule computational fuse_pair_projections_after_unary_lr_def -> : [Expr, Program] -> [Program] @M =
-    (exprVar(name = l) * (exprVar(name = p) ; exprIndex(idx = "[0]")) * ((exprVar(name = m) * (exprVar(name = l) ; exprUnary(fn = f)) * ((?right * (exprVar(name = p) ; exprIndex(idx = "[1]")) * ?body) ; programLet)) ; programLet)) ; programLet ==
-      (exprVar(name = l) * ?right * exprVar(name = p) * ((exprVar(name = m) * (exprVar(name = l) ; exprUnary(fn = f)) * ?body) ; programLet)) ; programLetPair
-
-  rule computational fuse_pair_projections_after_two_unary_lr_def -> : [Expr, Program] -> [Program] @M =
-    (exprVar(name = l) * (exprVar(name = p) ; exprIndex(idx = "[0]")) * ((exprVar(name = m1) * (exprVar(name = l) ; exprUnary(fn = f1)) * ((exprVar(name = m2) * (exprVar(name = l) ; exprUnary(fn = f2)) * ((?right * (exprVar(name = p) ; exprIndex(idx = "[1]")) * ?body) ; programLet)) ; programLet)) ; programLet)) ; programLet ==
-      (exprVar(name = l) * ?right * exprVar(name = p) * ((exprVar(name = m1) * (exprVar(name = l) ; exprUnary(fn = f1)) * ((exprVar(name = m2) * (exprVar(name = l) ; exprUnary(fn = f2)) * ?body) ; programLet)) ; programLet)) ; programLetPair
-
-}
-
-doctrine PairJSDoc extends Doc where {
-  gen DocList : [] -> [Doc.U_Doc] @Doc;
-  gen append : [Doc, Doc] -> [Doc] @Doc;
-  gen prefix { s:Str } : [Doc] -> [Doc] @Doc;
-  gen suffix { s:Str } : [Doc] -> [Doc] @Doc;
-  gen wrap { open:Str, close:Str } : [Doc] -> [Doc] @Doc;
-  gen joinWith { sep:Str } : [Doc, Doc] -> [Doc] @Doc;
-  gen lineJoin : [Doc, Doc] -> [Doc] @Doc;
-  gen stmtTerm : [Doc] -> [Doc] @Doc;
-  gen returnStmt : [Doc] -> [Doc] @Doc;
-  gen declConst : [Doc, Doc] -> [Doc] @Doc;
-  gen letStmt : [Doc, Doc, Doc] -> [Doc] @Doc;
-  gen indexDoc { idx:Str } : [Doc] -> [Doc] @Doc;
-  gen unaryCall { fn:Str } : [Doc] -> [Doc] @Doc;
-  gen negDoc : [Doc] -> [Doc] @Doc;
-  gen binaryDoc { op:Str } : [Doc, Doc] -> [Doc] @Doc;
-  gen callDoc : [Doc, Doc] -> [Doc] @Doc;
-  gen pairDoc : [Doc, Doc] -> [Doc] @Doc;
-  gen pairPattern : [Doc, Doc] -> [Doc] @Doc;
-  gen docsNil : [] -> [DocList] @Doc;
-  gen docsCons : [Doc, DocList] -> [DocList] @Doc;
-  gen renderComma : [DocList] -> [Doc] @Doc;
-  gen renderArray : [DocList] -> [Doc] @Doc;
-  gen returnExprs : [DocList] -> [Doc] @Doc;
-  gen moduleHead { fn:Str } : [DocList] -> [Doc] @Doc;
-  gen moduleOpen { fn:Str } : [DocList, Doc] -> [Doc] @Doc;
-  gen letPairStmt : [Doc, Doc, Doc, Doc] -> [Doc] @Doc;
-  gen unsupportedProgram { tag:Str } : [DocList, DocList, Doc, Doc] -> [Doc] @Doc;
-  gen lambdaUnsupported { tag:Str } : [Doc, Doc, Doc] -> [Doc] @Doc;
-
-  rule computational append_def -> : [Doc, Doc] -> [Doc] @Doc =
-    append == cat
-
-  rule computational prefix_def -> : [Doc] -> [Doc] @Doc =
-    prefix(s = p) == (text(s = p) * id[Doc]) ; append
-
-  rule computational suffix_def -> : [Doc] -> [Doc] @Doc =
-    suffix(s = p) == (id[Doc] * text(s = p)) ; append
-
-  rule computational wrap_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; wrap(open = l, close = r) ==
-      (((text(s = l) * ?d) ; append) * text(s = r)) ; append
-
-  rule computational joinWith_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?l * ?r) ; joinWith(sep = s) ==
-      ((((?l * text(s = s)) ; append) * ?r) ; append)
-
-  rule computational lineJoin_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?l * ?r) ; lineJoin ==
-      ((((?l * line) ; append) * ?r) ; append)
-
-  rule computational stmtTerm_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; stmtTerm == (?d ; suffix(s = ";"))
-
-  rule computational returnStmt_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; returnStmt == (?d ; prefix(s = "return ") ; stmtTerm)
-
-  rule computational declConst_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?lhs * ?rhs) ; declConst ==
-      ((((((text(s = "const ") * ?lhs) ; append) * text(s = " = ")) ; append) * ?rhs) ; append) ; stmtTerm
-
-  rule computational letStmt_def -> : [Doc, Doc, Doc] -> [Doc] @Doc =
-    (?lhs * ?rhs * ?body) ; letStmt ==
-      ((((?lhs * ?rhs) ; declConst) * ?body) ; lineJoin)
-
-  rule computational indexDoc_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; indexDoc(idx = i) == (?d ; suffix(s = i))
-
-  rule computational unaryCall_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; unaryCall(fn = f) ==
-      ((((text(s = f) * text(s = "(")) ; append) * ?d) ; append) ; suffix(s = ")")
-
-  rule computational negDoc_def -> : [Doc] -> [Doc] @Doc =
-    (?d) ; negDoc == (?d ; prefix(s = "(-") ; suffix(s = ")"))
-
-  rule computational binaryDoc_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?l * ?r) ; binaryDoc(op = o) == (?l * ?r) ; joinWith(sep = o) ; wrap(open = "(", close = ")")
-
-  rule computational callDoc_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?f * ?x) ; callDoc ==
-      ((((?f * text(s = "(")) ; append) * ?x) ; append) ; suffix(s = ")")
-
-  rule computational pairDoc_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?l * ?r) ; pairDoc ==
-      (?r * ?l) ; joinWith(sep = ", ") ; wrap(open = "[", close = "]")
-
-  rule computational pairPattern_def -> : [Doc, Doc] -> [Doc] @Doc =
-    (?l * ?r) ; pairPattern ==
-      (?l * ?r) ; joinWith(sep = ", ") ; wrap(open = "[", close = "]")
-
-  rule computational renderComma_nil_def -> : [] -> [Doc] @Doc =
-    docsNil ; renderComma == empty
-
-  rule computational renderComma_one_def -> : [Doc] -> [Doc] @Doc =
-    (?x * docsNil) ; docsCons ; renderComma == ?x
-
-  rule computational renderComma_many_def -> : [Doc, Doc, DocList] -> [Doc] @Doc =
-    (?x * ((?y * ?ys) ; docsCons)) ; docsCons ; renderComma ==
-      (?x * (((?y * ?ys) ; docsCons) ; renderComma)) ; joinWith(sep = ", ")
-
-  rule computational renderArray_def -> : [DocList] -> [Doc] @Doc =
-    (?xs) ; renderArray == (?xs ; renderComma ; wrap(open = "[", close = "]"))
-
-  rule computational returnExprs_nil_def -> : [] -> [Doc] @Doc =
-    docsNil ; returnExprs == text(s = "return undefined;")
-
-  rule computational returnExprs_one_def -> : [Doc] -> [Doc] @Doc =
-    (?x * docsNil) ; docsCons ; returnExprs == (?x ; returnStmt)
-
-  rule computational returnExprs_many_def -> : [Doc, Doc, DocList] -> [Doc] @Doc =
-    (?x * ((?y * ?ys) ; docsCons)) ; docsCons ; returnExprs ==
-      ((?x * ((?y * ?ys) ; docsCons)) ; docsCons) ; renderArray ; returnStmt
-
-  rule computational moduleHead_def -> : [DocList] -> [Doc] @Doc =
-    (?params) ; moduleHead(fn = f) ==
-      (((text(s = "export const ") * text(s = f)) ; append) * ((?params ; renderComma) ; prefix(s = " = (") ; suffix(s = ") => {"))) ; append
-
-  rule computational moduleOpen_def -> : [DocList, Doc] -> [Doc] @Doc =
-    (?params * ?body) ; moduleOpen(fn = f) ==
-      (((?params ; moduleHead(fn = f)) * (?body ; indent(n = 2))) ; lineJoin) ; suffix(s = "\n};")
-
-  rule computational letPairStmt_def -> : [Doc, Doc, Doc, Doc] -> [Doc] @Doc =
-    (?left * ?right * ?pair * ?body) ; letPairStmt ==
-      (((((?left * ?right) ; pairPattern) * ?pair) ; declConst) * ?body) ; lineJoin
-
-}
-
-morphism lowerJS : SmoothLam_Share -> PairJS where {
-  check structural;
-
-  mode M -> M;
-  attrsort __quote_str -> Str;
-  attrsort Str -> Str;
-
-  type Ref @M -> Expr @M;
-  type RefList @M -> ExprList @M;
-  type LetGraph @M -> Program @M;
-
-  gen ref @M -> exprVar(name = name)
-  gen refsNil @M -> exprsNil
-  gen refsCons @M -> exprsCons
-  gen returnRefs @M -> programReturn
-  gen letGraphProgram @M -> programOpen
-
-  gen let_U_M @M -> (id[Expr] * splice(?b0)) ; makeLetUndefined
-  gen let_R @M -> (id[Expr] * splice(?b0)) ; makeLetUndefined
-  gen let_Pair @M -> (id[Expr] * splice(?b0)) ; makeLetUndefined
-  gen let_Arr @M -> (id[Expr] * splice(?b0)) ; makeLetUndefined
-  gen let_comp_ctx_ext @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetCopy
-  gen let_comp_var @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetCopy
-  gen let_comp_reindex @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetCopy
-
-  gen let_dup @M -> (id[Expr] * id[Expr] * id[Expr] * splice(?b0)) ; makeLetDup
-  gen let_mkPair @M -> (id[Expr] * id[Expr] * id[Expr] * splice(?b0)) ; makeLetPair
-  gen let_fst @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetIndex(idx = "[0]")
-  gen let_snd @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetIndex(idx = "[1]")
-  gen let_lam @M -> (id[Expr] * id[Program] * splice(?b0)) ; makeLetLambda(tag = "lambda")
-  gen let_app @M -> (id[Expr] * id[Expr] * id[Expr] * splice(?b0)) ; makeLetCall
-  gen let_add @M -> (id[Expr] * id[Expr] * id[Expr] * splice(?b0)) ; makeLetBinary(op = " + ")
-  gen let_mul @M -> (id[Expr] * id[Expr] * id[Expr] * splice(?b0)) ; makeLetBinary(op = " * ")
-  gen let_sin @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetUnary(fn = "Math.sin")
-  gen let_cos @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetUnary(fn = "Math.cos")
-  gen let_neg @M -> (id[Expr] * id[Expr] * splice(?b0)) ; makeLetNeg
-
-  gen letBox @M -> (id[ExprList] * id[ExprList] * id[Program] * splice(?b0)) ; makeLetUnsupported(tag = "box")
-  gen letFeedback @M -> (id[ExprList] * id[ExprList] * id[Program] * splice(?b0)) ; makeLetUnsupported(tag = "feedback")
-}
-
-morphism emitJS : PairJS -> PairJSDoc where {
-  check structural;
-
-  mode M -> Doc;
-  attrsort Str -> Str;
-
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
-
-  type Expr @M -> Doc @Doc;
-  type ExprList @M -> DocList @Doc;
-  type Program @M -> Doc @Doc;
-
-  gen exprVar @M -> text(s = name)
-  gen exprUndefined @M -> text(s = "undefined")
-  gen exprIndex @M -> indexDoc(idx = idx)
-  gen exprUnary @M -> unaryCall(fn = fn)
-  gen exprNeg @M -> negDoc
-  gen exprBinary @M -> binaryDoc(op = op)
-  gen exprCall @M -> callDoc
-  gen exprPair @M -> pairDoc
-
-  gen exprsNil @M -> docsNil
-  gen exprsCons @M -> docsCons
-
-  gen programReturn @M -> returnExprs
-  gen programLet @M -> letStmt
-  gen programLetPair @M -> letPairStmt
-  gen programOpen @M -> moduleOpen(fn = "timesSinPair")
-
-  gen makeLetUndefined @M ->
-    (id[Doc] * text(s = "undefined") * id[Doc]) ; letStmt
-  gen makeLetCopy @M ->
-    (id[Doc] * id[Doc] * id[Doc]) ; letStmt
-  gen makeLetDup @M ->
-    (id[Doc] * ((id[Doc] * id[Doc]) ; pairDoc) * id[Doc]) ; letStmt
-  gen makeLetIndex @M ->
-    (id[Doc] * (id[Doc] ; indexDoc(idx = idx)) * id[Doc]) ; letStmt
-  gen makeLetUnary @M ->
-    (id[Doc] * (id[Doc] ; unaryCall(fn = fn)) * id[Doc]) ; letStmt
-  gen makeLetNeg @M ->
-    (id[Doc] * (id[Doc] ; negDoc) * id[Doc]) ; letStmt
-  gen makeLetBinary @M ->
-    (id[Doc] * ((id[Doc] * id[Doc]) ; binaryDoc(op = op)) * id[Doc]) ; letStmt
-  gen makeLetCall @M ->
-    (id[Doc] * ((id[Doc] * id[Doc]) ; callDoc) * id[Doc]) ; letStmt
-  gen makeLetPair @M ->
-    (id[Doc] * ((id[Doc] * id[Doc]) ; pairDoc) * id[Doc]) ; letStmt
-  gen makeLetUnsupported @M ->
-    unsupportedProgram(tag = tag)
-  gen makeLetLambda @M ->
-    lambdaUnsupported(tag = tag)
-}
-
-pipeline js_single where {
+pipeline quoted_single where {
   apply forwardAD;
   normalize { policy = "computational_lr"; fuel = 500; };
   quote into SmoothLam_Share;
-  apply lowerJS;
-  normalize { policy = "computational_lr"; fuel = 500; };
-  apply emitJS;
-  normalize { policy = "computational_lr"; fuel = 5000; };
-  extract Doc { stdout = true; };
+  extract diagram;
 }
 
-pipeline js_double where {
+pipeline quoted_double where {
   apply forwardAD;
   apply forwardAD;
   normalize { policy = "computational_lr"; fuel = 500; };
   quote into SmoothLam_Share;
-  apply lowerJS;
-  normalize { policy = "computational_lr"; fuel = 500; };
-  apply emitJS;
-  normalize { policy = "computational_lr"; fuel = 5000; };
-  extract Doc { stdout = true; };
+  extract diagram;
 }
 
-run main using js_single where {
+run main using quoted_single where {
   source doctrine SmoothLam;
   source mode M;
 }
@@ -509,7 +148,7 @@ run main using js_single where {
 dup{R} ; (id[R] * (id[R] ; sin)) ; mul
 ---
 
-run main2 using js_double where {
+run main2 using quoted_double where {
   source doctrine SmoothLam;
   source mode M;
 }
