@@ -20,7 +20,6 @@ import Strat.Pipeline
   ( FragmentDecl(..)
   , QuoteTargetLayout(..)
   )
-import Strat.Poly.Attr (AttrMap)
 import Strat.Poly.Diagram (Diagram, unionDiagram)
 import Strat.Poly.Doctrine (Doctrine(..), lookupGenDeclInDoctrine)
 import Strat.Poly.Graph
@@ -42,6 +41,7 @@ import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj (Obj(OVar, OCon), ObjRef(..), ObjName(..), mkCon, pattern OAObj)
+import Strat.Poly.Syntax (CodeArg)
 
 
 newtype RefId = RefId Int
@@ -68,7 +68,7 @@ data SharedBinding
       , sbEdgeId :: EdgeId
       , sbScope :: [RefId]
       , sbGen :: GenName
-      , sbAttrs :: AttrMap
+      , sbArgs :: [CodeArg]
       , sbIns :: [RefId]
       , sbOuts :: [RefId]
       , sbBinders :: [SharedProgram]
@@ -90,7 +90,7 @@ data SharedBinding
   deriving (Eq, Ord, Show)
 
 data BindingKey
-  = KeyGen GenName AttrMap [RefId] [SharedProgram]
+  = KeyGen GenName [CodeArg] [RefId] [SharedProgram]
   deriving (Eq, Ord, Show)
 
 data QuoteState = QuoteState
@@ -179,7 +179,7 @@ encodeSharedProgram layout doc program = do
       inputCtx = map (requireRefTy program) (spInputs program)
   let initialBundleTy = refsTy layout mode inputCtx
   let (bundlePort, diag0) = freshPort initialBundleTy (emptyDiagram mode [])
-  diag1 <- addEdgePayload (PGen (GenName (qtlInputRefsGen layout)) M.empty []) [] [bundlePort] diag0
+  diag1 <- addEdgePayload (PGen (GenName (qtlInputRefsGen layout)) [] []) [] [bundlePort] diag0
   let access =
         LocalAccess
           { laMode = mode
@@ -208,12 +208,12 @@ quoteEdge
   -> Either Text QuoteState
 quoteEdge doc mode fragment sourceDiag st edge =
   case ePayload edge of
-    PGen gen attrs bargs -> do
+    PGen gen args bargs -> do
       binders <- mapM (quoteBinderProgram doc mode fragment) bargs
       let included = gen `S.member` frIncludedGens fragment
       if included
-        then shareBinding gen attrs binders
-        else emitBinding SBResidual gen attrs binders
+        then shareBinding gen args binders
+        else emitBinding SBResidual gen args binders
     PBox _ inner -> do
       innerProgram <- quoteNestedProgram doc mode fragment (frCrossBoxes fragment) inner
       inputRefs <- mapPortRefs (eIns edge)
@@ -242,19 +242,19 @@ quoteEdge doc mode fragment sourceDiag st edge =
   where
     mapPortRefs = mapM (requirePortRef st)
 
-    shareBinding gen attrs binders = do
+    shareBinding gen args binders = do
       inputRefs <- mapPortRefs (eIns edge)
-      let key = KeyGen gen attrs inputRefs binders
+      let key = KeyGen gen args inputRefs binders
       case M.lookup key (qsMemo st) of
         Just priorOuts ->
           aliasOutputs priorOuts (eOuts edge) st
         Nothing ->
-          doEmit SBIncluded gen attrs binders
+          doEmit SBIncluded gen args binders
 
-    emitBinding kind gen attrs binders =
-      doEmit kind gen attrs binders
+    emitBinding kind gen args binders =
+      doEmit kind gen args binders
 
-    doEmit kind gen attrs binders = do
+    doEmit kind gen args binders = do
       (outs, st1) <- allocOutputRefs sourceDiag st (eOuts edge)
       let inputRefs = mapPortRefs' (eIns edge)
           binding =
@@ -263,7 +263,7 @@ quoteEdge doc mode fragment sourceDiag st edge =
               , sbEdgeId = eId edge
               , sbScope = qsScope st
               , sbGen = gen
-              , sbAttrs = attrs
+              , sbArgs = args
               , sbIns = inputRefs
               , sbOuts = outs
               , sbBinders = binders
@@ -276,7 +276,7 @@ quoteEdge doc mode fragment sourceDiag st edge =
       let memo' =
             case kind of
               SBIncluded ->
-                M.insert (KeyGen gen attrs inputRefs binders) outs (qsMemo st2)
+                M.insert (KeyGen gen args inputRefs binders) outs (qsMemo st2)
               SBResidual ->
                 qsMemo st2
       pure st2 { qsMemo = memo' }
@@ -436,7 +436,7 @@ encodeProgramLocal program access diag bindings =
       outBundle <- buildSelectedBundleFromCurrent access diag (spOutputs program)
       let progTy = programTy (laLayout access) (laMode access) program
       let (progPort, diag1) = freshPort progTy (snd outBundle)
-      diag2 <- addEdgePayload (PGen (GenName (qtlReturnRefsGen (laLayout access))) M.empty []) [fst outBundle] [progPort] diag1
+      diag2 <- addEdgePayload (PGen (GenName (qtlReturnRefsGen (laLayout access))) [] []) [fst outBundle] [progPort] diag1
       pure (progPort, diag2)
     binding:rest ->
       if sbScope binding /= laCurrentScope access
@@ -475,7 +475,7 @@ encodeGenBinding program access diag binding rest = do
       ctorName = GenName (bindingGenName (laLayout access) (sbKind binding) (sbGen binding))
       ins = bundleForCtor : inputPorts <> binderPorts
       (progPort, diag4) = freshPort progTy diag3
-  diag5 <- addEdgePayload (PGen ctorName (sbAttrs binding) [BAConcrete cont]) ins [progPort] diag4
+  diag5 <- addEdgePayload (PGen ctorName (sbArgs binding) [BAConcrete cont]) ins [progPort] diag4
   pure (progPort, diag5)
 
 
@@ -510,7 +510,7 @@ encodeBoxLikeBinding program access diag binding rest ctorName innerProgram = do
   let progTy = programTy (laLayout access) (laMode access) program
       ins = [bundleForCtor, inputBundlePort, innerPort]
       (progPort, diag3) = freshPort progTy diag2
-  diag4 <- addEdgePayload (PGen ctorName M.empty [BAConcrete cont]) ins [progPort] diag3
+  diag4 <- addEdgePayload (PGen ctorName [] [BAConcrete cont]) ins [progPort] diag3
   pure (progPort, diag4)
 
 
@@ -644,7 +644,7 @@ buildBundleFromPorts access diag refs = do
       layout = laLayout access
       nilTy = refsTy layout mode []
       (nilPort, diag0) = freshPort nilTy diag
-  diag1 <- addEdgePayload (PGen (GenName (qtlRefsNilGen layout)) M.empty []) [] [nilPort] diag0
+  diag1 <- addEdgePayload (PGen (GenName (qtlRefsNilGen layout)) [] []) [] [nilPort] diag0
   foldr consRef (Right (nilPort, diag1)) refs
   where
     consRef refPort acc = do
@@ -683,7 +683,7 @@ duplicateBundleCopies access ctx n bundlePort diag = do
       bundleTy = refsTy layout mode ctx
       (lhsPort, diag1) = freshPort bundleTy diag
       (rhsPort, diag2) = freshPort bundleTy diag1
-  diag3 <- addEdgePayload (PGen (GenName (qtlDupRefsGen layout)) M.empty []) [bundlePort] [lhsPort, rhsPort] diag2
+  diag3 <- addEdgePayload (PGen (GenName (qtlDupRefsGen layout)) [] []) [bundlePort] [lhsPort, rhsPort] diag2
   (rest, diag4) <- duplicateBundleCopies access ctx (n - 1) rhsPort diag3
   pure (lhsPort : rest, diag4)
 
@@ -693,7 +693,7 @@ dropBundlePort access ctx bundlePort diag = do
   let layout = laLayout access
       mode = laMode access
       _bundleTy = refsTy layout mode ctx
-  addEdgePayload (PGen (GenName (qtlDropRefsGen layout)) M.empty []) [bundlePort] [] diag
+  addEdgePayload (PGen (GenName (qtlDropRefsGen layout)) [] []) [bundlePort] [] diag
 
 
 projectRefFromBundle :: LocalAccess -> [RefId] -> [Obj] -> PortId -> RefId -> Diagram -> Either Text (PortId, Diagram)
@@ -707,12 +707,12 @@ projectRefFromBundle access scopeIds ctx bundlePort refId diag = do
     go (ty:rest) port 0 diag0 = do
       let outTy = refTy (laLayout access) (laMode access) ty
           (outPort, diag1) = freshPort outTy diag0
-      diag2 <- addEdgePayload (PGen (GenName (qtlRefsHeadGen (laLayout access))) M.empty []) [port] [outPort] diag1
+      diag2 <- addEdgePayload (PGen (GenName (qtlRefsHeadGen (laLayout access))) [] []) [port] [outPort] diag1
       pure (outPort, diag2)
     go (_:rest) port n diag0 = do
       let tailTy = refsTy (laLayout access) (laMode access) rest
           (tailPort, diag1) = freshPort tailTy diag0
-      diag2 <- addEdgePayload (PGen (GenName (qtlRefsTailGen (laLayout access))) M.empty []) [port] [tailPort] diag1
+      diag2 <- addEdgePayload (PGen (GenName (qtlRefsTailGen (laLayout access))) [] []) [port] [tailPort] diag1
       go rest tailPort (n - 1) diag2
     go [] _ _ _ =
       Left "quote: attempted to project past the end of a refs bundle"
@@ -733,7 +733,7 @@ consRefPort access refPort tailPort diag = do
         freshPort
           (refsTy (laLayout access) (laMode access) (refTy0 : ctxTail))
           diag
-  diag2 <- addEdgePayload (PGen (GenName (qtlRefsConsGen (laLayout access))) M.empty []) [refPort, tailPort] [outPort] diag1
+  diag2 <- addEdgePayload (PGen (GenName (qtlRefsConsGen (laLayout access))) [] []) [refPort, tailPort] [outPort] diag1
   pure (outPort, diag2)
 
 

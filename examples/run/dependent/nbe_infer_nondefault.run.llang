@@ -10,7 +10,7 @@ doctrine NbeInferNonDefault where {
   gen reindex(a@M) : [a] -> [a] @M;
   comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };
   rule computational beta -> (a@M, b@M) : [a] -> [b] @M =
-    (abs{a, b}[?Body] * id[a]) ; ev{a, b} == splice(?Body)
+    (abs(a, b)[?Body] * id[a]) ; ev(a, b) == splice(?Body)
 }
 
 pipeline debug where {
@@ -23,4 +23,4 @@ run main using debug where {
   source mode M;
 }
 ---
-(abs{A, A}[id[A]] * id[A]) ; ev{A, A}
+(abs(A, A)[id[A]] * id[A]) ; ev(A, A)

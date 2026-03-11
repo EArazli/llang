@@ -22,6 +22,7 @@ module Strat.Poly.Doctrine
   , lookupCtorRefForOwnerInTables
   , lookupGenDeclInDoctrine
   , actionImageForGenerator
+  , instantiateGenParams
   , genericGenDiagram
   , checkType
   , checkModTransformWitness
@@ -51,7 +52,7 @@ import Strat.Poly.TypeTheory
   , emptyDefFragment
   )
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Attr
+import Strat.Poly.Literal
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
   ( BinderArg(..)
@@ -59,6 +60,7 @@ import Strat.Poly.Graph
   , Edge(..)
   , EdgePayload(..)
   , addEdgePayload
+  , diagramPortObj
   , emptyDiagram
   , freshPort
   , unPortId
@@ -67,7 +69,7 @@ import Strat.Poly.Graph
 import Strat.Poly.Cell2
 import Strat.Poly.Tele (GenParam(..), teleTyVars, teleTmVars)
 import Strat.Poly.DSL.AST (RawOblExpr(..))
-import Strat.Poly.UnifyObj (Subst, applySubstCtx, composeSubst, emptySubst, mkSubst, unifyCtx)
+import Strat.Poly.UnifyObj (Subst, applySubstCtx, applySubstObj, composeSubst, emptySubst, mkSubst, unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.Poly.DefEq
   ( checkCodeWellFormed
@@ -101,7 +103,7 @@ data GenDecl = GenDecl
   , gdParams :: [GenParam]
   , gdDom :: [InputShape]
   , gdCod :: Context
-  , gdAttrs :: [(AttrName, AttrSort)]
+  , gdLiteralKind :: Maybe LiteralKind
   } deriving (Eq, Show)
 
 gdTyVars :: GenDecl -> [TmVar]
@@ -170,7 +172,6 @@ data Doctrine = Doctrine
   { dName :: Text
   , dModes :: ModeTheory
   , dAcyclicModes :: S.Set ModeName
-  , dAttrSorts :: M.Map AttrSort AttrSortDecl
   , dGens :: M.Map ModeName (M.Map GenName GenDecl)
   , dCells2 :: [Cell2]
   , dActions :: M.Map ModName ModAction
@@ -212,6 +213,7 @@ doctrineTypeTheoryBaseFromTables doc ctorTables =
             { ttModes = dModes doc
             , ttCtorSigs = ctorSigs
             , ttUniverseCtors = universeCtorsFromTables ctorTables
+            , ttLiteralKinds = literalKindsFromDoctrine doc ctorTables
             , ttDefFragments = fragments0
             , ttStrictCtorLookup = True
             }
@@ -244,6 +246,24 @@ doctrineTypeTheoryBaseFromTables doc ctorTables =
                         )
     universeCtorsFromTables tables =
       M.map (S.fromList . M.keys) tables
+
+    literalKindsFromDoctrine d tables =
+      M.fromList
+        [ (ownerMode, M.fromList entries)
+        | (ownerMode, ownerTable) <- M.toList tables
+        , let entries =
+                [ (ctorName, litKind)
+                | ctorName <- M.keys ownerTable
+                , Just litKind <- [lookupLiteralKind ownerMode ctorName]
+                ]
+        ]
+      where
+        lookupLiteralKind ownerMode ctorName = do
+          classDecl <- classifierOfMode (dModes d) ownerMode
+          let classifierMode = cdClassifier classDecl
+          let ObjName ctorText = ctorName
+          genDecl <- M.lookup classifierMode (dGens d) >>= M.lookup (GenName ctorText)
+          gdLiteralKind genDecl
 
 mkDefFragments
   :: ModeTheory
@@ -338,7 +358,6 @@ inferLamCandidateArr
   -> Maybe ObjName
 inferLamCandidateArr mt ownerMode classifierMode gd = do
   guard (gdMode gd == ownerMode)
-  guard (null (gdAttrs gd))
   let ports = [ty | InPort ty <- gdDom gd]
       binders = [bs | InBinder bs <- gdDom gd]
   guard (null ports)
@@ -377,7 +396,6 @@ inferAppCandidateArr
   -> Maybe ObjName
 inferAppCandidateArr mt ownerMode classifierMode gd = do
   guard (gdMode gd == ownerMode)
-  guard (null (gdAttrs gd))
   let ports = [ty | InPort ty <- gdDom gd]
       binders = [bs | InBinder bs <- gdDom gd]
   guard (null binders)
@@ -499,7 +517,7 @@ finalizeNbeConfigForMode doc tt mode prims cfg0 = do
             <> renderModeNameText mode
             <> " requires arrow type constructor `"
             <> renderObjNameText arrName
-            <> "` to be constructor-like (no inputs, no attributes)"
+            <> "` to be constructor-like (no inputs)"
         )
 
   sig <- ctorSigFromGen arrDecl
@@ -695,7 +713,6 @@ derivedTmFuns doc ctorTables =
               , not (isTypeDeclGenNameInTables doc ctorTables mode (ObjName gName))
               , null (gdTyVars gd)
               , null (gdTmVars gd)
-              , null (gdAttrs gd)
               , all isPort (gdDom gd)
               , [res] <- [gdCod gd]
               ]
@@ -742,8 +759,8 @@ cellPairToTmRule funs lhs0 rhs0 = do
     ensureRuleFunSigs d = mapM_ checkEdge (IM.elems (dEdges d))
     checkEdge edge =
       case ePayload edge of
-        PGen (GenName gName) attrs bargs
-          | M.null attrs && null bargs -> do
+        PGen (GenName gName) args bargs
+          | null args && null bargs -> do
               sig <- M.lookup (GenName gName) funs
               if length (tfsArgs sig) == length (eIns edge) && length (eOuts edge) == 1
                 then Just ()
@@ -769,8 +786,7 @@ validateDoctrine doc = do
   tt <- mkTypeTheoryFromTables doc ctorTables
   checkComprehensionDecls doc ctorTables
   checkClassifierLiftUniverseCompatibility doc tt
-  mapM_ checkAttrSortDecl (M.toList (dAttrSorts doc))
-  mapM_ (checkGenTable doc tt) (M.toList (dGens doc))
+  mapM_ (checkGenTable doc tt ctorTables) (M.toList (dGens doc))
   mapM_ (checkCell doc tt) (dCells2 doc)
   mapM_ (checkAction doc tt ctorTables) (M.toList (dActions doc))
   mapM_ (checkModeTransform doc) (M.elems (mtTransforms (dModes doc)))
@@ -862,18 +878,6 @@ checkComprehensionDecls doc ctorTables =
             )
 
     checkShape ownerMode fieldName genName gd = do
-      if null (gdAttrs gd)
-        then Right ()
-        else
-          Left
-            ( "validateDoctrine: comprehension "
-                <> fieldName
-                <> " generator "
-                <> renderMode ownerMode
-                <> "."
-                <> renderGen genName
-                <> " must not have attributes"
-            )
       case gdDom gd of
         [InPort _] -> Right ()
         _ ->
@@ -1074,7 +1078,7 @@ deriveCtorTables doc = do
 
 isCtorLikeGen :: GenDecl -> Bool
 isCtorLikeGen gd =
-  null (gdAttrs gd) && null (gdDom gd)
+  null (gdDom gd)
 
 ctorSigFromGen :: GenDecl -> Either Text [TypeParamSig]
 ctorSigFromGen gd = do
@@ -1173,22 +1177,23 @@ lookupCtorSigForOwnerInTables doc tables ownerMode ref = do
 checkModeTheory :: ModeTheory -> Either Text ()
 checkModeTheory = checkWellFormed
 
-checkGenTable :: Doctrine -> TypeTheory -> (ModeName, M.Map GenName GenDecl) -> Either Text ()
-checkGenTable doc tt (mode, gens)
-  | M.member mode (mtModes (dModes doc)) = mapM_ (checkGen doc tt mode) (M.elems gens)
+checkGenTable :: Doctrine -> TypeTheory -> CtorTables -> (ModeName, M.Map GenName GenDecl) -> Either Text ()
+checkGenTable doc tt ctorTables (mode, gens)
+  | M.member mode (mtModes (dModes doc)) = mapM_ (checkGen doc tt ctorTables mode) (M.elems gens)
   | otherwise = Left "validateDoctrine: generators for unknown mode"
 
-checkGen :: Doctrine -> TypeTheory -> ModeName -> GenDecl -> Either Text ()
-checkGen doc tt mode gd
+checkGen :: Doctrine -> TypeTheory -> CtorTables -> ModeName -> GenDecl -> Either Text ()
+checkGen doc tt ctorTables mode gd
   | gdMode gd /= mode = Left "validateDoctrine: generator stored under wrong mode"
   | otherwise = do
       checkTyVarModes doc (gdTyVars gd)
       checkTmVarModes doc tt (gdTyVars gd) (gdTmVars gd)
       ensureDistinctTyVars ("validateDoctrine: duplicate generator tyvars in " <> renderGen (gdName gd)) (gdTyVars gd)
       ensureDistinctTmVars ("validateDoctrine: duplicate generator term vars in " <> renderGen (gdName gd)) (gdTmVars gd)
+      ensureDistinct "validateDoctrine: duplicate generator parameter names" (map tmvName (gdTyVars gd <> gdTmVars gd))
       mapM_ (checkInputShape doc tt mode (gdTyVars gd) (gdTmVars gd)) (gdDom gd)
       checkContext doc tt mode (gdTyVars gd) (gdTmVars gd) [] (gdCod gd)
-      checkGenAttrs doc gd
+      checkGenLiteralKind doc ctorTables gd
 
 checkInputShape :: Doctrine -> TypeTheory -> ModeName -> [TmVar] -> [TmVar] -> InputShape -> Either Text ()
 checkInputShape doc tt expectedMode tyvars tmvars shape =
@@ -1213,8 +1218,6 @@ checkCell :: Doctrine -> TypeTheory -> Cell2 -> Either Text ()
 checkCell doc tt cell = do
   validateDiagram (c2LHS cell)
   validateDiagram (c2RHS cell)
-  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (c2LHS cell))
-  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (c2RHS cell))
   if S.null (spliceMetaVarsDiagram (c2LHS cell))
     then Right ()
     else Left "validateDoctrine: splice nodes are not allowed in rule LHS"
@@ -1254,11 +1257,6 @@ checkCell doc tt cell = do
       if S.isSubsetOf rhsVars (S.union lhsVars declaredVars)
         then Right ()
         else Left "validateDoctrine: RHS introduces fresh term variables"
-      let lhsAttrVars = freeAttrVarsDiagram (c2LHS cell)
-      let rhsAttrVars = freeAttrVarsDiagram (c2RHS cell)
-      if S.isSubsetOf rhsAttrVars lhsAttrVars
-        then Right ()
-        else Left "Cell RHS introduces fresh attribute variables"
       let vars = S.union lhsVars rhsVars
       if S.isSubsetOf vars declaredVars
         then Right ()
@@ -1366,21 +1364,23 @@ checkTmVarModes doc tt tyVars vars =
       checkType doc tt tyVars vars [] (tmvSort v)
       Right ()
 
-checkAttrSortDecl :: (AttrSort, AttrSortDecl) -> Either Text ()
-checkAttrSortDecl (name, decl) =
-  if asName decl == name
-    then Right ()
-    else Left "validateDoctrine: attribute sort declaration mismatch"
-
-checkGenAttrs :: Doctrine -> GenDecl -> Either Text ()
-checkGenAttrs doc gd = do
-  ensureDistinct ("validateDoctrine: duplicate generator attribute names in " <> renderGen (gdName gd)) (map fst (gdAttrs gd))
-  mapM_ ensureSortExists (gdAttrs gd)
-  where
-    ensureSortExists (_, sortName) =
-      if M.member sortName (dAttrSorts doc)
+checkGenLiteralKind :: Doctrine -> CtorTables -> GenDecl -> Either Text ()
+checkGenLiteralKind doc ctorTables gd =
+  case gdLiteralKind gd of
+    Nothing -> Right ()
+    Just _ ->
+      if null (gdParams gd) && null (gdDom gd) && not (null eligibleOwners)
         then Right ()
-        else Left ("validateDoctrine: unknown attribute sort in generator " <> renderGen (gdName gd))
+        else Left ("validateDoctrine: invalid gdLiteralKind on generator " <> renderGen (gdName gd))
+  where
+    eligibleOwners =
+      [ ownerMode
+      | (ownerMode, table) <- M.toList ctorTables
+      , let GenName genText = gdName gd
+      , M.member (ObjName genText) table
+      , Just decl <- [classifierOfMode (dModes doc) ownerMode]
+      , cdClassifier decl == gdMode gd
+      ]
 
 checkAction :: Doctrine -> TypeTheory -> CtorTables -> (ModName, ModAction) -> Either Text ()
 checkAction doc tt ctorTables (name, action) = do
@@ -1457,9 +1457,6 @@ ensureCanonicalActionFallbackCompatible
   -> GenDecl
   -> Either Text ()
 ensureCanonicalActionFallbackCompatible tt doc modDecl srcGen tgtGen = do
-  if attrs srcGen == attrs tgtGen
-    then Right ()
-    else mismatch "attribute schema mismatch"
   (targetTySubst, targetTyFlex) <- freshenTargetTyVars
   codeLift <- classifierLiftForModExpr (dModes doc) me
   domSection <- mkSection targetTySubst "domain" (mapSourceObj codeLift) (gdPlainDom srcGen) (gdPlainDom tgtGen)
@@ -1482,8 +1479,6 @@ ensureCanonicalActionFallbackCompatible tt doc modDecl srcGen tgtGen = do
         <> renderModName (mdName modDecl)
         <> " generator "
         <> renderGen (gdName srcGen)
-
-    attrs gd = M.fromList (gdAttrs gd)
 
     mismatch detail =
       Left (label <> ": " <> detail <> "; provide an explicit action image")
@@ -1563,16 +1558,29 @@ ensureCanonicalActionFallbackCompatible tt doc modDecl srcGen tgtGen = do
 genericGenDiagram :: GenDecl -> Either Text Diagram
 genericGenDiagram gd = do
   let mode = gdMode gd
-  let attrs = M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- gdAttrs gd ]
+  args <- mapM mkParamArg (gdParams gd)
   let binderSlots = [ bs | InBinder bs <- gdDom gd ]
   let bargs = map BAMeta (binderHoleNames (length binderSlots))
   let (ins, d0) = allocPorts (gdPlainDom gd) (emptyDiagram mode [])
   let (outs, d1) = allocPorts (gdCod gd) d0
-  d2 <- addEdgePayload (PGen (gdName gd) attrs bargs) ins outs d1
+  d2 <- addEdgePayload (PGen (gdName gd) args bargs) ins outs d1
   let d3 = d2 { dIn = ins, dOut = outs }
   validateDiagram d3
   pure d3
   where
+    mkParamArg param =
+      case param of
+        GP_Ty v -> Right (CAObj (OVar v))
+        GP_Tm v -> CATm <$> tmVarDiagram v
+
+    tmVarDiagram v = do
+      let ownerMode = objOwnerMode (tmvSort v)
+      let (outPid, d0) = freshPort (tmvSort v) (emptyDiagram ownerMode [])
+      d1 <- addEdgePayload (PTmMeta v) [] [outPid] d0
+      let d2 = d1 { dOut = [outPid] }
+      validateDiagram d2
+      pure (TermDiagram d2)
+
     binderHoleNames n =
       [ BinderMetaVar ("b" <> T.pack (show i))
       | i <- [0 :: Int .. n - 1]
@@ -1583,6 +1591,43 @@ genericGenDiagram gd = do
       let (pid, diag1) = freshPort ty diag
           (pids, diag2) = allocPorts rest diag1
        in (pid : pids, diag2)
+
+instantiateGenParams :: TypeTheory -> GenDecl -> [CodeArg] -> Either Text Subst
+instantiateGenParams tt gd args
+  | length args /= length (gdParams gd) =
+      Left "instantiateGenParams: generator argument arity mismatch"
+  | otherwise =
+      foldM step emptySubst (zip (gdParams gd) args)
+  where
+    step subst (param, arg) =
+      case (param, arg) of
+        (GP_Ty v, CAObj ty) ->
+          bind v (CAObj ty) subst
+        (GP_Tm v, CATm tm) -> do
+          expectedSort <- applySubstObj tt subst (tmvSort v)
+          actualSort <- termDiagramSort tm
+          let tmCtx = dTmCtx (unTerm tm)
+          sortOk <- defEqObj tt tmCtx actualSort expectedSort
+          if sortOk
+            then bind v (CATm tm) subst
+            else Left "instantiateGenParams: term argument sort mismatch"
+        (GP_Ty _, CATm _) ->
+          Left "instantiateGenParams: expected type argument"
+        (GP_Tm _, CAObj _) ->
+          Left "instantiateGenParams: expected term argument"
+
+    bind v arg subst = do
+      singleton <- mkSubst [(v, arg)]
+      composeSubst tt singleton subst
+
+    termDiagramSort tm =
+      case dOut (unTerm tm) of
+        [pid] ->
+          case diagramPortObj (unTerm tm) pid of
+            Just sortTy -> Right sortTy
+            Nothing -> Left "instantiateGenParams: term argument is missing an output sort"
+        _ ->
+          Left "instantiateGenParams: term argument must have exactly one output"
 
 checkModeTransform :: Doctrine -> ModTransformDecl -> Either Text ()
 checkModeTransform doc decl = do
@@ -1661,9 +1706,6 @@ checkModTransformWitness doc fromMe toMe witness = do
   if null (gdTmVars witness)
     then Right ()
     else Left "mod_transform: witness generator must not have term variables"
-  if null (gdAttrs witness)
-    then Right ()
-    else Left "mod_transform: witness generator must not have attributes"
   domTy <-
     case gdDom witness of
       [InPort ty] -> Right ty

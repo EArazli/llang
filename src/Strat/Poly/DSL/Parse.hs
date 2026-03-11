@@ -12,6 +12,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
 import Data.Functor (($>))
 import Strat.Poly.DSL.AST
+import Strat.Poly.Literal (Literal(..))
 
 
 type Parser = Parsec Void Text
@@ -58,10 +59,9 @@ polyIdTerm = do
 polyGenTerm :: Parser RawDiagExpr
 polyGenTerm = do
   name <- ident
-  mArgs <- optional (symbol "{" *> polyObjExpr `sepBy` symbol "," <* symbol "}")
-  mAttrArgs <- optional polyAttrArgs
+  mArgs <- optional polyGenArgs
   mBinderArgs <- optional polyBinderArgs
-  pure (RDGen name mArgs mAttrArgs mBinderArgs)
+  pure (RDGen name mArgs mBinderArgs)
 
 polySpliceTerm :: Parser RawDiagExpr
 polySpliceTerm = do
@@ -120,41 +120,31 @@ polyMapTerm = do
   _ <- symbol ")"
   pure (RDMap me inner)
 
-polyAttrArgs :: Parser [RawAttrArg]
-polyAttrArgs = do
+polyGenArgs :: Parser [RawGenArg]
+polyGenArgs = do
   _ <- symbol "("
-  args <- polyAttrArg `sepBy` symbol ","
+  args <- polyGenArg `sepBy` symbol ","
   _ <- symbol ")"
   if mixedArgStyles args
-    then fail "generator attribute arguments must be either all named or all positional"
+    then fail "generator arguments must be either all named or all positional"
     else pure args
   where
     mixedArgStyles [] = False
     mixedArgStyles xs =
-      let named = [ () | RAName _ _ <- xs ]
-          positional = [ () | RAPos _ <- xs ]
+      let named = [ () | RGNamed _ _ <- xs ]
+          positional = [ () | RGPos _ <- xs ]
       in not (null named) && not (null positional)
 
-polyAttrArg :: Parser RawAttrArg
-polyAttrArg =
+polyGenArg :: Parser RawGenArg
+polyGenArg =
   try named <|> positional
   where
     named = do
       field <- ident
       _ <- symbol "="
-      term <- polyAttrTerm
-      pure (RAName field term)
-    positional = RAPos <$> polyAttrTerm
-
-polyAttrTerm :: Parser RawAttrTerm
-polyAttrTerm =
-  choice
-    [ RATInt . fromIntegral <$> integer
-    , RATString <$> stringLiteral
-    , RATBool True <$ keyword "true"
-    , RATBool False <$ keyword "false"
-    , RATVar <$> ident
-    ]
+      term <- polyObjExpr
+      pure (RGNamed field term)
+    positional = RGPos <$> polyObjExpr
 
 polyContext :: Parser RawPolyContext
 polyContext = do
@@ -179,8 +169,14 @@ binderMetaVar :: Parser Text
 binderMetaVar = lexeme (char '?' *> identRaw)
 
 polyObjExpr :: Parser RawPolyObjExpr
-polyObjExpr = lexeme regular
+polyObjExpr = lexeme (literalExpr <|> regular)
   where
+    literalExpr =
+      (RPLit . LInt . fromIntegral <$> integer)
+        <|> (RPLit . LString <$> stringLiteral)
+        <|> (RPLit (LBool True) <$ keyword "true")
+        <|> (RPLit (LBool False) <$ keyword "false")
+
     regular = do
       name <- scopedIdentRaw
       mQual <- optional (try (char '.' *> scopedIdentRaw))

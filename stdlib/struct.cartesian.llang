@@ -5,14 +5,14 @@ doctrine StructCartesian extends StructSymmetric where {
   gen drop (a@M) : [a] -> [] @M;
 
   rule structural coassoc = (a@M) : [a] -> [a, a, a] @M =
-    dup ; (dup * id[a]) == dup ; (id[a] * dup)
+    dup(a) ; (dup(a) * id[a]) == dup(a) ; (id[a] * dup(a))
 
   rule structural counitL = (a@M) : [a] -> [a] @M =
-    dup ; (drop * id[a]) == id[a]
+    dup(a) ; (drop(a) * id[a]) == id[a]
 
   rule structural counitR = (a@M) : [a] -> [a] @M =
-    dup ; (id[a] * drop) == id[a]
+    dup(a) ; (id[a] * drop(a)) == id[a]
 
   rule structural cocomm = (a@M) : [a] -> [a, a] @M =
-    dup ; swap == dup
+    dup(a) ; swap(a, a) == dup(a)
 }

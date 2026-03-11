@@ -6,6 +6,7 @@ module Strat.DSL.Parse
 import Strat.DSL.AST
 import Strat.Common.Rules
 import qualified Strat.Poly.DSL.AST as PolyAST
+import Strat.Poly.Literal (Literal(..), LiteralKind(..))
 import Strat.Poly.Surface.Parse (surfaceSpecBlock)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -283,7 +284,7 @@ polyItem =
     <|> polyModTransformDecl
     <|> polyActionDecl
     <|> polyObligationDecl
-    <|> polyAttrSortDecl
+    <|> polyLiteralDecl
     <|> (PolyAST.RPData <$> polyDataDecl)
     <|> (PolyAST.RPGen <$> polyGenDecl)
     <|> (PolyAST.RPRule <$> polyRuleDecl)
@@ -493,15 +494,28 @@ rawModExpr =
       pure (PolyAST.RMId mode)
     rawComp = PolyAST.RMComp <$> (ident `sepBy1` symbol ".")
 
-polyAttrSortDecl :: Parser PolyAST.RawPolyItem
-polyAttrSortDecl = do
-  _ <- symbol "attrsort"
-  name <- ident
-  mKind <- optional (symbol "=" *> attrKind)
+polyLiteralDecl :: Parser PolyAST.RawPolyItem
+polyLiteralDecl = do
+  _ <- symbol "literal"
+  typeName <- ident
+  _ <- symbol "@"
+  ownerMode <- ident
+  _ <- symbol "="
+  kind <- literalKind
   optionalSemi
-  pure (PolyAST.RPAttrSort (PolyAST.RawAttrSortDecl name mKind))
+  pure
+    ( PolyAST.RPLiteral
+        PolyAST.RawLiteralDecl
+          { PolyAST.rldTypeName = typeName
+          , PolyAST.rldOwnerMode = ownerMode
+          , PolyAST.rldKind = kind
+          }
+    )
   where
-    attrKind = symbol "int" <|> symbol "string" <|> symbol "bool"
+    literalKind =
+      (symbol "int" $> LKInt)
+        <|> (symbol "string" $> LKString)
+        <|> (symbol "bool" $> LKBool)
 
 polyDataDecl :: Parser PolyAST.RawPolyDataDecl
 polyDataDecl = do
@@ -538,7 +552,6 @@ polyGenDecl = do
   _ <- symbol "gen"
   name <- ident
   vars <- polyParamList
-  attrs <- option [] (symbol "{" *> polyGenAttrDecl `sepBy` symbol "," <* symbol "}")
   _ <- symbol ":"
   dom <- polyInputShapes
   _ <- symbol "->"
@@ -549,18 +562,10 @@ polyGenDecl = do
   pure PolyAST.RawPolyGenDecl
     { PolyAST.rpgName = name
     , PolyAST.rpgVars = vars
-    , PolyAST.rpgAttrs = attrs
     , PolyAST.rpgDom = dom
     , PolyAST.rpgCod = cod
     , PolyAST.rpgMode = mode
     }
-
-polyGenAttrDecl :: Parser (Text, Text)
-polyGenAttrDecl = do
-  field <- ident
-  _ <- symbol ":"
-  sortName <- ident
-  pure (field, sortName)
 
 polyRuleDecl :: Parser PolyAST.RawPolyRuleDecl
 polyRuleDecl = do
@@ -664,8 +669,14 @@ polyParamList =
     <|> (map PolyAST.RPDType <$> many polyTyVarDeclBare)
 
 polyObjExpr :: Parser PolyAST.RawPolyObjExpr
-polyObjExpr = lexeme regular
+polyObjExpr = lexeme (literalExpr <|> regular)
   where
+    literalExpr =
+      (PolyAST.RPLit . LInt . fromIntegral <$> integer)
+        <|> (PolyAST.RPLit . LString <$> stringLiteral)
+        <|> (PolyAST.RPLit (LBool True) <$ keyword "true")
+        <|> (PolyAST.RPLit (LBool False) <$ keyword "false")
+
     regular = do
       name <- scopedIdentRaw
       mQual <- optional (try (char '.' *> scopedIdentRaw))
@@ -718,10 +729,9 @@ polyIdTerm = do
 polyGenTerm :: Parser PolyAST.RawDiagExpr
 polyGenTerm = do
   name <- ident
-  mArgs <- optional (symbol "{" *> polyObjExpr `sepBy` symbol "," <* symbol "}")
-  mAttrArgs <- optional polyAttrArgs
+  mArgs <- optional polyGenArgs
   mBinderArgs <- optional polyBinderArgs
-  pure (PolyAST.RDGen name mArgs mAttrArgs mBinderArgs)
+  pure (PolyAST.RDGen name mArgs mBinderArgs)
 
 polySpliceTerm :: Parser PolyAST.RawDiagExpr
 polySpliceTerm = do
@@ -746,41 +756,31 @@ polyBinderArg =
 binderMetaVar :: Parser Text
 binderMetaVar = lexeme (char '?' *> identRaw)
 
-polyAttrArgs :: Parser [PolyAST.RawAttrArg]
-polyAttrArgs = do
+polyGenArgs :: Parser [PolyAST.RawGenArg]
+polyGenArgs = do
   _ <- symbol "("
-  args <- polyAttrArg `sepBy` symbol ","
+  args <- polyGenArg `sepBy` symbol ","
   _ <- symbol ")"
   if mixedArgStyles args
-    then fail "generator attribute arguments must be either all named or all positional"
+    then fail "generator arguments must be either all named or all positional"
     else pure args
   where
     mixedArgStyles [] = False
     mixedArgStyles xs =
-      let named = [ () | PolyAST.RAName _ _ <- xs ]
-          positional = [ () | PolyAST.RAPos _ <- xs ]
+      let named = [ () | PolyAST.RGNamed _ _ <- xs ]
+          positional = [ () | PolyAST.RGPos _ <- xs ]
       in not (null named) && not (null positional)
 
-polyAttrArg :: Parser PolyAST.RawAttrArg
-polyAttrArg =
+polyGenArg :: Parser PolyAST.RawGenArg
+polyGenArg =
   try named <|> positional
   where
     named = do
       field <- ident
       _ <- symbol "="
-      term <- polyAttrTerm
-      pure (PolyAST.RAName field term)
-    positional = PolyAST.RAPos <$> polyAttrTerm
-
-polyAttrTerm :: Parser PolyAST.RawAttrTerm
-polyAttrTerm =
-  choice
-    [ PolyAST.RATInt . fromIntegral <$> integer
-    , PolyAST.RATString <$> stringLiteral
-    , PolyAST.RATBool True <$ keyword "true"
-    , PolyAST.RATBool False <$ keyword "false"
-    , PolyAST.RATVar <$> ident
-    ]
+      term <- polyObjExpr
+      pure (PolyAST.RGNamed field term)
+    positional = PolyAST.RGPos <$> polyObjExpr
 
 polyTermRefTerm :: Parser PolyAST.RawDiagExpr
 polyTermRefTerm = do
@@ -890,7 +890,6 @@ orientation =
 data MorphismItem
   = MorphismMode RawPolyModeMap
   | MorphismModality RawPolyModalityMap
-  | MorphismAttrSort RawPolyAttrSortMap
   | MorphismType RawPolyTypeMap
   | MorphismGen RawPolyGenMap
   | MorphismCoercion
@@ -911,7 +910,6 @@ morphismItem :: Parser MorphismItem
 morphismItem =
   morphismModeMap
     <|> morphismModalityMap
-    <|> morphismAttrSortMap
     <|> morphismTypeMap
     <|> morphismGenMap
     <|> morphismCoercionItem
@@ -938,15 +936,6 @@ morphismModalityMap = do
   tgt <- rawModExpr
   optionalSemi
   pure (MorphismModality (RawPolyModalityMap src tgt))
-
-morphismAttrSortMap :: Parser MorphismItem
-morphismAttrSortMap = do
-  _ <- symbol "attrsort"
-  src <- ident
-  _ <- symbol "->"
-  tgt <- ident
-  optionalSemi
-  pure (MorphismAttrSort (RawPolyAttrSortMap src tgt))
 
 morphismTypeMap :: Parser MorphismItem
 morphismTypeMap = do
@@ -1023,7 +1012,6 @@ buildPolyMorphism name src tgt items =
     , rpmItems =
         [ RPMMode m | MorphismMode m <- items ]
           <> [ RPMModality m | MorphismModality m <- items ]
-          <> [ RPMAttrSort m | MorphismAttrSort m <- items ]
           <> [ RPMType i | MorphismType i <- items ]
           <> [ RPMGen j | MorphismGen j <- items ]
           <> [ RPMCoercion | MorphismCoercion <- items ]

@@ -17,11 +17,11 @@ doctrine ImplicitBinderIndex where {
   gen reindex(a@M) : [a] -> [a] @M;
   comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };
   rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M =
-    ctx_ext{a} == id[a]
+    ctx_ext(a) == id[a]
   rule computational var_id -> (a@M) : [a] -> [a] @M =
-    var{a} == id[a]
+    var(a) == id[a]
   rule computational reindex_id -> (a@M) : [a] -> [a] @M =
-    reindex{a} == id[a]
+    reindex(a) == id[a]
 
   gen use(n : Nat) : [] -> [Vec(n)] @M;
   gen wrap : [binder { tm n : Nat } : [Vec(n)]] -> [Out] @M;
@@ -37,5 +37,5 @@ run main using main where {
   source mode M;
 }
 ---
-wrap[use{n}]
+wrap[use(n)]
 ---

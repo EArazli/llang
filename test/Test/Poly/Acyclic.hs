@@ -33,8 +33,8 @@ testRejectCycle = do
   let doc = mkDoctrine
   let (p0, d0) = freshPort tyT (emptyDiagram modeM [])
   let (p1, d1) = freshPort tyT d0
-  d2 <- require (addEdgePayload (PGen (GenName "f") M.empty []) [p0] [p1] d1)
-  d3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [p1] [p0] d2)
+  d2 <- require (addEdgePayload (PGen (GenName "f") [] []) [p0] [p1] d1)
+  d3 <- require (addEdgePayload (PGen (GenName "g") [] []) [p1] [p0] d2)
   let cyc = d3 { dIn = [], dOut = [] }
   case quoteProgram doc modeM fragmentResidual cyc of
     Left err ->
@@ -51,8 +51,7 @@ mkDoctrine =
       { dName = "D"
       , dModes = mkModes [modeM]
       , dAcyclicModes = S.singleton modeM
-      , dAttrSorts = M.empty
-      , dGens = M.empty
+            , dGens = M.empty
       , dCells2 = []
       , dActions = M.empty
       , dObligations = []

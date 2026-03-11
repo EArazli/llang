@@ -2,9 +2,9 @@ import "../../../lib/codegen/minifun/minifun.surface.llang";
 
 morphism emitJS : ConsoleExpr -> Doc where {
   mode M -> Doc;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
   type Str @M -> Doc @Doc;
   type Unit @M -> Doc @Doc;
 

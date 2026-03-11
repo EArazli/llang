@@ -237,7 +237,6 @@ generateCompObligations doc = do
         (renderGen genName)
         Nothing
         Nothing
-        Nothing
 
     sanitizePath =
       T.map (\c -> if isAlphaNum c || c == '/' || c == '_' || c == '-' then c else '_')

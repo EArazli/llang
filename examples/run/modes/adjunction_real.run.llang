@@ -26,39 +26,39 @@ doctrine AdjReal where {
   gen eps(b@L) : [F(U(b))] -> [b] @L;
 
   action F where {
-    gen comp_ctx_ext -> comp_ctx_ext
-    gen comp_var -> comp_var
-    gen comp_reindex -> comp_reindex
-    gen eta -> eps
+    gen comp_ctx_ext -> comp_ctx_ext(F(a))
+    gen comp_var -> comp_var(F(a))
+    gen comp_reindex -> comp_reindex(F(a))
+    gen eta -> eps(F(a))
   }
 
   action U where {
-    gen comp_ctx_ext -> comp_ctx_ext
-    gen comp_var -> comp_var
-    gen comp_reindex -> comp_reindex
-    gen eps -> eta
+    gen comp_ctx_ext -> comp_ctx_ext(U(a))
+    gen comp_var -> comp_var(U(a))
+    gen comp_reindex -> comp_reindex(U(a))
+    gen eps -> eta(U(b))
   }
 
   rule computational eta_id -> (a@C) : [a] -> [a] @C =
-    eta{a} ; eta{a} == id[a]
+    eta(a) ; eta(a) == id[a]
 
   rule computational eps_id -> (b@L) : [b] -> [b] @L =
-    eps{b} ; eps{b} == id[b]
+    eps(b) ; eps(b) == id[b]
 }
 
 morphism adjInst : SchemaAdjunction -> AdjReal where {
   mode C -> C;
   mode L -> L;
-  gen comp_ctx_ext @C -> comp_ctx_ext
-  gen comp_var @C -> comp_var
-  gen comp_reindex @C -> comp_reindex
-  gen comp_ctx_ext @L -> comp_ctx_ext
-  gen comp_var @L -> comp_var
-  gen comp_reindex @L -> comp_reindex
+  gen comp_ctx_ext @C -> comp_ctx_ext(a)
+  gen comp_var @C -> comp_var(a)
+  gen comp_reindex @C -> comp_reindex(a)
+  gen comp_ctx_ext @L -> comp_ctx_ext(a)
+  gen comp_var @L -> comp_var(a)
+  gen comp_reindex @L -> comp_reindex(a)
   modality F -> F;
   modality U -> U;
-  gen eta @C -> eta
-  gen eps @L -> eps
+  gen eta @C -> eta(a)
+  gen eps @L -> eps(b)
   check none;
 }
 

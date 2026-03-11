@@ -13,7 +13,7 @@ module Strat.Poly.DSL.AST
   , RawActionDecl(..)
   , RawObligationDecl(..)
   , RawOblExpr(..)
-  , RawAttrSortDecl(..)
+  , RawLiteralDecl(..)
   , RawParamDecl(..)
   , RawTmVarDecl(..)
   , RawPolyCtorDecl(..)
@@ -27,13 +27,13 @@ module Strat.Poly.DSL.AST
   , RawPolyObjExpr(..)
   , RawPolyContext
   , RawDiagExpr(..)
+  , RawGenArg(..)
   , RawBinderArg(..)
-  , RawAttrArg(..)
-  , RawAttrTerm(..)
   ) where
 
 import Data.Text (Text)
 import Strat.Common.Rules (RuleClass, Orientation)
+import Strat.Poly.Literal (Literal, LiteralKind)
 
 
 data RawPolyDoctrine = RawPolyDoctrine
@@ -51,7 +51,7 @@ data RawPolyItem
   | RPModTransform RawModTransformDecl
   | RPAction RawActionDecl
   | RPObligation RawObligationDecl
-  | RPAttrSort RawAttrSortDecl
+  | RPLiteral RawLiteralDecl
   | RPData RawPolyDataDecl
   | RPGen RawPolyGenDecl
   | RPRule RawPolyRuleDecl
@@ -135,9 +135,10 @@ data RawOblExpr
   | ROETensor RawOblExpr RawOblExpr
   deriving (Eq, Show)
 
-data RawAttrSortDecl = RawAttrSortDecl
-  { rasName :: Text
-  , rasKind :: Maybe Text
+data RawLiteralDecl = RawLiteralDecl
+  { rldTypeName :: Text
+  , rldOwnerMode :: Text
+  , rldKind :: LiteralKind
   } deriving (Eq, Show)
 
 data RawParamDecl
@@ -165,7 +166,6 @@ data RawPolyDataDecl = RawPolyDataDecl
 data RawPolyGenDecl = RawPolyGenDecl
   { rpgName :: Text
   , rpgVars :: [RawParamDecl]
-  , rpgAttrs :: [(Text, Text)]
   , rpgDom :: [RawInputShape]
   , rpgCod :: RawPolyContext
   , rpgMode :: Text
@@ -207,6 +207,7 @@ data RawPolyObjExpr
   = RPTVar Text
   | RPTCon RawTypeRef [RawPolyObjExpr]
   | RPTMod RawModExpr RawPolyObjExpr
+  | RPLit Literal
   deriving (Eq, Show)
 
 type RawPolyContext = [RawPolyObjExpr]
@@ -214,7 +215,7 @@ type RawPolyContext = [RawPolyObjExpr]
 data RawDiagExpr
   = RDId RawPolyContext
   | RDMetaVar Text
-  | RDGen Text (Maybe [RawPolyObjExpr]) (Maybe [RawAttrArg]) (Maybe [RawBinderArg])
+  | RDGen Text (Maybe [RawGenArg]) (Maybe [RawBinderArg])
   | RDTermRef Text
   | RDSplice Text
   | RDBox Text RawDiagExpr
@@ -230,14 +231,7 @@ data RawBinderArg
   | RBAMeta Text
   deriving (Eq, Show)
 
-data RawAttrArg
-  = RAName Text RawAttrTerm
-  | RAPos RawAttrTerm
-  deriving (Eq, Show)
-
-data RawAttrTerm
-  = RATVar Text
-  | RATInt Int
-  | RATString Text
-  | RATBool Bool
+data RawGenArg
+  = RGPos RawPolyObjExpr
+  | RGNamed Text RawPolyObjExpr
   deriving (Eq, Show)

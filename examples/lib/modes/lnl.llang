@@ -34,35 +34,35 @@ doctrine LNL where {
   gen eps(b@L) : [F(U(b))] -> [b] @L;
 
   rule structural swap_invol = (a@C, b@C) : [a, b] -> [a, b] @C =
-    swap ; swap == id[a, b]
+    swap(a, b) ; swap(b, a) == id[a, b]
 
   rule structural coassoc = (a@C) : [a] -> [a, a, a] @C =
-    dup ; (dup * id[a]) == dup ; (id[a] * dup)
+    dup(a) ; (dup(a) * id[a]) == dup(a) ; (id[a] * dup(a))
 
   rule structural counitL = (a@C) : [a] -> [a] @C =
-    dup ; (drop * id[a]) == id[a]
+    dup(a) ; (drop(a) * id[a]) == id[a]
 
   rule structural counitR = (a@C) : [a] -> [a] @C =
-    dup ; (id[a] * drop) == id[a]
+    dup(a) ; (id[a] * drop(a)) == id[a]
 
   rule structural cocomm = (a@C) : [a] -> [a, a] @C =
-    dup ; swap == dup
+    dup(a) ; swap(a, a) == dup(a)
 
   rule computational triangleL -> (a@C) : [F(a)] -> [F(a)] @L =
-    eps{F(a)} ; eps{F(a)} == id[F(a)]
+    eps(F(a)) ; eps(F(a)) == id[F(a)]
 
   rule computational triangleR -> (b@L) : [U(b)] -> [U(b)] @C =
-    eta{U(b)} ; eta{U(b)} == id[U(b)]
+    eta(U(b)) ; eta(U(b)) == id[U(b)]
 }
 
 morphism cartInst : StructCartesian -> LNL where {
   mode M -> C;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
-  gen swap @M -> swap
-  gen dup @M -> dup
-  gen drop @M -> drop
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+  gen swap @M -> swap(a, b)
+  gen dup @M -> dup(a)
+  gen drop @M -> drop(a)
   check none;
 }
 

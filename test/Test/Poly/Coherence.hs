@@ -53,7 +53,7 @@ mkGenDecl name =
     , gdParams = []
     , gdDom = map InPort [aTy]
     , gdCod = [aTy]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
 
 mkCell :: Text -> Diagram -> Diagram -> Cell2
@@ -76,7 +76,7 @@ mkDoctrine cells =
             , gdParams = []
             , gdDom = []
             , gdCod = [universeObj modeName]
-            , gdAttrs = []
+            , gdLiteralKind = Nothing
             }
         , GenDecl
             { gdName = GenName "comp_ctx_ext"
@@ -84,7 +84,7 @@ mkDoctrine cells =
             , gdParams = []
             , gdDom = [InPort (universeObj modeName)]
             , gdCod = [universeObj modeName]
-            , gdAttrs = []
+            , gdLiteralKind = Nothing
             }
         , GenDecl
             { gdName = GenName "comp_var"
@@ -92,7 +92,7 @@ mkDoctrine cells =
             , gdParams = []
             , gdDom = [InPort (universeObj modeName)]
             , gdCod = [universeObj modeName]
-            , gdAttrs = []
+            , gdLiteralKind = Nothing
             }
         , GenDecl
             { gdName = GenName "comp_reindex"
@@ -100,7 +100,7 @@ mkDoctrine cells =
             , gdParams = []
             , gdDom = [InPort (universeObj modeName)]
             , gdCod = [universeObj modeName]
-            , gdAttrs = []
+            , gdLiteralKind = Nothing
             }
         , mkGenDecl "f"
         , mkGenDecl "g"
@@ -113,8 +113,7 @@ mkDoctrine cells =
       , dAcyclicModes = S.empty
       , dGens = M.fromList [(modeName, M.fromList [(gdName g, g) | g <- gens])]
       , dCells2 = cells
-      , dAttrSorts = M.empty
-      , dActions = M.empty
+            , dActions = M.empty
       , dObligations = []
       }
 

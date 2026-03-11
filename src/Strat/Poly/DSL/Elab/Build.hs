@@ -71,13 +71,12 @@ seedDoctrine name base =
         { dName = name
         , dModes = emptyModeTheory
         , dAcyclicModes = S.empty
-        , dAttrSorts = M.empty
         , dGens = M.empty
         , dCells2 = []
         , dActions = M.empty
         , dObligations = []
         }
-    Just doc -> doc { dName = name, dAttrSorts = dAttrSorts doc }
+    Just doc -> doc { dName = name }
 
 applyPendingDeclarations :: BuildOps -> ElabState -> Either Text Doctrine
 applyPendingDeclarations ops st = do
@@ -141,16 +140,16 @@ materializeResolvedUniverses ops st doc =
         CATm tm -> CATm (rewriteTermDiagram tm)
 
     rewriteTmVar v =
-      let v1 = v { tmvSort = rewriteObj (tmvSort v) }
+      v { tmvSort = rewriteObj (tmvSort v) }
+
+    rewriteTyVar v =
+      let v1 = rewriteTmVar v
        in case tmvOwnerMode v1 of
             Just owner ->
               case modeUniverseObj (dModes doc) owner of
                 Just universe -> v1 { tmvSort = universe }
                 Nothing -> v1
             Nothing -> v1
-
-    rewriteTyVar v =
-      rewriteTmVar v
 
     rewriteInputShape shape =
       case shape of
@@ -210,8 +209,8 @@ materializeResolvedUniverses ops st doc =
 
     rewritePayload payload =
       case payload of
-        PGen g attrs bargs ->
-          PGen g attrs (map rewriteBinderArg bargs)
+        PGen g args bargs ->
+          PGen g args (map rewriteBinderArg bargs)
         PBox name inner ->
           PBox name (rewriteDiagram inner)
         PFeedback inner ->

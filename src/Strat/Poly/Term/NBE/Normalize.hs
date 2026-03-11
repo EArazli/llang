@@ -9,6 +9,7 @@ import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Strat.Poly.Literal (Literal)
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Graph
   ( Diagram(..)
@@ -50,6 +51,7 @@ data BTmExpr
   = BVar Int
   | BMeta TmVar [Int]
   | BGen GenName [BTm]
+  | BLit Literal
   | BLam BTm
   | BApp BTm BTm
   deriving (Eq, Show)
@@ -61,6 +63,7 @@ data Val = Val
 
 data ValExpr
   = VLam (Val -> Either Text Val)
+  | VLit Literal
   | VNeu Neu
 
 data Neu
@@ -145,9 +148,9 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
               edge <- producerEdge pid
               let seen' = S.insert pid seen
               case ePayload edge of
-                PGen g attrs bargs ->
-                  if not (M.null attrs)
-                    then Left "NbE: generator attrs are unsupported in NbE definitional normalization"
+                PGen g args bargs ->
+                  if not (null args)
+                    then Left "NbE: stored generator args are unsupported in NbE definitional normalization"
                     else
                       if g == nbeLamGen cfg
                         then parseLam pid edge bargs
@@ -166,6 +169,9 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
                   let v' = v { tmvSort = sortTy }
                   metaArgs <- mapM boundaryVarIndex (eIns edge)
                   pure BTm { btSort = sortTy, btExpr = BMeta v' metaArgs }
+                PTmLit lit -> do
+                  sortTy <- requirePortSort diag "NbE: missing literal output sort" pid
+                  pure BTm { btSort = sortTy, btExpr = BLit lit }
                 PInternalDrop ->
                   Left "NbE: reachable PInternalDrop is unsupported in NbE term normalization"
                 PBox _ _ ->
@@ -268,6 +274,12 @@ evalBTm cfg tt env tm =
           { valSort = btSort tm
           , valExpr = VNeu (NGen g vals (btSort tm))
           }
+    BLit lit ->
+      Right
+        Val
+          { valSort = btSort tm
+          , valExpr = VLit lit
+          }
     BLam body ->
       Right
         Val
@@ -320,6 +332,7 @@ reify cfg tt lvl expectedSort val =
   where
     quoteVal lvl0 v =
       case valExpr v of
+        VLit lit -> pure BTm { btSort = expectedSort, btExpr = BLit lit }
         VNeu n -> quoteNeu cfg lvl0 n
         VLam f ->
           case splitArr cfg expectedSort of
@@ -355,6 +368,7 @@ quoteNeu cfg lvl neu =
 
     quoteAtSort lvl0 sortTy v =
       case valExpr v of
+        VLit lit -> pure BTm { btSort = sortTy, btExpr = BLit lit }
         VNeu n -> quoteNeu cfg lvl0 n
         VLam f ->
           case splitArr cfg sortTy of
@@ -413,12 +427,16 @@ buildBTm cfg ctx diag tm =
     BGen g args -> do
       (argPorts, d0) <- foldM step ([], diag) args
       let (out, d1) = freshPort (btSort tm) d0
-      d2 <- addEdgePayload (PGen g M.empty []) argPorts [out] d1
+      d2 <- addEdgePayload (PGen g [] []) argPorts [out] d1
       pure (out, d2)
       where
         step (ports, dAcc) arg = do
           (pid, dNext) <- buildBTm cfg ctx dAcc arg
           pure (ports <> [pid], dNext)
+    BLit lit -> do
+      let (out, d0) = freshPort (btSort tm) diag
+      d1 <- addEdgePayload (PTmLit lit) [] [out] d0
+      pure (out, d1)
     BLam body -> do
       (domTy, _codTy) <-
         case splitArr cfg (btSort tm) of
@@ -447,13 +465,13 @@ buildBTm cfg ctx diag tm =
       innerBuilt <- saturateUnusedInputs innerBuilt1
       validateDiagram innerBuilt
       let (out, d0) = freshPort (btSort tm) diag
-      d1 <- addEdgePayload (PGen (nbeLamGen cfg) M.empty [BAConcrete innerBuilt]) [] [out] d0
+      d1 <- addEdgePayload (PGen (nbeLamGen cfg) [] [BAConcrete innerBuilt]) [] [out] d0
       pure (out, d1)
     BApp f a -> do
       (fPort, d0) <- buildBTm cfg ctx diag f
       (aPort, d1) <- buildBTm cfg ctx d0 a
       let (out, d2) = freshPort (btSort tm) d1
-      d3 <- addEdgePayload (PGen (nbeAppGen cfg) M.empty []) [fPort, aPort] [out] d2
+      d3 <- addEdgePayload (PGen (nbeAppGen cfg) [] []) [fPort, aPort] [out] d2
       pure (out, d3)
 
 requiredTopPrefix :: BTm -> Either Text Int
@@ -470,6 +488,8 @@ requiredTopPrefix tm = go 0 tm
           pure (max (maximumOrZero reqArgs) (max 0 (tmvScope v - depth)))
         BGen _ args ->
           maximumOrZero <$> mapM (go depth) args
+        BLit _ ->
+          Right 0
         BLam body ->
           go (depth + 1) body
         BApp f a -> do
@@ -528,11 +548,12 @@ rejectUnsupportedDiagram cfg diag = do
   where
     checkEdge edge =
       case ePayload edge of
-        PGen _ attrs bargs ->
-          if M.null attrs
+        PGen _ args bargs ->
+          if null args
             then mapM_ checkBinderArg bargs
-            else Left "NbE: generator attrs are unsupported in definitional normalization"
+            else Left "NbE: stored generator args are unsupported in definitional normalization"
         PTmMeta _ -> Right ()
+        PTmLit _ -> Right ()
         PInternalDrop -> Right ()
         PBox _ _ -> Left "NbE: box nodes are unsupported in definitional normalization"
         PFeedback _ -> Left "NbE: feedback nodes are unsupported in definitional normalization"

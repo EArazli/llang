@@ -22,4 +22,4 @@ run main using P where {
   source mode M;
 }
 ---
-a * (b * Nil{A} ; Cons{A}) ; Cons{A} ; fold_List{A, Nat}[Zero, drop{A} * id[Nat] ; Succ]
+a * (b * Nil(A) ; Cons(A)) ; Cons(A) ; fold_List(A, Nat)[Zero, drop(A) * id[Nat] ; Succ]

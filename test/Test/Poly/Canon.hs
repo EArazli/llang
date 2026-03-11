@@ -4,13 +4,13 @@ module Test.Poly.Canon
   ) where
 
 import Control.Monad (foldM)
-import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import Data.Text (Text)
 import qualified Data.Text as T
 import Test.Tasty
 import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
+import Strat.Poly.Literal (Literal(..))
 import Strat.Poly.Graph
   ( Diagram(..)
   , PortId(..)
@@ -26,7 +26,6 @@ import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoEqSlow)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Obj (Obj(..), ObjRef(..), ObjName(..), mkCon)
-import Strat.Poly.Attr (AttrTerm(..), AttrLit(..))
 
 
 tests :: TestTree
@@ -37,7 +36,7 @@ tests =
     , testProperty "agreement with slow isomorphism on small diagrams" propCanonAgreesSlow
     , testCase "regression: display reindex is not canonical" testDisplayReindexNotCanonical
     , testCase "symmetry stress: canonicalization is deterministic" testSymmetryStress
-    , testCase "canonicalization is stable under attr-value-only symmetry" testCanonRespectsAttrValues
+    , testCase "canonicalization is stable under literal-value-only symmetry" testCanonRespectsLiteralValues
     ]
 
 propCanonIdempotent :: Property
@@ -95,24 +94,22 @@ testSymmetryStress = do
     )
     variants
 
-testCanonRespectsAttrValues :: Assertion
-testCanonRespectsAttrValues = do
-  d1 <- require (mkAttrOrderDiagram [0, 1])
-  d2 <- require (mkAttrOrderDiagram [1, 0])
+testCanonRespectsLiteralValues :: Assertion
+testCanonRespectsLiteralValues = do
+  d1 <- require (mkLiteralOrderDiagram [0, 1])
+  d2 <- require (mkLiteralOrderDiagram [1, 0])
   c1 <- require (canonDiagramRaw d1)
   c2 <- require (canonDiagramRaw d2)
-  assertEqual "canon should be invariant under insertion order when attrs differ only by value" c1 c2
+  assertEqual "canon should be invariant under insertion order when literals differ only by value" c1 c2
 
-mkAttrOrderDiagram :: [Int] -> Either Text Diagram
-mkAttrOrderDiagram values =
+mkLiteralOrderDiagram :: [Int] -> Either Text Diagram
+mkLiteralOrderDiagram values =
   foldM addOne (emptyDiagram testMode []) values
   where
-    addOne diag v =
-      addEdgePayload
-        (PGen (GenName "g") (M.fromList [("k", ATLit (ALInt v))]) [])
-        []
-        []
-        diag
+    addOne diag v = do
+      let (pid, diag1) = freshPort testType diag
+      diag2 <- addEdgePayload (PTmLit (LInt v)) [] [pid] diag1
+      addEdgePayload PInternalDrop [pid] [] diag2
 
 genDiagramPair :: Gen (Diagram, Diagram)
 genDiagramPair = do
@@ -144,7 +141,7 @@ genSmallDiagram = do
       outArity <- chooseInt (0, 2)
       let (outs, diag1) = allocPorts outArity diag
       gname <- elements ["g", "h", "k"]
-      let payload = PGen (GenName gname) M.empty []
+      let payload = PGen (GenName gname) [] []
       case addEdgePayload payload ins outs diag1 of
         Left _ -> pure diag
         Right diag2 -> pure diag2
@@ -173,8 +170,8 @@ mkCycleDiagram pairs = do
     addPair lookupPort diag (i, j) = do
       pIn <- lookupPort i
       pj <- lookupPort j
-      d1 <- addEdgePayload (PGen (GenName "g") M.empty []) [pIn] [pj] diag
-      addEdgePayload (PGen (GenName "h") M.empty []) [pj] [pIn] d1
+      d1 <- addEdgePayload (PGen (GenName "g") [] []) [pIn] [pj] diag
+      addEdgePayload (PGen (GenName "h") [] []) [pj] [pIn] d1
 
 allocPorts :: Int -> Diagram -> ([PortId], Diagram)
 allocPorts n = go n []

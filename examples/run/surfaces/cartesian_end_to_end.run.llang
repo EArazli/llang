@@ -9,7 +9,7 @@ doctrine CartLaws where {
   gen drop(a@M) : [a] -> [] @M;
 
   obligation coassoc(a@M) : [a] -> [a, a, a] @M =
-    dup{a} ; (dup{a} * id[a]) == dup{a} ; (id[a] * dup{a})
+    dup(a) ; (dup(a) * id[a]) == dup(a) ; (id[a] * dup(a))
 }
 
 doctrine SurfaceTarget where {
@@ -27,16 +27,16 @@ doctrine SurfaceTarget where {
   gen unit : [] -> [A] @M;
 
   rule structural coassoc_copy = (a@M) : [a] -> [a, a, a] @M =
-    copy ; (copy * id[a]) == copy ; (id[a] * copy)
+    copy(a) ; (copy(a) * id[a]) == copy(a) ; (id[a] * copy(a))
 }
 
 morphism cartInst : CartLaws -> SurfaceTarget where {
   mode M -> M;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
-  gen dup @M -> copy
-  gen drop @M -> kill
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+  gen dup @M -> copy(a)
+  gen drop @M -> kill(a)
   check none;
 }
 

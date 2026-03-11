@@ -120,10 +120,10 @@ mkRepeatedNullaryDiag = do
   let (pF1, d1) = freshPort tyT d0
   let (pA2, d2) = freshPort tyT d1
   let (pF2, d3) = freshPort tyT d2
-  d4 <- addEdgePayload (PGen (GenName "a") M.empty []) [] [pA1] d3
-  d5 <- addEdgePayload (PGen (GenName "f") M.empty []) [pA1] [pF1] d4
-  d6 <- addEdgePayload (PGen (GenName "a") M.empty []) [] [pA2] d5
-  d7 <- addEdgePayload (PGen (GenName "f") M.empty []) [pA2] [pF2] d6
+  d4 <- addEdgePayload (PGen (GenName "a") [] []) [] [pA1] d3
+  d5 <- addEdgePayload (PGen (GenName "f") [] []) [pA1] [pF1] d4
+  d6 <- addEdgePayload (PGen (GenName "a") [] []) [] [pA2] d5
+  d7 <- addEdgePayload (PGen (GenName "f") [] []) [pA2] [pF2] d6
   let diag = d7 { dIn = [], dOut = [pF1, pF2] }
   diag' <- canonicalizeDiagram diag
   validateDiagram diag'
@@ -134,7 +134,7 @@ mkWrapDiag :: Either Text Diagram
 mkWrapDiag = do
   let (pOut, d0) = freshPort tyT (emptyDiagram modeM [])
   inner <- mkInnerA
-  d1 <- addEdgePayload (PGen (GenName "wrap") M.empty [BAConcrete inner]) [] [pOut] d0
+  d1 <- addEdgePayload (PGen (GenName "wrap") [] [BAConcrete inner]) [] [pOut] d0
   let diag = d1 { dIn = [], dOut = [pOut] }
   validateDiagram diag
   pure diag
@@ -143,7 +143,7 @@ mkWrapDiag = do
 mkInnerA :: Either Text Diagram
 mkInnerA = do
   let (pOut, d0) = freshPort tyT (emptyDiagram modeM [])
-  d1 <- addEdgePayload (PGen (GenName "a") M.empty []) [] [pOut] d0
+  d1 <- addEdgePayload (PGen (GenName "a") [] []) [] [pOut] d0
   let diag = d1 { dIn = [], dOut = [pOut] }
   validateDiagram diag
   pure diag
@@ -157,8 +157,7 @@ mkDoctrine =
       { dName = "D"
       , dModes = mkModes [modeM]
       , dAcyclicModes = S.singleton modeM
-      , dAttrSorts = M.empty
-      , dGens =
+            , dGens =
           M.fromList
             [ ( modeM
               , M.fromList
@@ -182,7 +181,7 @@ genNullary name =
     , gdParams = []
     , gdDom = []
     , gdCod = [tyT]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
 
 
@@ -194,7 +193,7 @@ genUnary name =
     , gdParams = []
     , gdDom = [InPort tyT]
     , gdCod = [tyT]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
 
 
@@ -213,7 +212,7 @@ genWrap =
               }
         ]
     , gdCod = [tyT]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
 
 

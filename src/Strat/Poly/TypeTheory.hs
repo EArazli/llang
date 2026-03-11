@@ -4,6 +4,7 @@ module Strat.Poly.TypeTheory
   , CtorSigEnv
   , UniverseCtors
   , ttCtorTablesByOwner
+  , literalKindForObj
   , DefFragment(..)
   , TypeParamSig(..)
   , TmFunSig(..)
@@ -26,6 +27,7 @@ module Strat.Poly.TypeTheory
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Strat.Poly.Literal (LiteralKind)
 import Strat.Poly.ModeTheory (ModeName, ModeTheory(..), DefEqEngine(..), modeDefEqEngine)
 import Strat.Poly.Names (GenName)
 import Strat.Poly.ObjClassifier (modeClassifierMode)
@@ -56,6 +58,7 @@ data TypeTheory = TypeTheory
   { ttModes :: ModeTheory
   , ttCtorSigs :: CtorSigEnv
   , ttUniverseCtors :: UniverseCtors
+  , ttLiteralKinds :: M.Map ModeName (M.Map ObjName LiteralKind)
   , ttDefFragments :: M.Map ModeName DefFragment
   , ttStrictCtorLookup :: Bool
   } deriving (Eq, Show)
@@ -92,6 +95,7 @@ modeOnlyTypeTheory mt =
     { ttModes = mt
     , ttCtorSigs = M.empty
     , ttUniverseCtors = M.empty
+    , ttLiteralKinds = M.empty
     , ttDefFragments = fragments
     , ttStrictCtorLookup = False
     }
@@ -246,3 +250,10 @@ nbeConfigForMode tt mode =
 lookupTmFunSig :: TypeTheory -> ModeName -> GenName -> Maybe TmFunSig
 lookupTmFunSig tt mode f =
   M.lookup f (termFunsForMode tt mode)
+
+literalKindForObj :: TypeTheory -> Obj -> Maybe LiteralKind
+literalKindForObj tt obj =
+  case objCode obj of
+    CTCon ref [] ->
+      M.lookup (orName ref) =<< M.lookup (objOwnerMode obj) (ttLiteralKinds tt)
+    _ -> Nothing

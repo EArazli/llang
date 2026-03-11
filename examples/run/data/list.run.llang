@@ -14,5 +14,5 @@ run main using main where {
   source mode M;
 }
 ---
-Nil{A}
+Nil(A)
 ---

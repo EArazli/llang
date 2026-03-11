@@ -21,17 +21,17 @@ doctrine StateSchema where {
 
 morphism chooseNat : StateSchema -> Base where {
   mode M -> M;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
   type S @M -> Nat @M;
 }
 
 morphism chooseBool : StateSchema -> Base where {
   mode M -> M;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
   type S @M -> Bool @M;
 }
 

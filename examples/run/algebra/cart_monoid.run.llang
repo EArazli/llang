@@ -9,5 +9,5 @@ run main using main where {
   source doctrine CartMonoid;
 }
 ---
-dup{A} ; mul
+dup(A) ; mul
 ---

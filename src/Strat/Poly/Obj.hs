@@ -143,6 +143,14 @@ freeCodeVarsTerm (TermDiagram diag) =
     edgeObjVars edge =
       case ePayload edge of
         PTmMeta v -> freeCodeVarsObj (tmvSort v)
+        PGen _ args _ ->
+          S.unions
+            [ case arg of
+                CAObj innerObj -> freeCodeVarsObj innerObj
+                CATm tmArg -> freeCodeVarsTerm tmArg
+            | arg <- args
+            ]
+        PTmLit _ -> S.empty
         _ -> S.empty
 
 freeTermVarsTerm :: TermDiagram -> S.Set TmVar
@@ -156,6 +164,14 @@ freeTermVarsTerm (TermDiagram diag) =
     edgeTmVars edge =
       case ePayload edge of
         PTmMeta v -> S.singleton v
+        PGen _ args _ ->
+          S.unions
+            [ case arg of
+                CAObj innerObj -> freeTermVarsObj innerObj
+                CATm tm -> freeTermVarsTerm tm
+            | arg <- args
+            ]
+        PTmLit _ -> S.empty
         _ -> S.empty
 
 freeTermVarsObj :: Obj -> S.Set TmVar

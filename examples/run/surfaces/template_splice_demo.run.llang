@@ -11,5 +11,5 @@ run main using main where {
   source surface SpliceSurface;
 }
 ---
-term{}
+term {}
 ---

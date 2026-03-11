@@ -4,5 +4,5 @@ doctrine StructSymmetric extends StructPlanar where {
   gen swap (a@M, b@M) : [a, b] -> [b, a] @M;
 
   rule structural swap_involutive = (a@M, b@M) : [a, b] -> [a, b] @M =
-    swap ; swap == id[a, b]
+    swap(a, b) ; swap(b, a) == id[a, b]
 }

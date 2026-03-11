@@ -8,7 +8,8 @@ doctrine SmoothLam where {
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_M : [] -> [M.U_M] @M;
 
-  attrsort Str = string;
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
 
   gen R : [] -> [M.U_M] @M;
   gen Pair(a@M, b@M) : [] -> [M.U_M] @M;
@@ -22,7 +23,7 @@ doctrine SmoothLam where {
   gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;
 
   rule computational beta -> (a@M, b@M) : [a] -> [b] @M =
-    (lam{a, b}[?Body] * id[a]) ; app{a, b} == splice(?Body)
+    (lam(a, b)[?Body] * id[a]) ; app(a, b) == splice(?Body)
 
   gen add : [R, R] -> [R] @M;
   gen mul : [R, R] -> [R] @M;
@@ -35,78 +36,78 @@ morphism forwardAD : SmoothLam -> SmoothLam where {
   check structural;
 
   mode M -> M;
-  attrsort Str -> Str;
+  type Str @M -> Str @M;
   type R @M -> Pair(R, R) @M;
 
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
 
-  gen dup @M -> dup
-  gen mkPair @M -> mkPair
-  gen fst @M -> fst
-  gen snd @M -> snd
-  gen lam @M -> lam[?b0]
-  gen app @M -> app
+  gen dup @M -> dup(a)
+  gen mkPair @M -> mkPair(a, b)
+  gen fst @M -> fst(a, b)
+  gen snd @M -> snd(a, b)
+  gen lam @M -> lam(a, b)[?b0]
+  gen app @M -> app(a, b)
 
   gen add @M ->
-    (mkPair{Pair(R, R), Pair(R, R)}
-    ; dup{Pair(Pair(R, R), Pair(R, R))}
+    (mkPair(Pair(R, R), Pair(R, R))
+    ; dup(Pair(Pair(R, R), Pair(R, R)))
     ; (
-        (dup{Pair(Pair(R, R), Pair(R, R))}
-          ; ((fst{Pair(R, R), Pair(R, R)} ; fst{R, R}) * (snd{Pair(R, R), Pair(R, R)} ; fst{R, R}))
+        (dup(Pair(Pair(R, R), Pair(R, R)))
+          ; ((fst(Pair(R, R), Pair(R, R)) ; fst(R, R)) * (snd(Pair(R, R), Pair(R, R)) ; fst(R, R)))
           ; add)
         *
-        (dup{Pair(Pair(R, R), Pair(R, R))}
-          ; ((fst{Pair(R, R), Pair(R, R)} ; snd{R, R}) * (snd{Pair(R, R), Pair(R, R)} ; snd{R, R}))
+        (dup(Pair(Pair(R, R), Pair(R, R)))
+          ; ((fst(Pair(R, R), Pair(R, R)) ; snd(R, R)) * (snd(Pair(R, R), Pair(R, R)) ; snd(R, R)))
           ; add)
       )
-    ; mkPair{R, R})
+    ; mkPair(R, R))
 
   gen mul @M ->
-    (mkPair{Pair(R, R), Pair(R, R)}
-    ; dup{Pair(Pair(R, R), Pair(R, R))}
+    (mkPair(Pair(R, R), Pair(R, R))
+    ; dup(Pair(Pair(R, R), Pair(R, R)))
     ; (
-        (dup{Pair(Pair(R, R), Pair(R, R))}
-          ; ((fst{Pair(R, R), Pair(R, R)} ; fst{R, R}) * (snd{Pair(R, R), Pair(R, R)} ; fst{R, R}))
+        (dup(Pair(Pair(R, R), Pair(R, R)))
+          ; ((fst(Pair(R, R), Pair(R, R)) ; fst(R, R)) * (snd(Pair(R, R), Pair(R, R)) ; fst(R, R)))
           ; mul)
         *
-        (dup{Pair(Pair(R, R), Pair(R, R))}
+        (dup(Pair(Pair(R, R), Pair(R, R)))
           ; (
-              (dup{Pair(Pair(R, R), Pair(R, R))}
-                ; ((fst{Pair(R, R), Pair(R, R)} ; fst{R, R}) * (snd{Pair(R, R), Pair(R, R)} ; snd{R, R}))
+              (dup(Pair(Pair(R, R), Pair(R, R)))
+                ; ((fst(Pair(R, R), Pair(R, R)) ; fst(R, R)) * (snd(Pair(R, R), Pair(R, R)) ; snd(R, R)))
                 ; mul)
               *
-              (dup{Pair(Pair(R, R), Pair(R, R))}
-                ; ((fst{Pair(R, R), Pair(R, R)} ; snd{R, R}) * (snd{Pair(R, R), Pair(R, R)} ; fst{R, R}))
+              (dup(Pair(Pair(R, R), Pair(R, R)))
+                ; ((fst(Pair(R, R), Pair(R, R)) ; snd(R, R)) * (snd(Pair(R, R), Pair(R, R)) ; fst(R, R)))
                 ; mul)
             )
             ; add)
       )
-    ; mkPair{R, R})
+    ; mkPair(R, R))
 
   gen sin @M ->
-    (dup{Pair(R, R)}
+    (dup(Pair(R, R))
     ; (
-        (fst{R, R} ; sin)
+        (fst(R, R) ; sin)
         *
-        (dup{Pair(R, R)} ; ((fst{R, R} ; cos) * snd{R, R}) ; mul)
+        (dup(Pair(R, R)) ; ((fst(R, R) ; cos) * snd(R, R)) ; mul)
       )
-    ; mkPair{R, R})
+    ; mkPair(R, R))
 
   gen cos @M ->
-    (dup{Pair(R, R)}
+    (dup(Pair(R, R))
     ; (
-        (fst{R, R} ; cos)
+        (fst(R, R) ; cos)
         *
-        (dup{Pair(R, R)} ; ((fst{R, R} ; sin) * snd{R, R}) ; mul ; neg)
+        (dup(Pair(R, R)) ; ((fst(R, R) ; sin) * snd(R, R)) ; mul ; neg)
       )
-    ; mkPair{R, R})
+    ; mkPair(R, R))
 
   gen neg @M ->
-    (dup{Pair(R, R)}
-    ; ((fst{R, R} ; neg) * (snd{R, R} ; neg))
-    ; mkPair{R, R})
+    (dup(Pair(R, R))
+    ; ((fst(R, R) ; neg) * (snd(R, R) ; neg))
+    ; mkPair(R, R))
 }
 
 fragment SharePair in SmoothLam mode M where {
@@ -145,7 +146,7 @@ run main using quoted_single where {
   source mode M;
 }
 ---
-dup{R} ; (id[R] * (id[R] ; sin)) ; mul
+dup(R) ; (id[R] * (id[R] ; sin)) ; mul
 ---
 
 run main2 using quoted_double where {
@@ -153,5 +154,5 @@ run main2 using quoted_double where {
   source mode M;
 }
 ---
-dup{R} ; (id[R] * (id[R] ; sin)) ; mul
+dup(R) ; (id[R] * (id[R] ; sin)) ; mul
 ---

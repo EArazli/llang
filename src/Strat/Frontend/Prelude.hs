@@ -6,8 +6,8 @@ module Strat.Frontend.Prelude
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.Attr
 import Strat.Poly.Doctrine
+import Strat.Poly.Literal (LiteralKind(..))
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names
 import Strat.Poly.Obj
@@ -27,11 +27,6 @@ docDoctrine =
     { dName = "Doc"
     , dModes = singleSelfClassifiedMode docMode
     , dAcyclicModes = S.singleton docMode
-    , dAttrSorts =
-        M.fromList
-          [ (strSort, AttrSortDecl strSort (Just LKString))
-          , (intSort, AttrSortDecl intSort (Just LKInt))
-          ]
     , dGens = M.singleton docMode gens
     , dCells2 = []
     , dActions = M.empty
@@ -40,17 +35,21 @@ docDoctrine =
   where
     gens =
       M.fromList
-        [ (GenName "Doc", ctorGen docMode "Doc")
+        [ (GenName "Doc", ctorGen docMode "Doc" Nothing)
+        , (GenName "Str", ctorGen docMode "Str" (Just LKString))
+        , (GenName "Int", ctorGen docMode "Int" (Just LKInt))
         , (compCtxExtName, compGen docMode compCtxExtName)
         , (compVarName, compGen docMode compVarName)
         , (compReindexName, compGen docMode compReindexName)
         , (GenName "empty", simpleGen "empty" [] [docTy] [])
-        , (GenName "text", simpleGen "text" [] [docTy] [("s", strSort)])
+        , (GenName "text", simpleGen "text" [] [docTy] [termParam docMode "s" strTy])
         , (GenName "line", simpleGen "line" [] [docTy] [])
         , (GenName "cat", simpleGen "cat" [docTy, docTy] [docTy] [])
-        , (GenName "indent", simpleGen "indent" [docTy] [docTy] [("n", intSort)])
+        , (GenName "indent", simpleGen "indent" [docTy] [docTy] [termParam docMode "n" intTy])
         ]
-    docTy = mkCon (ObjRef docMode (ObjName "Doc")) []
+    docTy = preludeTy docMode "Doc"
+    strTy = preludeTy docMode "Str"
+    intTy = preludeTy docMode "Int"
 
 
 artifactDoctrine :: Doctrine
@@ -59,32 +58,31 @@ artifactDoctrine =
     { dName = "Artifact"
     , dModes = singleSelfClassifiedMode artifactMode
     , dAcyclicModes = S.singleton artifactMode
-    , dAttrSorts =
-        M.fromList
-          [ (strSort, AttrSortDecl strSort (Just LKString))
-          , (intSort, AttrSortDecl intSort (Just LKInt))
-          ]
     , dGens = M.singleton artifactMode gens
     , dCells2 = []
     , dActions = M.empty
     , dObligations = []
     }
   where
-    docTy = mkCon (ObjRef artifactMode (ObjName "Doc")) []
-    ftTy = mkCon (ObjRef artifactMode (ObjName "FileTree")) []
+    docTy = preludeTy artifactMode "Doc"
+    ftTy = preludeTy artifactMode "FileTree"
+    strTy = preludeTy artifactMode "Str"
+    intTy = preludeTy artifactMode "Int"
     gens =
       M.fromList
-        [ (GenName "Doc", ctorGen artifactMode "Doc")
-        , (GenName "FileTree", ctorGen artifactMode "FileTree")
+        [ (GenName "Doc", ctorGen artifactMode "Doc" Nothing)
+        , (GenName "FileTree", ctorGen artifactMode "FileTree" Nothing)
+        , (GenName "Str", ctorGen artifactMode "Str" (Just LKString))
+        , (GenName "Int", ctorGen artifactMode "Int" (Just LKInt))
         , (compCtxExtName, compGen artifactMode compCtxExtName)
         , (compVarName, compGen artifactMode compVarName)
         , (compReindexName, compGen artifactMode compReindexName)
         , (GenName "empty", simpleGen "empty" [] [docTy] [])
-        , (GenName "text", simpleGen "text" [] [docTy] [("s", strSort)])
+        , (GenName "text", simpleGen "text" [] [docTy] [termParam artifactMode "s" strTy])
         , (GenName "line", simpleGen "line" [] [docTy] [])
         , (GenName "cat", simpleGen "cat" [docTy, docTy] [docTy] [])
-        , (GenName "indent", simpleGen "indent" [docTy] [docTy] [("n", intSort)])
-        , (GenName "singleFile", simpleGen "singleFile" [docTy] [ftTy] [("path", strSort)])
+        , (GenName "indent", simpleGen "indent" [docTy] [docTy] [termParam artifactMode "n" intTy])
+        , (GenName "singleFile", simpleGen "singleFile" [docTy] [ftTy] [termParam artifactMode "path" strTy])
         , (GenName "concatTree", simpleGen "concatTree" [ftTy, ftTy] [ftTy] [])
         ]
 
@@ -96,13 +94,6 @@ docMode = ModeName "Doc"
 artifactMode :: ModeName
 artifactMode = ModeName "Artifact"
 
-
-strSort :: AttrSort
-strSort = AttrSort "Str"
-
-
-intSort :: AttrSort
-intSort = AttrSort "Int"
 
 compCtxExtName :: GenName
 compCtxExtName = GenName "comp_ctx_ext"
@@ -130,7 +121,6 @@ selfClassifiedMode mode = do
     ClassificationDecl
       { cdClassifier = mode
       , cdUniverse = universeObj mode
-      
       , cdComp = Just preludeCompDecl
       }
     mt0
@@ -147,26 +137,29 @@ universeName (ModeName n) = ObjName ("U_" <> n)
 universeObj :: ModeName -> Obj
 universeObj mode = mkCon (ObjRef mode (universeName mode)) []
 
-ctorGen :: ModeName -> Text -> GenDecl
-ctorGen mode name =
+preludeTy :: ModeName -> Text -> Obj
+preludeTy mode name = mkCon (ObjRef mode (ObjName name)) []
+
+ctorGen :: ModeName -> Text -> Maybe LiteralKind -> GenDecl
+ctorGen mode name litKind =
   GenDecl
     { gdName = GenName name
     , gdMode = mode
     , gdParams = []
     , gdDom = []
     , gdCod = [universeObj mode]
-    , gdAttrs = []
+    , gdLiteralKind = litKind
     }
 
-simpleGen :: Text -> Context -> Context -> [(AttrName, AttrSort)] -> GenDecl
-simpleGen name dom cod attrs =
+simpleGen :: Text -> Context -> Context -> [GenParam] -> GenDecl
+simpleGen name dom cod params =
   GenDecl
     { gdName = GenName name
     , gdMode = modeFromCtx cod
-    , gdParams = []
+    , gdParams = params
     , gdDom = map InPort dom
     , gdCod = cod
-    , gdAttrs = attrs
+    , gdLiteralKind = Nothing
     }
   where
     modeFromCtx [] =
@@ -174,6 +167,16 @@ simpleGen name dom cod attrs =
         (ty:_) -> objMode ty
         [] -> error "prelude simpleGen: empty domain and codomain"
     modeFromCtx (ty:_) = objMode ty
+
+termParam :: ModeName -> Text -> Obj -> GenParam
+termParam mode name sortTy =
+  GP_Tm
+    TmVar
+      { tmvName = name
+      , tmvSort = sortTy
+      , tmvScope = 0
+      , tmvOwnerMode = Just mode
+      }
 
 compGen :: ModeName -> GenName -> GenDecl
 compGen mode name =
@@ -183,7 +186,7 @@ compGen mode name =
     , gdParams = [GP_Ty aVar]
     , gdDom = [InPort aTy]
     , gdCod = [aTy]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
   where
     aVar =

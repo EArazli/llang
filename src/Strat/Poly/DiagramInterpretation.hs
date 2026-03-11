@@ -111,6 +111,9 @@ interpretDiagram interp diagSrc = do
           sort' <- diMapTmMetaSort interp (tmvSort v)
           updateEdgePayload tgt edgeKey (PTmMeta v { tmvSort = sort' })
 
+        PTmLit lit ->
+          updateEdgePayload tgt edgeKey (PTmLit lit)
+
         PSplice x me -> do
           (x', me') <- diMapSplice interp x me
           updateEdgePayload tgt edgeKey (PSplice x' me')
@@ -267,9 +270,9 @@ instantiateGenImageBindersWithMapper tt mapSplice binderSigs holeSub diag0 = do
 
     recurseEdge edge =
       case ePayload edge of
-        PGen g attrs bargs -> do
+        PGen g args bargs -> do
           bargs' <- mapM recurseBinderArg bargs
-          pure edge { ePayload = PGen g attrs bargs' }
+          pure edge { ePayload = PGen g args bargs' }
         PBox name inner -> do
           inner' <- instantiateGenImageBindersWithMapper tt mapSplice binderSigs holeSub inner
           pure edge { ePayload = PBox name inner' }
@@ -280,6 +283,8 @@ instantiateGenImageBindersWithMapper tt mapSplice binderSigs holeSub diag0 = do
           pure edge { ePayload = PSplice x me }
         PTmMeta v ->
           pure edge { ePayload = PTmMeta v }
+        PTmLit lit ->
+          pure edge { ePayload = PTmLit lit }
         PInternalDrop ->
           pure edge { ePayload = PInternalDrop }
       where

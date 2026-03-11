@@ -13,15 +13,14 @@ module Strat.Poly.Surface.Spec
   , Action(..)
   , GenRef(..)
   , TemplateExpr(..)
+  , TemplateGenArg(..)
+  , TemplateArgExpr(..)
   , TemplateBinderArg(..)
-  , TemplateAttrArg(..)
-  , AttrTemplate(..)
   ) where
 
 import Data.Text (Text)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.DSL.AST (RawPolyObjExpr)
-import Strat.Poly.Attr (AttrLit)
 
 data PolySurfaceDef = PolySurfaceDef
   { psName :: Text
@@ -107,7 +106,7 @@ data GenRef
 
 data TemplateExpr
   = TId [RawPolyObjExpr]
-  | TGen GenRef (Maybe [RawPolyObjExpr]) (Maybe [TemplateAttrArg]) (Maybe [TemplateBinderArg])
+  | TGen GenRef (Maybe [TemplateGenArg]) (Maybe [TemplateBinderArg])
   | TTermRef Text
   | TBox Text TemplateExpr
   | TTrace Int TemplateExpr
@@ -123,13 +122,12 @@ data TemplateBinderArg
   | TBAMeta Text
   deriving (Eq, Show)
 
-data TemplateAttrArg
-  = TAName Text AttrTemplate
-  | TAPos AttrTemplate
+data TemplateGenArg
+  = TGNamed Text TemplateArgExpr
+  | TGPos TemplateArgExpr
   deriving (Eq, Show)
 
-data AttrTemplate
-  = ATLIT AttrLit
-  | ATHole Text
-  | ATVar Text
+data TemplateArgExpr
+  = TAHole Text
+  | TAExpr RawPolyObjExpr
   deriving (Eq, Show)

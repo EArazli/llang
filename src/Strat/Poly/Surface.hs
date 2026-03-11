@@ -13,6 +13,8 @@ module Strat.Poly.Surface
   , Action(..)
   , GenRef(..)
   , TemplateExpr(..)
+  , TemplateGenArg(..)
+  , TemplateArgExpr(..)
   , TemplateBinderArg(..)
   , SurfaceParamKind(..)
   , elabPolySurfaceDecl
@@ -198,11 +200,11 @@ validateTemplate info templ =
         then Right ()
         else Left "surface: template hole out of range"
     OVar cap -> requireNamedIdent info cap
-    TGen ref _ mAttrArgs mBinderArgs -> do
+    TGen ref mArgs mBinderArgs -> do
       case ref of
         GenLit _ -> Right ()
         GenHole cap -> requireNamedIdent info cap
-      mapM_ (validateTemplateAttrArg info) (maybe [] id mAttrArgs)
+      mapM_ (validateTemplateGenArg info) (maybe [] id mArgs)
       mapM_ (validateTemplateBinderArg info) (maybe [] id mBinderArgs)
 
 validateTemplateBinderArg :: RuleInfo -> TemplateBinderArg -> Either Text ()
@@ -211,18 +213,17 @@ validateTemplateBinderArg info arg =
     TBAExpr expr -> validateTemplate info expr
     TBAMeta _ -> Right ()
 
-validateTemplateAttrArg :: RuleInfo -> TemplateAttrArg -> Either Text ()
-validateTemplateAttrArg info arg =
+validateTemplateGenArg :: RuleInfo -> TemplateGenArg -> Either Text ()
+validateTemplateGenArg info arg =
   case arg of
-    TAName _ term -> validateAttrTemplate info term
-    TAPos term -> validateAttrTemplate info term
+    TGNamed _ term -> validateTemplateArgExpr info term
+    TGPos term -> validateTemplateArgExpr info term
 
-validateAttrTemplate :: RuleInfo -> AttrTemplate -> Either Text ()
-validateAttrTemplate info term =
+validateTemplateArgExpr :: RuleInfo -> TemplateArgExpr -> Either Text ()
+validateTemplateArgExpr info term =
   case term of
-    ATLIT _ -> Right ()
-    ATHole cap -> requireNamedLiteralLike info cap
-    ATVar _ -> Right ()
+    TAExpr _ -> Right ()
+    TAHole cap -> requireNamedCapture info cap
 
 requireNamedIdent :: RuleInfo -> Text -> Either Text ()
 requireNamedIdent info cap =
@@ -230,9 +231,8 @@ requireNamedIdent info cap =
     Just SPKIdent -> Right ()
     _ -> Left ("surface: template capture requires ident(...): " <> cap)
 
-requireNamedLiteralLike :: RuleInfo -> Text -> Either Text ()
-requireNamedLiteralLike info cap =
+requireNamedCapture :: RuleInfo -> Text -> Either Text ()
+requireNamedCapture info cap =
   case M.lookup cap (riNamedKinds info) of
-    Just SPKIdent -> Right ()
-    Just SPKLiteral -> Right ()
-    _ -> Left ("surface: attribute hole capture requires ident/int/string/bool capture: " <> cap)
+    Just _ -> Right ()
+    _ -> Left ("surface: template hole requires a named capture: " <> cap)

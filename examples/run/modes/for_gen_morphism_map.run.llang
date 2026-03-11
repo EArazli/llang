@@ -29,10 +29,10 @@ doctrine ForGenTargetMap where {
 
 morphism fgMapInst : ForGenSchemaMap -> ForGenTargetMap where {
   mode M -> M;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
-  gen op @M -> op2
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+  gen op @M -> op2(a)
   check none;
 }
 
@@ -47,5 +47,5 @@ run sanity using debug where {
   source mode M;
 }
 ---
-discard{M.X}
+discard(M.X)
 ---

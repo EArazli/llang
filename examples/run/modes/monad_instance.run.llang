@@ -17,25 +17,27 @@ doctrine IdMonad where {
   gen join(a@C) : [T(T(a))] -> [T(a)] @C;
 
   action T where {
-    gen comp_ctx_ext -> comp_ctx_ext
-    gen comp_var -> comp_var
-    gen comp_reindex -> comp_reindex
-    gen ret -> ret
-    gen join -> join
+    gen comp_ctx_ext -> comp_ctx_ext(T(a))
+    gen comp_var -> comp_var(T(a))
+    gen comp_reindex -> comp_reindex(T(a))
+    gen ret -> ret(T(a))
+    gen join -> join(T(a))
   }
 
   rule computational unit -> (a@C) : [T(a)] -> [T(a)] @C =
-    ret{T(a)} ; join{a} == id[T(a)]
+    ret(T(a)) ; join(a) == id[T(a)]
+  rule computational unit_lifted -> (a@C) : [T(T(a))] -> [T(T(a))] @C =
+    ret(T(T(a))) ; join(T(a)) == id[T(T(a))]
 }
 
 morphism monadInst : SchemaMonad -> IdMonad where {
   mode C -> C;
-  gen comp_ctx_ext @C -> comp_ctx_ext
-  gen comp_var @C -> comp_var
-  gen comp_reindex @C -> comp_reindex
+  gen comp_ctx_ext @C -> comp_ctx_ext(a)
+  gen comp_var @C -> comp_var(a)
+  gen comp_reindex @C -> comp_reindex(a)
   modality T -> T;
-  gen ret @C -> ret
-  gen join @C -> join
+  gen ret @C -> ret(x)
+  gen join @C -> join(x)
   check none;
 }
 
@@ -51,5 +53,5 @@ run assoc_nf using debug where {
   source mode C;
 }
 ---
-map[T](join{C.A}) ; join{C.A}
+map[T](join(C.A)) ; join(C.A)
 ---

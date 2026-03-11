@@ -18,5 +18,5 @@ run comm_swap using main where {
   source mode M;
 }
 ---
-swap{Obj, Obj} ; m
+swap(Obj, Obj) ; m
 ---

@@ -19,8 +19,8 @@ import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Control.Monad.Combinators.Expr (Operator(..), makeExprParser)
 
-import Strat.Poly.Attr (AttrLit(..))
 import Strat.Poly.DSL.AST (RawPolyObjExpr(..), RawTypeRef(..), RawModExpr(..))
+import Strat.Poly.Literal (Literal(..))
 import Strat.Poly.Surface.Spec
 
 
@@ -28,7 +28,7 @@ import Strat.Poly.Surface.Spec
 
 data SurfaceParam
   = SPIdent Text
-  | SPLit AttrLit
+  | SPLit Literal
   | SPType RawPolyObjExpr
   deriving (Eq, Show)
 
@@ -324,10 +324,9 @@ templateId = do
 templateGen :: Parser TemplateExpr
 templateGen = do
   ref <- templateGenRef
-  mArgs <- optional (symbol "{" *> typeExpr `sepBy` symbol "," <* symbol "}")
-  mAttrArgs <- optional templateAttrArgs
+  mArgs <- optional templateGenArgs
   mBinderArgs <- optional templateBinderArgs
-  pure (TGen ref mArgs mAttrArgs mBinderArgs)
+  pure (TGen ref mArgs mBinderArgs)
 
 templateGenRef :: Parser GenRef
 templateGenRef =
@@ -399,47 +398,37 @@ templateTermRef = do
   name <- ident
   pure (TTermRef name)
 
-templateAttrArgs :: Parser [TemplateAttrArg]
-templateAttrArgs = do
+templateGenArgs :: Parser [TemplateGenArg]
+templateGenArgs = do
   _ <- symbol "("
-  args <- templateAttrArg `sepBy` symbol ","
+  args <- templateGenArg `sepBy` symbol ","
   _ <- symbol ")"
   if mixedArgStyles args
-    then fail "template attribute arguments must be either all named or all positional"
+    then fail "template generator arguments must be either all named or all positional"
     else pure args
   where
     mixedArgStyles [] = False
     mixedArgStyles xs =
-      let named = [() | TAName _ _ <- xs]
-          positional = [() | TAPos _ <- xs]
+      let named = [() | TGNamed _ _ <- xs]
+          positional = [() | TGPos _ <- xs]
        in not (null named) && not (null positional)
 
-templateAttrArg :: Parser TemplateAttrArg
-templateAttrArg =
+templateGenArg :: Parser TemplateGenArg
+templateGenArg =
   try named <|> positional
   where
     named = do
-      field <- ident
+      field <- identRaw
       _ <- symbol "="
-      term <- templateAttrTerm
-      pure (TAName field term)
-    positional = TAPos <$> templateAttrTerm
+      term <- templateArgExpr
+      pure (TGNamed field term)
+    positional = TGPos <$> templateArgExpr
 
-templateAttrTerm :: Parser AttrTemplate
-templateAttrTerm =
-  choice
-    [ try attrHole
-    , ATLIT . ALInt . fromIntegral <$> integer
-    , ATLIT . ALString <$> stringLiteral
-    , ATLIT (ALBool True) <$ keyword "true"
-    , ATLIT (ALBool False) <$ keyword "false"
-    , ATVar <$> ident
-    ]
+templateArgExpr :: Parser TemplateArgExpr
+templateArgExpr =
+  try argHole <|> (TAExpr <$> typeExpr)
   where
-    attrHole = do
-      _ <- symbol "#"
-      name <- ident
-      pure (ATHole name)
+    argHole = TAHole <$> hashIdent
 
 templateBinderArgs :: Parser [TemplateBinderArg]
 templateBinderArgs = do
@@ -487,7 +476,14 @@ typeExpr = lexeme (try modApp <|> regular)
       third <- ident
       rest <- many (symbol "." *> ident)
       pure (RMComp (first : second : third : rest))
-    regular = do
+    regular =
+      literalExpr <|> typeOrTermExpr
+    literalExpr =
+      (RPLit . LInt . fromIntegral <$> integer)
+        <|> (RPLit . LString <$> stringLiteral)
+        <|> (RPLit (LBool True) <$ keyword "true")
+        <|> (RPLit (LBool False) <$ keyword "false")
+    typeOrTermExpr = do
       name <- identRaw
       mQual <- optional (try (char '.' *> identRaw))
       mArgs <- optional (symbol "(" *> typeExpr `sepBy` symbol "," <* symbol ")")
@@ -530,7 +526,7 @@ parseSurfaceExpr spec input =
 
 data Capture
   = CapIdent (Maybe Text) Text
-  | CapLit (Maybe Text) AttrLit
+  | CapLit (Maybe Text) Literal
   | CapType (Maybe Text) RawPolyObjExpr
   | CapExpr SurfaceNode
   | CapSkip
@@ -616,11 +612,11 @@ parseRulePatItem lexSpec exprSpec item =
   case item of
     PatLit lit -> literalToken lexSpec lit *> pure CapSkip
     PatIdent cap -> CapIdent cap <$> identToken lexSpec
-    PatInt cap -> CapLit cap . ALInt . fromIntegral <$> integer
-    PatString cap -> CapLit cap . ALString <$> stringLiteral
+    PatInt cap -> CapLit cap . LInt . fromIntegral <$> integer
+    PatString cap -> CapLit cap . LString <$> stringLiteral
     PatBool cap ->
-      (literalToken lexSpec "true" $> CapLit cap (ALBool True))
-        <|> (literalToken lexSpec "false" $> CapLit cap (ALBool False))
+      (literalToken lexSpec "true" $> CapLit cap (LBool True))
+        <|> (literalToken lexSpec "false" $> CapLit cap (LBool False))
     PatExpr -> CapExpr <$> parseExpr lexSpec exprSpec 0
     PatType cap -> CapType cap <$> typeExpr
 

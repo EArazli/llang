@@ -11,11 +11,11 @@ run beta_app using debug where {
 }
 ---
 (
-  eval{Obj, Obj}
+  eval(Obj, Obj)
   *
   (
-    (curry{Obj, Obj, Obj} * id[Hom(Obj, Obj)])
-    ; pair{exp(Obj, Obj), Obj, Obj}
+    (curry(Obj, Obj, Obj) * id[Hom(Obj, Obj)])
+    ; pair(exp(Obj, Obj), Obj, Obj)
   )
-) ; comp{Obj, prod(exp(Obj, Obj), Obj), Obj}
+) ; comp(Obj, prod(exp(Obj, Obj), Obj), Obj)
 ---

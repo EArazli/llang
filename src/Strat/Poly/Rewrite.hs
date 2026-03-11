@@ -128,12 +128,12 @@ rewriteOnceNestedRaw tt spliceMapper rules diag =
           go rest
         PInternalDrop ->
           go rest
-        PGen gen attrs bargs -> do
+        PGen gen args bargs -> do
           bargRes <- rewriteOnceBinderArgs bargs
           case bargRes of
             Nothing -> go rest
             Just bargs' -> do
-              let edge' = edge { ePayload = PGen gen attrs bargs' }
+              let edge' = edge { ePayload = PGen gen args bargs' }
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
               pure (Just diag')
 
@@ -209,11 +209,11 @@ rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
       Right []
     PInternalDrop ->
       Right []
-    PGen gen attrs bargs -> do
+    PGen gen args bargs -> do
       bargsRes <- rewriteAllBinderArgs tt spliceMapper cap rules bargs
       mapM
         (\bargs' -> do
-          let edge' = edge { ePayload = PGen gen attrs bargs' }
+          let edge' = edge { ePayload = PGen gen args bargs' }
           let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
           canonDiagramRaw diag')
         bargsRes
@@ -238,8 +238,7 @@ applyMatchWithMapper tt spliceMapper rule match host = do
   hostBoundary <- mapM boundaryHostPort lhsBoundary
   hostCtxNorm <- normalizeDiagramCtxOnly tt host
   hostNorm <- normalizeMergeSupport tt (S.fromList hostBoundary) hostCtxNorm
-  rhsSub <- applySubstDiagram tt (mTySubst match) (rrRHS rule)
-  let rhs0 = applyAttrSubstDiagram (mAttrSubst match) rhsSub
+  rhs0 <- applySubstDiagram tt (mTySubst match) (rrRHS rule)
   rhs1 <- instantiateBinderMetas (mBinderSub match) rhs0
   rhs <- expandSplices spliceMapper (mBinderSub match) rhs1
   host1 <- deleteMatchedEdges hostNorm (M.elems (mEdgeMap match))
@@ -509,5 +508,4 @@ mkMatchConfig tt rule =
   MatchConfig
     { mcTheory = tt
     , mcFlex = S.union (S.fromList (rrTyVars rule)) (S.fromList (rrTmVars rule))
-    , mcAttrFlex = freeAttrVarsDiagram (rrLHS rule)
     }

@@ -14,23 +14,24 @@ import qualified Data.Set as S
 
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
-import Strat.Poly.Attr
 import Strat.Poly.Doctrine
   ( Doctrine(..)
   , CtorTables
   , GenDecl(..)
+  , GenParam(..)
   , InputShape(..)
   , BinderSig(..)
   , deriveCtorTables
   , gdPlainDom
   , gdTyVars
   , gdTmVars
+  , instantiateGenParams
   , doctrineTypeTheory
   , doctrineTypeTheoryFromTables
   )
-import Strat.Poly.DSL.AST (RawPolyObjExpr)
+import Strat.Poly.DSL.AST (RawPolyObjExpr(..))
 import qualified Strat.Poly.DSL.Elab.Term as PolyDSL
-import Strat.Poly.Diagram (Diagram(..), idDTm, genD, unionDiagram, diagramDom, diagramCod, freeVarsDiagram, freeAttrVarsDiagram, applySubstDiagram)
+import Strat.Poly.Diagram (Diagram(..), idDTm, genD, unionDiagram, diagramDom, diagramCod, freeVarsDiagram, applySubstDiagram)
 import Strat.Poly.Graph
   ( PortId(..)
   , Edge(..)
@@ -55,9 +56,12 @@ import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
 import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurfaceExpr)
 import Strat.Poly.Surface.Spec
-import Strat.Poly.Obj (Obj, TmVar, Context, CodeArg(..), objMode, freeVarsObj)
+import Strat.Poly.Literal (Literal(..), LiteralKind(..), literalKind)
+import Strat.Poly.Obj (Obj, TmVar(..), Context, TermDiagram, CodeArg(..), defaultMetaArgs, modeCtxGlobals, objMode, freeVarsObj)
 import qualified Strat.Poly.Obj as Ty
-import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory, literalKindForObj)
+import Strat.Poly.DefEq (termExprToDiagramChecked)
+import Strat.Poly.TermExpr (TermExpr(..))
 import qualified Strat.Poly.UnifyObj as U
 import qualified Strat.Poly.Morphism as PolyMorph
 import Strat.Util.List (dedupe)
@@ -102,14 +106,12 @@ elabSurfaceExpr menv docS surf src = do
     then pure ()
     else Left "surface: unresolved variables"
   validateDiagram (sdDiag surfDiag)
-  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram (sdDiag surfDiag))
   docBase <- resolveBaseDoctrine menv docS surf
   diagOut <-
     if dName docBase == dName docS
       then Right (sdDiag surfDiag)
       else eliminateToBase docS docBase mode (sdDiag surfDiag)
   validateDiagram diagOut
-  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diagOut)
   pure (docBase, diagOut)
 
 resolveBaseDoctrine :: ModuleEnv -> Doctrine -> PolySurfaceDef -> Either Text Doctrine
@@ -419,8 +421,8 @@ instantiateImplUnaryGen iface mor g ty = do
 
 isDupShape :: GenDecl -> Bool
 isDupShape gen =
-  case (gdTyVars gen, gdTmVars gen, gdAttrs gen, gdDom gen, gdCod gen) of
-    ([v], [], [], [InPort (Ty.OVar v1)], [Ty.OVar v2, Ty.OVar v3]) ->
+  case (gdTyVars gen, gdTmVars gen, gdDom gen, gdCod gen) of
+    ([v], [], [InPort (Ty.OVar v1)], [Ty.OVar v2, Ty.OVar v3]) ->
       v == v1
         && v == v2
         && v == v3
@@ -428,8 +430,8 @@ isDupShape gen =
 
 isDropShape :: GenDecl -> Bool
 isDropShape gen =
-  case (gdTyVars gen, gdTmVars gen, gdAttrs gen, gdDom gen, gdCod gen) of
-    ([v], [], [], [InPort (Ty.OVar v1)], []) -> v == v1
+  case (gdTyVars gen, gdTmVars gen, gdDom gen, gdCod gen) of
+    ([v], [], [InPort (Ty.OVar v1)], []) -> v == v1
     _ -> False
 
 
@@ -514,21 +516,14 @@ elabVarRef tt subst tmCtx name ty = do
   let base0 = varSurf tmCtx name ty'
   liftEither (applySubstSurf tt subst base0)
 
-elabZeroArgGen :: TypeTheory -> Doctrine -> ModeName -> ElabEnv -> Text -> Fresh SurfDiag
-elabZeroArgGen tt doc mode env name = do
+elabZeroArgGen :: Doctrine -> CtorTables -> TypeTheory -> ModeName -> ElabEnv -> Text -> Fresh SurfDiag
+elabZeroArgGen doc ctorTables tt mode env name = do
   gen <- liftEither (lookupGen doc mode (GenName name))
-  liftEither (ensureDirectGenCallAttrs gen)
-  if null (gdPlainDom gen)
+  if null (gdPlainDom gen) && null (gdParams gen)
     then do
-      diag <- genDFromDecl tt mode env gen Nothing M.empty []
+      diag <- genDFromDecl doc ctorTables tt mode env M.empty gen Nothing []
       pure (emptySurf diag)
     else liftEither (Left ("surface: unknown variable " <> name))
-
-ensureDirectGenCallAttrs :: GenDecl -> Either Text ()
-ensureDirectGenCallAttrs gen =
-  if null (gdAttrs gen)
-    then Right ()
-    else Left "surface: generator requires attribute arguments; supply via a template action"
 
 
 -- Template evaluation
@@ -558,7 +553,7 @@ evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList templ 
           Just (SPIdent v) -> pure v
           _ -> liftEither (Left ("surface: variable placeholder requires ident capture: " <> cap))
       case M.lookup varName (eeVars env) of
-        Nothing -> elabZeroArgGen tt doc mode env varName
+        Nothing -> elabZeroArgGen doc ctorTables tt mode env varName
         Just ty -> elabVarRef tt subst (envTmCtx env) varName ty
     TTermRef name ->
       case M.lookup name (meTerms menv) of
@@ -574,7 +569,7 @@ evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList templ 
       ctx'0 <- liftEither (mapM (elabSurfaceObjExprWithTablesInCtx doc ctorTables (eeTmBinders env) mode) ctx)
       ctx' <- liftEither (mapM (applySubstObj tt subst) ctx'0)
       pure (emptySurf (idDTm mode (envTmCtx env) ctx'))
-    TGen ref mArgs mAttrArgs mBinderArgs -> do
+    TGen ref mArgs mBinderArgs -> do
       genName <-
         case ref of
           GenLit name -> pure name
@@ -583,21 +578,8 @@ evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList templ 
               Just (SPIdent name) -> pure name
               _ -> liftEither (Left ("surface: generator hole requires ident capture: " <> cap))
       gen <- liftEither (lookupGen doc mode (GenName genName))
-      args0 <-
-        case mArgs of
-          Nothing -> pure Nothing
-          Just args -> do
-            tys <- liftEither (mapM (elabSurfaceObjExprWithTablesInCtx doc ctorTables (eeTmBinders env) mode) args)
-            pure (Just tys)
-      args' <-
-        liftEither
-          ( case args0 of
-              Nothing -> Right Nothing
-              Just args -> Just <$> mapM (applySubstObj tt subst) args
-          )
-      attrs <- liftEither (elabTemplateGenAttrs doc gen paramMap mAttrArgs)
       bargs <- evalTemplateBinderArgs menv doc ctorTables tt mode ops env paramMap subst childList mBinderArgs
-      diag <- genDFromDecl tt mode env gen args' attrs bargs
+      diag <- genDFromDecl doc ctorTables tt mode env paramMap gen mArgs bargs
       pure (emptySurf diag)
     TBox name inner -> do
       innerDiag <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList inner
@@ -662,101 +644,157 @@ buildTypeSubst doc ctorTables tt mode env paramMap = do
           pure [(var, ty)]
         _ -> pure []
 
-elabTemplateGenAttrs
-  :: Doctrine
-  -> GenDecl
-  -> M.Map Text SurfaceParam
-  -> Maybe [TemplateAttrArg]
-  -> Either Text AttrMap
-elabTemplateGenAttrs doc gen paramMap mArgs =
-  case gdAttrs gen of
-    [] ->
-      case mArgs of
-        Nothing -> Right M.empty
-        Just _ -> Left "surface: generator does not accept attribute arguments"
-    fields -> do
-      args <- maybe (Left "surface: missing generator attribute arguments") Right mArgs
-      normalized <- normalizeTemplateAttrArgs fields args
-      fmap M.fromList (mapM elabOne normalized)
-  where
-    elabOne (fieldName, fieldSort, termTemplate) = do
-      term <- elabTemplateAttrTerm doc fieldSort paramMap termTemplate
-      Right (fieldName, term)
-
-normalizeTemplateAttrArgs
-  :: [(AttrName, AttrSort)]
-  -> [TemplateAttrArg]
-  -> Either Text [(AttrName, AttrSort, AttrTemplate)]
-normalizeTemplateAttrArgs fields args =
-  case (namedArgs, positionalArgs) of
-    (_ : _, _ : _) -> Left "surface: template attribute arguments must be either all named or all positional"
-    (_ : _, []) -> normalizeNamed namedArgs
-    ([], _) -> normalizePos positionalArgs
-  where
-    namedArgs = [ (name, term) | TAName name term <- args ]
-    positionalArgs = [ term | TAPos term <- args ]
-    fieldNames = map fst fields
-
-    normalizeNamed named = do
-      ensureDistinctText "surface: duplicate generator attribute argument" (map fst named)
-      if length named /= length fields
-        then Left "surface: generator attribute argument mismatch"
-        else Right ()
-      if S.fromList (map fst named) == S.fromList fieldNames
-        then Right ()
-        else Left "surface: generator attribute arguments must cover exactly the declared fields"
-      let namedMap = M.fromList named
-      traverse
-        (\(fieldName, fieldSort) ->
-          case M.lookup fieldName namedMap of
-            Nothing -> Left "surface: missing generator attribute argument"
-            Just term -> Right (fieldName, fieldSort, term))
-        fields
-
-    normalizePos positional =
-      if length positional /= length fields
-        then Left "surface: generator attribute argument mismatch"
-        else Right [ (fieldName, fieldSort, term) | ((fieldName, fieldSort), term) <- zip fields positional ]
-
 ensureDistinctText :: Text -> [Text] -> Either Text ()
 ensureDistinctText label names =
   if length names == S.size (S.fromList names)
     then Right ()
     else Left label
 
-elabTemplateAttrTerm :: Doctrine -> AttrSort -> M.Map Text SurfaceParam -> AttrTemplate -> Either Text AttrTerm
-elabTemplateAttrTerm doc expectedSort paramMap termTemplate =
-  case termTemplate of
-    ATLIT lit -> do
-      ensureLiteralAllowed doc expectedSort lit
-      Right (ATLit lit)
-    ATHole name ->
-      case M.lookup name paramMap of
-        Just (SPLit lit) -> do
-          ensureLiteralAllowed doc expectedSort lit
-          Right (ATLit lit)
-        Just (SPIdent identName) -> do
-          let lit = ALString identName
-          ensureLiteralAllowed doc expectedSort lit
-          Right (ATLit lit)
-        _ -> Left "surface: attribute hole must be bound to a literal or identifier"
-    Strat.Poly.Surface.Spec.ATVar name ->
-      Right (Strat.Poly.Attr.ATVar (AttrVar name expectedSort))
+requiredTemplateGenArgs :: [GenParam] -> Maybe [TemplateGenArg] -> Either Text [TemplateGenArg]
+requiredTemplateGenArgs params mArgs =
+  case mArgs of
+    Nothing
+      | null params -> Right []
+      | otherwise -> Left "surface: missing generator arguments"
+    Just args -> Right args
 
-ensureLiteralAllowed :: Doctrine -> AttrSort -> AttrLit -> Either Text ()
-ensureLiteralAllowed doc sortName lit = do
-  decl <-
-    case M.lookup sortName (dAttrSorts doc) of
-      Nothing -> Left "surface: unknown attribute sort"
-      Just d -> Right d
-  let litKind =
-        case lit of
-          ALInt _ -> LKInt
-          ALString _ -> LKString
-          ALBool _ -> LKBool
-  case asLitKind decl of
-    Just allowed | allowed == litKind -> Right ()
-    _ -> Left "surface: attribute sort does not admit this literal kind"
+normalizeTemplateGenArgs :: [GenParam] -> [TemplateGenArg] -> Either Text [TemplateArgExpr]
+normalizeTemplateGenArgs params args =
+  case (namedArgs, positionalArgs) of
+    (_ : _, _ : _) -> Left "surface: template generator arguments must be either all named or all positional"
+    (_ : _, []) -> normalizeNamed namedArgs
+    ([], _) -> normalizePos positionalArgs
+  where
+    namedArgs = [ (name, arg) | TGNamed name arg <- args ]
+    positionalArgs = [ arg | TGPos arg <- args ]
+    paramNames = map paramName params
+
+    normalizeNamed named = do
+      ensureDistinctText "surface: duplicate generator argument" (map fst named)
+      if length named /= length params
+        then Left "surface: generator argument mismatch"
+        else Right ()
+      if S.fromList (map fst named) == S.fromList paramNames
+        then Right ()
+        else Left "surface: generator arguments must cover exactly the declared parameters"
+      let namedMap = M.fromList named
+      mapM
+        (\param ->
+          case M.lookup (paramName param) namedMap of
+            Nothing -> Left "surface: missing generator argument"
+            Just arg -> Right arg)
+        params
+
+    normalizePos positional =
+      if length positional /= length params
+        then Left "surface: generator argument mismatch"
+        else Right positional
+
+    paramName param =
+      case param of
+        GP_Ty v -> Ty.tmvName v
+        GP_Tm v -> Ty.tmvName v
+
+elabTemplateTyArg
+  :: Doctrine
+  -> CtorTables
+  -> TypeTheory
+  -> ElabEnv
+  -> M.Map Text SurfaceParam
+  -> ModeName
+  -> TemplateArgExpr
+  -> Either Text Obj
+elabTemplateTyArg doc ctorTables tt env paramMap expectedMode argExpr = do
+  raw <-
+    case argExpr of
+      TAExpr expr -> Right expr
+      TAHole cap ->
+        case M.lookup cap paramMap of
+          Just (SPType expr) -> Right expr
+          Just (SPIdent name) -> Right (RPTVar name)
+          Just (SPLit _) -> Left "surface: type argument hole cannot use a literal capture"
+          Nothing -> Left ("surface: unknown template capture: " <> cap)
+  ty0 <- elabSurfaceObjExprWithTablesInCtx doc ctorTables (eeTmBinders env) expectedMode raw
+  applySubstObj tt (eeTypeSubst env) ty0
+
+elabTemplateTmArg
+  :: Doctrine
+  -> CtorTables
+  -> TypeTheory
+  -> ElabEnv
+  -> M.Map Text SurfaceParam
+  -> Obj
+  -> TemplateArgExpr
+  -> Either Text TermDiagram
+elabTemplateTmArg doc ctorTables tt env paramMap expectedSort argExpr =
+  case argExpr of
+    TAExpr expr ->
+      elabSurfaceTmArg doc ctorTables tt env expectedSort expr
+    TAHole cap ->
+      case M.lookup cap paramMap of
+        Just (SPLit lit) ->
+          mkLiteralTerm tt (envTmCtx env) expectedSort lit
+        Just (SPIdent name)
+          | literalKindForObj tt expectedSort == Just LKString ->
+              mkLiteralTerm tt (envTmCtx env) expectedSort (LString name)
+          | otherwise ->
+              elabSurfaceTmArg doc ctorTables tt env expectedSort (RPTVar name)
+        Just (SPType _) ->
+          Left "surface: term argument hole cannot use a <type> capture"
+        Nothing ->
+          Left ("surface: unknown template capture: " <> cap)
+
+elabSurfaceTmArg
+  :: Doctrine
+  -> CtorTables
+  -> TypeTheory
+  -> ElabEnv
+  -> Obj
+  -> RawPolyObjExpr
+  -> Either Text TermDiagram
+elabSurfaceTmArg doc ctorTables tt env expectedSort raw =
+  case PolyDSL.elabTmTermWithTables doc ctorTables [] [] tmBound (Just expectedSort) raw of
+    Right tm -> Right tm
+    Left err ->
+      case raw of
+        RPTVar name
+          | literalKindForObj tt expectedSort /= Nothing ->
+              mkImplicitTmMeta tt (envTmCtx env) name expectedSort
+          | otherwise ->
+              Left err
+        _ ->
+          Left err
+  where
+    visibleBinders = visibleTermBinders (eeTmBinders env)
+    tmBound =
+      M.fromList
+        ( zipWith
+            (\(name, ty) idx -> (name, (idx, ty)))
+            visibleBinders
+            [0 :: Int ..]
+        )
+
+mkLiteralTerm :: TypeTheory -> [Obj] -> Obj -> Literal -> Either Text TermDiagram
+mkLiteralTerm tt tmCtx expectedSort lit =
+  case literalKindForObj tt expectedSort of
+    Just kind
+      | kind == literalKind lit ->
+          termExprToDiagramChecked tt tmCtx expectedSort (TMLit lit)
+      | otherwise ->
+          Left "surface: literal kind does not match the expected generator parameter sort"
+    Nothing ->
+      Left "surface: expected generator parameter sort does not admit literals"
+
+mkImplicitTmMeta :: TypeTheory -> [Obj] -> Text -> Obj -> Either Text TermDiagram
+mkImplicitTmMeta tt tmCtx name expectedSort =
+  let fresh =
+        TmVar
+          { tmvName = name
+          , tmvSort = expectedSort
+          , tmvScope = max 0 (length (modeCtxGlobals tmCtx (objMode expectedSort)))
+          , tmvOwnerMode = Nothing
+          }
+   in termExprToDiagramChecked tt tmCtx expectedSort (TMMeta fresh (defaultMetaArgs tmCtx fresh))
 
 
 -- Apply binder after template evaluation
@@ -914,7 +952,6 @@ attachUnaryDiagram source host0 op0 = do
 
 instantiateUnaryGen :: TypeTheory -> GenDecl -> Obj -> Either Text Diagram
 instantiateUnaryGen tt gen ty = do
-  ensureStructuralGenAttrs gen
   if not (null (gdTmVars gen))
     then Left "surface: structural generator must not have term parameters"
     else Right ()
@@ -928,18 +965,17 @@ instantiateUnaryGen tt gen ty = do
   subst <- U.mkSubst [ (v, CAObj t) | (v, t) <- M.toList substTy ]
   dom <- U.applySubstCtx tt subst (gdPlainDom gen)
   cod <- U.applySubstCtx tt subst (gdCod gen)
-  genD (gdMode gen) dom cod (gdName gen)
+  buildGenDiagram (gdMode gen) [] dom cod (gdName gen) genArgs []
   where
     isBinder sh =
       case sh of
         InPort _ -> False
         InBinder _ -> True
-
-ensureStructuralGenAttrs :: GenDecl -> Either Text ()
-ensureStructuralGenAttrs gen =
-  if null (gdAttrs gen)
-    then Right ()
-    else Left "surface: structural generator dup/drop must not declare attributes"
+    genArgs =
+      case gdTyVars gen of
+        [] -> []
+        [_] -> [CAObj ty]
+        _ -> []
 
 
 -- Template helpers
@@ -969,33 +1005,49 @@ lookupGen doc mode name =
     renderMode (ModeName m) = m
     renderGen (GenName g) = g
 
-genDFromDecl :: TypeTheory -> ModeName -> ElabEnv -> GenDecl -> Maybe [Obj] -> AttrMap -> [BinderArg] -> Fresh Diagram
-genDFromDecl tt mode env gen mArgs attrs bargs = do
-  let tyVars = gdTyVars gen
-  let subst0 = eeTypeSubst env
-  renameSubst <- freshSubst tyVars
+genDFromDecl
+  :: Doctrine
+  -> CtorTables
+  -> TypeTheory
+  -> ModeName
+  -> ElabEnv
+  -> M.Map Text SurfaceParam
+  -> GenDecl
+  -> Maybe [TemplateGenArg]
+  -> [BinderArg]
+  -> Fresh Diagram
+genDFromDecl doc ctorTables tt mode env paramMap gen mArgs bargs = do
+  rawArgs <- liftEither (requiredTemplateGenArgs (gdParams gen) mArgs)
+  argExprs <- liftEither (normalizeTemplateGenArgs (gdParams gen) rawArgs)
+  (freshParams, renameSubst) <- freshGenParams tt (envTmCtx env) (gdParams gen)
+  let genFresh = gen { gdParams = freshParams }
+  (argsRev, _substSeq) <-
+    foldM
+      (elabOneArg freshParams)
+      ([], U.emptySubst)
+      (zip freshParams argExprs)
+  let genArgs = reverse argsRev
+  paramSubst <- liftEither (instantiateGenParams tt genFresh genArgs)
   dom0 <- liftEither (applySubstCtx tt renameSubst (gdPlainDom gen))
   cod0 <- liftEither (applySubstCtx tt renameSubst (gdCod gen))
   slots0 <- liftEither (mapM (applySubstBinderSigTy tt renameSubst) [ bs | InBinder bs <- gdDom gen ])
-  dom1 <- liftEither (applySubstCtx tt subst0 dom0)
-  cod1 <- liftEither (applySubstCtx tt subst0 cod0)
-  slots1 <- liftEither (mapM (applySubstBinderSigTy tt subst0) slots0)
-  (dom2, cod2, slots2) <-
-    case mArgs of
-      Nothing -> pure (dom1, cod1, slots1)
-      Just args -> do
-        args' <- liftEither (mapM (applySubstObj tt subst0) args)
-        if length args' /= length tyVars
-          then liftEither (Left "surface: generator type argument mismatch")
-          else do
-            freshVars <- liftEither (extractFreshVars tyVars renameSubst)
-            subst <- liftEither (U.mkSubst (zipWith (\v arg -> (v, CAObj arg)) freshVars args'))
-            dom2' <- liftEither (applySubstCtx tt subst dom1)
-            cod2' <- liftEither (applySubstCtx tt subst cod1)
-            slots2' <- liftEither (mapM (applySubstBinderSigTy tt subst) slots1)
-            pure (dom2', cod2', slots2')
-  (domFinal, codFinal, bargsFinal) <- liftEither (checkBinderArgs tt dom2 cod2 slots2 bargs)
-  liftEither (buildGenDiagram mode (envTmCtx env) domFinal codFinal (gdName gen) attrs bargsFinal)
+  dom1 <- liftEither (applySubstCtx tt paramSubst dom0)
+  cod1 <- liftEither (applySubstCtx tt paramSubst cod0)
+  slots1 <- liftEither (mapM (applySubstBinderSigTy tt paramSubst) slots0)
+  (domFinal, codFinal, bargsFinal) <- liftEither (checkBinderArgs tt dom1 cod1 slots1 bargs)
+  liftEither (buildGenDiagram mode (envTmCtx env) domFinal codFinal (gdName gen) genArgs bargsFinal)
+  where
+    elabOneArg _ (acc, substAcc) (param, argExpr) =
+      case param of
+        GP_Ty v -> do
+          ty <- liftEither (elabTemplateTyArg doc ctorTables tt env paramMap (Ty.tmVarOwner v) argExpr)
+          subst1 <- liftEither (bindCodeArg tt v (CAObj ty) substAcc)
+          pure (CAObj ty : acc, subst1)
+        GP_Tm v -> do
+          expectedSort <- liftEither (applySubstObj tt substAcc (Ty.tmvSort v))
+          tm <- liftEither (elabTemplateTmArg doc ctorTables tt env paramMap expectedSort argExpr)
+          subst1 <- liftEither (bindCodeArg tt v (CATm tm) substAcc)
+          pure (CATm tm : acc, subst1)
 
 applySubstBinderSigTy :: TypeTheory -> Subst -> BinderSig -> Either Text BinderSig
 applySubstBinderSigTy tt subst bs = do
@@ -1052,11 +1104,11 @@ applySubstBinderArg tt subst barg =
     BAConcrete inner ->
       BAConcrete <$> applySubstDiagram tt subst inner
 
-buildGenDiagram :: ModeName -> [Obj] -> Context -> Context -> GenName -> AttrMap -> [BinderArg] -> Either Text Diagram
-buildGenDiagram mode tmCtx dom cod gen attrs bargs = do
+buildGenDiagram :: ModeName -> [Obj] -> Context -> Context -> GenName -> [CodeArg] -> [BinderArg] -> Either Text Diagram
+buildGenDiagram mode tmCtx dom cod gen args bargs = do
   let (inPorts, diag1) = allocPorts dom (emptyDiagram mode tmCtx)
   let (outPorts, diag2) = allocPorts cod diag1
-  diag3 <- addEdgePayload (PGen gen attrs bargs) inPorts outPorts diag2
+  diag3 <- addEdgePayload (PGen gen args bargs) inPorts outPorts diag2
   let diagFinal = diag3 { dIn = inPorts, dOut = outPorts }
   validateDiagram diagFinal
   pure diagFinal
@@ -1270,32 +1322,47 @@ instance Monad Fresh where
 evalFresh :: Fresh a -> Either Text a
 evalFresh (Fresh f) = fmap fst (f 0)
 
-freshSubst :: [TmVar] -> Fresh Subst
-freshSubst vars = do
-  pairs <- mapM freshVar vars
-  liftEither (U.mkSubst [ (v, CAObj t) | (v, t) <- pairs ])
+bindCodeArg :: TypeTheory -> TmVar -> CodeArg -> Subst -> Either Text Subst
+bindCodeArg tt v arg subst = do
+  singleton <- U.mkSubst [(v, arg)]
+  composeSubst tt singleton subst
 
-extractFreshVars :: [TmVar] -> Subst -> Either Text [TmVar]
-extractFreshVars vars subst =
-  mapM lookupVar vars
+freshGenParams :: TypeTheory -> [Obj] -> [GenParam] -> Fresh ([GenParam], Subst)
+freshGenParams tt tmCtx = go U.emptySubst []
   where
-    lookupVar v =
-      case U.lookupCodeMeta subst v of
-        Just (Ty.OVar v') -> Right v'
-        _ -> Left "internal error: expected fresh type variable"
-
-freshVar :: TmVar -> Fresh (TmVar, Obj)
-freshVar v = do
-  n <- freshInt
-  let name = Ty.tmvName v <> T.pack ("#" <> show n)
-  let fresh = v { Ty.tmvName = name }
-  pure (v, Ty.OVar fresh)
+    go subst acc [] =
+      pure (reverse acc, subst)
+    go subst acc (param : rest) =
+      case param of
+        GP_Ty v -> do
+          fresh <- freshTyVar v
+          subst' <- liftEither (bindCodeArg tt v (CAObj (Ty.OVar fresh)) subst)
+          go subst' (GP_Ty fresh : acc) rest
+        GP_Tm v -> do
+          sort' <- liftEither (applySubstObj tt subst (Ty.tmvSort v))
+          (fresh, tm) <- freshTmParam tt tmCtx v sort'
+          subst' <- liftEither (bindCodeArg tt v (CATm tm) subst)
+          go subst' (GP_Tm fresh : acc) rest
 
 freshTyVar :: TmVar -> Fresh TmVar
 freshTyVar v = do
   n <- freshInt
   let name = Ty.tmvName v <> T.pack ("#" <> show n)
   pure v { Ty.tmvName = name }
+
+freshTmParam :: TypeTheory -> [Obj] -> TmVar -> Obj -> Fresh (TmVar, TermDiagram)
+freshTmParam tt tmCtx v sortTy = do
+  n <- freshInt
+  let name = Ty.tmvName v <> T.pack ("#" <> show n)
+  let fresh =
+        TmVar
+          { tmvName = name
+          , tmvSort = sortTy
+          , tmvScope = max 0 (length (modeCtxGlobals tmCtx (objMode sortTy)))
+          , tmvOwnerMode = Nothing
+          }
+  tm <- liftEither (termExprToDiagramChecked tt tmCtx sortTy (TMMeta fresh (defaultMetaArgs tmCtx fresh)))
+  pure (fresh, tm)
 
 freshInt :: Fresh Int
 freshInt = Fresh (\n -> Right (n, n + 1))

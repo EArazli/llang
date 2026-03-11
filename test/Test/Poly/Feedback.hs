@@ -30,6 +30,7 @@ tests =
     "Poly.Feedback"
     [ testCase "loop elaborates to explicit feedback payload" testFeedbackElab
     , testCase "trace elaborates to feedback payload with outer inputs" testTraceElab
+    , testCase "parameterized generators require explicit arguments" testParameterizedGeneratorRequiresArgs
     , testCase "trace rejects zero arity" testTraceRejectsZeroArity
     , testCase "trace rejects body arity smaller than k" testTraceRejectsInsufficientBoundary
     , testCase "trace rejects suffix feedback object mismatch" testTraceRejectsSuffixMismatch
@@ -65,6 +66,12 @@ testTraceElab = do
       case binding of
         BindFeedback { sbIns = ins, sbOuts = outs } -> length ins == 1 && length outs == 1
         _ -> False
+
+testParameterizedGeneratorRequiresArgs :: Assertion
+testParameterizedGeneratorRequiresArgs = do
+  let doc = mkDoctrine
+  raw <- require (parseDiagExpr "tag")
+  expectLeftContains "missing generator arguments" (elabDiagExpr emptyEnv doc modeM [] raw)
 
 testTraceRejectsZeroArity :: Assertion
 testTraceRejectsZeroArity = do
@@ -129,14 +136,14 @@ mkDoctrine =
       { dName = "D"
       , dModes = mkModes [modeM]
       , dAcyclicModes = S.singleton modeM
-      , dAttrSorts = M.empty
-      , dGens =
+            , dGens =
           M.fromList
             [ ( modeM
               , M.fromList
                   [ (GenName "step", genStep)
                   , (GenName "step2", genStep2)
                   , (GenName "step_bad", genStepBad)
+                  , (GenName "tag", genTag)
                   ]
               )
             ]
@@ -154,7 +161,7 @@ genStep =
     , gdParams = []
     , gdDom = [InPort tyT]
     , gdCod = [tyT, tyT]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
 
 genStep2 :: GenDecl
@@ -165,7 +172,7 @@ genStep2 =
     , gdParams = []
     , gdDom = [InPort tyT, InPort tyT]
     , gdCod = [tyT, tyT]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
 
 genStepBad :: GenDecl
@@ -176,7 +183,18 @@ genStepBad =
     , gdParams = []
     , gdDom = [InPort tyT, InPort tyU]
     , gdCod = [tyT, tyT]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
+    }
+
+genTag :: GenDecl
+genTag =
+  GenDecl
+    { gdName = GenName "tag"
+    , gdMode = modeM
+    , gdParams = [GP_Tm (TmVar { tmvName = "x", tmvSort = tyT, tmvScope = 0, tmvOwnerMode = Nothing })]
+    , gdDom = []
+    , gdCod = [tyT]
+    , gdLiteralKind = Nothing
     }
 
 

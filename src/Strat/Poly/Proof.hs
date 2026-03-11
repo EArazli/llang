@@ -154,13 +154,13 @@ applyAtFocus spliceMapper tt focus match diag rule =
     FocusInBinder edgeKey binderIx innerFocus -> do
       edge <- requireEdge edgeKey diag
       case ePayload edge of
-        PGen g attrs bargs -> do
+        PGen g args bargs -> do
           barg <- requireBinderArg binderIx bargs
           case barg of
             BAConcrete inner -> do
               inner' <- applyAtFocus spliceMapper tt innerFocus match inner rule
               let bargs' = replaceAt binderIx (BAConcrete inner') bargs
-              let edge' = edge { ePayload = PGen g attrs bargs' }
+              let edge' = edge { ePayload = PGen g args bargs' }
               canonDiagramRaw diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
             BAMeta _ ->
               Left "checkRewriteStep: focus points to binder meta argument"

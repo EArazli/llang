@@ -30,6 +30,7 @@ foldDiagram onDiag onPayload onBArg = goDiag
           PFeedback inner -> goDiag inner
           PSplice _ _ -> mempty
           PTmMeta _ -> mempty
+          PTmLit _ -> mempty
           PInternalDrop -> mempty
 
     goBArg ba =
@@ -59,9 +60,9 @@ traverseDiagram onDiag onPayload onBArg = goDiag
     goPayload p = do
       p' <-
         case p of
-          PGen g attrs bargs -> do
+          PGen g args bargs -> do
             bargs' <- traverse goBArg bargs
-            pure (PGen g attrs bargs')
+            pure (PGen g args bargs')
           PBox name inner -> do
             inner' <- goDiag inner
             pure (PBox name inner')
@@ -72,6 +73,8 @@ traverseDiagram onDiag onPayload onBArg = goDiag
             pure (PSplice x me)
           PTmMeta v ->
             pure (PTmMeta v)
+          PTmLit lit ->
+            pure (PTmLit lit)
           PInternalDrop ->
             pure PInternalDrop
       onPayload p'

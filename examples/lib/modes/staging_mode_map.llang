@@ -82,12 +82,12 @@ doctrine Staging2 where {
 morphism StageToStage2 : Staging -> Staging2 where {
   mode RT -> R2;
   mode CT -> C2;
-  gen comp_ctx_ext @RT -> comp_ctx_ext
-  gen comp_var @RT -> comp_var
-  gen comp_reindex @RT -> comp_reindex
-  gen comp_ctx_ext @CT -> comp_ctx_ext
-  gen comp_var @CT -> comp_var
-  gen comp_reindex @CT -> comp_reindex
+  gen comp_ctx_ext @RT -> comp_ctx_ext(a)
+  gen comp_var @RT -> comp_var(a)
+  gen comp_reindex @RT -> comp_reindex(a)
+  gen comp_ctx_ext @CT -> comp_ctx_ext(a)
+  gen comp_var @CT -> comp_var(a)
+  gen comp_reindex @CT -> comp_reindex(a)
   modality quote -> Q;
   modality splice -> S;
   type Nat @RT -> Nat @R2;

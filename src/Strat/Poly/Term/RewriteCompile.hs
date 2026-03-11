@@ -56,6 +56,7 @@ compileTermRules tt mode = do
       TermConvEnv
         { tcLookupSig = \m f -> TT.lookupTmFunSig tt m f
         , tcSortEq = \_ tyA tyB -> Right (tyA == tyB)
+        , tcLiteralKindForSort = \_ sortTy -> Right (TT.literalKindForObj tt sortTy)
         }
 
     expectedOutSort d =
@@ -88,6 +89,7 @@ abstractVars _mode varCtx vars tm =
             else Left ("Can't use term variable with non-canonical arguments in TRS compilation: " <> tmvName v)
     TMBound i -> Right (TMBound i)
     TMFun f args -> TMFun f <$> mapM (abstractVars _mode varCtx vars) args
+    TMLit lit -> Right (TMLit lit)
 
 findVarIndex :: TmVar -> [TmVar] -> Int -> Maybe Int
 findVarIndex _ [] _ = Nothing
@@ -101,6 +103,7 @@ ensureFirstOrder side tm =
     TMMeta _ _ -> Left ("compileTermRules: unexpected TMMeta in " <> side)
     TMBound _ -> Right ()
     TMFun _ args -> mapM_ (ensureFirstOrder side) args
+    TMLit _ -> Right ()
 
 ensureLHSShape :: TermExpr -> Either Text ()
 ensureLHSShape lhs =

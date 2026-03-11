@@ -21,12 +21,12 @@ doctrine D where {
 morphism CtoV : D -> D where {
   mode C -> V;
   mode V -> V;
-  gen comp_ctx_ext @C -> comp_ctx_ext
-  gen comp_var @C -> comp_var
-  gen comp_reindex @C -> comp_reindex
-  gen comp_ctx_ext @V -> comp_ctx_ext
-  gen comp_var @V -> comp_var
-  gen comp_reindex @V -> comp_reindex
+  gen comp_ctx_ext @C -> comp_ctx_ext(a)
+  gen comp_var @C -> comp_var(a)
+  gen comp_reindex @C -> comp_reindex(a)
+  gen comp_ctx_ext @V -> comp_ctx_ext(a)
+  gen comp_var @V -> comp_var(a)
+  gen comp_reindex @V -> comp_reindex(a)
   type A @C -> B @V;
   gen f @C -> g
   gen g @V -> g

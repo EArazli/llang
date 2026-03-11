@@ -18,13 +18,13 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
 import Strat.Common.Rules (RewritePolicy(..))
-import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar(..), AttrTerm(..))
 import Strat.Poly.Cell2 (Cell2(..), c2TyVars)
 import Strat.Poly.Doctrine
 import Strat.Poly.Graph
 import Strat.Poly.Diagram
 import Strat.Poly.DiagramInterpretation
   ( DiagramInterpretation(..)
+  , applySubstBinderSig
   , applySubstBinderSigs
   , binderHoleCaptureRiskMetasDiagram
   , binderHoleNames
@@ -51,6 +51,8 @@ import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Obj
 import Strat.Poly.UnifyObj hiding (applySubstDiagram)
 import Strat.Poly.TypeTheory
+import Strat.Poly.DefEq (termExprToDiagramChecked)
+import Strat.Poly.TermExpr (TermExpr(..))
 
 data ActionSemanticsResult
   = ActionSemanticsProved [(Text, JoinProof)]
@@ -307,6 +309,12 @@ maybeToList mv =
     Nothing -> []
     Just x -> [x]
 
+firstText :: (Text -> Text) -> Either Text a -> Either Text a
+firstText f mv =
+  case mv of
+    Left err -> Left (f err)
+    Right v -> Right v
+
 renderGenName :: GenName -> Text
 renderGenName (GenName g) = g
 
@@ -399,19 +407,95 @@ applyAction doc mName diagSrc = do
 
     onGenEdge tt modName me codeLift diagSrc0 diagTgt edgeKey edgeSrc mappedBargs =
       case ePayload edgeSrc of
-        PGen g attrs _bargsSrc -> do
-          genDecl <- lookupGenDeclInDoctrine "map: unknown source generator" doc (dMode diagSrc0) g
+        PGen g args _bargsSrc -> do
+          genDecl0 <- lookupGenDeclInDoctrine "map: unknown source generator" doc (dMode diagSrc0) g
           img0raw <- actionImageForGenerator tt doc modName g
-          (img0, renameSubst) <- freshenImageTyVars tt diagTgt img0raw
-          (img1, subst) <- instantiateImage tt diagTgt edgeKey img0
-          let img2 = applyAttrSubstDiagram (actionAttrSubst genDecl attrs) img1
-          img3 <- instantiateMappedBinders tt me codeLift genDecl mappedBargs renameSubst subst img2
+          (genDecl, img0base) <- freshenGenDeclAndImage tt edgeKey genDecl0 img0raw
+          let protectedVars = S.fromList (gdTyVars genDecl <> gdTmVars genDecl)
+          (img0, renameSubst) <- freshenImageTyVars tt protectedVars diagTgt img0base
+          argSubst <- instantiateGenParams tt genDecl args
+          img1 <- applySubstDiagram tt argSubst img0
+          (img2, subst) <-
+            firstText
+              (\err -> "map: generator " <> renderGenName g <> " boundary instantiation failed: " <> err)
+              (instantiateImage tt diagTgt edgeKey img1)
+          img3 <-
+            firstText
+              (\err -> "map: generator " <> renderGenName g <> " binder instantiation failed: " <> err)
+              (instantiateMappedBinders tt me codeLift genDecl mappedBargs renameSubst subst img2)
           img4 <- weakenDiagramTmCtxTo (dTmCtx diagTgt) img3
           diagTgtNorm <- normalizeBoundaryPorts (eIns edgeSrc <> eOuts edgeSrc) diagTgt
           img4Norm <- normalizeDiagramObjExprs (dModes doc) img4
           spliceEdge diagTgtNorm edgeKey img4Norm
         _ ->
           Left "map: internal error: diOnGenEdge called on non-PGen"
+
+    freshenGenDeclAndImage
+      :: TypeTheory
+      -> Int
+      -> GenDecl
+      -> Diagram
+      -> Either Text (GenDecl, Diagram)
+    freshenGenDeclAndImage typeTheory edgeIdx genDecl image0 = do
+      (freshParams, renameSubst) <- freshenSourceParams typeTheory edgeIdx (gdParams genDecl)
+      domFresh <- mapM (renameInputShape typeTheory renameSubst) (gdDom genDecl)
+      codFresh <- applySubstCtx typeTheory renameSubst (gdCod genDecl)
+      imageFresh <- applySubstDiagram typeTheory renameSubst image0
+      pure
+        ( genDecl
+            { gdParams = freshParams
+            , gdDom = domFresh
+            , gdCod = codFresh
+            }
+        , imageFresh
+        )
+
+    freshenSourceParams
+      :: TypeTheory
+      -> Int
+      -> [GenParam]
+      -> Either Text ([GenParam], Subst)
+    freshenSourceParams typeTheory edgeIdx =
+      go 0 emptySubst []
+      where
+        go _ subst acc [] =
+          Right (reverse acc, subst)
+        go i subst acc (param : rest) =
+          case param of
+            GP_Ty v -> do
+              sort' <- applySubstObj typeTheory subst (tmvSort v)
+              let fresh = freshTyParamVar edgeIdx i v sort'
+              singleton <- mkSubst [(v, CAObj (OVar fresh))]
+              subst' <- composeSubst typeTheory singleton subst
+              go (i + 1) subst' (GP_Ty fresh : acc) rest
+            GP_Tm v -> do
+              sort' <- applySubstObj typeTheory subst (tmvSort v)
+              let fresh = freshTmParamVar edgeIdx i v sort'
+              tmFresh <- termExprToDiagramChecked typeTheory [] sort' (TMMeta fresh [])
+              singleton <- mkSubst [(v, CATm tmFresh)]
+              subst' <- composeSubst typeTheory singleton subst
+              go (i + 1) subst' (GP_Tm fresh : acc) rest
+
+    renameInputShape :: TypeTheory -> Subst -> InputShape -> Either Text InputShape
+    renameInputShape typeTheory subst shape =
+      case shape of
+        InPort ty -> InPort <$> applySubstObj typeTheory subst ty
+        InBinder sig -> InBinder <$> applySubstBinderSig typeTheory subst sig
+
+    freshTyParamVar :: Int -> Int -> TmVar -> Obj -> TmVar
+    freshTyParamVar edgeIdx i v sort' =
+      v
+        { tmvName = tmvName v <> "__map" <> T.pack (show edgeIdx) <> "_" <> T.pack (show i)
+        , tmvSort = sort'
+        }
+
+    freshTmParamVar :: Int -> Int -> TmVar -> Obj -> TmVar
+    freshTmParamVar edgeIdx i v sort' =
+      v
+        { tmvName = tmvName v <> "__map" <> T.pack (show edgeIdx) <> "_" <> T.pack (show i)
+        , tmvSort = sort'
+        , tmvOwnerMode = Nothing
+        }
 
     instantiateMappedBinders
       :: TypeTheory
@@ -448,11 +532,12 @@ applyAction doc mName diagSrc = do
 
     freshenImageTyVars
       :: TypeTheory
+      -> S.Set TmVar
       -> Diagram
       -> Diagram
       -> Either Text (Diagram, Subst)
-    freshenImageTyVars typeTheory host image = do
-      let vars = S.toList (freeVarsDiagram image)
+    freshenImageTyVars typeTheory protected host image = do
+      let vars = S.toList (S.difference (freeVarsDiagram image) protected)
       if null vars
         then do
           subst <- mkSubst []
@@ -493,13 +578,6 @@ applyAction doc mName diagSrc = do
               ty' <- normalizeObjExpr (dModes doc) ty
               pure (IM.insert (unPortId pid) ty' mp)
 
-actionAttrSubst :: GenDecl -> AttrMap -> AttrSubst
-actionAttrSubst genDecl attrs =
-  M.fromList
-    [ (AttrVar fieldName sortName, M.findWithDefault (ATVar (AttrVar fieldName sortName)) fieldName attrs)
-    | (fieldName, sortName) <- gdAttrs genDecl
-    ]
-
 instantiateImage :: TypeTheory -> Diagram -> Int -> Diagram -> Either Text (Diagram, Subst)
 instantiateImage tt diag edgeKey img = do
   edge <-
@@ -533,8 +611,8 @@ normalizeDiagramObjExprs mt diag = do
 
     normalizePayload payload =
       case payload of
-        PGen g attrs bargs ->
-          PGen g attrs <$> mapM normalizeBinderArg bargs
+        PGen g args bargs ->
+          PGen g args <$> mapM normalizeBinderArg bargs
         PBox name inner ->
           PBox name <$> normalizeDiagramObjExprs mt inner
         PFeedback inner ->

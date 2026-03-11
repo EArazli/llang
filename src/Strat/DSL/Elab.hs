@@ -19,7 +19,6 @@ import Strat.DSL.AST
 import Strat.Frontend.Env
 import Strat.Frontend.Compile (compileDiagramArtifact)
 import Strat.Pipeline
-import Strat.Poly.Attr
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
 import Strat.Poly.DSL.Elab
@@ -47,7 +46,7 @@ import Strat.Poly.Obj
   , TmVar(..)
   , TermDiagram(..)
   )
-import Strat.Poly.Diagram (Diagram(..), genDWithAttrs)
+import Strat.Poly.Diagram (Diagram(..), genDWithArgs)
 import Strat.Poly.Doctrine
   ( Doctrine(..)
   , BinderSig(..)
@@ -59,6 +58,7 @@ import Strat.Poly.Doctrine
   , deriveCtorTables
   , doctrineTypeTheory
   , doctrineTypeTheoryFromTables
+  , genericGenDiagram
   , gdPlainDom
   , isTypeDeclGenNameInTables
   , lookupGenDeclInDoctrine
@@ -469,8 +469,6 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
   mapM_ (uncurry validateApplyCoverage) implMorphs
   modeMap <- mergeDisjoint "mode" [liftModeMap p (PolyMorph.morModeMap mor) | (p, mor) <- implMorphs]
   modMap <- mergeDisjoint "modality" [liftModMap p (PolyMorph.morModMap mor) | (p, mor) <- implMorphs]
-  attrMaps <- mapM (uncurry liftCompletedAttrMap) implMorphs
-  attrMap <- mergeDisjoint "attrsort" attrMaps
   typeMaps <- mapM (uncurry liftCompletedTypeMap) implMorphs
   typeMap <- mergeDisjoint "type" typeMaps
   genMaps <- mapM (uncurry liftCompletedGenMap) implMorphs
@@ -483,7 +481,6 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
       , PolyMorph.morIsCoercion = False
       , PolyMorph.morModeMap = modeMap
       , PolyMorph.morModMap = modMap
-      , PolyMorph.morAttrSortMap = attrMap
       , PolyMorph.morTypeMap = typeMap
       , PolyMorph.morGenMap = genMap
       , PolyMorph.morCheck = PolyMorph.CheckAll
@@ -499,7 +496,6 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
         , orName = ObjName (prefixText p (renderTypeName (orName ref)))
         }
     renderTypeName (ObjName t) = t
-    prefixAttr p (AttrSort s) = AttrSort (prefixText p s)
     prefixGen p (mode, gen) = (prefixMode p mode, GenName (prefixText p (renderGenName gen)))
     renderGenName (GenName g) = g
 
@@ -513,14 +509,6 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
         [ (prefixMod p srcMod, tgtExpr)
         | (srcMod, tgtExpr) <- M.toList mp
         ]
-    liftAttrMap p mp =
-      M.fromList
-        [ (prefixAttr p srcSort, tgtSort)
-        | (srcSort, tgtSort) <- M.toList mp
-        ]
-    liftCompletedAttrMap p mor = do
-      completed <- completeAttrMap mor
-      pure (liftAttrMap p completed)
     liftTypeMap p mp =
       M.fromList
         [ (prefixTypeRef p srcRef, tmpl)
@@ -537,19 +525,6 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
         [ (prefixGen p srcKey, img)
         | (srcKey, img) <- M.toList mp
         ]
-
-    completeAttrMap mor =
-      foldM add M.empty (M.keys (dAttrSorts (PolyMorph.morSrc mor)))
-      where
-        explicit = PolyMorph.morAttrSortMap mor
-        tgtSorts = dAttrSorts (PolyMorph.morTgt mor)
-        add mp srcSort =
-          case M.lookup srcSort explicit of
-            Just tgtSort -> Right (M.insert srcSort tgtSort mp)
-            Nothing ->
-              if M.member srcSort tgtSorts
-                then Right (M.insert srcSort srcSort mp)
-                else Left ("apply: morphism " <> PolyMorph.morName mor <> " missing attrsort mapping")
 
     completeTypeMap mor = do
       tgtCtorTables <- deriveCtorTables (PolyMorph.morTgt mor)
@@ -598,8 +573,14 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
                           <> renderGen srcGenName
                       )
                   Just gd -> Right gd
-              diag <- genDWithAttrs tgtMode (gdPlainDom tgtGen) (gdCod tgtGen) (gdName tgtGen) M.empty
-              Right (M.insert srcKey (PolyMorph.GenImage diag M.empty) mp)
+              img <- canonicalGenImage tgtGen
+              Right (M.insert srcKey img mp)
+
+        canonicalGenImage gd = do
+          diag <- genericGenDiagram gd
+          let binderSlots = [bs | InBinder bs <- gdDom gd]
+          let holes = [BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length binderSlots - 1]]
+          pure (PolyMorph.GenImage diag (M.fromList (zip holes binderSlots)))
 
     identityTemplate tt tgtCtorTables mor srcRef sig = do
       tgtMode <- PolyMorph.applyMorphismMode mor (orMode srcRef)
@@ -662,8 +643,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
       let incompatibleTypes = [ srcRef | (srcRef, isMissing) <- typeIssues, not isMissing ]
       let allBadTypes = missingTypes <> incompatibleTypes
       let missingGens = [ srcKey | srcKey <- allGenKeys srcDoc srcCtorTables, M.notMember srcKey (PolyMorph.morGenMap mor) ]
-      let missingAttrSorts = [ srcSort | srcSort <- M.keys (dAttrSorts srcDoc), needsAttrMapping srcSort tgtDoc mor ]
-      if null allBadTypes && null missingGens && null missingAttrSorts
+      if null allBadTypes && null missingGens
         then Right ()
         else
           Left
@@ -677,8 +657,6 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
                 <> renderMissing "type_incompatible" (map renderTypeRef incompatibleTypes)
                 <> "; "
                 <> renderMissing "gen" (map renderGenKey missingGens)
-                <> "; "
-                <> renderMissing "attr_sort" (map renderAttrSort missingAttrSorts)
             )
 
     typeMappingIssue srcRef srcSig tgtDoc mor =
@@ -695,11 +673,6 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
                     if length srcSig == length tgtSig
                       then Nothing
                       else Just False
-
-    needsAttrMapping srcSort tgtDoc mor =
-      case M.lookup srcSort (PolyMorph.morAttrSortMap mor) of
-        Just _ -> False
-        Nothing -> M.notMember srcSort (dAttrSorts tgtDoc)
 
     allGenKeys doc ctorTables =
       [ (mode, gdName genDecl)
@@ -727,7 +700,6 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     genToObjName (GenName n) = ObjName n
     renderGen (GenName n) = n
     renderTypeRef ref = renderModeName (orMode ref) <> "." <> renderTypeName (orName ref)
-    renderAttrSort (AttrSort s) = s
     renderGenKey (mode, GenName genName) = renderModeName mode <> "." <> genName
 
 toGlueMorph :: Text -> Text -> Doctrine -> PolyMorph.Morphism -> PolyMorph.Morphism
@@ -762,7 +734,6 @@ namespaceDoctrineWithParam paramName doc = do
   let prefix t = paramName <> "::" <> t
       renameModeName (ModeName t) = ModeName (prefix t)
       renameModName (ModName t) = ModName (prefix t)
-      renameAttrSort (AttrSort t) = AttrSort (prefix t)
       renameObjName (ObjName t) = ObjName (prefix t)
       renameGenName (GenName t) = GenName (prefix t)
       renameTransformName (ModTransformName t) = ModTransformName (prefix t)
@@ -770,8 +741,6 @@ namespaceDoctrineWithParam paramName doc = do
         M.fromList [ (m, renameModeName m) | m <- M.keys (mtModes (dModes doc)) ]
       modRenMap =
         M.fromList [ (m, renameModName m) | m <- M.keys (mtDecls (dModes doc)) ]
-      sortRenMap =
-        M.fromList [ (s, renameAttrSort s) | s <- M.keys (dAttrSorts doc) ]
       typeRenMap =
         M.fromList
           [ ( ObjRef mode ctor
@@ -804,7 +773,6 @@ namespaceDoctrineWithParam paramName doc = do
     renameDoctrine
       modeRenMap
       modRenMap
-      sortRenMap
       typeRenMap
       M.empty
       genRenMap
@@ -831,7 +799,6 @@ mergeIface left right = do
   transforms <- unionByEq "mod_transform" (mtTransforms (dModes left)) (mtTransforms (dModes right))
   classified <- unionByEq "classifiedBy" (mtClassifiedBy (dModes left)) (mtClassifiedBy (dModes right))
   classifierLifts <- unionByEq "classifier_lift" (mtClassifierLifts (dModes left)) (mtClassifierLifts (dModes right))
-  attrSorts <- unionByEq "attrsort" (dAttrSorts left) (dAttrSorts right)
   gens <- mergeModeTables "generator" (dGens left) (dGens right)
   cells <- mergeCellsWithAlphaRename (dCells2 left) (dCells2 right)
   actions <- unionByEq "action" (dActions left) (dActions right)
@@ -848,7 +815,6 @@ mergeIface left right = do
             , mtClassifierLifts = classifierLifts
             }
       , dAcyclicModes = S.union (dAcyclicModes left) (dAcyclicModes right)
-      , dAttrSorts = attrSorts
       , dGens = gens
       , dCells2 = cells
       , dActions = actions
@@ -1332,7 +1298,7 @@ emitTransformObject mode transformer doc objDecl = do
           , gdParams = params
           , gdDom = []
           , gdCod = [universeTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   insertGeneratedGen doc mode decl
   where
@@ -1443,7 +1409,7 @@ emitTransformUtility mode layout doc util =
         , gdParams = params
         , gdDom = map InPort dom
         , gdCod = cod
-        , gdAttrs = []
+        , gdLiteralKind = Nothing
         }
     residualStructuredGen name =
       let oldGamma = mkTyVar "gOld"
@@ -1470,7 +1436,7 @@ emitTransformUtility mode layout doc util =
                 , InBinder binderSig
                 ]
             , gdCod = [progTy (OVar progIn) (OVar progOut)]
-            , gdAttrs = []
+            , gdLiteralKind = Nothing
             }
 
 
@@ -1537,7 +1503,7 @@ emitTransformLoop mode layout fragment baseDoc doc item =
                   <> [ InPort (binderProgramTy bs) | InBinder bs <- gdDom gDecl ]
                   <> [continuationBinder]
             , gdCod = [progTy (OVar gammaProgIn) (OVar gammaProgOut)]
-            , gdAttrs = gdAttrs gDecl
+            , gdLiteralKind = Nothing
             }
 
 
@@ -1718,7 +1684,6 @@ buildPolyFromBase budget baseName newName env newDoc = do
           , PolyMorph.morIsCoercion = True
           , PolyMorph.morModeMap = identityModeMap baseDoc
           , PolyMorph.morModMap = identityModMap baseDoc
-          , PolyMorph.morAttrSortMap = identityAttrSortMap baseDoc
           , PolyMorph.morTypeMap = M.empty
           , PolyMorph.morGenMap = genMap
           , PolyMorph.morCheck = PolyMorph.CheckAll
@@ -1752,20 +1717,13 @@ buildPolyFromBase budget baseName newName env newDoc = do
       ]
 
     genImage (mode, gen) = do
-      let attrs = M.fromList [(fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- gdAttrs gen]
-      img0 <- genDWithAttrs mode (gdPlainDom gen) (gdCod gen) (gdName gen) attrs
+      img0 <- genericGenDiagram gen
       let binderSlots = [bs | InBinder bs <- gdDom gen]
       let holes = [BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length binderSlots - 1]]
       let bargs = map BAMeta holes
       let binderSigs = M.fromList (zip holes binderSlots)
-      img <- setSingleGenBargs (gdName gen) attrs bargs img0
-      pure ((mode, gdName gen), PolyMorph.GenImage img binderSigs)
-
-    setSingleGenBargs genName attrs bargs img =
-      case IM.toList (dEdges img) of
-        [(edgeKey, edge)] ->
-          let edge' = edge {ePayload = PGen genName attrs bargs}
-           in Right img {dEdges = IM.insert edgeKey edge' (dEdges img)}
+      case IM.toList (dEdges img0) of
+        [(_, _)] -> pure ((mode, gdName gen), PolyMorph.GenImage img0 binderSigs)
         _ -> Left "generated morphism image is not a single generator edge"
 
     identityModeMap doc =
@@ -1776,8 +1734,5 @@ buildPolyFromBase budget baseName newName env newDoc = do
         [ (name, ModExpr {meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [name]})
         | (name, decl) <- M.toList (mtDecls (dModes doc))
         ]
-
-    identityAttrSortMap doc =
-      M.fromList [(s, s) | s <- M.keys (dAttrSorts doc)]
 
     genToObjName (GenName n) = ObjName n

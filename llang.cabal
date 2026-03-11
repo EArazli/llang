@@ -140,7 +140,6 @@ library
       Strat.Frontend.Prelude
       Strat.Frontend.Run
       Strat.Pipeline
-      Strat.Poly.Attr
       Strat.Poly.Cell2
       Strat.Poly.Coherence
       Strat.Poly.CriticalPairs
@@ -161,6 +160,7 @@ library
       Strat.Poly.DSL.Parse
       Strat.Poly.Graph
       Strat.Poly.GraphCanon
+      Strat.Poly.Literal
       Strat.Poly.Match
       Strat.Poly.ModAction
       Strat.Poly.ModeTheory

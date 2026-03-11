@@ -21,11 +21,11 @@ import Strat.Frontend.Compile (compileSourceDiagram)
 import Strat.Pipeline
 import Strat.Poly.Doctrine
 import Strat.Poly.Kernel (Obj(..), pattern OCon, ObjRef(..), ObjName(..))
-import Strat.Poly.Obj (mkCon)
+import Strat.Poly.Obj (CodeArg(..), TermDiagram(..), mkCon, tmvName, tmvSort)
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
+import Strat.Poly.Literal (Literal(..), LiteralKind(..), literalKind)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Attr
 import Strat.Poly.ModeTheory (ModeName(..))
 import qualified Strat.Poly.Morphism as Morph
 import Strat.Poly.Pretty (renderDiagram)
@@ -33,6 +33,7 @@ import Strat.Poly.Quote (quoteDiagram)
 import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.TypeTheory (TypeTheory, literalKindForObj)
 
 
 data Artifact
@@ -237,13 +238,16 @@ ensureDocFragment = ensureDocFragmentWithLabel "extract Doc"
 ensureDocFragmentWithLabel :: Text -> Doctrine -> ModeName -> Either Text ()
 ensureDocFragmentWithLabel label doc mode = do
   let docTy = mkCon (ObjRef mode (ObjName "Doc")) []
-  _ <- requireFragmentGen label doc mode (GenName "empty") [] [docTy]
+  emptyDecl <- requireFragmentGen label doc mode (GenName "empty") [] [docTy]
   textDecl <- requireFragmentGen label doc mode (GenName "text") [] [docTy]
-  _ <- requireFragmentGen label doc mode (GenName "line") [] [docTy]
-  _ <- requireFragmentGen label doc mode (GenName "cat") [docTy, docTy] [docTy]
+  lineDecl <- requireFragmentGen label doc mode (GenName "line") [] [docTy]
+  catDecl <- requireFragmentGen label doc mode (GenName "cat") [docTy, docTy] [docTy]
   indentDecl <- requireFragmentGen label doc mode (GenName "indent") [docTy] [docTy]
-  requireAttrLitKind label doc "s" LKString textDecl
-  requireAttrLitKind label doc "n" LKInt indentDecl
+  requireNoParams label emptyDecl
+  requireNoParams label lineDecl
+  requireNoParams label catDecl
+  requireTmLiteralParam label doc "s" LKString textDecl
+  requireTmLiteralParam label doc "n" LKInt indentDecl
 
 
 ensureFileTreeFragment :: Doctrine -> ModeName -> Either Text ()
@@ -253,8 +257,9 @@ ensureFileTreeFragment doc mode = do
       docTy = mkCon (ObjRef mode (ObjName "Doc")) []
       ftTy = mkCon (ObjRef mode (ObjName "FileTree")) []
   singleFileDecl <- requireFragmentGen label doc mode (GenName "singleFile") [docTy] [ftTy]
-  _ <- requireFragmentGen label doc mode (GenName "concatTree") [ftTy, ftTy] [ftTy]
-  requireAttrLitKind label doc "path" LKString singleFileDecl
+  concatDecl <- requireFragmentGen label doc mode (GenName "concatTree") [ftTy, ftTy] [ftTy]
+  requireNoParams label concatDecl
+  requireTmLiteralParam label doc "path" LKString singleFileDecl
 
 
 requireFragmentGen :: Text -> Doctrine -> ModeName -> GenName -> [Obj] -> [Obj] -> Either Text GenDecl
@@ -278,16 +283,28 @@ lookupGenInMode doc mode genName =
     Just gd -> Right gd
 
 
-requireNoParamsNoBinders :: Text -> GenDecl -> Either Text ()
-requireNoParamsNoBinders label gd =
-  if null (gdParams gd) && all isPort (gdDom gd)
+requireNoParams :: Text -> GenDecl -> Either Text ()
+requireNoParams label gd =
+  if null (gdParams gd)
     then Right ()
     else
       Left
         ( label
             <> ": generator '"
             <> renderGenNameText (gdName gd)
-            <> "' must have no parameters and no binder inputs"
+            <> "' must have no parameters"
+        )
+
+requireNoBinders :: Text -> GenDecl -> Either Text ()
+requireNoBinders label gd =
+  if all isPort (gdDom gd)
+    then Right ()
+    else
+      Left
+        ( label
+            <> ": generator '"
+            <> renderGenNameText (gdName gd)
+            <> "' must have no binder inputs"
         )
   where
     isPort sh =
@@ -317,7 +334,7 @@ requireGenSig label mode genName expectedDom expectedCod gd = do
             <> renderModeName mode
         )
     else Right ()
-  requireNoParamsNoBinders label gd
+  requireNoBinders label gd
   let expectedDomShape = map InPort expectedDom
   if gdDom gd == expectedDomShape && gdCod gd == expectedCod
     then Right ()
@@ -340,47 +357,49 @@ requireGenSig label mode genName expectedDom expectedCod gd = do
         _ -> "<obj>"
 
 
-requireAttrLitKind
+requireTmLiteralParam
   :: Text
   -> Doctrine
-  -> AttrName
-  -> AttrLitKind
+  -> Text
+  -> LiteralKind
   -> GenDecl
   -> Either Text ()
-requireAttrLitKind label doc key expectedKind gd = do
-  attrSort <-
-    case lookup key (gdAttrs gd) of
-      Nothing ->
+requireTmLiteralParam label doc key expectedKind gd = do
+  tt <- doctrineTypeTheory doc
+  param <-
+    case filter ((== key) . paramName) (gdParams gd) of
+      [p] -> Right p
+      [] ->
         Left
           ( label
               <> ": generator '"
               <> renderGenNameText (gdName gd)
-              <> "' missing attribute '"
+              <> "' missing parameter '"
               <> key
               <> "'"
           )
-      Just sortName -> Right sortName
-  decl <-
-    case M.lookup attrSort (dAttrSorts doc) of
-      Nothing ->
+      _ ->
+        Left (label <> ": duplicate generator parameter name '" <> key <> "'")
+  tmv <-
+    case param of
+      GP_Tm v -> Right v
+      GP_Ty _ ->
         Left
           ( label
               <> ": generator '"
               <> renderGenNameText (gdName gd)
-              <> "' attribute '"
+              <> "' parameter '"
               <> key
-              <> "' refers to unknown sort "
-              <> renderAttrSort attrSort
+              <> "' must be a term parameter"
           )
-      Just d -> Right d
-  if asLitKind decl == Just expectedKind
+  if literalKindForObj tt (tmvSort tmv) == Just expectedKind
     then Right ()
     else
       Left
         ( label
             <> ": generator '"
             <> renderGenNameText (gdName gd)
-            <> "' attribute '"
+            <> "' parameter '"
             <> key
             <> "' must have "
             <> litKindLabel expectedKind
@@ -392,6 +411,10 @@ requireAttrLitKind label doc key expectedKind gd = do
         LKString -> "string"
         LKInt -> "int"
         LKBool -> "bool"
+    paramName param =
+      case param of
+        GP_Ty v -> tmvName v
+        GP_Tm v -> tmvName v
 
 
 prefixErr :: Either Text a -> Text -> Either Text a
@@ -486,20 +509,20 @@ topologicalEdges diag =
 
 
 extractValue :: ValueExtractorSpec -> Doctrine -> Diagram -> Either Text Artifact
-extractValue extractorSpec _doc diag =
+extractValue extractorSpec doc diag =
   case extractorSpec of
     ExtractDoc _stdout -> do
-      txt <- extractDoc diag
+      txt <- extractDoc doc diag
       pure (ArtExtracted txt M.empty)
     ExtractFileTree root -> do
-      files <- extractFileTree diag
+      files <- extractFileTree doc diag
       let files' = M.mapKeys (\path -> root <> "/" <> path) files
       pure (ArtExtracted "" files')
 
 
-extractDoc :: Diagram -> Either Text Text
-extractDoc diag = do
-  env <- evalArtifactDiagram diag
+extractDoc :: Doctrine -> Diagram -> Either Text Text
+extractDoc doc diag = do
+  env <- evalArtifactDiagram doc diag
   vals <- mapM (lookupOut env "extract Doc") (dOut diag)
   docs <- mapM expectDoc vals
   pure (T.concat (map renderDoc docs))
@@ -509,9 +532,9 @@ extractDoc diag = do
         Nothing -> Left (label <> ": open output port")
         Just v -> Right v
 
-extractFileTree :: Diagram -> Either Text (M.Map FilePath Text)
-extractFileTree diag = do
-  env <- evalArtifactDiagram diag
+extractFileTree :: Doctrine -> Diagram -> Either Text (M.Map FilePath Text)
+extractFileTree doc diag = do
+  env <- evalArtifactDiagram doc diag
   vals <- mapM (lookupOut env "extract FileTree") (dOut diag)
   trees <- mapM expectFileTree vals
   foldM mergeOne M.empty trees
@@ -529,11 +552,13 @@ extractFileTree diag = do
             else Right (M.insert path (renderDoc bodyDoc) acc)
         FTConcat xs -> foldM mergeOne acc xs
 
-evalArtifactDiagram :: Diagram -> Either Text (M.Map PortId RuntimeValue)
-evalArtifactDiagram diag = do
+evalArtifactDiagram :: Doctrine -> Diagram -> Either Text (M.Map PortId RuntimeValue)
+evalArtifactDiagram doc diag = do
   ordered <- topologicalEdges diag
   foldM step M.empty ordered
   where
+    mode = dMode diag
+
     step env edge = do
       ins <- mapM (lookupPort env) (eIns edge)
       outs <- evalEdge edge ins
@@ -551,8 +576,8 @@ evalArtifactDiagram diag = do
     evalEdge edge ins =
       case ePayload edge of
         PGen (GenName "empty") _ _ -> Right [RVDoc DEmpty]
-        PGen (GenName "text") attrs _ -> do
-          s <- attrString "s" attrs
+        PGen genName@(GenName "text") args _ -> do
+          s <- literalStringArg genName "s" args
           Right [RVDoc (DText s)]
         PGen (GenName "line") _ _ -> Right [RVDoc DLine]
         PGen (GenName "cat") _ _ ->
@@ -562,15 +587,15 @@ evalArtifactDiagram diag = do
               db <- expectDoc b
               Right [RVDoc (DCat da db)]
             _ -> Left "extract Doc: cat expects 2 inputs"
-        PGen (GenName "indent") attrs _ ->
+        PGen genName@(GenName "indent") args _ ->
           case ins of
             [d] -> do
-              n <- attrInt "n" attrs
+              n <- literalIntArg genName "n" args
               dd <- expectDoc d
               Right [RVDoc (DIndent n dd)]
             _ -> Left "extract Doc: indent expects 1 input"
-        PGen (GenName "singleFile") attrs _ -> do
-          path <- T.unpack <$> attrString "path" attrs
+        PGen genName@(GenName "singleFile") args _ -> do
+          path <- T.unpack <$> literalStringArg genName "path" args
           body <-
             case ins of
               [v] -> expectDoc v
@@ -588,7 +613,22 @@ evalArtifactDiagram diag = do
         PFeedback _ -> Left "extract value: feedback is not supported"
         PSplice _ _ -> Left "extract value: splice is not supported"
         PTmMeta _ -> Left "extract value: term-meta nodes are not supported"
+        PTmLit _ -> Left "extract value: literal term nodes are not supported at top level"
         PInternalDrop -> Left "extract value: internal drop nodes are not supported"
+
+    literalStringArg genName key args = do
+      tt <- doctrineTypeTheory doc
+      lit <- literalParamArg doc tt mode genName key LKString args
+      case lit of
+        LString s -> Right s
+        _ -> Left ("extract value: parameter '" <> key <> "' is not a string literal")
+
+    literalIntArg genName key args = do
+      tt <- doctrineTypeTheory doc
+      lit <- literalParamArg doc tt mode genName key LKInt args
+      case lit of
+        LInt n -> Right n
+        _ -> Left ("extract value: parameter '" <> key <> "' is not an int literal")
 
 
 data RuntimeValue
@@ -641,19 +681,52 @@ data FileTreeValue
   = FTFile FilePath DocValue
   | FTConcat [FileTreeValue]
 
+literalParamArg :: Doctrine -> TypeTheory -> ModeName -> GenName -> Text -> LiteralKind -> [CodeArg] -> Either Text Literal
+literalParamArg doc tt mode genName key expectedKind args = do
+  gd <- lookupGenInMode doc mode genName
+  (param, arg) <- lookupParamArg key gd args
+  tmv <-
+    case param of
+      GP_Tm v -> Right v
+      GP_Ty _ -> Left ("extract value: parameter '" <> key <> "' is not a term parameter")
+  if literalKindForObj tt (tmvSort tmv) == Just expectedKind
+    then Right ()
+    else Left ("extract value: parameter '" <> key <> "' does not admit the expected literal kind")
+  tm <-
+    case arg of
+      CATm term -> Right term
+      CAObj _ -> Left ("extract value: parameter '" <> key <> "' is not a term argument")
+  lit <-
+    case termDiagramLiteral tm of
+      Just l -> Right l
+      Nothing -> Left ("extract value: parameter '" <> key <> "' is not a literal term")
+  if literalKind lit == expectedKind
+    then Right lit
+    else Left ("extract value: parameter '" <> key <> "' has the wrong literal kind")
 
-attrString :: Text -> AttrMap -> Either Text Text
-attrString key attrs =
-  case M.lookup key attrs of
-    Just (ATLit (ALString s)) -> Right s
-    _ -> Left ("missing or non-string attribute: " <> key)
+lookupParamArg :: Text -> GenDecl -> [CodeArg] -> Either Text (GenParam, CodeArg)
+lookupParamArg key gd args =
+  if length args /= length (gdParams gd)
+    then Left "extract value: generator argument arity mismatch"
+    else
+      case [ (param, arg) | (param, arg) <- zip (gdParams gd) args, paramName param == key ] of
+        [entry] -> Right entry
+        [] -> Left ("extract value: missing generator parameter '" <> key <> "'")
+        _ -> Left ("extract value: duplicate generator parameter '" <> key <> "'")
+  where
+    paramName param =
+      case param of
+        GP_Ty v -> tmvName v
+        GP_Tm v -> tmvName v
 
-
-attrInt :: Text -> AttrMap -> Either Text Int
-attrInt key attrs =
-  case M.lookup key attrs of
-    Just (ATLit (ALInt n)) -> Right n
-    _ -> Left ("missing or non-int attribute: " <> key)
+termDiagramLiteral :: TermDiagram -> Maybe Literal
+termDiagramLiteral (TermDiagram tmDiag) =
+  case (IM.elems (dEdges tmDiag), dIn tmDiag, dOut tmDiag) of
+    ([edge], [], [outBoundary]) ->
+      case (ePayload edge, eIns edge, eOuts edge) of
+        (PTmLit lit, [], [outPid]) | outPid == outBoundary -> Just lit
+        _ -> Nothing
+    _ -> Nothing
 
 
 renderModeName :: ModeName -> Text

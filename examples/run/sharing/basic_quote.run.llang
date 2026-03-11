@@ -35,5 +35,5 @@ run main using p where {
   source mode M;
 }
 ---
-a ; dup{T} ; (b * b) ; (c * c)
+a ; dup(T) ; (b * b) ; (c * c)
 ---

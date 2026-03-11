@@ -38,13 +38,13 @@ import Strat.Poly.Obj
   , mapObjExpr
   )
 import qualified Strat.Poly.UnifyObj as U
-import Strat.Poly.Attr
 import Strat.Poly.Rewrite (RewriteRule(..))
 import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
 import Strat.Poly.Cell2 (Cell2(..), c2TyVars, c2TmVars)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.ModeTheory (ModeTheory)
+import Strat.Poly.Syntax (CodeArg(..))
 import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
 import Strat.Poly.Traversal (traverseDiagram)
 
@@ -90,7 +90,6 @@ data PartialIso = PartialIso
   , piUsedEdges :: S.Set EdgeId
   , piUsedPorts :: S.Set PortId
   , piTySubst :: Subst
-  , piAttrSubst :: AttrSubst
   } deriving (Eq, Show)
 
 criticalPairsForDoctrine :: CPMode -> RewritePolicy -> Doctrine -> Either Text [CriticalPairInfo]
@@ -132,11 +131,7 @@ criticalPairsForPair tt r1 r2 = do
   let r2' = renameRule 1 (riRule r2)
   let tyFlex = S.fromList (rrTyVars r1' <> rrTyVars r2')
   let flex = S.unions [tyFlex, freeVarsDiagram (rrLHS r1'), freeVarsDiagram (rrLHS r2')]
-  let attrFlex =
-        S.union
-          (freeAttrVarsDiagram (rrLHS r1'))
-          (freeAttrVarsDiagram (rrLHS r2'))
-  overlaps <- enumerateOverlaps tt flex attrFlex (rrLHS r1') (rrLHS r2')
+  overlaps <- enumerateOverlaps tt flex (rrLHS r1') (rrLHS r2')
   fmap concat (mapM (buildPair r1 r2 r1' r2') overlaps)
   where
     buildPair r1Info r2Info rule1 rule2 ov = do
@@ -204,7 +199,6 @@ renameRule idx rule =
   let idxText = T.pack (show idx)
       tySuffix = ":" <> idxText
       tmSuffix = "$" <> idxText
-      attrSuffix = "#" <> idxText
       binderSuffix = "%" <> idxText
       renamedTyVars = M.fromList [ (v, renameTyVar v) | v <- rrTyVars rule ]
       renameTyVar v = v { tmvName = tmvName v <> tySuffix }
@@ -241,14 +235,14 @@ renameRule idx rule =
       rhsTm' = renameTmVarsDiagram renameTmType (rrRHS rule)
       lhsB' = renameBinderMetasDiagram renameBinderMeta lhsTm'
       rhsB' = renameBinderMetasDiagram renameBinderMeta rhsTm'
-      lhs' = renameAttrVarsDiagram (<> attrSuffix) lhsB'
-      rhs' = renameAttrVarsDiagram (<> attrSuffix) rhsB'
+      lhs' = lhsB'
+      rhs' = rhsB'
       tyvars' = map renameTyVar (rrTyVars rule)
       tmVars' = map renameTmVar (rrTmVars rule)
   in rule { rrLHS = lhs', rrRHS = rhs', rrTyVars = tyvars', rrTmVars = tmVars' }
 
-enumerateOverlaps :: TypeTheory -> S.Set TmVar -> S.Set AttrVar -> Diagram -> Diagram -> Either Text [PartialIso]
-enumerateOverlaps tt flex attrFlex l1 l2 =
+enumerateOverlaps :: TypeTheory -> S.Set TmVar -> Diagram -> Diagram -> Either Text [PartialIso]
+enumerateOverlaps tt flex l1 l2 =
   if dMode l1 /= dMode l2 || dTmCtx l1 /= dTmCtx l2
     then Right []
     else do
@@ -256,15 +250,15 @@ enumerateOverlaps tt flex attrFlex l1 l2 =
       let edges2 = sortEdges (IM.elems (dEdges l2))
       fmap concat (mapM (seedFrom edges2) edges1)
   where
-    emptyState = PartialIso M.empty M.empty S.empty S.empty U.emptySubst M.empty
+    emptyState = PartialIso M.empty M.empty S.empty S.empty U.emptySubst
     seedFrom edges2 e1 =
       fmap concat (mapM (expandFromSeed e1) edges2)
     expandFromSeed e1 e2 = do
-      seeds <- mapEdge tt flex attrFlex l1 l2 emptyState e1 e2
-      fmap concat (mapM (expandState tt l1 l2 flex attrFlex) seeds)
+      seeds <- mapEdge tt flex l1 l2 emptyState e1 e2
+      fmap concat (mapM (expandState tt l1 l2 flex) seeds)
 
-expandState :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> S.Set AttrVar -> PartialIso -> Either Text [PartialIso]
-expandState tt l1 l2 flex attrFlex st = do
+expandState :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> PartialIso -> Either Text [PartialIso]
+expandState tt l1 l2 flex st = do
   let mappedPorts = S.fromList (M.keys (piPortMap st))
   let candidates =
         [ e
@@ -272,22 +266,22 @@ expandState tt l1 l2 flex attrFlex st = do
         , M.notMember (eId e) (piEdgeMap st)
         , any (`S.member` mappedPorts) (eIns e <> eOuts e)
         ]
-  expanded <- fmap concat (mapM (expandEdge tt l1 l2 flex attrFlex st) candidates)
-  deeper <- fmap concat (mapM (expandState tt l1 l2 flex attrFlex) expanded)
+  expanded <- fmap concat (mapM (expandEdge tt l1 l2 flex st) candidates)
+  deeper <- fmap concat (mapM (expandState tt l1 l2 flex) expanded)
   pure (st : deeper)
 
-expandEdge :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> S.Set AttrVar -> PartialIso -> Edge -> Either Text [PartialIso]
-expandEdge tt l1 l2 flex attrFlex st e1 = do
+expandEdge :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> PartialIso -> Edge -> Either Text [PartialIso]
+expandEdge tt l1 l2 flex st e1 = do
   let candidates =
         [ e2
         | e2 <- sortEdges (IM.elems (dEdges l2))
         , eId e2 `S.notMember` piUsedEdges st
         , edgeCompatible e1 e2
         ]
-  fmap concat (mapM (mapEdge tt flex attrFlex l1 l2 st e1) candidates)
+  fmap concat (mapM (mapEdge tt flex l1 l2 st e1) candidates)
 
-mapEdge :: TypeTheory -> S.Set TmVar -> S.Set AttrVar -> Diagram -> Diagram -> PartialIso -> Edge -> Edge -> Either Text [PartialIso]
-mapEdge tt flex attrFlex l1 l2 st e1 e2 =
+mapEdge :: TypeTheory -> S.Set TmVar -> Diagram -> Diagram -> PartialIso -> Edge -> Edge -> Either Text [PartialIso]
+mapEdge tt flex l1 l2 st e1 e2 =
   if M.member (eId e1) (piEdgeMap st)
     then Right []
     else if eId e2 `S.member` piUsedEdges st
@@ -295,17 +289,17 @@ mapEdge tt flex attrFlex l1 l2 st e1 e2 =
     else if length (eIns e1) /= length (eIns e2) || length (eOuts e1) /= length (eOuts e2)
       then Right []
       else do
-        substs <- payloadSubsts tt flex attrFlex (piTySubst st) (piAttrSubst st) (ePayload e1) (ePayload e2)
+        substs <- payloadSubsts tt flex l1 (piTySubst st) (ePayload e1) (ePayload e2)
         fmap concat (mapM extendPorts substs)
   where
-    extendPorts (tySubst0, attrSubst0) = do
+    extendPorts tySubst0 = do
       let pairs = zip (eIns e1) (eIns e2) <> zip (eOuts e1) (eOuts e2)
-      case foldl (extendPort tt l1 l2 flex) (Right (piPortMap st, piUsedPorts st, tySubst0, attrSubst0)) pairs of
+      case foldl (extendPort tt l1 l2 flex) (Right (piPortMap st, piUsedPorts st, tySubst0)) pairs of
         Left err ->
           if isFatalSubstError err
             then Left err
             else Right []
-        Right (portMap', usedPorts', tySubst', attrSubst') -> do
+        Right (portMap', usedPorts', tySubst') -> do
           let edgeMap' = M.insert (eId e1) (eId e2) (piEdgeMap st)
           let usedEdges' = S.insert (eId e2) (piUsedEdges st)
           pure
@@ -315,23 +309,22 @@ mapEdge tt flex attrFlex l1 l2 st e1 e2 =
                 , piUsedEdges = usedEdges'
                 , piUsedPorts = usedPorts'
                 , piTySubst = tySubst'
-                , piAttrSubst = attrSubst'
                 }
             ]
 
-extendPort :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> Either Text (M.Map PortId PortId, S.Set PortId, Subst, AttrSubst) -> (PortId, PortId) -> Either Text (M.Map PortId PortId, S.Set PortId, Subst, AttrSubst)
+extendPort :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> Either Text (M.Map PortId PortId, S.Set PortId, Subst) -> (PortId, PortId) -> Either Text (M.Map PortId PortId, S.Set PortId, Subst)
 extendPort tt l1 l2 flex acc (p1, p2) = do
-  (portMap, usedPorts, tySubst, attrSubst) <- acc
+  (portMap, usedPorts, tySubst) <- acc
   case M.lookup p1 portMap of
     Just p2' ->
-      if p2' == p2 then Right (portMap, usedPorts, tySubst, attrSubst) else Left "criticalPairs: port mapping conflict"
+      if p2' == p2 then Right (portMap, usedPorts, tySubst) else Left "criticalPairs: port mapping conflict"
     Nothing ->
       if p2 `S.member` usedPorts
         then Left "criticalPairs: target port already used"
         else do
           s1 <- unifyPorts tt l1 l2 flex tySubst p1 p2
           tySubst' <- mapLeft fatalSubstError (U.composeSubst tt s1 tySubst)
-          Right (M.insert p1 p2 portMap, S.insert p2 usedPorts, tySubst', attrSubst)
+          Right (M.insert p1 p2 portMap, S.insert p2 usedPorts, tySubst')
 
 unifyPorts :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> Subst -> PortId -> PortId -> Either Text Subst
 unifyPorts tt l1 l2 flex subst p1 p2 = do
@@ -348,51 +341,46 @@ unifyPorts tt l1 l2 flex subst p1 p2 = do
     pTy'
     hTy'
 
-payloadSubsts :: TypeTheory -> S.Set TmVar -> S.Set AttrVar -> Subst -> AttrSubst -> EdgePayload -> EdgePayload -> Either Text [(Subst, AttrSubst)]
-payloadSubsts tt flex attrFlex tySubst attrSubst p1 p2 =
+payloadSubsts :: TypeTheory -> S.Set TmVar -> Diagram -> Subst -> EdgePayload -> EdgePayload -> Either Text [Subst]
+payloadSubsts tt flex lhs tySubst p1 p2 =
   case (p1, p2) of
-    (PGen g1 attrs1 bargs1, PGen g2 attrs2 bargs2) ->
-      if g1 /= g2 || M.keysSet attrs1 /= M.keysSet attrs2 || length bargs1 /= length bargs2
+    (PGen g1 args1 bargs1, PGen g2 args2 bargs2) ->
+      if g1 /= g2 || length args1 /= length args2 || length bargs1 /= length bargs2
         then Right []
         else do
-          case foldl unifyField (Right attrSubst) (M.toList attrs1) of
-            Left _ -> Right []
-            Right attrSubst' ->
-              foldl step (Right [(tySubst, attrSubst')]) (zip bargs1 bargs2)
+          tmCtx' <- mapLeft fatalSubstError (U.applySubstCtx tt tySubst (dTmCtx lhs))
+          case U.unifyCodeArgsFlex tt tmCtx' flex tySubst args1 args2 of
+            Left err -> mapLeft fatalSubstError (Left err)
+            Right tySubst' ->
+              foldl step (Right [tySubst']) (zip bargs1 bargs2)
       where
-        unifyField acc (field, term1) = do
-          sub <- acc
-          case M.lookup field attrs2 of
-            Nothing -> Left "criticalPairs: missing attribute field"
-            Just term2 -> unifyAttrFlex attrFlex sub term1 term2
         step acc pair = do
           subs <- acc
-          fmap concat (mapM (\(tyS, attrS) -> binderArgSubsts tyS attrS pair) subs)
+          fmap concat (mapM (\tyS -> binderArgSubsts tyS pair) subs)
 
-        binderArgSubsts tySubst0 attrSubst0 (lhsArg, rhsArg) =
+        binderArgSubsts tySubst0 (lhsArg, rhsArg) =
           case (lhsArg, rhsArg) of
             (BAConcrete d1, BAConcrete d2) ->
-              fmap
-                (map (\(tySub', attrSub') -> (tySub', attrSub')))
-                ( mapLeft
-                    fatalSubstError
-                    (DiagramIso.diagramIsoMatchWithVarsFrom tt flex attrFlex tySubst0 attrSubst0 d1 d2)
-                )
+              mapLeft
+                fatalSubstError
+                (DiagramIso.diagramIsoMatchWithVarsFrom tt flex tySubst0 d1 d2)
             (BAMeta x, BAMeta y) ->
-              if x == y then Right [(tySubst0, attrSubst0)] else Right []
+              if x == y then Right [tySubst0] else Right []
             _ -> Right []
     (PBox _ d1, PBox _ d2) -> do
       mapLeft
         fatalSubstError
-        (DiagramIso.diagramIsoMatchWithVarsFrom tt flex attrFlex tySubst attrSubst d1 d2)
+        (DiagramIso.diagramIsoMatchWithVarsFrom tt flex tySubst d1 d2)
     (PFeedback d1, PFeedback d2) ->
       mapLeft
         fatalSubstError
-        (DiagramIso.diagramIsoMatchWithVarsFrom tt flex attrFlex tySubst attrSubst d1 d2)
-    (PSplice x me1, PSplice y me2) | x == y && me1 == me2 -> Right [(tySubst, attrSubst)]
+        (DiagramIso.diagramIsoMatchWithVarsFrom tt flex tySubst d1 d2)
+    (PSplice x me1, PSplice y me2) | x == y && me1 == me2 -> Right [tySubst]
     (PTmMeta x, PTmMeta y)
-      | sameTmVarId x y -> Right [(tySubst, attrSubst)]
-    (PInternalDrop, PInternalDrop) -> Right [(tySubst, attrSubst)]
+      | sameTmVarId x y -> Right [tySubst]
+    (PTmLit x, PTmLit y)
+      | x == y -> Right [tySubst]
+    (PInternalDrop, PInternalDrop) -> Right [tySubst]
     _ -> Right []
 
 edgeCompatible :: Edge -> Edge -> Bool
@@ -404,14 +392,22 @@ edgeCompatible e1 e2 =
 payloadCompatible :: EdgePayload -> EdgePayload -> Bool
 payloadCompatible p1 p2 =
   case (p1, p2) of
-    (PGen g1 attrs1 bargs1, PGen g2 attrs2 bargs2) ->
-      g1 == g2 && M.keysSet attrs1 == M.keysSet attrs2 && length bargs1 == length bargs2
+    (PGen g1 args1 bargs1, PGen g2 args2 bargs2) ->
+      g1 == g2
+        && length args1 == length args2
+        && and (zipWith sameArgKind args1 args2)
+        && length bargs1 == length bargs2
     (PBox _ _, PBox _ _) -> True
     (PFeedback _, PFeedback _) -> True
     (PSplice x me1, PSplice y me2) -> x == y && me1 == me2
     (PTmMeta x, PTmMeta y) -> sameTmVarId x y
+    (PTmLit x, PTmLit y) -> x == y
     (PInternalDrop, PInternalDrop) -> True
     _ -> False
+  where
+    sameArgKind (CAObj _) (CAObj _) = True
+    sameArgKind (CATm _) (CATm _) = True
+    sameArgKind _ _ = False
 
 sortEdges :: [Edge] -> [Edge]
 sortEdges = L.sortOn (unEdgeId . eId)
@@ -419,9 +415,8 @@ sortEdges = L.sortOn (unEdgeId . eId)
 buildOverlapHost :: TypeTheory -> Diagram -> Diagram -> PartialIso -> Either Text (Diagram, Match, Match)
 buildOverlapHost tt l1 l2 ov = do
   let tySubst = piTySubst ov
-  let attrSubst = piAttrSubst ov
-  l1' <- applySubstsDiagramLocal tt tySubst attrSubst l1
-  l2' <- applySubstsDiagramLocal tt tySubst attrSubst l2
+  l1' <- applySubstsDiagramLocal tt tySubst l1
+  l2' <- applySubstsDiagramLocal tt tySubst l2
   let portMapL2 = M.fromList [ (p2, p1) | (p1, p2) <- M.toList (piPortMap ov) ]
   let edgeMapL2 = M.fromList [ (e2, e1) | (e1, e2) <- M.toList (piEdgeMap ov) ]
   (host1, portMap1, edgeMap1) <- insertEdgesFromL2 l1' l2' portMapL2 edgeMapL2
@@ -432,8 +427,8 @@ buildOverlapHost tt l1 l2 ov = do
           , dOut = dedupePorts (dOut l1' <> mapPorts portMap2 (dOut l2'))
           }
   validateDiagram host3
-  let m1 = mkIdentityMatch tySubst attrSubst l1'
-  let m2 = mkMatchForL2 tySubst attrSubst l2' portMap2 edgeMap1
+  let m1 = mkIdentityMatch tySubst l1'
+  let m2 = mkMatchForL2 tySubst l2' portMap2 edgeMap1
   pure (host3, m1, m2)
 
 insertEdgesFromL2 :: Diagram -> Diagram -> M.Map PortId PortId -> M.Map EdgeId EdgeId -> Either Text (Diagram, M.Map PortId PortId, M.Map EdgeId EdgeId)
@@ -495,8 +490,8 @@ dedupePorts = go S.empty
       | p `S.member` seen = go seen ps
       | otherwise = p : go (S.insert p seen) ps
 
-mkIdentityMatch :: Subst -> AttrSubst -> Diagram -> Match
-mkIdentityMatch tySubst attrSubst diag =
+mkIdentityMatch :: Subst -> Diagram -> Match
+mkIdentityMatch tySubst diag =
   let ports = diagramPortIds diag
       edges = IM.elems (dEdges diag)
       mPorts = M.fromList [ (p, p) | p <- ports ]
@@ -508,14 +503,13 @@ mkIdentityMatch tySubst attrSubst diag =
       { mPortMap = mPorts
       , mEdgeMap = mEdges
       , mTySubst = tySubst
-      , mAttrSubst = attrSubst
       , mBinderSub = M.empty
       , mUsedHostPorts = usedPorts
       , mUsedHostEdges = usedEdges
       }
 
-mkMatchForL2 :: Subst -> AttrSubst -> Diagram -> M.Map PortId PortId -> M.Map EdgeId EdgeId -> Match
-mkMatchForL2 tySubst attrSubst l2 portMap edgeMap =
+mkMatchForL2 :: Subst -> Diagram -> M.Map PortId PortId -> M.Map EdgeId EdgeId -> Match
+mkMatchForL2 tySubst l2 portMap edgeMap =
   let ports = diagramPortIds l2
       edges = IM.elems (dEdges l2)
       mPorts = M.fromList [ (p, M.findWithDefault p p portMap) | p <- ports ]
@@ -527,7 +521,6 @@ mkMatchForL2 tySubst attrSubst l2 portMap edgeMap =
       { mPortMap = mPorts
       , mEdgeMap = mEdges
       , mTySubst = tySubst
-      , mAttrSubst = attrSubst
       , mBinderSub = M.empty
       , mUsedHostPorts = usedPorts
       , mUsedHostEdges = usedEdges
@@ -562,7 +555,7 @@ danglingOk lhs host match =
 applyRuleAtMatch :: TypeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyRuleAtMatch tt rule match host = do
   let lhs = rrLHS rule
-  rhs <- applySubstsDiagramLocal tt (mTySubst match) (mAttrSubst match) (rrRHS rule)
+  rhs <- applySubstsDiagramLocal tt (mTySubst match) (rrRHS rule)
   host1 <- deleteMatchedEdges host (M.elems (mEdgeMap match))
   host2 <- deleteMatchedPorts host1 (internalPorts lhs) (mPortMap match)
   let rhsShift = shiftDiagram (dNextPort host2) (dNextEdge host2) rhs
@@ -604,10 +597,9 @@ deleteMatchedPorts diag ports portMap = foldl step (Right diag) ports
         Nothing -> Left "criticalPairs: missing port mapping"
         Just hostPort -> deletePortIfDangling d hostPort
 
-applySubstsDiagramLocal :: TypeTheory -> Subst -> AttrSubst -> Diagram -> Either Text Diagram
-applySubstsDiagramLocal tt tySubst attrSubst diag = do
-  dTy <- mapLeft fatalSubstError (Diag.applySubstDiagram tt tySubst diag)
-  pure (applyAttrSubstDiagram attrSubst dTy)
+applySubstsDiagramLocal :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
+applySubstsDiagramLocal tt tySubst diag =
+  mapLeft fatalSubstError (Diag.applySubstDiagram tt tySubst diag)
 
 renameTmVarsDiagram :: (Obj -> Obj) -> Diagram -> Diagram
 renameTmVarsDiagram renameTy =

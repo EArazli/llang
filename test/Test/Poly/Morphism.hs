@@ -90,7 +90,7 @@ ctorDecl mode ctorName sig =
     , gdParams = params
     , gdDom = []
     , gdCod = [universeObj mode]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
   where
     tyPos =
@@ -195,7 +195,7 @@ mkCompGen mode aTy name =
     , gdParams = []
     , gdDom = [InPort aTy]
     , gdCod = [aTy]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
 
 insertCompSupportGens
@@ -268,8 +268,8 @@ plainImage diag = GenImage diag M.empty
 setSingleEdgeBargs :: Diagram -> [BinderArg] -> Either Text Diagram
 setSingleEdgeBargs diag bargs =
   case IM.toList (dEdges diag) of
-    [(edgeKey, edge@(Edge _ (PGen g attrs _) _ _))] ->
-      let edge' = edge { ePayload = PGen g attrs bargs }
+    [(edgeKey, edge@(Edge _ (PGen g args _) _ _))] ->
+      let edge' = edge { ePayload = PGen g args bargs }
       in pure diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
     _ -> Left "expected a single generator edge"
 
@@ -328,7 +328,6 @@ testMonoidMorphism = do
         , morIsCoercion = False
         , morModeMap = modeMap
         , morModMap = identityModMap docSrc
-        , morAttrSortMap = M.empty
         , morTypeMap = typeMap
         , morGenMap =
             M.fromList
@@ -360,7 +359,7 @@ testTypeMapReorder = do
           , gdParams = [GP_Ty a, GP_Ty b]
           , gdDom = map InPort [mkCon (ObjRef mode prod) [OAObj (OVar (a)), OAObj (OVar (b))]]
           , gdCod = [mkCon (ObjRef mode prod) [OAObj (OVar (a)), OAObj (OVar (b))]]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let genTgt =
         GenDecl
@@ -369,7 +368,7 @@ testTypeMapReorder = do
           , gdParams = [GP_Ty a, GP_Ty b]
           , gdDom = map InPort [mkCon (ObjRef mode pair) [OAObj (OVar (a)), OAObj (OVar (b))]]
           , gdCod = [mkCon (ObjRef mode pair) [OAObj (OVar (a)), OAObj (OVar (b))]]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let prodCtor =
         GenDecl
@@ -378,7 +377,7 @@ testTypeMapReorder = do
           , gdParams = [GP_Ty a, GP_Ty b]
           , gdDom = []
           , gdCod = [uTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let pairCtor =
         GenDecl
@@ -387,14 +386,13 @@ testTypeMapReorder = do
           , gdParams = [GP_Ty a, GP_Ty b]
           , gdDom = []
           , gdCod = [uTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let docSrc = Doctrine
         { dName = "Src"
         , dModes = selfClassifiedModes [mode]
         , dAcyclicModes = S.empty
-        , dAttrSorts = M.empty
-        , dGens =
+                , dGens =
             insertCompSupportGens mode $
               M.fromList [(mode, M.fromList [(gdName prodCtor, prodCtor), (genName, genSrc)])]
         , dCells2 = []
@@ -405,8 +403,7 @@ testTypeMapReorder = do
         { dName = "Tgt"
         , dModes = selfClassifiedModes [mode]
         , dAcyclicModes = S.empty
-        , dAttrSorts = M.empty
-        , dGens =
+                , dGens =
             insertCompSupportGens mode $
               M.fromList [(mode, M.fromList [(gdName pairCtor, pairCtor), (genName, genTgt)])]
         , dCells2 = []
@@ -429,7 +426,6 @@ testTypeMapReorder = do
         , morIsCoercion = False
         , morModeMap = identityModeMap docSrc'
         , morModMap = identityModMap docSrc'
-        , morAttrSortMap = M.empty
         , morTypeMap = typeMap
         , morGenMap = M.fromList (((mode, genName), plainImage img) : compImgs)
         , morCheck = CheckAll
@@ -454,7 +450,7 @@ testCrossModeMorphism = do
           , gdParams = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let gGen =
         GenDecl
@@ -463,7 +459,7 @@ testCrossModeMorphism = do
           , gdParams = []
           , gdDom = map InPort [bTy]
           , gdCod = [bTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let docSrc =
         withSelfClassifiedCtors
@@ -472,8 +468,7 @@ testCrossModeMorphism = do
             { dName = "Src"
             , dModes = mkModes [modeC]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
+                        , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -485,8 +480,7 @@ testCrossModeMorphism = do
             { dName = "Tgt"
             , dModes = mkModes [modeV]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
+                        , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -506,7 +500,6 @@ testCrossModeMorphism = do
         , morIsCoercion = False
         , morModeMap = M.fromList [(modeC, modeV)]
         , morModMap = identityModMap docSrc'
-        , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(aRef, TypeTemplate [] bTy)]
         , morGenMap = M.fromList (((modeC, GenName "f"), plainImage img) : compImgs)
         , morCheck = CheckAll
@@ -585,7 +578,7 @@ testModalityMapRewritesTypeModalities = do
           , gdParams = []
           , gdDom = map InPort [fBaseSrc]
           , gdCod = [fBaseSrc]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let genGGSrc =
         GenDecl
@@ -594,7 +587,7 @@ testModalityMapRewritesTypeModalities = do
           , gdParams = []
           , gdDom = map InPort [hfBaseSrc]
           , gdCod = [hfBaseSrc]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let genGTgt =
         GenDecl
@@ -603,7 +596,7 @@ testModalityMapRewritesTypeModalities = do
           , gdParams = []
           , gdDom = map InPort [gBaseTgt]
           , gdCod = [gBaseTgt]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let genGGTgt =
         GenDecl
@@ -612,7 +605,7 @@ testModalityMapRewritesTypeModalities = do
           , gdParams = []
           , gdDom = map InPort [kgBaseTgt]
           , gdCod = [kgBaseTgt]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let docSrc =
         withSelfClassifiedCtors
@@ -621,8 +614,7 @@ testModalityMapRewritesTypeModalities = do
             { dName = "SrcModal"
             , dModes = modeTheorySrc
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(modeB, M.fromList [(GenName "g", genGSrc), (GenName "gg", genGGSrc)])]
+                        , dGens = M.fromList [(modeB, M.fromList [(GenName "g", genGSrc), (GenName "gg", genGGSrc)])]
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -634,8 +626,7 @@ testModalityMapRewritesTypeModalities = do
             { dName = "TgtModal"
             , dModes = modeTheoryTgt
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(modeD, M.fromList [(GenName "g", genGTgt), (GenName "gg", genGGTgt)])]
+                        , dGens = M.fromList [(modeD, M.fromList [(GenName "g", genGTgt), (GenName "gg", genGGTgt)])]
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -656,7 +647,6 @@ testModalityMapRewritesTypeModalities = do
         , morIsCoercion = False
         , morModeMap = M.fromList [(modeA, modeC), (modeB, modeD)]
         , morModMap = M.fromList [(modF, gTgt), (modH, kTgt)]
-        , morAttrSortMap = M.empty
         , morTypeMap = M.fromList [(ObjRef modeA (ObjName "Base"), TypeTemplate [] baseTgt)]
         , morGenMap =
             M.fromList
@@ -692,9 +682,9 @@ testModalityMapRewritesTypeModalities = do
   where
     assertSingleGenEdge name diag =
       case IM.elems (dEdges diag) of
-        [Edge _ (PGen genName attrs bargs) _ _] -> do
+        [Edge _ (PGen genName args bargs) _ _] -> do
           genName @?= GenName name
-          attrs @?= M.empty
+          args @?= []
           bargs @?= []
         _ -> assertFailure "expected exactly one generator edge"
 
@@ -708,8 +698,7 @@ testMorphismRejectsMissingTargetCtor = do
             { dName = "SrcMissingCtor"
             , dModes = mkModes [mode]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.empty
+                        , dGens = M.empty
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -721,8 +710,7 @@ testMorphismRejectsMissingTargetCtor = do
             { dName = "TgtMissingCtor"
             , dModes = mkModes [mode]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.empty
+                        , dGens = M.empty
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -741,7 +729,6 @@ testMorphismRejectsMissingTargetCtor = do
           , morIsCoercion = False
           , morModeMap = identityModeMap srcDoc'
           , morModMap = identityModMap srcDoc'
-          , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.empty
           , morCheck = CheckNone
@@ -761,8 +748,7 @@ testMorphismRequiresExplicitComprehensionMappings = do
             { dName = "SrcCompStrict"
             , dModes = mkModes [mode]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.empty
+                        , dGens = M.empty
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -774,8 +760,7 @@ testMorphismRequiresExplicitComprehensionMappings = do
             { dName = "TgtCompStrict"
             , dModes = mkModes [mode]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.empty
+                        , dGens = M.empty
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -794,7 +779,6 @@ testMorphismRequiresExplicitComprehensionMappings = do
           , morIsCoercion = False
           , morModeMap = identityModeMap srcDoc'
           , morModMap = identityModMap srcDoc'
-          , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.empty
           , morCheck = CheckNone
@@ -817,7 +801,7 @@ testMorphismInstantiationSubstFailure = do
           , gdParams = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let tgtGen =
         GenDecl
@@ -826,7 +810,7 @@ testMorphismInstantiationSubstFailure = do
           , gdParams = []
           , gdDom = map InPort [aTy]
           , gdCod = [aTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let srcDoc =
         withSelfClassifiedCtors
@@ -835,8 +819,7 @@ testMorphismInstantiationSubstFailure = do
             { dName = "SrcSubstFail"
             , dModes = mkModes [mode]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(mode, M.fromList [(GenName "f", srcGen)])]
+                        , dGens = M.fromList [(mode, M.fromList [(GenName "f", srcGen)])]
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -848,8 +831,7 @@ testMorphismInstantiationSubstFailure = do
             { dName = "TgtSubstFail"
             , dModes = mkModes [mode]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(mode, M.fromList [(GenName "g", tgtGen)])]
+                        , dGens = M.fromList [(mode, M.fromList [(GenName "g", tgtGen)])]
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -871,7 +853,6 @@ testMorphismInstantiationSubstFailure = do
           , morIsCoercion = False
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
-          , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((mode, GenName "f"), plainImage badImg)]
         , morCheck = CheckAll
@@ -894,7 +875,7 @@ testBinderIdentityMorphismPreservesBinders = do
           , gdParams = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy']
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let doc =
         attachComprehensionFixture mode aTy' $
@@ -904,8 +885,7 @@ testBinderIdentityMorphismPreservesBinders = do
               { dName = "LamDoc"
               , dModes = mkModes [mode]
               , dAcyclicModes = S.empty
-              , dAttrSorts = M.empty
-              , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
+                            , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
               , dCells2 = []
               , dActions = M.empty
               , dObligations = []
@@ -928,7 +908,6 @@ testBinderIdentityMorphismPreservesBinders = do
           , morIsCoercion = False
           , morModeMap = identityModeMap doc'
           , morModMap = identityModMap doc'
-          , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.fromList ([((mode, lamName), GenImage img (M.fromList [(hole, slotSig)]))] <> compImgs)
         , morCheck = CheckAll
@@ -941,9 +920,9 @@ testBinderIdentityMorphismPreservesBinders = do
     Left err -> assertFailure (T.unpack err)
     Right d -> pure d
   case IM.elems (dEdges mapped) of
-    [Edge _ (PGen g attrs [BAConcrete body']) _ _] -> do
+    [Edge _ (PGen g args [BAConcrete body']) _ _] -> do
       g @?= lamName
-      attrs @?= M.empty
+      args @?= []
       same <- case diagramIsoEq body body' of
         Left err -> assertFailure (T.unpack err)
         Right ok -> pure ok
@@ -964,7 +943,7 @@ testMorphismSpliceRenamesToBinderMeta = do
           , gdParams = []
           , gdDom = [InPort aTy', InBinder slotSig]
           , gdCod = [aTy']
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let doc =
         attachComprehensionFixture mode aTy' $
@@ -974,8 +953,7 @@ testMorphismSpliceRenamesToBinderMeta = do
               { dName = "SpliceMetaDoc"
               , dModes = mkModes [mode]
               , dAcyclicModes = S.empty
-              , dAttrSorts = M.empty
-              , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
+                            , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
               , dCells2 = []
               , dActions = M.empty
               , dObligations = []
@@ -999,7 +977,6 @@ testMorphismSpliceRenamesToBinderMeta = do
           , morIsCoercion = False
           , morModeMap = identityModeMap doc'
           , morModMap = identityModMap doc'
-          , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.fromList ([((mode, gName), GenImage img (M.fromList [(b0, slotSig)]))] <> compImgs)
         , morCheck = CheckAll
@@ -1048,11 +1025,11 @@ testDslMorphismAcceptsPolymorphicBinderHoleImage = do
           , "}"
           , "morphism m : S -> T where {"
           , "  mode M -> M;"
-          , "  gen comp_ctx_ext @M -> comp_ctx_ext"
-          , "  gen comp_var @M -> comp_var"
-          , "  gen comp_reindex @M -> comp_reindex"
-          , "  gen lam @M -> lam[?b0]"
-          , "  gen app @M -> app"
+          , "  gen comp_ctx_ext @M -> comp_ctx_ext(a)"
+          , "  gen comp_var @M -> comp_var(a)"
+          , "  gen comp_reindex @M -> comp_reindex(a)"
+          , "  gen lam @M -> lam(a, b)[?b0]"
+          , "  gen app @M -> app(a, b)"
           , "}"
           ]
   case parseRawFile src >>= elabRawFile of
@@ -1097,13 +1074,13 @@ testDslMorphismAcceptsTypeChangingCccImage = do
           , "}"
           , "morphism D : S -> T where {"
           , "  mode M -> M;"
-          , "  gen comp_ctx_ext @M -> comp_ctx_ext"
-          , "  gen comp_var @M -> comp_var"
-          , "  gen comp_reindex @M -> comp_reindex"
+          , "  gen comp_ctx_ext @M -> comp_ctx_ext(a)"
+          , "  gen comp_var @M -> comp_var(a)"
+          , "  gen comp_reindex @M -> comp_reindex(a)"
           , "  type R @M -> Dual @M;"
-          , "  gen dup @M -> dup"
-          , "  gen lam @M -> lam[?b0]"
-          , "  gen app @M -> app"
+          , "  gen dup @M -> dup(a)"
+          , "  gen lam @M -> lam(a, b)[?b0]"
+          , "  gen app @M -> app(a, b)"
           , "  gen mul @M -> dmul"
           , "  gen sin @M -> dsin"
           , "}"
@@ -1115,7 +1092,7 @@ testDslMorphismAcceptsTypeChangingCccImage = do
           , "  source mode M;"
           , "}"
           , "---"
-          , "lam{R, R}[dup{R} ; (id[R] * (id[R] ; sin)) ; mul]"
+          , "lam(R, R)[dup(R) ; (id[R] * (id[R] ; sin)) ; mul]"
           , "---"
           ]
   case parseRawFile src >>= elabRawFile of
@@ -1148,7 +1125,8 @@ testDslMorphismAcceptsSelfRecursiveEndomorphicTypeImage = do
           , "  lift_classifier splice = id@M;"
           , "  mod_eq splice.quote -> id@M;"
           , ""
-          , "  attrsort Str = string;"
+          , "  gen Str : [] -> [M.U_M] @M;"
+          , "  literal Str @M = string;"
           , "  gen R : [] -> [M.U_M] @M;"
           , "  gen Pair(a@M, b@M) : [] -> [M.U_M] @M;"
           , "  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;"
@@ -1157,8 +1135,8 @@ testDslMorphismAcceptsSelfRecursiveEndomorphicTypeImage = do
           , "  gen mkPair(a@M, b@M) : [a, b] -> [Pair(a, b)] @M;"
           , "  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;"
           , "  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;"
-          , "  gen emitUnaryModule(a@M) { fn:Str, path:Str } : [Arr(a, a)] -> [Module] @M;"
-          , "  gen emitUnaryModule(a@M) { fn:Str, path:Str } : [quote(Arr(a, a))] -> [quote(Module)] @O;"
+          , "  gen emitUnaryModule(a@M, fn:Str, path:Str) : [Arr(a, a)] -> [Module] @M;"
+          , "  gen emitUnaryModule(a@M, fn:Str, path:Str) : [quote(Arr(a, a))] -> [quote(Module)] @O;"
           , "}"
           , "morphism f : D -> D where {"
           , "  check none;"
@@ -1166,20 +1144,20 @@ testDslMorphismAcceptsSelfRecursiveEndomorphicTypeImage = do
           , "  mode O -> O;"
           , "  modality quote -> quote;"
           , "  modality splice -> splice;"
-          , "  attrsort Str -> Str;"
+          , "  type Str @M -> Str @M;"
           , "  type R @M -> Pair(R, R) @M;"
-          , "  gen comp_ctx_ext @M -> comp_ctx_ext"
-          , "  gen comp_var @M -> comp_var"
-          , "  gen comp_reindex @M -> comp_reindex"
-          , "  gen comp_ctx_ext @O -> comp_ctx_ext"
-          , "  gen comp_var @O -> comp_var"
-          , "  gen comp_reindex @O -> comp_reindex"
-          , "  gen dup @M -> dup"
-          , "  gen mkPair @M -> mkPair"
-          , "  gen lam @M -> lam[?b0]"
-          , "  gen app @M -> app"
-          , "  gen emitUnaryModule @M -> emitUnaryModule(fn = fn, path = path)"
-          , "  gen emitUnaryModule @O -> emitUnaryModule(fn = fn, path = path)"
+          , "  gen comp_ctx_ext @M -> comp_ctx_ext(a)"
+          , "  gen comp_var @M -> comp_var(a)"
+          , "  gen comp_reindex @M -> comp_reindex(a)"
+          , "  gen comp_ctx_ext @O -> comp_ctx_ext(a)"
+          , "  gen comp_var @O -> comp_var(a)"
+          , "  gen comp_reindex @O -> comp_reindex(a)"
+          , "  gen dup @M -> dup(a)"
+          , "  gen mkPair @M -> mkPair(a, b)"
+          , "  gen lam @M -> lam(a, b)[?b0]"
+          , "  gen app @M -> app(a, b)"
+          , "  gen emitUnaryModule @M -> emitUnaryModule(a = a, fn = fn, path = path)"
+          , "  gen emitUnaryModule @O -> emitUnaryModule(a = a, fn = fn, path = path)"
           , "}"
           , "pipeline build where {"
           , "  apply f;"
@@ -1189,7 +1167,7 @@ testDslMorphismAcceptsSelfRecursiveEndomorphicTypeImage = do
           , "  source mode M;"
           , "}"
           , "---"
-          , "lam{R, Pair(R, R)}[dup{R} ; mkPair{R, R}]"
+          , "lam(R, Pair(R, R))[dup(R) ; mkPair(R, R)]"
           , "---"
           ]
   case parseRawFile src >>= elabRawFile of
@@ -1212,7 +1190,7 @@ testMorphismRejectsBadBinderHoleSignatures = do
           , gdParams = []
           , gdDom = [InBinder slotSig]
           , gdCod = [aTy']
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let doc =
         attachComprehensionFixture mode aTy' $
@@ -1222,8 +1200,7 @@ testMorphismRejectsBadBinderHoleSignatures = do
               { dName = "BadBinderSigsDoc"
               , dModes = mkModes [mode]
               , dAcyclicModes = S.empty
-              , dAttrSorts = M.empty
-              , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
+                            , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
               , dCells2 = []
               , dActions = M.empty
               , dObligations = []
@@ -1243,7 +1220,6 @@ testMorphismRejectsBadBinderHoleSignatures = do
           , morIsCoercion = False
           , morModeMap = identityModeMap doc'
           , morModMap = identityModMap doc'
-          , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.fromList ([((mode, lamName), GenImage img (M.fromList [(hole, wrongSig)]))] <> compImgs)
         , morCheck = CheckAll
@@ -1269,8 +1245,7 @@ testTypeTemplateCycleRejected = do
             { dName = "CycleDoc"
             , dModes = mkModes [mode]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.empty
+                        , dGens = M.empty
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -1287,7 +1262,6 @@ testTypeTemplateCycleRejected = do
           , morIsCoercion = False
           , morModeMap = identityModeMap doc'
           , morModMap = identityModMap doc'
-          , morAttrSortMap = M.empty
           , morTypeMap =
               M.fromList
                 [ (aRef, TypeTemplate [] (mkCon bRef []))
@@ -1321,8 +1295,7 @@ testTermTemplateSortMismatch = do
             { dName = "SrcSortMismatch"
             , dModes = mkModes [modeM', modeI']
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.empty
+                        , dGens = M.empty
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -1336,8 +1309,7 @@ testTermTemplateSortMismatch = do
             { dName = "TgtSortMismatch"
             , dModes = mkModes [modeM', modeI']
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.empty
+                        , dGens = M.empty
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -1360,7 +1332,6 @@ testTermTemplateSortMismatch = do
           , morIsCoercion = False
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
-          , morAttrSortMap = M.empty
           , morTypeMap =
               M.fromList
                 [ ( vecRef
@@ -1400,7 +1371,7 @@ testTermTypeTemplateInstantiation = do
           , gdParams = []
           , gdDom = []
           , gdCod = [natTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let sGen =
         GenDecl
@@ -1409,7 +1380,7 @@ testTermTypeTemplateInstantiation = do
           , gdParams = []
           , gdDom = [InPort natTy]
           , gdCod = [natTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let natCtor =
         GenDecl
@@ -1418,7 +1389,7 @@ testTermTypeTemplateInstantiation = do
           , gdParams = []
           , gdDom = []
           , gdCod = [universeObj modeI']
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let aCtor =
         GenDecl
@@ -1427,7 +1398,7 @@ testTermTypeTemplateInstantiation = do
           , gdParams = []
           , gdDom = []
           , gdCod = [universeObj modeM']
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let nIx = TmVar { tmvName = "n_ix", tmvSort = natTy, tmvScope = -1, tmvOwnerMode = Nothing }
   let aIx = TmVar { tmvName = "a_ix", tmvSort = universeObj modeM', tmvScope = 1, tmvOwnerMode = Just modeM' }
@@ -1438,7 +1409,7 @@ testTermTypeTemplateInstantiation = do
           , gdParams = [GP_Tm nIx, GP_Ty aIx]
           , gdDom = []
           , gdCod = [universeObj modeM']
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let vec2Ctor =
         GenDecl
@@ -1447,15 +1418,14 @@ testTermTypeTemplateInstantiation = do
           , gdParams = [GP_Tm nIx, GP_Ty aIx]
           , gdDom = []
           , gdCod = [universeObj modeM']
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let srcDoc =
         Doctrine
           { dName = "SrcTermTemplate"
           , dModes = selfClassifiedModes [modeM', modeI']
           , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dGens =
+                    , dGens =
               insertCompSupportGens modeI' $
                 insertCompSupportGens modeM' $
                   M.fromList
@@ -1471,8 +1441,7 @@ testTermTypeTemplateInstantiation = do
           { dName = "TgtTermTemplate"
           , dModes = selfClassifiedModes [modeM', modeI']
           , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dGens =
+                    , dGens =
               insertCompSupportGens modeI' $
                 insertCompSupportGens modeM' $
                   M.fromList
@@ -1519,7 +1488,6 @@ testTermTypeTemplateInstantiation = do
           , morIsCoercion = False
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
-          , morAttrSortMap = M.empty
           , morTypeMap =
               M.fromList
                 [ ( vecRef
@@ -1577,7 +1545,7 @@ testTermTemplateKindMismatch = do
           , gdParams = []
           , gdDom = []
           , gdCod = [natTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let srcDoc =
         withSelfClassifiedCtors
@@ -1588,8 +1556,7 @@ testTermTemplateKindMismatch = do
             { dName = "SrcTermTemplateBad"
             , dModes = mkModes [modeM', modeI']
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
+                        , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -1603,8 +1570,7 @@ testTermTemplateKindMismatch = do
             { dName = "TgtTermTemplateBad"
             , dModes = mkModes [modeM', modeI']
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
+                        , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -1628,7 +1594,6 @@ testTermTemplateKindMismatch = do
           , morIsCoercion = False
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
-          , morAttrSortMap = M.empty
           , morTypeMap =
               M.fromList
                 [ ( vecRef
@@ -1663,7 +1628,7 @@ testMorphismMapsStructuredTermArgs = do
           , gdParams = []
           , gdDom = [InPort natTy]
           , gdCod = [natTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let dblDecl = succDecl { gdName = dblName }
   let srcDoc =
@@ -1675,8 +1640,7 @@ testMorphismMapsStructuredTermArgs = do
             { dName = "SrcStructuredTm"
             , dModes = mkModes [modeM', modeI']
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(modeI', M.fromList [(succName, succDecl)])]
+                        , dGens = M.fromList [(modeI', M.fromList [(succName, succDecl)])]
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -1690,8 +1654,7 @@ testMorphismMapsStructuredTermArgs = do
             { dName = "TgtStructuredTm"
             , dModes = mkModes [modeM', modeI']
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.fromList [(modeI', M.fromList [(dblName, dblDecl)])]
+                        , dGens = M.fromList [(modeI', M.fromList [(dblName, dblDecl)])]
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -1713,7 +1676,6 @@ testMorphismMapsStructuredTermArgs = do
           , morIsCoercion = False
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
-          , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.fromList [((modeI', succName), plainImage dblImg)]
           , morCheck = CheckNone
@@ -1756,7 +1718,7 @@ testMorphismWeakenImageTmCtx = do
           , gdParams = []
           , gdDom = [InPort tyX]
           , gdCod = [tyX]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let srcDoc =
         withSelfClassifiedCtors
@@ -1765,8 +1727,7 @@ testMorphismWeakenImageTmCtx = do
             { dName = "SrcWeakenMorph"
             , dModes = mkModes [mode]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.singleton mode (M.singleton srcName (mkGen srcName))
+                        , dGens = M.singleton mode (M.singleton srcName (mkGen srcName))
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -1778,8 +1739,7 @@ testMorphismWeakenImageTmCtx = do
             { dName = "TgtWeakenMorph"
             , dModes = mkModes [mode]
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = M.singleton mode (M.singleton tgtName (mkGen tgtName))
+                        , dGens = M.singleton mode (M.singleton tgtName (mkGen tgtName))
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
@@ -1801,7 +1761,6 @@ testMorphismWeakenImageTmCtx = do
           , morIsCoercion = False
           , morModeMap = identityModeMap src
           , morModMap = identityModMap src
-          , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap = M.singleton (mode, srcName) (plainImage img)
           , morCheck = CheckNone
@@ -1841,7 +1800,7 @@ mkMonoid = do
                       , gdParams = []
                       , gdDom = map InPort []
                       , gdCod = [aTy]
-                      , gdAttrs = []
+                      , gdLiteralKind = Nothing
                       }
                   )
                 , ( GenName "mul"
@@ -1851,7 +1810,7 @@ mkMonoid = do
                       , gdParams = []
                       , gdDom = map InPort [aTy, aTy]
                       , gdCod = [aTy]
-                      , gdAttrs = []
+                      , gdLiteralKind = Nothing
                       }
                   )
                 ]
@@ -1864,8 +1823,7 @@ mkMonoid = do
             { dName = "Monoid"
             , dModes = mt
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = gens
+                        , dGens = gens
             , dCells2 = [assoc { c2Class = Structural }, unitL, unitR]
             , dActions = M.empty
             , dObligations = []
@@ -1891,7 +1849,7 @@ mkStringMonoid = do
                       , gdParams = []
                       , gdDom = map InPort []
                       , gdCod = [strTy]
-                      , gdAttrs = []
+                      , gdLiteralKind = Nothing
                       }
                   )
                 , ( GenName "append"
@@ -1901,7 +1859,7 @@ mkStringMonoid = do
                       , gdParams = []
                       , gdDom = map InPort [strTy, strTy]
                       , gdCod = [strTy]
-                      , gdAttrs = []
+                      , gdLiteralKind = Nothing
                       }
                   )
                 ]
@@ -1914,8 +1872,7 @@ mkStringMonoid = do
             { dName = "StringMonoid"
             , dModes = mt
             , dAcyclicModes = S.empty
-            , dAttrSorts = M.empty
-            , dGens = gens
+                        , dGens = gens
             , dCells2 = [assoc { c2Class = Structural }, unitL, unitR]
             , dActions = M.empty
             , dObligations = []
@@ -2052,9 +2009,9 @@ morphismCheckAllProgram =
     <> "morphism m : S -> T where {\n"
     <> "  check all;\n"
     <> "  mode M -> M;\n"
-    <> "  gen comp_ctx_ext @M -> comp_ctx_ext\n"
-    <> "  gen comp_var @M -> comp_var\n"
-    <> "  gen comp_reindex @M -> comp_reindex\n"
+    <> "  gen comp_ctx_ext @M -> comp_ctx_ext(a)\n"
+    <> "  gen comp_var @M -> comp_var(a)\n"
+    <> "  gen comp_reindex @M -> comp_reindex(a)\n"
     <> "  gen f @M -> g\n"
     <> "}\n"
 
@@ -2094,9 +2051,9 @@ morphismBadBoundaryProgram =
     <> "morphism bad : S -> T where {\n"
     <> "  check none;\n"
     <> "  mode M -> M;\n"
-    <> "  gen comp_ctx_ext @M -> comp_ctx_ext\n"
-    <> "  gen comp_var @M -> comp_var\n"
-    <> "  gen comp_reindex @M -> comp_reindex\n"
+    <> "  gen comp_ctx_ext @M -> comp_ctx_ext(a)\n"
+    <> "  gen comp_var @M -> comp_var(a)\n"
+    <> "  gen comp_reindex @M -> comp_reindex(a)\n"
     <> "  gen and @M -> true\n"
     <> "}\n"
 
@@ -2135,12 +2092,12 @@ morphismClassifierMismatchProgram =
     <> "  mode Ty -> Ty2;\n"
     <> "  mode Tm -> Tm2;\n"
     <> "  type U @Ty -> U_Ty2 @Ty2;\n"
-    <> "  gen comp_ctx_ext @Ty -> comp_ctx_ext\n"
-    <> "  gen comp_var @Ty -> comp_var\n"
-    <> "  gen comp_reindex @Ty -> comp_reindex\n"
-    <> "  gen t_ctx_ext @Tm -> t_ctx_ext\n"
-    <> "  gen t_var @Tm -> t_var\n"
-    <> "  gen t_reindex @Tm -> t_reindex\n"
+    <> "  gen comp_ctx_ext @Ty -> comp_ctx_ext(a)\n"
+    <> "  gen comp_var @Ty -> comp_var(a)\n"
+    <> "  gen comp_reindex @Ty -> comp_reindex(a)\n"
+    <> "  gen t_ctx_ext @Tm -> t_ctx_ext(a)\n"
+    <> "  gen t_var @Tm -> t_var(a)\n"
+    <> "  gen t_reindex @Tm -> t_reindex(a)\n"
     <> "}\n"
 
 wireMetaRuleProgram :: Text

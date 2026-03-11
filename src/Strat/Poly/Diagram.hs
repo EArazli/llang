@@ -5,8 +5,8 @@ module Strat.Poly.Diagram
   , idD
   , genDTm
   , genD
-  , genDWithAttrsTm
-  , genDWithAttrs
+  , genDWithArgsTm
+  , genDWithArgs
   , weakenDiagramTmCtxTo
   , compD
   , tensorD
@@ -14,10 +14,7 @@ module Strat.Poly.Diagram
   , diagramDom
   , diagramCod
   , applySubstDiagram
-  , applyAttrSubstDiagram
-  , renameAttrVarsDiagram
   , freeVarsDiagram
-  , freeAttrVarsDiagram
   , binderArgMetaVarsDiagram
   , spliceMetaVarsDiagram
   , binderMetaVarsDiagram
@@ -25,14 +22,11 @@ module Strat.Poly.Diagram
 
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
-import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Data.Functor.Identity (runIdentity)
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
-import Strat.Poly.Obj (Context, Obj, TmVar(..), freeVarsObj)
+import Strat.Poly.Obj (Context, Obj, TmVar(..), CodeArg(..), freeVarsObj, freeVarsTerm)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Attr (AttrMap, AttrSubst, AttrVar, freeAttrVarsMap, applyAttrSubstMap, renameAttrTerm)
 import Strat.Poly.UnifyObj
   ( Subst
   , emptySubst
@@ -57,25 +51,25 @@ idD mode = idDTm mode []
 
 genDTm :: ModeName -> [Obj] -> Context -> Context -> GenName -> Either Text Diagram
 genDTm mode tmCtx dom cod gen =
-  genDWithAttrsTm mode tmCtx dom cod gen M.empty
+  genDWithArgsTm mode tmCtx dom cod gen []
 
 genD :: ModeName -> Context -> Context -> GenName -> Either Text Diagram
 genD mode dom cod gen =
   genDTm mode [] dom cod gen
 
-genDWithAttrsTm :: ModeName -> [Obj] -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
-genDWithAttrsTm mode tmCtx dom cod gen attrs = do
+genDWithArgsTm :: ModeName -> [Obj] -> Context -> Context -> GenName -> [CodeArg] -> Either Text Diagram
+genDWithArgsTm mode tmCtx dom cod gen args = do
   let (inPorts, diag1) = allocPorts dom (emptyDiagram mode tmCtx)
   let (outPorts, diag2) = allocPorts cod diag1
-  diag3 <- case addEdgePayload (PGen gen attrs []) inPorts outPorts diag2 of
+  diag3 <- case addEdgePayload (PGen gen args []) inPorts outPorts diag2 of
     Left err -> Left ("genD " <> renderGen gen <> ": " <> err)
     Right d -> Right d
   let diagFinal = diag3 { dIn = inPorts, dOut = outPorts }
   validateDiagram diagFinal
   pure diagFinal
 
-genDWithAttrs :: ModeName -> Context -> Context -> GenName -> AttrMap -> Either Text Diagram
-genDWithAttrs mode = genDWithAttrsTm mode []
+genDWithArgs :: ModeName -> Context -> Context -> GenName -> [CodeArg] -> Either Text Diagram
+genDWithArgs mode = genDWithArgsTm mode []
 
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
@@ -151,15 +145,6 @@ diagramCod diag = mapM (lookupPort "diagramCod") (dOut diag)
 applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
 applySubstDiagram = U.applySubstDiagram
 
-freeAttrVarsDiagram :: Diagram -> S.Set AttrVar
-freeAttrVarsDiagram =
-  foldDiagram (\_ -> mempty) onPayload (\_ -> mempty)
-  where
-    onPayload payload =
-      case payload of
-        PGen _ attrs _ -> freeAttrVarsMap attrs
-        _ -> mempty
-
 freeVarsDiagram :: Diagram -> S.Set TmVar
 freeVarsDiagram =
   foldDiagram onDiag onPayload (\_ -> mempty)
@@ -172,6 +157,14 @@ freeVarsDiagram =
     onPayload payload =
       case payload of
         PTmMeta v -> S.singleton v
+        PTmLit _ -> S.empty
+        PGen _ args _ ->
+          S.unions
+            [ case arg of
+                CAObj obj -> freeVarsObj obj
+                CATm tm -> freeVarsTerm tm
+            | arg <- args
+            ]
         _ -> S.empty
 
 binderArgMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
@@ -195,26 +188,6 @@ spliceMetaVarsDiagram =
 binderMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
 binderMetaVarsDiagram d =
   binderArgMetaVarsDiagram d <> spliceMetaVarsDiagram d
-
-applyAttrSubstDiagram :: AttrSubst -> Diagram -> Diagram
-applyAttrSubstDiagram subst =
-  runIdentity . traverseDiagram pure onPayload pure
-  where
-    onPayload payload =
-      pure $
-        case payload of
-          PGen g attrs bargs -> PGen g (applyAttrSubstMap subst attrs) bargs
-          _ -> payload
-
-renameAttrVarsDiagram :: (Text -> Text) -> Diagram -> Diagram
-renameAttrVarsDiagram rename =
-  runIdentity . traverseDiagram pure onPayload pure
-  where
-    onPayload payload =
-      pure $
-        case payload of
-          PGen g attrs bargs -> PGen g (M.map (renameAttrTerm rename) attrs) bargs
-          _ -> payload
 
 allocPorts :: Context -> Diagram -> ([PortId], Diagram)
 allocPorts [] diag = ([], diag)

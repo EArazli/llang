@@ -55,12 +55,14 @@ import Strat.Poly.Syntax
   , EdgePayload(..)
   , Edge(..)
   , Diagram(..)
-  , Obj
+  , Obj(..)
+  , TermDiagram(..)
+  , CodeArg(..)
+  , CodeTerm(..)
   , TmVar(..)
   )
 import Strat.Poly.Obj (boundTmIndicesObj, objOwnerMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.Attr (AttrTerm)
 import Strat.Util.List (dedupe)
 
 
@@ -122,7 +124,7 @@ freshPort ty diag =
 
 addEdge :: GenName -> [PortId] -> [PortId] -> Diagram -> Either Text Diagram
 addEdge gen ins outs diag =
-  addEdgePayload (PGen gen M.empty []) ins outs diag
+  addEdgePayload (PGen gen [] []) ins outs diag
 
 addEdgePayload :: EdgePayload -> [PortId] -> [PortId] -> Diagram -> Either Text Diagram
 addEdgePayload payload ins outs diag = do
@@ -277,7 +279,9 @@ validateDiagram diag = do
         Just ty -> Right ty
     checkPayload edge =
       case ePayload edge of
-        PGen _ _ binderArgs -> mapM_ checkBinderArg binderArgs
+        PGen _ args binderArgs -> do
+          mapM_ checkCodeArg args
+          mapM_ checkBinderArg binderArgs
         PBox _ inner -> do
           if dMode inner /= dMode diag
             then Left "validateDiagram: box mode mismatch"
@@ -364,6 +368,10 @@ validateDiagram diag = do
           if all (`elem` dIn diag) (eIns edge)
             then Right ()
             else Left "validateDiagram: PTmMeta inputs must be boundary ports"
+        PTmLit _ ->
+          case (eIns edge, eOuts edge) of
+            ([], [_]) -> Right ()
+            _ -> Left "validateDiagram: PTmLit must have no inputs and exactly one output"
         PInternalDrop ->
           case (eIns edge, eOuts edge) of
             ([_], []) -> Right ()
@@ -404,6 +412,17 @@ validateDiagram diag = do
       case barg of
         BAConcrete inner -> validateDiagram inner
         BAMeta _ -> Right ()
+    checkCodeArg arg =
+      case arg of
+        CAObj obj -> checkObj obj
+        CATm (TermDiagram inner) -> validateDiagram inner
+    checkObj obj =
+      checkCode (objCode obj)
+    checkCode code =
+      case code of
+        CTMeta _ -> Right ()
+        CTCon _ args -> mapM_ checkCodeArg args
+        CTLift _ inner -> checkCode inner
     ensureNoDuplicates label ports =
       let s = S.fromList ports
       in if S.size s == length ports
@@ -568,12 +587,24 @@ shiftDiagram portOff edgeOff diag =
           }
       shiftPayload payload =
         case payload of
-          PGen g attrs bargs -> PGen g attrs (map shiftBinderArg bargs)
+          PGen g args bargs -> PGen g (map shiftCodeArg args) (map shiftBinderArg bargs)
           PBox name inner -> PBox name (shiftDiagram portOff edgeOff inner)
           PFeedback inner -> PFeedback (shiftDiagram portOff edgeOff inner)
           PSplice x me -> PSplice x me
           PTmMeta v -> PTmMeta v
+          PTmLit lit -> PTmLit lit
           PInternalDrop -> PInternalDrop
+      shiftCodeArg arg =
+        case arg of
+          CAObj obj -> CAObj (shiftObj obj)
+          CATm (TermDiagram inner) -> CATm (TermDiagram (shiftDiagram portOff edgeOff inner))
+      shiftObj obj =
+        obj { objCode = shiftCode (objCode obj) }
+      shiftCode code =
+        case code of
+          CTMeta _ -> code
+          CTCon ref args -> CTCon ref (map shiftCodeArg args)
+          CTLift me inner -> CTLift me (shiftCode inner)
       shiftBinderArg barg =
         case barg of
           BAConcrete inner -> BAConcrete (shiftDiagram portOff edgeOff inner)
@@ -662,9 +693,10 @@ reindexDiagramForDisplay diag = do
           (IM.elems edges)
     mapPayload payload =
       case payload of
-        PGen g attrs bargs -> do
+        PGen g args bargs -> do
+          args' <- mapM (rewriteCodeArgDiagrams reindexDiagramForDisplay) args
           bargs' <- mapM mapBinderArg bargs
-          Right (PGen g attrs bargs')
+          Right (PGen g args' bargs')
         PBox name inner -> do
           inner' <- reindexDiagramForDisplay inner
           Right (PBox name inner')
@@ -673,6 +705,7 @@ reindexDiagramForDisplay diag = do
           Right (PFeedback inner')
         PSplice x me -> Right (PSplice x me)
         PTmMeta v -> Right (PTmMeta v)
+        PTmLit lit -> Right (PTmLit lit)
         PInternalDrop -> Right PInternalDrop
     mapBinderArg barg =
       case barg of
@@ -702,11 +735,12 @@ data BinderArgKey
   deriving (Eq, Ord, Show)
 
 data PayloadKey
-  = PKGen GenName [(Text, AttrTerm)] [BinderArgKey]
+  = PKGen GenName [CodeArg] [BinderArgKey]
   | PKBox ByteString
   | PKFeedback ByteString
   | PKSplice BinderMetaVar ModExpr
   | PKTmMeta Text Int
+  | PKTmLit Text
   | PKInternalDrop
   deriving (Eq, Ord, Show)
 
@@ -745,9 +779,10 @@ canonKey (CanonDiagram diag) = BS8.pack (show diag)
 canonPayload :: EdgePayload -> Either Text EdgePayload
 canonPayload payload =
   case payload of
-    PGen g attrs bargs -> do
+    PGen g args bargs -> do
+      args' <- mapM (rewriteCodeArgDiagrams canonDiagramRaw) args
       bargs' <- mapM canonBinderArg bargs
-      pure (PGen g attrs bargs')
+      pure (PGen g args' bargs')
     PBox _ inner -> do
       inner' <- canonDiagramRaw inner
       pure (PBox (BoxName "") inner')
@@ -758,6 +793,8 @@ canonPayload payload =
       Right (PSplice x me)
     PTmMeta v ->
       Right (PTmMeta v)
+    PTmLit lit ->
+      Right (PTmLit lit)
     PInternalDrop ->
       Right PInternalDrop
   where
@@ -852,9 +889,9 @@ colorKeyFor diag v =
   where
     edgePayloadKey payload =
       case payload of
-        PGen g attrs bargs -> do
+        PGen g args bargs -> do
           bargs' <- mapM binderArgKey bargs
-          pure (PKGen g (M.toList attrs) bargs')
+          pure (PKGen g args bargs')
         PBox _ inner ->
           Right (PKBox (BS8.pack (show inner)))
         PFeedback inner ->
@@ -863,6 +900,8 @@ colorKeyFor diag v =
           Right (PKSplice x me)
         PTmMeta tmv ->
           Right (PKTmMeta (tmvName tmv) (tmvScope tmv))
+        PTmLit lit ->
+          Right (PKTmLit (T.pack (show lit)))
         PInternalDrop ->
           Right PKInternalDrop
 
@@ -1172,6 +1211,22 @@ rebuildCanonicalDiagram diag portOrder edgeOrder = do
                   Right (IM.insert k (Just eid) mp)
                 Just (Just _) ->
                   Left ("canonDiagram: duplicate " <> label <> " incidence")
+
+rewriteCodeArgDiagrams :: (Diagram -> Either Text Diagram) -> CodeArg -> Either Text CodeArg
+rewriteCodeArgDiagrams rewrite arg =
+  case arg of
+    CAObj obj -> CAObj <$> rewriteObj obj
+    CATm (TermDiagram inner) -> CATm . TermDiagram <$> rewrite inner
+  where
+    rewriteObj obj = do
+      code' <- rewriteCode (objCode obj)
+      pure obj { objCode = code' }
+
+    rewriteCode code =
+      case code of
+        CTMeta _ -> Right code
+        CTCon ref args -> CTCon ref <$> mapM (rewriteCodeArgDiagrams rewrite) args
+        CTLift me inner -> CTLift me <$> rewriteCode inner
 
 unionDisjointIntMap :: Text -> IM.IntMap a -> IM.IntMap a -> Either Text (IM.IntMap a)
 unionDisjointIntMap label left right =

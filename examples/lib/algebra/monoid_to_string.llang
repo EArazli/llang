@@ -32,9 +32,9 @@ doctrine StringMonoid where {
 
 morphism MonoidToString : Monoid -> StringMonoid where {
   mode M -> M;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
   type A @M -> Str @M;
   gen unit @M -> empty
   gen mul @M -> append

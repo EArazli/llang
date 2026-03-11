@@ -123,8 +123,8 @@ mkBetaInput aTy = do
   let (x, d0) = freshPort aTy (emptyDiagram modeM [])
   let (lamOut, d1) = freshPort aToA d0
   let (y, d2) = freshPort aTy d1
-  d3 <- addEdgePayload (PGen (GenName "lam") M.empty [BAConcrete body]) [] [lamOut] d2
-  d4 <- addEdgePayload (PGen (GenName "app") M.empty []) [lamOut, x] [y] d3
+  d3 <- addEdgePayload (PGen (GenName "lam") [] [BAConcrete body]) [] [lamOut] d2
+  d4 <- addEdgePayload (PGen (GenName "app") [] []) [lamOut, x] [y] d3
   let diag = d4 { dIn = [x], dOut = [y] }
   validateDiagram diag
   pure (TermDiagram diag)
@@ -142,7 +142,7 @@ mkNestedInput aTy = do
 
   let (xOuter, b0) = freshPort aTy (emptyDiagram modeM [])
   let (lam2Out, b1) = freshPort aToA b0
-  b2 <- addEdgePayload (PGen (GenName "lam") M.empty [BAConcrete body2]) [] [lam2Out] b1
+  b2 <- addEdgePayload (PGen (GenName "lam") [] [BAConcrete body2]) [] [lam2Out] b1
   b3 <- addEdgePayload PInternalDrop [xOuter] [] b2
   let body1 = b3 { dIn = [xOuter], dOut = [lam2Out] }
   validateDiagram body1
@@ -152,9 +152,9 @@ mkNestedInput aTy = do
   let (lam1Out, d2) = freshPort aToAToA d1
   let (mid, d3) = freshPort aToA d2
   let (out, d4) = freshPort aTy d3
-  d5 <- addEdgePayload (PGen (GenName "lam") M.empty [BAConcrete body1]) [] [lam1Out] d4
-  d6 <- addEdgePayload (PGen (GenName "app") M.empty []) [lam1Out, t1] [mid] d5
-  d7 <- addEdgePayload (PGen (GenName "app") M.empty []) [mid, t2] [out] d6
+  d5 <- addEdgePayload (PGen (GenName "lam") [] [BAConcrete body1]) [] [lam1Out] d4
+  d6 <- addEdgePayload (PGen (GenName "app") [] []) [lam1Out, t1] [mid] d5
+  d7 <- addEdgePayload (PGen (GenName "app") [] []) [mid, t2] [out] d6
   let diag = d7 { dIn = [t1, t2], dOut = [out] }
   validateDiagram diag
   pure (TermDiagram diag)
@@ -322,7 +322,7 @@ mkEligibilityModeTheory tmUniverse = do
 mkConstClosedTerm :: ModeName -> Obj -> GenName -> Either Text TermDiagram
 mkConstClosedTerm mode sortTy g = do
   let (out, d0) = freshPort sortTy (emptyDiagram mode [])
-  d1 <- addEdgePayload (PGen g M.empty []) [] [out] d0
+  d1 <- addEdgePayload (PGen g [] []) [] [out] d0
   let diag = d1 { dIn = [], dOut = [out] }
   validateDiagram diag
   pure (TermDiagram diag)
@@ -347,9 +347,9 @@ mkClosedBetaTerm mode natTy arrNatNat lamName appName zName = do
   let (lamOut, d0) = freshPort arrNatNat (emptyDiagram mode [])
   let (zOut, d1) = freshPort natTy d0
   let (out, d2) = freshPort natTy d1
-  d3 <- addEdgePayload (PGen lamName M.empty [BAConcrete body]) [] [lamOut] d2
-  d4 <- addEdgePayload (PGen zName M.empty []) [] [zOut] d3
-  d5 <- addEdgePayload (PGen appName M.empty []) [lamOut, zOut] [out] d4
+  d3 <- addEdgePayload (PGen lamName [] [BAConcrete body]) [] [lamOut] d2
+  d4 <- addEdgePayload (PGen zName [] []) [] [zOut] d3
+  d5 <- addEdgePayload (PGen appName [] []) [lamOut, zOut] [out] d4
   let diag = d5 { dIn = [], dOut = [out] }
   validateDiagram diag
   pure (TermDiagram diag)
@@ -358,7 +358,7 @@ mkClosedSpliceTerm :: ModeName -> Obj -> GenName -> Either Text TermDiagram
 mkClosedSpliceTerm mode sortTy seedGen = do
   let (mid, d0) = freshPort sortTy (emptyDiagram mode [])
   let (out, d1) = freshPort sortTy d0
-  d2 <- addEdgePayload (PGen seedGen M.empty []) [] [mid] d1
+  d2 <- addEdgePayload (PGen seedGen [] []) [] [mid] d1
   let me = ModExpr { meSrc = mode, meTgt = mode, mePath = [] }
   d3 <- addEdgePayload (PSplice (BinderMetaVar "s0") me) [mid] [out] d2
   let diag = d3 { dIn = [], dOut = [out] }
@@ -392,7 +392,7 @@ mkEligibilityDoctrine includeBad = do
           , gdParams = []
           , gdDom = []
           , gdCod = [cod]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
 
   let gUTy = mkCtor "U_Ty" uTy
@@ -407,7 +407,7 @@ mkEligibilityDoctrine includeBad = do
           , gdParams = [GP_Tm nTmVar]
           , gdDom = []
           , gdCod = [uTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
 
   let gArr =
@@ -417,7 +417,7 @@ mkEligibilityDoctrine includeBad = do
           , gdParams = [GP_Ty aTyVar, GP_Ty bTyVar]
           , gdDom = []
           , gdCod = [uTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
 
   let lamBody = BinderSig { bsTmCtx = [], bsDom = [natTy], bsCod = [natTy] }
@@ -428,7 +428,7 @@ mkEligibilityDoctrine includeBad = do
           , gdParams = []
           , gdDom = [InBinder lamBody]
           , gdCod = [arrNatNat]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
 
   let gApp =
@@ -438,7 +438,7 @@ mkEligibilityDoctrine includeBad = do
           , gdParams = []
           , gdDom = [InPort arrNatNat, InPort natTy]
           , gdCod = [natTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
 
   let gBad =
@@ -448,7 +448,7 @@ mkEligibilityDoctrine includeBad = do
           , gdParams = []
           , gdDom = []
           , gdCod = [mkCon wrapRef [CATm badTm]]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
 
   let gens =
@@ -467,8 +467,7 @@ mkEligibilityDoctrine includeBad = do
       { dName = "CtorEligibilityNBE"
       , dModes = mt
       , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-      , dGens = M.fromList [(modeTy, M.fromList [(gdName gd, gd) | gd <- gens])]
+            , dGens = M.fromList [(modeTy, M.fromList [(gdName gd, gd) | gd <- gens])]
       , dCells2 = []
       , dActions = M.empty
       , dObligations = []
@@ -497,7 +496,7 @@ mkMissingArrDoctrine = do
           , gdParams = []
           , gdDom = []
           , gdCod = [uTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let gNat =
         GenDecl
@@ -506,7 +505,7 @@ mkMissingArrDoctrine = do
           , gdParams = []
           , gdDom = []
           , gdCod = [uTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let arrNatNat = mkCon (ObjRef modeTy (ObjName "Arr")) [CAObj natTy, CAObj natTy]
   let lamBody = BinderSig { bsTmCtx = [], bsDom = [natTy], bsCod = [natTy] }
@@ -517,7 +516,7 @@ mkMissingArrDoctrine = do
           , gdParams = []
           , gdDom = [InBinder lamBody]
           , gdCod = [arrNatNat]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let gApp =
         GenDecl
@@ -526,15 +525,14 @@ mkMissingArrDoctrine = do
           , gdParams = []
           , gdDom = [InPort arrNatNat, InPort natTy]
           , gdCod = [natTy]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   pure
     Doctrine
       { dName = "MissingArrInEligibility"
       , dModes = mt
       , dAcyclicModes = S.empty
-      , dAttrSorts = M.empty
-      , dGens = M.fromList [(modeTy, M.fromList [(gdName gd, gd) | gd <- [gUTy, gNat, gLam, gApp]])]
+            , dGens = M.fromList [(modeTy, M.fromList [(gdName gd, gd) | gd <- [gUTy, gNat, gLam, gApp]])]
       , dCells2 = []
       , dActions = M.empty
       , dObligations = []

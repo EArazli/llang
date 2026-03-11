@@ -6,16 +6,17 @@ doctrine Calc where {
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_M : [] -> [M.U_M] @M;
 
-  attrsort Str = string;
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
 
   gen Expr : [] -> [M.U_M] @M;
   gen Step : [] -> [M.U_M] @M;
   gen Comp : [] -> [M.U_M] @M;
   gen Program : [] -> [M.U_M] @M;
 
-  gen var { name:Str } : [] -> [Expr] @M;
+  gen var( name:Str ) : [] -> [Expr] @M;
   gen zero : [] -> [Expr] @M;
-  gen strLit { value:Str } : [] -> [Expr] @M;
+  gen strLit( value:Str ) : [] -> [Expr] @M;
 
   gen plusExpr : [Expr, Expr] -> [Expr] @M;
   gen toIntExpr : [Expr] -> [Expr] @M;
@@ -24,18 +25,18 @@ doctrine Calc where {
   gen isPlusExpr : [Expr] -> [Expr] @M;
   gen isSpaceExpr : [Expr] -> [Expr] @M;
 
-  gen letStmt { name:Str } : [Expr] -> [Step] @M;
-  gen setStmt { name:Str } : [Expr] -> [Step] @M;
+  gen letStmt( name:Str ) : [Expr] -> [Step] @M;
+  gen setStmt( name:Str ) : [Expr] -> [Step] @M;
   gen ifStmt : [Expr, Step] -> [Step] @M;
-  gen forStmt { name:Str } : [Expr, Step] -> [Step] @M;
+  gen forStmt( name:Str ) : [Expr, Step] -> [Step] @M;
   gen continueStmt : [] -> [Step] @M;
-  gen failStmt { message:Str } : [] -> [Step] @M;
+  gen failStmt( message:Str ) : [] -> [Step] @M;
   gen printStmt : [Expr] -> [Step] @M;
 
   gen then : [Step, Step] -> [Step] @M;
 
   gen retComp : [Expr] -> [Comp] @M;
-  gen bindComp { name:Str } : [Comp, Comp] -> [Comp] @M;
+  gen bindComp( name:Str ) : [Comp, Comp] -> [Comp] @M;
   gen readComp : [] -> [Comp] @M;
   gen runComp : [Step] -> [Comp] @M;
 
@@ -98,17 +99,18 @@ doctrine JSAst where {
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_M : [] -> [M.U_M] @M;
 
-  attrsort Str = string;
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
 
   gen JExpr : [] -> [M.U_M] @M;
   gen JStmt : [] -> [M.U_M] @M;
   gen JBlock : [] -> [M.U_M] @M;
   gen JsProgram : [] -> [M.U_M] @M;
 
-  gen varRef { name:Str } : [] -> [JExpr] @M;
+  gen varRef( name:Str ) : [] -> [JExpr] @M;
   gen zeroLit : [] -> [JExpr] @M;
-  gen intLit { value:Str } : [] -> [JExpr] @M;
-  gen stringLit { value:Str } : [] -> [JExpr] @M;
+  gen intLit( value:Str ) : [] -> [JExpr] @M;
+  gen stringLit( value:Str ) : [] -> [JExpr] @M;
 
   gen readInputExpr : [] -> [JExpr] @M;
   gen plusExpr : [JExpr, JExpr] -> [JExpr] @M;
@@ -122,22 +124,22 @@ doctrine JSAst where {
   gen isSpaceExpr : [JExpr] -> [JExpr] @M;
   gen lengthExpr : [JExpr] -> [JExpr] @M;
   gen charCodeAt0Expr : [JExpr] -> [JExpr] @M;
-  gen lambda1 { arg:Str } : [JExpr] -> [JExpr] @M;
+  gen lambda1( arg:Str ) : [JExpr] -> [JExpr] @M;
   gen bindApplyExpr : [JExpr, JExpr] -> [JExpr] @M;
   gen runBlockExpr : [JBlock] -> [JExpr] @M;
-  gen varLenEqZero { name:Str } : [] -> [JExpr] @M;
-  gen varBetweenStr { name:Str, low:Str, high:Str } : [] -> [JExpr] @M;
-  gen varCharCodeAt0LteInt { name:Str, max:Str } : [] -> [JExpr] @M;
-  gen constLambda1 { name:Str, arg:Str } : [JExpr] -> [JStmt] @M;
+  gen varLenEqZero( name:Str ) : [] -> [JExpr] @M;
+  gen varBetweenStr( name:Str, low:Str, high:Str ) : [] -> [JExpr] @M;
+  gen varCharCodeAt0LteInt( name:Str, max:Str ) : [] -> [JExpr] @M;
+  gen constLambda1( name:Str, arg:Str ) : [JExpr] -> [JStmt] @M;
 
-  gen constDecl { name:Str } : [JExpr] -> [JStmt] @M;
-  gen letDecl { name:Str } : [JExpr] -> [JStmt] @M;
-  gen assignDecl { name:Str } : [JExpr] -> [JStmt] @M;
+  gen constDecl( name:Str ) : [JExpr] -> [JStmt] @M;
+  gen letDecl( name:Str ) : [JExpr] -> [JStmt] @M;
+  gen assignDecl( name:Str ) : [JExpr] -> [JStmt] @M;
   gen continueStmt : [] -> [JStmt] @M;
-  gen failStmt { message:Str } : [] -> [JStmt] @M;
+  gen failStmt( message:Str ) : [] -> [JStmt] @M;
   gen printStmt : [JExpr] -> [JStmt] @M;
   gen ifStmt : [JExpr, JBlock] -> [JStmt] @M;
-  gen forOfStmt { name:Str } : [JExpr, JBlock] -> [JStmt] @M;
+  gen forOfStmt( name:Str ) : [JExpr, JBlock] -> [JStmt] @M;
 
   gen blockOne : [JStmt] -> [JBlock] @M;
   gen blockSnoc : [JBlock, JStmt] -> [JBlock] @M;
@@ -168,26 +170,26 @@ doctrine JSAst where {
 
 doctrine PrettyArtifact extends Artifact where {
   gen append : [Doc, Doc] -> [Doc] @Artifact;
-  gen prefix { s:Str } : [Doc] -> [Doc] @Artifact;
-  gen suffix { s:Str } : [Doc] -> [Doc] @Artifact;
-  gen wrap { open:Str, close:Str } : [Doc] -> [Doc] @Artifact;
-  gen joinWith { sep:Str } : [Doc, Doc] -> [Doc] @Artifact;
+  gen prefix( s:Str ) : [Doc] -> [Doc] @Artifact;
+  gen suffix( s:Str ) : [Doc] -> [Doc] @Artifact;
+  gen wrap( open:Str, close:Str ) : [Doc] -> [Doc] @Artifact;
+  gen joinWith( sep:Str ) : [Doc, Doc] -> [Doc] @Artifact;
 
   gen quoted : [Doc] -> [Doc] @Artifact;
-  gen call1 { fn:Str } : [Doc] -> [Doc] @Artifact;
+  gen call1( fn:Str ) : [Doc] -> [Doc] @Artifact;
   gen apply1 : [Doc, Doc] -> [Doc] @Artifact;
-  gen infix { op:Str } : [Doc, Doc] -> [Doc] @Artifact;
-  gen field { name:Str } : [Doc] -> [Doc] @Artifact;
+  gen infix( op:Str ) : [Doc, Doc] -> [Doc] @Artifact;
+  gen field( name:Str ) : [Doc] -> [Doc] @Artifact;
   gen charCodeAt0 : [Doc] -> [Doc] @Artifact;
-  gen lambda1 { arg:Str } : [Doc] -> [Doc] @Artifact;
+  gen lambda1( arg:Str ) : [Doc] -> [Doc] @Artifact;
   gen iifeBlock : [Doc] -> [Doc] @Artifact;
-  gen decl { kw:Str, name:Str } : [Doc] -> [Doc] @Artifact;
-  gen assign { name:Str } : [Doc] -> [Doc] @Artifact;
+  gen decl( kw:Str, name:Str ) : [Doc] -> [Doc] @Artifact;
+  gen assign( name:Str ) : [Doc] -> [Doc] @Artifact;
   gen ifHead : [Doc] -> [Doc] @Artifact;
-  gen forOfHead { name:Str } : [Doc] -> [Doc] @Artifact;
+  gen forOfHead( name:Str ) : [Doc] -> [Doc] @Artifact;
   gen blockWithHead : [Doc, Doc] -> [Doc] @Artifact;
   gen ifBlock : [Doc, Doc] -> [Doc] @Artifact;
-  gen forOfBlock { name:Str } : [Doc, Doc] -> [Doc] @Artifact;
+  gen forOfBlock( name:Str ) : [Doc, Doc] -> [Doc] @Artifact;
   gen stmtTerm : [Doc] -> [Doc] @Artifact;
   gen lineJoin2 : [Doc, Doc] -> [Doc] @Artifact;
 
@@ -272,11 +274,11 @@ morphism lowerCalc : Calc -> JSAst where {
   check structural;
 
   mode M -> M;
-  attrsort Str -> Str;
+  type Str @M -> Str @M;
 
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
 
   type Expr @M -> JExpr @M;
   type Step @M -> JBlock @M;
@@ -347,11 +349,11 @@ morphism emitJS : JSAst -> PrettyArtifact where {
   check structural;
 
   mode M -> Artifact;
-  attrsort Str -> Str;
+  type Str @M -> Str @Artifact;
 
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
 
   type JExpr @M -> Doc @Artifact;
   type JStmt @M -> Doc @Artifact;
@@ -459,12 +461,12 @@ morphism erasePretty : PrettyArtifact -> Artifact where {
   check structural;
 
   mode Artifact -> Artifact;
-  attrsort Str -> Str;
-  attrsort Int -> Int;
+  type Str @Artifact -> Str @Artifact;
+  type Int @Artifact -> Int @Artifact;
 
-  gen comp_ctx_ext @Artifact -> comp_ctx_ext
-  gen comp_var @Artifact -> comp_var
-  gen comp_reindex @Artifact -> comp_reindex
+  gen comp_ctx_ext @Artifact -> comp_ctx_ext(a)
+  gen comp_var @Artifact -> comp_var(a)
+  gen comp_reindex @Artifact -> comp_reindex(a)
 
   gen empty @Artifact -> empty
   gen text @Artifact -> text(s = s)

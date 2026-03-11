@@ -16,17 +16,17 @@ doctrine Base where {
 
 morphism chooseErr : ExceptionSchema -> Base where {
   mode M -> M;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
   type E @M -> Err @M;
 }
 
 morphism chooseLog : WriterSchema -> Base where {
   mode M -> M;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
   type W @M -> Log @M;
 }
 
@@ -36,18 +36,18 @@ doctrine WriterW = apply Writer to Base using { L = chooseLog; };
 morphism ExnE.fromBase : Base -> ExnE where {
   coercion;
   mode M -> M;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
   gen id @M -> id
 }
 
 morphism WriterW.fromBase : Base -> WriterW where {
   coercion;
   mode M -> M;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
   gen id @M -> id
 }
 

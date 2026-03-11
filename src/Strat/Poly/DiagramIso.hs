@@ -10,7 +10,6 @@ import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.Attr (AttrSubst, AttrVar, unifyAttrFlex)
 import Strat.Poly.Graph
   ( Diagram(..)
   , Edge(..)
@@ -24,8 +23,15 @@ import Strat.Poly.Graph
   , canonDiagram
   )
 import Strat.Poly.Obj (Obj, TmVar(..), sameTmVarId)
+import Strat.Poly.Syntax (CodeArg(..))
 import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.UnifyObj (Subst, emptySubst, unifyObjFlex, applySubstCtx)
+import Strat.Poly.UnifyObj
+  ( Subst
+  , applySubstCtx
+  , emptySubst
+  , unifyCodeArgsFlex
+  , unifyObjFlex
+  )
 import Strat.Poly.DefEq (defEqObj)
 
 
@@ -40,7 +46,6 @@ data IsoState extra = IsoState
 
 data IsoExtra = IsoExtra
   { ieTySubst :: Subst
-  , ieAttrSubst :: AttrSubst
   } deriving (Eq, Show)
 
 data IsoAlgo extra = IsoAlgo
@@ -52,7 +57,9 @@ data IsoAlgo extra = IsoAlgo
       -> Obj
       -> Either Text [extra]
   , iaComparePayload
-      :: (extra -> Diagram -> Diagram -> Either Text [extra])
+      :: Diagram
+      -> Diagram
+      -> (extra -> Diagram -> Diagram -> Either Text [extra])
       -> extra
       -> EdgePayload
       -> EdgePayload
@@ -74,26 +81,23 @@ diagramIsoEqSlow left right =
 diagramIsoMatchWithVars
   :: TypeTheory
   -> S.Set TmVar
-  -> S.Set AttrVar
   -> Diagram
   -> Diagram
-  -> Either Text [(Subst, AttrSubst)]
-diagramIsoMatchWithVars tt flex attrFlex =
-  diagramIsoMatchWithVarsFrom tt flex attrFlex emptySubst M.empty
+  -> Either Text [Subst]
+diagramIsoMatchWithVars tt flex =
+  diagramIsoMatchWithVarsFrom tt flex emptySubst
 
 diagramIsoMatchWithVarsFrom
   :: TypeTheory
   -> S.Set TmVar
-  -> S.Set AttrVar
   -> Subst
-  -> AttrSubst
   -> Diagram
   -> Diagram
-  -> Either Text [(Subst, AttrSubst)]
-diagramIsoMatchWithVarsFrom tt flex attrFlex tySubst attrSubst left right = do
-  let initExtra = IsoExtra tySubst attrSubst
-  xs <- diagramIsoWith (algoMatch tt flex attrFlex) initExtra left right
-  pure [ (ieTySubst ex, ieAttrSubst ex) | ex <- xs ]
+  -> Either Text [Subst]
+diagramIsoMatchWithVarsFrom tt flex tySubst left right = do
+  let initExtra = IsoExtra tySubst
+  xs <- diagramIsoWith (algoMatch tt flex) initExtra left right
+  pure [ieTySubst ex | ex <- xs]
 
 diagramIsoWith
   :: IsoAlgo extra
@@ -218,7 +222,7 @@ diagramIsoWith algo extra0 left right
             || not (iaPayloadShapeOk algo (ePayload e1) (ePayload e2))
             then Right []
             else do
-              extras <- iaComparePayload algo recurse' (isoExtra st) (ePayload e1) (ePayload e2)
+              extras <- iaComparePayload algo left right recurse' (isoExtra st) (ePayload e1) (ePayload e2)
               let pairs = zip (eIns e1) (eIns e2) <> zip (eOuts e1) (eOuts e2)
               pure
                 [ st''
@@ -264,11 +268,11 @@ algoEq =
     , iaTmCtxOk = \left right _ -> dTmCtx left == dTmCtx right
     }
   where
-    comparePayload recurse _ p1 p2 =
+    comparePayload _ _ recurse _ p1 p2 =
       case (p1, p2) of
-        (PGen g1 attrs1 bargs1, PGen g2 attrs2 bargs2)
+        (PGen g1 args1 bargs1, PGen g2 args2 bargs2)
           | g1 == g2
-              && attrs1 == attrs2
+              && args1 == args2
               && length bargs1 == length bargs2 ->
               foldl step (Right [()]) (zip bargs1 bargs2)
           | otherwise ->
@@ -284,6 +288,11 @@ algoEq =
               Right []
         (PTmMeta x, PTmMeta y)
           | sameTmVarId x y ->
+              Right [()]
+          | otherwise ->
+              Right []
+        (PTmLit x, PTmLit y)
+          | x == y ->
               Right [()]
           | otherwise ->
               Right []
@@ -310,15 +319,16 @@ algoEq =
 
     payloadShape p1 p2 =
       case (p1, p2) of
-        (PGen g1 attrs1 bargs1, PGen g2 attrs2 bargs2) ->
+        (PGen g1 args1 bargs1, PGen g2 args2 bargs2) ->
           g1 == g2
-            && attrs1 == attrs2
+            && args1 == args2
             && length bargs1 == length bargs2
             && and (zipWith binderShape bargs1 bargs2)
         (PBox _ _, PBox _ _) -> True
         (PFeedback _, PFeedback _) -> True
         (PSplice x me1, PSplice y me2) -> x == y && me1 == me2
         (PTmMeta x, PTmMeta y) -> sameTmVarId x y
+        (PTmLit x, PTmLit y) -> x == y
         (PInternalDrop, PInternalDrop) -> True
         _ -> False
 
@@ -329,9 +339,8 @@ algoEq =
 algoMatch
   :: TypeTheory
   -> S.Set TmVar
-  -> S.Set AttrVar
   -> IsoAlgo IsoExtra
-algoMatch tt flex attrFlex =
+algoMatch tt flex =
   IsoAlgo
     { iaComparePorts = comparePorts
     , iaComparePayload = comparePayload
@@ -368,25 +377,23 @@ algoMatch tt flex attrFlex =
             Right tySubst' ->
               Right [extra { ieTySubst = tySubst' }]
 
-    comparePayload recurse extra p1 p2 =
+    comparePayload left _ recurse extra p1 p2 =
       case (p1, p2) of
-        (PGen g1 attrs1 bargs1, PGen g2 attrs2 bargs2)
+        (PGen g1 args1 bargs1, PGen g2 args2 bargs2)
           | g1 /= g2
-              || M.keysSet attrs1 /= M.keysSet attrs2
+              || length args1 /= length args2
               || length bargs1 /= length bargs2 ->
               Right []
           | otherwise ->
-              case foldl unifyField (Right (ieAttrSubst extra)) (M.toList attrs1) of
+              case applySubstCtx tt (ieTySubst extra) (dTmCtx left) of
                 Left _ -> Right []
-                Right attrSubst ->
-                  foldl step (Right [extra { ieAttrSubst = attrSubst }]) (zip bargs1 bargs2)
-          where
-            unifyField acc (field, term1) = do
-              sub <- acc
-              case M.lookup field attrs2 of
-                Nothing -> Left "diagramIsoMatchWithVars: missing attribute field"
-                Just term2 -> unifyAttrFlex attrFlex sub term1 term2
+                Right tmCtx' ->
+                  case unifyCodeArgsFlex tt tmCtx' flex (ieTySubst extra) args1 args2 of
+                    Left _ -> Right []
+                    Right tySubst ->
+                      foldl step (Right [extra { ieTySubst = tySubst }]) (zip bargs1 bargs2)
 
+          where
             step acc pair = do
               xs <- acc
               fmap concat (mapM (\ex -> compareBinder ex pair) xs)
@@ -416,6 +423,11 @@ algoMatch tt flex attrFlex =
               Right [extra]
           | otherwise ->
               Right []
+        (PTmLit x, PTmLit y)
+          | x == y ->
+              Right [extra]
+          | otherwise ->
+              Right []
         (PInternalDrop, PInternalDrop) ->
           Right [extra]
         _ ->
@@ -423,17 +435,23 @@ algoMatch tt flex attrFlex =
 
     payloadShape p1 p2 =
       case (p1, p2) of
-        (PGen g1 attrs1 bargs1, PGen g2 attrs2 bargs2) ->
+        (PGen g1 args1 bargs1, PGen g2 args2 bargs2) ->
           g1 == g2
-            && M.keysSet attrs1 == M.keysSet attrs2
+            && length args1 == length args2
             && length bargs1 == length bargs2
+            && and (zipWith sameArgKind args1 args2)
             && and (zipWith binderShape bargs1 bargs2)
         (PBox _ _, PBox _ _) -> True
         (PFeedback _, PFeedback _) -> True
         (PSplice x me1, PSplice y me2) -> x == y && me1 == me2
         (PTmMeta x, PTmMeta y) -> sameTmVarId x y
+        (PTmLit x, PTmLit y) -> x == y
         (PInternalDrop, PInternalDrop) -> True
         _ -> False
+
+    sameArgKind (CAObj _) (CAObj _) = True
+    sameArgKind (CATm _) (CATm _) = True
+    sameArgKind _ _ = False
 
     binderShape (BAConcrete _) (BAConcrete _) = True
     binderShape (BAMeta x) (BAMeta y) = x == y

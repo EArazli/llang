@@ -22,6 +22,7 @@ import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Strat.Poly.Literal (LiteralKind, literalKind)
 import Strat.Poly.Term.AST
   ( TermExpr(..)
   , freeTmVarsExpr
@@ -55,12 +56,14 @@ import Strat.Poly.Obj
 import Strat.Poly.TypeTheory
   ( TmFunSig(..)
   , TypeTheory
+  , literalKindForObj
   , lookupTmFunSig
   )
 
 data TermConvEnv = TermConvEnv
   { tcLookupSig :: ModeName -> GenName -> Maybe TmFunSig
   , tcSortEq :: [Obj] -> Obj -> Obj -> Either Text Bool
+  , tcLiteralKindForSort :: [Obj] -> Obj -> Either Text (Maybe LiteralKind)
   }
 
 termExprToDiagram
@@ -128,8 +131,13 @@ termExprToDiagramWith convEnv tmCtx expectedSort tm = do
           sig <- requireFunSig convEnv tmCtx currentSort f args
           (argPorts, d1) <- foldM step ([], diag) (zip (tfsArgs sig) args)
           let (outPort, d2) = freshPort currentSort d1
-          d3 <- addEdgePayload (PGen f M.empty []) argPorts [outPort] d2
+          d3 <- addEdgePayload (PGen f [] []) argPorts [outPort] d2
           pure (outPort, d3)
+        TMLit lit -> do
+          ensureLiteralSort currentSort lit
+          let (outPort, d1) = freshPort currentSort diag
+          d2 <- addEdgePayload (PTmLit lit) [] [outPort] d1
+          pure (outPort, d2)
       where
         step (ports, dAcc) (argSort, argTm) = do
           (argPort, dNext) <- go modeInputs modeInputsAll inPorts dAcc argSort argTm
@@ -159,6 +167,14 @@ termExprToDiagramWith convEnv tmCtx expectedSort tm = do
       if ok
         then Right ()
         else Left err
+
+    ensureLiteralSort sortTy lit = do
+      mKind <- tcLiteralKindForSort convEnv tmCtx sortTy
+      case mKind of
+        Just kind
+          | kind == literalKind lit -> Right ()
+          | otherwise -> Left "termExprToDiagram: literal kind does not match expected sort"
+        Nothing -> Left "termExprToDiagram: expected sort does not admit literals"
 
 diagramToTermExprWith
   :: TermConvEnv
@@ -210,7 +226,7 @@ diagramGraphToTermExprWith convEnv tmCtx expectedSort diag = do
       if outOk
         then Right ()
         else Left "diagramToTermExpr: output sort mismatch"
-      diagramGraphToTermExprCore diag
+      diagramGraphToTermExprCore convEnv tmCtx diag
     _ -> Left "diagramToTermExpr: term diagram must have exactly one output"
   where
     modeInputs = modeCtxEntries tmCtx (dMode diag)
@@ -235,9 +251,11 @@ diagramGraphToTermExprWith convEnv tmCtx expectedSort diag = do
         else Left "diagramToTermExpr: boundary input sort mismatch"
 
 diagramGraphToTermExprCore
-  :: Diagram
+  :: TermConvEnv
+  -> [Obj]
+  -> Diagram
   -> Either Text TermExpr
-diagramGraphToTermExprCore diag = do
+diagramGraphToTermExprCore convEnv tmCtx diag = do
   validateTermGraph diag
   case dOut diag of
     [outPort] -> termAt S.empty outPort
@@ -266,16 +284,24 @@ diagramGraphToTermExprCore diag = do
                       Just edge -> Right edge
                   _ -> Left "diagramToTermExpr: missing producer"
               case ePayload producer of
-                PGen gen attrs bargs
-                  | M.null attrs && null bargs -> do
+                PGen gen args bargs
+                  | null args && null bargs -> do
                       args <- mapM (termAt (S.insert pid seen)) (eIns producer)
                       Right (TMFun gen args)
                   | otherwise ->
-                      Left "diagramToTermExpr: generator term node must not carry attrs or binder args"
+                      Left "diagramToTermExpr: generator term node must not carry stored args or binder args"
                 PTmMeta v ->
                   do
                     metaArgs <- mapM boundaryInputGlobal (eIns producer)
                     Right (TMMeta v metaArgs)
+                PTmLit lit -> do
+                  sortTy <- requirePortType pid
+                  mKind <- tcLiteralKindForSort convEnv tmCtx sortTy
+                  case mKind of
+                    Just kind
+                      | kind == literalKind lit -> Right (TMLit lit)
+                      | otherwise -> Left "diagramToTermExpr: literal kind does not match output sort"
+                    Nothing -> Left "diagramToTermExpr: literal node output sort does not admit literals"
                 _ ->
                   Left "diagramToTermExpr: non-term payload in term diagram"
     boundaryInputGlobal pid =
@@ -286,6 +312,10 @@ diagramGraphToTermExprCore diag = do
           case nth localToGlobal local of
             Nothing -> Left "diagramToTermExpr: invalid boundary input mapping"
             Just globalTm -> Right globalTm
+    requirePortType pid =
+      case diagramPortObj diag pid of
+        Nothing -> Left "diagramToTermExpr: missing port type"
+        Just ty -> Right ty
 validateTermGraph :: Diagram -> Either Text ()
 validateTermGraph diag = do
   validateDiagram diag
@@ -316,16 +346,20 @@ validateTermGraph diag = do
 
     checkEdge edge =
       case ePayload edge of
-        PGen _ attrs bargs ->
-          if M.null attrs && null bargs
+        PGen _ args bargs ->
+          if null args && null bargs
             then Right ()
-            else Left "validateTermDiagram: term generator nodes cannot have attrs or binder args"
+            else Left "validateTermDiagram: term generator nodes cannot have stored args or binder args"
         PTmMeta _ ->
           if all (`elem` dIn diag) (eIns edge)
             then Right ()
             else Left "validateTermDiagram: PTmMeta inputs must be boundary ports"
+        PTmLit _ ->
+          case (eIns edge, eOuts edge) of
+            ([], [_]) -> Right ()
+            _ -> Left "validateTermDiagram: PTmLit must have no inputs and exactly one output"
         PInternalDrop -> Right ()
-        _ -> Left "validateTermDiagram: only PGen/PTmMeta/PInternalDrop are allowed in term diagrams"
+        _ -> Left "validateTermDiagram: only PGen/PTmMeta/PTmLit/PInternalDrop are allowed in term diagrams"
 
 requiredModePrefixLen :: [Obj] -> ModeName -> TermExpr -> Either Text Int
 requiredModePrefixLen tmCtx mode tm = do
@@ -396,6 +430,7 @@ structuralConvEnv tt =
   TermConvEnv
     { tcLookupSig = \mode f -> lookupTmFunSig tt mode f
     , tcSortEq = \_ a b -> Right (a == b)
+    , tcLiteralKindForSort = \_ sortTy -> Right (literalKindForObj tt sortTy)
     }
 
 requireFunSig :: TermConvEnv -> [Obj] -> Obj -> GenName -> [TermExpr] -> Either Text TmFunSig

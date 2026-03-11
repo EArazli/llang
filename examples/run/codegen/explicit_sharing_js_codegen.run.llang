@@ -6,10 +6,11 @@ doctrine Arith where {
   gen comp_var(a@M) : [a] -> [a] @M;
   gen comp_reindex(a@M) : [a] -> [a] @M;
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
-  attrsort Str = string;
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
   gen U_M : [] -> [U_M] @M;
   gen I : [] -> [U_M] @M;
-  gen lit { n:Str } : [] -> [I] @M;
+  gen lit( n:Str ) : [] -> [I] @M;
   gen add : [I, I] -> [I] @M;
   gen dup : [I] -> [I, I] @M;
   gen print : [I] -> [] @M;

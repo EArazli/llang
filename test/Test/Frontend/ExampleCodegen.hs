@@ -27,7 +27,7 @@ tests =
   testGroup
     "Frontend.ExampleCodegen"
     [ testCase "logic_full_adder_codegen main emits structured JavaScript" testLogicFullAdderMain
-    , testCase "logic_full_adder_codegen share shows quoted bindings and attrs" testLogicFullAdderShare
+    , testCase "logic_full_adder_codegen share shows quoted bindings and residual names" testLogicFullAdderShare
     , testCase "explicit_sharing_js_codegen main exposes mixed quoted bindings" testExplicitSharingJsMain
     , testCase "end-to-end autodiff example emits differentiated JavaScript" testEndToEndAutodiffMain
     , testCase "end-to-end autodiff core run exposes differentiated target IR" testEndToEndAutodiffCore
@@ -57,8 +57,8 @@ testLogicFullAdderShare = do
   runDef <- require (selectRun env (Just "share"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected residual var for a" ("res_var(s=\"a\")" `T.isInfixOf` out)
-  assertBool "expected residual var for b" ("res_var(s=\"b\")" `T.isInfixOf` out)
+  assertBool "expected residual var for a" ("res_var(\"a\")" `T.isInfixOf` out)
+  assertBool "expected residual var for b" ("res_var(\"b\")" `T.isInfixOf` out)
   assertBool "expected residual xor binding" ("res_xor" `T.isInfixOf` out)
   assertBool "expected residual and binding" ("res_and" `T.isInfixOf` out)
 
@@ -73,7 +73,7 @@ testExplicitSharingJsMain = do
   assertBool "expected residual add binding" ("res_add" `T.isInfixOf` out)
   assertBool "expected residual print binding" ("res_print" `T.isInfixOf` out)
   assertBool "expected quote bundle plumbing" ("returnRefs" `T.isInfixOf` out)
-  assertBool "expected no old naming attrsorts" (not ("__quote_str" `T.isInfixOf` out))
+  assertBool "expected no old quote-name literal marker" (not ("__quote_str" `T.isInfixOf` out))
 
 testEndToEndAutodiffMain :: Assertion
 testEndToEndAutodiffMain = do

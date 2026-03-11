@@ -247,9 +247,9 @@ rewriteInEdge spliceMapper tt cap rules diag (edgeKey, edge) =
       Right []
     PInternalDrop ->
       Right []
-    PGen gen attrs bargs -> do
+    PGen gen args bargs -> do
       bargsRes <- rewriteAllBinderArgsWithProof spliceMapper tt cap rules bargs
-      mapM (replaceGen gen attrs) bargsRes
+      mapM (replaceGen gen args) bargsRes
   where
     prefix focus step = step { rsFocus = focus (rsFocus step) }
 
@@ -263,8 +263,8 @@ rewriteInEdge spliceMapper tt cap rules diag (edgeKey, edge) =
       let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
       Right (prefix (FocusInFeedback edgeKey) step, diag')
 
-    replaceGen gen attrs (binderIx, step, bargs') = do
-      let edge' = edge { ePayload = PGen gen attrs bargs' }
+    replaceGen gen args (binderIx, step, bargs') = do
+      let edge' = edge { ePayload = PGen gen args bargs' }
       let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
       Right (prefix (FocusInBinder edgeKey binderIx) step, diag')
 

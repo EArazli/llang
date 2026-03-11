@@ -11,6 +11,8 @@ module Strat.Poly.UnifyObj
   , emptySubst
   , unifyObj
   , unifyObjFlex
+  , unifyCodeArgFlex
+  , unifyCodeArgsFlex
   , unifyTm
   , unifyCtx
   , diagramTmCtx
@@ -29,6 +31,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import Control.Monad (foldM)
+import Strat.Poly.Literal (Literal, literalKind)
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
@@ -47,6 +50,7 @@ import Strat.Poly.TypeTheory
   ( TypeTheory(..)
   , TypeParamSig(..)
   , TmFunSig(..)
+  , literalKindForObj
   , lookupTmFunSig
   )
 import Strat.Poly.Traversal (traverseDiagram)
@@ -72,6 +76,7 @@ data PortHead
   = PHBound Int
   | PHFun GenName [PortId]
   | PHMeta TmVar
+  | PHLit Literal
 
 lookupMeta :: Subst -> TmVar -> Maybe CodeArg
 lookupMeta subst v =
@@ -343,6 +348,41 @@ unifyCtxDiagram
 unifyCtxDiagram tt diag flex =
   unifyCtx tt (diagramTmCtx diag) flex
 
+unifyCodeArgFlex
+  :: TypeTheory
+  -> [Obj]
+  -> S.Set TmVar
+  -> Subst
+  -> CodeArg
+  -> CodeArg
+  -> Either Text Subst
+unifyCodeArgFlex tt tmCtx flex subst argA argB =
+  case (argA, argB) of
+    (CAObj tyA, CAObj tyB) ->
+      unifyObjFlex tt tmCtx flex subst tyA tyB
+    (CATm tmA, CATm tmB) -> do
+      sort <- inferExpectedTmSort tt tmCtx subst tmA tmB
+      unifyTm tt tmCtx flex subst sort tmA tmB
+    _ ->
+      Left "unifyCodeArgFlex: mixed type/term arguments cannot unify"
+
+unifyCodeArgsFlex
+  :: TypeTheory
+  -> [Obj]
+  -> S.Set TmVar
+  -> Subst
+  -> [CodeArg]
+  -> [CodeArg]
+  -> Either Text Subst
+unifyCodeArgsFlex tt tmCtx flex subst argsA argsB
+  | length argsA /= length argsB =
+      Left "unifyCodeArgsFlex: arity mismatch"
+  | otherwise =
+      foldM
+        (\s (argA, argB) -> unifyCodeArgFlex tt tmCtx flex s argA argB)
+        subst
+        (zip argsA argsB)
+
 unifyTm
   :: TypeTheory
   -> [Obj]
@@ -401,6 +441,9 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                     (zip3 (tfsArgs sig) lIns rIns)
               | otherwise ->
                   Left "unifyTm: function mismatch"
+            (PHLit l1, PHLit l2)
+              | l1 == l2 -> Right s
+              | otherwise -> Left "unifyTm: literal mismatch"
             _ -> do
               lhsTm <- termFromPort lhsDiag lhsInputs lp
               rhsTm <- termFromPort rhsDiag rhsInputs rp
@@ -419,6 +462,12 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
               sig <- requireFunSig s currentSort f xs
               foldl step (Right s) (zip3 (tfsArgs sig) xs ys)
           | otherwise -> Left "unifyTm: function mismatch"
+        (TMLit l1, TMLit l2) -> do
+          ensureTmTermSort s currentSort (TMLit l1)
+          ensureTmTermSort s currentSort (TMLit l2)
+          if l1 == l2
+            then Right s
+            else Left "unifyTm: literal mismatch"
         (TMMeta v args, TMMeta w args') -> do
           ensureTmTermSort s currentSort (TMMeta v args)
           ensureTmTermSort s currentSort (TMMeta w args')
@@ -533,6 +582,13 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
         TMFun f args -> do
           sig <- requireFunSig s currentSort f args
           mapM_ (uncurry (ensureTmTermSort s)) (zip (tfsArgs sig) args)
+        TMLit lit -> do
+          currentSort' <- normalizeInCtx s currentSort
+          case literalKindForObj tt currentSort' of
+            Just kind
+              | kind == literalKind lit -> Right ()
+              | otherwise -> Left "unifyTm: literal kind does not match expected sort"
+            Nothing -> Left "unifyTm: expected sort does not admit literals"
 
     requireFunSig s currentSort f args = do
       requireFunSigArity s currentSort f (length args)
@@ -575,6 +631,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
               sig <- requireFunSigArity s currentSort f (length args)
               args' <- mapM (\(argSort, argTm) -> go seen argSort argTm) (zip (tfsArgs sig) args)
               Right (TMFun f args')
+            TMLit _ -> Right tm
 
     normalizeTermExprInCtx ctx _ expectedSort expr = do
       tm <- termExprToDiagram tt ctx expectedSort expr
@@ -598,10 +655,11 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
         Nothing -> do
           edge <- producerEdge diag pid
           case ePayload edge of
-            PGen fName attrs bargs
-              | M.null attrs && null bargs -> Right (PHFun fName (eIns edge))
+            PGen fName args bargs
+              | null args && null bargs -> Right (PHFun fName (eIns edge))
               | otherwise -> Left "unifyTm: non-term generator payload in normalized term graph"
             PTmMeta v -> Right (PHMeta v)
+            PTmLit lit -> Right (PHLit lit)
             _ -> Left "unifyTm: non-term payload in normalized term graph"
 
     termFromPort diag inputs pid = go S.empty pid
@@ -615,8 +673,8 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                 else do
                   edge <- producerEdge diag pid0
                   case ePayload edge of
-                    PGen fName attrs bargs
-                      | M.null attrs && null bargs -> do
+                    PGen fName args bargs
+                      | null args && null bargs -> do
                           args <- mapM (go (S.insert pid0 seen)) (eIns edge)
                           Right (TMFun fName args)
                       | otherwise ->
@@ -624,6 +682,8 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                     PTmMeta v -> do
                       metaArgs <- mapM boundaryGlobal (eIns edge)
                       Right (TMMeta v metaArgs)
+                    PTmLit lit ->
+                      Right (TMLit lit)
                     _ ->
                       Left "unifyTm: non-term payload in normalized term graph"
         boundaryGlobal inp =
@@ -763,10 +823,22 @@ applySubstDiagram tt subst =
       pure d { dTmCtx = dTmCtx', dPortObj = dPortObj' }
     onPayload payload =
       case payload of
+        PGen g args bargs -> do
+          args' <- mapM applyArg args
+          pure (PGen g args' bargs)
         PTmMeta v -> do
           sort' <- applySubstObj tt subst (tmvSort v)
           pure (PTmMeta (v { tmvSort = sort' }))
+        PTmLit lit ->
+          pure (PTmLit lit)
         _ -> pure payload
+
+    applyArg arg =
+      case arg of
+        CAObj obj -> CAObj <$> applySubstObj tt subst obj
+        CATm tmArg -> do
+          sort <- inferTmSortFromDiagram tt subst tmArg
+          CATm <$> applySubstTm tt subst sort tmArg
 
 applySubstTmInCtx :: TypeTheory -> [Obj] -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
 applySubstTmInCtx tt tmCtx subst expectedSort tm = do
@@ -888,6 +960,7 @@ substituteTermExprMetas tt subst =
               (curCtx, [])
               (zip (tfsArgs sig) args)
           Right (ctxOut, TMFun f (reverse argsRev))
+        TMLit _ -> Right (curCtx, expr)
 
     requireSig curCtx currentSort f arity = do
       currentSort' <- normalizeObjDeepWithCtx tt curCtx =<< applySubstObj tt subst currentSort
@@ -939,6 +1012,7 @@ renameTermGlobalsPartial ren tm =
     TMBound i -> TMBound (M.findWithDefault i i ren)
     TMMeta v args -> TMMeta v (map (\i -> M.findWithDefault i i ren) args)
     TMFun f args -> TMFun f (map (renameTermGlobalsPartial ren) args)
+    TMLit lit -> TMLit lit
 
 instantiateMetaBody
   :: [Obj]
@@ -1012,6 +1086,7 @@ occursTmVarExpr v tm =
     TMMeta v' _ -> v == v'
     TMBound _ -> False
     TMFun _ args -> any (occursTmVarExpr v) args
+    TMLit _ -> False
 
 isTmIdentity :: TmVar -> TermDiagram -> Bool
 isTmIdentity v tm =

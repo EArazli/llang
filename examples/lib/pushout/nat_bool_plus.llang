@@ -7,5 +7,5 @@ doctrine NatBoolPlus extends NatBool where {
     Nat_inl_Z ; isZero == Bool_inr_T
 
   rule computational isZeroS -> : [Nat_inl_Nat] -> [Bool_inr_Bool] @M =
-    Nat_inl_S ; isZero == drop{Nat_inl_Nat} ; Bool_inr_F
+    Nat_inl_S ; isZero == drop(Nat_inl_Nat) ; Bool_inr_F
 }

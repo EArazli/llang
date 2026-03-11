@@ -160,8 +160,7 @@ testCriticalPairsFailOnSubstFailure = do
                         }
                 }
           , dAcyclicModes = S.empty
-          , dAttrSorts = M.empty
-          , dGens =
+                    , dGens =
               M.singleton
                 mode
                 ( M.fromList
@@ -172,7 +171,7 @@ testCriticalPairsFailOnSubstFailure = do
                           , gdParams = []
                           , gdDom = []
                           , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
-                          , gdAttrs = []
+                          , gdLiteralKind = Nothing
                           }
                       )
                     , ( GenName "comp_ctx_ext"
@@ -182,7 +181,7 @@ testCriticalPairsFailOnSubstFailure = do
                           , gdParams = []
                           , gdDom = [InPort (mkCon (ObjRef mode (ObjName "U")) [])]
                           , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
-                          , gdAttrs = []
+                          , gdLiteralKind = Nothing
                           }
                       )
                     , ( GenName "comp_var"
@@ -192,7 +191,7 @@ testCriticalPairsFailOnSubstFailure = do
                           , gdParams = []
                           , gdDom = [InPort (mkCon (ObjRef mode (ObjName "U")) [])]
                           , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
-                          , gdAttrs = []
+                          , gdLiteralKind = Nothing
                           }
                       )
                     , ( GenName "comp_reindex"
@@ -202,7 +201,7 @@ testCriticalPairsFailOnSubstFailure = do
                           , gdParams = []
                           , gdDom = [InPort (mkCon (ObjRef mode (ObjName "U")) [])]
                           , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
-                          , gdAttrs = []
+                          , gdLiteralKind = Nothing
                           }
                       )
                     ]

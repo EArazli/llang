@@ -167,7 +167,6 @@ generateBeckChevalleyObligations doc = do
         (renderGen (compReindex compDecl))
         Nothing
         Nothing
-        Nothing
 
     slotLawProfile mode genName slot =
       case M.lookup mode (dGens doc) >>= M.lookup genName of

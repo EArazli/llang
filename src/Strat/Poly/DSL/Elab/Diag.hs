@@ -11,7 +11,6 @@ module Strat.Poly.DSL.Elab.Diag
   , renderGenName
   , ensureMode
   , renderModeName
-  , ensureAttrSort
   , ensureAcyclicMode
   ) where
 
@@ -24,7 +23,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
-import Strat.Poly.Attr
 import Strat.Poly.DSL.AST
 import Strat.Poly.DSL.Elab.Resolve (elabRawModExpr)
 import Strat.Poly.DSL.Elab.Term
@@ -56,7 +54,7 @@ import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Names
 import Strat.Poly.Obj
 import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.TypeTheory (TypeTheory(..), ttCtorTablesByOwner)
+import Strat.Poly.TypeTheory (TypeTheory(..), literalKindForObj, ttCtorTablesByOwner)
 import qualified Strat.Poly.UnifyObj as U
 
 renderGenName :: GenName -> Text
@@ -70,12 +68,6 @@ ensureMode doc mode =
 
 renderModeName :: ModeName -> Text
 renderModeName (ModeName name) = name
-
-ensureAttrSort :: Doctrine -> AttrSort -> Either Text ()
-ensureAttrSort doc sortName =
-  if M.member sortName (dAttrSorts doc)
-    then Right ()
-    else Left "unknown attribute sort"
 
 data AlphaVarState = AlphaVarState
   { avsForward :: M.Map TmVar TmVar
@@ -149,8 +141,7 @@ elabRuleLHS
   -> RawDiagExpr
   -> Either Text (Diagram, M.Map BinderMetaVar BinderSig)
 elabRuleLHS env doc mode tyVars tmVars expr = do
-  (diag, metas) <- elabDiagExprWith env doc mode [] tyVars tmVars M.empty BMCollect False expr
-  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
+  (diag, metas) <- elabDiagExprWith env doc mode [] tyVars tmVars M.empty BMCollect False False expr
   ensureAcyclicMode doc mode diag
   pure (diag, metas)
 
@@ -164,18 +155,16 @@ elabRuleRHS
   -> RawDiagExpr
   -> Either Text Diagram
 elabRuleRHS env doc mode tyVars tmVars binderSigs expr = do
-  (diag, metas) <- elabDiagExprWith env doc mode [] tyVars tmVars binderSigs BMUse True expr
+  (diag, metas) <- elabDiagExprWith env doc mode [] tyVars tmVars binderSigs BMUse True False expr
   if metas == binderSigs
     then do
-      ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
       ensureAcyclicMode doc mode diag
       pure diag
     else Left "rule RHS introduces fresh binder metas"
 
 elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [TmVar] -> RawDiagExpr -> Either Text Diagram
 elabDiagExpr env doc mode ruleVars expr = do
-  (diag, _) <- elabDiagExprWith env doc mode [] ruleVars [] M.empty BMNoMeta False expr
-  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
+  (diag, _) <- elabDiagExprWith env doc mode [] ruleVars [] M.empty BMNoMeta False False expr
   ensureAcyclicMode doc mode diag
   pure diag
 
@@ -189,10 +178,11 @@ elabDiagExprWith
   -> M.Map BinderMetaVar BinderSig
   -> BinderMetaMode
   -> Bool
+  -> Bool
   -> RawDiagExpr
   -> Either Text (Diagram, M.Map BinderMetaVar BinderSig)
-elabDiagExprWith env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice expr =
-  ensureLinearMetaVars expr *> evalFresh (elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice expr)
+elabDiagExprWith env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice allowImplicitGenArgs expr =
+  ensureLinearMetaVars expr *> evalFresh (elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice allowImplicitGenArgs expr)
 
 elabDiagExprWithFresh
   :: ModuleEnv
@@ -204,9 +194,10 @@ elabDiagExprWithFresh
   -> M.Map BinderMetaVar BinderSig
   -> BinderMetaMode
   -> Bool
+  -> Bool
   -> RawDiagExpr
   -> Fresh (Diagram, M.Map BinderMetaVar BinderSig)
-elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice expr = do
+elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice allowImplicitGenArgs expr = do
   ttDoc <- liftEither (doctrineTypeTheory doc)
   let ctorTables = ttCtorTablesByOwner ttDoc
   build ttDoc ctorTables tmCtx binderSigs0 expr
@@ -214,7 +205,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
     rigidTy = S.fromList tyVars
     rigidTm = S.fromList tmVars
 
-    elabOneParamArg ttDoc ctorTables curTmCtx tyFreshMap tmFreshMap (tyAcc, tmAcc) (paramKind, rawArg) =
+    elabOneParamArg ttDoc ctorTables curTmCtx tyFreshMap tmFreshMap (argAcc, tyAcc, tmAcc) (paramKind, rawArg) =
       case paramKind of
         GP_Ty tyVar0 -> do
           freshTyParam <-
@@ -224,7 +215,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           ownerMode <- liftEither (ownerModeForTypeMeta doc freshTyParam)
           tyArg <- liftEither (elabObjExprWithTables doc ctorTables tyVars tmVars M.empty ownerMode rawArg)
           if objOwnerMode tyArg == ownerMode
-            then pure ((freshTyParam, tyArg) : tyAcc, tmAcc)
+            then pure (CAObj tyArg : argAcc, (freshTyParam, tyArg) : tyAcc, tmAcc)
             else liftEither (Left "generator type argument mode mismatch")
         GP_Tm tmVar0 -> do
           freshTmParam <-
@@ -232,7 +223,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
               Nothing -> liftEither (Left "internal error: missing fresh term parameter")
               Just v -> pure v
           tmArg <- elabTmArg ttDoc curTmCtx freshTmParam rawArg
-          pure (tyAcc, (freshTmParam, tmArg) : tmAcc)
+          pure (CATm tmArg : argAcc, tyAcc, (freshTmParam, tmArg) : tmAcc)
 
     build ttDoc ctorTables curTmCtx binderSigs e =
       case e of
@@ -245,7 +236,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           let (pid, d0) = freshPort ty (emptyDiagram mode curTmCtx)
           d1 <- liftEither (setPortLabel pid name d0)
           pure (d1 { dIn = [pid], dOut = [pid] }, binderSigs)
-        RDGen name mArgs mAttrArgs mBinderArgs -> do
+        RDGen name mArgs mBinderArgs -> do
           gen <- liftEither (lookupGen doc mode (GenName name))
           tyRename <- freshTySubst doc (gdTyVars gen)
           tmRename <- freshTmSubst ttDoc curTmCtx (gdTmVars gen)
@@ -263,41 +254,42 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           dom0 <- applySubstCtxDoc ttDoc renameSubst (gdPlainDom gen)
           cod0 <- applySubstCtxDoc ttDoc renameSubst (gdCod gen)
           binderSlots0 <- mapM (applySubstBinderSig ttDoc renameSubst) [ bs | InBinder bs <- gdDom gen ]
-          (dom, cod, binderSlots) <-
+          freshTyVars <- liftEither (extractFreshTyVars (gdTyVars gen) tyRename)
+          freshTmVars <- liftEither (extractFreshTmVars (gdTmVars gen) tmRename)
+          let tyFreshMap = M.fromList (zip (gdTyVars gen) freshTyVars)
+          let tmFreshMap = M.fromList (zip (gdTmVars gen) freshTmVars)
+          (genArgs, dom, cod, binderSlots) <-
             case mArgs of
-              Nothing -> pure (dom0, cod0, binderSlots0)
-              Just args -> do
-                let paramOrder = gdParams gen
-                if length args /= length paramOrder
-                  then liftEither (Left "generator type/term argument mismatch")
-                  else do
-                    freshTyVars <- liftEither (extractFreshTyVars (gdTyVars gen) tyRename)
-                    freshTmVars <- liftEither (extractFreshTmVars (gdTmVars gen) tmRename)
-                    let tyFreshMap = M.fromList (zip (gdTyVars gen) freshTyVars)
-                    let tmFreshMap = M.fromList (zip (gdTmVars gen) freshTmVars)
-                    (tyBinds, tmBinds) <-
-                      foldM
-                        (elabOneParamArg ttDoc ctorTables curTmCtx tyFreshMap tmFreshMap)
-                        ([], [])
-                        (zip paramOrder args)
-                    argSubst <-
-                      liftEither
-                        ( U.mkSubst
-                            ( [ (v, CAObj ty)
-                              | (v, ty) <- reverse tyBinds
-                              ]
-                                <> [ (v, CATm tm)
-                                   | (v, tm) <- reverse tmBinds
-                                   ]
-                            )
+              Nothing
+                | allowImplicitGenArgs -> do
+                    genArgs <- liftEither (implicitGenArgs (gdParams gen) tyRename tmRename)
+                    pure (genArgs, dom0, cod0, binderSlots0)
+              _ -> do
+                rawArgs <- liftEither (resolveGenArgs (gdParams gen) mArgs)
+                args <- liftEither (normalizeGenArgs (gdParams gen) rawArgs)
+                (argsRev, tyBinds, tmBinds) <-
+                  foldM
+                    (elabOneParamArg ttDoc ctorTables curTmCtx tyFreshMap tmFreshMap)
+                    ([], [], [])
+                    (zip (gdParams gen) args)
+                argSubst <-
+                  liftEither
+                    ( U.mkSubst
+                        ( [ (v, CAObj ty)
+                          | (v, ty) <- reverse tyBinds
+                          ]
+                            <> [ (v, CATm tm)
+                               | (v, tm) <- reverse tmBinds
+                               ]
                         )
-                    dom1 <- applySubstCtxDoc ttDoc argSubst dom0
-                    cod1 <- applySubstCtxDoc ttDoc argSubst cod0
-                    binderSlots1 <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
-                    pure (dom1, cod1, binderSlots1)
-          attrs <- liftEither (elabGenAttrs doc gen mAttrArgs)
+                    )
+                let genArgs = reverse argsRev
+                dom <- applySubstCtxDoc ttDoc argSubst dom0
+                cod <- applySubstCtxDoc ttDoc argSubst cod0
+                binderSlots <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
+                pure (genArgs, dom, cod, binderSlots)
           (binderArgs, binderSigs') <- elaborateBinderArgs ttDoc binderSigs binderSlots mBinderArgs
-          diag <- liftEither (mkGenDiag curTmCtx (gdName gen) attrs binderArgs dom cod)
+          diag <- liftEither (mkGenDiag curTmCtx (gdName gen) genArgs binderArgs dom cod)
           pure (diag, binderSigs')
         RDTermRef name -> do
           term <- liftEither (lookupTerm env name)
@@ -412,6 +404,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
               binderSigs
               metaMode
               allowSplice
+              allowImplicitGenArgs
               innerExpr
           mapped <- liftEither (applyModExpr doc me inner)
           if dMode mapped == mode
@@ -453,6 +446,7 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                   M.empty
                   BMNoMeta
                   False
+                  allowImplicitGenArgs
                   exprArg
               diagArg' <- liftEither (unifyBoundary ttDoc rigidTy rigidTm (bsDom slot) (bsCod slot) diagArg)
               domArg <- liftEither (diagramDom diagArg')
@@ -494,11 +488,28 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                   case termExprToDiagramChecked ttDoc curTmCtx (tmvSort v) (TMBound idx) of
                     Right tm -> pure tm
                     Left msg -> liftEither (Left ("explicit term argument `" <> name <> "`: " <> msg))
-                Right Nothing -> liftEither (Left err)
+                Right Nothing ->
+                  case literalKindForObj ttDoc (tmvSort v) of
+                    Just _ -> liftEither (mkImplicitLiteralMeta ttDoc curTmCtx name (tmvSort v))
+                    Nothing -> liftEither (Left err)
                 Left msg -> liftEither (Left ("explicit term argument `" <> name <> "`: " <> msg))
             _ ->
               liftEither (Left err)
       where
+        mkImplicitLiteralMeta ttDoc' ctx name expectedSort =
+          case literalKindForObj ttDoc' expectedSort of
+            Just _ ->
+              let fresh =
+                    TmVar
+                      { tmvName = name
+                      , tmvSort = expectedSort
+                      , tmvScope = max 0 (length (modeCtxGlobals ctx (objMode expectedSort)))
+                      , tmvOwnerMode = Nothing
+                      }
+               in termExprToDiagramChecked ttDoc' ctx expectedSort (TMMeta fresh (defaultMetaArgs ctx fresh))
+            Nothing ->
+              Left "expected sort does not admit literals"
+
         implicitBoundCandidate ctx expectedSort = do
           expectedNorm <- normalizeObjDeep ttDoc expectedSort
           let candidates =
@@ -516,10 +527,10 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           sortNorm <- normalizeObjDeep ttDoc sortTy
           pure (if sortNorm == expectedNorm then Just idx else Nothing)
 
-    mkGenDiag curTmCtx g attrs bargs dom cod = do
+    mkGenDiag curTmCtx g args bargs dom cod = do
       let (ins, d0) = allocPorts dom (emptyDiagram mode curTmCtx)
       let (outs, d1) = allocPorts cod d0
-      d2 <- addEdgePayload (PGen g attrs bargs) ins outs d1
+      d2 <- addEdgePayload (PGen g args bargs) ins outs d1
       let d3 = d2 { dIn = ins, dOut = outs }
       validateDiagram d3
       pure d3
@@ -569,7 +580,7 @@ metaVarsIn expr =
   case expr of
     RDId _ -> []
     RDMetaVar name -> [name]
-    RDGen _ _ _ mBinderArgs ->
+    RDGen _ _ mBinderArgs ->
       case mBinderArgs of
         Nothing -> []
         Just args -> concatMap binderArgMetaVars args
@@ -629,20 +640,29 @@ mkForGenDiag :: ModeName -> GenDecl -> Either Text Diagram
 mkForGenDiag mode gen = do
   let dom = gdPlainDom gen
   let cod = gdCod gen
-  let attrs = forGenAttrs (gdAttrs gen)
+  args <- forGenArgs (gdParams gen)
   let bargs = forGenBinderArgs (gdDom gen)
   let (ins, d0) = allocPorts dom (emptyDiagram mode [])
   let (outs, d1) = allocPorts cod d0
-  d2 <- addEdgePayload (PGen (gdName gen) attrs bargs) ins outs d1
+  d2 <- addEdgePayload (PGen (gdName gen) args bargs) ins outs d1
   let d3 = d2 { dIn = ins, dOut = outs }
   validateDiagram d3
   pure d3
   where
-    forGenAttrs fields =
-      M.fromList
-        [ (fieldName, ATVar (AttrVar ("for_gen_" <> fieldName) fieldSort))
-        | (fieldName, fieldSort) <- fields
-        ]
+    forGenArgs params =
+      mapM paramArg params
+
+    paramArg param =
+      case param of
+        GP_Ty v -> Right (CAObj (OVar v))
+        GP_Tm v -> CATm <$> tmVarDiagram v
+
+    tmVarDiagram v = do
+      let (outPid, d0) = freshPort (tmvSort v) (emptyDiagram (objOwnerMode (tmvSort v)) [])
+      d1 <- addEdgePayload (PTmMeta v) [] [outPid] d0
+      let d2 = d1 { dOut = [outPid] }
+      validateDiagram d2
+      pure (TermDiagram d2)
 
     forGenBinderArgs domShapes =
       [ BAMeta (BinderMetaVar ("for_gen_b" <> T.pack (show i)))
@@ -655,92 +675,71 @@ mkForGenDiag mode gen = do
           (pids, diag2) = allocPorts rest diag1
        in (pid : pids, diag2)
 
-elabGenAttrs :: Doctrine -> GenDecl -> Maybe [RawAttrArg] -> Either Text AttrMap
-elabGenAttrs doc gen mArgs =
-  case gdAttrs gen of
-    [] ->
-      case mArgs of
-        Nothing -> Right M.empty
-        Just _ -> Left "generator does not accept attribute arguments"
-    fields -> do
-      args <- maybe (Left "missing generator attribute arguments") Right mArgs
-      normalized <- normalizeAttrArgs fields args
-      (attrs, _) <- foldM elabOne (M.empty, M.empty) normalized
-      Right attrs
-  where
-    elabOne (attrs, varSorts) (fieldName, fieldSort, rawTerm) = do
-      (term, varSorts') <- elabRawAttrTerm doc fieldSort varSorts rawTerm
-      Right (M.insert fieldName term attrs, varSorts')
-
-normalizeAttrArgs :: [(AttrName, AttrSort)] -> [RawAttrArg] -> Either Text [(AttrName, AttrSort, RawAttrTerm)]
-normalizeAttrArgs fields args =
-  case (namedArgs, positionalArgs) of
-    (_:_, _:_) -> Left "generator attribute arguments must be either all named or all positional"
-    (_:_, []) -> normalizeNamed namedArgs
-    ([], _) -> normalizePos positionalArgs
-  where
-    namedArgs = [ (name, term) | RAName name term <- args ]
-    positionalArgs = [ term | RAPos term <- args ]
-    fieldNames = map fst fields
-    normalizeNamed named = do
-      ensureDistinct "duplicate generator attribute argument" (map fst named)
-      if length named /= length fields
-        then Left "generator attribute argument mismatch"
-        else Right ()
-      if S.fromList (map fst named) == S.fromList fieldNames
-        then Right ()
-        else Left "generator attribute arguments must cover exactly the declared fields"
-      let namedMap = M.fromList named
-      traverse
-        (\(fieldName, fieldSort) ->
-          case M.lookup fieldName namedMap of
-            Nothing -> Left "missing generator attribute argument"
-            Just term -> Right (fieldName, fieldSort, term))
-        fields
-    normalizePos positional =
-      if length positional /= length fields
-        then Left "generator attribute argument mismatch"
-        else Right [ (fieldName, fieldSort, term) | ((fieldName, fieldSort), term) <- zip fields positional ]
-
 ensureDistinct :: Ord a => Text -> [a] -> Either Text ()
 ensureDistinct label names =
   let set = S.fromList names
    in if S.size set == length names then Right () else Left label
 
-elabRawAttrTerm
-  :: Doctrine
-  -> AttrSort
-  -> M.Map Text AttrSort
-  -> RawAttrTerm
-  -> Either Text (AttrTerm, M.Map Text AttrSort)
-elabRawAttrTerm doc expectedSort varSorts rawTerm =
-  case rawTerm of
-    RATVar name ->
-      case M.lookup name varSorts of
-        Nothing ->
-          Right (ATVar (AttrVar name expectedSort), M.insert name expectedSort varSorts)
-        Just sortName ->
-          if sortName == expectedSort
-            then Right (ATVar (AttrVar name expectedSort), varSorts)
-            else Left "attribute variable used with conflicting sorts"
-    RATInt n -> do
-      ensureLiteralKind LKInt
-      Right (ATLit (ALInt n), varSorts)
-    RATString s -> do
-      ensureLiteralKind LKString
-      Right (ATLit (ALString s), varSorts)
-    RATBool b -> do
-      ensureLiteralKind LKBool
-      Right (ATLit (ALBool b), varSorts)
+resolveGenArgs :: [GenParam] -> Maybe [RawGenArg] -> Either Text [RawGenArg]
+resolveGenArgs params mArgs =
+  case mArgs of
+    Nothing
+      | null params -> Right []
+      | otherwise -> Left "missing generator arguments"
+    Just args -> Right args
+
+implicitGenArgs :: [GenParam] -> M.Map TmVar Obj -> M.Map TmVar TermDiagram -> Either Text [CodeArg]
+implicitGenArgs params tyRename tmRename =
+  mapM mkArg params
   where
-    ensureLiteralKind kind = do
-      decl <-
-        case M.lookup expectedSort (dAttrSorts doc) of
-          Nothing -> Left "unknown attribute sort"
-          Just d -> Right d
-      case asLitKind decl of
-        Just allowed | allowed == kind -> Right ()
-        _ -> Left "attribute sort does not admit this literal kind"
+    mkArg param =
+      case param of
+        GP_Ty v ->
+          case M.lookup v tyRename of
+            Just ty -> Right (CAObj ty)
+            Nothing -> Left "internal error: missing implicit type argument"
+        GP_Tm v ->
+          case M.lookup v tmRename of
+            Just tm -> Right (CATm tm)
+            Nothing -> Left "internal error: missing implicit term argument"
+
+normalizeGenArgs :: [GenParam] -> [RawGenArg] -> Either Text [RawPolyObjExpr]
+normalizeGenArgs params args =
+  case (namedArgs, positionalArgs) of
+    (_:_, _:_) -> Left "generator arguments must be either all named or all positional"
+    (_:_, []) -> normalizeNamed namedArgs
+    ([], _) -> normalizePos positionalArgs
+  where
+    namedArgs = [ (name, arg) | RGNamed name arg <- args ]
+    positionalArgs = [ arg | RGPos arg <- args ]
+    paramNames = map paramName params
+
+    normalizeNamed named = do
+      ensureDistinct "duplicate generator argument" (map fst named)
+      if length named /= length params
+        then Left "generator argument mismatch"
+        else Right ()
+      if S.fromList (map fst named) == S.fromList paramNames
+        then Right ()
+        else Left "generator arguments must cover exactly the declared parameters"
+      let namedMap = M.fromList named
+      mapM
+        (\param ->
+          case M.lookup (paramName param) namedMap of
+            Nothing -> Left "missing generator argument"
+            Just arg -> Right arg
+        )
+        params
+
+    normalizePos positional =
+      if length positional /= length params
+        then Left "generator argument mismatch"
+        else Right positional
+
+    paramName param =
+      case param of
+        GP_Ty v -> tmvName v
+        GP_Tm v -> tmvName v
 
 ensureAcyclicMode :: Doctrine -> ModeName -> Diagram -> Either Text ()
 ensureAcyclicMode doc mode diag =

@@ -15,18 +15,28 @@ doctrine IdMonad where {
   gen ret(a@C) : [a] -> [T(a)] @C;
   gen join(a@C) : [T(T(a))] -> [T(a)] @C;
 
+  action T where {
+    gen comp_ctx_ext -> comp_ctx_ext(T(a))
+    gen comp_var -> comp_var(T(a))
+    gen comp_reindex -> comp_reindex(T(a))
+    gen ret -> ret(T(a))
+    gen join -> join(T(a))
+  }
+
   rule computational unit -> (a@C) : [T(a)] -> [T(a)] @C =
-    ret{T(a)} ; join{a} == id[T(a)]
+    ret(T(a)) ; join(a) == id[T(a)]
+  rule computational unit_lifted -> (a@C) : [T(T(a))] -> [T(T(a))] @C =
+    ret(T(T(a))) ; join(T(a)) == id[T(T(a))]
 }
 
 morphism monadInst : SchemaMonad -> IdMonad where {
   mode C -> C;
-  gen comp_ctx_ext @C -> comp_ctx_ext
-  gen comp_var @C -> comp_var
-  gen comp_reindex @C -> comp_reindex
+  gen comp_ctx_ext @C -> comp_ctx_ext(a)
+  gen comp_var @C -> comp_var(a)
+  gen comp_reindex @C -> comp_reindex(a)
   modality T -> T;
-  gen ret @C -> ret
-  gen join @C -> join
+  gen ret @C -> ret(x)
+  gen join @C -> join(x)
   check none;
 }
 
@@ -34,9 +44,13 @@ doctrine_functor AddBind(M : SchemaMonad) where {
   gen bind(a@M::C, b@M::C) :
     [M::T(a), binder { x : a } : [M::T(b)]] -> [M::T(b)] @M::C;
 
+  action M::T where {
+    gen bind -> bind(M::T(a), M::T(b))[?b0]
+  }
+
   rule computational bind_def -> (a@M::C, b@M::C) :
     [M::T(a)] -> [M::T(b)] @M::C =
-    bind{a,b}[?K] == map[M::T](splice(?K)) ; M::join{b}
+    bind(a,b)[?K] == map[M::T](splice(?K)) ; M::join(b)
 }
 
 doctrine IdMonadBind = apply AddBind to IdMonad using { M = monadInst; };
@@ -51,4 +65,4 @@ run showBind using showBind where {
   source mode C;
 }
 ---
-U_C ; bind{C.U_C, C.U_C}[ret{C.U_C}]
+U_C ; bind(C.U_C, C.U_C)[ret(C.U_C)]

@@ -7,14 +7,15 @@ doctrine LogicJS where {
   gen comp_reindex(a@M) : [a] -> [a] @M;
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_M : [] -> [M.U_M] @M;
-  attrsort Str = string;
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
 
   gen B : [] -> [M.U_M] @M;
   gen P : [] -> [M.U_M] @M;
 
   gen true  : [] -> [B] @M;
   gen false : [] -> [B] @M;
-  gen var { s:Str } : [] -> [B] @M;
+  gen var( s:Str ) : [] -> [B] @M;
 
   gen not : [B] -> [B] @M;
   gen and : [B, B] -> [B] @M;
@@ -27,7 +28,7 @@ doctrine LogicJS where {
   rule computational xor_false_r -> : [B] -> [B] @M =
     (false * ?x) ; xor == ?x
 
-  gen emit2 { name:Str, k1:Str, k2:Str } : [B, B] -> [P] @M;
+  gen emit2( name:Str, k1:Str, k2:Str ) : [B, B] -> [P] @M;
   gen concat : [P, P] -> [P] @M;
 }
 
@@ -40,12 +41,11 @@ morphism emitJS : LogicJS -> Doc where {
   check structural;
 
   mode M -> Doc;
+  type Str @M -> Str @Doc;
 
-  attrsort Str -> Str;
-
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
 
   type B @M -> Doc @Doc;
   type P @M -> Doc @Doc;

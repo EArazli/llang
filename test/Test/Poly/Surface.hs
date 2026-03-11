@@ -18,7 +18,7 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.ModeTheory (ModeName(..), ClassificationDecl(..), ModeTheory(..))
 import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), CodeArg(..), CodeTerm(..), mkCon, mkModeMetaVar, boundTmIndicesTerm)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..))
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..), genericGenDiagram)
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..))
 import Strat.Poly.Surface.Parse (parseSurfaceSpec)
 import Strat.Poly.Surface (PolySurfaceDef, elabPolySurfaceDecl)
@@ -135,7 +135,7 @@ mkDoctrine hasDup hasDrop =
           , gdParams = map GP_Ty tyVars
           , gdDom = map InPort dom
           , gdCod = cod
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
       genDup = mkGen "dup" [aVar] [OVar aVar] [OVar aVar, OVar aVar]
       genDrop = mkGen "drop" [aVar] [OVar aVar] []
@@ -159,8 +159,7 @@ mkDoctrine hasDup hasDrop =
         , dCells2 = []
         , dActions = M.empty
         , dObligations = []
-        , dAttrSorts = M.empty
-        }
+                }
 
 mkSurfaceWithSpec :: Text -> Doctrine -> Either Text PolySurfaceDef
 mkSurfaceWithSpec txt doc = do
@@ -191,7 +190,7 @@ mkStructEnv target = do
           , gdParams = [GP_Ty (aVar)]
           , gdDom = [InPort (OVar aVar)]
           , gdCod = cod
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
       iface =
         Doctrine
@@ -210,10 +209,9 @@ mkStructEnv target = do
           , dCells2 = []
           , dActions = M.empty
           , dObligations = []
-          , dAttrSorts = M.empty
-          }
-  dupImg <- genD modeM [OVar aVar] [OVar aVar, OVar aVar] (GenName "dup")
-  dropImg <- genD modeM [OVar aVar] [] (GenName "drop")
+                    }
+  dupImg <- genericGenDiagram (mkGen "dup" [OVar aVar, OVar aVar])
+  dropImg <- genericGenDiagram (mkGen "drop" [])
   let morph =
         Morphism
           { morName = "Test.structInst"
@@ -222,7 +220,6 @@ mkStructEnv target = do
           , morIsCoercion = False
           , morModeMap = M.singleton modeM modeM
           , morModMap = M.empty
-          , morAttrSortMap = M.empty
           , morTypeMap = M.empty
           , morGenMap =
               M.fromList
@@ -346,11 +343,11 @@ testSurfaceStructImplements = do
           , "}"
           , "morphism cartInst : StructCartesian -> Target where {"
           , "  mode M -> M;"
-          , "  gen comp_ctx_ext @M -> comp_ctx_ext"
-          , "  gen comp_var @M -> comp_var"
-          , "  gen comp_reindex @M -> comp_reindex"
-          , "  gen dup @M -> copy"
-          , "  gen drop @M -> kill"
+          , "  gen comp_ctx_ext @M -> comp_ctx_ext(a)"
+          , "  gen comp_var @M -> comp_var(a)"
+          , "  gen comp_reindex @M -> comp_reindex(a)"
+          , "  gen dup @M -> copy(a)"
+          , "  gen drop @M -> kill(a)"
           , "  check none;"
           , "}"
           , "implements StructCartesian for Target using cartInst;"

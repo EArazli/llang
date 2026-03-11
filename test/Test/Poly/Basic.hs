@@ -226,7 +226,7 @@ testValidateBoundaryInputProduced = do
   let diag = idD mode [a]
   case dIn diag of
     [p] -> do
-      bad <- require (addEdgePayload (PGen (GenName "producer") M.empty []) [] [p] diag)
+      bad <- require (addEdgePayload (PGen (GenName "producer") [] []) [] [p] diag)
       case validateDiagram bad of
         Left _ -> pure ()
         Right _ -> assertFailure "expected validation failure for boundary input with producer"
@@ -239,7 +239,7 @@ testValidateBoundaryOutputConsumed = do
   let diag = idD mode [a]
   case dOut diag of
     [p] -> do
-      bad <- require (addEdgePayload (PGen (GenName "consumer") M.empty []) [p] [] diag)
+      bad <- require (addEdgePayload (PGen (GenName "consumer") [] []) [p] [] diag)
       case validateDiagram bad of
         Left _ -> pure ()
         Right _ -> assertFailure "expected validation failure for boundary output with consumer"
@@ -344,7 +344,7 @@ testDuplicateGenTyVars = do
         , gdParams = [GP_Ty (a), GP_Ty (a)]
         , gdDom = map InPort [OVar a]
         , gdCod = [OVar a]
-        , gdAttrs = []
+        , gdLiteralKind = Nothing
         }
   let doc = Doctrine
         { dName = "DupGenTyVars"
@@ -354,8 +354,7 @@ testDuplicateGenTyVars = do
         , dCells2 = []
       , dActions = M.empty
       , dObligations = []
-        , dAttrSorts = M.empty
-        }
+                }
   case validateDoctrine doc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected duplicate gen tyvars to be rejected"
@@ -370,7 +369,7 @@ testUnclassifiedModeCtorUsageDiagnostic = do
           , gdParams = []
           , gdDom = []
           , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
       doc =
         Doctrine
@@ -381,8 +380,7 @@ testUnclassifiedModeCtorUsageDiagnostic = do
           , dCells2 = []
           , dActions = M.empty
           , dObligations = []
-          , dAttrSorts = M.empty
-          }
+                    }
   case validateDoctrine doc of
     Left err -> do
       assertBool
@@ -413,8 +411,7 @@ testDuplicateCellTyVars = do
     , dAcyclicModes = S.empty
         , dGens = M.empty
         , dCells2 = [cell]
-        , dAttrSorts = M.empty
-        }
+                }
   case validateDoctrine doc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected duplicate cell tyvars to be rejected"
@@ -430,7 +427,7 @@ testRejectRHSTyVars = do
         , gdParams = []
         , gdDom = map InPort [tcon mode "A" []]
         , gdCod = [tcon mode "A" []]
-        , gdAttrs = []
+        , gdLiteralKind = Nothing
         }
   lhs <- require (genD mode [tcon mode "A" []] [tcon mode "A" []] (gdName gen))
   rhs <- require (genD mode [OVar bVar] [OVar bVar] (gdName gen))
@@ -453,8 +450,7 @@ testRejectRHSTyVars = do
             , dCells2 = [cell]
             , dActions = M.empty
             , dObligations = []
-            , dAttrSorts = M.empty
-            }
+                        }
   case validateDoctrine doc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected RHS fresh tyvars to be rejected"
@@ -470,7 +466,7 @@ testAcceptRHSTyVars = do
         , gdParams = [GP_Ty (aVar)]
         , gdDom = map InPort [OVar aVar]
         , gdCod = [OVar aVar]
-        , gdAttrs = []
+        , gdLiteralKind = Nothing
         }
   lhs <- require (genD mode [OVar aVar] [OVar aVar] (gdName gen))
   rhs <- require (genD mode [OVar aVar] [OVar aVar] (gdName gen))
@@ -493,8 +489,7 @@ testAcceptRHSTyVars = do
             , dCells2 = [cell]
             , dActions = M.empty
             , dObligations = []
-            , dAttrSorts = M.empty
-            }
+                        }
   case validateDoctrine doc of
     Left err -> assertFailure (T.unpack err)
     Right () -> pure ()
@@ -524,8 +519,7 @@ testRejectEmptyLHS = do
             , dCells2 = [cell]
             , dActions = M.empty
             , dObligations = []
-            , dAttrSorts = M.empty
-            }
+                        }
   case validateDoctrine doc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected empty LHS rule to be rejected"
@@ -563,8 +557,7 @@ testCellBoundaryUsesDiagramTmCtx = do
             , dCells2 = [cell]
             , dActions = M.empty
             , dObligations = []
-            , dAttrSorts = M.empty
-            }
+                        }
   case validateDoctrine doc of
     Left err -> assertFailure ("expected doctrine to validate with matching tmctx: " <> T.unpack err)
     Right () -> pure ()
@@ -598,7 +591,7 @@ testGenTmVarSortUsesTyVarScope = do
           , gdParams = [GP_Ty aVar, GP_Tm xVar]
           , gdDom = []
           , gdCod = []
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let doc =
         withSelfClassifiedCtors
@@ -611,8 +604,7 @@ testGenTmVarSortUsesTyVarScope = do
             , dCells2 = []
             , dActions = M.empty
             , dObligations = []
-            , dAttrSorts = M.empty
-            }
+                        }
   case validateDoctrine doc of
     Left err ->
       assertFailure
@@ -646,7 +638,7 @@ testCellTmVarSortUsesTyVarScope = do
           , gdParams = []
           , gdDom = []
           , gdCod = []
-          , gdAttrs = []
+          , gdLiteralKind = Nothing
           }
   let cell =
         Cell2
@@ -668,8 +660,7 @@ testCellTmVarSortUsesTyVarScope = do
             , dCells2 = [cell]
             , dActions = M.empty
             , dObligations = []
-            , dAttrSorts = M.empty
-            }
+                        }
   case validateDoctrine doc of
     Left err ->
       assertFailure
@@ -685,9 +676,9 @@ buildIsoDiagram mode a = do
   let (p2, d2) = freshPort a d1
   let (p3, d3) = freshPort a d2
   let (p4, d4) = freshPort a d3
-  d5 <- addEdgePayload (PGen (GenName "f") M.empty []) [p0] [p2] d4
-  d6 <- addEdgePayload (PGen (GenName "g") M.empty []) [p1] [p3] d5
-  d7 <- addEdgePayload (PGen (GenName "h") M.empty []) [p2, p3] [p4] d6
+  d5 <- addEdgePayload (PGen (GenName "f") [] []) [p0] [p2] d4
+  d6 <- addEdgePayload (PGen (GenName "g") [] []) [p1] [p3] d5
+  d7 <- addEdgePayload (PGen (GenName "h") [] []) [p2, p3] [p4] d6
   let diag = d7 { dIn = [p0, p1], dOut = [p4] }
   validateDiagram diag
   pure diag

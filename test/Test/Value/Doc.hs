@@ -24,7 +24,7 @@ tests =
     , testCase "Doc extractor works for doctrines extending Doc" testExtendedDocExtraction
     , testCase "FileTree extractor works for doctrines extending Artifact" testExtendedArtifactFileTreeExtraction
     , testCase "Doc extractor rejects doctrines missing required generators" testDocExtractionMissingGenerator
-    , testCase "Doc extractor rejects non-string text attribute sort" testDocExtractionWrongAttrKind
+    , testCase "Doc extractor rejects non-string text literal type" testDocExtractionWrongLiteralKind
     , testCase "FileTree extractor rejects wrong singleFile signature" testFileTreeExtractionWrongSingleFileSig
     ]
 
@@ -77,12 +77,12 @@ testDocExtractionMissingGenerator = do
   assertBool "expected missing cat diagnostic" ("pipeline: extract Doc: missing generator 'cat' in mode M" `T.isInfixOf` err)
 
 
-testDocExtractionWrongAttrKind :: Assertion
-testDocExtractionWrongAttrKind = do
-  env <- require (elabDocProgram badTextAttrKindProgram)
+testDocExtractionWrongLiteralKind :: Assertion
+testDocExtractionWrongLiteralKind = do
+  env <- require (elabDocProgram badTextLiteralKindProgram)
   runDef <- require (selectRun env (Just "main"))
   err <- requireLeft (runWithEnv env runDef)
-  assertBool "expected text attr literal kind diagnostic" ("pipeline: extract Doc: generator 'text' attribute 's' must have string literal kind" `T.isInfixOf` err)
+  assertBool "expected text parameter literal kind diagnostic" ("pipeline: extract Doc: generator 'text' parameter 's' must have string literal kind" `T.isInfixOf` err)
 
 
 testFileTreeExtractionWrongSingleFileSig :: Assertion
@@ -170,13 +170,15 @@ missingCatProgram =
     <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
     <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
     <> "  gen U_M : [] -> [M.U_M] @M;\n"
-    <> "  attrsort Str = string;\n"
-    <> "  attrsort Int = int;\n"
+    <> "  gen Str : [] -> [M.U_M] @M;\n"
+    <> "  literal Str @M = string;\n"
+    <> "  gen Int : [] -> [M.U_M] @M;\n"
+    <> "  literal Int @M = int;\n"
     <> "  gen Doc : [] -> [M.U_M] @M;\n"
     <> "  gen empty : [] -> [Doc] @M;\n"
-    <> "  gen text { s:Str } : [] -> [Doc] @M;\n"
+    <> "  gen text(s:Str) : [] -> [Doc] @M;\n"
     <> "  gen line : [] -> [Doc] @M;\n"
-    <> "  gen indent { n:Int } : [Doc] -> [Doc] @M;\n"
+    <> "  gen indent(n:Int) : [Doc] -> [Doc] @M;\n"
     <> "}\n"
     <> "pipeline p where {\n"
     <> "  extract Doc { stdout = true };\n"
@@ -190,29 +192,31 @@ missingCatProgram =
     <> "---\n"
 
 
-badTextAttrKindProgram :: Text
-badTextAttrKindProgram =
-  "doctrine BadTextAttrKind where {\n"
+badTextLiteralKindProgram :: Text
+badTextLiteralKindProgram =
+  "doctrine BadTextLiteralKind where {\n"
     <> "  mode M acyclic classifiedBy M via M.U_M;\n"
     <> "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;\n"
     <> "  gen comp_var(a@M) : [a] -> [a] @M;\n"
     <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
     <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
     <> "  gen U_M : [] -> [M.U_M] @M;\n"
-    <> "  attrsort Bad = int;\n"
-    <> "  attrsort Int = int;\n"
+    <> "  gen Bad : [] -> [M.U_M] @M;\n"
+    <> "  literal Bad @M = int;\n"
+    <> "  gen Int : [] -> [M.U_M] @M;\n"
+    <> "  literal Int @M = int;\n"
     <> "  gen Doc : [] -> [M.U_M] @M;\n"
     <> "  gen empty : [] -> [Doc] @M;\n"
-    <> "  gen text { s:Bad } : [] -> [Doc] @M;\n"
+    <> "  gen text(s:Bad) : [] -> [Doc] @M;\n"
     <> "  gen line : [] -> [Doc] @M;\n"
     <> "  gen cat : [Doc, Doc] -> [Doc] @M;\n"
-    <> "  gen indent { n:Int } : [Doc] -> [Doc] @M;\n"
+    <> "  gen indent(n:Int) : [Doc] -> [Doc] @M;\n"
     <> "}\n"
     <> "pipeline p where {\n"
     <> "  extract Doc { stdout = true };\n"
     <> "}\n"
     <> "run main using p where {\n"
-    <> "  source doctrine BadTextAttrKind;\n"
+    <> "  source doctrine BadTextLiteralKind;\n"
     <> "  source mode M;\n"
     <> "}\n"
     <> "---\n"
@@ -229,16 +233,18 @@ badSingleFileSigProgram =
     <> "  gen comp_reindex(a@M) : [a] -> [a] @M;\n"
     <> "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };\n"
     <> "  gen U_M : [] -> [M.U_M] @M;\n"
-    <> "  attrsort Str = string;\n"
-    <> "  attrsort Int = int;\n"
+    <> "  gen Str : [] -> [M.U_M] @M;\n"
+    <> "  literal Str @M = string;\n"
+    <> "  gen Int : [] -> [M.U_M] @M;\n"
+    <> "  literal Int @M = int;\n"
     <> "  gen Doc : [] -> [M.U_M] @M;\n"
     <> "  gen FileTree : [] -> [M.U_M] @M;\n"
     <> "  gen empty : [] -> [Doc] @M;\n"
-    <> "  gen text { s:Str } : [] -> [Doc] @M;\n"
+    <> "  gen text(s:Str) : [] -> [Doc] @M;\n"
     <> "  gen line : [] -> [Doc] @M;\n"
     <> "  gen cat : [Doc, Doc] -> [Doc] @M;\n"
-    <> "  gen indent { n:Int } : [Doc] -> [Doc] @M;\n"
-    <> "  gen singleFile { path:Str } : [] -> [FileTree] @M;\n"
+    <> "  gen indent(n:Int) : [Doc] -> [Doc] @M;\n"
+    <> "  gen singleFile(path:Str) : [] -> [FileTree] @M;\n"
     <> "  gen concatTree : [FileTree, FileTree] -> [FileTree] @M;\n"
     <> "}\n"
     <> "pipeline p where {\n"

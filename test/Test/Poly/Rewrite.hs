@@ -138,7 +138,7 @@ testInjectiveMatch = do
   g <- require (mkGen "f" [aTy] [aTy])
   pat <- require (tensorD g g)
   let host = g
-  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) S.empty S.empty
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) S.empty
   res <- case findFirstMatch cfg pat host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
@@ -292,7 +292,7 @@ testNestedBoxesMatch = do
   inner <- require (mkBoxDiagram "Inner" f aTy)
   lhs <- require (mkBoxDiagram "Outer" inner aTy)
   host <- require (mkBoxDiagram "Outer" inner aTy)
-  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) S.empty S.empty
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) S.empty
   res <- case findFirstMatch cfg lhs host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
@@ -310,7 +310,7 @@ testBoxTypeVarUnify = do
   fConcrete <- require (mkGen "f" [aConcrete] [aConcrete])
   lhs <- require (mkBoxDiagram "B" fVar aVarTy)
   host <- require (mkBoxDiagram "B" fConcrete aConcrete)
-  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) (S.singleton (aVar)) S.empty
+  let cfg = MatchConfig (modeOnlyTypeTheory (mkModes [modeName])) (S.singleton (aVar))
   res <- case findFirstMatch cfg lhs host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
@@ -379,7 +379,7 @@ mkWrapDiagram :: BinderArg -> Either Text Diagram
 mkWrapDiagram barg = do
   let (inP, d0) = freshPort aTy (emptyDiagram modeName [])
   let (outP, d1) = freshPort aTy d0
-  d2 <- addEdgePayload (PGen (GenName "wrap") M.empty [barg]) [inP] [outP] d1
+  d2 <- addEdgePayload (PGen (GenName "wrap") [] [barg]) [inP] [outP] d1
   let diag = d2 { dIn = [inP], dOut = [outP] }
   validateDiagram diag
   pure diag

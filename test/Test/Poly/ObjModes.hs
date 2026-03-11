@@ -75,8 +75,7 @@ mkDoctrine tables =
     { dName = "D"
     , dModes = selfClassifiedModes (S.fromList (map fst tables))
     , dAcyclicModes = S.empty
-    , dAttrSorts = M.empty
-    , dGens =
+        , dGens =
         foldl
           (\acc (mode, sigs) ->
               let ctors = M.fromList [ (gdName g, g) | g <- map (uncurry (ctorDecl mode)) sigs ]
@@ -151,7 +150,7 @@ compSupportGens mode =
         , gdParams = []
         , gdDom = [InPort uTy]
         , gdCod = [uTy]
-        , gdAttrs = []
+        , gdLiteralKind = Nothing
         }
 
 objNameText :: ObjName -> Text
@@ -165,7 +164,7 @@ ctorDecl mode ctorName sig =
     , gdParams = params
     , gdDom = []
     , gdCod = [mkCon (ObjRef mode (ObjName "U")) []]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
   where
     tyPos =

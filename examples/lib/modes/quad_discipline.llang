@@ -50,26 +50,26 @@ doctrine QuadDiscipline where {
   gen drop (a@Cart) : [a] -> [] @Cart;
 
   rule structural coassoc_rel = (a@Rel) : [a] -> [a, a, a] @Rel =
-    dup ; (dup * id[a]) == dup ; (id[a] * dup)
+    dup(a) ; (dup(a) * id[a]) == dup(a) ; (id[a] * dup(a))
 
   rule structural coassoc_cart = (a@Cart) : [a] -> [a, a, a] @Cart =
-    dup ; (dup * id[a]) == dup ; (id[a] * dup)
+    dup(a) ; (dup(a) * id[a]) == dup(a) ; (id[a] * dup(a))
 
   rule structural counitL_cart = (a@Cart) : [a] -> [a] @Cart =
-    dup ; (drop * id[a]) == id[a]
+    dup(a) ; (drop(a) * id[a]) == id[a]
 
   rule structural counitR_cart = (a@Cart) : [a] -> [a] @Cart =
-    dup ; (id[a] * drop) == id[a]
+    dup(a) ; (id[a] * drop(a)) == id[a]
 }
 
 morphism cartInst : StructCartesian -> QuadDiscipline where {
   mode M -> Cart;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
-  gen swap @M -> swap
-  gen dup @M -> dup
-  gen drop @M -> drop
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+  gen swap @M -> swap(a, b)
+  gen dup @M -> dup(a)
+  gen drop @M -> drop(a)
   check none;
 }
 
@@ -77,10 +77,10 @@ implements StructCartesian for QuadDiscipline using cartInst;
 
 morphism relDupInst : HasDup -> QuadDiscipline where {
   mode M -> Rel;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
-  gen dup @M -> dup
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+  gen dup @M -> dup(a)
   check none;
 }
 
@@ -88,10 +88,10 @@ implements HasDup for QuadDiscipline using relDupInst;
 
 morphism affDropInst : HasDrop -> QuadDiscipline where {
   mode M -> Aff;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
-  gen drop @M -> drop
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+  gen drop @M -> drop(a)
   check none;
 }
 

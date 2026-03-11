@@ -20,7 +20,7 @@ doctrine Monoid extends Semigroup where {
 
 doctrine Commutative extends Semigroup where {
   rule structural comm = : [Obj, Obj] -> [Obj] @M =
-    m == swap{Obj, Obj} ; m
+    m == swap(Obj, Obj) ; m
 }
 
 doctrine CommMonoid = pushout Monoid.fromBase Commutative.fromBase;

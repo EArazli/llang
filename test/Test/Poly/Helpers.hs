@@ -78,7 +78,7 @@ ctorDecl mode ctorName sig =
     , gdParams = params
     , gdDom = []
     , gdCod = [universeObj mode]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
   where
     tyPos =
@@ -140,7 +140,7 @@ compSupportGen mode name =
     , gdParams = []
     , gdDom = [InPort (universeObj mode)]
     , gdCod = [universeObj mode]
-    , gdAttrs = []
+    , gdLiteralKind = Nothing
     }
 
 insertCompSupportGens

@@ -27,7 +27,6 @@ module Strat.DSL.AST
   , RawPolyMorphismItem(..)
   , RawPolyModeMap(..)
   , RawPolyModalityMap(..)
-  , RawPolyAttrSortMap(..)
   , RawPolyTypeMap(..)
   , RawPolyGenMap(..)
   ) where
@@ -222,7 +221,6 @@ data RawPolyMorphism = RawPolyMorphism
 data RawPolyMorphismItem
   = RPMMode RawPolyModeMap
   | RPMModality RawPolyModalityMap
-  | RPMAttrSort RawPolyAttrSortMap
   | RPMType RawPolyTypeMap
   | RPMGen RawPolyGenMap
   | RPMCoercion
@@ -237,12 +235,6 @@ data RawPolyModalityMap = RawPolyModalityMap
   { rpmmSrc :: Text
   , rpmmTgt :: PolyAST.RawModExpr
   } deriving (Eq, Show)
-
-data RawPolyAttrSortMap = RawPolyAttrSortMap
-  { rpmasSrc :: Text
-  , rpmasTgt :: Text
-  } deriving (Eq, Show)
-
 
 data RawPolyTypeMap = RawPolyTypeMap
   { rpmtSrcType :: Text

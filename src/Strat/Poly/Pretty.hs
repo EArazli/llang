@@ -8,10 +8,11 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Strat.Poly.Graph
 import Strat.Poly.Obj
 import Strat.Poly.Names (GenName(..), BoxName(..))
-import Strat.Poly.Attr (AttrTerm(..), AttrLit(..), AttrMap, AttrVar(..))
+import Strat.Poly.Literal (renderLiteral)
 import Strat.Poly.ObjPretty (renderMode, renderType)
 
 
@@ -49,13 +50,13 @@ renderEdges edges = do
   where
     renderEdge e =
       case ePayload e of
-        PGen g attrs bargs -> do
+        PGen g args bargs -> do
           bargsTxt <- renderBinderArgs bargs
           Right
             ( "  "
                 <> renderEdgeId (eId e)
                 <> ": "
-                <> renderGenWithAttrs g attrs
+                <> renderGenCall g args
                 <> bargsTxt
                 <> " ["
                 <> renderPortList (eIns e)
@@ -103,6 +104,18 @@ renderEdges edges = do
                 <> renderPortList (eOuts e)
                 <> "]"
             )
+        PTmLit lit ->
+          Right
+            ( "  "
+                <> renderEdgeId (eId e)
+                <> ": lit("
+                <> renderLiteral lit
+                <> ") ["
+                <> renderPortList (eIns e)
+                <> "] -> ["
+                <> renderPortList (eOuts e)
+                <> "]"
+            )
         PInternalDrop ->
           Right
             ( "  "
@@ -135,25 +148,61 @@ indent txt =
 renderGen :: GenName -> Text
 renderGen (GenName t) = t
 
-renderGenWithAttrs :: GenName -> AttrMap -> Text
-renderGenWithAttrs g attrs
-  | M.null attrs = renderGen g
-  | otherwise =
-      renderGen g
-        <> "("
-        <> T.intercalate ", " [ name <> "=" <> renderAttrTerm term | (name, term) <- M.toAscList attrs ]
-        <> ")"
+renderGenCall :: GenName -> [CodeArg] -> Text
+renderGenCall g [] = renderGen g
+renderGenCall g args =
+  renderGen g <> "(" <> T.intercalate ", " (map renderCodeArg args) <> ")"
 
-renderAttrTerm :: AttrTerm -> Text
-renderAttrTerm term =
-  case term of
-    ATVar v -> avName v
-    ATLit lit ->
-      case lit of
-        ALInt n -> T.pack (show n)
-        ALString s -> T.pack (show s)
-        ALBool True -> "true"
-        ALBool False -> "false"
+renderCodeArg :: CodeArg -> Text
+renderCodeArg arg =
+  case arg of
+    CAObj obj -> renderType obj
+    CATm tm -> renderTermDiagramArg tm
+
+renderTermDiagramArg :: TermDiagram -> Text
+renderTermDiagramArg (TermDiagram diag) =
+  case dOut diag of
+    [outPort] -> go S.empty outPort
+    _ -> "<term>"
+  where
+    modeInputs = modeCtxEntries (dTmCtx diag) (dMode diag)
+    inMap = M.fromList (zip (dIn diag) [0 :: Int ..])
+    localToGlobal = map fst (take (length (dIn diag)) modeInputs)
+
+    go seen pid =
+      case M.lookup pid inMap of
+        Just local ->
+          case nth localToGlobal local of
+            Just globalTm -> "bound#" <> T.pack (show globalTm)
+            Nothing -> "<bound>"
+        Nothing ->
+          if pid `S.member` seen
+            then "<cycle>"
+            else
+              case IM.lookup (unPortId pid) (dProd diag) of
+                Just (Just eid) ->
+                  case IM.lookup (unEdgeId eid) (dEdges diag) of
+                    Just edge ->
+                      case ePayload edge of
+                        PTmLit lit -> renderLiteral lit
+                        PTmMeta v -> tmvName v
+                        PGen gen args [] -> renderGenCall gen args
+                        _ -> "<term>"
+                    Nothing -> "<term>"
+                _ -> "<term>"
+
+    nth xs i
+      | i < 0 = Nothing
+      | otherwise =
+          case drop i xs of
+            (x:_) -> Just x
+            [] -> Nothing
+
+    modeCtxEntries tmCtx mode =
+      [ (i, ty)
+      | (i, ty) <- zip [0 :: Int ..] tmCtx
+      , objMode ty == mode
+      ]
 
 renderBox :: BoxName -> Text
 renderBox (BoxName t) = t

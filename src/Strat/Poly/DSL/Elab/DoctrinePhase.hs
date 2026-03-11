@@ -15,7 +15,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Strat.Common.Rules (Orientation (..), RewritePolicy (..), RuleClass (..))
 import Strat.Frontend.Env (ModuleEnv(..))
-import Strat.Poly.Attr
 import Strat.Poly.BeckChevalleyObligations (installGeneratedBeckChevalleyObligations, isGeneratedBeckChevalleyObligation)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.CompObligations (installGeneratedCompObligations, isGeneratedCompObligation)
@@ -196,7 +195,6 @@ identityMorphismFor doc = do
       , morIsCoercion = True
       , morModeMap = modeMap
       , morModMap = modMap
-      , morAttrSortMap = attrSortMap
       , morTypeMap = M.empty
       , morGenMap = genMap
       , morCheck = CheckNone
@@ -219,12 +217,6 @@ identityMorphismFor doc = do
           )
         | (name, decl) <- M.toList (mtDecls (dModes doc))
         ]
-    attrSortMap =
-      M.fromList
-        [ (s, s)
-        | s <- M.keys (dAttrSorts doc)
-        ]
-
 mkIdentityGenMap :: Doctrine -> Either Text (M.Map (ModeName, GenName) GenImage)
 mkIdentityGenMap doc = do
   ctorTables <- deriveCtorTables doc
@@ -396,14 +388,9 @@ elabPolyItem env st item =
                   , obPolicy = UseStructuralAsBidirectional
                   }
           pure st { esDoc = doc { dObligations = dObligations doc <> [obl] } }
-    RPAttrSort decl -> do
-      let sortName = AttrSort (rasName decl)
-      litKind <- mapM parseAttrLitKind (rasKind decl)
-      if M.member sortName (dAttrSorts doc)
-        then Left "duplicate attribute sort name"
-        else do
-          let sortDecl = AttrSortDecl { asName = sortName, asLitKind = litKind }
-          pure st { esDoc = doc { dAttrSorts = M.insert sortName sortDecl (dAttrSorts doc) } }
+    RPLiteral decl -> do
+      doc' <- installLiteralDecl doc decl
+      pure st { esDoc = doc' }
     RPGen decl -> do
       let mode = ModeName (rpgMode decl)
       ensureMode doc mode
@@ -422,14 +409,12 @@ elabPolyItem env st item =
               , gdParams = params
               , gdDom = []
               , gdCod = [provisionalCtorSort doc mode]
-              , gdAttrs = []
+              , gdLiteralKind = Nothing
               }
       let docForElab =
             doc
               { dGens = M.insert mode (M.insert gname provisional table0) (dGens doc)
               }
-      attrs <- mapM (resolveAttrField doc) (rpgAttrs decl)
-      ensureDistinct "duplicate generator attribute field name" (map fst attrs)
       dom <- elabInputShapes docForElab mode tyVars tmVars (rpgDom decl)
       cod <- elabContext docForElab mode tyVars tmVars M.empty (rpgCod decl)
       let gen = GenDecl
@@ -438,7 +423,7 @@ elabPolyItem env st item =
             , gdParams = params
             , gdDom = dom
             , gdCod = cod
-            , gdAttrs = attrs
+            , gdLiteralKind = Nothing
             }
       let table' = M.insert gname gen table0
       let gens' = M.insert mode table' (dGens doc)
@@ -477,7 +462,7 @@ elabPolyItem env st item =
               , gdParams = params
               , gdDom = []
               , gdCod = [universe]
-              , gdAttrs = []
+              , gdLiteralKind = Nothing
               }
       let classifierTable' = M.insert (gdName typeCtorGen) typeCtorGen existingClassifier
       let doc' =
@@ -526,11 +511,6 @@ elabPolyItem env st item =
       if S.isSubsetOf free allowed
         then pure ()
         else Left ("rule " <> rprName decl <> ": unresolved metavariables")
-      let lhsAttrVars = freeAttrVarsDiagram lhs'
-      let rhsAttrVars = freeAttrVarsDiagram rhs'
-      if S.isSubsetOf rhsAttrVars lhsAttrVars
-        then pure ()
-        else Left ("rule " <> rprName decl <> ": RHS introduces fresh attribute variables")
       let cell = Cell2
             { c2Name = rprName decl
             , c2Class = rprClass decl
@@ -573,13 +553,34 @@ ensureDistinct label names =
   let set = S.fromList names
   in if S.size set == length names then Right () else Left label
 
-parseAttrLitKind :: Text -> Either Text AttrLitKind
-parseAttrLitKind name =
-  case name of
-    "int" -> Right LKInt
-    "string" -> Right LKString
-    "bool" -> Right LKBool
-    _ -> Left "unknown attribute literal kind"
+installLiteralDecl :: Doctrine -> RawLiteralDecl -> Either Text Doctrine
+installLiteralDecl doc decl = do
+  let ownerMode = ModeName (rldOwnerMode decl)
+  ensureMode doc ownerMode
+  universe <-
+    case modeUniverseObj (dModes doc) ownerMode of
+      Nothing -> Left "literal: owner mode is missing a classifiedBy universe"
+      Just u -> Right u
+  let classifierMode = modeClassifierMode (dModes doc) ownerMode
+  let genName = GenName (rldTypeName decl)
+  table <-
+    case M.lookup classifierMode (dGens doc) of
+      Nothing -> Left "literal: classifier mode has no generators"
+      Just t -> Right t
+  genDecl <-
+    case M.lookup genName table of
+      Nothing -> Left "literal: unknown type constructor"
+      Just gd -> Right gd
+  if gdParams genDecl == [] && gdDom genDecl == [] && gdCod genDecl == [universe]
+    then Right ()
+    else Left "literal: target must be a nullary type constructor for the owner mode"
+  case gdLiteralKind genDecl of
+    Nothing ->
+      let genDecl' = genDecl { gdLiteralKind = Just (rldKind decl) }
+          table' = M.insert genName genDecl' table
+       in Right doc { dGens = M.insert classifierMode table' (dGens doc) }
+    Just _ ->
+      Left "literal: duplicate literal declaration"
 
 rpdCtorName :: RawPolyCtorDecl -> Text
 rpdCtorName = rpcName
@@ -592,7 +593,6 @@ mkCtor modeName tyName vars ctor =
   in RawPolyGenDecl
       { rpgName = rpcName ctor
       , rpgVars = map RPDType vars
-      , rpgAttrs = []
       , rpgDom = map RIPort (rpcArgs ctor)
       , rpgCod = cod
       , rpgMode = modeName
@@ -627,8 +627,7 @@ mkFoldBundle modeName tyName tyVars ctors =
     foldCall =
       RDGen
         foldName
-        (Just (typeArgs <> [RPTVar resTyName]))
-        Nothing
+        (Just (map RGPos (typeArgs <> [RPTVar resTyName])))
         (Just (map RBAMeta caseNames))
 
     isRecursiveArg arg =
@@ -639,7 +638,6 @@ mkFoldBundle modeName tyName tyVars ctors =
       RawPolyGenDecl
         { rpgName = foldName
         , rpgVars = map RPDType tyVars <> [RPDType resTyVarDecl]
-        , rpgAttrs = []
         , rpgDom = RIPort selfTyCon : map foldBinder ctors
         , rpgCod = [RPTVar resTyName]
         , rpgMode = modeName
@@ -667,7 +665,7 @@ mkFoldBundle modeName tyName tyVars ctors =
     mkFoldRule ctorDecl thisCaseName =
       let ctorName = rpcName ctorDecl
           ruleName = foldName <> "_" <> ctorName
-          ctorCall = RDGen ctorName (Just typeArgs) Nothing Nothing
+          ctorCall = RDGen ctorName (Just (map RGPos typeArgs)) Nothing
           lhs = RDComp ctorCall foldCall
           perArg arg =
             if isRecursiveArg arg
@@ -694,13 +692,6 @@ mkFoldBundle modeName tyName tyVars ctors =
     tensorMany [d] = d
     tensorMany (d:ds) = RDTensor d (tensorMany ds)
 
-resolveAttrField :: Doctrine -> (Text, Text) -> Either Text (AttrName, AttrSort)
-resolveAttrField doc (fieldName, sortName) = do
-  let sortRef = AttrSort sortName
-  if M.member sortRef (dAttrSorts doc)
-    then Right (fieldName, sortRef)
-    else Left "unknown attribute sort"
-
 elabActionImage
   :: ModuleEnv
   -> Doctrine
@@ -717,6 +708,7 @@ elabActionImage env doc modName srcMode tgtMode (genNameTxt, rhs) = do
       doc
       srcMode
       g
+  rejectImplicitTopLevelArgs rhs
   let slots = [ bs | InBinder bs <- gdDom genDecl ]
   let holes = binderHoleNames (length slots)
   let me = ModExpr { meSrc = srcMode, meTgt = tgtMode, mePath = [modName] }
@@ -735,12 +727,33 @@ elabActionImage env doc modName srcMode tgtMode (genNameTxt, rhs) = do
   let binderSigs = M.fromList (zip holes mappedSlots)
   let tyVars = gdTyVars genDecl
   let tmVars = gdTmVars genDecl
-  (d, _) <- elabDiagExprWith env doc tgtMode [] tyVars tmVars binderSigs BMUse True rhs
-  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram d)
+  (d, _) <- elabDiagExprWith env doc tgtMode [] tyVars tmVars binderSigs BMUse True False rhs
   ensureAcyclicMode doc tgtMode d
   pure (g, d)
   where
     renderMode (ModeName name) = name
+
+    rejectImplicitTopLevelArgs expr =
+      case expr of
+        RDGen tgtName Nothing _ -> do
+          tgtGen <-
+            lookupGenDeclInDoctrine
+              ("Unknown target generator in action image: " <> tgtName <> " @" <> renderMode tgtMode)
+              doc
+              tgtMode
+              (GenName tgtName)
+          if null (gdParams tgtGen)
+            then Right ()
+            else
+              Left
+                ( "action image for "
+                    <> genNameTxt
+                    <> " must provide explicit generator arguments for target "
+                    <> tgtName
+                )
+        _ ->
+          Right ()
+
 
 validateObligationExprMode :: Doctrine -> ModeName -> Bool -> RawOblExpr -> Either Text ()
 validateObligationExprMode doc mode allowGen = go mode

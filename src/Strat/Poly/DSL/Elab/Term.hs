@@ -26,8 +26,9 @@ import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import Strat.Poly.DSL.AST
 import Strat.Poly.DSL.Elab.Resolve (elabRawModExpr)
-import Strat.Poly.DefEq (termExprToDiagramChecked)
+import Strat.Poly.DefEq (normalizeObjDeepWithCtx, termExprToDiagramChecked)
 import Strat.Poly.Doctrine
+import Strat.Poly.Literal (literalKind)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj
@@ -37,7 +38,7 @@ import Strat.Poly.ObjResolve
   , resolveTypeRefInClassifierMaybeInTables
   )
 import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.TypeTheory (TypeParamSig(..), TmFunSig(..))
+import Strat.Poly.TypeTheory (TypeParamSig(..), TmFunSig(..), literalKindForObj)
 
 provisionalCtorSort :: Doctrine -> ModeName -> Obj
 provisionalCtorSort doc mode =
@@ -274,6 +275,8 @@ elabObjExprWithTables_
   -> Either Text Obj
 elabObjExprWithTables_ pol doc ctorTables tyVars tmVars tmBound expectedOwnerMode expr =
   case expr of
+    RPLit _ ->
+      Left "literal is not allowed in type expressions"
     RPTVar name -> do
       case [v | v <- tyVars, tmvName v == name] of
         [v] -> do
@@ -448,12 +451,26 @@ elabTmTermWithTables doc ctorTables _tyVars tmVars tmBound mExpected raw =
   do
     ttDoc <- doctrineTypeTheoryFromTables doc ctorTables
     tmCtx <- mkTmCtx
-    (expr, inferredSort) <- elabExpr ctorTables tmCtx mExpected raw
+    (expr, inferredSort) <- elabExpr ttDoc ctorTables tmCtx mExpected raw
     let expectedSort = maybe inferredSort id mExpected
     termExprToDiagramChecked ttDoc tmCtx expectedSort expr
   where
-    elabExpr ctorTables tmCtx mExp tmRaw =
+    elabExpr ttDoc ctorTables tmCtx mExp tmRaw =
       case tmRaw of
+        RPLit lit ->
+          case mExp of
+            Just expectedSort0 -> do
+              expectedSort <- normalizeObjDeepWithCtx ttDoc tmCtx expectedSort0
+              case literalKindForObj ttDoc expectedSort of
+                Just expectedKind
+                  | expectedKind == literalKind lit ->
+                      Right (TMLit lit, expectedSort)
+                  | otherwise ->
+                      Left "literal kind does not match expected term sort"
+                Nothing ->
+                  Left "expected term sort does not admit literals"
+            Nothing ->
+              Left "cannot infer sort for literal term"
         RPTMod _ _ -> Left "term arguments do not support modality application"
         RPTVar name ->
           case M.lookup name tmBound of
@@ -478,7 +495,7 @@ elabTmTermWithTables doc ctorTables _tyVars tmVars tmBound mExpected raw =
                 case mExp of
                   Just expected -> lookupTmFunByNameInTables doc ctorTables expected (rtrName rawRef) (length args)
                   Nothing -> lookupTmFunAnyInTables doc ctorTables (rtrName rawRef) (length args)
-              argExprs <- mapM (\(argSort, argRaw) -> fst <$> elabExpr ctorTables tmCtx (Just argSort) argRaw) (zip (tfsArgs sig) args)
+              argExprs <- mapM (\(argSort, argRaw) -> fst <$> elabExpr ttDoc ctorTables tmCtx (Just argSort) argRaw) (zip (tfsArgs sig) args)
               pure (TMFun funName argExprs, tfsRes sig)
 
     mkTmCtx =
@@ -516,7 +533,6 @@ lookupTmFunByNameInTables doc ctorTables expectedSort name arity =
       , not (isTypeDeclGenNameInTables doc ctorTables' mode (ObjName (renderGenName (gdName gd))))
       , null (gdTyVars gd)
       , null (gdTmVars gd)
-      , null (gdAttrs gd)
       , all isPort (gdDom gd)
       , [res] <- [gdCod gd]
       ]
@@ -545,7 +561,6 @@ lookupTmFunAnyInTables doc ctorTables name arity =
       , gdName gd == GenName name
       , null (gdTyVars gd)
       , null (gdTmVars gd)
-      , null (gdAttrs gd)
       , all isPort (gdDom gd)
       , [res] <- [gdCod gd]
       , length [ ty | InPort ty <- gdDom gd ] == arity

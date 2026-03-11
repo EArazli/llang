@@ -13,11 +13,11 @@ doctrine SchemaMonad where {
   gen join(x@C) : [T(T(x))] -> [T(x)] @C;
 
   obligation leftUnit(a@C) : [T(a)] -> [T(a)] @C =
-    map[T](ret{a}) ; join{a} == id[T(a)]
+    map[T](ret(a)) ; join(a) == id[T(a)]
 
   obligation rightUnit(a@C) : [T(a)] -> [T(a)] @C =
-    ret{T(a)} ; join{a} == id[T(a)]
+    ret(T(a)) ; join(a) == id[T(a)]
 
   obligation assoc(a@C) : [T(T(T(a)))] -> [T(a)] @C =
-    map[T](join{a}) ; join{a} == join{T(a)} ; join{a}
+    map[T](join(a)) ; join(a) == join(T(a)) ; join(a)
 }

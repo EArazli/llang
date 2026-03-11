@@ -8,9 +8,9 @@ doctrine Handled extends Base where {
 morphism Handle : Combined -> Handled where {
   coercion;
   mode M -> M;
-  gen comp_ctx_ext @M -> comp_ctx_ext
-  gen comp_var @M -> comp_var
-  gen comp_reindex @M -> comp_reindex
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
   gen id @M -> id
   gen ExnE_inl_raise @M -> handleRaise
   gen WriterW_inr_tell @M -> handleTell

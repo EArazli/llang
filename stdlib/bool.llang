@@ -8,8 +8,8 @@ doctrine Bool extends StructCartesian where {
   gen if : [Bool, Bool, Bool] -> [Bool] @M;
 
   rule computational ifT -> : [Bool, Bool] -> [Bool] @M =
-    (T * id[Bool] * id[Bool]) ; if == id[Bool] * drop
+    (T * id[Bool] * id[Bool]) ; if == id[Bool] * drop(Bool)
 
   rule computational ifF -> : [Bool, Bool] -> [Bool] @M =
-    (F * id[Bool] * id[Bool]) ; if == drop * id[Bool]
+    (F * id[Bool] * id[Bool]) ; if == drop(Bool) * id[Bool]
 }

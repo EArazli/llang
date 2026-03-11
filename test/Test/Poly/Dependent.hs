@@ -372,18 +372,18 @@ testMatchBoundSortUsesCurrentSubst = do
   let d0 = emptyDiagram modeM [tmCtxSort]
   let (p1, d1) = freshPort (OVar aVar) d0
   let (p2, d2) = freshPort (mkCon fooRef [OATm bound0]) d1
-  d3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [p1, p2] [] d2)
+  d3 <- require (addEdgePayload (PGen (GenName "g") [] []) [p1, p2] [] d2)
   let lhs = d3 { dIn = [p1, p2], dOut = [] }
   _ <- require (validateDiagram lhs)
 
   let h0 = emptyDiagram modeM [tmCtxSort]
   let (h1, h1d) = freshPort concrete h0
   let (h2, h2d) = freshPort (mkCon fooRef [OATm bound0]) h1d
-  h3 <- require (addEdgePayload (PGen (GenName "g") M.empty []) [h1, h2] [] h2d)
+  h3 <- require (addEdgePayload (PGen (GenName "g") [] []) [h1, h2] [] h2d)
   let host = h3 { dIn = [h1, h2], dOut = [] }
   _ <- require (validateDiagram host)
 
-  let cfg = MatchConfig tt (S.singleton (aVar)) S.empty
+  let cfg = MatchConfig tt (S.singleton (aVar))
   matches <- require (findAllMatches cfg lhs host)
   assertBool "expected at least one match" (not (null matches))
 
@@ -442,7 +442,7 @@ testMatchTmCtxCompatibility = do
   let host = (idD modeM [aTy]) { dTmCtx = [boolTy] }
   _ <- require (validateDiagram lhs)
   _ <- require (validateDiagram host)
-  let cfg = MatchConfig tt S.empty S.empty
+  let cfg = MatchConfig tt S.empty
   matches <- require (findAllMatches cfg lhs host)
   assertBool "expected no matches for incompatible term contexts" (null matches)
 
@@ -463,7 +463,7 @@ testMatchTmCtxDefEqCompatibility = do
   let rhs = (idD modeM [rhsTy]) { dTmCtx = [rhsTy] }
   _ <- require (validateDiagram lhs)
   _ <- require (validateDiagram rhs)
-  matches <- require (diagramIsoMatchWithVars tt S.empty S.empty lhs rhs)
+  matches <- require (diagramIsoMatchWithVars tt S.empty lhs rhs)
   assertBool "expected at least one iso match under definitional tmctx equality" (not (null matches))
 
 testIsoMatchDropsSubstFailure :: Assertion
@@ -479,7 +479,7 @@ testIsoMatchDropsSubstFailure = do
   _ <- require (validateDiagram inner)
   lhs <- require (mkWrapWithBinder mode goodTy inner)
   rhs <- require (mkWrapWithBinder mode goodTy inner)
-  matches <- require (diagramIsoMatchWithVars tt S.empty S.empty lhs rhs)
+  matches <- require (diagramIsoMatchWithVars tt S.empty lhs rhs)
   assertBool "expected no matches when binder substitution normalization fails" (null matches)
 
 testCheckedTermConversionDefEq :: Assertion
@@ -543,11 +543,11 @@ testExplicitBinderTermArg = do
         , "  gen reindex(a@M) : [a] -> [a] @M;"
         , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
         , "  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M ="
-        , "    ctx_ext{a} == id[a]"
+        , "    ctx_ext(a) == id[a]"
         , "  rule computational var_id -> (a@M) : [a] -> [a] @M ="
-        , "    var{a} == id[a]"
+        , "    var(a) == id[a]"
         , "  rule computational reindex_id -> (a@M) : [a] -> [a] @M ="
-        , "    reindex{a} == id[a]"
+        , "    reindex(a) == id[a]"
         , "  gen wrap : [binder { tm n : Nat } : [Vec(n)]] -> [Out] @M;"
         , "}"
         ]
@@ -556,7 +556,7 @@ testExplicitBinderTermArg = do
     case M.lookup "ImplicitBinderIndex" (meDoctrines env) of
       Nothing -> assertFailure "missing doctrine ImplicitBinderIndex" >> fail "unreachable"
       Just d -> pure d
-  raw <- require (parseDiagExpr "wrap[use{n}]")
+  raw <- require (parseDiagExpr "wrap[use(n)]")
   diag <- require (elabDiagExpr env doc (ModeName "M") [] raw)
   assertBool "expected no unresolved metavariables" (S.null (freeVarsDiagram diag))
 
@@ -565,8 +565,8 @@ mkBetaInput mode aTy lamArg = do
   let (x, d0) = freshPort aTy (emptyDiagram mode [])
   let (lamOut, d1) = freshPort aTy d0
   let (y, d2) = freshPort aTy d1
-  d3 <- addEdgePayload (PGen (GenName "lam") M.empty [lamArg]) [] [lamOut] d2
-  d4 <- addEdgePayload (PGen (GenName "app") M.empty []) [lamOut, x] [y] d3
+  d3 <- addEdgePayload (PGen (GenName "lam") [] [lamArg]) [] [lamOut] d2
+  d4 <- addEdgePayload (PGen (GenName "app") [] []) [lamOut, x] [y] d3
   let diag = d4 { dIn = [x], dOut = [y] }
   validateDiagram diag
   pure diag
@@ -584,7 +584,7 @@ mkSpliceRHS mode aTy meta = do
 mkWrapWithBinder :: ModeName -> Obj -> Diagram -> Either Text Diagram
 mkWrapWithBinder mode outTy inner = do
   let (outPort, d0) = freshPort outTy (emptyDiagram mode [])
-  d1 <- addEdgePayload (PGen (GenName "wrap") M.empty [BAConcrete inner]) [] [outPort] d0
+  d1 <- addEdgePayload (PGen (GenName "wrap") [] [BAConcrete inner]) [] [outPort] d0
   let diag = d1 { dOut = [outPort] }
   validateDiagram diag
   pure diag

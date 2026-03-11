@@ -6,8 +6,7 @@ doctrine ActionBinderHoles where {
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
 
   modality Box : M -> M;
-  lift_classifier Box = Box;
-  mod_eq Box.Box -> Box;
+  lift_classifier Box = id@M;
 
   gen U_M : [] -> [Box(M.U_M)] @M;
   gen A : [] -> [Box(M.U_M)] @M;
@@ -15,8 +14,8 @@ doctrine ActionBinderHoles where {
   gen lam : [binder { x : A } : [A]] -> [A] @M;
   gen app : [A, A] -> [A] @M;
 
-  gen lamB : [binder { x : Box(A) } : [Box(A)]] -> [Box(A)] @M;
-  gen appB : [Box(A), Box(A)] -> [Box(A)] @M;
+  gen lamB : [binder { x : A } : [A]] -> [A] @M;
+  gen appB : [A, A] -> [A] @M;
 
   action Box where {
     gen lam -> lamB[?b0]

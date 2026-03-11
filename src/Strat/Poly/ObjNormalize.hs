@@ -43,6 +43,7 @@ import Strat.Poly.TypeTheory
   , TypeParamSig(..)
   , TypeTheory(..)
   , defFragmentForMode
+  , literalKindForObj
   , termTRSForMode
   , lookupTmFunSig
   )
@@ -405,6 +406,9 @@ checkedConvEnv tt =
         tyA' <- normalizeObjDeepWithCtx tt tmCtx tyA
         tyB' <- normalizeObjDeepWithCtx tt tmCtx tyB
         pure (tyA' == tyB')
+    , tcLiteralKindForSort = \tmCtx sortTy -> do
+        sortTy' <- normalizeObjDeepWithCtx tt tmCtx sortTy
+        pure (literalKindForObj tt sortTy')
     }
 
 renderMode :: ModeName -> Text

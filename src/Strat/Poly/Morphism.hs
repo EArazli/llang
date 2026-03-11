@@ -28,6 +28,7 @@ import qualified Data.List as L
 import qualified Data.Set as S
 import Control.Monad (foldM)
 import Data.Functor.Identity (runIdentity)
+import Data.Bifunctor (first)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.Doctrine
 import Strat.Poly.Cell2
@@ -50,9 +51,9 @@ import Strat.Poly.DiagramInterpretation
 import Strat.Poly.Names
 import Strat.Poly.Obj
 import Strat.Poly.UnifyObj hiding (applySubstDiagram)
-import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..))
-import Strat.Poly.DefEq (normalizeObjDeep, defEqObj)
-import Strat.Poly.Attr
+import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..), literalKindForObj)
+import Strat.Poly.DefEq (normalizeObjDeep, defEqObj, termExprToDiagramChecked)
+import Strat.Poly.Literal (renderLiteralKind)
 import Strat.Poly.Rewrite
 import Strat.Poly.ObjClassifier (modeUniverseObj, modeClassifierMode)
 import Strat.Poly.Normalize (autoJoinProofWithMapper)
@@ -82,6 +83,7 @@ import Strat.Poly.ModeTheory
   )
 import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.Traversal (traverseDiagram)
+import Strat.Poly.TermExpr (TermExpr(..))
 
 unifyCtxCompat :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
 unifyCtxCompat tt tmCtx ctxA ctxB =
@@ -101,7 +103,6 @@ data Morphism = Morphism
   , morIsCoercion :: Bool
   , morModeMap :: M.Map ModeName ModeName
   , morModMap :: M.Map ModName ModExpr
-  , morAttrSortMap :: M.Map AttrSort AttrSort
   , morTypeMap :: M.Map ObjRef TypeTemplate
   , morGenMap  :: M.Map (ModeName, GenName) GenImage
   , morCheck :: MorphismCheck
@@ -137,12 +138,6 @@ mapMode mor mode =
 
 applyMorphismMode :: Morphism -> ModeName -> Either Text ModeName
 applyMorphismMode = mapMode
-
-mapAttrSort :: Morphism -> AttrSort -> Either Text AttrSort
-mapAttrSort mor sortName =
-  case M.lookup sortName (morAttrSortMap mor) of
-    Nothing -> Left "morphism: missing attribute sort mapping"
-    Just sortName' -> Right sortName'
 
 mapTypeRef :: CtorTables -> Morphism -> ModeName -> ModeName -> ObjRef -> Either Text ObjRef
 mapTypeRef tgtCtorTables mor ownerSrc ownerTgt ref = do
@@ -198,14 +193,6 @@ mapTypeRef tgtCtorTables mor ownerSrc ownerTgt ref = do
 
     renderMode (ModeName name) = name
     renderRef (ObjRef mode (ObjName name)) = renderMode mode <> "." <> name
-
-applyMorphismAttrTerm :: Morphism -> AttrTerm -> Either Text AttrTerm
-applyMorphismAttrTerm mor term =
-  case term of
-    ATLit lit -> Right (ATLit lit)
-    ATVar v -> do
-      sortName' <- mapAttrSort mor (avSort v)
-      Right (ATVar v { avSort = sortName' })
 
 applyMorphismTy :: Morphism -> Obj -> Either Text Obj
 applyMorphismTy mor ty = do
@@ -376,34 +363,171 @@ applyMorphismDiagramWithTheories srcTheory tgtTheory tgtCtorTables mor diagSrc =
 
     onGenEdge diagSrc0 diagTgt edgeKey edgeSrc mappedBargs =
       case ePayload edgeSrc of
-        PGen genName attrsSrc _bargsSrc -> do
+        PGen genName _argsSrc _bargsSrc -> do
           let modeSrc = dMode diagSrc0
-          genDecl <- lookupGenDeclInDoctrine "applyMorphismDiagram: unknown generator" (morSrc mor) modeSrc genName
-          substSrc <- instantiateGen srcTheory genDecl diagSrc0 edgeSrc
-          substTgt <- mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor substSrc
           case M.lookup (modeSrc, genName) (morGenMap mor) of
             Nothing -> Left "applyMorphismDiagram: missing generator mapping"
             Just image0 -> do
+              genDecl0 <- lookupGenDeclInDoctrine "applyMorphismDiagram: unknown generator" (morSrc mor) modeSrc genName
+              (genDecl, image0Fresh) <-
+                freshenGenDeclAndImage
+                  srcTheory
+                  tgtTheory
+                  tgtCtorTables
+                  mor
+                  edgeKey
+                  genDecl0
+                  image0
+              substSrc <- instantiateGen srcTheory genDecl diagSrc0 edgeSrc
+              substTgt <- mapSubstWithTheories srcTheory tgtTheory tgtCtorTables mor substSrc
               let modeTgt = dMode diagTgt
-              let image = giDiagram image0
+              let image = giDiagram image0Fresh
               if dMode image /= modeTgt
                 then Left "applyMorphismDiagram: generator mapping mode mismatch"
                 else Right ()
-              attrSubst <- instantiateAttrSubst mor genDecl attrsSrc
               instImage0 <- applySubstDiagram tgtTheory substTgt image
-              instHoleSigs0 <- applySubstBinderSigs tgtTheory substTgt (giBinderSigs image0)
-              let instImage1 = applyAttrSubstDiagram attrSubst instImage0
+              instHoleSigs0 <- applySubstBinderSigs tgtTheory substTgt (giBinderSigs image0Fresh)
               holeSub <- buildBinderHoleSub genDecl mappedBargs
-              instImage <- instantiateGenImageBindersWithMapper tgtTheory (applyModExpr (morTgt mor)) instHoleSigs0 holeSub instImage1
+              instImage <- instantiateGenImageBindersWithMapper tgtTheory (applyModExpr (morTgt mor)) instHoleSigs0 holeSub instImage0
               let holeKeys = S.fromList (binderHoleNames (length (binderSlots genDecl)))
               let remaining = S.intersection holeKeys (binderMetaVarsDiagram instImage)
               if S.null remaining
                 then Right ()
                 else Left "applyMorphismDiagram: uninstantiated binder holes in generator image"
               instImage' <- weakenDiagramTmCtxTo (dTmCtx diagTgt) instImage
-              spliceEdge diagTgt edgeKey instImage'
+              first
+                (\err ->
+                  "applyMorphismDiagram: generator mapping for "
+                    <> renderGenName genName
+                    <> " failed: "
+                    <> err
+                )
+                (spliceEdge diagTgt edgeKey instImage')
         _ ->
           Left "applyMorphismDiagram: internal error: diOnGenEdge called on non-PGen"
+
+    freshenGenDeclAndImage
+      :: TypeTheory
+      -> TypeTheory
+      -> CtorTables
+      -> Morphism
+      -> Int
+      -> GenDecl
+      -> GenImage
+      -> Either Text (GenDecl, GenImage)
+    freshenGenDeclAndImage ttSrc ttTgt tgtTables mor' edgeIdx genDecl image0 = do
+      (freshParams, renameSrc) <- freshenSourceParams ttSrc edgeIdx (gdParams genDecl)
+      domFresh <- mapM (renameInputShape renameSrc) (gdDom genDecl)
+      codFresh <- applySubstCtx ttSrc renameSrc (gdCod genDecl)
+      renameTgt <- buildTargetRenameSubst ttSrc ttTgt tgtTables mor' (gdParams genDecl) freshParams
+      imageFresh <- applySubstDiagram ttTgt renameTgt (giDiagram image0)
+      sigsFresh <- applySubstBinderSigs ttTgt renameTgt (giBinderSigs image0)
+      pure
+        ( genDecl
+            { gdParams = freshParams
+            , gdDom = domFresh
+            , gdCod = codFresh
+            }
+        , image0
+            { giDiagram = imageFresh
+            , giBinderSigs = sigsFresh
+            }
+        )
+
+    freshenSourceParams
+      :: TypeTheory
+      -> Int
+      -> [GenParam]
+      -> Either Text ([GenParam], Subst)
+    freshenSourceParams tt edgeIdx =
+      go 0 emptySubst []
+      where
+        go _ subst acc [] =
+          Right (reverse acc, subst)
+        go i subst acc (param : rest) =
+          case param of
+            GP_Ty v -> do
+              sort' <- applySubstObj tt subst (tmvSort v)
+              let fresh = freshTyParamVar edgeIdx i v sort'
+              singleton <- mkSubst [(v, CAObj (OVar fresh))]
+              subst' <- composeSubst tt singleton subst
+              go (i + 1) subst' (GP_Ty fresh : acc) rest
+            GP_Tm v -> do
+              sort' <- applySubstObj tt subst (tmvSort v)
+              let fresh = freshTmParamVar edgeIdx i v sort'
+              tmFresh <- termExprToDiagramChecked tt [] sort' (TMMeta fresh [])
+              singleton <- mkSubst [(v, CATm tmFresh)]
+              subst' <- composeSubst tt singleton subst
+              go (i + 1) subst' (GP_Tm fresh : acc) rest
+
+    renameInputShape :: Subst -> InputShape -> Either Text InputShape
+    renameInputShape subst shape =
+      case shape of
+        InPort ty -> InPort <$> applySubstObj srcTheory subst ty
+        InBinder sig -> InBinder <$> applySubstBinderSig srcTheory subst sig
+
+    buildTargetRenameSubst
+      :: TypeTheory
+      -> TypeTheory
+      -> CtorTables
+      -> Morphism
+      -> [GenParam]
+      -> [GenParam]
+      -> Either Text Subst
+    buildTargetRenameSubst ttSrc ttTgt tgtTables mor' oldParams newParams =
+      mkSubst =<< mapM renameOne (zip oldParams newParams)
+      where
+        renameOne (oldParam, newParam) =
+          case (oldParam, newParam) of
+            (GP_Ty oldVar, GP_Ty newVar) -> do
+              oldTgt <- mapTyParamToTarget ttSrc ttTgt tgtTables mor' oldVar
+              newTgt <- mapTyParamToTarget ttSrc ttTgt tgtTables mor' newVar
+              pure (oldTgt, CAObj (OVar newTgt))
+            (GP_Tm oldVar, GP_Tm newVar) -> do
+              oldTgt <- mapTmParamToTarget ttSrc ttTgt tgtTables mor' oldVar
+              newTgt <- mapTmParamToTarget ttSrc ttTgt tgtTables mor' newVar
+              tmFresh <- termExprToDiagramChecked ttTgt [] (tmvSort newTgt) (TMMeta newTgt [])
+              pure (oldTgt, CATm tmFresh)
+            _ ->
+              Left "applyMorphismDiagram: internal error: parameter kind mismatch during freshening"
+
+    mapTyParamToTarget
+      :: TypeTheory
+      -> TypeTheory
+      -> CtorTables
+      -> Morphism
+      -> TmVar
+      -> Either Text TmVar
+    mapTyParamToTarget ttSrc ttTgt tgtTables mor' v = do
+      ownerTgt <- mapMode mor' (tmVarOwner v)
+      sortTgt <- applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor' (tmvSort v)
+      pure v { tmvSort = sortTgt, tmvOwnerMode = Just ownerTgt }
+
+    mapTmParamToTarget
+      :: TypeTheory
+      -> TypeTheory
+      -> CtorTables
+      -> Morphism
+      -> TmVar
+      -> Either Text TmVar
+    mapTmParamToTarget ttSrc ttTgt tgtTables mor' v = do
+      sortTgt <- applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor' (tmvSort v)
+      pure v { tmvSort = sortTgt, tmvOwnerMode = Nothing }
+
+    freshTyParamVar :: Int -> Int -> TmVar -> Obj -> TmVar
+    freshTyParamVar edgeIdx i v sort' =
+      v
+        { tmvName = tmvName v <> "__mor" <> T.pack (show edgeIdx) <> "_" <> T.pack (show i)
+        , tmvSort = sort'
+        }
+
+    freshTmParamVar :: Int -> Int -> TmVar -> Obj -> TmVar
+    freshTmParamVar edgeIdx i v sort' =
+      v
+        { tmvName = tmvName v <> "__mor" <> T.pack (show edgeIdx) <> "_" <> T.pack (show i)
+        , tmvSort = sort'
+        , tmvOwnerMode = Nothing
+        }
 
 mapSubstWithTheories
   :: TypeTheory
@@ -454,6 +578,9 @@ applyMorphismBinderSigInTables tgtCtorTables mor sig = do
   cod' <- mapM (applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor) (bsCod sig)
   pure sig { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
 
+renderGenName :: GenName -> Text
+renderGenName (GenName name) = name
+
 checkMorphismResultWithBudget :: SearchBudget -> Morphism -> Either Text MorphismCheckResult
 checkMorphismResultWithBudget budget mor = do
   srcCtorTables <- deriveCtorTables (morSrc mor)
@@ -465,7 +592,7 @@ checkMorphismResultWithBudget budget mor = do
   validateModMap mor
   validateModEqPreservation mor
   validateClassificationPreservation tgtCtorTables ttSrc ttTgt mor
-  validateAttrSortMap mor
+  validateLiteralKindPreservation tgtCtorTables ttSrc ttTgt mor
   validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor
   mapM_ (checkGenMapping tgtCtorTables ttSrc ttTgt mor) srcGens
   case morCheck mor of
@@ -725,63 +852,59 @@ checkModExprWellTyped mt me = do
             then walk (mdTgt decl) rest
             else Left "checkMorphism: modality expression composition mismatch"
 
-validateAttrSortMap :: Morphism -> Either Text ()
-validateAttrSortMap mor = do
-  let srcSorts = dAttrSorts (morSrc mor)
-  let tgtSorts = dAttrSorts (morTgt mor)
-  case [ s | (s, _) <- M.toList (morAttrSortMap mor), M.notMember s srcSorts ] of
-    (s:_) -> Left ("checkMorphism: unknown source attribute sort " <> renderAttrSort s)
-    [] -> Right ()
-  case [ s | (_, s) <- M.toList (morAttrSortMap mor), M.notMember s tgtSorts ] of
-    (s:_) -> Left ("checkMorphism: unknown target attribute sort " <> renderAttrSort s)
-    [] -> Right ()
-  let usedSrcSorts =
-        S.fromList
-          [ sortName
-          | table <- M.elems (dGens (morSrc mor))
-          , gen <- M.elems table
-          , (_, sortName) <- gdAttrs gen
-          ]
-  case [ s | s <- S.toList usedSrcSorts, M.notMember s (morAttrSortMap mor) ] of
-    (s:_) -> Left ("checkMorphism: missing attribute sort mapping for " <> renderAttrSort s)
-    [] -> Right ()
-  mapM_ (checkLiteralKind srcSorts tgtSorts) (M.toList (morAttrSortMap mor))
+validateLiteralKindPreservation :: CtorTables -> TypeTheory -> TypeTheory -> Morphism -> Either Text ()
+validateLiteralKindPreservation tgtCtorTables ttSrc ttTgt mor =
+  mapM_ checkOne literalGens
   where
-    renderAttrSort (AttrSort name) = name
-    renderLitKind kind =
-      case kind of
-        LKInt -> "int"
-        LKString -> "string"
-        LKBool -> "bool"
-    renderMaybeKind mKind =
-      case mKind of
-        Nothing -> "none"
-        Just kind -> renderLitKind kind
-    checkLiteralKind srcSorts tgtSorts (srcSort, tgtSort) = do
-      srcDecl <-
-        case M.lookup srcSort srcSorts of
-          Nothing -> Left "checkMorphism: unknown source attribute sort declaration"
-          Just decl -> Right decl
-      tgtDecl <-
-        case M.lookup tgtSort tgtSorts of
-          Nothing -> Left "checkMorphism: unknown target attribute sort declaration"
-          Just decl -> Right decl
-      case asLitKind srcDecl of
+    literalGens =
+      [ gd
+      | table <- M.elems (dGens (morSrc mor))
+      , gd <- M.elems table
+      , Just _ <- [gdLiteralKind gd]
+      ]
+
+    checkOne gd =
+      case gdLiteralKind gd of
         Nothing -> Right ()
-        Just srcKind ->
-          case asLitKind tgtDecl of
-            Just tgtKind | tgtKind == srcKind -> Right ()
-            tgtKind ->
+        Just srcKind -> do
+          tgtTy <- applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables mor (sourceTy gd)
+          case literalKindForObj ttTgt tgtTy of
+            Just tgtKind
+              | tgtKind == srcKind -> Right ()
+              | otherwise ->
+                  Left
+                    ( "morphism: literal kind changes for "
+                        <> renderGen (gdName gd)
+                        <> " @"
+                        <> renderMode (gdMode gd)
+                        <> " (expected "
+                        <> renderLiteralKind srcKind
+                        <> ", got "
+                        <> renderLiteralKind tgtKind
+                        <> ")"
+                    )
+            Nothing ->
               Left
-                ( "morphism: attrsort mapping changes literal kind: "
-                    <> renderAttrSort srcSort
-                    <> " admits "
-                    <> renderLitKind srcKind
-                    <> ", but "
-                    <> renderAttrSort tgtSort
-                    <> " admits "
-                    <> renderMaybeKind tgtKind
+                ( "morphism: literal kind is not preserved for "
+                    <> renderGen (gdName gd)
+                    <> " @"
+                    <> renderMode (gdMode gd)
                 )
+
+    sourceTy gd =
+      Obj
+        { objOwnerMode = gdMode gd
+        , objCode =
+            CTCon
+              ( ObjRef
+                  (modeClassifierMode (dModes (morSrc mor)) (gdMode gd))
+                  (ObjName (renderGen (gdName gd)))
+              )
+              []
+        }
+
+    renderMode (ModeName name) = name
+    renderGen (GenName name) = name
 
 validateTypeMap :: CtorTables -> CtorTables -> TypeTheory -> TypeTheory -> Morphism -> Either Text ()
 validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor = do
@@ -946,18 +1069,6 @@ modMapIsIdentity mor =
               }
           )
 
-attrSortMapIsIdentity :: Morphism -> Bool
-attrSortMapIsIdentity mor =
-  all (\s -> M.lookup s (morAttrSortMap mor) == Just s) (S.toList usedSorts)
-  where
-    usedSorts =
-      S.fromList
-        [ sortName
-        | table <- M.elems (dGens (morSrc mor))
-        , gen <- M.elems table
-        , (_, sortName) <- gdAttrs gen
-        ]
-
 checkGenMapping :: CtorTables -> TypeTheory -> TypeTheory -> Morphism -> GenDecl -> Either Text ()
 checkGenMapping tgtCtorTables ttSrc ttTgt mor gen = do
   let modeSrc = gdMode gen
@@ -1033,7 +1144,6 @@ inclusionFastPath :: CtorTables -> Morphism -> Either Text Bool
 inclusionFastPath srcCtorTables mor
   | not (modeMapIsIdentity mor) = Right False
   | not (modMapIsIdentity mor) = Right False
-  | not (attrSortMapIsIdentity mor) = Right False
   | not (M.null (morTypeMap mor)) = Right False
   | otherwise = do
       let srcGens = allGensInTables (morSrc mor) srcCtorTables
@@ -1064,7 +1174,7 @@ inclusionFastPath srcCtorTables mor
 
 renamingFastPath :: CtorTables -> CtorTables -> Morphism -> [Cell2] -> Either Text Bool
 renamingFastPath srcCtorTables tgtCtorTables mor srcCells = do
-  if not (modeMapIsIdentity mor) || not (modMapIsIdentity mor) || not (attrSortMapIsIdentity mor)
+  if not (modeMapIsIdentity mor) || not (modMapIsIdentity mor)
     then Right False
   else do
     let tgt = morTgt mor
@@ -1095,15 +1205,18 @@ renamingFastPath srcCtorTables tgtCtorTables mor srcCells = do
     cellMatchesRenaming tyRen genRen tgtMap cell =
       case M.lookup (cellKey cell) tgtMap of
         Nothing -> Right False
-        Just tgt ->
-          if c2Class cell /= c2Class tgt || c2Orient cell /= c2Orient tgt
+        Just tgt0 ->
+          if c2Class cell /= c2Class tgt0 || c2Orient cell /= c2Orient tgt0
             then Right False
-            else do
-              let lhsRen = renameDiagram tyRen genRen (c2LHS cell)
-              let rhsRen = renameDiagram tyRen genRen (c2RHS cell)
-              okL <- isoOrFalse lhsRen (c2LHS tgt)
-              okR <- isoOrFalse rhsRen (c2RHS tgt)
-              pure (okL && okR)
+            else
+              case alphaAlignCellTo cell tgt0 of
+                Left _ -> Right False
+                Right tgt -> do
+                  let lhsRen = renameDiagram tyRen genRen (c2LHS cell)
+                  let rhsRen = renameDiagram tyRen genRen (c2RHS cell)
+                  okL <- isoOrFalse lhsRen (c2LHS tgt)
+                  okR <- isoOrFalse rhsRen (c2RHS tgt)
+                  pure (okL && okR)
 
     matchCellsByBody tyRen genRen cells tgtCells =
       go tgtCells cells
@@ -1118,17 +1231,20 @@ renamingFastPath srcCtorTables tgtCtorTables mor srcCells = do
           hits <- acc
           ok <- matchesCell cell tgt
           if ok then Right (hits <> [tgt]) else Right hits
-        matchesCell cell tgt =
-          if dMode (c2LHS cell) /= dMode (c2LHS tgt)
-            || c2Class cell /= c2Class tgt
-            || c2Orient cell /= c2Orient tgt
+        matchesCell cell tgt0 =
+          if dMode (c2LHS cell) /= dMode (c2LHS tgt0)
+            || c2Class cell /= c2Class tgt0
+            || c2Orient cell /= c2Orient tgt0
             then Right False
-            else do
-              let lhsRen = renameDiagram tyRen genRen (c2LHS cell)
-              let rhsRen = renameDiagram tyRen genRen (c2RHS cell)
-              okL <- isoOrFalse lhsRen (c2LHS tgt)
-              okR <- isoOrFalse rhsRen (c2RHS tgt)
-              pure (okL && okR)
+            else
+              case alphaAlignCellTo cell tgt0 of
+                Left _ -> Right False
+                Right tgt -> do
+                  let lhsRen = renameDiagram tyRen genRen (c2LHS cell)
+                  let rhsRen = renameDiagram tyRen genRen (c2RHS cell)
+                  okL <- isoOrFalse lhsRen (c2LHS tgt)
+                  okR <- isoOrFalse rhsRen (c2RHS tgt)
+                  pure (okL && okR)
 
 isoOrFalse :: Diagram -> Diagram -> Either Text Bool
 isoOrFalse d1 d2 =
@@ -1245,11 +1361,11 @@ singleGenNameMaybe srcGen image0 =
                   edgePorts = eIns edge <> eOuts edge
                   allPorts = diagramPortIds canon
               in case ePayload edge of
-                PGen g attrs bargs
+                PGen g args bargs
                   | boundary == edgePorts
                   , length allPorts == length boundary
                   , bargs == expectedBinderArgs
-                  , attrs == passThroughAttrs (gdAttrs srcGen) ->
+                  , passThroughArgs (gdParams srcGen) args ->
                       Just g
                 _ -> Nothing
             _ -> Nothing
@@ -1261,8 +1377,23 @@ singleGenNameMaybe srcGen image0 =
     holes = binderHoleNames (length binderSlots)
     expectedBinderArgs = map BAMeta holes
     expectedBinderSigs = M.fromList (zip holes binderSlots)
-    passThroughAttrs attrs =
-      M.fromList [ (fieldName, ATVar (AttrVar fieldName sortName)) | (fieldName, sortName) <- attrs ]
+    passThroughArgs params args =
+      length params == length args
+        && and (zipWith argMatches params args)
+
+    argMatches param arg =
+      case (param, arg) of
+        (GP_Ty v, CAObj (OVar v')) -> v == v'
+        (GP_Tm v, CATm tm) -> termMetaOnly tm == Just v
+        _ -> False
+
+    termMetaOnly (TermDiagram diag) =
+      case (IM.elems (dEdges diag), dIn diag, dOut diag) of
+        ([edge], [], [outBoundary]) ->
+          case (ePayload edge, eIns edge, eOuts edge) of
+            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just v
+            _ -> Nothing
+        _ -> Nothing
 
 renameDiagram :: M.Map ObjRef ObjRef -> M.Map (ModeName, GenName) GenName -> Diagram -> Diagram
 renameDiagram tyRen genRen diag =
@@ -1277,9 +1408,9 @@ renameDiagram tyRen genRen diag =
     onPayload payload =
       pure $
         case payload of
-          PGen gen attrs bargs ->
+          PGen gen args bargs ->
             let gen' = M.findWithDefault gen (dMode diag, gen) genRen
-            in PGen gen' attrs bargs
+            in PGen gen' args bargs
           PTmMeta v ->
             PTmMeta v { tmvSort = renameObjExpr tyRen (tmvSort v) }
           _ -> payload
@@ -1320,6 +1451,101 @@ injective :: Ord a => [a] -> Bool
 injective xs =
   let set = S.fromList xs
   in length xs == S.size set
+
+alphaAlignCellTo :: Cell2 -> Cell2 -> Either Text Cell2
+alphaAlignCellTo target source
+  | length (c2TyVars source) /= length (c2TyVars target) =
+      Left "alphaAlignCellTo: type-parameter arity mismatch"
+  | length (c2TmVars source) /= length (c2TmVars target) =
+      Left "alphaAlignCellTo: term-parameter arity mismatch"
+  | otherwise =
+      let tyMap = M.fromList (zip (c2TyVars source) (c2TyVars target))
+          tmMap = M.fromList (zip (c2TmVars source) (c2TmVars target))
+      in Right
+           source
+             { c2Params = map (renameParamAlpha tyMap tmMap) (c2Params source)
+             , c2LHS = renameDiagramAlpha tyMap tmMap (c2LHS source)
+             , c2RHS = renameDiagramAlpha tyMap tmMap (c2RHS source)
+             }
+
+renameParamAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> GenParam -> GenParam
+renameParamAlpha tyMap tmMap param =
+  case param of
+    GP_Ty v -> GP_Ty (renameTyVarAlpha tyMap v)
+    GP_Tm v -> GP_Tm (renameTmVarAlpha tyMap tmMap v)
+
+renameTyVarAlpha :: M.Map TmVar TmVar -> TmVar -> TmVar
+renameTyVarAlpha tyMap v =
+  M.findWithDefault v v tyMap
+
+renameTmVarAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> TmVar -> TmVar
+renameTmVarAlpha tyMap tmMap v =
+  case M.lookup v tmMap of
+    Just v' -> v'
+    Nothing -> v { tmvSort = renameTypeAlpha tyMap tmMap (tmvSort v) }
+
+renameTypeAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Obj -> Obj
+renameTypeAlpha tyMap tmMap = goObj
+  where
+    goObj ty =
+      ty { objCode = goCode (objCode ty) }
+
+    goCode code =
+      case code of
+        CTMeta v ->
+          CTMeta (renameTyVarAlpha tyMap v)
+        CTCon ref args ->
+          CTCon ref (map goArg args)
+        CTLift me inner ->
+          CTLift me (goCode inner)
+
+    goArg arg =
+      case arg of
+        CAObj ty -> CAObj (goObj ty)
+        CATm tm -> CATm (renameTermDiagramAlpha tyMap tmMap tm)
+
+renameDiagramAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Diagram -> Diagram
+renameDiagramAlpha tyMap tmMap =
+  runIdentity . traverseDiagram onDiag onPayload pure
+  where
+    onDiag d =
+      pure d
+        { dTmCtx = map (renameTypeAlpha tyMap tmMap) (dTmCtx d)
+        , dPortObj = IM.map (renameTypeAlpha tyMap tmMap) (dPortObj d)
+        }
+
+    onPayload payload =
+      pure $
+        case payload of
+          PGen g args bargs ->
+            PGen
+              g
+              (map (renameCodeArgAlpha tyMap tmMap) args)
+              (map (renameBinderArgAlpha tyMap tmMap) bargs)
+          PBox name inner ->
+            PBox name (renameDiagramAlpha tyMap tmMap inner)
+          PFeedback inner ->
+            PFeedback (renameDiagramAlpha tyMap tmMap inner)
+          PTmMeta v ->
+            PTmMeta (renameTmVarAlpha tyMap tmMap v)
+          other ->
+            other
+
+renameCodeArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> CodeArg -> CodeArg
+renameCodeArgAlpha tyMap tmMap arg =
+  case arg of
+    CAObj ty -> CAObj (renameTypeAlpha tyMap tmMap ty)
+    CATm tm -> CATm (renameTermDiagramAlpha tyMap tmMap tm)
+
+renameBinderArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> BinderArg -> BinderArg
+renameBinderArgAlpha tyMap tmMap barg =
+  case barg of
+    BAConcrete inner -> BAConcrete (renameDiagramAlpha tyMap tmMap inner)
+    BAMeta x -> BAMeta x
+
+renameTermDiagramAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> TermDiagram -> TermDiagram
+renameTermDiagramAlpha tyMap tmMap (TermDiagram diag) =
+  TermDiagram (renameDiagramAlpha tyMap tmMap diag)
 
 allM :: (a -> Either Text Bool) -> [a] -> Either Text Bool
 allM _ [] = Right True
@@ -1377,12 +1603,15 @@ lookupCtorSigByRefInTables doc tables ref = do
 
 instantiateGen :: TypeTheory -> GenDecl -> Diagram -> Edge -> Either Text Subst
 instantiateGen tt gen diag edge = do
+  sArgs <- instantiateGenParams tt gen args
   dom <- mapM (requirePortType "applyMorphismDiagram" diag) (eIns edge)
   cod <- mapM (requirePortType "applyMorphismDiagram" diag) (eOuts edge)
-  s1 <- unifyCtxFromPattern tt (dTmCtx diag) (gdPlainDom gen) dom
-  codExpected <- applySubstCtx tt s1 (gdCod gen)
+  domExpected <- applySubstCtx tt sArgs (gdPlainDom gen)
+  s1 <- unifyCtxFromPattern tt (dTmCtx diag) domExpected dom
+  sDom <- composeSubst tt s1 sArgs
+  codExpected <- applySubstCtx tt sDom (gdCod gen)
   s2 <- unifyCtxFromPattern tt (dTmCtx diag) codExpected cod
-  s0 <- composeSubst tt s2 s1
+  s0 <- composeSubst tt s2 sDom
   if length binderSlots /= length bargs
     then Left "applyMorphismDiagram: source binder argument arity mismatch"
     else foldM checkBinderSlot s0 (zip binderSlots bargs)
@@ -1391,6 +1620,11 @@ instantiateGen tt gen diag edge = do
       [ bs
       | InBinder bs <- gdDom gen
       ]
+
+    args =
+      case ePayload edge of
+        PGen _ as _ -> as
+        _ -> []
 
     bargs =
       case ePayload edge of
@@ -1416,22 +1650,3 @@ instantiateGen tt gen diag edge = do
           codInner <- diagramCod inner
           sCod <- unifyCtxFromPattern tt slotTm1 (bsCod slot1) codInner
           composeSubst tt sCod subst1
-
-instantiateAttrSubst :: Morphism -> GenDecl -> AttrMap -> Either Text AttrSubst
-instantiateAttrSubst mor gen attrsSrc = do
-  mappedFields <- mapM mapField (gdAttrs gen)
-  attrsSrcTgt <- mapM (applyMorphismAttrTerm mor) attrsSrc
-  let flex = S.fromList [ v | (_, v) <- mappedFields ]
-  let unifyOne acc (fieldName, formalVar) = do
-        subst <- acc
-        term <-
-          case M.lookup fieldName attrsSrcTgt of
-            Nothing -> Left "applyMorphismDiagram: missing source attribute argument"
-            Just t -> Right t
-        unifyAttrFlex flex subst (ATVar formalVar) term
-  foldl unifyOne (Right M.empty) mappedFields
-  where
-    mapField (fieldName, sortName) = do
-      sortName' <- mapAttrSort mor sortName
-      let v = AttrVar fieldName sortName'
-      Right (fieldName, v)

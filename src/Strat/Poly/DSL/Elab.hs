@@ -23,8 +23,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
-  ( RawPolyAttrSortMap(..)
-  , RawPolyGenMap(..)
+  ( RawPolyGenMap(..)
   , RawPolyModeMap(..)
   , RawPolyModalityMap(..)
   , RawPolyMorphism(..)
@@ -32,12 +31,10 @@ import Strat.DSL.AST
   , RawPolyTypeMap(..)
   )
 import Strat.Frontend.Env (ModuleEnv(..))
-import Strat.Poly.Attr (AttrSort(..))
 import Strat.Poly.DSL.Elab.Diag
   ( BinderMetaMode(..)
   , elabDiagExpr
   , elabDiagExprWith
-  , ensureAttrSort
   , ensureMode
   , lookupGen
   , renderGenName
@@ -100,7 +97,6 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
   when (length coercionFlags > 1) (Left "morphism: duplicate coercion flag")
   modeMap <- buildModeMap src tgt [ m | RPMMode m <- rpmItems raw ]
   modMap <- buildModMap src tgt modeMap [ mm | RPMModality mm <- rpmItems raw ]
-  attrSortMap <- buildAttrSortMap src tgt [ a | RPMAttrSort a <- rpmItems raw ]
   typeMap <- foldM (addTypeMap src srcCtorTables tgt modeMap) M.empty [ t | RPMType t <- rpmItems raw ]
   let mor0 = Morphism
         { morName = rpmName raw
@@ -109,7 +105,6 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
         , morIsCoercion = not (null coercionFlags)
         , morModeMap = modeMap
         , morModMap = modMap
-        , morAttrSortMap = attrSortMap
         , morTypeMap = typeMap
         , morGenMap = M.empty
         , morCheck = checkMode
@@ -124,7 +119,6 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
         , morIsCoercion = not (null coercionFlags)
         , morModeMap = modeMap
         , morModMap = modMap
-        , morAttrSortMap = attrSortMap
         , morTypeMap = typeMap
         , morGenMap = genMap
         , morCheck = checkMode
@@ -179,27 +173,6 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
           ensureMode tgt tgtMode
           pure (srcMode, tgtMode)
         renderModeNameLocal (ModeName name) = name
-        firstDup xs = go S.empty xs
-          where
-            go _ [] = Nothing
-            go seen (x:rest)
-              | x `S.member` seen = Just x
-              | otherwise = go (S.insert x seen) rest
-    buildAttrSortMap src tgt decls = do
-      pairs <- mapM toPair decls
-      let dup = firstDup (map fst pairs)
-      case dup of
-        Just s -> Left ("morphism: duplicate attrsort mapping for " <> renderAttrSort s)
-        Nothing -> Right ()
-      pure (M.fromList pairs)
-      where
-        toPair decl = do
-          let srcSort = AttrSort (rpmasSrc decl)
-          let tgtSort = AttrSort (rpmasTgt decl)
-          ensureAttrSort src srcSort
-          ensureAttrSort tgt tgtSort
-          pure (srcSort, tgtSort)
-        renderAttrSort (AttrSort name) = name
         firstDup xs = go S.empty xs
           where
             go _ [] = Nothing
@@ -296,7 +269,7 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       tyVarsTgt <- mapM (mapTyVarMode ttSrc ttTgt tgtTables mor0) (gdTyVars gen)
       tmVarsTgt <- mapM (mapTmVarSort ttSrc ttTgt tgtTables mor0) (gdTmVars gen)
       binderSigs0 <- buildBinderHoleSigs ttSrc ttTgt tgtTables mor0 gen
-      (diag0, _) <- elabDiagExprWith env tgt modeTgt [] tyVarsTgt tmVarsTgt binderSigs0 BMUse True (rpmgRhs decl)
+      (diag0, _) <- elabDiagExprWith env tgt modeTgt [] tyVarsTgt tmVarsTgt binderSigs0 BMUse True False (rpmgRhs decl)
       let domSrc = gdPlainDom gen
       let codSrc = gdCod gen
       domTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor0) domSrc

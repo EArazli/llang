@@ -27,7 +27,7 @@ module Strat.Poly.Syntax
 
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
-import Strat.Poly.Attr (AttrMap)
+import Strat.Poly.Literal (Literal)
 import Strat.Poly.ModeSyntax (ModeName, ModExpr(..))
 import Strat.Poly.Names (BoxName, GenName)
 
@@ -56,11 +56,12 @@ data BinderArg
   deriving (Eq, Ord, Show)
 
 data EdgePayload
-  = PGen GenName AttrMap [BinderArg]
+  = PGen GenName [CodeArg] [BinderArg]
   | PBox BoxName Diagram
   | PFeedback Diagram
   | PSplice BinderMetaVar ModExpr
   | PTmMeta TmVar
+  | PTmLit Literal
   | PInternalDrop
   deriving (Eq, Ord, Show)
 

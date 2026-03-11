@@ -16,7 +16,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Frontend.Env (ModuleEnv(..))
-import Strat.Poly.Attr (ensureAttrVarNameSortsDiagram)
 import Strat.Poly.DSL.AST
 import Strat.Poly.DSL.Elab.Diag
   ( BinderMetaMode(..)
@@ -99,8 +98,8 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
     checkPlain ttSrc ttTgt tgtCtorTables obl = do
       tyVarsTgt <- mapM (mapObligationTyVar ttSrc ttTgt tgtCtorTables morph) (obTyVars obl)
       tmVarsTgt <- mapM (mapObligationTmVar ttSrc ttTgt tgtCtorTables morph) (obTmVars obl)
-      lhs0 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obLHSExpr obl)
-      rhs0 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obRHSExpr obl)
+      lhs0 <- evalObligationExprMapped (obGenerated obl) ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obLHSExpr obl)
+      rhs0 <- evalObligationExprMapped (obGenerated obl) ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (obTyVars obl) (obTmVars obl) (obRHSExpr obl)
       domTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph) (obDom obl)
       codTgt <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtCtorTables morph) (obCod obl)
       let rigidTy = S.fromList tyVarsTgt
@@ -129,8 +128,8 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
 
     checkForGenOne ttSrc ttTgt tgtCtorTables slotsByGen modeTgt obl gen = do
       genDiag <- mkForGenDiag modeTgt gen
-      lhs0 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obLHSExpr obl)
-      rhs0 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obRHSExpr obl)
+      lhs0 <- evalObligationExprForGen (obGenerated obl) ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obLHSExpr obl)
+      rhs0 <- evalObligationExprForGen (obGenerated obl) ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (obMode obl) (gdTyVars gen) (gdTmVars gen) genDiag (obRHSExpr obl)
       let rigidTy = S.fromList (gdTyVars gen)
       let rigidTm = S.fromList (gdTmVars gen)
       let label = obName obl <> "[" <> renderGenName (gdName gen) <> "]"
@@ -646,7 +645,8 @@ mapObligationTmVar ttSrc ttTgt tgtCtorTables morph v = do
   pure v { tmvSort = sort', tmvOwnerMode = Nothing }
 
 evalObligationExprMapped
-  :: TypeTheory
+  :: Bool
+  -> TypeTheory
   -> TypeTheory
   -> CtorTables
   -> ModuleEnv
@@ -658,18 +658,18 @@ evalObligationExprMapped
   -> [TmVar]
   -> RawOblExpr
   -> Either Text Diagram
-evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars expr = do
+evalObligationExprMapped allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars expr = do
   modeTgt <- applyMorphismMode morph mode
   case expr of
     ROEDiag rawDiag -> do
-      diagSrc <- elabObligationDiag env ifaceDoc mode [] tyVars tmVars rawDiag
+      diagSrc <- elabObligationDiag allowImplicitGenArgs env ifaceDoc mode [] tyVars tmVars rawDiag
       diagTgt <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables morph diagSrc
       if dMode diagTgt == modeTgt
         then Right diagTgt
         else Left "obligation: mapped diagram mode mismatch after morphism application"
     ROEMap rawMe innerExpr -> do
       me <- elabRawModExpr (dModes ifaceDoc) rawMe
-      inner <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars innerExpr
+      inner <- evalObligationExprMapped allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars innerExpr
       mappedMe <- applyMorphismModExpr morph me
       mapped <- applyModExpr tgtDoc mappedMe inner
       if dMode mapped == modeTgt
@@ -682,12 +682,12 @@ evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mod
     ROELiftCod _ ->
       Left "obligation: lift_cod is only valid in for_gen obligations"
     ROEComp a b -> do
-      d1 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars a
-      d2 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars b
+      d1 <- evalObligationExprMapped allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars a
+      d2 <- evalObligationExprMapped allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars b
       compD ttTgt d2 d1
     ROETensor a b -> do
-      d1 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars a
-      d2 <- evalObligationExprMapped ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars b
+      d1 <- evalObligationExprMapped allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars a
+      d2 <- evalObligationExprMapped allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars b
       tensorD d1 d2
 
 data LiftBoundary
@@ -696,7 +696,8 @@ data LiftBoundary
   deriving (Eq, Show)
 
 evalObligationExprForGen
-  :: TypeTheory
+  :: Bool
+  -> TypeTheory
   -> TypeTheory
   -> CtorTables
   -> ModuleEnv
@@ -709,11 +710,11 @@ evalObligationExprForGen
   -> Diagram
   -> RawOblExpr
   -> Either Text Diagram
-evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag expr = do
+evalObligationExprForGen allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag expr = do
   modeTgt <- applyMorphismMode morph mode
   case expr of
     ROEDiag rawDiag -> do
-      diagSrc <- elabObligationDiag env ifaceDoc mode (dTmCtx genDiag) tyVars tmVars rawDiag
+      diagSrc <- elabObligationDiag allowImplicitGenArgs env ifaceDoc mode (dTmCtx genDiag) tyVars tmVars rawDiag
       diagTgt0 <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables morph diagSrc
       diagTgt <- weakenDiagramTmCtxTo (dTmCtx genDiag) diagTgt0
       if dMode diagTgt == modeTgt
@@ -721,7 +722,7 @@ evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mod
         else Left "obligation: mapped diagram mode mismatch after morphism application"
     ROEMap rawMe innerExpr -> do
       me <- elabRawModExpr (dModes ifaceDoc) rawMe
-      inner <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars genDiag innerExpr
+      inner <- evalObligationExprForGen allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph (meSrc me) tyVars tmVars genDiag innerExpr
       mappedMe <- applyMorphismModExpr morph me
       mapped <- applyModExpr tgtDoc mappedMe inner
       if dMode mapped == modeTgt
@@ -732,32 +733,33 @@ evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mod
         then Right genDiag
         else Left "obligation: @gen mode mismatch"
     ROELiftDom rawOp ->
-      evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverDom rawOp
+      evalLiftedForAnchor allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverDom rawOp
     ROELiftCod rawOp ->
-      evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverCod rawOp
+      evalLiftedForAnchor allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars genDiag LiftOverCod rawOp
     ROEComp a b -> do
       case (a, b) of
         (ROELiftDom _rawDom, ROELiftCod _rawCod) ->
           Left "obligation: ambiguous composition anchor for lift_dom ; lift_cod"
         (ROELiftDom rawDom, _) -> do
-          d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
-          d1 <- evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars d2 LiftOverDom rawDom
+          d2 <- evalObligationExprForGen allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
+          d1 <- evalLiftedForAnchor allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars d2 LiftOverDom rawDom
           compD ttTgt d2 d1
         (_, ROELiftCod rawCod) -> do
-          d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
-          d2 <- evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars d1 LiftOverCod rawCod
+          d1 <- evalObligationExprForGen allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+          d2 <- evalLiftedForAnchor allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode modeTgt tyVars tmVars d1 LiftOverCod rawCod
           compD ttTgt d2 d1
         _ -> do
-          d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
-          d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
+          d1 <- evalObligationExprForGen allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+          d2 <- evalObligationExprForGen allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
           compD ttTgt d2 d1
     ROETensor a b -> do
-      d1 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
-      d2 <- evalObligationExprForGen ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
+      d1 <- evalObligationExprForGen allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag a
+      d2 <- evalObligationExprForGen allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc tgtDoc morph mode tyVars tmVars genDiag b
       tensorD d1 d2
 
 evalLiftedForAnchor
-  :: TypeTheory
+  :: Bool
+  -> TypeTheory
   -> TypeTheory
   -> CtorTables
   -> ModuleEnv
@@ -772,7 +774,7 @@ evalLiftedForAnchor
   -> LiftBoundary
   -> RawDiagExpr
   -> Either Text Diagram
-evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc _tgtDoc morph modeSrc modeTgt tyVars tmVars anchorDiag liftSide rawOp = do
+evalLiftedForAnchor _allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc _tgtDoc morph modeSrc modeTgt tyVars tmVars anchorDiag liftSide rawOp = do
   let ttDoc = ttTgt
   ctx <- case liftSide of
     LiftOverDom -> diagramDom anchorDiag
@@ -790,7 +792,7 @@ evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc _tgtDoc morph modeSrc
         LiftOverCod -> "lift_cod"
 
     instantiateAt ttDoc tmCtx argTy = do
-      opSrc <- elabObligationDiag env ifaceDoc modeSrc tmCtx tyVars tmVars rawOp
+      opSrc <- elabObligationDiag True env ifaceDoc modeSrc tmCtx tyVars tmVars rawOp
       opTgt0 <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables morph opSrc
       opTgt <- weakenDiagramTmCtxTo (dTmCtx anchorDiag) opTgt0
       if dMode opTgt == modeTgt
@@ -805,7 +807,8 @@ evalLiftedForAnchor ttSrc ttTgt tgtCtorTables env ifaceDoc _tgtDoc morph modeSrc
           applySubstDiagram ttDoc sDom opTgt
 
 elabObligationDiag
-  :: ModuleEnv
+  :: Bool
+  -> ModuleEnv
   -> Doctrine
   -> ModeName
   -> [Obj]
@@ -813,8 +816,7 @@ elabObligationDiag
   -> [TmVar]
   -> RawDiagExpr
   -> Either Text Diagram
-elabObligationDiag env doc mode tmCtx tyVars tmVars rawDiag = do
-  (diag, _) <- elabDiagExprWith env doc mode tmCtx tyVars tmVars M.empty BMNoMeta False rawDiag
-  ensureAttrVarNameSortsDiagram (freeAttrVarsDiagram diag)
+elabObligationDiag allowImplicitGenArgs env doc mode tmCtx tyVars tmVars rawDiag = do
+  (diag, _) <- elabDiagExprWith env doc mode tmCtx tyVars tmVars M.empty BMNoMeta False allowImplicitGenArgs rawDiag
   ensureAcyclicMode doc mode diag
   pure diag
