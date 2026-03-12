@@ -21,7 +21,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeSyntax (ModeName)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Term.AST (TermExpr(..))
+import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
 
 
 data TRule = TRule
@@ -52,7 +52,7 @@ mkTRS mode rules =
 rootKey :: TermExpr -> Maybe GenName
 rootKey tm =
   case tm of
-    TMFun f _ -> Just f
+    TMGen f _ -> Just f
     _ -> Nothing
 
 applyTermSubstClosed :: TermSubst -> TermExpr -> TermExpr
@@ -68,7 +68,8 @@ applyTermSubstClosed subst = go S.empty
                 then TMBound i
                 else go (S.insert i seen) t
         TMMeta _ _ -> tm
-        TMFun f args -> TMFun f (map (go seen) args)
+        TMGen f args -> TMGen f (map (mapHeadArg (go seen)) args)
+        TMLit lit -> TMLit lit
 
 applyTermSubstOnce :: TermSubst -> TermExpr -> TermExpr
 applyTermSubstOnce subst = go
@@ -80,35 +81,55 @@ applyTermSubstOnce subst = go
             Nothing -> TMBound i
             Just t -> t
         TMMeta _ _ -> tm
-        TMFun f args -> TMFun f (map go args)
+        TMGen f args -> TMGen f (map (mapHeadArg go) args)
+        TMLit lit -> TMLit lit
 
 renameBoundVars :: Int -> TermExpr -> TermExpr
 renameBoundVars off tm =
   case tm of
     TMBound i -> TMBound (i + off)
     TMMeta v args -> TMMeta v (map (+ off) args)
-    TMFun f args -> TMFun f (map (renameBoundVars off) args)
+    TMGen f args -> TMGen f (map (mapHeadArg (renameBoundVars off)) args)
+    TMLit lit -> TMLit lit
 
 maxBoundVarIndex :: TermExpr -> Int
 maxBoundVarIndex tm =
   case tm of
     TMBound i -> i
     TMMeta _ args -> maximum (-1 : args)
-    TMFun _ args -> maximum (-1 : map maxBoundVarIndex args)
+    TMGen _ args -> maximum (-1 : map maxHeadArg args)
+    TMLit _ -> -1
+  where
+    maxHeadArg arg =
+      case arg of
+        THAObj _ -> -1
+        THATm inner -> maxBoundVarIndex inner
 
 boundVarSet :: TermExpr -> S.Set Int
 boundVarSet tm =
   case tm of
     TMBound i -> S.singleton i
     TMMeta _ args -> S.fromList args
-    TMFun _ args -> S.unions (map boundVarSet args)
+    TMGen _ args -> S.unions (map boundHeadArg args)
+    TMLit _ -> S.empty
+  where
+    boundHeadArg arg =
+      case arg of
+        THAObj _ -> S.empty
+        THATm inner -> boundVarSet inner
 
 occursBoundVar :: Int -> TermExpr -> Bool
 occursBoundVar needle tm =
   case tm of
     TMBound i -> i == needle
     TMMeta _ args -> needle `elem` args
-    TMFun _ args -> any (occursBoundVar needle) args
+    TMGen _ args -> any occursHeadArg args
+    TMLit _ -> False
+  where
+    occursHeadArg arg =
+      case arg of
+        THAObj _ -> False
+        THATm inner -> occursBoundVar needle inner
 
 matchPattern :: TermExpr -> TermExpr -> Maybe TermSubst
 matchPattern pat tm = go M.empty pat tm
@@ -127,17 +148,28 @@ matchPattern pat tm = go M.empty pat tm
           case tgtTm of
             TMMeta w args' | v == w && args == args' -> Just subst
             _ -> Nothing
-        TMFun f args ->
+        TMGen f args ->
           case tgtTm of
-            TMFun g args'
+            TMGen g args'
               | f == g
               , length args == length args' ->
                   foldM
-                    (\s (a, b) -> go s a b)
+                    (\s (a, b) -> matchHeadArg s a b)
                     subst
                     (zip args args')
             _ ->
               Nothing
+        TMLit lit ->
+          case tgtTm of
+            TMLit lit' | lit == lit' -> Just subst
+            _ -> Nothing
+    matchHeadArg subst argA argB =
+      case (argA, argB) of
+        (THAObj objA, THAObj objB)
+          | objA == objB -> Just subst
+          | otherwise -> Nothing
+        (THATm tmA, THATm tmB) -> go subst tmA tmB
+        _ -> Nothing
 
 unifyTerms :: TermExpr -> TermExpr -> Maybe TermSubst
 unifyTerms lhs rhs = go M.empty [(lhs, rhs)]
@@ -152,10 +184,12 @@ unifyTerms lhs rhs = go M.empty [(lhs, rhs)]
               case (a', b') of
                 (TMBound i, t) -> bindVar i t subst rest
                 (t, TMBound i) -> bindVar i t subst rest
-                (TMFun f xs, TMFun g ys)
+                (TMGen f xs, TMGen g ys)
                   | f == g
                   , length xs == length ys ->
-                      go subst (zip xs ys <> rest)
+                      case zipHeadArgs xs ys of
+                        Nothing -> Nothing
+                        Just pairs -> go subst (pairs <> rest)
                 (TMMeta v args, TMMeta w args')
                   | v == w
                   , args == args' ->
@@ -174,3 +208,17 @@ unifyTerms lhs rhs = go M.empty [(lhs, rhs)]
                       subst' = M.insert i t' (M.map (applyTermSubstClosed one) subst)
                       rest' = map (\(x, y) -> (applyTermSubstClosed one x, applyTermSubstClosed one y)) rest
                    in go subst' rest'
+
+mapHeadArg :: (TermExpr -> TermExpr) -> TermHeadArg -> TermHeadArg
+mapHeadArg f arg =
+  case arg of
+    THAObj obj -> THAObj obj
+    THATm tm -> THATm (f tm)
+
+zipHeadArgs :: [TermHeadArg] -> [TermHeadArg] -> Maybe [(TermExpr, TermExpr)]
+zipHeadArgs [] [] = Just []
+zipHeadArgs (THATm a : as) (THATm b : bs) = ((a, b) :) <$> zipHeadArgs as bs
+zipHeadArgs (THAObj objA : as) (THAObj objB : bs)
+  | objA == objB = zipHeadArgs as bs
+  | otherwise = Nothing
+zipHeadArgs _ _ = Nothing

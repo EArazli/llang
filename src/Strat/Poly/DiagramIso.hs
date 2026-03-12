@@ -22,14 +22,17 @@ import Strat.Poly.Graph
   , unEdgeId
   , canonDiagram
   )
+import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.Names (GenName)
 import Strat.Poly.Obj (Obj, TmVar(..), sameTmVarId)
 import Strat.Poly.Syntax (CodeArg(..))
-import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.Tele (GenParam)
+import Strat.Poly.TypeTheory (TypeTheory, GenArgSig(..), lookupGenArgSig)
 import Strat.Poly.UnifyObj
   ( Subst
   , applySubstCtx
   , emptySubst
-  , unifyCodeArgsFlex
+  , unifyGenArgsFlex
   , unifyObjFlex
   )
 import Strat.Poly.DefEq (defEqObj)
@@ -388,10 +391,13 @@ algoMatch tt flex =
               case applySubstCtx tt (ieTySubst extra) (dTmCtx left) of
                 Left _ -> Right []
                 Right tmCtx' ->
-                  case unifyCodeArgsFlex tt tmCtx' flex (ieTySubst extra) args1 args2 of
-                    Left _ -> Right []
-                    Right tySubst ->
-                      foldl step (Right [extra { ieTySubst = tySubst }]) (zip bargs1 bargs2)
+                  case lookupGenArgParams tt (dMode left) g1 args1 args2 of
+                    Nothing -> Right []
+                    Just params ->
+                      case unifyGenArgsFlex tt tmCtx' flex (ieTySubst extra) params args1 args2 of
+                        Left _ -> Right []
+                        Right tySubst ->
+                          foldl step (Right [extra { ieTySubst = tySubst }]) (zip bargs1 bargs2)
 
           where
             step acc pair = do
@@ -456,3 +462,9 @@ algoMatch tt flex =
     binderShape (BAConcrete _) (BAConcrete _) = True
     binderShape (BAMeta x) (BAMeta y) = x == y
     binderShape _ _ = False
+
+lookupGenArgParams :: TypeTheory -> ModeName -> GenName -> [CodeArg] -> [CodeArg] -> Maybe [GenParam]
+lookupGenArgParams tt mode g _args1 _args2 =
+  case lookupGenArgSig tt mode g of
+    Just sig -> Just (gasParams sig)
+    Nothing -> Nothing

@@ -39,7 +39,7 @@ import Control.Monad (foldM)
 import Strat.Poly.ModeSyntax
 import Strat.Poly.Syntax (Obj(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Term.AST (TermExpr(..))
+import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
 import Strat.Poly.Term.RewriteSystem (TRS, TRule(..), mkTRS)
 import Strat.Poly.Term.Termination (checkTerminatingSCT)
@@ -268,7 +268,7 @@ modEqIdFun :: GenName
 modEqIdFun = GenName "__mod_id"
 
 modEqIdTerm :: TermExpr
-modEqIdTerm = TMFun modEqIdFun []
+modEqIdTerm = TMGen modEqIdFun []
 
 -- Diagnostic-only mode name for the TRS checks; cannot clash with user modes.
 modEqDiagnosticMode :: ModeName
@@ -276,13 +276,13 @@ modEqDiagnosticMode = ModeName "__mod_eq"
 
 encodeModPathWithTail :: [ModName] -> TermExpr -> TermExpr
 encodeModPathWithTail mods tail0 =
-  foldr (\(ModName m) acc -> TMFun (GenName m) [acc]) tail0 mods
+  foldr (\(ModName m) acc -> TMGen (GenName m) [THATm acc]) tail0 mods
 
 decodeModPathFromTerm :: TermExpr -> Maybe [ModName]
 decodeModPathFromTerm = go
   where
-    go (TMFun f []) | f == modEqIdFun = Just []
-    go (TMFun f [inner]) | f /= modEqIdFun = do
+    go (TMGen f []) | f == modEqIdFun = Just []
+    go (TMGen f [THATm inner]) | f /= modEqIdFun = do
       rest <- go inner
       case f of
         GenName nm -> Just (ModName nm : rest)

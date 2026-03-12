@@ -17,16 +17,26 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.IntMap.Strict as IM
 import Control.Monad (unless)
+import Strat.Poly.Literal (literalKind)
 import Strat.Poly.Graph
   ( Diagram(..)
+  , EdgePayload(..)
   , PortId
   , diagramPortObj
+  , addEdgePayload
+  , emptyDiagram
+  , freshPort
+  , setPortLabel
+  , unPortId
   , validateDiagram
+  , validateLiteralEdges
   , weakenDiagramTmCtxTo
   )
 import Strat.Poly.ModeTheory (ModeName, meSrc, meTgt)
 import Strat.Poly.ObjClassifier (modeClassifierMode)
+import Strat.Poly.Names (GenName)
 import Strat.Poly.Obj
   ( TermDiagram(..)
   , CodeArg(..)
@@ -34,25 +44,28 @@ import Strat.Poly.Obj
   , Obj(..)
   , ObjName(..)
   , ObjRef(..)
+  , TmVar(..)
   , objOwnerMode
+  , defaultMetaArgs
+  , modeCtxGlobals
   , normalizeCodeTerm
   , normalizeObjExpr
   )
 import Strat.Poly.TypeTheory
   ( DefFragment(..)
+  , TmHeadSig(..)
   , TypeParamSig(..)
   , TypeTheory(..)
   , defFragmentForMode
   , literalKindForObj
   , termTRSForMode
-  , lookupTmFunSig
+  , lookupTmHeadSig
   )
 import Strat.Poly.TermExpr
-  ( TermExpr
+  ( TermExpr(..)
   , TermConvEnv(..)
-  , diagramToTermExprWith
-  , diagramGraphToTermExprWith
   , termExprToDiagramWith
+  , diagramGraphToTermExprWith
   , validateTermGraph
   )
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
@@ -243,6 +256,7 @@ normalizeTermDiagram tt tmCtx expectedSort term = do
       out <- wrap "nbe-normalize" (normalizeDiagramNBE cfg tt nbeSortEq tmCtx expectedSort' src)
       let outGraph = unTerm out
       wrap "validate-output-graph" (validateDiagram outGraph)
+      wrap "validate-literals" (validateLiteralEdges tt outGraph)
       wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' outGraph)
       pure out
     _ -> do
@@ -250,17 +264,18 @@ normalizeTermDiagram tt tmCtx expectedSort term = do
       expr0 <-
         wrap
           "diagram-to-termexpr"
-          (diagramGraphToTermExprWith (checkedConvEnv tt) tmCtx expectedSort' src)
+          (diagramGraphToTermExprChecked tt tmCtx expectedSort' src)
       let expr = normalizeTermExpr trs expr0
       out <- wrap "termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' expr)
       let outGraph = unTerm out
       wrap "validate-output-graph" (validateTermGraph outGraph)
+      wrap "validate-literals" (validateLiteralEdges tt outGraph)
       wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' outGraph)
       -- Normalize output graph layout by a deterministic structural roundtrip.
       exprCanon <-
         wrap
           "roundtrip-diagram-to-termexpr"
-          (diagramGraphToTermExprWith (checkedConvEnv tt) tmCtx expectedSort' outGraph)
+          (diagramGraphToTermExprChecked tt tmCtx expectedSort' outGraph)
       wrap "roundtrip-termexpr-to-diagram" (termExprToDiagramChecked tt tmCtx expectedSort' exprCanon)
   where
     nbeSortEq sortCtx tyA tyB = do
@@ -297,8 +312,12 @@ termToDiagram tt tmCtx expectedSort (TermDiagram term0) = do
   expectedSort' <- wrap "normalize-sort" (normalizeObjDeepWithCtx tt tmCtx expectedSort)
   term <- wrap "weaken-tmctx" (weakenDiagramTmCtxTo tmCtx term0)
   case defFragmentForMode tt (objOwnerMode expectedSort') of
-    Just DefFragmentNBE {} -> wrap "validate-diagram" (validateDiagram term)
-    _ -> wrap "validate-term-graph" (validateTermGraph term)
+    Just DefFragmentNBE {} -> do
+      wrap "validate-diagram" (validateDiagram term)
+      wrap "validate-literals" (validateLiteralEdges tt term)
+    _ -> do
+      _ <- wrap "validate-term-graph" (diagramGraphToTermExprChecked tt tmCtx expectedSort' term)
+      wrap "validate-literals" (validateLiteralEdges tt term)
   if dMode term == objOwnerMode expectedSort'
     then Right ()
     else wrapFail "mode-mismatch" "term mode differs from expected sort mode"
@@ -351,8 +370,10 @@ diagramToTerm tt tmCtx expectedSort term0 = do
   expectedSort' <- normalizeObjDeepWithCtx tt tmCtx expectedSort
   let term = term0 { dTmCtx = tmCtx }
   case defFragmentForMode tt (objOwnerMode expectedSort') of
-    Just DefFragmentNBE {} -> validateDiagram term
-    _ -> validateTermGraph term
+    Just DefFragmentNBE {} -> validateDiagram term *> validateLiteralEdges tt term
+    _ -> do
+      _ <- diagramGraphToTermExprChecked tt tmCtx expectedSort' term
+      validateLiteralEdges tt term
   if dMode term == objOwnerMode expectedSort'
     then Right ()
     else Left "diagramToTerm: mode mismatch"
@@ -386,8 +407,10 @@ termExprToDiagramChecked
   -> Obj
   -> TermExpr
   -> Either Text TermDiagram
-termExprToDiagramChecked tt tmCtx expectedSort tm =
-  termExprToDiagramWith (checkedConvEnv tt) tmCtx expectedSort tm
+termExprToDiagramChecked tt tmCtx expectedSort tm = do
+  out <- termExprToDiagramWith tt (checkedConvEnv tt) tmCtx expectedSort tm
+  validateLiteralEdges tt (unTerm out)
+  pure out
 
 diagramToTermExprChecked
   :: TypeTheory
@@ -396,16 +419,28 @@ diagramToTermExprChecked
   -> TermDiagram
   -> Either Text TermExpr
 diagramToTermExprChecked tt tmCtx expectedSort tm =
-  diagramToTermExprWith (checkedConvEnv tt) tmCtx expectedSort tm
+  diagramGraphToTermExprChecked tt tmCtx expectedSort (unTerm tm)
+
+diagramGraphToTermExprChecked
+  :: TypeTheory
+  -> [Obj]
+  -> Obj
+  -> Diagram
+  -> Either Text TermExpr
+diagramGraphToTermExprChecked tt tmCtx expectedSort diag = do
+  expr <- diagramGraphToTermExprWith tt (checkedConvEnv tt) tmCtx expectedSort diag
+  _ <- termExprToDiagramChecked tt tmCtx expectedSort expr
+  pure expr
 
 checkedConvEnv :: TypeTheory -> TermConvEnv
 checkedConvEnv tt =
   TermConvEnv
-    { tcLookupSig = \mode f -> lookupTmFunSig tt mode f
+    { tcLookupSig = \mode f -> lookupTmHeadSig tt mode f
     , tcSortEq = \tmCtx tyA tyB -> do
         tyA' <- normalizeObjDeepWithCtx tt tmCtx tyA
         tyB' <- normalizeObjDeepWithCtx tt tmCtx tyB
         pure (tyA' == tyB')
+    , tcNormalizeSort = normalizeObjDeepWithCtx tt
     , tcLiteralKindForSort = \tmCtx sortTy -> do
         sortTy' <- normalizeObjDeepWithCtx tt tmCtx sortTy
         pure (literalKindForObj tt sortTy')

@@ -158,6 +158,7 @@ library
       Strat.Poly.DSL.Elab.Resolve
       Strat.Poly.DSL.Elab.Term
       Strat.Poly.DSL.Parse
+      Strat.Poly.GenArgSigs
       Strat.Poly.Graph
       Strat.Poly.GraphCanon
       Strat.Poly.Literal
@@ -193,6 +194,7 @@ library
   other-modules:
       Strat.Poly.BeckChevalleyObligations
       Strat.Frontend.Compile
+      Strat.Poly.GenArgs
       Strat.Poly.CompObligations
       Strat.Poly.Kernel
       Strat.Poly.ModeSyntax

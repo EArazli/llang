@@ -15,6 +15,7 @@ module Strat.Poly.Graph
   , addEdge
   , addEdgePayload
   , validateDiagram
+  , validateLiteralEdges
   , mergePorts
   , mergeBoundaryPairs
   , deleteEdgeKeepPorts
@@ -44,6 +45,7 @@ import qualified Data.Map.Strict as M
 import Control.Monad (foldM)
 import qualified Data.List as L
 import Strat.Poly.ModeTheory (ModeName(..), ModExpr)
+import Strat.Poly.Literal (literalKind)
 import Strat.Poly.Syntax
   ( PortId(..)
   , EdgeId(..)
@@ -63,6 +65,7 @@ import Strat.Poly.Syntax
   )
 import Strat.Poly.Obj (boundTmIndicesObj, objOwnerMode)
 import Strat.Poly.Names (GenName(..), BoxName(..))
+import Strat.Poly.TypeTheory (TypeTheory, literalKindForObj)
 import Strat.Util.List (dedupe)
 
 
@@ -449,6 +452,45 @@ validateDiagram diag = do
                 <> T.pack (show ty)
                 <> ")"
             )
+
+validateLiteralEdges :: TypeTheory -> Diagram -> Either Text ()
+validateLiteralEdges tt = go
+  where
+    go diag = do
+      mapM_ (checkEdge diag) (IM.elems (dEdges diag))
+      pure ()
+
+    checkEdge diag edge =
+      case ePayload edge of
+        PGen _ args bargs -> do
+          mapM_ checkCodeArg args
+          mapM_ checkBinderArg bargs
+        PBox _ inner -> go inner
+        PFeedback inner -> go inner
+        PTmLit lit ->
+          case (eIns edge, eOuts edge) of
+            ([], [outPid]) -> do
+              outTy <-
+                case diagramPortObj diag outPid of
+                  Just ty -> Right ty
+                  Nothing -> Left "validateLiteralEdges: PTmLit output sort is missing"
+              case literalKindForObj tt outTy of
+                Just expectedKind
+                  | expectedKind == literalKind lit -> Right ()
+                  | otherwise -> Left "validateLiteralEdges: PTmLit output sort has the wrong literal kind"
+                Nothing -> Left "validateLiteralEdges: PTmLit output sort does not admit literals"
+            _ -> Left "validateLiteralEdges: PTmLit must have no inputs and exactly one output"
+        _ -> Right ()
+
+    checkCodeArg arg =
+      case arg of
+        CAObj _ -> Right ()
+        CATm (TermDiagram inner) -> go inner
+
+    checkBinderArg barg =
+      case barg of
+        BAConcrete inner -> go inner
+        BAMeta _ -> Right ()
 
 mergePorts :: Diagram -> PortId -> PortId -> Either Text Diagram
 mergePorts diag keep drop

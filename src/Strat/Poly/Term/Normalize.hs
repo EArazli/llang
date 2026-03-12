@@ -3,7 +3,7 @@ module Strat.Poly.Term.Normalize
   ) where
 
 import qualified Data.Map.Strict as M
-import Strat.Poly.Term.AST (TermExpr(..))
+import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
 import Strat.Poly.Term.RewriteSystem (TRS(..), TRule(..), TermSubst, applyTermSubstOnce, matchPattern, rootKey)
 
 
@@ -21,16 +21,23 @@ normalizeTermExpr trs tm = fst (normalizeWithMemo M.empty tm)
 
     normalizeChildren memo term =
       case term of
-        TMFun f args ->
-          let (args', memo') = normalizeList memo args
-           in (TMFun f args', memo')
+        TMGen f args ->
+          let (args', memo') = normalizeArgList memo args
+           in (TMGen f args', memo')
         _ -> (term, memo)
 
-    normalizeList memo [] = ([], memo)
-    normalizeList memo (x:xs) =
-      let (x', memo1) = normalizeWithMemo memo x
-          (xs', memo2) = normalizeList memo1 xs
+    normalizeArgList memo [] = ([], memo)
+    normalizeArgList memo (x:xs) =
+      let (x', memo1) = normalizeHeadArg memo x
+          (xs', memo2) = normalizeArgList memo1 xs
        in (x' : xs', memo2)
+
+    normalizeHeadArg memo arg =
+      case arg of
+        THAObj _ -> (arg, memo)
+        THATm tm0 ->
+          let (tm1, memo1) = normalizeWithMemo memo tm0
+           in (THATm tm1, memo1)
 
     rewriteToFixpoint memo term =
       case rewriteRootOnce term of

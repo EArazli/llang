@@ -21,7 +21,7 @@ import Strat.Frontend.Compile (compileSourceDiagram)
 import Strat.Pipeline
 import Strat.Poly.Doctrine
 import Strat.Poly.Kernel (Obj(..), pattern OCon, ObjRef(..), ObjName(..))
-import Strat.Poly.Obj (CodeArg(..), TermDiagram(..), mkCon, tmvName, tmvSort)
+import Strat.Poly.Obj (CodeArg(..), TermDiagram(..), TmVar, mkCon, tmvName, tmvSort)
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.Literal (Literal(..), LiteralKind(..), literalKind)
@@ -33,6 +33,8 @@ import Strat.Poly.Quote (quoteDiagram)
 import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.DefEq (diagramToTermExprChecked, normalizeTermDiagram)
+import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.TypeTheory (TypeTheory, literalKindForObj)
 
 
@@ -246,8 +248,9 @@ ensureDocFragmentWithLabel label doc mode = do
   requireNoParams label emptyDecl
   requireNoParams label lineDecl
   requireNoParams label catDecl
-  requireTmLiteralParam label doc "s" LKString textDecl
-  requireTmLiteralParam label doc "n" LKInt indentDecl
+  _ <- requireExactlyOneLiteralTmParam label doc LKString textDecl
+  _ <- requireExactlyOneLiteralTmParam label doc LKInt indentDecl
+  pure ()
 
 
 ensureFileTreeFragment :: Doctrine -> ModeName -> Either Text ()
@@ -259,7 +262,8 @@ ensureFileTreeFragment doc mode = do
   singleFileDecl <- requireFragmentGen label doc mode (GenName "singleFile") [docTy] [ftTy]
   concatDecl <- requireFragmentGen label doc mode (GenName "concatTree") [ftTy, ftTy] [ftTy]
   requireNoParams label concatDecl
-  requireTmLiteralParam label doc "path" LKString singleFileDecl
+  _ <- requireExactlyOneLiteralTmParam label doc LKString singleFileDecl
+  pure ()
 
 
 requireFragmentGen :: Text -> Doctrine -> ModeName -> GenName -> [Obj] -> [Obj] -> Either Text GenDecl
@@ -357,53 +361,48 @@ requireGenSig label mode genName expectedDom expectedCod gd = do
         _ -> "<obj>"
 
 
-requireTmLiteralParam
+requireExactlyOneLiteralTmParam
   :: Text
   -> Doctrine
-  -> Text
   -> LiteralKind
   -> GenDecl
-  -> Either Text ()
-requireTmLiteralParam label doc key expectedKind gd = do
+  -> Either Text TmVar
+requireExactlyOneLiteralTmParam label doc expectedKind gd = do
   tt <- doctrineTypeTheory doc
-  param <-
-    case filter ((== key) . paramName) (gdParams gd) of
-      [p] -> Right p
+  tmv <-
+    case gdParams gd of
+      [GP_Tm v] -> Right v
       [] ->
         Left
           ( label
               <> ": generator '"
               <> renderGenNameText (gdName gd)
-              <> "' missing parameter '"
-              <> key
-              <> "'"
+              <> "' must have exactly one sole term parameter"
           )
-      _ ->
-        Left (label <> ": duplicate generator parameter name '" <> key <> "'")
-  tmv <-
-    case param of
-      GP_Tm v -> Right v
-      GP_Ty _ ->
+      [_] ->
         Left
           ( label
               <> ": generator '"
               <> renderGenNameText (gdName gd)
-              <> "' parameter '"
-              <> key
-              <> "' must be a term parameter"
+              <> "' sole parameter must be a term parameter"
+          )
+      _ ->
+        Left
+          ( label
+              <> ": generator '"
+              <> renderGenNameText (gdName gd)
+              <> "' must have exactly one sole term parameter"
           )
   if literalKindForObj tt (tmvSort tmv) == Just expectedKind
-    then Right ()
+    then Right tmv
     else
       Left
         ( label
             <> ": generator '"
             <> renderGenNameText (gdName gd)
-            <> "' parameter '"
-            <> key
-            <> "' must have "
+            <> "' sole term parameter must admit "
             <> litKindLabel expectedKind
-            <> " literal kind"
+            <> " literals"
         )
   where
     litKindLabel lk =
@@ -411,10 +410,6 @@ requireTmLiteralParam label doc key expectedKind gd = do
         LKString -> "string"
         LKInt -> "int"
         LKBool -> "bool"
-    paramName param =
-      case param of
-        GP_Ty v -> tmvName v
-        GP_Tm v -> tmvName v
 
 
 prefixErr :: Either Text a -> Text -> Either Text a
@@ -576,8 +571,8 @@ evalArtifactDiagram doc diag = do
     evalEdge edge ins =
       case ePayload edge of
         PGen (GenName "empty") _ _ -> Right [RVDoc DEmpty]
-        PGen genName@(GenName "text") args _ -> do
-          s <- literalStringArg genName "s" args
+        PGen (GenName "text") args _ -> do
+          s <- literalStringArg args
           Right [RVDoc (DText s)]
         PGen (GenName "line") _ _ -> Right [RVDoc DLine]
         PGen (GenName "cat") _ _ ->
@@ -587,15 +582,15 @@ evalArtifactDiagram doc diag = do
               db <- expectDoc b
               Right [RVDoc (DCat da db)]
             _ -> Left "extract Doc: cat expects 2 inputs"
-        PGen genName@(GenName "indent") args _ ->
+        PGen (GenName "indent") args _ ->
           case ins of
             [d] -> do
-              n <- literalIntArg genName "n" args
+              n <- literalIntArg args
               dd <- expectDoc d
               Right [RVDoc (DIndent n dd)]
             _ -> Left "extract Doc: indent expects 1 input"
-        PGen genName@(GenName "singleFile") args _ -> do
-          path <- T.unpack <$> literalStringArg genName "path" args
+        PGen (GenName "singleFile") args _ -> do
+          path <- T.unpack <$> literalStringArg args
           body <-
             case ins of
               [v] -> expectDoc v
@@ -616,19 +611,26 @@ evalArtifactDiagram doc diag = do
         PTmLit _ -> Left "extract value: literal term nodes are not supported at top level"
         PInternalDrop -> Left "extract value: internal drop nodes are not supported"
 
-    literalStringArg genName key args = do
+    literalStringArg args = do
       tt <- doctrineTypeTheory doc
-      lit <- literalParamArg doc tt mode genName key LKString args
+      arg <- requireSoleStoredArg args
+      lit <- extractClosedLiteralArg doc tt LKString arg
       case lit of
         LString s -> Right s
-        _ -> Left ("extract value: parameter '" <> key <> "' is not a string literal")
+        _ -> Left "extract value: sole term parameter is not a string literal"
 
-    literalIntArg genName key args = do
+    literalIntArg args = do
       tt <- doctrineTypeTheory doc
-      lit <- literalParamArg doc tt mode genName key LKInt args
+      arg <- requireSoleStoredArg args
+      lit <- extractClosedLiteralArg doc tt LKInt arg
       case lit of
         LInt n -> Right n
-        _ -> Left ("extract value: parameter '" <> key <> "' is not an int literal")
+        _ -> Left "extract value: sole term parameter is not an int literal"
+
+    requireSoleStoredArg args =
+      case args of
+        [arg] -> Right arg
+        _ -> Left "extract value: expected exactly one sole term parameter"
 
 
 data RuntimeValue
@@ -681,52 +683,50 @@ data FileTreeValue
   = FTFile FilePath DocValue
   | FTConcat [FileTreeValue]
 
-literalParamArg :: Doctrine -> TypeTheory -> ModeName -> GenName -> Text -> LiteralKind -> [CodeArg] -> Either Text Literal
-literalParamArg doc tt mode genName key expectedKind args = do
-  gd <- lookupGenInMode doc mode genName
-  (param, arg) <- lookupParamArg key gd args
-  tmv <-
-    case param of
-      GP_Tm v -> Right v
-      GP_Ty _ -> Left ("extract value: parameter '" <> key <> "' is not a term parameter")
-  if literalKindForObj tt (tmvSort tmv) == Just expectedKind
-    then Right ()
-    else Left ("extract value: parameter '" <> key <> "' does not admit the expected literal kind")
+extractClosedLiteralArg
+  :: Doctrine
+  -> TypeTheory
+  -> LiteralKind
+  -> CodeArg
+  -> Either Text Literal
+extractClosedLiteralArg _doc tt expectedKind arg = do
   tm <-
     case arg of
       CATm term -> Right term
-      CAObj _ -> Left ("extract value: parameter '" <> key <> "' is not a term argument")
+      CAObj _ -> Left "extract value: sole term parameter must be term-valued"
+  let tmDiag = unTerm tm
+  if null (dIn tmDiag)
+    then Right ()
+    else Left "extract value: sole term parameter must be closed"
+  sortTy <-
+    case dOut tmDiag of
+      [outPid] ->
+        case diagramPortObj tmDiag outPid of
+          Just ty -> Right ty
+          Nothing -> Left "extract value: sole term parameter is missing an output sort"
+      _ -> Left "extract value: sole term parameter must have exactly one output"
+  tmNorm <- normalizeTermDiagram tt (dTmCtx tmDiag) sortTy tm
   lit <-
-    case termDiagramLiteral tm of
-      Just l -> Right l
-      Nothing -> Left ("extract value: parameter '" <> key <> "' is not a literal term")
+    case normalizedLiteral tmNorm of
+      Just lit -> Right lit
+      Nothing -> do
+        expr <- diagramToTermExprChecked tt (dTmCtx tmDiag) sortTy tmNorm
+        case expr of
+          TMLit lit -> Right lit
+          _ -> Left "extract value: sole term parameter must normalize to a literal"
   if literalKind lit == expectedKind
     then Right lit
-    else Left ("extract value: parameter '" <> key <> "' has the wrong literal kind")
-
-lookupParamArg :: Text -> GenDecl -> [CodeArg] -> Either Text (GenParam, CodeArg)
-lookupParamArg key gd args =
-  if length args /= length (gdParams gd)
-    then Left "extract value: generator argument arity mismatch"
-    else
-      case [ (param, arg) | (param, arg) <- zip (gdParams gd) args, paramName param == key ] of
-        [entry] -> Right entry
-        [] -> Left ("extract value: missing generator parameter '" <> key <> "'")
-        _ -> Left ("extract value: duplicate generator parameter '" <> key <> "'")
+    else Left "extract value: sole term parameter has the wrong literal kind"
   where
-    paramName param =
-      case param of
-        GP_Ty v -> tmvName v
-        GP_Tm v -> tmvName v
-
-termDiagramLiteral :: TermDiagram -> Maybe Literal
-termDiagramLiteral (TermDiagram tmDiag) =
-  case (IM.elems (dEdges tmDiag), dIn tmDiag, dOut tmDiag) of
-    ([edge], [], [outBoundary]) ->
-      case (ePayload edge, eIns edge, eOuts edge) of
-        (PTmLit lit, [], [outPid]) | outPid == outBoundary -> Just lit
+    normalizedLiteral (TermDiagram diag) =
+      case (dIn diag, dOut diag, IM.elems (dEdges diag)) of
+        ([], [outPid], [edge])
+          | null (eIns edge)
+          , eOuts edge == [outPid] ->
+              case ePayload edge of
+                PTmLit lit -> Just lit
+                _ -> Nothing
         _ -> Nothing
-    _ -> Nothing
 
 
 renderModeName :: ModeName -> Text

@@ -7,21 +7,23 @@ module Strat.Poly.TypeTheory
   , literalKindForObj
   , DefFragment(..)
   , TypeParamSig(..)
-  , TmFunSig(..)
+  , TmHeadSig(..)
+  , GenArgSig(..)
   , TmRule(..)
   , emptyDefFragment
   , setDefFragment
-  , setModeTermFuns
+  , setModeTermHeads
   , setModeTermRules
   , setModeTermTRS
   , setModeNBEConfig
   , defFragmentForMode
   , defEqEngineForMode
-  , termFunsForMode
+  , termHeadsForMode
   , termRulesForMode
   , termTRSForMode
   , nbeConfigForMode
-  , lookupTmFunSig
+  , lookupTmHeadSig
+  , lookupGenArgSig
   , modeOnlyTypeTheory
   ) where
 
@@ -34,6 +36,7 @@ import Strat.Poly.ObjClassifier (modeClassifierMode)
 import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
 import Strat.Poly.Term.NBE.Config (NbeConfig, defaultNbeConfig)
 import Strat.Poly.Obj
+import Strat.Poly.Tele (GenParam)
 
 type CtorSigEnv = M.Map ModeName (M.Map ObjName [TypeParamSig])
 type UniverseCtors = M.Map ModeName (S.Set ObjName)
@@ -42,13 +45,13 @@ type UniverseCtors = M.Map ModeName (S.Set ObjName)
 data DefFragment
   = DefFragmentTRS
       { dfMode :: ModeName
-      , dfFuns :: M.Map GenName TmFunSig
+      , dfHeads :: M.Map GenName TmHeadSig
       , dfRules :: [TmRule]
       , dfTRS :: TRS
       }
   | DefFragmentNBE
       { dfMode :: ModeName
-      , dfFuns :: M.Map GenName TmFunSig
+      , dfHeads :: M.Map GenName TmHeadSig
       , dfRules :: [TmRule]
       , dfNBE :: NbeConfig
       }
@@ -59,6 +62,7 @@ data TypeTheory = TypeTheory
   , ttCtorSigs :: CtorSigEnv
   , ttUniverseCtors :: UniverseCtors
   , ttLiteralKinds :: M.Map ModeName (M.Map ObjName LiteralKind)
+  , ttGenArgSigs :: M.Map ModeName (M.Map GenName GenArgSig)
   , ttDefFragments :: M.Map ModeName DefFragment
   , ttStrictCtorLookup :: Bool
   } deriving (Eq, Show)
@@ -68,9 +72,14 @@ data TypeParamSig
   | TPS_Tm Obj
   deriving (Eq, Ord, Show)
 
-data TmFunSig = TmFunSig
-  { tfsArgs :: [Obj]
-  , tfsRes :: Obj
+data TmHeadSig = TmHeadSig
+  { thsParams :: [GenParam]
+  , thsInputs :: [Obj]
+  , thsRes :: Obj
+  } deriving (Eq, Ord, Show)
+
+data GenArgSig = GenArgSig
+  { gasParams :: [GenParam]
   } deriving (Eq, Ord, Show)
 
 data TmRule = TmRule
@@ -96,6 +105,7 @@ modeOnlyTypeTheory mt =
     , ttCtorSigs = M.empty
     , ttUniverseCtors = M.empty
     , ttLiteralKinds = M.empty
+    , ttGenArgSigs = M.empty
     , ttDefFragments = fragments
     , ttStrictCtorLookup = False
     }
@@ -117,7 +127,7 @@ emptyDefFragment :: ModeName -> DefFragment
 emptyDefFragment mode =
   DefFragmentTRS
     { dfMode = mode
-    , dfFuns = M.empty
+    , dfHeads = M.empty
     , dfRules = []
     , dfTRS = mkTRS mode []
     }
@@ -126,7 +136,7 @@ emptyNBEDefFragment :: ModeName -> DefFragment
 emptyNBEDefFragment mode =
   DefFragmentNBE
     { dfMode = mode
-    , dfFuns = M.empty
+    , dfHeads = M.empty
     , dfRules = []
     , dfNBE = defaultNbeConfig
     }
@@ -138,14 +148,14 @@ setDefFragment fragment tt =
   where
     mode = dfMode fragment
 
-setModeTermFuns :: ModeName -> M.Map GenName TmFunSig -> TypeTheory -> TypeTheory
-setModeTermFuns mode funs tt =
+setModeTermHeads :: ModeName -> M.Map GenName TmHeadSig -> TypeTheory -> TypeTheory
+setModeTermHeads mode heads tt =
   setDefFragment fragment tt
   where
     fragment =
       case baseFragment of
-        trs@DefFragmentTRS {} -> trs { dfFuns = funs }
-        nbe@DefFragmentNBE {} -> nbe { dfFuns = funs }
+        trs@DefFragmentTRS {} -> trs { dfHeads = heads }
+        nbe@DefFragmentNBE {} -> nbe { dfHeads = heads }
     baseFragment =
       case defFragmentForMode tt mode of
         Just existing -> existing
@@ -181,7 +191,7 @@ setModeTermTRS mode trs tt =
         nbeFrag@DefFragmentNBE {} ->
           DefFragmentTRS
             { dfMode = dfMode nbeFrag
-            , dfFuns = dfFuns nbeFrag
+            , dfHeads = dfHeads nbeFrag
             , dfRules = dfRules nbeFrag
             , dfTRS = trs
             }
@@ -199,7 +209,7 @@ setModeNBEConfig mode cfg tt =
         trsFrag@DefFragmentTRS {} ->
           DefFragmentNBE
             { dfMode = dfMode trsFrag
-            , dfFuns = dfFuns trsFrag
+            , dfHeads = dfHeads trsFrag
             , dfRules = dfRules trsFrag
             , dfNBE = cfg
             }
@@ -221,10 +231,10 @@ defEqEngineForMode tt mode =
     Just DefFragmentNBE {} -> DefEqNBE
     Nothing -> modeDefEqEngine (ttModes tt) mode
 
-termFunsForMode :: TypeTheory -> ModeName -> M.Map GenName TmFunSig
-termFunsForMode tt mode =
+termHeadsForMode :: TypeTheory -> ModeName -> M.Map GenName TmHeadSig
+termHeadsForMode tt mode =
   case defFragmentForMode tt mode of
-    Just fragment -> dfFuns fragment
+    Just fragment -> dfHeads fragment
     Nothing -> M.empty
 
 termRulesForMode :: TypeTheory -> ModeName -> [TmRule]
@@ -247,9 +257,13 @@ nbeConfigForMode tt mode =
     Just DefFragmentNBE { dfNBE = cfg } -> Just cfg
     _ -> Nothing
 
-lookupTmFunSig :: TypeTheory -> ModeName -> GenName -> Maybe TmFunSig
-lookupTmFunSig tt mode f =
-  M.lookup f (termFunsForMode tt mode)
+lookupTmHeadSig :: TypeTheory -> ModeName -> GenName -> Maybe TmHeadSig
+lookupTmHeadSig tt mode f =
+  M.lookup f (termHeadsForMode tt mode)
+
+lookupGenArgSig :: TypeTheory -> ModeName -> GenName -> Maybe GenArgSig
+lookupGenArgSig tt mode g =
+  M.lookup g (M.findWithDefault M.empty mode (ttGenArgSigs tt))
 
 literalKindForObj :: TypeTheory -> Obj -> Maybe LiteralKind
 literalKindForObj tt obj =

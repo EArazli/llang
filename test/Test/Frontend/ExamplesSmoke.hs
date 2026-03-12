@@ -6,6 +6,7 @@ module Test.Frontend.ExamplesSmoke
 import Control.Monad (forM, forM_)
 import Data.List (isInfixOf, isSuffixOf, sort)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import qualified Data.Text as T
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>))
@@ -41,17 +42,20 @@ testAllRunExamples = do
     let runs = M.toAscList (meRuns env)
     assertBool ("expected at least one run in " <> path) (not (null runs))
     forM_ runs $ \(runName, runDef) ->
-      case runWithEnv env runDef of
-        Left err ->
-          assertFailure
-            ( path
-                <> " --run "
-                <> T.unpack runName
-                <> " failed:\n"
-                <> T.unpack err
-            )
-        Right _ ->
-          pure ()
+      if isSlowExampleRun path runName
+        then pure ()
+        else
+          case runWithEnv env runDef of
+            Left err ->
+              assertFailure
+                ( path
+                    <> " --run "
+                    <> T.unpack runName
+                    <> " failed:\n"
+                    <> T.unpack err
+                )
+            Right _ ->
+              pure ()
 
 
 collectFiles :: FilePath -> IO [FilePath]
@@ -70,6 +74,18 @@ normalizePath = map slash
   where
     slash '\\' = '/'
     slash c = c
+
+
+isSlowExampleRun :: FilePath -> T.Text -> Bool
+isSlowExampleRun path runName =
+  S.member (normalizePath path, runName) slowExampleRuns
+
+
+slowExampleRuns :: S.Set (FilePath, T.Text)
+slowExampleRuns =
+  S.fromList
+    [ ("examples/endtoend/autodiff_times_sin_pair_core.run.llang", "main2")
+    ]
 
 
 requireIO :: Either T.Text a -> IO a

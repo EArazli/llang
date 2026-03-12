@@ -23,6 +23,7 @@ import Strat.Poly.Cell2
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
 import Strat.Poly.TypeTheory (modeOnlyTypeTheory, TypeParamSig(..))
+import Strat.Poly.Term.AST (TermHeadArg(..))
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Test.Poly.Helpers (mkModes, identityModeMap, identityModMap)
 
@@ -1362,8 +1363,8 @@ testTermTypeTemplateInstantiation = do
   let vec2Ref = ObjRef modeM' (ObjName "Vec2")
   let natTy = mkCon natRef []
   let aTy' = mkCon aRef []
-  let z = TMFun (GenName "Z") []
-  let s x = TMFun (GenName "S") [x]
+  let z = TMGen (GenName "Z") []
+  let s x = TMGen (GenName "S") [THATm x]
   let zGen =
         GenDecl
           { gdName = GenName "Z"
@@ -1688,7 +1689,7 @@ testMorphismMapsStructuredTermArgs = do
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tt -> pure tt
   let nVar = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
-  tmSrc <- case termExprToDiagram ttSrc [] natTy (TMFun (GenName "succ") [TMMeta nVar []]) of
+  tmSrc <- case termExprToDiagram ttSrc [] natTy (TMGen (GenName "succ") [THATm (TMMeta nVar [])]) of
     Left err -> assertFailure (T.unpack err) >> fail "unreachable"
     Right tm -> pure tm
   let tySrc = mkCon vecRef [OATm tmSrc]
@@ -1701,7 +1702,7 @@ testMorphismMapsStructuredTermArgs = do
       tmExpr <- case diagramToTermExpr ttTgt [] natTy tmOut of
         Left err -> assertFailure (T.unpack err) >> fail "unreachable"
         Right e -> pure e
-      tmExpr @?= TMFun (GenName "dbl") [TMMeta nVar []]
+      tmExpr @?= TMGen (GenName "dbl") [THATm (TMMeta nVar [])]
     _ ->
       assertFailure "expected mapped Vec term argument"
 

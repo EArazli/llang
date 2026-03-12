@@ -14,14 +14,17 @@ import qualified Data.Set as S
 import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVarsFrom)
 import Strat.Poly.DiagramInterpretation (requirePortType)
+import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.Names (GenName)
 import Strat.Poly.Obj (TmVar, sameTmVarId)
 import Strat.Poly.Syntax (CodeArg(..))
-import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.Tele (GenParam)
+import Strat.Poly.TypeTheory (TypeTheory, GenArgSig(..), lookupGenArgSig)
 import Strat.Poly.UnifyObj
   ( Subst
   , applySubstCtx
   , emptySubst
-  , unifyCodeArgsFlex
+  , unifyGenArgsFlex
   , unifyObjFlex
   )
 
@@ -207,8 +210,11 @@ payloadSubsts tt flex lhs match patEdge hostEdge =
           || length bargs1 /= length bargs2 -> Right []
       | otherwise -> do
           tmCtx' <- applySubstCtx tt (mTySubst match) (dTmCtx lhs)
-          tySubst <- unifyCodeArgsFlex tt tmCtx' flex (mTySubst match) args1 args2
-          foldBinderArgs [(tySubst, mBinderSub match)] (zip bargs1 bargs2)
+          case lookupGenArgParams tt (dMode lhs) g1 args1 args2 of
+            Nothing -> Right []
+            Just params -> do
+              tySubst <- unifyGenArgsFlex tt tmCtx' flex (mTySubst match) params args1 args2
+              foldBinderArgs [(tySubst, mBinderSub match)] (zip bargs1 bargs2)
       where
         foldBinderArgs acc [] = Right acc
         foldBinderArgs acc (pair : rest) = do
@@ -257,6 +263,12 @@ payloadSubsts tt flex lhs match patEdge hostEdge =
       Right [(mTySubst match, mBinderSub match)]
 
     _ -> Right []
+
+lookupGenArgParams :: TypeTheory -> ModeName -> GenName -> [CodeArg] -> [CodeArg] -> Maybe [GenParam]
+lookupGenArgParams tt mode g _args1 _args2 =
+  case lookupGenArgSig tt mode g of
+    Just sig -> Just (gasParams sig)
+    Nothing -> Nothing
 
 completeBoundary
   :: TypeTheory

@@ -10,6 +10,7 @@ module Strat.Poly.Normalize
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
+import Data.Monoid (Any(..), getAny)
 import Strat.Poly.Diagram (Diagram(..))
 import Strat.Poly.Graph
   ( CanonDiagram(..)
@@ -19,6 +20,7 @@ import Strat.Poly.Graph
   , canonDiagram
   , canonDiagramRaw
   )
+import Strat.Poly.Obj (TermDiagram(..))
 import Strat.Poly.Match (findAllMatches)
 import Strat.Poly.Proof
   ( JoinProof(..)
@@ -41,7 +43,9 @@ import Strat.Poly.Rewrite
   , mkMatchConfig
   , rewriteOnceRawWithMapper
   )
+import Strat.Poly.Syntax (CodeArg(..))
 import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.Traversal (foldDiagram)
 
 
 data NormalizationStatus a
@@ -245,11 +249,16 @@ rewriteInEdge spliceMapper tt cap rules diag (edgeKey, edge) =
       mapM replaceFeedback innerRes
     PTmMeta _ ->
       Right []
+    PTmLit _ ->
+      Right []
     PInternalDrop ->
       Right []
     PGen gen args bargs -> do
+      argRes <- rewriteAllCodeArgsWithProof spliceMapper tt cap rules args
+      fromArgs <- mapM (replaceGenArg gen bargs) argRes
       bargsRes <- rewriteAllBinderArgsWithProof spliceMapper tt cap rules bargs
-      mapM (replaceGen gen args) bargsRes
+      fromBinders <- mapM (replaceGen gen args) bargsRes
+      pure (fromArgs <> fromBinders)
   where
     prefix focus step = step { rsFocus = focus (rsFocus step) }
 
@@ -263,10 +272,30 @@ rewriteInEdge spliceMapper tt cap rules diag (edgeKey, edge) =
       let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
       Right (prefix (FocusInFeedback edgeKey) step, diag')
 
+    replaceGenArg gen bargs (argIx, step, args') = do
+      let edge' = edge { ePayload = PGen gen args' bargs }
+      let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+      Right (prefix (FocusInGenArg edgeKey argIx) step, diag')
+
     replaceGen gen args (binderIx, step, bargs') = do
       let edge' = edge { ePayload = PGen gen args bargs' }
       let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
       Right (prefix (FocusInBinder edgeKey binderIx) step, diag')
+
+rewriteAllCodeArgsWithProof :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> [CodeArg] -> Either Text [(Int, RewriteStep, [CodeArg])]
+rewriteAllCodeArgsWithProof _ _ _ _ [] = Right []
+rewriteAllCodeArgsWithProof spliceMapper tt cap rules args =
+  fmap concat (mapM rewriteAt [0 .. length args - 1])
+  where
+    rewriteAt i =
+      case splitAt i args of
+        (pre, CATm (TermDiagram inner) : post) -> do
+          res <- rewriteAllWithProof spliceMapper tt cap rules inner
+          Right
+            [ (i, step, pre <> [CATm (TermDiagram inner')] <> post)
+            | (step, inner') <- res
+            ]
+        _ -> Right []
 
 rewriteAllBinderArgsWithProof :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [(Int, RewriteStep, [BinderArg])]
 rewriteAllBinderArgsWithProof _ _ _ _ [] = Right []
@@ -290,20 +319,14 @@ rejectSplice label diag =
     else Right ()
 
 hasSplice :: Diagram -> Bool
-hasSplice diag = any edgeHasSplice (IM.elems (dEdges diag))
+hasSplice =
+  getAny . foldDiagram (\_ -> mempty) onPayload (\_ -> mempty) (\_ -> mempty)
   where
-    edgeHasSplice edge =
-      case ePayload edge of
-        PSplice _ _ -> True
-        PBox _ inner -> hasSplice inner
-        PFeedback inner -> hasSplice inner
-        PGen _ _ bargs -> any bargHasSplice bargs
-        _ -> False
-
-    bargHasSplice barg =
-      case barg of
-        BAConcrete inner -> hasSplice inner
-        BAMeta _ -> False
+    onPayload payload =
+      Any $
+        case payload of
+          PSplice _ _ -> True
+          _ -> False
 
 combineLimits :: ReachStop -> ReachStop -> SearchLimit
 combineLimits s1 s2

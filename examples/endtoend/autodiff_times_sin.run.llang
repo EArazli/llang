@@ -140,28 +140,28 @@ doctrine DualJS where {
 
   rule computational render_input -> (n : Str) : [] -> [Doc] @M =
     inputDual(name = n) ; renderDual ==
-      text(s = "dx")
+      text("dx")
 
   rule computational render_dmul -> : [Dual, Dual] -> [Doc] @M =
     dmul ; renderDual ==
-      (((text(s = "mulDual(") * (id[Dual] ; renderDual)) ; cat) ; (id[Doc] * text(s = ", ")) ; cat)
+      (((text("mulDual(") * (id[Dual] ; renderDual)) ; cat) ; (id[Doc] * text(", ")) ; cat)
       * (id[Dual] ; renderDual)
       ; cat
-      ; (id[Doc] * text(s = ")")) ; cat
+      ; (id[Doc] * text(")")) ; cat
 
   rule computational render_dsin -> : [Dual] -> [Doc] @M =
     dsin ; renderDual ==
-      (text(s = "sinDual(") * (id[Dual] ; renderDual)) ; cat
-      ; (id[Doc] * text(s = ")")) ; cat
+      (text("sinDual(") * (id[Dual] ; renderDual)) ; cat
+      ; (id[Doc] * text(")")) ; cat
 
   rule computational emit_module -> (f : Str, p : Str) : [] -> [FileTree] @M =
     lam(Dual, Dual)[?Body] ; emitUnaryModule(fn = f, path = p) ==
-      (text(s = "const mulDual = (l, r) => ({\n  value: (l.value * r.value),\n  derivative: ((l.value * r.derivative) + (l.derivative * r.value))\n});\n\nconst sinDual = u => ({\n  value: Math.sin(u.value),\n  derivative: (Math.cos(u.value) * u.derivative)\n});\n\nexport const ") * text(s = f))
+      (text("const mulDual = (l, r) => ({\n  value: (l.value * r.value),\n  derivative: ((l.value * r.derivative) + (l.derivative * r.value))\n});\n\nconst sinDual = u => ({\n  value: Math.sin(u.value),\n  derivative: (Math.cos(u.value) * u.derivative)\n});\n\nexport const ") * text(f))
       ; cat
-      ; (id[Doc] * text(s = " = x => {\n  const dx = { value: x, derivative: 1 };\n  return ")) ; cat
+      ; (id[Doc] * text(" = x => {\n  const dx = { value: x, derivative: 1 };\n  return ")) ; cat
       ; (id[Doc] * (inputDual(name = "x") ; splice(?Body) ; renderDual)) ; cat
-      ; (id[Doc] * text(s = ";\n};\n")) ; cat
-      ; singleFile(path = p)
+      ; (id[Doc] * text(";\n};\n")) ; cat
+      ; singleFile(p)
 }
 
 morphism forwardAD : SmoothLam -> DualCore where {

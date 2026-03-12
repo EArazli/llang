@@ -2,7 +2,7 @@ doctrine JSArtifact extends Artifact where {
   gen jsHello : [] -> [Doc] @Artifact;
 
   rule computational jsHello_def -> : [] -> [Doc] @Artifact =
-    jsHello == text(s="console.log('hello');")
+    jsHello == text("console.log('hello');")
 }
 
 pipeline main where {
@@ -15,5 +15,5 @@ run main using main where {
   source mode Artifact;
 }
 ---
-jsHello; singleFile(path="main.mjs")
+jsHello; singleFile("main.mjs")
 ---

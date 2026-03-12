@@ -120,11 +120,12 @@ mkBetaInput :: Obj -> Either Text TermDiagram
 mkBetaInput aTy = do
   body <- mkLamIdBody aTy
   let aToA = arrTy aTy aTy
+  let headArgs = [CAObj aTy, CAObj aTy]
   let (x, d0) = freshPort aTy (emptyDiagram modeM [])
   let (lamOut, d1) = freshPort aToA d0
   let (y, d2) = freshPort aTy d1
-  d3 <- addEdgePayload (PGen (GenName "lam") [] [BAConcrete body]) [] [lamOut] d2
-  d4 <- addEdgePayload (PGen (GenName "app") [] []) [lamOut, x] [y] d3
+  d3 <- addEdgePayload (PGen (GenName "lam") headArgs [BAConcrete body]) [] [lamOut] d2
+  d4 <- addEdgePayload (PGen (GenName "app") headArgs []) [lamOut, x] [y] d3
   let diag = d4 { dIn = [x], dOut = [y] }
   validateDiagram diag
   pure (TermDiagram diag)
@@ -133,6 +134,8 @@ mkNestedInput :: Obj -> Either Text TermDiagram
 mkNestedInput aTy = do
   let aToA = arrTy aTy aTy
   let aToAToA = arrTy aTy aToA
+  let headArgsA = [CAObj aTy, CAObj aTy]
+  let headArgsAtoA = [CAObj aTy, CAObj aToA]
 
   let (yPort, c0) = freshPort aTy (emptyDiagram modeM [])
   let (xPort, c1) = freshPort aTy c0
@@ -142,7 +145,7 @@ mkNestedInput aTy = do
 
   let (xOuter, b0) = freshPort aTy (emptyDiagram modeM [])
   let (lam2Out, b1) = freshPort aToA b0
-  b2 <- addEdgePayload (PGen (GenName "lam") [] [BAConcrete body2]) [] [lam2Out] b1
+  b2 <- addEdgePayload (PGen (GenName "lam") headArgsA [BAConcrete body2]) [] [lam2Out] b1
   b3 <- addEdgePayload PInternalDrop [xOuter] [] b2
   let body1 = b3 { dIn = [xOuter], dOut = [lam2Out] }
   validateDiagram body1
@@ -152,9 +155,9 @@ mkNestedInput aTy = do
   let (lam1Out, d2) = freshPort aToAToA d1
   let (mid, d3) = freshPort aToA d2
   let (out, d4) = freshPort aTy d3
-  d5 <- addEdgePayload (PGen (GenName "lam") [] [BAConcrete body1]) [] [lam1Out] d4
-  d6 <- addEdgePayload (PGen (GenName "app") [] []) [lam1Out, t1] [mid] d5
-  d7 <- addEdgePayload (PGen (GenName "app") [] []) [mid, t2] [out] d6
+  d5 <- addEdgePayload (PGen (GenName "lam") headArgsAtoA [BAConcrete body1]) [] [lam1Out] d4
+  d6 <- addEdgePayload (PGen (GenName "app") headArgsAtoA []) [lam1Out, t1] [mid] d5
+  d7 <- addEdgePayload (PGen (GenName "app") headArgsA []) [mid, t2] [out] d6
   let diag = d7 { dIn = [t1, t2], dOut = [out] }
   validateDiagram diag
   pure (TermDiagram diag)
@@ -182,16 +185,17 @@ testNBEEta = do
   let normDiag = unTerm norm
   let topEdges = IM.elems (dEdges normDiag)
   let lamBodies =
-        [ body
-        | Edge _ (PGen g _ [BAConcrete body]) _ _ <- topEdges
+        [ (args, body)
+        | Edge _ (PGen g args [BAConcrete body]) _ _ <- topEdges
         , g == GenName "lam"
         ]
   assertBool "expected exactly one top-level lam in eta normal form" (length lamBodies == 1)
   assertBool "expected top-level eta normal form to drop unused outer function input" (any isDrop topEdges)
   case lamBodies of
-    [body] ->
+    [(lamArgs, body)] -> do
+      lamArgs @?= [CAObj aTy, CAObj bTy]
       let bodyEdges = IM.elems (dEdges body)
-       in assertBool "expected lambda body to contain app node" (any isApp bodyEdges)
+      assertBool "expected lambda body to contain parameterized app node" (any (isApp aTy bTy) bodyEdges)
     _ ->
       pure ()
   where
@@ -200,9 +204,9 @@ testNBEEta = do
         PInternalDrop -> True
         _ -> False
 
-    isApp edge =
+    isApp aTy bTy edge =
       case ePayload edge of
-        PGen g _ [] -> g == GenName "app"
+        PGen g args [] -> g == GenName "app" && args == [CAObj aTy, CAObj bTy]
         _ -> False
 
 testNBENestedBinders :: Assertion

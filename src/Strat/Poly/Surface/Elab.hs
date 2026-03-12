@@ -54,6 +54,7 @@ import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
+import qualified Strat.Poly.GenArgs as GA
 import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurfaceExpr)
 import Strat.Poly.Surface.Spec
 import Strat.Poly.Literal (Literal(..), LiteralKind(..), literalKind)
@@ -1019,14 +1020,17 @@ genDFromDecl
 genDFromDecl doc ctorTables tt mode env paramMap gen mArgs bargs = do
   rawArgs <- liftEither (requiredTemplateGenArgs (gdParams gen) mArgs)
   argExprs <- liftEither (normalizeTemplateGenArgs (gdParams gen) rawArgs)
-  (freshParams, renameSubst) <- freshGenParams tt (envTmCtx env) (gdParams gen)
+  (freshParams, renameSubst) <- liftEither (GA.freshGenParams tt (envTmCtx env) (gdParams gen))
   let genFresh = gen { gdParams = freshParams }
-  (argsRev, _substSeq) <-
-    foldM
-      (elabOneArg freshParams)
-      ([], U.emptySubst)
-      (zip freshParams argExprs)
-  let genArgs = reverse argsRev
+  (genArgs, _substSeq) <-
+    liftEither
+      ( GA.elabGenArgsSequentialWith
+          tt
+          (\v argExpr -> elabTemplateTyArg doc ctorTables tt env paramMap (Ty.tmVarOwner v) argExpr)
+          (\expectedSort _ rawArg -> elabTemplateTmArg doc ctorTables tt env paramMap expectedSort rawArg)
+          freshParams
+          argExprs
+      )
   paramSubst <- liftEither (instantiateGenParams tt genFresh genArgs)
   dom0 <- liftEither (applySubstCtx tt renameSubst (gdPlainDom gen))
   cod0 <- liftEither (applySubstCtx tt renameSubst (gdCod gen))
@@ -1036,18 +1040,6 @@ genDFromDecl doc ctorTables tt mode env paramMap gen mArgs bargs = do
   slots1 <- liftEither (mapM (applySubstBinderSigTy tt paramSubst) slots0)
   (domFinal, codFinal, bargsFinal) <- liftEither (checkBinderArgs tt dom1 cod1 slots1 bargs)
   liftEither (buildGenDiagram mode (envTmCtx env) domFinal codFinal (gdName gen) genArgs bargsFinal)
-  where
-    elabOneArg _ (acc, substAcc) (param, argExpr) =
-      case param of
-        GP_Ty v -> do
-          ty <- liftEither (elabTemplateTyArg doc ctorTables tt env paramMap (Ty.tmVarOwner v) argExpr)
-          subst1 <- liftEither (bindCodeArg tt v (CAObj ty) substAcc)
-          pure (CAObj ty : acc, subst1)
-        GP_Tm v -> do
-          expectedSort <- liftEither (applySubstObj tt substAcc (Ty.tmvSort v))
-          tm <- liftEither (elabTemplateTmArg doc ctorTables tt env paramMap expectedSort argExpr)
-          subst1 <- liftEither (bindCodeArg tt v (CATm tm) substAcc)
-          pure (CATm tm : acc, subst1)
 
 applySubstBinderSigTy :: TypeTheory -> Subst -> BinderSig -> Either Text BinderSig
 applySubstBinderSigTy tt subst bs = do
@@ -1322,47 +1314,11 @@ instance Monad Fresh where
 evalFresh :: Fresh a -> Either Text a
 evalFresh (Fresh f) = fmap fst (f 0)
 
-bindCodeArg :: TypeTheory -> TmVar -> CodeArg -> Subst -> Either Text Subst
-bindCodeArg tt v arg subst = do
-  singleton <- U.mkSubst [(v, arg)]
-  composeSubst tt singleton subst
-
-freshGenParams :: TypeTheory -> [Obj] -> [GenParam] -> Fresh ([GenParam], Subst)
-freshGenParams tt tmCtx = go U.emptySubst []
-  where
-    go subst acc [] =
-      pure (reverse acc, subst)
-    go subst acc (param : rest) =
-      case param of
-        GP_Ty v -> do
-          fresh <- freshTyVar v
-          subst' <- liftEither (bindCodeArg tt v (CAObj (Ty.OVar fresh)) subst)
-          go subst' (GP_Ty fresh : acc) rest
-        GP_Tm v -> do
-          sort' <- liftEither (applySubstObj tt subst (Ty.tmvSort v))
-          (fresh, tm) <- freshTmParam tt tmCtx v sort'
-          subst' <- liftEither (bindCodeArg tt v (CATm tm) subst)
-          go subst' (GP_Tm fresh : acc) rest
-
 freshTyVar :: TmVar -> Fresh TmVar
 freshTyVar v = do
   n <- freshInt
   let name = Ty.tmvName v <> T.pack ("#" <> show n)
   pure v { Ty.tmvName = name }
-
-freshTmParam :: TypeTheory -> [Obj] -> TmVar -> Obj -> Fresh (TmVar, TermDiagram)
-freshTmParam tt tmCtx v sortTy = do
-  n <- freshInt
-  let name = Ty.tmvName v <> T.pack ("#" <> show n)
-  let fresh =
-        TmVar
-          { tmvName = name
-          , tmvSort = sortTy
-          , tmvScope = max 0 (length (modeCtxGlobals tmCtx (objMode sortTy)))
-          , tmvOwnerMode = Nothing
-          }
-  tm <- liftEither (termExprToDiagramChecked tt tmCtx sortTy (TMMeta fresh (defaultMetaArgs tmCtx fresh)))
-  pure (fresh, tm)
 
 freshInt :: Fresh Int
 freshInt = Fresh (\n -> Right (n, n + 1))

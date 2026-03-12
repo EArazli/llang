@@ -7,14 +7,13 @@ Term arguments (`CATm`) normalize through restricted diagram fragments that depe
 - `TRS` defeq term-argument fragment:
   - one output
   - no boxes, feedback, or splice nodes
-  - no generator attrs or binder args
+  - no binder args
   - `PTmMeta` inputs must be boundary ports; explicit meta arguments may choose any boundary subset/order
   - `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
 
 - `NbE` defeq term-argument fragment:
   - one output
   - no boxes, feedback, or splice nodes
-  - no generator attrs
   - binder args are allowed only for the mode's inferred lambda generator, and only as the enforced concrete binder-body form used by NbE (`BAConcrete`, bound var first, then outer-prefix inputs)
   - `PTmMeta` inputs must be boundary ports; explicit meta arguments may choose any boundary subset/order
   - `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
@@ -72,14 +71,14 @@ Disconnected dead subgraphs do not contribute to reported bound indices.
 ## 9. Transform Restrictions (Phase 2)
 
 - `mod_transform` does not rewrite modalities and does not change `mod_eq`.
-- The witness must be a generator with exactly one type variable, no term vars, no attrs, one input port, and one output type.
+- The witness must be a generator with exactly one type variable, no term vars, one input port, and one output type.
 - Witness shape is constrained to `mu(A) -> nu(A)` (checked after modality/type normalization).
 - No automatic transform coercion insertion is performed; witnesses must be used explicitly.
 
 ## 10. NbE Fragment Coverage Is Intentionally Narrow
 
 Current NbE normalization targets a strict lambda-calculus fragment for definitional equality.
-Unsupported constructs (for now) include box/feedback/splice nodes, generator attrs, and binder metavariables; non-lambda generators cannot carry binder args.
+Unsupported constructs (for now) include box/feedback/splice nodes and binder metavariables; non-lambda generators cannot carry binder args.
 This is a scope restriction, not a fundamental limitation, and should be revisited after core NbE stability and soundness are locked in.
 Follow-up work item: expand supported definitional fragment after NbE core stability/soundness are established.
 

@@ -37,8 +37,10 @@ import Strat.Poly.ObjResolve
   ( resolveTypeRefInClassifierInTables
   , resolveTypeRefInClassifierMaybeInTables
   )
+import Strat.Poly.Term.AST (TermHeadArg(..))
 import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.TypeTheory (TypeParamSig(..), TmFunSig(..), literalKindForObj)
+import Strat.Poly.TypeTheory (TypeParamSig(..), TmHeadSig(..), literalKindForObj)
+import qualified Strat.Poly.UnifyObj as U
 
 provisionalCtorSort :: Doctrine -> ModeName -> Obj
 provisionalCtorSort doc mode =
@@ -483,20 +485,52 @@ elabTmTermWithTables doc ctorTables _tyVars tmVars tmBound mExpected raw =
                   case mExp of
                     Nothing -> do
                       (funName, sig) <- lookupTmFunAnyInTables doc ctorTables name 0
-                      pure (TMFun funName [], tfsRes sig)
+                      pure (TMGen funName [], thsRes sig)
                     Just expected -> do
                       (funName, sig) <- lookupTmFunByNameInTables doc ctorTables expected name 0
-                      pure (TMFun funName [], tfsRes sig)
+                      pure (TMGen funName [], thsRes sig)
         RPTCon rawRef args ->
           case rtrMode rawRef of
-            Just _ -> Left "term function names must be unqualified"
+            Just _ -> Left "term head names must be unqualified"
             Nothing -> do
               (funName, sig) <-
                 case mExp of
                   Just expected -> lookupTmFunByNameInTables doc ctorTables expected (rtrName rawRef) (length args)
                   Nothing -> lookupTmFunAnyInTables doc ctorTables (rtrName rawRef) (length args)
-              argExprs <- mapM (\(argSort, argRaw) -> fst <$> elabExpr ttDoc ctorTables tmCtx (Just argSort) argRaw) (zip (tfsArgs sig) args)
-              pure (TMFun funName argExprs, tfsRes sig)
+              flatArgs <- elabHeadArgs ttDoc ctorTables tmCtx sig args
+              pure (TMGen funName flatArgs, thsRes sig)
+
+    elabHeadArgs ttDoc ctorTables tmCtx sig args =
+      if length args /= length (thsParams sig) + length (thsInputs sig)
+        then Left "term head arity mismatch"
+        else do
+          let params = zip (thsParams sig) (take (length (thsParams sig)) args)
+          let inputs = zip (thsInputs sig) (drop (length (thsParams sig)) args)
+          (paramExprs, substAfterParams) <- foldl stepParam (Right ([], U.emptySubst)) params
+          inputExprs <- fmap fst (foldl stepInput (Right ([], substAfterParams)) inputs)
+          pure (paramExprs <> inputExprs)
+      where
+        stepParam acc (param, rawArg) = do
+          (flatArgs, substAcc) <- acc
+          case param of
+            GP_Ty v -> do
+              obj <- elabObjExprWithTables doc ctorTables [] tmVars M.empty (tmVarOwner v) rawArg
+              singleton <- U.mkSubst [(v, CAObj obj)]
+              substNext <- U.composeSubst ttDoc singleton substAcc
+              Right (flatArgs <> [THAObj obj], substNext)
+            GP_Tm v -> do
+              expectedSort <- U.applySubstObj ttDoc substAcc (tmvSort v)
+              (tmExpr, _) <- elabExpr ttDoc ctorTables tmCtx (Just expectedSort) rawArg
+              tmDiag <- termExprToDiagramChecked ttDoc tmCtx expectedSort tmExpr
+              singleton <- U.mkSubst [(v, CATm tmDiag)]
+              substNext <- U.composeSubst ttDoc singleton substAcc
+              Right (flatArgs <> [THATm tmExpr], substNext)
+
+        stepInput acc (argSort, rawArg) = do
+          (flatArgs, substAcc) <- acc
+          expectedSort <- U.applySubstObj ttDoc substAcc argSort
+          (tmExpr, _) <- elabExpr ttDoc ctorTables tmCtx (Just expectedSort) rawArg
+          Right (flatArgs <> [THATm tmExpr], substAcc)
 
     mkTmCtx =
       if M.null tmBound
@@ -511,64 +545,42 @@ elabTmTermWithTables doc ctorTables _tyVars tmVars tmBound mExpected raw =
                 Nothing -> Left "term argument uses sparse bound term context")
             [0 .. maxIdx]
 
-lookupTmFunByNameInTables :: Doctrine -> CtorTables -> Obj -> Text -> Int -> Either Text (GenName, TmFunSig)
+lookupTmFunByNameInTables :: Doctrine -> CtorTables -> Obj -> Text -> Int -> Either Text (GenName, TmHeadSig)
 lookupTmFunByNameInTables doc ctorTables expectedSort name arity =
   let fname = GenName name
       sigs = gatherCandidates ctorTables (objOwnerMode expectedSort)
    in case sigs of
-        [] -> Left ("unknown term function: " <> name)
+        [] -> Left ("unknown term head: " <> name)
         [sig] ->
-          if length (tfsArgs sig) == arity
+          if length (thsParams sig) + length (thsInputs sig) == arity
             then Right (fname, sig)
-            else Left "term function arity mismatch"
-        _ -> Left ("ambiguous term function in mode: " <> name)
+            else Left "term head arity mismatch"
+        _ -> Left ("ambiguous term head in mode: " <> name)
   where
     gatherCandidates ctorTables' mode =
-      [ TmFunSig
-          { tfsArgs = [ ty | InPort ty <- gdDom gd ]
-          , tfsRes = res
-          }
+      [ sig
       | gd <- maybe [] M.elems (M.lookup mode (dGens doc))
       , gdName gd == GenName name
       , not (isTypeDeclGenNameInTables doc ctorTables' mode (ObjName (renderGenName (gdName gd))))
-      , null (gdTyVars gd)
-      , null (gdTmVars gd)
-      , all isPort (gdDom gd)
-      , [res] <- [gdCod gd]
+      , Just sig <- [tmHeadSigForGenDecl gd]
       ]
-    isPort sh =
-      case sh of
-        InPort _ -> True
-        InBinder _ -> False
 
-lookupTmFunAnyInTables :: Doctrine -> CtorTables -> Text -> Int -> Either Text (GenName, TmFunSig)
+lookupTmFunAnyInTables :: Doctrine -> CtorTables -> Text -> Int -> Either Text (GenName, TmHeadSig)
 lookupTmFunAnyInTables doc ctorTables name arity =
   case genCandidates ctorTables of
-    [] -> Left ("unknown term function: " <> name)
+    [] -> Left ("unknown term head: " <> name)
     [single] -> Right single
-    _ -> Left ("ambiguous term function: " <> name)
+    _ -> Left ("ambiguous term head: " <> name)
   where
     genCandidates ctorTables' =
-      [ ( GenName name
-        , TmFunSig
-            { tfsArgs = [ ty | InPort ty <- gdDom gd ]
-            , tfsRes = res
-            }
-        )
+      [ (GenName name, sig)
       | modeTable <- M.elems (dGens doc)
       , gd <- M.elems modeTable
       , not (isTypeDeclGenNameInTables doc ctorTables' (gdMode gd) (ObjName (renderGenName (gdName gd))))
       , gdName gd == GenName name
-      , null (gdTyVars gd)
-      , null (gdTmVars gd)
-      , all isPort (gdDom gd)
-      , [res] <- [gdCod gd]
-      , length [ ty | InPort ty <- gdDom gd ] == arity
+      , Just sig <- [tmHeadSigForGenDecl gd]
+      , length (thsParams sig) + length (thsInputs sig) == arity
       ]
-    isPort sh =
-      case sh of
-        InPort _ -> True
-        InBinder _ -> False
 
 elabInputShapes :: Doctrine -> ModeName -> [TmVar] -> [TmVar] -> [RawInputShape] -> Either Text [InputShape]
 elabInputShapes doc mode tyVars tmVars shapes = do

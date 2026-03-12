@@ -47,13 +47,18 @@ data BTm = BTm
   , btExpr :: BTmExpr
   } deriving (Eq, Show)
 
+data BTmHeadArg
+  = BHAObj Obj
+  | BHATm BTm
+  deriving (Eq, Show)
+
 data BTmExpr
   = BVar Int
   | BMeta TmVar [Int]
-  | BGen GenName [BTm]
+  | BGen GenName [BTmHeadArg] [BTm]
   | BLit Literal
-  | BLam BTm
-  | BApp BTm BTm
+  | BLam [BTmHeadArg] BTm
+  | BApp [BTmHeadArg] BTm BTm
   deriving (Eq, Show)
 
 data Val = Val
@@ -62,15 +67,19 @@ data Val = Val
   }
 
 data ValExpr
-  = VLam (Val -> Either Text Val)
+  = VLam [ValHeadArg] (Val -> Either Text Val)
   | VLit Literal
   | VNeu Neu
+
+data ValHeadArg
+  = VHAObj Obj
+  | VHATm Val
 
 data Neu
   = NVar Int Obj
   | NMeta TmVar [Val]
-  | NGen GenName [Val] Obj
-  | NApp Neu Val Obj Obj
+  | NGen GenName [ValHeadArg] [Val] Obj
+  | NApp [ValHeadArg] Neu Val Obj Obj
 
 normalizeDiagramNBE
   :: NbeConfig
@@ -149,21 +158,19 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
               let seen' = S.insert pid seen
               case ePayload edge of
                 PGen g args bargs ->
-                  if not (null args)
-                    then Left "NbE: stored generator args are unsupported in NbE definitional normalization"
+                  if isLamPrimitive pid edge bargs
+                    then parseLam pid edge args bargs
                     else
-                      if g == nbeLamGen cfg
-                        then parseLam pid edge bargs
+                      if isAppPrimitive pid edge bargs
+                        then parseApp seen' pid edge args
                         else
-                          if g == nbeAppGen cfg
-                            then parseApp seen' pid edge bargs
-                            else do
-                              if null bargs
-                                then Right ()
-                                else Left "NbE: non-lam generators with binder args are unsupported in NbE"
-                              args <- mapM (termAt seen') (eIns edge)
+                          if null bargs
+                            then do
+                              headArgs <- mapM (storedArgToBTm boundaryVars) args
+                              inputArgs <- mapM (termAt seen') (eIns edge)
                               sortTy <- requirePortSort diag "NbE: missing generator output sort" pid
-                              pure BTm { btSort = sortTy, btExpr = BGen g args }
+                              pure BTm { btSort = sortTy, btExpr = BGen g headArgs inputArgs }
+                            else Left "NbE: non-lam generators with binder args are unsupported in NbE"
                 PTmMeta v -> do
                   sortTy <- requirePortSort diag "NbE: missing PTmMeta output sort" pid
                   let v' = v { tmvSort = sortTy }
@@ -198,10 +205,25 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
         Nothing ->
           Left "NbE: PTmMeta inputs must connect to boundary ports"
 
-    parseLam pid edge bargs = do
+    isLamPrimitive pid edge bargs =
+      case (ePayload edge, eIns edge, eOuts edge, bargs) of
+        (PGen g _ _, [], [outPid], [BAConcrete _]) ->
+          g == nbeLamGen cfg && outPid == pid
+        _ ->
+          False
+
+    isAppPrimitive pid edge bargs =
+      case (ePayload edge, eIns edge, eOuts edge, bargs) of
+        (PGen g _ _, [_fIn, _aIn], [outPid], []) ->
+          g == nbeAppGen cfg && outPid == pid
+        _ ->
+          False
+
+    parseLam pid edge args bargs = do
       case (eIns edge, eOuts edge, bargs) of
         ([], [outPid], [BAConcrete bodyDiag])
           | outPid == pid -> do
+              headArgs <- mapM (storedArgToBTm boundaryVars) args
               lamSort <- requirePortSort diag "NbE: missing lambda output sort" outPid
               (domTy, codTy) <-
                 case splitArr cfg lamSort of
@@ -229,14 +251,15 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
                 then Right ()
                 else Left "NbE: lambda binder body bound-variable sort mismatch"
               body <- diagramToBTm cfg sortEq bodyDiag bodyBoundaryVars codTy
-              pure BTm { btSort = lamSort, btExpr = BLam body }
+              pure BTm { btSort = lamSort, btExpr = BLam headArgs body }
         _ ->
           Left "NbE: lam node must have no plain inputs, one output, and one concrete binder body"
 
-    parseApp seen pid edge bargs = do
-      case (eIns edge, eOuts edge, bargs) of
-        ([fIn, aIn], [outPid], [])
+    parseApp seen pid edge args = do
+      case (eIns edge, eOuts edge) of
+        ([fIn, aIn], [outPid])
           | outPid == pid -> do
+              headArgs <- mapM (storedArgToBTm boundaryVars) args
               fTm <- termAt seen fIn
               aTm <- termAt seen aIn
               outTy <- requirePortSort diag "NbE: missing app output sort" outPid
@@ -246,12 +269,26 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
                   domMatches <- sortEq boundarySorts domTy (btSort aTm)
                   codMatches <- sortEq boundarySorts codTy outTy
                   if domMatches && codMatches
-                    then pure BTm { btSort = outTy, btExpr = BApp fTm aTm }
+                    then pure BTm { btSort = outTy, btExpr = BApp headArgs fTm aTm }
                     else Left "NbE: app node type mismatch against Arr(domain, codomain)"
                 Nothing ->
                   Left "NbE: app function input does not have Arr type"
         _ ->
           Left "NbE: app node must have exactly two inputs, one output, and no binder args"
+
+    storedArgToBTm outerBoundaryVars arg =
+      case arg of
+        CAObj obj -> Right (BHAObj obj)
+        CATm (TermDiagram inner) -> do
+          sortTy <- termDiagramSort inner
+          let innerBoundaryVars = take (length (dIn inner)) outerBoundaryVars
+          tm <- diagramToBTm cfg sortEq inner innerBoundaryVars sortTy
+          Right (BHATm tm)
+
+    termDiagramSort inner =
+      case dOut inner of
+        [outPid] -> requirePortSort inner "NbE: missing stored term-arg output sort" outPid
+        _ -> Left "NbE: stored term argument must have exactly one output"
 
 evalBTm :: NbeConfig -> TypeTheory -> [Val] -> BTm -> Either Text Val
 evalBTm cfg tt env tm =
@@ -267,12 +304,13 @@ evalBTm cfg tt env tm =
           { valSort = btSort tm
           , valExpr = VNeu (NMeta v argVals)
           }
-    BGen g args -> do
+    BGen g headArgs args -> do
+      headVals <- mapM evalHeadArg headArgs
       vals <- mapM (evalBTm cfg tt env) args
       Right
         Val
           { valSort = btSort tm
-          , valExpr = VNeu (NGen g vals (btSort tm))
+          , valExpr = VNeu (NGen g headVals vals (btSort tm))
           }
     BLit lit ->
       Right
@@ -280,38 +318,48 @@ evalBTm cfg tt env tm =
           { valSort = btSort tm
           , valExpr = VLit lit
           }
-    BLam body ->
+    BLam headArgs body -> do
+      headVals <- mapM evalHeadArg headArgs
       Right
         Val
           { valSort = btSort tm
           , valExpr =
-              VLam
+              VLam headVals
                 ( \v ->
                     evalBTm cfg tt (v : env) body
                 )
           }
-    BApp f a -> do
+    BApp headArgs f a -> do
+      headVals <- mapM evalHeadArg headArgs
       fV <- evalBTm cfg tt env f
       aV <- evalBTm cfg tt env a
-      applyVal cfg tt fV aV
+      applyVal cfg tt (Just headVals) fV aV
   where
     lookupArg i =
       case nth env i of
         Just v -> Right v
         Nothing -> Left "NbE: metavariable argument index out of scope during evaluation"
 
-applyVal :: NbeConfig -> TypeTheory -> Val -> Val -> Either Text Val
-applyVal cfg _tt funVal argVal =
+    evalHeadArg arg =
+      case arg of
+        BHAObj obj -> Right (VHAObj obj)
+        BHATm tmArg -> VHATm <$> evalBTm cfg tt env tmArg
+
+applyVal :: NbeConfig -> TypeTheory -> Maybe [ValHeadArg] -> Val -> Val -> Either Text Val
+applyVal cfg _tt mHeadArgs funVal argVal =
   case valExpr funVal of
-    VLam f -> f argVal
+    VLam _ f -> f argVal
+    VLit _ ->
+      Left "NbE: attempted to apply a literal"
     VNeu n ->
       case splitArr cfg (valSort funVal) of
         Just (domTy, codTy)
           | domTy == valSort argVal ->
-              Right
+              let headArgs = maybe (synthAppHeadArgs cfg domTy codTy) id mHeadArgs
+               in Right
                 Val
                   { valSort = codTy
-                  , valExpr = VNeu (NApp n argVal domTy codTy)
+                  , valExpr = VNeu (NApp headArgs n argVal domTy codTy)
                   }
           | otherwise ->
               Left "NbE: neutral application argument sort mismatch"
@@ -324,9 +372,9 @@ reify cfg tt lvl expectedSort val =
     Just (domTy, codTy)
       | nbeAllowEta cfg -> do
           let fresh = neutralVar lvl domTy
-          bodyVal <- applyVal cfg tt val fresh
+          bodyVal <- applyVal cfg tt Nothing val fresh
           body <- reify cfg tt (lvl + 1) codTy bodyVal
-          pure BTm { btSort = expectedSort, btExpr = BLam body }
+          pure BTm { btSort = expectedSort, btExpr = BLam (synthArrHeadArgs cfg expectedSort) body }
     _ ->
       quoteVal lvl val
   where
@@ -334,15 +382,36 @@ reify cfg tt lvl expectedSort val =
       case valExpr v of
         VLit lit -> pure BTm { btSort = expectedSort, btExpr = BLit lit }
         VNeu n -> quoteNeu cfg lvl0 n
-        VLam f ->
+        VLam headArgs f ->
           case splitArr cfg expectedSort of
             Just (domTy, codTy) -> do
               let fresh = neutralVar lvl0 domTy
               bodyVal <- f fresh
               body <- reify cfg tt (lvl0 + 1) codTy bodyVal
-              pure BTm { btSort = expectedSort, btExpr = BLam body }
+              headArgs' <- mapM (quoteHeadArgAt lvl0) headArgs
+              pure BTm { btSort = expectedSort, btExpr = BLam headArgs' body }
             Nothing ->
               Left "NbE: cannot quote lambda at non-function expected sort"
+
+    quoteHeadArgAt lvl0 arg =
+      case arg of
+        VHAObj obj -> pure (BHAObj obj)
+        VHATm val0 -> BHATm <$> quoteValAtLevel lvl0 val0
+
+    quoteValAtLevel lvl0 val0 =
+      case valExpr val0 of
+        VLit lit -> pure BTm { btSort = valSort val0, btExpr = BLit lit }
+        VNeu n -> quoteNeu cfg lvl0 n
+        VLam innerHeadArgs f ->
+          case splitArr cfg (valSort val0) of
+            Just (domTy, _codTy) -> do
+              let fresh = neutralVar lvl0 domTy
+              bodyVal <- f fresh
+              body <- quoteValAtLevel (lvl0 + 1) bodyVal
+              headArgs' <- mapM (quoteHeadArgAt lvl0) innerHeadArgs
+              pure BTm { btSort = valSort val0, btExpr = BLam headArgs' body }
+            Nothing ->
+              Left "NbE: cannot quote lambda head arg at non-function sort"
 
 quoteNeu :: NbeConfig -> Int -> Neu -> Either Text BTm
 quoteNeu cfg lvl neu =
@@ -355,13 +424,15 @@ quoteNeu cfg lvl neu =
     NMeta v args -> do
       argIdx <- mapM (metaArgIndex lvl) args
       pure BTm { btSort = tmvSort v, btExpr = BMeta v argIdx }
-    NGen g args sortTy -> do
+    NGen g headArgs args sortTy -> do
+      headArgs' <- mapM quoteHeadArg headArgs
       args' <- mapM (\v -> quoteValAt lvl v) args
-      pure BTm { btSort = sortTy, btExpr = BGen g args' }
-    NApp f a domTy codTy -> do
+      pure BTm { btSort = sortTy, btExpr = BGen g headArgs' args' }
+    NApp headArgs f a domTy codTy -> do
       f' <- quoteNeu cfg lvl f
       a' <- quoteAtSort lvl domTy a
-      pure BTm { btSort = codTy, btExpr = BApp f' a' }
+      headArgs' <- mapM quoteHeadArg headArgs
+      pure BTm { btSort = codTy, btExpr = BApp headArgs' f' a' }
   where
     quoteValAt lvl0 v =
       quoteAtSort lvl0 (valSort v) v
@@ -370,15 +441,21 @@ quoteNeu cfg lvl neu =
       case valExpr v of
         VLit lit -> pure BTm { btSort = sortTy, btExpr = BLit lit }
         VNeu n -> quoteNeu cfg lvl0 n
-        VLam f ->
+        VLam headArgs f ->
           case splitArr cfg sortTy of
             Just (domTy, codTy) -> do
               let fresh = neutralVar lvl0 domTy
               bodyVal <- f fresh
               body <- quoteAtSort (lvl0 + 1) codTy bodyVal
-              pure BTm { btSort = sortTy, btExpr = BLam body }
+              headArgs' <- mapM quoteHeadArg headArgs
+              pure BTm { btSort = sortTy, btExpr = BLam headArgs' body }
             Nothing ->
               Left "NbE: cannot quote lambda at non-function sort"
+
+    quoteHeadArg arg =
+      case arg of
+        VHAObj obj -> pure (BHAObj obj)
+        VHATm val -> BHATm <$> quoteAtSort lvl (valSort val) val
 
 btmToDiagram
   :: NbeConfig
@@ -424,10 +501,11 @@ buildBTm cfg ctx diag tm =
       let (out, d0) = freshPort (btSort tm) diag
       d1 <- addEdgePayload (PTmMeta v') argPorts [out] d0
       pure (out, d1)
-    BGen g args -> do
+    BGen g headArgs args -> do
+      storedArgs <- mapM buildHeadArgForCtx headArgs
       (argPorts, d0) <- foldM step ([], diag) args
       let (out, d1) = freshPort (btSort tm) d0
-      d2 <- addEdgePayload (PGen g [] []) argPorts [out] d1
+      d2 <- addEdgePayload (PGen g storedArgs []) argPorts [out] d1
       pure (out, d2)
       where
         step (ports, dAcc) arg = do
@@ -437,7 +515,8 @@ buildBTm cfg ctx diag tm =
       let (out, d0) = freshPort (btSort tm) diag
       d1 <- addEdgePayload (PTmLit lit) [] [out] d0
       pure (out, d1)
-    BLam body -> do
+    BLam headArgs body -> do
+      storedArgs <- mapM buildHeadArgForCtx headArgs
       (domTy, _codTy) <-
         case splitArr cfg (btSort tm) of
           Just parts -> Right parts
@@ -465,14 +544,28 @@ buildBTm cfg ctx diag tm =
       innerBuilt <- saturateUnusedInputs innerBuilt1
       validateDiagram innerBuilt
       let (out, d0) = freshPort (btSort tm) diag
-      d1 <- addEdgePayload (PGen (nbeLamGen cfg) [] [BAConcrete innerBuilt]) [] [out] d0
+      d1 <- addEdgePayload (PGen (nbeLamGen cfg) storedArgs [BAConcrete innerBuilt]) [] [out] d0
       pure (out, d1)
-    BApp f a -> do
+    BApp headArgs f a -> do
+      storedArgs <- mapM buildHeadArgForCtx headArgs
       (fPort, d0) <- buildBTm cfg ctx diag f
       (aPort, d1) <- buildBTm cfg ctx d0 a
       let (out, d2) = freshPort (btSort tm) d1
-      d3 <- addEdgePayload (PGen (nbeAppGen cfg) [] []) [fPort, aPort] [out] d2
+      d3 <- addEdgePayload (PGen (nbeAppGen cfg) storedArgs []) [fPort, aPort] [out] d2
       pure (out, d3)
+  where
+    buildHeadArgForCtx arg =
+      case arg of
+        BHAObj obj -> Right (CAObj obj)
+        BHATm tmArg -> do
+          let modeInputsAll = modeCtx (bcTmCtx ctx) (bcMode ctx)
+          needed <- requiredTopPrefix tmArg
+          if needed <= length modeInputsAll
+            then Right ()
+            else Left "NbE: stored term argument requires larger mode-local context prefix than available"
+          let inSorts = map snd (take needed modeInputsAll)
+          tmDiag <- btmToDiagram cfg (bcTmCtx ctx) (btSort tmArg) inSorts tmArg
+          Right (CATm (TermDiagram tmDiag))
 
 requiredTopPrefix :: BTm -> Either Text Int
 requiredTopPrefix tm = go 0 tm
@@ -486,21 +579,31 @@ requiredTopPrefix tm = go 0 tm
         BMeta v args -> do
           reqArgs <- mapM (argReq depth) args
           pure (max (maximumOrZero reqArgs) (max 0 (tmvScope v - depth)))
-        BGen _ args ->
-          maximumOrZero <$> mapM (go depth) args
+        BGen _ headArgs args -> do
+          reqHead <- mapM (headReq depth) headArgs
+          reqArgs <- mapM (go depth) args
+          pure (maximumOrZero (reqHead <> reqArgs))
         BLit _ ->
           Right 0
-        BLam body ->
-          go (depth + 1) body
-        BApp f a -> do
+        BLam headArgs body -> do
+          rh <- mapM (headReq depth) headArgs
+          rb <- go (depth + 1) body
+          pure (max rb (maximumOrZero rh))
+        BApp headArgs f a -> do
+          rh <- mapM (headReq depth) headArgs
           rf <- go depth f
           ra <- go depth a
-          pure (max rf ra)
+          pure (maximumOrZero (rh <> [rf, ra]))
 
     argReq depth i =
       if i < depth
         then Right 0
         else Right (i - depth + 1)
+
+    headReq depth arg =
+      case arg of
+        BHAObj _ -> Right 0
+        BHATm tmArg -> go depth tmArg
 
 mkInitialEnv :: Int -> [Obj] -> Either Text [Val]
 mkInitialEnv lvl inSortsOldToNew = do
@@ -541,6 +644,18 @@ splitArr cfg ty =
       | name == nbeArrTyCon cfg -> Just (domTy, codTy)
     _ -> Nothing
 
+synthArrHeadArgs :: NbeConfig -> Obj -> [BTmHeadArg]
+synthArrHeadArgs cfg ty =
+  case splitArr cfg ty of
+    Just (domTy, codTy) -> [BHAObj domTy, BHAObj codTy]
+    Nothing -> []
+
+synthAppHeadArgs :: NbeConfig -> Obj -> Obj -> [ValHeadArg]
+synthAppHeadArgs _cfg domTy codTy =
+  [ VHAObj domTy
+  , VHAObj codTy
+  ]
+
 rejectUnsupportedDiagram :: NbeConfig -> Diagram -> Either Text ()
 rejectUnsupportedDiagram cfg diag = do
   validateDiagram diag
@@ -548,10 +663,9 @@ rejectUnsupportedDiagram cfg diag = do
   where
     checkEdge edge =
       case ePayload edge of
-        PGen _ args bargs ->
-          if null args
-            then mapM_ checkBinderArg bargs
-            else Left "NbE: stored generator args are unsupported in definitional normalization"
+        PGen _ args bargs -> do
+          mapM_ checkCodeArg args
+          mapM_ checkBinderArg bargs
         PTmMeta _ -> Right ()
         PTmLit _ -> Right ()
         PInternalDrop -> Right ()
@@ -563,6 +677,11 @@ rejectUnsupportedDiagram cfg diag = do
       case barg of
         BAConcrete inner -> rejectUnsupportedDiagram cfg inner
         BAMeta _ -> Left "NbE: binder metavariables are unsupported in definitional normalization"
+
+    checkCodeArg arg =
+      case arg of
+        CAObj _ -> Right ()
+        CATm (TermDiagram inner) -> rejectUnsupportedDiagram cfg inner
 
 saturateUnusedInputs :: Diagram -> Either Text Diagram
 saturateUnusedInputs diag =

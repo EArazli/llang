@@ -6,16 +6,18 @@ module Strat.Poly.Traversal
 
 import qualified Data.IntMap.Strict as IM
 import Strat.Poly.Graph
+import Strat.Poly.Syntax (CodeArg(..), TermDiagram(..))
 
 
 foldDiagram
   :: Monoid m
   => (Diagram -> m)
   -> (EdgePayload -> m)
+  -> (CodeArg -> m)
   -> (BinderArg -> m)
   -> Diagram
   -> m
-foldDiagram onDiag onPayload onBArg = goDiag
+foldDiagram onDiag onPayload onCodeArg onBArg = goDiag
   where
     goDiag d =
       onDiag d <> foldMap goEdge (IM.elems (dEdges d))
@@ -25,13 +27,19 @@ foldDiagram onDiag onPayload onBArg = goDiag
     goPayload p =
       onPayload p
         <> case p of
-          PGen _ _ bargs -> foldMap goBArg bargs
+          PGen _ args bargs -> foldMap goCodeArg args <> foldMap goBArg bargs
           PBox _ inner -> goDiag inner
           PFeedback inner -> goDiag inner
           PSplice _ _ -> mempty
           PTmMeta _ -> mempty
           PTmLit _ -> mempty
           PInternalDrop -> mempty
+
+    goCodeArg arg =
+      onCodeArg arg
+        <> case arg of
+          CAObj _ -> mempty
+          CATm (TermDiagram inner) -> goDiag inner
 
     goBArg ba =
       onBArg ba
@@ -44,10 +52,11 @@ traverseDiagram
   :: Monad f
   => (Diagram -> f Diagram)
   -> (EdgePayload -> f EdgePayload)
+  -> (CodeArg -> f CodeArg)
   -> (BinderArg -> f BinderArg)
   -> Diagram
   -> f Diagram
-traverseDiagram onDiag onPayload onBArg = goDiag
+traverseDiagram onDiag onPayload onCodeArg onBArg = goDiag
   where
     goDiag d = do
       edges' <- IM.traverseWithKey (\_ e -> goEdge e) (dEdges d)
@@ -61,8 +70,9 @@ traverseDiagram onDiag onPayload onBArg = goDiag
       p' <-
         case p of
           PGen g args bargs -> do
+            args' <- traverse goCodeArg args
             bargs' <- traverse goBArg bargs
-            pure (PGen g args bargs')
+            pure (PGen g args' bargs')
           PBox name inner -> do
             inner' <- goDiag inner
             pure (PBox name inner')
@@ -78,6 +88,13 @@ traverseDiagram onDiag onPayload onBArg = goDiag
           PInternalDrop ->
             pure PInternalDrop
       onPayload p'
+
+    goCodeArg arg = do
+      arg' <-
+        case arg of
+          CAObj obj -> pure (CAObj obj)
+          CATm (TermDiagram inner) -> CATm . TermDiagram <$> goDiag inner
+      onCodeArg arg'
 
     goBArg ba = do
       ba' <-

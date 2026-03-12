@@ -4,19 +4,23 @@ module Test.Poly.Helpers
   , mkModesFromSet
   , selfClassifiedModes
   , withSelfClassifiedCtors
+  , withZeroParamGenArgSigs
   , identityModeMap
   , identityModMap
   ) where
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Data.Text (Text)
 import qualified Data.Text as T
 import Strat.Poly.Doctrine (Doctrine(..))
 import Strat.Poly.Doctrine (GenDecl(..), GenParam(..), InputShape(..))
+import Strat.Poly.Graph (Diagram)
+import Strat.Poly.GenArgSigs (withStructuralZeroParamGenArgSigs)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj (Obj, ObjName(..), ObjRef(..), TmVar(..), mkCon)
-import Strat.Poly.TypeTheory (TypeParamSig(..))
+import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..))
 
 
 mkModes :: [ModeName] -> ModeTheory
@@ -193,3 +197,6 @@ identityModMap doc =
     [ (name, ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [name] })
     | (name, decl) <- M.toList (mtDecls (dModes doc))
     ]
+
+withZeroParamGenArgSigs :: [Diagram] -> TypeTheory -> Either Text TypeTheory
+withZeroParamGenArgSigs = withStructuralZeroParamGenArgSigs

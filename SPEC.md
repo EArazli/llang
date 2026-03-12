@@ -89,7 +89,6 @@ Current elaboration rule:
 - when elaborating an object expression with expected owner mode `M`, unqualified constructors are resolved only in classifier mode `K = classifier(M)`,
 - a qualified constructor `Q.C` is accepted only when `Q = K`; other qualifiers are rejected as wrong-classifier references.
 - in the current kernel cut, constructor-eligible generators must have:
-  - no attrs,
   - no diagram-domain inputs,
   - exactly one codomain object, definitionally equal to `U`.
 - if `U` normalizes to a nullary classifier constructor `K.C`, `C` is also included as an implicit zero-argument constructor.
@@ -238,7 +237,6 @@ Current kernel checks:
 - each referenced generator must exist in mode `M`.
 - referenced generators must be term generators (not constructor-like declarations).
 - each referenced generator must have:
-  - no attrs,
   - exactly one plain input port (no binder input),
   - exactly one output.
 
@@ -294,12 +292,11 @@ Implemented fragments:
     - an arrow type constructor `Arr` in the classifier mode of `M` used by both shapes above.
   - primitive inference requires a unique `(lambda, app, Arr)` triple per NbE mode; zero matches or multiple matches are rejected.
   - additional `Arr` checks:
-    - `Arr` must be declared constructor-like in `classifier(M)` (no inputs, no attrs),
+    - `Arr` must be declared constructor-like in `classifier(M)` (no diagram-domain inputs),
     - `Arr` must have exactly two type parameters,
     - `Arr` must be eligible for owner mode `M` (present in derived constructor tables).
   - unsupported constructs are rejected during definitional normalization in NbE modes:
     - box/feedback/splice payloads,
-    - generator attrs,
     - binder metavariables,
     - generators other than the inferred lambda primitive carrying binder args.
 
@@ -323,12 +320,12 @@ Per-mode definitional data is represented by `DefFragment`:
 
 - `DefFragmentTRS`:
   - `dfMode`: mode name
-  - `dfFuns`: admissible term symbols in that mode, keyed by generator names (`GenName`); there is no separate “term function name” namespace—TRS term symbols are exactly the eligible generator symbols of the mode.
+  - `dfHeads`: admissible term heads in that mode, keyed by generator names (`GenName`); there is no separate term-head namespace, so TRS symbols are exactly the eligible generator symbols of the mode.
   - `dfRules`: admissible computational rules in that mode
   - `dfTRS`: compiled TRS used by normalization/equality
 - `DefFragmentNBE`:
   - `dfMode`: mode name
-  - `dfFuns`: admissible term symbols in that mode, keyed by generator names (`GenName`); there is no separate “term function name” namespace—TRS term symbols are exactly the eligible generator symbols of the mode.
+  - `dfHeads`: admissible term heads in that mode, keyed by generator names (`GenName`); there is no separate term-head namespace, so NbE term heads are exactly the eligible generator symbols of the mode.
   - `dfRules`: admissible computational rules in that mode
   - `dfNBE`: NbE configuration
 
@@ -419,7 +416,7 @@ Structural diagram isomorphism (`diagramIsoEq`) uses:
 - syntactic port-type equality
 - ordered incidence lists (`eIns`, `eOuts`) preserved positionally
 - payload-structural equality:
-  - `PGen`: generator name, attrs, binder args
+  - `PGen`: generator name, ordered stored args, binder args
   - `PBox`: inner diagram only (box name is annotation)
   - `PFeedback`: inner diagram
   - `PSplice`: binder metavariable
@@ -510,7 +507,7 @@ Current witness constraints:
 - if `witness` is omitted, it defaults to the transform name
 - witness generator mode must be the target mode of `mu`/`nu`
 - witness generator must have exactly one object variable `A` in the source mode of `mu`/`nu`
-- witness generator must have no term variables and no attributes
+- witness generator must have no term variables
 - witness generator boundary must be exactly one input and one output with type
   `mu(A) -> nu(A)` after normalization
 
@@ -629,7 +626,7 @@ Doctrine items:
 
 - `mode`, `modality`, `mod_eq`, `mod_transform`
 - `action`, `obligation`
-- `attrsort`, `data`, `gen`, `rule`
+- `data`, `gen`, `rule`
 
 Mode declaration supports optional engine selection:
 
@@ -683,7 +680,6 @@ Namespacing renames all schema content:
 - rewrite cells/rules
 - modality actions
 - obligations
-- attribute sorts
 
 `apply` builds one interface morphism `implIface : iface -> target` by:
 
@@ -823,17 +819,17 @@ These extractors interpret diagrams into a fixed semantic algebra implemented by
 
 Let `D` be a doctrine and `M` a mode of `D`. Write `Doc_M` for the nullary type constructor `Doc` in mode `M` and `FileTree_M` for the nullary type constructor `FileTree` in mode `M`.
 
-A doctrine `D` supports **Doc extraction in mode `M`** iff `D` contains, in mode `M`, generators with the following signatures (with no parameters and no binder inputs):
+A doctrine `D` supports **Doc extraction in mode `M`** iff `D` contains, in mode `M`, generators with the following signatures and no binder inputs:
 
 - `empty : [] -> [Doc_M]`
-- `text { s : Str } : [] -> [Doc_M]` where `Str` is an attribute sort whose literal kind is `string`
+- `text(x : Str) : [] -> [Doc_M]` where `Str` is a nullary type constructor in mode `M` marked `literal Str @M = string`
 - `line : [] -> [Doc_M]`
 - `cat : [Doc_M, Doc_M] -> [Doc_M]`
-- `indent { n : Int } : [Doc_M] -> [Doc_M]` where `Int` is an attribute sort whose literal kind is `int`
+- `indent(n : Int) : [Doc_M] -> [Doc_M]` where `Int` is a nullary type constructor in mode `M` marked `literal Int @M = int`
 
-A doctrine `D` supports **FileTree extraction in mode `M`** iff it supports Doc extraction in mode `M` and also contains, in mode `M`, generators (again with no parameters and no binder inputs):
+A doctrine `D` supports **FileTree extraction in mode `M`** iff it supports Doc extraction in mode `M` and also contains, in mode `M`, generators with the following signatures and no binder inputs:
 
-- `singleFile { path : Str } : [Doc_M] -> [FileTree_M]` where `Str` is an attribute sort of literal kind `string`
+- `singleFile(path : Str) : [Doc_M] -> [FileTree_M]` where `Str` is a nullary type constructor in mode `M` marked `literal Str @M = string`
 - `concatTree : [FileTree_M, FileTree_M] -> [FileTree_M]`
 
 ### 12.2 Pipeline semantics

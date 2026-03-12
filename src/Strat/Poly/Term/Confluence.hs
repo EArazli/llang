@@ -7,7 +7,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.List as L
-import Strat.Poly.Term.AST (TermExpr(..))
+import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
 import Strat.Poly.Term.RewriteSystem
   ( TRS(..)
@@ -98,25 +98,39 @@ isTrivialSelfOverlap outer inner pos =
 overlapPositions :: TermExpr -> [[Int]]
 overlapPositions tm =
   case tm of
-    TMFun _ args -> [] : concat [ map (i :) (overlapPositions a) | (i, a) <- zip [0 :: Int ..] args ]
+    TMGen _ args -> [] : concat [ map (i :) (overlapArgPositions a) | (i, a) <- zip [0 :: Int ..] args ]
     _ -> []
+
+overlapArgPositions :: TermHeadArg -> [[Int]]
+overlapArgPositions arg =
+  case arg of
+    THAObj _ -> []
+    THATm tm -> overlapPositions tm
 
 subtermAt :: [Int] -> TermExpr -> Maybe TermExpr
 subtermAt [] tm = Just tm
 subtermAt (i:is) tm =
   case tm of
-    TMFun _ args -> do
+    TMGen _ args -> do
       arg <- nth args i
-      subtermAt is arg
+      subtermAtArg is arg
     _ -> Nothing
+
+subtermAtArg :: [Int] -> TermHeadArg -> Maybe TermExpr
+subtermAtArg _ (THAObj _) = Nothing
+subtermAtArg is (THATm tm) = subtermAt is tm
 
 replaceAt :: [Int] -> TermExpr -> TermExpr -> TermExpr
 replaceAt [] new _ = new
 replaceAt (i:is) new tm =
   case tm of
-    TMFun f args ->
-      TMFun f (replaceNth i (replaceAt is new) args)
+    TMGen f args ->
+      TMGen f (replaceNth i (replaceHeadArgAt is new) args)
     _ -> tm
+
+replaceHeadArgAt :: [Int] -> TermExpr -> TermHeadArg -> TermHeadArg
+replaceHeadArgAt _ _ arg@(THAObj _) = arg
+replaceHeadArgAt is new (THATm tm) = THATm (replaceAt is new tm)
 
 replaceNth :: Int -> (a -> a) -> [a] -> [a]
 replaceNth _ _ [] = []
@@ -158,9 +172,9 @@ canonicalizeVars tm =
   where
     go expr fwd next =
       case expr of
-        TMFun fn args ->
-          let (args', fwd', next') = goList args fwd next
-           in (TMFun fn args', fwd', next')
+        TMGen fn args ->
+          let (args', fwd', next') = goHeadArgs args fwd next
+           in (TMGen fn args', fwd', next')
         TMMeta v args ->
           let (args', fwd', next') = renameArgs args fwd next
            in (TMMeta v args', fwd', next')
@@ -169,12 +183,20 @@ canonicalizeVars tm =
             Just j -> (TMBound j, fwd, next)
             Nothing ->
               (TMBound next, M.insert i next fwd, next + 1)
+        TMLit lit -> (TMLit lit, fwd, next)
 
-    goList [] fwd next = ([], fwd, next)
-    goList (x:xs) fwd next =
-      let (x', fwd1, next1) = go x fwd next
-          (xs', fwd2, next2) = goList xs fwd1 next1
+    goHeadArgs [] fwd next = ([], fwd, next)
+    goHeadArgs (x:xs) fwd next =
+      let (x', fwd1, next1) = goHeadArg x fwd next
+          (xs', fwd2, next2) = goHeadArgs xs fwd1 next1
        in (x' : xs', fwd2, next2)
+
+    goHeadArg arg fwd next =
+      case arg of
+        THAObj obj -> (THAObj obj, fwd, next)
+        THATm tm0 ->
+          let (tm1, fwd1, next1) = go tm0 fwd next
+           in (THATm tm1, fwd1, next1)
 
     renameArgs [] fwd next = ([], fwd, next)
     renameArgs (i:is) fwd next =

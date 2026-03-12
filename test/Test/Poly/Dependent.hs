@@ -38,10 +38,10 @@ import Strat.Poly.Obj
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
   , TypeParamSig(..)
-  , TmFunSig(..)
+  , TmHeadSig(..)
   , TmRule(..)
   , modeOnlyTypeTheory
-  , setModeTermFuns
+  , setModeTermHeads
   , setModeTermRules
   , setModeTermTRS
   )
@@ -66,9 +66,10 @@ import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVars)
 import Strat.Poly.Diagram (idD, genDTm, compD, freeVarsDiagram)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Rewrite (RewriteRule(..), rewriteOnce)
+import Strat.Poly.Term.AST (TermHeadArg(..))
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr, diagramGraphToTermExpr)
 import Strat.Poly.Term.RewriteCompile (compileAllTermRules)
-import Test.Poly.Helpers (mkModes)
+import Test.Poly.Helpers (mkModes, withZeroParamGenArgSigs)
 
 
 tests :: TestTree
@@ -93,6 +94,7 @@ tests =
     , testCase "matching accepts term-context compatibility up to defeq" testMatchTmCtxDefEqCompatibility
     , testCase "iso matching drops candidates when dependent substitution fails" testIsoMatchDropsSubstFailure
     , testCase "checked term conversion accepts definitional sort equality" testCheckedTermConversionDefEq
+    , testCase "checked term conversion rejects bad generalized head sorts" testCheckedTermConversionRejectsBadHeadSort
     , testCase "binder metas + splice rewrite" testBinderMetaSplice
     , testCase "explicit binder term args can reference bound term vars" testExplicitBinderTermArg
     ]
@@ -139,9 +141,9 @@ testDoctrineNormalizeTypeArg = do
   let aTy = mkCon (ObjRef modeM (ObjName "A")) []
   let vecRef = ObjRef modeM (ObjName "Vec")
   let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
-  let z = TMFun (GenName "Z") []
-  let s x = TMFun (GenName "S") [x]
-  let add x y = TMFun (GenName "add") [x, y]
+  let z = TMGen (GenName "Z") []
+  let s x = TMGen (GenName "S") [THATm x]
+  let add x y = TMGen (GenName "add") [THATm x, THATm y]
   tmArg <- require (termExprToDiagram tt [] natTy (add (s z) (s z)))
   wantTm <- require (termExprToDiagram tt [] natTy (s (s z)))
   let ty = mkCon vecRef [OATm tmArg, OAObj aTy]
@@ -159,9 +161,9 @@ testDoctrineNormalizeTypeArg = do
 testNormalizeTm :: Assertion
 testNormalizeTm = do
   (tt, natTy, _modeM, _modeI) <- require mkNatTypeTheory
-  let z = TMFun (GenName "Z") []
-  let s x = TMFun (GenName "S") [x]
-  let add x y = TMFun (GenName "add") [x, y]
+  let z = TMGen (GenName "Z") []
+  let s x = TMGen (GenName "S") [THATm x]
+  let add x y = TMGen (GenName "add") [THATm x, THATm y]
   tm <- require (termExprToDiagram tt [] natTy (add (s z) (s z)))
   norm <- require (normalizeTermDiagram tt [] natTy tm)
   want <- require (termExprToDiagram tt [] natTy (s (s z)))
@@ -172,9 +174,9 @@ testNormalizeTm = do
 testNormalizeTmIdempotent :: Assertion
 testNormalizeTmIdempotent = do
   (tt, natTy, _modeM, _modeI) <- require mkNatTypeTheory
-  let z = TMFun (GenName "Z") []
-  let s x = TMFun (GenName "S") [x]
-  let add x y = TMFun (GenName "add") [x, y]
+  let z = TMGen (GenName "Z") []
+  let s x = TMGen (GenName "S") [THATm x]
+  let add x y = TMGen (GenName "add") [THATm x, THATm y]
   tm <- require (termExprToDiagram tt [] natTy (add (s z) (s z)))
   n1 <- require (normalizeTermDiagram tt [] natTy tm)
   n2 <- require (normalizeTermDiagram tt [] natTy n1)
@@ -321,8 +323,8 @@ testDependentUnify = do
   let aTy = mkCon (ObjRef modeM (ObjName "A")) []
   let tt = withCtorSigs tt0 [(vecRef, [TPS_Tm natTy, TPS_Ty modeM])]
   let n = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
-  let z = TMFun (GenName "Z") []
-  let add x y = TMFun (GenName "add") [x, y]
+  let z = TMGen (GenName "Z") []
+  let add x y = TMGen (GenName "add") [THATm x, THATm y]
   lhsTm <- require (termExprToDiagram tt [] natTy (add (TMMeta n []) z))
   rhsTm <- require (termExprToDiagram tt [] natTy (TMMeta n []))
   let lhs = mkCon vecRef [OATm lhsTm, OAObj aTy]
@@ -383,7 +385,8 @@ testMatchBoundSortUsesCurrentSubst = do
   let host = h3 { dIn = [h1, h2], dOut = [] }
   _ <- require (validateDiagram host)
 
-  let cfg = MatchConfig tt (S.singleton (aVar))
+  tt' <- require (withZeroParamGenArgSigs [lhs, host] tt)
+  let cfg = MatchConfig tt' (S.singleton (aVar))
   matches <- require (findAllMatches cfg lhs host)
   assertBool "expected at least one match" (not (null matches))
 
@@ -392,8 +395,8 @@ testDependentCompDefEq = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
   let outRef = ObjRef modeM (ObjName "Out")
-  let z = TMFun (GenName "Z") []
-  let add x y = TMFun (GenName "add") [x, y]
+  let z = TMGen (GenName "Z") []
+  let add x y = TMGen (GenName "add") [THATm x, THATm y]
   let vecTy tmArg = mkCon vecRef [OATm tmArg]
   let outTy = mkCon outRef []
   let tt =
@@ -413,8 +416,8 @@ testDefEqObjTermIndexReduction :: Assertion
 testDefEqObjTermIndexReduction = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
-  let z = TMFun (GenName "Z") []
-  let add x y = TMFun (GenName "add") [x, y]
+  let z = TMGen (GenName "Z") []
+  let add x y = TMGen (GenName "add") [THATm x, THATm y]
   let tt =
         withCtorSigs tt0 [(vecRef, [TPS_Tm natTy])]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
@@ -451,8 +454,8 @@ testMatchTmCtxDefEqCompatibility = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
   let vecTy tmArg = mkCon vecRef [OATm tmArg]
-  let z = TMFun (GenName "Z") []
-  let add x y = TMFun (GenName "add") [x, y]
+  let z = TMGen (GenName "Z") []
+  let add x y = TMGen (GenName "add") [THATm x, THATm y]
   let tt =
         withCtorSigs tt0 [(vecRef, [TPS_Tm natTy])]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
@@ -487,8 +490,8 @@ testCheckedTermConversionDefEq = do
   (tt0, natTy, modeM, _modeI) <- require mkNatTypeTheory
   let vecRef = ObjRef modeM (ObjName "Vec")
   let tt = withCtorSigs tt0 [(vecRef, [TPS_Tm natTy])]
-  let z = TMFun (GenName "Z") []
-  let add x y = TMFun (GenName "add") [x, y]
+  let z = TMGen (GenName "Z") []
+  let add x y = TMGen (GenName "add") [THATm x, THATm y]
   tmAdd <- require (termExprToDiagram tt [] natTy (add z z))
   tmZ <- require (termExprToDiagram tt [] natTy z)
   let sortAdd = mkCon vecRef [OATm tmAdd]
@@ -499,6 +502,35 @@ testCheckedTermConversionDefEq = do
     Right _ -> assertFailure "expected unchecked conversion to reject structural sort mismatch"
   _ <- require (DE.termExprToDiagramChecked tt [] sortZ (TMMeta xVar []))
   pure ()
+
+testCheckedTermConversionRejectsBadHeadSort :: Assertion
+testCheckedTermConversionRejectsBadHeadSort = do
+  let mode = ModeName "M"
+  let aTy = mkCon (ObjRef mode (ObjName "A")) []
+  let bTy = mkCon (ObjRef mode (ObjName "B")) []
+  let cTy = mkCon (ObjRef mode (ObjName "C")) []
+  let fName = GenName "f"
+  let cName = GenName "c"
+  let headSigs =
+        M.fromList
+          [ (fName, TmHeadSig { thsParams = [], thsInputs = [aTy], thsRes = bTy })
+          , (cName, TmHeadSig { thsParams = [], thsInputs = [], thsRes = cTy })
+          ]
+  let tt = setModeTermHeads mode headSigs (modeOnlyTypeTheory (mkModes [mode]))
+  let badExpr = TMGen fName [THATm (TMGen cName [])]
+  case DE.termExprToDiagramChecked tt [] bTy badExpr of
+    Left _ -> pure ()
+    Right _ ->
+      assertFailure "expected checked term->diagram conversion to reject mismatched generalized head input sort"
+  let d0 = emptyDiagram mode []
+  let (cOut, d1) = freshPort cTy d0
+  d2 <- require (addEdgePayload (PGen cName [] []) [] [cOut] d1)
+  let (fOut, d3) = freshPort bTy d2
+  badDiag <- require (TermDiagram <$> addEdgePayload (PGen fName [] []) [cOut] [fOut] d3)
+  case DE.diagramToTermExprChecked tt [] bTy badDiag of
+    Left _ -> pure ()
+    Right _ ->
+      assertFailure "expected checked diagram->term conversion to reject mismatched generalized head input sort"
 
 testBinderMetaSplice :: Assertion
 testBinderMetaSplice = do
@@ -512,7 +544,7 @@ testBinderMetaSplice = do
   rhs <- require (mkSpliceRHS mode aTy meta)
 
   let rule = RewriteRule { rrName = "beta", rrLHS = lhs, rrRHS = rhs, rrTyVars = [], rrTmVars = [] }
-  let tt = modeOnlyTypeTheory (mkModes [mode])
+  tt <- require (withZeroParamGenArgSigs [lhs, rhs, host] (modeOnlyTypeTheory (mkModes [mode])))
   step <- require (rewriteOnce tt [rule] host)
   out <-
     case step of
@@ -596,19 +628,19 @@ mkNatTypeTheory = do
   mt0 <- addMode modeM emptyModeTheory
   mt1 <- addMode modeI mt0
   let natTy = mkCon (ObjRef modeI (ObjName "Nat")) []
-  let z = TMFun (GenName "Z") []
-  let s x = TMFun (GenName "S") [x]
-  let add x y = TMFun (GenName "add") [x, y]
+  let z = TMGen (GenName "Z") []
+  let s x = TMGen (GenName "S") [THATm x]
+  let add x y = TMGen (GenName "add") [THATm x, THATm y]
   let vM = TmVar { tmvName = "m", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let vN = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let funSigs =
         M.fromList
-          [ (GenName "Z", TmFunSig [] natTy)
-          , (GenName "S", TmFunSig [natTy] natTy)
-          , (GenName "add", TmFunSig [natTy, natTy] natTy)
+          [ (GenName "Z", TmHeadSig [] [] natTy)
+          , (GenName "S", TmHeadSig [] [natTy] natTy)
+          , (GenName "add", TmHeadSig [] [natTy, natTy] natTy)
           ]
   let ttSig =
-        setModeTermFuns modeI funSigs $
+        setModeTermHeads modeI funSigs $
           withCtorSigs
             (modeOnlyTypeTheory mt1)
             []

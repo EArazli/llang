@@ -40,12 +40,16 @@ import Strat.Poly.Obj
 import qualified Strat.Poly.UnifyObj as U
 import Strat.Poly.Rewrite (RewriteRule(..))
 import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
+import Strat.Poly.GenArgSigs (withStructuralZeroParamGenArgSigs)
 import Strat.Poly.Cell2 (Cell2(..), c2TyVars, c2TmVars)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
 import Strat.Poly.ModeTheory (ModeTheory)
+import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.Names (GenName)
 import Strat.Poly.Syntax (CodeArg(..))
-import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
+import Strat.Poly.Tele (GenParam)
+import Strat.Poly.TypeTheory (TypeTheory(..), GenArgSig(..), lookupGenArgSig, modeOnlyTypeTheory)
 import Strat.Poly.Traversal (traverseDiagram)
 
 
@@ -99,7 +103,14 @@ criticalPairsForDoctrine mode policy doc = do
 
 criticalPairsForRules :: ModeTheory -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
 criticalPairsForRules mt mode rules =
-  criticalPairsForRulesTT (modeOnlyTypeTheory mt) mode rules
+  do
+    tt <- withStructuralZeroParamGenArgSigs (concatMap ruleDiagrams rules) (modeOnlyTypeTheory mt)
+    criticalPairsForRulesTT tt mode rules
+
+ruleDiagrams :: RuleInfo -> [Diagram]
+ruleDiagrams info =
+  let rule = riRule info
+   in [rrLHS rule, rrRHS rule]
 
 criticalPairsForRulesTT :: TypeTheory -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
 criticalPairsForRulesTT tt mode rules = do
@@ -218,13 +229,18 @@ renameRule idx rule =
       renameTmTerm (TermDiagram diag) =
         TermDiagram $
           runIdentity $
-            traverseDiagram onDiag onPayload pure diag
+            traverseDiagram onDiag onPayload onCodeArg pure diag
         where
           onDiag d =
             pure d
               { dPortObj = IM.map renameTmType (dPortObj d)
               , dTmCtx = map renameTmType (dTmCtx d)
               }
+          onCodeArg arg =
+            pure $
+              case arg of
+                CAObj obj -> CAObj (renameTmType obj)
+                CATm tmArg -> CATm tmArg
       onPayload payload =
         pure $
           case payload of
@@ -349,10 +365,13 @@ payloadSubsts tt flex lhs tySubst p1 p2 =
         then Right []
         else do
           tmCtx' <- mapLeft fatalSubstError (U.applySubstCtx tt tySubst (dTmCtx lhs))
-          case U.unifyCodeArgsFlex tt tmCtx' flex tySubst args1 args2 of
-            Left err -> mapLeft fatalSubstError (Left err)
-            Right tySubst' ->
-              foldl step (Right [tySubst']) (zip bargs1 bargs2)
+          case lookupGenArgParams tt (dMode lhs) g1 args1 args2 of
+            Nothing -> Right []
+            Just params ->
+              case U.unifyGenArgsFlex tt tmCtx' flex tySubst params args1 args2 of
+                Left err -> mapLeft fatalSubstError (Left err)
+                Right tySubst' ->
+                  foldl step (Right [tySubst']) (zip bargs1 bargs2)
       where
         step acc pair = do
           subs <- acc
@@ -382,6 +401,12 @@ payloadSubsts tt flex lhs tySubst p1 p2 =
       | x == y -> Right [tySubst]
     (PInternalDrop, PInternalDrop) -> Right [tySubst]
     _ -> Right []
+
+lookupGenArgParams :: TypeTheory -> ModeName -> GenName -> [CodeArg] -> [CodeArg] -> Maybe [GenParam]
+lookupGenArgParams tt mode g _args1 _args2 =
+  case lookupGenArgSig tt mode g of
+    Just sig -> Just (gasParams sig)
+    Nothing -> Nothing
 
 edgeCompatible :: Edge -> Edge -> Bool
 edgeCompatible e1 e2 =
@@ -603,7 +628,7 @@ applySubstsDiagramLocal tt tySubst diag =
 
 renameTmVarsDiagram :: (Obj -> Obj) -> Diagram -> Diagram
 renameTmVarsDiagram renameTy =
-  runIdentity . traverseDiagram onDiag onPayload pure
+  runIdentity . traverseDiagram onDiag onPayload onCodeArg pure
   where
     onDiag d =
       pure d
@@ -615,10 +640,15 @@ renameTmVarsDiagram renameTy =
         case payload of
           PTmMeta v -> PTmMeta v { tmvSort = renameTy (tmvSort v) }
           _ -> payload
+    onCodeArg arg =
+      pure $
+        case arg of
+          CAObj obj -> CAObj (renameTy obj)
+          CATm tm -> CATm tm
 
 renameBinderMetasDiagram :: (BinderMetaVar -> BinderMetaVar) -> Diagram -> Diagram
 renameBinderMetasDiagram renameMeta =
-  runIdentity . traverseDiagram pure onPayload onBArg
+  runIdentity . traverseDiagram pure onPayload pure onBArg
   where
     onPayload payload =
       pure $

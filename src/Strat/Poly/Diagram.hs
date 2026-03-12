@@ -147,7 +147,7 @@ applySubstDiagram = U.applySubstDiagram
 
 freeVarsDiagram :: Diagram -> S.Set TmVar
 freeVarsDiagram =
-  foldDiagram onDiag onPayload (\_ -> mempty)
+  foldDiagram onDiag onPayload onCodeArg (\_ -> mempty)
   where
     onDiag d =
       S.unions
@@ -158,18 +158,15 @@ freeVarsDiagram =
       case payload of
         PTmMeta v -> S.singleton v
         PTmLit _ -> S.empty
-        PGen _ args _ ->
-          S.unions
-            [ case arg of
-                CAObj obj -> freeVarsObj obj
-                CATm tm -> freeVarsTerm tm
-            | arg <- args
-            ]
         _ -> S.empty
+    onCodeArg arg =
+      case arg of
+        CAObj obj -> freeVarsObj obj
+        CATm tm -> freeVarsTerm tm
 
 binderArgMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
 binderArgMetaVarsDiagram =
-  foldDiagram (\_ -> mempty) (\_ -> mempty) onBArg
+  foldDiagram (\_ -> mempty) (\_ -> mempty) (\_ -> mempty) onBArg
   where
     onBArg barg =
       case barg of
@@ -178,7 +175,7 @@ binderArgMetaVarsDiagram =
 
 spliceMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
 spliceMetaVarsDiagram =
-  foldDiagram (\_ -> mempty) onPayload (\_ -> mempty)
+  foldDiagram (\_ -> mempty) onPayload (\_ -> mempty) (\_ -> mempty)
   where
     onPayload payload =
       case payload of

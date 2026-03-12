@@ -189,7 +189,7 @@ binderHoleNames n =
 
 binderHoleCaptureRiskMetasDiagram :: Diagram -> S.Set BinderMetaVar
 binderHoleCaptureRiskMetasDiagram =
-  foldDiagram (\_ -> mempty) onPayload (\_ -> mempty)
+  foldDiagram (\_ -> mempty) onPayload (\_ -> mempty) (\_ -> mempty)
   where
     onPayload payload =
       case payload of

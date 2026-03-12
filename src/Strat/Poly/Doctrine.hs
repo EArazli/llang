@@ -21,6 +21,7 @@ module Strat.Poly.Doctrine
   , lookupCtorSigForOwnerInTables
   , lookupCtorRefForOwnerInTables
   , lookupGenDeclInDoctrine
+  , tmHeadSigForGenDecl
   , actionImageForGenerator
   , instantiateGenParams
   , genericGenDiagram
@@ -47,7 +48,8 @@ import Strat.Poly.TypeTheory
   , ttCtorTablesByOwner
   , DefFragment(..)
   , TypeParamSig(..)
-  , TmFunSig(..)
+  , TmHeadSig(..)
+  , GenArgSig(..)
   , TmRule(..)
   , emptyDefFragment
   )
@@ -156,6 +158,25 @@ lookupGenDeclInDoctrine missingMsg doc mode genName =
     Nothing -> Left missingMsg
     Just gd -> Right gd
 
+tmHeadSigForGenDecl :: GenDecl -> Maybe TmHeadSig
+tmHeadSigForGenDecl gd =
+  case gdCod gd of
+    [res]
+      | all isPort (gdDom gd) ->
+          Just
+            TmHeadSig
+              { thsParams = gdParams gd
+              , thsInputs = [ ty | InPort ty <- gdDom gd ]
+              , thsRes = res
+              }
+    _ ->
+      Nothing
+  where
+    isPort sh =
+      case sh of
+        InPort _ -> True
+        InBinder _ -> False
+
 isTypeDeclGenNameInTables :: Doctrine -> CtorTables -> ModeName -> ObjName -> Bool
 isTypeDeclGenNameInTables doc tables classifierMode ctorName =
   any
@@ -203,9 +224,10 @@ mkTypeTheoryFromTables doc ctorTables = do
 
 doctrineTypeTheoryBaseFromTables :: Doctrine -> CtorTables -> Either Text TypeTheory
 doctrineTypeTheoryBaseFromTables doc ctorTables =
-  let tmFuns = derivedTmFuns doc ctorTables
-      tmRules = derivedTmRules doc tmFuns
-      fragments0 = mkDefFragments (dModes doc) tmFuns tmRules M.empty
+  let tmHeads = derivedTmHeads doc ctorTables
+      tmRules = derivedTmRules doc tmHeads
+      genArgSigs = derivedGenArgSigs doc
+      fragments0 = mkDefFragments (dModes doc) tmHeads tmRules M.empty
    in do
         ctorSigs <- ctorSigEnvFromTables doc ctorTables
         pure
@@ -214,6 +236,7 @@ doctrineTypeTheoryBaseFromTables doc ctorTables =
             , ttCtorSigs = ctorSigs
             , ttUniverseCtors = universeCtorsFromTables ctorTables
             , ttLiteralKinds = literalKindsFromDoctrine doc ctorTables
+            , ttGenArgSigs = genArgSigs
             , ttDefFragments = fragments0
             , ttStrictCtorLookup = True
             }
@@ -247,27 +270,29 @@ doctrineTypeTheoryBaseFromTables doc ctorTables =
     universeCtorsFromTables tables =
       M.map (S.fromList . M.keys) tables
 
-    literalKindsFromDoctrine d tables =
+    literalKindsFromDoctrine d _tables =
       M.fromList
-        [ (ownerMode, M.fromList entries)
-        | (ownerMode, ownerTable) <- M.toList tables
-        , let entries =
-                [ (ctorName, litKind)
-                | ctorName <- M.keys ownerTable
-                , Just litKind <- [lookupLiteralKind ownerMode ctorName]
-                ]
+        [ (ownerMode, declaredLiteralKinds ownerMode)
+        | ownerMode <- M.keys (mtModes (dModes d))
         ]
       where
-        lookupLiteralKind ownerMode ctorName = do
-          classDecl <- classifierOfMode (dModes d) ownerMode
-          let classifierMode = cdClassifier classDecl
-          let ObjName ctorText = ctorName
-          genDecl <- M.lookup classifierMode (dGens d) >>= M.lookup (GenName ctorText)
-          gdLiteralKind genDecl
+        declaredLiteralKinds ownerMode =
+          M.fromList
+            [ (ObjName ctorText, litKind)
+            | genDecl <- M.elems (M.findWithDefault M.empty classifierMode (dGens d))
+            , isCtorLikeGen genDecl
+            , let GenName ctorText = gdName genDecl
+            , Just litKind <- [gdLiteralKind genDecl]
+            ]
+          where
+            classifierMode =
+              case classifierOfMode (dModes d) ownerMode of
+                Just classDecl -> cdClassifier classDecl
+                Nothing -> ownerMode
 
 mkDefFragments
   :: ModeTheory
-  -> M.Map ModeName (M.Map GenName TmFunSig)
+  -> M.Map ModeName (M.Map GenName TmHeadSig)
   -> M.Map ModeName [TmRule]
   -> M.Map ModeName TRS
   -> M.Map ModeName DefFragment
@@ -282,14 +307,14 @@ mkDefFragments mt tmFuns tmRules tmTRS =
         DefEqTRS ->
           DefFragmentTRS
             { dfMode = mode
-            , dfFuns = M.findWithDefault M.empty mode tmFuns
+            , dfHeads = M.findWithDefault M.empty mode tmFuns
             , dfRules = M.findWithDefault [] mode tmRules
             , dfTRS = M.findWithDefault (mkTRS mode []) mode tmTRS
             }
         DefEqNBE ->
           DefFragmentNBE
             { dfMode = mode
-            , dfFuns = M.findWithDefault M.empty mode tmFuns
+            , dfHeads = M.findWithDefault M.empty mode tmFuns
             , dfRules = M.findWithDefault [] mode tmRules
             , dfNBE = defaultNbeConfig
             }
@@ -585,7 +610,7 @@ buildCompiledFragments doc tt0 trsByMode =
                   nbeFrag@DefFragmentNBE {} ->
                     DefFragmentTRS
                       { dfMode = dfMode nbeFrag
-                      , dfFuns = dfFuns nbeFrag
+                      , dfHeads = dfHeads nbeFrag
                       , dfRules = dfRules nbeFrag
                       , dfTRS = trs
                       }
@@ -609,7 +634,7 @@ buildCompiledFragments doc tt0 trsByMode =
                   trsFrag@DefFragmentTRS {} ->
                     DefFragmentNBE
                       { dfMode = dfMode trsFrag
-                      , dfFuns = dfFuns trsFrag
+                      , dfHeads = dfHeads trsFrag
                       , dfRules = dfRules trsFrag
                       , dfNBE = cfg
                       }
@@ -647,7 +672,7 @@ buildCtorEligibilityFragments doc tt0 trsByMode =
                   nbeFrag@DefFragmentNBE {} ->
                     DefFragmentTRS
                       { dfMode = dfMode nbeFrag
-                      , dfFuns = dfFuns nbeFrag
+                      , dfHeads = dfHeads nbeFrag
                       , dfRules = dfRules nbeFrag
                       , dfTRS = trs
                       }
@@ -669,7 +694,7 @@ buildCtorEligibilityFragments doc tt0 trsByMode =
                   trsFrag@DefFragmentTRS {} ->
                     DefFragmentNBE
                       { dfMode = dfMode trsFrag
-                      , dfFuns = dfFuns trsFrag
+                      , dfHeads = dfHeads trsFrag
                       , dfRules = dfRules trsFrag
                       , dfNBE = cfg
                       }
@@ -686,7 +711,7 @@ renderRootSymbols trs =
     names = S.toList (S.fromList (mapMaybe rootName (RS.trsRules trs)))
     rootName rule =
       case RS.trLHS rule of
-        TMFun (GenName name) _ -> Just name
+        TMGen (GenName name) _ -> Just name
         _ -> Nothing
 
 renderFragmentRules :: TRS -> Text
@@ -700,31 +725,31 @@ renderFragmentRules trs =
       | rule <- RS.trsRules trs
       ]
 
-derivedTmFuns :: Doctrine -> CtorTables -> M.Map ModeName (M.Map GenName TmFunSig)
-derivedTmFuns doc ctorTables =
+derivedTmHeads :: Doctrine -> CtorTables -> M.Map ModeName (M.Map GenName TmHeadSig)
+derivedTmHeads doc ctorTables =
   M.fromList
-    [ (mode, funs)
+    [ (mode, heads)
     | (mode, table) <- M.toList (dGens doc)
-    , let funs =
+    , let heads =
             M.fromList
-              [ (GenName gName, TmFunSig { tfsArgs = [ ty | InPort ty <- gdDom gd ], tfsRes = res })
+              [ (gdName gd, sig)
               | gd <- M.elems table
               , let GenName gName = gdName gd
               , not (isTypeDeclGenNameInTables doc ctorTables mode (ObjName gName))
-              , null (gdTyVars gd)
-              , null (gdTmVars gd)
-              , all isPort (gdDom gd)
-              , [res] <- [gdCod gd]
+              , Just sig <- [tmHeadSigForGenDecl gd]
               ]
-    , not (M.null funs)
+    , not (M.null heads)
     ]
-  where
-    isPort sh =
-      case sh of
-        InPort _ -> True
-        InBinder _ -> False
 
-derivedTmRules :: Doctrine -> M.Map ModeName (M.Map GenName TmFunSig) -> M.Map ModeName [TmRule]
+derivedGenArgSigs :: Doctrine -> M.Map ModeName (M.Map GenName GenArgSig)
+derivedGenArgSigs doc =
+  M.map
+    ( M.map
+        (\gd -> GenArgSig { gasParams = gdParams gd })
+    )
+    (dGens doc)
+
+derivedTmRules :: Doctrine -> M.Map ModeName (M.Map GenName TmHeadSig) -> M.Map ModeName [TmRule]
 derivedTmRules doc tmFuns =
   M.fromListWith (<>)
     [ (mode, [rule])
@@ -733,7 +758,7 @@ derivedTmRules doc tmFuns =
     , (lhs, rhs) <- oriented cell
     , let mode = dMode lhs
     , Just funs <- [M.lookup mode tmFuns]
-    , Just rule <- [cellPairToTmRule funs lhs rhs]
+    , Just rule <- [cellPairToTmRule funs (c2TmVars cell) lhs rhs]
     ]
   where
     oriented cell =
@@ -743,9 +768,10 @@ derivedTmRules doc tmFuns =
         Bidirectional -> [(c2LHS cell, c2RHS cell), (c2RHS cell, c2LHS cell)]
         Unoriented -> []
 
-cellPairToTmRule :: M.Map GenName TmFunSig -> Diagram -> Diagram -> Maybe TmRule
-cellPairToTmRule funs lhs0 rhs0 = do
-  vars <- mkInputVars lhs0
+cellPairToTmRule :: M.Map GenName TmHeadSig -> [TmVar] -> Diagram -> Diagram -> Maybe TmRule
+cellPairToTmRule heads tmVars lhs0 rhs0 = do
+  boundaryVars <- mkInputVars lhs0
+  let vars = boundaryVars <> tmVars
   let varCtx = map tmvSort vars
   let lhs = lhs0 { dTmCtx = varCtx }
   let rhs = rhs0 { dTmCtx = varCtx }
@@ -759,10 +785,12 @@ cellPairToTmRule funs lhs0 rhs0 = do
     ensureRuleFunSigs d = mapM_ checkEdge (IM.elems (dEdges d))
     checkEdge edge =
       case ePayload edge of
-        PGen (GenName gName) args bargs
-          | null args && null bargs -> do
-              sig <- M.lookup (GenName gName) funs
-              if length (tfsArgs sig) == length (eIns edge) && length (eOuts edge) == 1
+        PGen g args bargs
+          | null bargs -> do
+              sig <- M.lookup g heads
+              if length (thsParams sig) == length args
+                  && length (thsInputs sig) == length (eIns edge)
+                  && length (eOuts edge) == 1
                 then Just ()
                 else Nothing
         PTmMeta _ -> Just ()

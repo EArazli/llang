@@ -10,7 +10,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.List as L
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Term.AST (TermExpr(..))
+import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
 import Strat.Poly.Term.RewriteSystem (TRS(..), TRule(..))
 
 
@@ -66,7 +66,7 @@ ruleGraphs :: TRule -> Either Text [SCGraph]
 ruleGraphs rule = do
   (f, lhsArgs) <-
     case trLHS rule of
-      TMFun fn args -> Right (fn, args)
+      TMGen fn args -> Right (fn, args)
       _ -> Left ("termination checker requires function-headed lhs in rule " <> trName rule)
   let calls = collectCalls (trRHS rule)
   pure
@@ -74,34 +74,44 @@ ruleGraphs rule = do
     | (g, qArgs) <- calls
     ]
 
-collectCalls :: TermExpr -> [(GenName, [TermExpr])]
+collectCalls :: TermExpr -> [(GenName, [TermHeadArg])]
 collectCalls tm =
   case tm of
-    TMFun f args -> (f, args) : concatMap collectCalls args
+    TMGen f args -> (f, args) : concatMap collectHeadArgCalls args
     TMMeta _ _ -> []
     TMBound _ -> []
+    TMLit _ -> []
 
-mkGraph :: GenName -> [TermExpr] -> GenName -> [TermExpr] -> SCGraph
+collectHeadArgCalls :: TermHeadArg -> [(GenName, [TermHeadArg])]
+collectHeadArgCalls arg =
+  case arg of
+    THAObj _ -> []
+    THATm tm -> collectCalls tm
+
+mkGraph :: GenName -> [TermHeadArg] -> GenName -> [TermHeadArg] -> SCGraph
 mkGraph f lhsArgs g qArgs =
   SCGraph
     { scFrom = f
     , scTo = g
-    , scFromArity = length lhsArgs
-    , scToArity = length qArgs
+    , scFromArity = length lhsTerms
+    , scToArity = length qTerms
     , scEdges = edgeMap
     }
   where
+    lhsTerms = [ tm | THATm tm <- lhsArgs ]
+    qTerms = [ tm | THATm tm <- qArgs ]
+
     edgeMap =
       M.fromList
         [ ((i, j), rel)
-        | (i, p) <- zip [0 :: Int ..] lhsArgs
-        , (j, q) <- zip [0 :: Int ..] qArgs
+        | (i, p) <- zip [0 :: Int ..] lhsTerms
+        , (j, q) <- zip [0 :: Int ..] qTerms
         , Just rel <- [edgeRel p q]
         ]
 
-    edgeRel p q
-      | strictSubterm q p = Just SCStrict
-      | subterm q p = Just SCWeak
+    edgeRel tmP tmQ
+      | strictSubterm tmQ tmP = Just SCStrict
+      | subterm tmQ tmP = Just SCWeak
       | otherwise = Nothing
 
 closureGraphs :: [SCGraph] -> S.Set SCGraph
@@ -163,9 +173,10 @@ composeRel SCWeak SCWeak = SCWeak
 
 isIdempotent :: SCGraph -> Bool
 isIdempotent g =
-  case composeGraph g g of
-    Nothing -> False
-    Just gg -> gg == g
+  not (M.null (scEdges g))
+    && case composeGraph g g of
+      Nothing -> False
+      Just gg -> gg == g
 
 hasStrictSelfLoop :: SCGraph -> Bool
 hasStrictSelfLoop g
@@ -180,9 +191,16 @@ subterm needle tm
   | needle == tm = True
   | otherwise =
       case tm of
-        TMFun _ args -> any (subterm needle) args
+        TMGen _ args -> any (subtermHeadArg needle) args
         TMMeta _ _ -> False
         TMBound _ -> False
+        TMLit _ -> False
+
+subtermHeadArg :: TermExpr -> TermHeadArg -> Bool
+subtermHeadArg needle arg =
+  case arg of
+    THAObj _ -> False
+    THATm tm -> subterm needle tm
 
 strictSubterm :: TermExpr -> TermExpr -> Bool
 strictSubterm needle tm = needle /= tm && subterm needle tm

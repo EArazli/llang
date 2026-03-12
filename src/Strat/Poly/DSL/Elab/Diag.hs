@@ -53,6 +53,7 @@ import Strat.Poly.ModeTheory
 import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Names
 import Strat.Poly.Obj
+import qualified Strat.Poly.GenArgs as GA
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.TypeTheory (TypeTheory(..), literalKindForObj, ttCtorTablesByOwner)
 import qualified Strat.Poly.UnifyObj as U
@@ -205,26 +206,6 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
     rigidTy = S.fromList tyVars
     rigidTm = S.fromList tmVars
 
-    elabOneParamArg ttDoc ctorTables curTmCtx tyFreshMap tmFreshMap (argAcc, tyAcc, tmAcc) (paramKind, rawArg) =
-      case paramKind of
-        GP_Ty tyVar0 -> do
-          freshTyParam <-
-            case M.lookup tyVar0 tyFreshMap of
-              Nothing -> liftEither (Left "internal error: missing fresh type parameter")
-              Just v -> pure v
-          ownerMode <- liftEither (ownerModeForTypeMeta doc freshTyParam)
-          tyArg <- liftEither (elabObjExprWithTables doc ctorTables tyVars tmVars M.empty ownerMode rawArg)
-          if objOwnerMode tyArg == ownerMode
-            then pure (CAObj tyArg : argAcc, (freshTyParam, tyArg) : tyAcc, tmAcc)
-            else liftEither (Left "generator type argument mode mismatch")
-        GP_Tm tmVar0 -> do
-          freshTmParam <-
-            case M.lookup tmVar0 tmFreshMap of
-              Nothing -> liftEither (Left "internal error: missing fresh term parameter")
-              Just v -> pure v
-          tmArg <- elabTmArg ttDoc curTmCtx freshTmParam rawArg
-          pure (CATm tmArg : argAcc, tyAcc, (freshTmParam, tmArg) : tmAcc)
-
     build ttDoc ctorTables curTmCtx binderSigs e =
       case e of
         RDId ctx -> do
@@ -238,56 +219,37 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           pure (d1 { dIn = [pid], dOut = [pid] }, binderSigs)
         RDGen name mArgs mBinderArgs -> do
           gen <- liftEither (lookupGen doc mode (GenName name))
-          tyRename <- freshTySubst doc (gdTyVars gen)
-          tmRename <- freshTmSubst ttDoc curTmCtx (gdTmVars gen)
-          renameSubst <-
-            liftEither
-              ( U.mkSubst
-                  ( [ (v, CAObj ty)
-                    | (v, ty) <- M.toList tyRename
-                    ]
-                      <> [ (v, CATm tm)
-                         | (v, tm) <- M.toList tmRename
-                         ]
-                  )
-              )
+          (freshParams, renameSubst) <- liftEither (GA.freshGenParams ttDoc curTmCtx (gdParams gen))
+          let genFresh = gen { gdParams = freshParams }
           dom0 <- applySubstCtxDoc ttDoc renameSubst (gdPlainDom gen)
           cod0 <- applySubstCtxDoc ttDoc renameSubst (gdCod gen)
           binderSlots0 <- mapM (applySubstBinderSig ttDoc renameSubst) [ bs | InBinder bs <- gdDom gen ]
-          freshTyVars <- liftEither (extractFreshTyVars (gdTyVars gen) tyRename)
-          freshTmVars <- liftEither (extractFreshTmVars (gdTmVars gen) tmRename)
-          let tyFreshMap = M.fromList (zip (gdTyVars gen) freshTyVars)
-          let tmFreshMap = M.fromList (zip (gdTmVars gen) freshTmVars)
-          (genArgs, dom, cod, binderSlots) <-
+          (genArgs, argSubst, dom, cod, binderSlots) <-
             case mArgs of
               Nothing
                 | allowImplicitGenArgs -> do
-                    genArgs <- liftEither (implicitGenArgs (gdParams gen) tyRename tmRename)
-                    pure (genArgs, dom0, cod0, binderSlots0)
+                    genArgs <- liftEither (implicitGenArgs ttDoc curTmCtx freshParams)
+                    argSubst <- liftEither (instantiateGenParams ttDoc genFresh genArgs)
+                    dom <- applySubstCtxDoc ttDoc argSubst dom0
+                    cod <- applySubstCtxDoc ttDoc argSubst cod0
+                    binderSlots <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
+                    pure (genArgs, argSubst, dom, cod, binderSlots)
               _ -> do
                 rawArgs <- liftEither (resolveGenArgs (gdParams gen) mArgs)
                 args <- liftEither (normalizeGenArgs (gdParams gen) rawArgs)
-                (argsRev, tyBinds, tmBinds) <-
-                  foldM
-                    (elabOneParamArg ttDoc ctorTables curTmCtx tyFreshMap tmFreshMap)
-                    ([], [], [])
-                    (zip (gdParams gen) args)
-                argSubst <-
+                (genArgs, argSubst) <-
                   liftEither
-                    ( U.mkSubst
-                        ( [ (v, CAObj ty)
-                          | (v, ty) <- reverse tyBinds
-                          ]
-                            <> [ (v, CATm tm)
-                               | (v, tm) <- reverse tmBinds
-                               ]
-                        )
+                    ( GA.elabGenArgsSequentialWith
+                        ttDoc
+                        (elabTyArg ctorTables)
+                        (\expectedSort _ rawArg -> elabTmArg ttDoc curTmCtx expectedSort rawArg)
+                        freshParams
+                        args
                     )
-                let genArgs = reverse argsRev
                 dom <- applySubstCtxDoc ttDoc argSubst dom0
                 cod <- applySubstCtxDoc ttDoc argSubst cod0
                 binderSlots <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
-                pure (genArgs, dom, cod, binderSlots)
+                pure (genArgs, argSubst, dom, cod, binderSlots)
           (binderArgs, binderSigs') <- elaborateBinderArgs ttDoc binderSigs binderSlots mBinderArgs
           diag <- liftEither (mkGenDiag curTmCtx (gdName gen) genArgs binderArgs dom cod)
           pure (diag, binderSigs')
@@ -477,24 +439,31 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
                       | binderSigAlphaEq slot' slot -> pure (acc <> [BAMeta key], bsMap)
                       | otherwise -> liftEither (Left "binder meta used with inconsistent signature")
 
-    elabTmArg ttDoc curTmCtx v rawArg =
-      case elabTmTerm doc tyVars tmVars M.empty (Just (tmvSort v)) rawArg of
+    elabTyArg ctorTables v rawArg = do
+      ownerMode <- ownerModeForTypeMeta doc v
+      tyArg <- elabObjExprWithTables doc ctorTables tyVars tmVars M.empty ownerMode rawArg
+      if objOwnerMode tyArg == ownerMode
+        then pure tyArg
+        else Left "generator type argument mode mismatch"
+
+    elabTmArg ttDoc curTmCtx expectedSort rawArg =
+      case elabTmTerm doc tyVars tmVars M.empty (Just expectedSort) rawArg of
         Right tm -> pure tm
         Left err ->
           case rawArg of
             RPTVar name ->
-              case implicitBoundCandidate curTmCtx (tmvSort v) of
+              case implicitBoundCandidate curTmCtx expectedSort of
                 Right (Just idx) ->
-                  case termExprToDiagramChecked ttDoc curTmCtx (tmvSort v) (TMBound idx) of
+                  case termExprToDiagramChecked ttDoc curTmCtx expectedSort (TMBound idx) of
                     Right tm -> pure tm
-                    Left msg -> liftEither (Left ("explicit term argument `" <> name <> "`: " <> msg))
+                    Left msg -> Left ("explicit term argument `" <> name <> "`: " <> msg)
                 Right Nothing ->
-                  case literalKindForObj ttDoc (tmvSort v) of
-                    Just _ -> liftEither (mkImplicitLiteralMeta ttDoc curTmCtx name (tmvSort v))
-                    Nothing -> liftEither (Left err)
-                Left msg -> liftEither (Left ("explicit term argument `" <> name <> "`: " <> msg))
+                  case literalKindForObj ttDoc expectedSort of
+                    Just _ -> mkImplicitLiteralMeta ttDoc curTmCtx name expectedSort
+                    Nothing -> Left err
+                Left msg -> Left ("explicit term argument `" <> name <> "`: " <> msg)
             _ ->
-              liftEither (Left err)
+              Left err
       where
         mkImplicitLiteralMeta ttDoc' ctx name expectedSort =
           case literalKindForObj ttDoc' expectedSort of
@@ -688,20 +657,15 @@ resolveGenArgs params mArgs =
       | otherwise -> Left "missing generator arguments"
     Just args -> Right args
 
-implicitGenArgs :: [GenParam] -> M.Map TmVar Obj -> M.Map TmVar TermDiagram -> Either Text [CodeArg]
-implicitGenArgs params tyRename tmRename =
+implicitGenArgs :: TypeTheory -> [Obj] -> [GenParam] -> Either Text [CodeArg]
+implicitGenArgs ttDoc tmCtx params =
   mapM mkArg params
   where
     mkArg param =
       case param of
-        GP_Ty v ->
-          case M.lookup v tyRename of
-            Just ty -> Right (CAObj ty)
-            Nothing -> Left "internal error: missing implicit type argument"
+        GP_Ty v -> Right (CAObj (OVar v))
         GP_Tm v ->
-          case M.lookup v tmRename of
-            Just tm -> Right (CATm tm)
-            Nothing -> Left "internal error: missing implicit term argument"
+          CATm <$> termExprToDiagramChecked ttDoc tmCtx (tmvSort v) (TMMeta v (defaultMetaArgs tmCtx v))
 
 normalizeGenArgs :: [GenParam] -> [RawGenArg] -> Either Text [RawPolyObjExpr]
 normalizeGenArgs params args =
@@ -847,45 +811,6 @@ instance Monad Fresh where
 evalFresh :: Fresh a -> Either Text a
 evalFresh (Fresh f) = fmap fst (f 0)
 
-freshTySubst :: Doctrine -> [TmVar] -> Fresh (M.Map TmVar Obj)
-freshTySubst doc vars = do
-  pairs <- mapM (freshTyVar doc) vars
-  pure (M.fromList pairs)
-
-freshTmSubst :: TypeTheory -> [Obj] -> [TmVar] -> Fresh (M.Map TmVar TermDiagram)
-freshTmSubst ttDoc tmCtx vars = do
-  pairs <- mapM (freshTmVar ttDoc tmCtx) vars
-  pure (M.fromList pairs)
-
-extractFreshTyVars :: [TmVar] -> M.Map TmVar Obj -> Either Text [TmVar]
-extractFreshTyVars vars subst =
-  mapM lookupVar vars
-  where
-    lookupVar v =
-      case M.lookup v subst of
-        Just (OVar v') -> Right v'
-        _ -> Left "internal error: expected fresh type variable"
-
-extractFreshTmVars :: [TmVar] -> M.Map TmVar TermDiagram -> Either Text [TmVar]
-extractFreshTmVars vars subst =
-  mapM lookupVar vars
-  where
-    lookupVar v =
-      case M.lookup v subst of
-        Just tm ->
-          case metaOnly tm of
-            Just v' -> Right v'
-            Nothing -> Left "internal error: expected fresh term variable"
-        _ -> Left "internal error: expected fresh term variable"
-
-    metaOnly (TermDiagram diag) =
-      case (IM.elems (dEdges diag), dOut diag) of
-        ([edge], [outBoundary]) ->
-          case (ePayload edge, eOuts edge) of
-            (PTmMeta v, [outPid]) | outPid == outBoundary -> Just v
-            _ -> Nothing
-        _ -> Nothing
-
 freshTyVar :: Doctrine -> TmVar -> Fresh (TmVar, Obj)
 freshTyVar doc v = do
   n <- freshInt
@@ -893,20 +818,6 @@ freshTyVar doc v = do
   let fresh = v { tmvName = name }
   ownerMode <- liftEither (ownerModeForTypeMeta doc v)
   pure (v, Obj { objOwnerMode = ownerMode, objCode = CTMeta fresh })
-
-freshTmVar :: TypeTheory -> [Obj] -> TmVar -> Fresh (TmVar, TermDiagram)
-freshTmVar ttDoc tmCtx v = do
-  n <- freshInt
-  let name = tmvName v <> T.pack ("#" <> show n)
-  let fresh =
-        TmVar
-          { tmvName = name
-          , tmvSort = tmvSort v
-          , tmvScope = max (tmvScope v) (length (modeCtxGlobals tmCtx (objOwnerMode (tmvSort v))))
-          , tmvOwnerMode = Nothing
-          }
-  tm <- liftEither (termExprToDiagramChecked ttDoc tmCtx (tmvSort fresh) (TMMeta fresh (defaultMetaArgs tmCtx fresh)))
-  pure (v, tm)
 
 freshInt :: Fresh Int
 freshInt = Fresh (\n -> Right (n, n + 1))

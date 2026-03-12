@@ -27,7 +27,7 @@ import Strat.Poly.DiagramInterpretation
   , spliceEdge
   )
 import Strat.Poly.Match
-import Strat.Poly.Obj (TmVar(..))
+import Strat.Poly.Obj (TmVar(..), TermDiagram(..))
 import Strat.Poly.Cell2
 import Strat.Poly.UnifyObj
   ( applySubstCtx
@@ -38,6 +38,7 @@ import Strat.Poly.UnifyObj
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
 import Strat.Poly.ModeSyntax (ModExpr(..))
+import Strat.Poly.Syntax (CodeArg(..))
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.Traversal (foldDiagram, traverseDiagram)
 
@@ -126,28 +127,45 @@ rewriteOnceNestedRaw tt spliceMapper rules diag =
               pure (Just diag')
         PTmMeta _ ->
           go rest
+        PTmLit _ ->
+          go rest
         PInternalDrop ->
           go rest
         PGen gen args bargs -> do
-          bargRes <- rewriteOnceBinderArgs bargs
-          case bargRes of
-            Nothing -> go rest
-            Just bargs' -> do
-              let edge' = edge { ePayload = PGen gen args bargs' }
+          argRes <- rewriteOnceCodeArgs args
+          case argRes of
+            Just args' -> do
+              let edge' = edge { ePayload = PGen gen args' bargs }
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
               pure (Just diag')
+            Nothing -> do
+              bargRes <- rewriteOnceBinderArgs bargs
+              case bargRes of
+                Nothing -> go rest
+                Just bargs' -> do
+                  let edge' = edge { ePayload = PGen gen args bargs' }
+                  let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+                  pure (Just diag')
+
+    rewriteOnceCodeArgs [] = Right Nothing
+    rewriteOnceCodeArgs (arg:args) =
+      case arg of
+        CAObj _ -> fmap (fmap (arg :)) (rewriteOnceCodeArgs args)
+        CATm (TermDiagram inner) -> do
+          res <- rewriteOnceRawWithMapper tt spliceMapper rules inner
+          case res of
+            Just inner' -> Right (Just (CATm (TermDiagram inner') : args))
+            Nothing -> fmap (fmap (arg :)) (rewriteOnceCodeArgs args)
 
     rewriteOnceBinderArgs [] = Right Nothing
     rewriteOnceBinderArgs (b:bs) =
       case b of
-        BAMeta _ -> rewriteOnceBinderArgs bs
+        BAMeta _ -> fmap (fmap (b :)) (rewriteOnceBinderArgs bs)
         BAConcrete inner -> do
           res <- rewriteOnceRawWithMapper tt spliceMapper rules inner
           case res of
             Just inner' -> Right (Just (BAConcrete inner' : bs))
-            Nothing -> do
-              rest <- rewriteOnceBinderArgs bs
-              pure (fmap (b :) rest)
+            Nothing -> fmap (fmap (b :)) (rewriteOnceBinderArgs bs)
 
 rewriteAllWithMapper :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
 rewriteAllWithMapper tt spliceMapper cap rules diag = do
@@ -207,16 +225,40 @@ rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
         innerRes
     PTmMeta _ ->
       Right []
+    PTmLit _ ->
+      Right []
     PInternalDrop ->
       Right []
     PGen gen args bargs -> do
+      argsRes <- rewriteAllCodeArgs tt spliceMapper cap rules args
+      fromArgs <-
+        mapM
+          (\args' -> do
+            let edge' = edge { ePayload = PGen gen args' bargs }
+            let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+            canonDiagramRaw diag')
+          argsRes
       bargsRes <- rewriteAllBinderArgs tt spliceMapper cap rules bargs
-      mapM
-        (\bargs' -> do
-          let edge' = edge { ePayload = PGen gen args bargs' }
-          let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-          canonDiagramRaw diag')
-        bargsRes
+      fromBinders <-
+        mapM
+          (\bargs' -> do
+            let edge' = edge { ePayload = PGen gen args bargs' }
+            let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+            canonDiagramRaw diag')
+          bargsRes
+      pure (fromArgs <> fromBinders)
+
+rewriteAllCodeArgs :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> [CodeArg] -> Either Text [[CodeArg]]
+rewriteAllCodeArgs _ _ _ _ [] = Right []
+rewriteAllCodeArgs tt spliceMapper cap rules args =
+  fmap concat (mapM rewriteAt [0 .. length args - 1])
+  where
+    rewriteAt i =
+      case splitAt i args of
+        (pre, CATm (TermDiagram inner) : post) -> do
+          res <- rewriteAllWithMapper tt spliceMapper cap rules inner
+          pure [pre <> [CATm (TermDiagram inner')] <> post | inner' <- res]
+        _ -> Right []
 
 rewriteAllBinderArgs :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [[BinderArg]]
 rewriteAllBinderArgs _ _ _ _ [] = Right []
@@ -270,7 +312,7 @@ applyMatch tt =
 
 normalizeDiagramCtxOnly :: TypeTheory -> Diagram -> Either Text Diagram
 normalizeDiagramCtxOnly tt =
-  traverseDiagram onDiag pure pure
+  traverseDiagram onDiag pure pure pure
   where
     onDiag d = do
       tmCtx' <- applySubstCtx tt emptySubst (dTmCtx d)
@@ -278,7 +320,7 @@ normalizeDiagramCtxOnly tt =
 
 normalizeDiagramObjsOnly :: TypeTheory -> Diagram -> Either Text Diagram
 normalizeDiagramObjsOnly tt =
-  traverseDiagram onDiag onPayload pure
+  traverseDiagram onDiag onPayload onCodeArg pure
   where
     onDiag d = do
       dPortObj' <- IM.traverseWithKey (\_ ty -> applySubstObj tt emptySubst ty) (dPortObj d)
@@ -291,6 +333,11 @@ normalizeDiagramObjsOnly tt =
           pure (PTmMeta (v { tmvSort = sort' }))
         _ ->
           pure payload
+
+    onCodeArg arg =
+      case arg of
+        CAObj obj -> CAObj <$> applySubstObj tt emptySubst obj
+        CATm tm -> pure (CATm tm)
 
 normalizeMergeSupport :: TypeTheory -> S.Set PortId -> Diagram -> Either Text Diagram
 normalizeMergeSupport tt seedPorts diag = do
@@ -368,7 +415,7 @@ normalizeMergeSupport tt seedPorts diag = do
 
 instantiateBinderMetas :: M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
 instantiateBinderMetas binderSub =
-  traverseDiagram pure pure onBinderArg
+  traverseDiagram pure pure pure onBinderArg
   where
     onBinderArg barg =
       case barg of
@@ -380,7 +427,7 @@ instantiateBinderMetas binderSub =
 
 expandSplices :: SpliceMapper -> M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
 expandSplices spliceMapper binderSub =
-  traverseDiagram expandTop pure pure
+  traverseDiagram expandTop pure pure pure
   where
     expandTop diag =
       case findSpliceEdge diag of
@@ -495,7 +542,7 @@ rejectSplice label diag =
 
 hasSplice :: Diagram -> Bool
 hasSplice =
-  getAny . foldDiagram (\_ -> mempty) onPayload (\_ -> mempty)
+  getAny . foldDiagram (\_ -> mempty) onPayload (\_ -> mempty) (\_ -> mempty)
   where
     onPayload payload =
       Any $

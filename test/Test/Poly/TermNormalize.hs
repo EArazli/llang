@@ -12,8 +12,9 @@ import qualified Data.Map.Strict as M
 import Strat.Poly.ModeTheory (ModeName(..))
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj (Obj(..), mkModeMetaVar, TmVar, tmvName, tmVarOwner, TmVar(..))
-import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory, setModeTermFuns, setModeTermRules)
+import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory, setModeTermHeads, setModeTermRules)
 import qualified Strat.Poly.TypeTheory as TT
+import Strat.Poly.Term.AST (TermHeadArg(..))
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram)
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
 import qualified Strat.Poly.Term.RewriteSystem as TRS
@@ -33,22 +34,22 @@ tests =
 testNonRecursiveSubst :: Assertion
 testNonRecursiveSubst = do
   let trs = TRS.mkTRS modeM [projRule]
-  let tm = TMFun (GenName "g") [TMBound 1, TMBound 0]
+  let tm = TMGen (GenName "g") [THATm (TMBound 1), THATm (TMBound 0)]
   normalizeTermExpr trs tm @?= TMBound 1
   where
     modeM = ModeName "M"
     projRule =
       TRS.TRule
         { TRS.trName = "proj"
-        , TRS.trLHS = TMFun (GenName "g") [TMBound 0, TMBound 1]
+        , TRS.trLHS = TMGen (GenName "g") [THATm (TMBound 0), THATm (TMBound 1)]
         , TRS.trRHS = TMBound 0
         }
 
 testRepeatedVarMatch :: Assertion
 testRepeatedVarMatch = do
   let trs = TRS.mkTRS modeM [diagRule]
-  let noRewrite = TMFun (GenName "h") [TMBound 0, TMBound 1]
-  let rewrite = TMFun (GenName "h") [TMBound 0, TMBound 0]
+  let noRewrite = TMGen (GenName "h") [THATm (TMBound 0), THATm (TMBound 1)]
+  let rewrite = TMGen (GenName "h") [THATm (TMBound 0), THATm (TMBound 0)]
   normalizeTermExpr trs noRewrite @?= noRewrite
   normalizeTermExpr trs rewrite @?= TMBound 0
   where
@@ -56,13 +57,13 @@ testRepeatedVarMatch = do
     diagRule =
       TRS.TRule
         { TRS.trName = "diag"
-        , TRS.trLHS = TMFun (GenName "h") [TMBound 0, TMBound 0]
+        , TRS.trLHS = TMGen (GenName "h") [THATm (TMBound 0), THATm (TMBound 0)]
         , TRS.trRHS = TMBound 0
         }
 
 testCompileRejectsFreshRhsVars :: Assertion
 testCompileRejectsFreshRhsVars = do
-  lhs <- requireEither (termExprToDiagram ttBase [] sortTy (TMFun fName [TMMeta xVar []]))
+  lhs <- requireEither (termExprToDiagram ttBase [] sortTy (TMGen fName [THATm (TMMeta xVar [])]))
   rhs <- requireEither (termExprToDiagram ttBase [] sortTy (TMMeta yVar []))
   let rule = TT.TmRule { TT.trVars = [xVar, yVar], TT.trLHS = lhs, TT.trRHS = rhs }
   let tt = setModeTermRules modeM [rule] ttBase
@@ -79,8 +80,8 @@ testCompileRejectsFreshRhsVars = do
     sortTy = OVar (mkModeMetaVar "a" modeM)
     xVar = TmVar { tmvName = "x", tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
     yVar = TmVar { tmvName = "y", tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
-    funSigs = M.fromList [(fName, TT.TmFunSig { TT.tfsArgs = [sortTy], TT.tfsRes = sortTy })]
-    ttBase = setModeTermFuns modeM funSigs (modeOnlyTypeTheory (mkModes [modeM]))
+    funSigs = M.fromList [(fName, TT.TmHeadSig { TT.thsParams = [], TT.thsInputs = [sortTy], TT.thsRes = sortTy })]
+    ttBase = setModeTermHeads modeM funSigs (modeOnlyTypeTheory (mkModes [modeM]))
 
 requireEither :: Either Text a -> IO a
 requireEither result =

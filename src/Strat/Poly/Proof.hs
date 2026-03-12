@@ -25,6 +25,7 @@ import Strat.Poly.Diagram (Diagram(..))
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), canonDiagramRaw)
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Match (Match, findAllMatches)
+import Strat.Poly.Obj (TermDiagram(..))
 import Strat.Poly.Rewrite
   ( RewriteRule(..)
   , SpliceMapper
@@ -32,6 +33,7 @@ import Strat.Poly.Rewrite
   , applyMatchWithMapper
   , mkMatchConfig
   )
+import Strat.Poly.Syntax (CodeArg(..))
 import Strat.Poly.TypeTheory (TypeTheory)
 
 
@@ -42,6 +44,7 @@ data RewriteFocus
   = FocusTop
   | FocusInBox Int RewriteFocus
   | FocusInFeedback Int RewriteFocus
+  | FocusInGenArg Int Int RewriteFocus
   | FocusInBinder Int Int RewriteFocus
   deriving (Eq, Ord, Show)
 
@@ -151,6 +154,20 @@ applyAtFocus spliceMapper tt focus match diag rule =
           let edge' = edge { ePayload = PFeedback inner' }
           canonDiagramRaw diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
         _ -> Left "checkRewriteStep: focus does not point to feedback payload"
+    FocusInGenArg edgeKey argIx innerFocus -> do
+      edge <- requireEdge edgeKey diag
+      case ePayload edge of
+        PGen g args bargs -> do
+          arg <- requireCodeArg argIx args
+          case arg of
+            CATm (TermDiagram inner) -> do
+              inner' <- applyAtFocus spliceMapper tt innerFocus match inner rule
+              let args' = replaceAt argIx (CATm (TermDiagram inner')) args
+              let edge' = edge { ePayload = PGen g args' bargs }
+              canonDiagramRaw diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+            CAObj _ ->
+              Left "checkRewriteStep: focus points to object-valued generator argument"
+        _ -> Left "checkRewriteStep: focus does not point to generator payload"
     FocusInBinder edgeKey binderIx innerFocus -> do
       edge <- requireEdge edgeKey diag
       case ePayload edge of
@@ -215,6 +232,14 @@ requireBinderArg idx bargs
       case drop idx bargs of
         (b:_) -> Right b
         [] -> Left "checkRewriteStep: binder index out of bounds"
+
+requireCodeArg :: Int -> [CodeArg] -> Either Text CodeArg
+requireCodeArg idx args
+  | idx < 0 = Left "checkRewriteStep: generator argument index out of bounds"
+  | otherwise =
+      case drop idx args of
+        (arg:_) -> Right arg
+        [] -> Left "checkRewriteStep: generator argument index out of bounds"
 
 replaceAt :: Int -> a -> [a] -> [a]
 replaceAt idx x xs =

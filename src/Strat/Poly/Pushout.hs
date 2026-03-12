@@ -2220,7 +2220,7 @@ renameDiagram
   -> Diagram
   -> Either Text Diagram
 renameDiagram modeRen modRen tyRen permRen genRen diag =
-  traverseDiagram onDiag onPayload pure diag
+  traverseDiagram onDiag onPayload onCodeArg onBinderArg diag
   where
     mode = dMode diag
 
@@ -2237,9 +2237,7 @@ renameDiagram modeRen modRen tyRen permRen genRen diag =
       case payload of
         PGen gen args bargs -> do
           let gen' = M.findWithDefault gen (mode, gen) genRen
-          args' <- mapM renameCodeArg args
-          bargs' <- mapM renameBinderArg bargs
-          pure (PGen gen' args' bargs')
+          pure (PGen gen' args bargs)
         PSplice x me ->
           pure (PSplice x (renameModExpr modeRen modRen me))
         PTmMeta v -> do
@@ -2247,7 +2245,7 @@ renameDiagram modeRen modRen tyRen permRen genRen diag =
           pure (PTmMeta v { tmvSort = sort' })
         _ -> pure payload
 
-    renameCodeArg arg =
+    onCodeArg arg =
       case arg of
         CAObj obj -> CAObj <$> renameObjExpr modeRen modRen tyRen permRen obj
         CATm tm -> CATm <$> renameTermDiagram tm
@@ -2255,7 +2253,7 @@ renameDiagram modeRen modRen tyRen permRen genRen diag =
     renameTermDiagram (TermDiagram inner) =
       TermDiagram <$> renameDiagram modeRen modRen tyRen permRen genRen inner
 
-    renameBinderArg barg =
+    onBinderArg barg =
       case barg of
         BAConcrete d ->
           BAConcrete <$> renameDiagram modeRen modRen tyRen permRen genRen d
@@ -2659,7 +2657,7 @@ renameInputShapeAlpha tyMap tmMap shape =
 
 renameDiagramAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Diagram -> Diagram
 renameDiagramAlpha tyMap tmMap =
-  runIdentity . traverseDiagram onDiag onPayload pure
+  runIdentity . traverseDiagram onDiag onPayload onCodeArg pure
   where
     onDiag d =
       pure d
@@ -2668,6 +2666,8 @@ renameDiagramAlpha tyMap tmMap =
         }
     onPayload payload =
       pure (renameEdgePayloadAlpha tyMap tmMap payload)
+    onCodeArg arg =
+      pure (renameCodeArgAlpha tyMap tmMap arg)
 
 renameCodeArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> CodeArg -> CodeArg
 renameCodeArgAlpha tyMap tmMap arg =
@@ -3049,16 +3049,16 @@ composeMorphisms name first second = do
       let renHole (BinderMetaVar h) = BinderMetaVar ("compose_" <> h)
           renBinderArg barg =
             case barg of
-              BAConcrete inner -> BAConcrete (renDiagram inner)
+              BAConcrete inner -> BAConcrete inner
               BAMeta hole -> BAMeta (renHole hole)
           renPayload payload =
             case payload of
-              PGen g args bargs -> PGen g args (map renBinderArg bargs)
-              PBox nm inner -> PBox nm (renDiagram inner)
-              PFeedback inner -> PFeedback (renDiagram inner)
+              PGen g args bargs -> PGen g args bargs
+              PBox nm inner -> PBox nm inner
+              PFeedback inner -> PFeedback inner
               _ -> payload
           renDiagram =
-            runIdentity . traverseDiagram pure (pure . renPayload) pure
+            runIdentity . traverseDiagram pure (pure . renPayload) pure (pure . renBinderArg)
           holeSigs' =
             M.fromList
               [ (renHole hole, sig)

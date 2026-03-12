@@ -42,7 +42,8 @@ User-facing changes:
   `structure M = linear | affine | relevant | cartesian;`.
 - Structural generator names are fixed to `dup` and `drop` (no surface-level renaming).
 - Required structural generators must:
-  - declare no attributes,
+  - use the ordinary generator-parameter system (there is no separate attr channel),
+  - have no stored term parameters,
   - have the expected structural shape,
   - and have no binder slots in their domain.
 - Variable‑use discipline is enforced during surface elaboration:

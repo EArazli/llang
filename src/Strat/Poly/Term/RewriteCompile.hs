@@ -14,9 +14,9 @@ import qualified Strat.Poly.TypeTheory as TT
 import Strat.Poly.Obj (Obj, TmVar(..), defaultMetaArgs, sameTmVarId, unTerm)
 import Strat.Poly.TermExpr
   ( TermExpr(..)
-  , TermConvEnv(..)
-  , diagramGraphToTermExprWith
+  , diagramGraphToTermExpr
   )
+import Strat.Poly.Term.AST (TermHeadArg(..))
 import Strat.Poly.Term.RewriteSystem (TRS, TRule(..), mkTRS, boundVarSet)
 
 
@@ -30,8 +30,8 @@ compileTermRules tt mode = do
     compileOne (i, rule) = do
       let vars = TT.trVars rule
       let varCtx = map tmvSort vars
-      lhs0 <- toExpr varCtx (TT.trLHS rule)
-      rhs0 <- toExpr varCtx (TT.trRHS rule)
+      lhs0 <- toExpr "lhs" i varCtx (TT.trLHS rule)
+      rhs0 <- toExpr "rhs" i varCtx (TT.trRHS rule)
       lhs <- abstractVars mode varCtx vars lhs0
       rhs <- abstractVars mode varCtx vars rhs0
       ensureFirstOrder "lhs" lhs
@@ -45,19 +45,27 @@ compileTermRules tt mode = do
           , trRHS = rhs
           }
 
-    toExpr varCtx tm =
+    toExpr side ruleIx varCtx tm =
       let d0 = unTerm tm
           d = d0 { dTmCtx = varCtx }
        in do
             expectedSort <- expectedOutSort d
-            diagramGraphToTermExprWith convEnv varCtx expectedSort d
-
-    convEnv =
-      TermConvEnv
-        { tcLookupSig = \m f -> TT.lookupTmFunSig tt m f
-        , tcSortEq = \_ tyA tyB -> Right (tyA == tyB)
-        , tcLiteralKindForSort = \_ sortTy -> Right (TT.literalKindForObj tt sortTy)
-        }
+            mapLeft
+              ( \err ->
+                  "compileTermRules: "
+                    <> side
+                    <> " of rule tmrule."
+                    <> T.pack (show ruleIx)
+                    <> " failed (expectedSort="
+                    <> T.pack (show expectedSort)
+                    <> ", inArity="
+                    <> T.pack (show (length (dIn d)))
+                    <> ", outArity="
+                    <> T.pack (show (length (dOut d)))
+                    <> "): "
+                    <> err
+              )
+              (diagramGraphToTermExpr tt varCtx expectedSort d)
 
     expectedOutSort d =
       case dOut d of
@@ -66,6 +74,12 @@ compileTermRules tt mode = do
             Just sortTy -> Right sortTy
             Nothing -> Left "compileTermRules: rule diagram output is missing a sort"
         _ -> Left "compileTermRules: rule diagram must have exactly one output"
+
+mapLeft :: (e -> f) -> Either e a -> Either f a
+mapLeft f mv =
+  case mv of
+    Left err -> Left (f err)
+    Right v -> Right v
 
 
 compileAllTermRules :: TT.TypeTheory -> Either Text (M.Map ModeName TRS)
@@ -88,8 +102,13 @@ abstractVars _mode varCtx vars tm =
             then Right (TMBound i)
             else Left ("Can't use term variable with non-canonical arguments in TRS compilation: " <> tmvName v)
     TMBound i -> Right (TMBound i)
-    TMFun f args -> TMFun f <$> mapM (abstractVars _mode varCtx vars) args
+    TMGen f args -> TMGen f <$> mapM abstractHeadArg args
     TMLit lit -> Right (TMLit lit)
+  where
+    abstractHeadArg arg =
+      case arg of
+        THAObj obj -> Right (THAObj obj)
+        THATm tm0 -> THATm <$> abstractVars _mode varCtx vars tm0
 
 findVarIndex :: TmVar -> [TmVar] -> Int -> Maybe Int
 findVarIndex _ [] _ = Nothing
@@ -102,13 +121,18 @@ ensureFirstOrder side tm =
   case tm of
     TMMeta _ _ -> Left ("compileTermRules: unexpected TMMeta in " <> side)
     TMBound _ -> Right ()
-    TMFun _ args -> mapM_ (ensureFirstOrder side) args
+    TMGen _ args -> mapM_ ensureHeadArg args
     TMLit _ -> Right ()
+  where
+    ensureHeadArg arg =
+      case arg of
+        THAObj _ -> Right ()
+        THATm tm0 -> ensureFirstOrder side tm0
 
 ensureLHSShape :: TermExpr -> Either Text ()
 ensureLHSShape lhs =
   case lhs of
-    TMFun _ _ -> Right ()
+    TMGen _ _ -> Right ()
     _ -> Left "compileTermRules: left-hand side must be a function application"
 
 ensureRHSVarsSubsetLHS :: Int -> TermExpr -> TermExpr -> Either Text ()

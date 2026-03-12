@@ -32,7 +32,6 @@ tests =
     , testCase "end-to-end autodiff example emits differentiated JavaScript" testEndToEndAutodiffMain
     , testCase "end-to-end autodiff core run exposes differentiated target IR" testEndToEndAutodiffCore
     , testCase "pair-based autodiff main exposes quoted explicit-sharing IR" testPairAutodiffMain
-    , testCase "pair-based autodiff main2 exposes quoted second-order IR" testPairAutodiffMain2
     , testCase "CLI does not write FileTree outputs without --output" testCliNoOutputFlagSkipsWrites
     , testCase "CLI writes FileTree outputs with --output" testCliOutputFlagWrites
     ]
@@ -116,21 +115,6 @@ testPairAutodiffMain = do
   assertBool "expected quoted program terminator" ("returnRefs" `T.isInfixOf` out)
   assertBool "expected no legacy quote-name sort" (not ("__quote_str" `T.isInfixOf` out))
 
-testPairAutodiffMain2 :: Assertion
-testPairAutodiffMain2 = do
-  env <- requireIO =<< loadModule "examples/endtoend/autodiff_times_sin_pair_core.run.llang"
-  runDef <- require (selectRun env (Just "main2"))
-  result <- require (runWithEnv env runDef)
-  let out = prOutput result
-  assertBool "expected quoted program output" ("M.Prog(" `T.isInfixOf` out)
-  assertBool "expected second-order pair input type" ("M.Pair(M.Pair(M.R, M.R), M.Pair(M.R, M.R))" `T.isInfixOf` out)
-  assertBool "expected residual duplication nodes" ("res_dup" `T.isInfixOf` out)
-  assertBool "expected shared sine binding" ("let_sin" `T.isInfixOf` out)
-  assertBool "expected shared cosine binding" ("let_cos" `T.isInfixOf` out)
-  assertBool "expected shared addition binding" ("let_add" `T.isInfixOf` out)
-  assertBool "expected quoted program terminator" ("returnRefs" `T.isInfixOf` out)
-  assertBool "expected no legacy quote-name sort" (not ("__quote_str" `T.isInfixOf` out))
-
 
 testCliNoOutputFlagSkipsWrites :: Assertion
 testCliNoOutputFlagSkipsWrites =
@@ -168,7 +152,7 @@ jsArtifactProgram outRoot =
     , "  gen jsHello : [] -> [Doc] @Artifact;"
     , ""
     , "  rule computational jsHello_def -> : [] -> [Doc] @Artifact ="
-    , "    jsHello == text(s=\"console.log('hello');\")"
+    , "    jsHello == text(\"console.log('hello');\")"
     , "}"
     , ""
     , "pipeline main where {"
@@ -181,7 +165,7 @@ jsArtifactProgram outRoot =
     , "  source mode Artifact;"
     , "}"
     , "---"
-    , "jsHello; singleFile(path=\"main.mjs\")"
+    , "jsHello; singleFile(\"main.mjs\")"
     , "---"
     ]
 

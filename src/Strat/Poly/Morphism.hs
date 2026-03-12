@@ -1397,7 +1397,7 @@ singleGenNameMaybe srcGen image0 =
 
 renameDiagram :: M.Map ObjRef ObjRef -> M.Map (ModeName, GenName) GenName -> Diagram -> Diagram
 renameDiagram tyRen genRen diag =
-  runIdentity (traverseDiagram onDiag onPayload pure diag)
+  runIdentity (traverseDiagram onDiag onPayload onCodeArg pure diag)
   where
     onDiag d =
       pure d
@@ -1414,6 +1414,12 @@ renameDiagram tyRen genRen diag =
           PTmMeta v ->
             PTmMeta v { tmvSort = renameObjExpr tyRen (tmvSort v) }
           _ -> payload
+
+    onCodeArg arg =
+      pure $
+        case arg of
+          CAObj obj -> CAObj (renameObjExpr tyRen obj)
+          CATm tm -> CATm tm
 
 renameObjExpr :: M.Map ObjRef ObjRef -> Obj -> Obj
 renameObjExpr ren ty =
@@ -1506,7 +1512,7 @@ renameTypeAlpha tyMap tmMap = goObj
 
 renameDiagramAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Diagram -> Diagram
 renameDiagramAlpha tyMap tmMap =
-  runIdentity . traverseDiagram onDiag onPayload pure
+  runIdentity . traverseDiagram onDiag onPayload onCodeArg onBinderArg
   where
     onDiag d =
       pure d
@@ -1517,19 +1523,19 @@ renameDiagramAlpha tyMap tmMap =
     onPayload payload =
       pure $
         case payload of
-          PGen g args bargs ->
-            PGen
-              g
-              (map (renameCodeArgAlpha tyMap tmMap) args)
-              (map (renameBinderArgAlpha tyMap tmMap) bargs)
-          PBox name inner ->
-            PBox name (renameDiagramAlpha tyMap tmMap inner)
-          PFeedback inner ->
-            PFeedback (renameDiagramAlpha tyMap tmMap inner)
+          PGen g args bargs -> PGen g args bargs
+          PBox name inner -> PBox name inner
+          PFeedback inner -> PFeedback inner
           PTmMeta v ->
             PTmMeta (renameTmVarAlpha tyMap tmMap v)
           other ->
             other
+
+    onCodeArg arg =
+      pure (renameCodeArgAlpha tyMap tmMap arg)
+
+    onBinderArg barg =
+      pure (renameBinderArgAlpha tyMap tmMap barg)
 
 renameCodeArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> CodeArg -> CodeArg
 renameCodeArgAlpha tyMap tmMap arg =
