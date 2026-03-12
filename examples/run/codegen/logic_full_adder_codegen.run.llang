@@ -1,5 +1,3 @@
-import "../../../stdlib/transformers/explicit_sharing.llang";
-
 doctrine LogicJS where {
   mode M acyclic classifiedBy M via M.U_M;
   gen comp_ctx_ext(a@M) : [a] -> [a] @M;
@@ -35,7 +33,7 @@ doctrine LogicJS where {
 fragment ShareLogic in LogicJS mode M where {
 }
 
-derived doctrine LogicJS_Share = transform explicit_sharing using ShareLogic;
+derived doctrine LogicJS_Q = reflect quotation of LogicJS mode M;
 
 morphism emitJS : LogicJS -> Doc where {
   check structural;
@@ -109,7 +107,7 @@ pipeline js_codegen where {
 }
 
 pipeline show_share where {
-  quote into LogicJS_Share;
+  quote using ShareLogic into LogicJS_Q;
   extract diagram;
 }
 

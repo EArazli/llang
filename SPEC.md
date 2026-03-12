@@ -757,15 +757,15 @@ Surface elaboration is capability-driven:
 
 No discipline lattice is consulted.
 
-## 11. Fragment quotation as explicit-sharing reification
+## 11. Fragment quotation as reflected reification
 
-Quotation is available for derived doctrines declared via a transformer application:
+Quotation is available for reflected quotation targets:
 
-- `derived doctrine D_Share = transform explicit_sharing using Frag;`
+- `derived doctrine D_Q = reflect quotation of D mode M;`
 
 This requires:
 
-- `Frag` names a fragment declared over base doctrine `D` and mode `M`, and
+- `Frag` names a fragment declared over base doctrine `D` and mode `M`,
 - `M` is declared acyclic in `D`.
 
 Fragments are purely syntactic subpresentations:
@@ -775,36 +775,37 @@ Fragments are purely syntactic subpresentations:
 - `cross binders`, `cross boxes`, and `cross feedback` control whether quotation
   recursively crosses those boundaries.
 
-The generated explicit-sharing doctrine is typed and name-free. Its added
+The generated reflected doctrine is typed and backend-oriented. Its added
 presentation includes:
 
-- context objects `CtxNil` and `CtxCons(a, g)`,
-- typed references `Ref(a)`,
-- typed reference bundles `Refs(g)`,
-- typed programs `Prog(gIn, gOut)`,
-- utility generators `inputRefs`, `refsNil`, `refsCons`, `refsHead`,
-  `refsTail`, `dupRefs`, `dropRefs`, `returnRefs`, `resBox`, and
-  `resFeedback`,
-- for each source generator `g`, an included constructor `let_g` and a
-  residual constructor `res_g`.
+- nullary reflected types `Seq`, `Prog`, `Digit`, `RefId`, and `RefIds`,
+- data constructors `digit0` ... `digit9`,
+- data constructors `refId_nil`, `refId_cons`, `refIds_nil`, and `refIds_cons`,
+- structural quotation generators `q_begin` and `q_end`,
+- structured residual generators `q_res_box(inputs:RefIds, outputs:RefIds)`
+  and `q_res_feedback(inputs:RefIds, outputs:RefIds)`,
+- for each source generator `g`, one reflected binding constructor `q_g` whose
+  parameter telescope copies the source generator telescope and then appends the
+  relevant reflected wire-id parameters.
 
 Quotation semantics:
 
-- `quote into D_Share` computes a deterministic, topologically ordered ordinary
-  diagram in `D_Share`; there is no privileged runtime quote artifact,
-- included generators become `let_g` nodes and participate in exact structural
-  sharing recovery,
-- excluded generators become `res_g` nodes with no quote-time algebraic
-  cleanup,
+- `quote using Frag into D_Q` computes a deterministic, topologically ordered
+  ordinary diagram in `D_Q`; there is no privileged runtime quote artifact,
+- included generators participate in exact structural sharing recovery before
+  reflection,
+- excluded generators remain duplicated before reflection,
+- the reflected output always uses the same `q_*` constructor family; sharing
+  policy affects duplication, not reflected generator names,
 - quotation is relative rather than total: if a boundary is not crossed, the
-  nested subprogram remains residual in the mixed target via `res_*`,
-  `resBox`, or `resFeedback`,
+  nested subprogram is still reflected as a nested `Prog`, but the nested
+  fragment is residualized before reflection,
 - names, reserved words, and ordering policies are not part of quotation
   semantics.
 
-This explicit-sharing doctrine is then consumed by ordinary userland morphisms,
-rewrites, or extractors. Backend-local naming or cleanup belongs there, not in
-quotation.
+This reflected quotation doctrine is then consumed by ordinary userland
+morphisms, rewrites, or extractors. Backend-local naming or cleanup belongs
+there, not in quotation.
 
 ## 12. Artifact extraction
 
@@ -839,7 +840,7 @@ Given a pipeline phase `extract Doc` or `extract FileTree` applied to an artifac
 1. Let `M = mode(d)`. The kernel checks that `D` supports the corresponding extractable fragment in `M`.
 2. The diagram must have no open inputs, and all declared outputs must be produced (extraction fails on open input/output ports).
 3. Evaluation is defined only for the generator subset above. Any other generator, as well as boxes, feedback, splice, term-meta, or internal-drop payloads, causes extraction to fail.
-4. Evaluation proceeds by topologically ordering edges and interpreting each supported generator into a host `Doc` / `FileTree` value.
+4. `extract Doc` / `extract FileTree` interpret the supported generators into host `Doc` / `FileTree` values.
 
 ### 12.3 Conservative extensions
 

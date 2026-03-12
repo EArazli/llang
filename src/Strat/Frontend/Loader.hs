@@ -116,7 +116,6 @@ diffEnv full base = ModuleEnv
   , meSurfaces = M.difference (meSurfaces full) (meSurfaces base)
   , mePipelines = M.difference (mePipelines full) (mePipelines base)
   , meFragments = M.difference (meFragments full) (meFragments base)
-  , meTransformers = M.difference (meTransformers full) (meTransformers base)
   , meDerivedDoctrines = M.difference (meDerivedDoctrines full) (meDerivedDoctrines base)
   , meImplDefaults = diffImplDefaults (meImplDefaults full) (meImplDefaults base)
   , meRuns = M.difference (meRuns full) (meRuns base)

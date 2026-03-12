@@ -7,7 +7,7 @@ This directory is split into libraries and runnable entrypoints:
 - `examples/endtoend/**`: self-contained runnable pipelines built fully in userland.
   - `calc_plus_int.run.llang` (surface -> JS calculator)
   - `autodiff_times_sin.run.llang` (type-changing CCC forward AD morphism -> differentiated core -> JS module)
-  - `autodiff_times_sin_pair_core.run.llang` (pair-based endomorphic forward AD core, with `main` and `main2` sharing the same explicit-sharing quotation path and differing only by a second `forwardAD` pass)
+  - `autodiff_times_sin_pair_core.run.llang` (pair-based endomorphic forward AD core, with `main` and `main2` lowering the reflected quotation IR to shared JS and `share` / `share2` exposing the reflected program directly)
 - `examples/run/xfail/**`: runnable files that are expected to fail.
 
 See `examples/run/README.md` for execution details.
@@ -45,11 +45,11 @@ Quick index (non-exhaustive):
 - `examples/run/doc/`
   - `hello_doc.run.llang` (`Doc` extraction)
 - `examples/run/sharing/`
-  - `basic_quote.run.llang` (basic fragment-relative explicit-sharing quotation)
+  - `basic_quote.run.llang` (basic fragment-relative reflected quotation)
 - `examples/run/codegen/`
   - `simple_codegen.run.llang` (direct emission to `Doc`)
-  - `logic_full_adder_codegen.run.llang` (JS-ish module emission + optional explicit-sharing debug view)
-  - `explicit_sharing_js_codegen.run.llang` (small arithmetic term quoted into the mixed explicit-sharing IR)
+  - `logic_full_adder_codegen.run.llang` (JS-ish module emission + optional reflected-quotation debug view)
+  - `explicit_sharing_js_codegen.run.llang` (small arithmetic term quoted into the reflected quotation IR)
 - `examples/run/codegen/minifun/`
   - `concat2.run.llang` (MiniFun surface -> `Doc` emission)
 - `examples/run/xfail/`

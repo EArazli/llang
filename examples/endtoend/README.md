@@ -1,8 +1,6 @@
 End-to-end examples
 
-This directory contains end-to-end userland examples. Most are self-contained;
-the explicit-sharing quotation examples import the standard-library transformer
-module from `stdlib/transformers/**`.
+This directory contains end-to-end userland examples. Most are self-contained.
 
 ## Plus Calculator (integers + `+`)
 
@@ -90,7 +88,7 @@ Expected output:
 ## Pair-Based Endomorphic AD Core
 
 `autodiff_times_sin_pair_core.run.llang` isolates the pair-based endomorphic AD
-story at the explicit-sharing quotation boundary.
+story at the reflected quotation boundary.
 
 - `SmoothLam` is closed under differentiation by adding `Pair`, `mkPair`,
   `fst`, `snd`, `add`, `cos`, and `neg`
@@ -98,26 +96,32 @@ story at the explicit-sharing quotation boundary.
   `R -> Pair(R, R)` and primitive images expressed as composites in the same
   doctrine
 - the source run is an open core term `dup ; (id * (id ; sin)) ; mul`, so after
-  one AD pass quotation targets a `Prog(Pair(R, R), Pair(R, R))` object in the
-  generated explicit-sharing doctrine
+  one AD pass quotation targets a closed reflected `Prog` in the generated
+  quotation doctrine, with `q_begin`, `q_*` binding steps, and `q_end`
 - `main` runs:
-  `apply forwardAD -> normalize -> quote into SmoothLam_Share -> extract diagram`
+  `apply forwardAD -> normalize -> quote using SharePair into SmoothLam_Q -> apply emitJS -> normalize -> extract Doc`
 - `main2` uses the exact same path, with the only semantic difference being a
   second `apply forwardAD` before normalization
+- `share` / `share2` keep the same quoted programs in reflected diagram form for
+  debugging
 
-Inspect the first-order quoted program:
+Inspect the first-order shared JS output:
 
   stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run main
 
-Inspect the second-order quoted program through the same path:
+Inspect the second-order shared JS output through the same path:
 
   stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run main2
+
+Inspect the first-order reflected quotation IR directly:
+
+  stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run share
 
 Current status:
 
   So `main` and `main2` differ only by the extra `forwardAD` application in the
-  pipeline. They share the same fragment, the same
-  `transform explicit_sharing using SharePair` target, and the same
-  fragment-relative quotation algorithm. The output is the actual typed mixed
-  explicit-sharing IR with `Prog`, `Refs`, `let_*`, `res_*`, and `returnRefs`
-  nodes.
+  pipeline. They share the same fragment, the same reflected quotation target,
+  and the same fragment-relative quotation algorithm. `main` / `main2` lower
+  that reflected IR through an ordinary userland JS backend, while `share` /
+  `share2` expose the thin reflected IR with `Seq`, `Prog`, `Digit`, `RefId`,
+  `RefIds`, `q_begin`, `q_*`, and `q_end` nodes.

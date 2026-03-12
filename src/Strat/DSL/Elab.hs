@@ -66,6 +66,7 @@ import Strat.Poly.Doctrine
   )
 import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
 import Strat.Poly.Cell2 (Cell2(..))
+import Strat.Poly.Literal (LiteralKind(..))
 import Strat.Poly.ModeTheory
   ( ModeTheory(..)
   , ModeInfo(..)
@@ -150,9 +151,6 @@ elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
           pure (env', rawTerms, rawRuns)
         DeclFragment rawFragment -> do
           env' <- insertFragmentDecl env rawFragment
-          pure (env', rawTerms, rawRuns)
-        DeclTransformer rawTransformer -> do
-          env' <- insertTransformerDecl env rawTransformer
           pure (env', rawTerms, rawRuns)
         DeclDerivedDoctrine rawDerived -> do
           env' <- insertDerivedDoctrine env rawDerived
@@ -951,26 +949,23 @@ insertDerivedDoctrine :: ModuleEnv -> RawDerivedDoctrine -> Either Text ModuleEn
 insertDerivedDoctrine env raw = do
   ensureAbsent "derived doctrine" (rddName raw) (meDerivedDoctrines env)
   ensureAbsent "doctrine" (rddName raw) (meDoctrines env)
-  transformer <- lookupTransformer env (rddTransformer raw)
-  fragment <- lookupFragment env (rddFragment raw)
-  baseDoc <- lookupDoctrine env (frBase fragment)
-  let mode = ModeName (frMode fragment)
+  baseDoc <- lookupDoctrine env (rddBase raw)
+  let mode = ModeName (rddMode raw)
   if M.member mode (mtModes (dModes baseDoc))
     then Right ()
     else Left "derived doctrine: unknown mode"
   if mode `S.member` dAcyclicModes baseDoc
     then Right ()
     else Left "derived doctrine: mode is not declared acyclic in base doctrine"
-  quoteLayout <- quoteLayoutFromTransformer transformer
-  derivedDoc <- applyTransformerDecl (rddName raw) transformer fragment baseDoc mode
+  case modeUniverseObj (dModes baseDoc) mode of
+    Nothing -> Left "derived doctrine: reflected quotation requires a classified mode"
+    Just _ -> Right ()
+  derivedDoc <- deriveReflectedQuotationDoctrine env (rddName raw) baseDoc mode
   let dd =
-        DerivedTransform
+        DerivedReflectQuotation
           { ddName = rddName raw
-          , ddBase = frBase fragment
-          , ddMode = frMode fragment
-          , ddFragment = rddFragment raw
-          , ddTransformer = rddTransformer raw
-          , ddQuoteLayout = quoteLayout
+          , ddBase = rddBase raw
+          , ddMode = rddMode raw
           }
   let env' =
         env
@@ -1016,87 +1011,188 @@ insertFragmentDecl env raw = do
           }
   pure env { meFragments = M.insert (rfdName raw) fragment (meFragments env) }
 
-insertTransformerDecl :: ModuleEnv -> RawTransformerDecl -> Either Text ModuleEnv
-insertTransformerDecl env raw = do
-  ensureAbsent "transformer" (rtdName raw) (meTransformers env)
-  sourceDoctrineVar <- singletonVar "transformer: expected exactly one source doctrine declaration" [ name | RTISourceDoctrine name <- rtdItems raw ]
-  sourceModeVar <- singletonVar "transformer: expected exactly one source mode declaration" [ name | RTISourceMode name <- rtdItems raw ]
-  sourceFragmentVar <- singletonVar "transformer: expected exactly one source fragment declaration" [ name | RTISourceFragment name <- rtdItems raw ]
-  items <- mapM elabTransformerItem [ item | item <- rtdItems raw, not (isSourceItem item) ]
-  let transformer =
-        TransformerDecl
-          { tdName = rtdName raw
-          , tdSourceDoctrineVar = sourceDoctrineVar
-          , tdSourceModeVar = sourceModeVar
-          , tdSourceFragmentVar = sourceFragmentVar
-          , tdItems = items
-          }
-  pure env { meTransformers = M.insert (rtdName raw) transformer (meTransformers env) }
-  where
-    isSourceItem item =
-      case item of
-        RTISourceDoctrine _ -> True
-        RTISourceMode _ -> True
-        RTISourceFragment _ -> True
-        _ -> False
-
-    singletonVar err xs =
-      case xs of
-        [x] -> Right x
-        _ -> Left err
-
 singletonFlag :: a -> Text -> [a] -> Either Text a
 singletonFlag def _ [] = Right def
 singletonFlag _ _ [x] = Right x
 singletonFlag _ err (_:_:_) = Left err
 
-elabTransformerItem :: RawTransformerItem -> Either Text TransformerItem
-elabTransformerItem raw =
-  case raw of
-    RTISourceDoctrine _ -> Left "transformer: internal unexpected source doctrine item"
-    RTISourceMode _ -> Left "transformer: internal unexpected source mode item"
-    RTISourceFragment _ -> Left "transformer: internal unexpected source fragment item"
-    RTICopyDoctrine name -> Right (TICopyDoctrine name)
-    RTIEmitObject rawObj -> TIEmitObject <$> elabTransformObject rawObj
-    RTIEmitUtility rawUtil -> Right (TIEmitUtility (elabTransformUtility rawUtil))
-    RTIForIncludedGenerators genVar fragmentVar rawItems ->
-      TIForIncludedGenerators genVar fragmentVar <$> mapM elabTransformLoopItem rawItems
-    RTIForExcludedGenerators genVar doctrineVar modeVar fragmentVar rawItems ->
-      TIForExcludedGenerators genVar doctrineVar modeVar fragmentVar <$> mapM elabTransformLoopItem rawItems
-
-elabTransformObject :: RawTransformObjectDecl -> Either Text TransformObjectDecl
-elabTransformObject raw =
-  Right
-    TransformObjectDecl
-      { todName = rtodName raw
-      , todParams =
-          [ TransformTypeParam
-              { ttpName = rttpName p
-              , ttpModeVar = rttpModeVar p
-              }
-          | p <- rtodParams raw
+deriveReflectedQuotationDoctrine :: ModuleEnv -> Text -> Doctrine -> ModeName -> Either Text Doctrine
+deriveReflectedQuotationDoctrine env targetName baseDoc mode = do
+  universeTy <-
+    case modeUniverseObj (dModes baseDoc) mode of
+      Nothing -> Left "derived doctrine: reflected quotation requires a classified mode"
+      Just u -> Right u
+  ctorTables <- deriveCtorTables baseDoc
+  (doc0, _) <-
+    elabPolyDoctrineFromBaseWithBudgetResult
+      defaultSearchBudget
+      env
+      (baseDoc { dName = targetName })
+      (rawReflectedSupportDoctrine targetName mode)
+  doc1 <- insertGeneratedGen doc0 mode (mkTypeCtorDecl mode universeTy "Seq" Nothing)
+  doc2 <- insertGeneratedGen doc1 mode (mkTypeCtorDecl mode universeTy "Prog" Nothing)
+  let seqTy = mkCon (ObjRef mode (ObjName "Seq")) []
+      progTy = mkCon (ObjRef mode (ObjName "Prog")) []
+      refIdTy = mkCon (ObjRef mode (ObjName "RefId")) []
+      refIdsTy = mkCon (ObjRef mode (ObjName "RefIds")) []
+      tmParam name sortTy =
+        GP_Tm
+          TmVar
+            { tmvName = name
+            , tmvSort = sortTy
+            , tmvScope = 0
+            , tmvOwnerMode = Just mode
+            }
+      simpleGen name params dom cod =
+        GenDecl
+          { gdName = GenName name
+          , gdMode = mode
+          , gdParams = params
+          , gdDom = map InPort dom
+          , gdCod = cod
+          , gdLiteralKind = Nothing
+          }
+      structuredGen name =
+        simpleGen
+          name
+          [ tmParam "inputs" refIdsTy
+          , tmParam "outputs" refIdsTy
           ]
-      }
+          [seqTy, progTy]
+          [seqTy]
+  doc3 <- insertGeneratedGen doc2 mode (simpleGen "q_begin" [tmParam "inputs" refIdsTy] [] [seqTy])
+  doc4 <- insertGeneratedGen doc3 mode (simpleGen "q_end" [tmParam "outputs" refIdsTy] [seqTy] [progTy])
+  doc5 <- insertGeneratedGen doc4 mode (structuredGen "q_res_box")
+  doc6 <- insertGeneratedGen doc5 mode (structuredGen "q_res_feedback")
+  let sourceGens =
+        [ entry
+        | entry@(srcGen, _) <- M.toAscList (M.findWithDefault M.empty mode (dGens baseDoc))
+        , not (isTypeDeclGenNameInTables baseDoc ctorTables mode (ObjName (renderGenNameText srcGen)))
+        ]
+  doc7 <- foldM (insertReflectedBindingGen mode seqTy progTy refIdTy) doc6 sourceGens
+  validateDoctrine doc7
+  pure doc7
 
-elabTransformUtility :: RawTransformUtility -> TransformUtility
-elabTransformUtility raw =
-  case raw of
-    RTUInputRefs -> TUInputRefs
-    RTURefsNil -> TURefsNil
-    RTURefsCons -> TURefsCons
-    RTURefsHead -> TURefsHead
-    RTURefsTail -> TURefsTail
-    RTUDupRefs -> TUDupRefs
-    RTUDropRefs -> TUDropRefs
-    RTUReturnRefs -> TUReturnRefs
-    RTUResidualBox -> TUResidualBox
-    RTUResidualFeedback -> TUResidualFeedback
 
-elabTransformLoopItem :: RawTransformLoopItem -> Either Text TransformLoopItem
-elabTransformLoopItem raw =
-  case raw of
-    RTLBindingPrefix prefix -> Right (TLEmitBindingPrefix prefix)
-    RTLResidualPrefix prefix -> Right (TLEmitResidualPrefix prefix)
+rawReflectedSupportDoctrine :: Text -> ModeName -> PolyAST.RawPolyDoctrine
+rawReflectedSupportDoctrine targetName mode =
+  PolyAST.RawPolyDoctrine
+    { PolyAST.rpdName = targetName
+    , PolyAST.rpdExtends = Nothing
+    , PolyAST.rpdItems =
+        [ PolyAST.RPData digitDecl
+        , PolyAST.RPData refIdDecl
+        , PolyAST.RPData refIdsDecl
+        ]
+    }
+  where
+    modeName = modeText mode
+    tyRef name = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
+    ty0 name = PolyAST.RPTCon (tyRef name) []
+    ctor name args =
+      PolyAST.RawPolyCtorDecl
+        { PolyAST.rpcName = name
+        , PolyAST.rpcArgs = args
+        }
+    digitDecl =
+      PolyAST.RawPolyDataDecl
+        { PolyAST.rpdTyName = "Digit"
+        , PolyAST.rpdTyVars = []
+        , PolyAST.rpdTyMode = modeName
+        , PolyAST.rpdCtors =
+            [ ctor "digit0" []
+            , ctor "digit1" []
+            , ctor "digit2" []
+            , ctor "digit3" []
+            , ctor "digit4" []
+            , ctor "digit5" []
+            , ctor "digit6" []
+            , ctor "digit7" []
+            , ctor "digit8" []
+            , ctor "digit9" []
+            ]
+        }
+    refIdDecl =
+      PolyAST.RawPolyDataDecl
+        { PolyAST.rpdTyName = "RefId"
+        , PolyAST.rpdTyVars = []
+        , PolyAST.rpdTyMode = modeName
+        , PolyAST.rpdCtors =
+            [ ctor "refId_nil" []
+            , ctor "refId_cons" [ty0 "Digit", ty0 "RefId"]
+            ]
+        }
+    refIdsDecl =
+      PolyAST.RawPolyDataDecl
+        { PolyAST.rpdTyName = "RefIds"
+        , PolyAST.rpdTyVars = []
+        , PolyAST.rpdTyMode = modeName
+        , PolyAST.rpdCtors =
+            [ ctor "refIds_nil" []
+            , ctor "refIds_cons" [ty0 "RefId", ty0 "RefIds"]
+            ]
+        }
+    modeText (ModeName name) = name
+
+
+mkTypeCtorDecl :: ModeName -> Obj -> Text -> Maybe LiteralKind -> GenDecl
+mkTypeCtorDecl mode universeTy name litKind =
+  GenDecl
+    { gdName = GenName name
+    , gdMode = mode
+    , gdParams = []
+    , gdDom = []
+    , gdCod = [universeTy]
+    , gdLiteralKind = litKind
+    }
+
+
+insertReflectedBindingGen :: ModeName -> Obj -> Obj -> Obj -> Doctrine -> (GenName, GenDecl) -> Either Text Doctrine
+insertReflectedBindingGen mode seqTy progTy refIdTy doc (srcGen, srcDecl) =
+  insertGeneratedGen doc mode reflectedDecl
+  where
+    binderCount =
+      length
+        [ ()
+        | InBinder _ <- gdDom srcDecl
+        ]
+    tmParam name sortTy =
+      GP_Tm
+        TmVar
+          { tmvName = name
+          , tmvSort = sortTy
+          , tmvScope = 0
+          , tmvOwnerMode = Just mode
+          }
+    inParams =
+      [ tmParam ("in" <> T.pack (show i)) refIdTy
+      | i <- [0 :: Int .. length (gdPlainDom srcDecl) - 1]
+      ]
+    outParams =
+      [ tmParam ("out" <> T.pack (show i)) refIdTy
+      | i <- [0 :: Int .. length (gdCod srcDecl) - 1]
+      ]
+    reflectedDecl =
+      GenDecl
+        { gdName = GenName ("q_" <> renderGenNameText srcGen)
+        , gdMode = mode
+        , gdParams = gdParams srcDecl <> inParams <> outParams
+        , gdDom = map InPort (seqTy : replicate binderCount progTy)
+        , gdCod = [seqTy]
+        , gdLiteralKind = Nothing
+        }
+
+
+insertGeneratedGen :: Doctrine -> ModeName -> GenDecl -> Either Text Doctrine
+insertGeneratedGen doc mode decl =
+  let modeGens = M.findWithDefault M.empty mode (dGens doc)
+      genName = gdName decl
+   in if M.member genName modeGens
+        then Left ("derived doctrine: generated generator collision: " <> renderGenNameText genName)
+        else
+          Right
+            doc
+              { dGens = M.insert mode (M.insert genName decl modeGens) (dGens doc) }
 
 
 elabPipeline :: RawPipeline -> Either Text Pipeline
@@ -1113,8 +1209,8 @@ elabPhase raw =
       policy <- parsePipelinePolicy (rnoPolicy opts)
       let fuel = maybe 50 id (rnoFuel opts)
       Right (Normalize policy fuel)
-    RPQuoteInto targetName ->
-      Right (QuoteInto targetName)
+    RPQuoteInto fragmentName targetName ->
+      Right (QuoteInto fragmentName targetName)
     RPExtractValue doctrineName opts ->
       case doctrineName of
         "Doc" ->
@@ -1135,426 +1231,11 @@ parsePipelinePolicy mName =
     other -> parsePolicy other
 
 
-quoteLayoutFromTransformer :: TransformerDecl -> Either Text (Maybe QuoteTargetLayout)
-quoteLayoutFromTransformer transformer =
-  if null utilityItems && null loopItems && null objectItems
-    then Right Nothing
-    else do
-      let objectNames = S.fromList (map todName objectItems)
-      requireObject "CtxNil" objectNames
-      requireObject "CtxCons" objectNames
-      requireObject "Ref" objectNames
-      requireObject "Refs" objectNames
-      requireObject "Prog" objectNames
-      let utilitySet = S.fromList utilityItems
-      requireUtility TUInputRefs utilitySet
-      requireUtility TURefsNil utilitySet
-      requireUtility TURefsCons utilitySet
-      requireUtility TURefsHead utilitySet
-      requireUtility TURefsTail utilitySet
-      requireUtility TUDupRefs utilitySet
-      requireUtility TUDropRefs utilitySet
-      requireUtility TUReturnRefs utilitySet
-      requireUtility TUResidualBox utilitySet
-      requireUtility TUResidualFeedback utilitySet
-      bindingPrefix <- singletonLoop "transformer: expected exactly one included binding prefix" [ prefix | TLEmitBindingPrefix prefix <- loopItems ]
-      residualPrefix <- singletonLoop "transformer: expected exactly one excluded residual prefix" [ prefix | TLEmitResidualPrefix prefix <- loopItems ]
-      pure
-        ( Just
-            QuoteTargetLayout
-              { qtlCtxNilCtor = "CtxNil"
-              , qtlCtxConsCtor = "CtxCons"
-              , qtlRefCtor = "Ref"
-              , qtlRefsCtor = "Refs"
-              , qtlProgCtor = "Prog"
-              , qtlInputRefsGen = "inputRefs"
-              , qtlRefsNilGen = "refsNil"
-              , qtlRefsConsGen = "refsCons"
-              , qtlRefsHeadGen = "refsHead"
-              , qtlRefsTailGen = "refsTail"
-              , qtlDupRefsGen = "dupRefs"
-              , qtlDropRefsGen = "dropRefs"
-              , qtlReturnRefsGen = "returnRefs"
-              , qtlResidualBoxGen = "resBox"
-              , qtlResidualFeedbackGen = "resFeedback"
-              , qtlBindingPrefix = bindingPrefix
-              , qtlResidualPrefix = residualPrefix
-              }
-        )
-  where
-    objectItems = [ obj | TIEmitObject obj <- tdItems transformer ]
-    utilityItems = [ util | TIEmitUtility util <- tdItems transformer ]
-    loopItems =
-      concat
-        [ items
-        | item <- tdItems transformer
-        , items <-
-            case item of
-              TIForIncludedGenerators { tigItems = xs } -> [xs]
-              TIForExcludedGenerators { tegItems = xs } -> [xs]
-              _ -> []
-        ]
-    requireObject name names =
-      if name `S.member` names
-        then Right ()
-        else Left ("transformer: quote-compatible transformer is missing object " <> name)
-    requireUtility util utils =
-      if util `S.member` utils
-        then Right ()
-        else Left ("transformer: quote-compatible transformer is missing utility " <> renderUtility util)
-    singletonLoop err xs =
-      case xs of
-        [x] -> Right x
-        _ -> Left err
-    renderUtility util =
-      case util of
-        TUInputRefs -> "input_refs"
-        TURefsNil -> "refs_nil"
-        TURefsCons -> "refs_cons"
-        TURefsHead -> "refs_head"
-        TURefsTail -> "refs_tail"
-        TUDupRefs -> "dup_refs"
-        TUDropRefs -> "drop_refs"
-        TUReturnRefs -> "return_refs"
-        TUResidualBox -> "residual_box"
-        TUResidualFeedback -> "residual_feedback"
-
-
-applyTransformerDecl
-  :: Text
-  -> TransformerDecl
-  -> FragmentDecl
-  -> Doctrine
-  -> ModeName
-  -> Either Text Doctrine
-applyTransformerDecl targetName transformer fragment baseDoc mode = do
-  ensureTransformerMatchesSource transformer fragment
-  layout <-
-    maybe
-      (Left "derived doctrine: transformer does not define a quote-compatible explicit-sharing layout")
-      Right
-      =<< quoteLayoutFromTransformer transformer
-  copied <- copyBaseDoctrine targetName transformer baseDoc
-  docWithObjects <- foldM (emitTransformObject mode transformer) copied [ obj | TIEmitObject obj <- tdItems transformer ]
-  docWithUtilities <- foldM (emitTransformUtility mode layout) docWithObjects [ util | TIEmitUtility util <- tdItems transformer ]
-  docWithLoops <- foldM (emitTransformLoop mode layout fragment baseDoc) docWithUtilities (tdItems transformer)
-  validateDoctrine docWithLoops
-  pure docWithLoops
-
-
-ensureTransformerMatchesSource :: TransformerDecl -> FragmentDecl -> Either Text ()
-ensureTransformerMatchesSource transformer fragment = do
-  mapM_ requireItem (tdItems transformer)
-  pure ()
-  where
-    requireItem item =
-      case item of
-        TICopyDoctrine name
-          | name == tdSourceDoctrineVar transformer -> Right ()
-          | otherwise -> Left "transformer: copy doctrine must reference the declared source doctrine variable"
-        TIForIncludedGenerators { tigFragmentVar = name }
-          | name == tdSourceFragmentVar transformer -> Right ()
-          | otherwise -> Left "transformer: included-generator loop must reference the declared source fragment variable"
-        TIForExcludedGenerators { tegDoctrineVar = dName', tegModeVar = mName, tegFragmentVar = fName }
-          | dName' == tdSourceDoctrineVar transformer
-          , mName == tdSourceModeVar transformer
-          , fName == tdSourceFragmentVar transformer ->
-              Right ()
-          | otherwise ->
-              Left "transformer: excluded-generator loop must reference the declared source doctrine/mode/fragment variables"
-        TIEmitObject obj ->
-          mapM_ requireParamMode (todParams obj)
-        _ ->
-          Right ()
-    requireParamMode param =
-      if ttpModeVar param == tdSourceModeVar transformer
-        then Right ()
-        else Left "transformer: emitted object parameters must use the declared source mode variable"
-
-
-copyBaseDoctrine :: Text -> TransformerDecl -> Doctrine -> Either Text Doctrine
-copyBaseDoctrine targetName transformer baseDoc =
-  if any isCopyDoctrine (tdItems transformer)
-    then Right baseDoc { dName = targetName }
-    else Left "transformer: expected `copy doctrine` item"
-  where
-    isCopyDoctrine item =
-      case item of
-        TICopyDoctrine name -> name == tdSourceDoctrineVar transformer
-        _ -> False
-
-
-emitTransformObject :: ModeName -> TransformerDecl -> Doctrine -> TransformObjectDecl -> Either Text Doctrine
-emitTransformObject mode transformer doc objDecl = do
-  universeTy <-
-    case modeUniverseObj (dModes doc) mode of
-      Nothing -> Left "transformer: source mode must be classified to emit object constructors"
-      Just u -> Right u
-  params <- mapM (mkTypeParam universeTy) (todParams objDecl)
-  let decl =
-        GenDecl
-          { gdName = GenName (todName objDecl)
-          , gdMode = mode
-          , gdParams = params
-          , gdDom = []
-          , gdCod = [universeTy]
-          , gdLiteralKind = Nothing
-          }
-  insertGeneratedGen doc mode decl
-  where
-    mkTypeParam universeTy param =
-      if ttpModeVar param == tdSourceModeVar transformer
-        then
-          Right
-            ( GP_Ty
-                TmVar
-                  { tmvName = ttpName param
-                  , tmvSort = universeTy
-                  , tmvScope = 0
-                  , tmvOwnerMode = Just mode
-                  }
-            )
-        else Left "transformer: object parameter mode does not match source mode variable"
-
-
-emitTransformUtility :: ModeName -> QuoteTargetLayout -> Doctrine -> TransformUtility -> Either Text Doctrine
-emitTransformUtility mode layout doc util =
-  case util of
-    TUInputRefs ->
-      insertUtilityGen doc mode
-        (mkSimpleGen (qtlInputRefsGen layout) [gammaParam "g"] [] [refsTy (OVar gammaVar)])
-    TURefsNil ->
-      insertUtilityGen doc mode
-        (mkSimpleGen (qtlRefsNilGen layout) [] [] [refsTy ctxNilTy])
-    TURefsCons ->
-      insertUtilityGen doc mode
-        ( mkSimpleGen
-            (qtlRefsConsGen layout)
-            [aParam, gammaParam "g"]
-            [refTy (OVar aVar), refsTy (OVar gammaVar)]
-            [refsTy (ctxConsTy (OVar aVar) (OVar gammaVar))]
-        )
-    TURefsHead ->
-      insertUtilityGen doc mode
-        ( mkSimpleGen
-            (qtlRefsHeadGen layout)
-            [aParam, gammaParam "g"]
-            [refsTy (ctxConsTy (OVar aVar) (OVar gammaVar))]
-            [refTy (OVar aVar)]
-        )
-    TURefsTail ->
-      insertUtilityGen doc mode
-        ( mkSimpleGen
-            (qtlRefsTailGen layout)
-            [aParam, gammaParam "g"]
-            [refsTy (ctxConsTy (OVar aVar) (OVar gammaVar))]
-            [refsTy (OVar gammaVar)]
-        )
-    TUDupRefs ->
-      insertUtilityGen doc mode
-        ( mkSimpleGen
-            (qtlDupRefsGen layout)
-            [gammaParam "g"]
-            [refsTy (OVar gammaVar)]
-            [refsTy (OVar gammaVar), refsTy (OVar gammaVar)]
-        )
-    TUDropRefs ->
-      insertUtilityGen doc mode
-        ( mkSimpleGen
-            (qtlDropRefsGen layout)
-            [gammaParam "g"]
-            [refsTy (OVar gammaVar)]
-            []
-        )
-    TUReturnRefs ->
-      insertUtilityGen doc mode
-        ( mkSimpleGen
-            (qtlReturnRefsGen layout)
-            [gammaParam "gIn", gammaParam "gOut"]
-            [refsTy (OVar gammaOutVar)]
-            [progTy (OVar gammaInVar) (OVar gammaOutVar)]
-        )
-    TUResidualBox ->
-      insertUtilityGen doc mode (residualStructuredGen (qtlResidualBoxGen layout))
-    TUResidualFeedback ->
-      insertUtilityGen doc mode (residualStructuredGen (qtlResidualFeedbackGen layout))
-  where
-    universeTy =
-      case modeUniverseObj (dModes doc) mode of
-        Nothing -> error "emitTransformUtility: classified mode required"
-        Just u -> u
-    mkTyVar name =
-      TmVar
-        { tmvName = name
-        , tmvSort = universeTy
-        , tmvScope = 0
-        , tmvOwnerMode = Just mode
-        }
-    gammaVar = mkTyVar "g"
-    gammaInVar = mkTyVar "gIn"
-    gammaOutVar = mkTyVar "gOut"
-    aVar = mkTyVar "a"
-    gammaParam name = GP_Ty (mkTyVar name)
-    aParam = GP_Ty aVar
-    typeRef name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
-    ctxNilTy = typeRef (qtlCtxNilCtor layout) []
-    ctxConsTy a g = typeRef (qtlCtxConsCtor layout) [a, g]
-    refTy a = typeRef (qtlRefCtor layout) [a]
-    refsTy g = typeRef (qtlRefsCtor layout) [g]
-    progTy gIn gOut = typeRef (qtlProgCtor layout) [gIn, gOut]
-    mkSimpleGen name params dom cod =
-      GenDecl
-        { gdName = GenName name
-        , gdMode = mode
-        , gdParams = params
-        , gdDom = map InPort dom
-        , gdCod = cod
-        , gdLiteralKind = Nothing
-        }
-    residualStructuredGen name =
-      let oldGamma = mkTyVar "gOld"
-          edgeIn = mkTyVar "gEdgeIn"
-          edgeOut = mkTyVar "gEdgeOut"
-          bodyIn = mkTyVar "gBodyIn"
-          bodyOut = mkTyVar "gBodyOut"
-          progIn = mkTyVar "gProgIn"
-          progOut = mkTyVar "gProgOut"
-          binderSig =
-            BinderSig
-              { bsTmCtx = []
-              , bsDom = [refsTy (OVar oldGamma), refsTy (OVar edgeOut)]
-              , bsCod = [progTy (OVar progIn) (OVar progOut)]
-              }
-       in GenDecl
-            { gdName = GenName name
-            , gdMode = mode
-            , gdParams = map GP_Ty [oldGamma, edgeIn, edgeOut, bodyIn, bodyOut, progIn, progOut]
-            , gdDom =
-                [ InPort (refsTy (OVar oldGamma))
-                , InPort (refsTy (OVar edgeIn))
-                , InPort (progTy (OVar bodyIn) (OVar bodyOut))
-                , InBinder binderSig
-                ]
-            , gdCod = [progTy (OVar progIn) (OVar progOut)]
-            , gdLiteralKind = Nothing
-            }
-
-
-emitTransformLoop :: ModeName -> QuoteTargetLayout -> FragmentDecl -> Doctrine -> Doctrine -> TransformerItem -> Either Text Doctrine
-emitTransformLoop mode layout fragment baseDoc doc item =
-  case item of
-    TIForIncludedGenerators { tigItems = items } ->
-      foldM emitIncludedItem doc items
-    TIForExcludedGenerators { tegItems = items } ->
-      foldM emitExcludedItem doc items
-    _ ->
-      Right doc
-  where
-    sourceGens = M.toAscList (M.findWithDefault M.empty mode (dGens baseDoc))
-    includedGens = [ pair | pair@(g, _) <- sourceGens, g `S.member` frIncludedGens fragment ]
-    excludedGens = sourceGens
-    emitIncludedItem acc loopItem =
-      case loopItem of
-        TLEmitBindingPrefix prefix ->
-          foldM (\d pair -> insertGeneratedGen d mode (mkStepGen prefix pair)) acc includedGens
-        TLEmitResidualPrefix prefix ->
-          foldM (\d pair -> insertGeneratedGen d mode (mkStepGen prefix pair)) acc includedGens
-    emitExcludedItem acc loopItem =
-      case loopItem of
-        TLEmitBindingPrefix prefix ->
-          foldM (\d pair -> insertGeneratedGen d mode (mkStepGen prefix pair)) acc excludedGens
-        TLEmitResidualPrefix prefix ->
-          foldM (\d pair -> insertGeneratedGen d mode (mkStepGen prefix pair)) acc excludedGens
-    mkStepGen prefix (GenName gName, gDecl) =
-      let universeTy =
-            case modeUniverseObj (dModes doc) mode of
-              Nothing -> error "emitTransformLoop: classified mode required"
-              Just u -> u
-          mkTyVar name =
-            TmVar
-              { tmvName = name
-              , tmvSort = universeTy
-              , tmvScope = 0
-              , tmvOwnerMode = Just mode
-              }
-          gammaOld = mkTyVar "__gOld"
-          gammaProgIn = mkTyVar "__gProgIn"
-          gammaProgOut = mkTyVar "__gProgOut"
-          typeRef name args = mkCon (ObjRef mode (ObjName name)) (map OAObj args)
-          refTy ty = typeRef (qtlRefCtor layout) [ty]
-          refsTy gamma = typeRef (qtlRefsCtor layout) [gamma]
-          progTy gammaIn gammaOut' = typeRef (qtlProgCtor layout) [gammaIn, gammaOut']
-          oldCtxTy = OVar gammaOld
-          binderProgramTy bs = progTy (contextTy layout mode (bsDom bs)) (contextTy layout mode (bsCod bs))
-          continuationBinder =
-            InBinder
-              BinderSig
-                { bsTmCtx = []
-                , bsDom = [refsTy oldCtxTy] <> map refTy (gdCod gDecl)
-                , bsCod = [progTy (OVar gammaProgIn) (OVar gammaProgOut)]
-                }
-       in GenDecl
-            { gdName = GenName (prefix <> gName)
-            , gdMode = mode
-            , gdParams = gdParams gDecl <> [GP_Ty gammaOld, GP_Ty gammaProgIn, GP_Ty gammaProgOut]
-            , gdDom =
-                [InPort (refsTy oldCtxTy)]
-                  <> [ InPort (refTy ty) | ty <- gdPlainDom gDecl ]
-                  <> [ InPort (binderProgramTy bs) | InBinder bs <- gdDom gDecl ]
-                  <> [continuationBinder]
-            , gdCod = [progTy (OVar gammaProgIn) (OVar gammaProgOut)]
-            , gdLiteralKind = Nothing
-            }
-
-
-insertGeneratedGen :: Doctrine -> ModeName -> GenDecl -> Either Text Doctrine
-insertGeneratedGen doc mode decl =
-  let modeGens = M.findWithDefault M.empty mode (dGens doc)
-      genName = gdName decl
-   in if M.member genName modeGens
-        then Left ("transformer: generated generator collision: " <> renderGenNameText genName)
-        else
-          Right
-            doc
-              { dGens = M.insert mode (M.insert genName decl modeGens) (dGens doc) }
-
-
-insertUtilityGen :: Doctrine -> ModeName -> GenDecl -> Either Text Doctrine
-insertUtilityGen = insertGeneratedGen
-
-
-contextTy :: QuoteTargetLayout -> ModeName -> [Obj] -> Obj
-contextTy layout mode = prependContext layout mode (mkCon (ObjRef mode (ObjName (qtlCtxNilCtor layout))) [])
-
-
-prependContext :: QuoteTargetLayout -> ModeName -> Obj -> [Obj] -> Obj
-prependContext layout mode oldCtx extra =
-  foldr step oldCtx extra
-  where
-    step ty acc =
-      mkCon (ObjRef mode (ObjName (qtlCtxConsCtor layout))) [OAObj ty, OAObj acc]
-
-
-lookupTransformer :: ModuleEnv -> Text -> Either Text TransformerDecl
-lookupTransformer env name =
-  case M.lookup name (meTransformers env) of
-    Nothing -> Left ("Unknown transformer: " <> name)
-    Just transformer -> Right transformer
-
-
 lookupDoctrine :: ModuleEnv -> Text -> Either Text Doctrine
 lookupDoctrine env name =
   case M.lookup name (meDoctrines env) of
     Nothing -> Left ("Unknown doctrine: " <> name)
     Just doc -> Right doc
-
-
-lookupFragment :: ModuleEnv -> Text -> Either Text FragmentDecl
-lookupFragment env name =
-  case M.lookup name (meFragments env) of
-    Nothing -> Left ("Unknown fragment: " <> name)
-    Just fragment -> Right fragment
-
 
 lookupMorphism :: ModuleEnv -> Text -> Either Text PolyMorph.Morphism
 lookupMorphism env name =

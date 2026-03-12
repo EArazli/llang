@@ -1,5 +1,3 @@
-import "../../../stdlib/transformers/explicit_sharing.llang";
-
 doctrine Arith where {
   mode M acyclic classifiedBy M via U_M;
   gen comp_ctx_ext(a@M) : [a] -> [a] @M;
@@ -23,10 +21,10 @@ fragment ShareArith in Arith mode M where {
   cross feedback = false;
 }
 
-derived doctrine Arith_Share = transform explicit_sharing using ShareArith;
+derived doctrine Arith_Q = reflect quotation of Arith mode M;
 
 pipeline main where {
-  quote into Arith_Share;
+  quote using ShareArith into Arith_Q;
   extract diagram;
 }
 

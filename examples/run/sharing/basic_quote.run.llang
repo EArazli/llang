@@ -1,5 +1,3 @@
-import "../../../stdlib/transformers/explicit_sharing.llang";
-
 doctrine D where {
   mode M acyclic classifiedBy M via M.U_M;
   gen comp_ctx_ext(a@M) : [a] -> [a] @M;
@@ -22,11 +20,11 @@ fragment Share in D mode M where {
   cross feedback = false;
 }
 
-derived doctrine D_Share = transform explicit_sharing using Share;
+derived doctrine D_Q = reflect quotation of D mode M;
 
 pipeline p where {
   normalize { policy = "topmost"; fuel = 50; };
-  quote into D_Share;
+  quote using Share into D_Q;
   extract diagram;
 }
 

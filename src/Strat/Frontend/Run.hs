@@ -21,7 +21,7 @@ import Strat.Frontend.Compile (compileSourceDiagram)
 import Strat.Pipeline
 import Strat.Poly.Doctrine
 import Strat.Poly.Kernel (Obj(..), pattern OCon, ObjRef(..), ObjName(..))
-import Strat.Poly.Obj (CodeArg(..), TermDiagram(..), TmVar, mkCon, tmvName, tmvSort)
+import Strat.Poly.Obj (CodeArg(..), TermDiagram(..), TmVar, mkCon, tmvSort)
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.Literal (Literal(..), LiteralKind(..), literalKind)
@@ -140,7 +140,7 @@ runPhase env art phase =
           ensureAcyclicIfRequired doc diag'
           pure (ArtDiagram doc diag')
         ArtExtracted{} -> Left "pipeline: cannot normalize extracted host value"
-    QuoteInto targetName ->
+    QuoteInto fragmentName targetName ->
       case art of
         ArtDiagram doc diag -> do
           derived <- lookupDerivedDoctrine env targetName
@@ -151,13 +151,15 @@ runPhase env art phase =
               if expectedMode /= renderModeName (dMode diag)
                 then Left "pipeline: quote target mode mismatch"
                 else do
-                  fragment <- lookupFragment env (ddFragment derived)
+                  fragment <- lookupFragment env fragmentName
+                  if frBase fragment /= dName doc
+                    then Left "pipeline: quote fragment base doctrine mismatch"
+                    else
+                      if frMode fragment /= renderModeName (dMode diag)
+                        then Left "pipeline: quote fragment mode mismatch"
+                        else Right ()
                   derivedDoc <- lookupDoctrine env targetName
-                  layout <-
-                    case ddQuoteLayout derived of
-                      Nothing -> Left "pipeline: quote target does not define a quote-compatible layout"
-                      Just qtl -> Right qtl
-                  quoted <- quoteDiagram layout doc derivedDoc (dMode diag) fragment diag
+                  quoted <- quoteDiagram doc derivedDoc (dMode diag) fragment diag
                   pure (ArtDiagram derivedDoc quoted)
         ArtExtracted{} -> Left "pipeline: cannot quote extracted host value"
     ExtractValue doctrineName extractorSpec ->
@@ -527,6 +529,7 @@ extractDoc doc diag = do
         Nothing -> Left (label <> ": open output port")
         Just v -> Right v
 
+
 extractFileTree :: Doctrine -> Diagram -> Either Text (M.Map FilePath Text)
 extractFileTree doc diag = do
   env <- evalArtifactDiagram doc diag
@@ -552,8 +555,6 @@ evalArtifactDiagram doc diag = do
   ordered <- topologicalEdges diag
   foldM step M.empty ordered
   where
-    mode = dMode diag
-
     step env edge = do
       ins <- mapM (lookupPort env) (eIns edge)
       outs <- evalEdge edge ins
@@ -631,6 +632,7 @@ evalArtifactDiagram doc diag = do
       case args of
         [arg] -> Right arg
         _ -> Left "extract value: expected exactly one sole term parameter"
+
 
 
 data RuntimeValue

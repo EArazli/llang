@@ -27,11 +27,12 @@ tests =
   testGroup
     "Frontend.ExampleCodegen"
     [ testCase "logic_full_adder_codegen main emits structured JavaScript" testLogicFullAdderMain
-    , testCase "logic_full_adder_codegen share shows quoted bindings and residual names" testLogicFullAdderShare
-    , testCase "explicit_sharing_js_codegen main exposes mixed quoted bindings" testExplicitSharingJsMain
+    , testCase "logic_full_adder_codegen share shows reflected quote bindings" testLogicFullAdderShare
+    , testCase "explicit_sharing_js_codegen main exposes reflected quotation IR" testExplicitSharingJsMain
     , testCase "end-to-end autodiff example emits differentiated JavaScript" testEndToEndAutodiffMain
     , testCase "end-to-end autodiff core run exposes differentiated target IR" testEndToEndAutodiffCore
-    , testCase "pair-based autodiff main exposes quoted explicit-sharing IR" testPairAutodiffMain
+    , testCase "pair-based autodiff main emits shared JavaScript" testPairAutodiffMain
+    , testCase "pair-based autodiff share exposes reflected quotation IR" testPairAutodiffShare
     , testCase "CLI does not write FileTree outputs without --output" testCliNoOutputFlagSkipsWrites
     , testCase "CLI writes FileTree outputs with --output" testCliOutputFlagWrites
     ]
@@ -56,10 +57,12 @@ testLogicFullAdderShare = do
   runDef <- require (selectRun env (Just "share"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected residual var for a" ("res_var(\"a\")" `T.isInfixOf` out)
-  assertBool "expected residual var for b" ("res_var(\"b\")" `T.isInfixOf` out)
-  assertBool "expected residual xor binding" ("res_xor" `T.isInfixOf` out)
-  assertBool "expected residual and binding" ("res_and" `T.isInfixOf` out)
+  assertBool "expected reflected quote prologue" ("q_begin" `T.isInfixOf` out)
+  assertBool "expected reflected var for a" ("q_var(\"a\"" `T.isInfixOf` out)
+  assertBool "expected reflected var for b" ("q_var(\"b\"" `T.isInfixOf` out)
+  assertBool "expected reflected xor binding" ("q_xor" `T.isInfixOf` out)
+  assertBool "expected reflected and binding" ("q_and" `T.isInfixOf` out)
+  assertBool "expected reflected quote epilogue" ("q_end" `T.isInfixOf` out)
 
 testExplicitSharingJsMain :: Assertion
 testExplicitSharingJsMain = do
@@ -67,12 +70,12 @@ testExplicitSharingJsMain = do
   runDef <- require (selectRun env (Just "main"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected explicit-sharing program output" ("M.Prog(" `T.isInfixOf` out)
-  assertBool "expected shared duplicate binding" ("let_dup" `T.isInfixOf` out)
-  assertBool "expected residual add binding" ("res_add" `T.isInfixOf` out)
-  assertBool "expected residual print binding" ("res_print" `T.isInfixOf` out)
-  assertBool "expected quote bundle plumbing" ("returnRefs" `T.isInfixOf` out)
-  assertBool "expected no old quote-name literal marker" (not ("__quote_str" `T.isInfixOf` out))
+  assertBool "expected reflected quote prologue" ("q_begin" `T.isInfixOf` out)
+  assertBool "expected reflected duplicate binding" ("q_dup" `T.isInfixOf` out)
+  assertBool "expected reflected add binding" ("q_add" `T.isInfixOf` out)
+  assertBool "expected reflected print binding" ("q_print" `T.isInfixOf` out)
+  assertBool "expected reflected quote epilogue" ("q_end" `T.isInfixOf` out)
+  assertBool "expected no old explicit-sharing bindings" (not ("let_" `T.isInfixOf` out || "res_" `T.isInfixOf` out || "returnRefs" `T.isInfixOf` out))
 
 testEndToEndAutodiffMain :: Assertion
 testEndToEndAutodiffMain = do
@@ -107,14 +110,28 @@ testPairAutodiffMain = do
   runDef <- require (selectRun env (Just "main"))
   result <- require (runWithEnv env runDef)
   let out = prOutput result
-  assertBool "expected quoted program output" ("M.Prog(" `T.isInfixOf` out)
-  assertBool "expected residual duplication nodes" ("res_dup" `T.isInfixOf` out)
-  assertBool "expected shared sine binding" ("let_sin" `T.isInfixOf` out)
-  assertBool "expected shared cosine binding" ("let_cos" `T.isInfixOf` out)
-  assertBool "expected shared multiplication binding" ("let_mul" `T.isInfixOf` out)
-  assertBool "expected quoted program terminator" ("returnRefs" `T.isInfixOf` out)
-  assertBool "expected no legacy quote-name sort" (not ("__quote_str" `T.isInfixOf` out))
+  assertBool "expected exported function block" ("export const timesSinAD = (" `T.isInfixOf` out)
+  assertBool "expected shared sine call" ("Math.sin" `T.isInfixOf` out)
+  assertBool "expected shared cosine call" ("Math.cos" `T.isInfixOf` out)
+  assertBool "expected pair return" ("return t41;" `T.isInfixOf` out)
+  assertBool "expected no reflected IR in JS output" (not ("q_begin" `T.isInfixOf` out || "q_end" `T.isInfixOf` out))
 
+
+testPairAutodiffShare :: Assertion
+testPairAutodiffShare = do
+  env <- requireIO =<< loadModule "examples/endtoend/autodiff_times_sin_pair_core.run.llang"
+  runDef <- require (selectRun env (Just "share"))
+  result <- require (runWithEnv env runDef)
+  let out = prOutput result
+  assertBool "expected reflected quote prologue" ("q_begin" `T.isInfixOf` out)
+  assertBool "expected reflected RefIds boundary encoding" ("refIds_cons" `T.isInfixOf` out)
+  assertBool "expected reflected duplication nodes" ("q_dup" `T.isInfixOf` out)
+  assertBool "expected reflected sine binding" ("q_sin" `T.isInfixOf` out)
+  assertBool "expected reflected cosine binding" ("q_cos" `T.isInfixOf` out)
+  assertBool "expected reflected multiplication binding" ("q_mul" `T.isInfixOf` out)
+  assertBool "expected reflected quote epilogue" ("q_end" `T.isInfixOf` out)
+  assertBool "expected no legacy WireIds encoding" (not ("wireIds_" `T.isInfixOf` out || "WireIds" `T.isInfixOf` out))
+  assertBool "expected no explicit-sharing plumbing" (not ("let_" `T.isInfixOf` out || "res_" `T.isInfixOf` out || "returnRefs" `T.isInfixOf` out))
 
 testCliNoOutputFlagSkipsWrites :: Assertion
 testCliNoOutputFlagSkipsWrites =

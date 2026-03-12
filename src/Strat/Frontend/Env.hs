@@ -15,7 +15,7 @@ module Strat.Frontend.Env
 
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
-import Strat.Pipeline (Pipeline, Run, DerivedDoctrine, FragmentDecl, TransformerDecl)
+import Strat.Pipeline (Pipeline, Run, DerivedDoctrine, FragmentDecl)
 import Strat.Poly.Kernel (Doctrine)
 import Strat.Poly.Diagram (Diagram)
 import Strat.Poly.ModeTheory (ModeName)
@@ -86,7 +86,6 @@ data ModuleEnv = ModuleEnv
   , meSurfaces :: M.Map Text PolySurfaceDef
   , mePipelines :: M.Map Text Pipeline
   , meFragments :: M.Map Text FragmentDecl
-  , meTransformers :: M.Map Text TransformerDecl
   , meDerivedDoctrines :: M.Map Text DerivedDoctrine
   , meImplDefaults :: M.Map (Text, Text) [Text]
   , meRuns :: M.Map Text Run
@@ -105,7 +104,6 @@ emptyEnv =
     , meSurfaces = M.empty
     , mePipelines = M.empty
     , meFragments = M.empty
-    , meTransformers = M.empty
     , meDerivedDoctrines = M.empty
     , meImplDefaults = M.empty
     , meRuns = M.empty
@@ -122,7 +120,6 @@ mergeEnv a b = do
   surfs <- mergeMap "surface" meSurfaces
   pipelines <- mergeMap "pipeline" mePipelines
   fragments <- mergeMap "fragment" meFragments
-  transformers <- mergeMap "transformer" meTransformers
   derived <- mergeMap "derived doctrine" meDerivedDoctrines
   let impls = mergeImplDefaults (meImplDefaults a) (meImplDefaults b)
   runs <- mergeMap "run" meRuns
@@ -135,7 +132,6 @@ mergeEnv a b = do
       , meSurfaces = surfs
       , mePipelines = pipelines
       , meFragments = fragments
-      , meTransformers = transformers
       , meDerivedDoctrines = derived
       , meImplDefaults = impls
       , meRuns = runs

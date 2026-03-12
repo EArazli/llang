@@ -9,12 +9,6 @@ module Strat.DSL.AST
   , RawValueExtractOpts(..)
   , RawFragmentItem(..)
   , RawFragmentDecl(..)
-  , RawTransformTypeParam(..)
-  , RawTransformObjectDecl(..)
-  , RawTransformUtility(..)
-  , RawTransformLoopItem(..)
-  , RawTransformerItem(..)
-  , RawTransformerDecl(..)
   , RawDerivedDoctrine(..)
   , RawRun(..)
   , RawNamedRun(..)
@@ -50,7 +44,6 @@ data RawDecl
   | DeclDoctrineFunctor RawDoctrineFunctor
   | DeclDoctrineApply RawDoctrineApply
   | DeclFragment RawFragmentDecl
-  | DeclTransformer RawTransformerDecl
   | DeclDerivedDoctrine RawDerivedDoctrine
   | DeclSurface Text SurfaceSpec
   | DeclPipeline RawPipeline
@@ -85,7 +78,7 @@ data RawValueExtractOpts = RawValueExtractOpts
 data RawPhase
   = RPApply Text
   | RPNormalize RawNormalizeOpts
-  | RPQuoteInto Text
+  | RPQuoteInto Text Text
   | RPExtractValue Text RawValueExtractOpts
   | RPExtractDiagramPretty
   deriving (Eq, Show)
@@ -104,55 +97,11 @@ data RawFragmentDecl = RawFragmentDecl
   , rfdItems :: [RawFragmentItem]
   } deriving (Eq, Show)
 
-data RawTransformTypeParam = RawTransformTypeParam
-  { rttpName :: Text
-  , rttpModeVar :: Text
-  } deriving (Eq, Show)
-
-data RawTransformObjectDecl = RawTransformObjectDecl
-  { rtodName :: Text
-  , rtodParams :: [RawTransformTypeParam]
-  } deriving (Eq, Show)
-
-data RawTransformUtility
-  = RTUInputRefs
-  | RTURefsNil
-  | RTURefsCons
-  | RTURefsHead
-  | RTURefsTail
-  | RTUDupRefs
-  | RTUDropRefs
-  | RTUReturnRefs
-  | RTUResidualBox
-  | RTUResidualFeedback
-  deriving (Eq, Show)
-
-data RawTransformLoopItem
-  = RTLBindingPrefix Text
-  | RTLResidualPrefix Text
-  deriving (Eq, Show)
-
-data RawTransformerItem
-  = RTISourceDoctrine Text
-  | RTISourceMode Text
-  | RTISourceFragment Text
-  | RTICopyDoctrine Text
-  | RTIEmitObject RawTransformObjectDecl
-  | RTIEmitUtility RawTransformUtility
-  | RTIForIncludedGenerators Text Text [RawTransformLoopItem]
-  | RTIForExcludedGenerators Text Text Text Text [RawTransformLoopItem]
-  deriving (Eq, Show)
-
-data RawTransformerDecl = RawTransformerDecl
-  { rtdName :: Text
-  , rtdItems :: [RawTransformerItem]
-  } deriving (Eq, Show)
-
 
 data RawDerivedDoctrine = RawDerivedDoctrine
   { rddName :: Text
-  , rddTransformer :: Text
-  , rddFragment :: Text
+  , rddBase :: Text
+  , rddMode :: Text
   } deriving (Eq, Show)
 
 

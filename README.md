@@ -7,11 +7,13 @@ See `SPEC.md` for the kernel semantics, `examples/README.md` for runnable exampl
 Examples:
 - JS codegen output:
   `stack run -- examples/run/codegen/logic_full_adder_codegen.run.llang --run main`
-- Explicit-sharing debug view for the same example:
+- Reflected quotation debug view for the same example:
   `stack run -- examples/run/codegen/logic_full_adder_codegen.run.llang --run share`
-- Pair-based forward AD quoted into the typed explicit-sharing target after one differentiation pass:
+- Pair-based forward AD lowered to shared JS from the reflected quotation IR after one differentiation pass:
   `stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run main`
-- The same pair-based example, but with `forwardAD` applied twice before the same quotation path:
+- The same pair-based example, but with `forwardAD` applied twice before the same reflected-JS path:
   `stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run main2`
+- Inspect the reflected quotation IR for that same example:
+  `stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run share`
 - Write extracted `FileTree` artifacts to disk (only when `--output` is passed):
   `stack run -- examples/run/codegen/jsartifact_filetree_hello.run.llang --output`
