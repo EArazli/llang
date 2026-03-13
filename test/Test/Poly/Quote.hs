@@ -31,7 +31,6 @@ import Strat.Poly.Quote
   ( SharedBinding(..)
   , SharedBindingKind(..)
   , SharedProgram(..)
-  , canonicalizeDiagram
   , quoteProgram
   )
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
@@ -125,9 +124,8 @@ mkRepeatedNullaryDiag = do
   d6 <- addEdgePayload (PGen (GenName "a") [] []) [] [pA2] d5
   d7 <- addEdgePayload (PGen (GenName "f") [] []) [pA2] [pF2] d6
   let diag = d7 { dIn = [], dOut = [pF1, pF2] }
-  diag' <- canonicalizeDiagram diag
-  validateDiagram diag'
-  pure diag'
+  validateDiagram diag
+  pure diag
 
 
 mkWrapDiag :: Either Text Diagram

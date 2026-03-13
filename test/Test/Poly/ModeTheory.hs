@@ -39,11 +39,10 @@ import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), modeOnlyTypeTheo
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Syntax (BinderMetaVar(..))
 import Strat.Poly.Diagram (genDTm, genD, diagramDom, diagramCod)
-import Strat.Poly.Graph (Diagram(..))
+import Strat.Poly.Graph (Diagram(..), canonDiagramRaw)
 import Strat.Poly.ModAction (applyAction, mapTypeByModExpr)
 import Strat.Poly.DiagramInterpretation (stableHoleCaptureRenaming)
 import Strat.Poly.DefEq (normalizeObjDeepWithCtx)
-import Strat.Poly.Quote (canonicalizeDiagram)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Strat.Poly.Proof (defaultSearchBudget)
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
@@ -650,8 +649,8 @@ testActionBinderHoles = do
 
   assertEqual
     "map[Box] should translate binder-slot generator lam using binder-hole passthrough"
-    (canonicalizeDiagram diagExpected)
-    (canonicalizeDiagram diagMapped)
+    (canonDiagramRaw diagExpected)
+    (canonDiagramRaw diagMapped)
 
 testStableHoleCaptureRenamingSkipsNonConflictingCanonicalMetas :: Assertion
 testStableHoleCaptureRenamingSkipsNonConflictingCanonicalMetas = do

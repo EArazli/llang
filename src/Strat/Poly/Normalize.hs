@@ -18,7 +18,6 @@ import Strat.Poly.Graph
   , EdgePayload(..)
   , BinderArg(..)
   , canonDiagram
-  , canonDiagramRaw
   )
 import Strat.Poly.Obj (TermDiagram(..))
 import Strat.Poly.Match (findAllMatches)
@@ -54,9 +53,8 @@ data NormalizationStatus a
   deriving (Eq, Show)
 
 normalizeWithMapper :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
-normalizeWithMapper spliceMapper tt fuel rules diag = do
-  start <- canonDiagramRaw diag
-  go fuel start
+normalizeWithMapper spliceMapper tt fuel rules diag =
+  go fuel diag
   where
     go remaining current
       | remaining <= 0 =
@@ -66,9 +64,8 @@ normalizeWithMapper spliceMapper tt fuel rules diag = do
           case step of
             Nothing ->
               Right (Finished current)
-            Just next -> do
-              nextCanon <- canonDiagramRaw next
-              go (remaining - 1) nextCanon
+            Just next ->
+              go (remaining - 1) next
 
 normalize :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
 normalize = normalizeWithMapper defaultSpliceMapper

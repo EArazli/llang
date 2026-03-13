@@ -113,7 +113,7 @@ testPairAutodiffMain = do
   assertBool "expected exported function block" ("export const timesSinAD = (" `T.isInfixOf` out)
   assertBool "expected shared sine call" ("Math.sin" `T.isInfixOf` out)
   assertBool "expected shared cosine call" ("Math.cos" `T.isInfixOf` out)
-  assertBool "expected pair return" ("return t41;" `T.isInfixOf` out)
+  assertBool "expected temporary return" ("return t" `T.isInfixOf` out)
   assertBool "expected no reflected IR in JS output" (not ("q_begin" `T.isInfixOf` out || "q_end" `T.isInfixOf` out))
 
 

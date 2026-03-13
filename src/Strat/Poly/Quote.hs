@@ -7,7 +7,6 @@ module Strat.Poly.Quote
   , reflectSharedProgram
   , quoteProgram
   , quoteDiagram
-  , canonicalizeDiagram
   ) where
 
 import Control.Monad (foldM)
@@ -23,11 +22,9 @@ import Strat.Poly.Graph
   ( BinderArg(..)
   , Diagram(..)
   , Edge(..)
-  , EdgeId(..)
   , EdgePayload(..)
   , PortId(..)
   , addEdgePayload
-  , canonDiagramRaw
   , emptyDiagram
   , freshPort
   , shiftDiagram
@@ -62,7 +59,6 @@ data SharedProgram = SharedProgram
 data SharedBinding
   = BindGen
       { sbKind :: SharedBindingKind
-      , sbEdgeId :: EdgeId
       , sbScope :: [RefId]
       , sbGen :: GenName
       , sbArgs :: [CodeArg]
@@ -71,15 +67,13 @@ data SharedBinding
       , sbBinders :: [SharedProgram]
       }
   | BindBox
-      { sbEdgeId :: EdgeId
-      , sbScope :: [RefId]
+      { sbScope :: [RefId]
       , sbIns :: [RefId]
       , sbOuts :: [RefId]
       , sbInner :: SharedProgram
       }
   | BindFeedback
-      { sbEdgeId :: EdgeId
-      , sbScope :: [RefId]
+      { sbScope :: [RefId]
       , sbIns :: [RefId]
       , sbOuts :: [RefId]
       , sbBody :: SharedProgram
@@ -137,16 +131,16 @@ quoteProgram
   -> Diagram
   -> Either Text SharedProgram
 quoteProgram doc mode fragment diag = do
-  diag0 <- canonicalizeDiagram diag
-  if mode /= dMode diag0
+  if mode /= dMode diag
     then Left "quote: mode mismatch"
     else Right ()
   if mode `S.member` dAcyclicModes doc
     then Right ()
     else Left "quote: mode is not declared acyclic"
-  let inputs = dIn diag0
-  (inputRefs, refTypes0) <- allocBoundaryRefs diag0 inputs
-  ordered <- topoOrder diag0
+  validateDiagram diag
+  let inputs = dIn diag
+  (inputRefs, refTypes0) <- allocBoundaryRefs diag inputs
+  ordered <- topoOrder diag
   let initialState =
         QuoteState
           { qsNextRef = length inputRefs
@@ -156,8 +150,8 @@ quoteProgram doc mode fragment diag = do
           , qsBindingsRev = []
           , qsMemo = M.empty
           }
-  st <- foldM (quoteEdge doc mode fragment diag0) initialState ordered
-  outputRefs <- mapM (requirePortRef st) (dOut diag0)
+  st <- foldM (quoteEdge doc mode fragment diag) initialState ordered
+  outputRefs <- mapM (requirePortRef st) (dOut diag)
   pure
     SharedProgram
       { spBaseDoctrine = dName doc
@@ -190,8 +184,7 @@ quoteEdge doc mode fragment sourceDiag st edge =
       inputRefs <- mapPortRefs (eIns edge)
       emitStructuredBinding
         BindBox
-          { sbEdgeId = eId edge
-          , sbScope = qsScope st
+          { sbScope = qsScope st
           , sbIns = inputRefs
           , sbOuts = []
           , sbInner = innerProgram
@@ -201,8 +194,7 @@ quoteEdge doc mode fragment sourceDiag st edge =
       inputRefs <- mapPortRefs (eIns edge)
       emitStructuredBinding
         BindFeedback
-          { sbEdgeId = eId edge
-          , sbScope = qsScope st
+          { sbScope = qsScope st
           , sbIns = inputRefs
           , sbOuts = []
           , sbBody = bodyProgram
@@ -232,7 +224,6 @@ quoteEdge doc mode fragment sourceDiag st edge =
           binding =
             BindGen
               { sbKind = kind
-              , sbEdgeId = eId edge
               , sbScope = qsScope st
               , sbGen = gen
               , sbArgs = args
@@ -660,7 +651,3 @@ topoOrder diag =
         Just edge -> Right edge
 
     portInt (PortId i) = i
-
-
-canonicalizeDiagram :: Diagram -> Either Text Diagram
-canonicalizeDiagram = canonDiagramRaw

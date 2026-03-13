@@ -72,15 +72,12 @@ rewriteOnceRaw tt =
   rewriteOnceRawWithMapper tt defaultSpliceMapper
 
 rewriteOnceWithMapper :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceWithMapper tt spliceMapper rules diag = do
-  step <- rewriteOnceRawWithMapper tt spliceMapper rules diag
-  case step of
-    Nothing -> Right Nothing
-    Just next -> Just <$> canonDiagramRaw next
+rewriteOnceWithMapper tt spliceMapper rules diag =
+  rewriteOnceRawWithMapper tt spliceMapper rules diag
 
 rewriteOnce :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
 rewriteOnce tt =
-  rewriteOnceWithMapper tt defaultSpliceMapper
+  rewriteOnceRaw tt
 
 rewriteOnceTopRaw :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
 rewriteOnceTopRaw tt spliceMapper rules diag = go rules
@@ -183,8 +180,7 @@ rewriteAllWithMapper tt spliceMapper cap rules diag = do
             else do
               matches <- findAllMatches (mkMatchConfig tt' r) (rrLHS r) diag'
               applied <- foldl collect (Right []) matches
-              canon <- mapM canonDiagramRaw applied
-              go (acc <> canon) rs
+              go (acc <> applied) rs
           where
             collect acc m =
               case acc of
@@ -210,18 +206,18 @@ rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
     PBox name inner -> do
       innerRes <- rewriteAllWithMapper tt spliceMapper cap rules inner
       mapM
-        (\d -> do
+        (\d ->
           let edge' = edge { ePayload = PBox name d }
-          let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-          canonDiagramRaw diag')
+              diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+           in Right diag')
         innerRes
     PFeedback inner -> do
       innerRes <- rewriteAllWithMapper tt spliceMapper cap rules inner
       mapM
-        (\d -> do
+        (\d ->
           let edge' = edge { ePayload = PFeedback d }
-          let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-          canonDiagramRaw diag')
+              diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+           in Right diag')
         innerRes
     PTmMeta _ ->
       Right []
@@ -233,18 +229,18 @@ rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
       argsRes <- rewriteAllCodeArgs tt spliceMapper cap rules args
       fromArgs <-
         mapM
-          (\args' -> do
+          (\args' ->
             let edge' = edge { ePayload = PGen gen args' bargs }
-            let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-            canonDiagramRaw diag')
+                diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+             in Right diag')
           argsRes
       bargsRes <- rewriteAllBinderArgs tt spliceMapper cap rules bargs
       fromBinders <-
         mapM
-          (\bargs' -> do
+          (\bargs' ->
             let edge' = edge { ePayload = PGen gen args bargs' }
-            let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
-            canonDiagramRaw diag')
+                diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
+             in Right diag')
           bargsRes
       pure (fromArgs <> fromBinders)
 
