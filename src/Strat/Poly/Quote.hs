@@ -11,13 +11,14 @@ module Strat.Poly.Quote
 
 import Control.Monad (foldM)
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Pipeline (FragmentDecl(..))
 import Strat.Poly.DefEq (termExprToDiagramChecked)
 import Strat.Poly.Diagram (Diagram, unionDiagram)
-import Strat.Poly.Doctrine (Doctrine(..), lookupGenDeclInDoctrine, doctrineTypeTheory)
+import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), lookupGenDeclInDoctrine, doctrineTypeTheory)
 import Strat.Poly.Graph
   ( BinderArg(..)
   , Diagram(..)
@@ -34,8 +35,10 @@ import Strat.Poly.Graph
   )
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Obj (CodeArg(..), Obj, ObjName(..), ObjRef(..), TermDiagram(..), mkCon)
+import Strat.Poly.Literal (Literal(..), LiteralKind(..))
+import Strat.Poly.Obj (CodeArg(..), Obj, ObjName(..), ObjRef(..), TermDiagram(..), mkCon, tmvSort)
 import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
+import Strat.Poly.TypeTheory (literalKindForObj)
 
 
 newtype RefId = RefId Int
@@ -385,6 +388,9 @@ ensureReflectedTarget doc program = do
     , "q_res_box"
     , "q_res_feedback"
     ]
+  case fastRefIdLabelSort doc mode of
+    Left err -> Left err
+    Right _ -> Right ()
   mapM_ requireBindingGen (spBindings program)
   pure ()
   where
@@ -476,7 +482,12 @@ refIdArg doc mode refId = CATm <$> refIdTerm doc mode refId
 refIdTerm :: Doctrine -> ModeName -> RefId -> Either Text TermDiagram
 refIdTerm doc mode refId = do
   tt <- doctrineTypeTheory doc
-  termExprToDiagramChecked tt [] (reflectedRefIdTy mode) (refIdExpr refId)
+  refExpr <-
+    case fastRefIdLabelSort doc mode of
+      Left err -> Left err
+      Right (Just _) -> Right (refIdLabelExpr refId)
+      Right Nothing -> Right (refIdExpr refId)
+  termExprToDiagramChecked tt [] (reflectedRefIdTy mode) refExpr
 
 
 refIdsArg :: Doctrine -> ModeName -> [RefId] -> Either Text CodeArg
@@ -486,7 +497,12 @@ refIdsArg doc mode refIds = CATm <$> refIdsTerm doc mode refIds
 refIdsTerm :: Doctrine -> ModeName -> [RefId] -> Either Text TermDiagram
 refIdsTerm doc mode refIds = do
   tt <- doctrineTypeTheory doc
-  termExprToDiagramChecked tt [] (reflectedRefIdsTy mode) (refIdsExpr refIds)
+  refExpr <-
+    case fastRefIdLabelSort doc mode of
+      Left err -> Left err
+      Right (Just _) -> Right (refIdsExpr refIdLabelExpr refIds)
+      Right Nothing -> Right (refIdsExpr refIdExpr refIds)
+  termExprToDiagramChecked tt [] (reflectedRefIdsTy mode) refExpr
 
 
 refIdExpr :: RefId -> TermExpr
@@ -497,12 +513,17 @@ refIdExpr (RefId n) =
       TMGen reflectedRefIdConsGen [THATm digit, THATm tailExpr]
 
 
-refIdsExpr :: [RefId] -> TermExpr
-refIdsExpr =
+refIdLabelExpr :: RefId -> TermExpr
+refIdLabelExpr refId =
+  TMGen reflectedRefIdLabelGen [THATm (TMLit (LString (refIdLabelText refId)))]
+
+
+refIdsExpr :: (RefId -> TermExpr) -> [RefId] -> TermExpr
+refIdsExpr refExpr =
   foldr consTail refIdsNilExpr
   where
     consTail refId tailExpr =
-      TMGen reflectedRefIdsConsGen [THATm (refIdExpr refId), THATm tailExpr]
+      TMGen reflectedRefIdsConsGen [THATm (refExpr refId), THATm tailExpr]
 
 
 digitExpr :: Int -> TermExpr
@@ -574,12 +595,38 @@ reflectedRefIdConsGen :: GenName
 reflectedRefIdConsGen = GenName "refId_cons"
 
 
+reflectedRefIdLabelGen :: GenName
+reflectedRefIdLabelGen = GenName "refId_label"
+
+
 reflectedRefIdsNilGen :: GenName
 reflectedRefIdsNilGen = GenName "refIds_nil"
 
 
 reflectedRefIdsConsGen :: GenName
 reflectedRefIdsConsGen = GenName "refIds_cons"
+
+
+fastRefIdLabelSort :: Doctrine -> ModeName -> Either Text (Maybe Obj)
+fastRefIdLabelSort doc mode = do
+  tt <- doctrineTypeTheory doc
+  case lookupGenDeclInDoctrine "" doc mode reflectedRefIdLabelGen of
+    Left _ -> Right Nothing
+    Right gd ->
+      case gdParams gd of
+        [GP_Tm tmv]
+          | null (gdDom gd)
+              && gdCod gd == [reflectedRefIdTy mode]
+              && literalKindForObj tt (tmvSort tmv) == Just LKString ->
+              Right (Just (tmvSort tmv))
+          | otherwise ->
+              Left "quote: reflected refId_label must be [] -> [RefId] with a single string-literal term parameter"
+        _ ->
+          Left "quote: reflected refId_label must be [] -> [RefId] with a single string-literal term parameter"
+
+
+refIdLabelText :: RefId -> Text
+refIdLabelText (RefId n) = T.pack (show n)
 
 
 reflectedBeginGen :: GenName

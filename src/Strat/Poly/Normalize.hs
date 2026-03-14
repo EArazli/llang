@@ -10,17 +10,19 @@ module Strat.Poly.Normalize
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Monoid (Any(..), getAny)
 import Strat.Poly.Diagram (Diagram(..))
 import Strat.Poly.Graph
   ( CanonDiagram(..)
   , Edge(..)
+  , EdgeId(..)
   , EdgePayload(..)
   , BinderArg(..)
   , canonDiagram
   )
 import Strat.Poly.Obj (TermDiagram(..))
-import Strat.Poly.Match (findAllMatches)
+import Strat.Poly.Match (Match(..), buildHostIndex, findAllMatchesWithIndex, findAllMatchesWithIndexSeeded)
 import Strat.Poly.Proof
   ( JoinProof(..)
   , RewritePath(..)
@@ -54,18 +56,65 @@ data NormalizationStatus a
 
 normalizeWithMapper :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
 normalizeWithMapper spliceMapper tt fuel rules diag =
-  go fuel diag
+  go fuel diag (allEdgeIds diag)
   where
-    go remaining current
+    go remaining current worklist
       | remaining <= 0 =
           Right (OutOfFuel current)
       | otherwise = do
-          step <- rewriteOnceRawWithMapper tt spliceMapper rules current
+          localStep <- rewriteOnceTopWithCandidates current worklist
+          step <-
+            case localStep of
+              Just (next, nextWorklist) ->
+                Right (Just (next, nextWorklist))
+              Nothing -> do
+                fullStep <- rewriteOnceRawWithMapper tt spliceMapper rules current
+                case fullStep of
+                  Nothing -> Right Nothing
+                  Just next -> Right (Just (next, allEdgeIds next))
           case step of
             Nothing ->
               Right (Finished current)
-            Just next ->
-              go (remaining - 1) next
+            Just (next, nextWorklist) ->
+              go (remaining - 1) next nextWorklist
+
+    rewriteOnceTopWithCandidates current candidateEdges
+      | S.null candidateEdges = Right Nothing
+      | otherwise =
+          let hostIndex = buildHostIndex current
+           in goRules hostIndex rules
+      where
+        goRules _ [] = Right Nothing
+        goRules hostIndex (rule:rest)
+          | dMode (rrLHS rule) /= dMode current = goRules hostIndex rest
+          | otherwise = do
+              matches <- findAllMatchesWithIndexSeeded (mkMatchConfig tt rule) (rrLHS rule) hostIndex candidateEdges current
+              tryMatches rule matches
+          where
+            tryMatches _ [] = goRules hostIndex rest
+            tryMatches rule (match:more) =
+              case applyMatchWithMapper tt spliceMapper rule match current of
+                Left _ -> tryMatches rule more
+                Right next ->
+                  Right (Just (next, affectedEdges current next match))
+
+    affectedEdges before after match =
+      let oldKeys = S.fromList (IM.keys (dEdges before))
+          newKeys = S.fromList (IM.keys (dEdges after))
+          inserted = S.map EdgeId (S.difference newKeys oldKeys)
+          touchedPorts = S.fromList (M.elems (mPortMap match))
+          adjacent = incidentEdges after touchedPorts
+       in inserted `S.union` adjacent
+
+    incidentEdges current ports =
+      S.fromList
+        [ eId edge
+        | edge <- IM.elems (dEdges current)
+        , any (`S.member` ports) (eIns edge <> eOuts edge)
+        ]
+
+    allEdgeIds current =
+      S.fromList [eId edge | edge <- IM.elems (dEdges current)]
 
 normalize :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text (NormalizationStatus Diagram)
 normalize = normalizeWithMapper defaultSpliceMapper
@@ -204,14 +253,15 @@ rewriteAllWithProof spliceMapper tt cap rules diag = do
 
 rewriteAllTopWithProof :: SpliceMapper -> TypeTheory -> [RewriteRule] -> Diagram -> Either Text [(RewriteStep, Diagram)]
 rewriteAllTopWithProof spliceMapper tt rules diag =
-  foldl collect (Right []) (zip [0 :: Int ..] rules)
+  let hostIndex = buildHostIndex diag
+   in foldl (collect hostIndex) (Right []) (zip [0 :: Int ..] rules)
   where
-    collect acc (ruleIndex, rule) = do
+    collect hostIndex acc (ruleIndex, rule) = do
       out <- acc
       if dMode (rrLHS rule) /= dMode diag
         then Right out
         else do
-          matches <- findAllMatches (mkMatchConfig tt rule) (rrLHS rule) diag
+          matches <- findAllMatchesWithIndex (mkMatchConfig tt rule) (rrLHS rule) hostIndex diag
           steps <- fmap concat (mapM (applyOne ruleIndex rule) matches)
           Right (out <> steps)
 

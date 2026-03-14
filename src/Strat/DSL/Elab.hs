@@ -1064,14 +1064,19 @@ deriveReflectedQuotationDoctrine env targetName baseDoc mode = do
   doc4 <- insertGeneratedGen doc3 mode (simpleGen "q_end" [tmParam "outputs" refIdsTy] [seqTy] [progTy])
   doc5 <- insertGeneratedGen doc4 mode (structuredGen "q_res_box")
   doc6 <- insertGeneratedGen doc5 mode (structuredGen "q_res_feedback")
+  doc7 <-
+    case uniqueStringLiteralTy baseDoc mode of
+      Nothing -> Right doc6
+      Just labelTy ->
+        insertGeneratedGen doc6 mode (simpleGen "refId_label" [tmParam "label" labelTy] [] [refIdTy])
   let sourceGens =
         [ entry
         | entry@(srcGen, _) <- M.toAscList (M.findWithDefault M.empty mode (dGens baseDoc))
         , not (isTypeDeclGenNameInTables baseDoc ctorTables mode (ObjName (renderGenNameText srcGen)))
         ]
-  doc7 <- foldM (insertReflectedBindingGen mode seqTy progTy refIdTy) doc6 sourceGens
-  validateDoctrine doc7
-  pure doc7
+  doc8 <- foldM (insertReflectedBindingGen mode seqTy progTy refIdTy) doc7 sourceGens
+  validateDoctrine doc8
+  pure doc8
 
 
 rawReflectedSupportDoctrine :: Text -> ModeName -> PolyAST.RawPolyDoctrine
@@ -1133,6 +1138,21 @@ rawReflectedSupportDoctrine targetName mode =
             ]
         }
     modeText (ModeName name) = name
+
+
+uniqueStringLiteralTy :: Doctrine -> ModeName -> Maybe Obj
+uniqueStringLiteralTy doc mode =
+  case candidates of
+    [ty] -> Just ty
+    _ -> Nothing
+  where
+    candidates =
+      [ mkCon (ObjRef mode (ObjName (renderGenNameText genName))) []
+      | (genName, genDecl) <- M.toAscList (M.findWithDefault M.empty mode (dGens doc))
+      , gdLiteralKind genDecl == Just LKString
+      , null (gdParams genDecl)
+      , null (gdDom genDecl)
+      ]
 
 
 mkTypeCtorDecl :: ModeName -> Obj -> Text -> Maybe LiteralKind -> GenDecl

@@ -134,30 +134,8 @@ doctrine SmoothLam_JS extends SmoothLam_Q where {
   gen cat : [Doc, Doc] -> [Doc] @M;
   gen indent(n:Int) : [Doc] -> [Doc] @M;
 
-  gen prefix(s:Str) : [Doc] -> [Doc] @M;
-  gen suffix(s:Str) : [Doc] -> [Doc] @M;
-  gen wrap(open:Str, close:Str) : [Doc] -> [Doc] @M;
-  gen joinWith(sep:Str) : [Doc, Doc] -> [Doc] @M;
-  gen call1(fn:Str) : [Doc] -> [Doc] @M;
-
-  rule computational prefix_def -> (p:Str) : [Doc] -> [Doc] @M =
-    prefix(s = p) == (text(s = p) * id[Doc]) ; cat
-
-  rule computational suffix_def -> (p:Str) : [Doc] -> [Doc] @M =
-    suffix(s = p) == (id[Doc] * text(s = p)) ; cat
-
-  rule computational wrap_def -> (l:Str, r:Str) : [Doc] -> [Doc] @M =
-    wrap(open = l, close = r) == prefix(s = l) ; suffix(s = r)
-
-  rule computational joinWith_def -> (s:Str) : [Doc, Doc] -> [Doc] @M =
-    joinWith(sep = s) == (((id[Doc] * text(s = s)) ; cat) * id[Doc]) ; cat
-
-  rule computational call1_def -> (f:Str) : [Doc] -> [Doc] @M =
-    call1(fn = f) == prefix(s = "(") ; prefix(s = f) ; suffix(s = ")")
-
   gen renderDigit(d:Digit) : [] -> [Doc] @M;
   gen renderRefId(id:RefId) : [] -> [Doc] @M;
-  gen renderVar(id:RefId) : [] -> [Doc] @M;
   gen renderVarList(ids:RefIds) : [] -> [Doc] @M;
   gen renderVarListTail(ids:RefIds) : [] -> [Doc] @M;
   gen renderVarListWithHead(head:RefId, tail:RefIds) : [] -> [Doc] @M;
@@ -194,16 +172,15 @@ doctrine SmoothLam_JS extends SmoothLam_Q where {
   rule computational renderDigit_9 -> : [] -> [Doc] @M =
     renderDigit(d = digit9) == text(s = "9")
 
+  rule computational renderRefId_label -> (label:Str) : [] -> [Doc] @M =
+    renderRefId(id = refId_label(label)) == text(s = label)
+
   rule computational renderRefId_nil -> : [] -> [Doc] @M =
     renderRefId(id = refId_nil) == empty
 
   rule computational renderRefId_cons -> (d:Digit, tail:RefId) : [] -> [Doc] @M =
     renderRefId(id = refId_cons(d, tail)) ==
       (renderDigit(d = d) * renderRefId(id = tail)) ; cat
-
-  rule computational renderVar_def -> (rid:RefId) : [] -> [Doc] @M =
-    renderVar(id = rid) ==
-      (text(s = "t") * renderRefId(id = rid)) ; cat
 
   rule computational renderVarList_nil -> : [] -> [Doc] @M =
     renderVarList(ids = refIds_nil) == empty
@@ -217,11 +194,11 @@ doctrine SmoothLam_JS extends SmoothLam_Q where {
 
   rule computational renderVarListTail_cons -> (head:RefId, tail:RefIds) : [] -> [Doc] @M =
     renderVarListTail(ids = refIds_cons(head, tail)) ==
-      ((renderVar(id = head) ; prefix(s = ", ")) * renderVarListTail(ids = tail)) ; cat
+      (((((text(s = ", ") * text(s = "t")) ; cat) * renderRefId(id = head)) ; cat) * renderVarListTail(ids = tail)) ; cat
 
   rule computational renderVarListWithHead_def -> (head:RefId, tail:RefIds) : [] -> [Doc] @M =
     renderVarListWithHead(head = head, tail = tail) ==
-      (renderVar(id = head) * renderVarListTail(ids = tail)) ; cat
+      ((((text(s = "t") * renderRefId(id = head)) ; cat) * renderVarListTail(ids = tail)) ; cat)
 
   rule computational renderReturn_nil -> : [] -> [Doc] @M =
     renderReturnExpr(outputs = refIds_nil) == text(s = "undefined")
@@ -231,78 +208,12 @@ doctrine SmoothLam_JS extends SmoothLam_Q where {
       renderReturnTail(head = head, tail = tail)
 
   rule computational renderReturnTail_nil -> (head:RefId) : [] -> [Doc] @M =
-    renderReturnTail(head = head, tail = refIds_nil) == renderVar(id = head)
+    renderReturnTail(head = head, tail = refIds_nil) == (text(s = "t") * renderRefId(id = head)) ; cat
 
   rule computational renderReturnTail_cons -> (head:RefId, next:RefId, rest:RefIds) : [] -> [Doc] @M =
     renderReturnTail(head = head, tail = refIds_cons(next, rest)) ==
-      renderVarListWithHead(head = head, tail = refIds_cons(next, rest))
-      ; wrap(open = "[", close = "]")
-
-  gen beginDoc(name:Str, inputs:RefIds) : [] -> [Doc] @M;
-  gen endDoc(outputs:RefIds) : [] -> [Doc] @M;
-  gen assignStmt(dst:RefId) : [Doc] -> [Doc] @M;
-  gen aliasStmt(src:RefId, dst:RefId) : [] -> [Doc] @M;
-  gen dupStmt(src:RefId, dst0:RefId, dst1:RefId) : [] -> [Doc] @M;
-  gen binaryExpr(op:Str, left:RefId, right:RefId) : [] -> [Doc] @M;
-  gen unaryExpr(fn:Str, src:RefId) : [] -> [Doc] @M;
-  gen negExpr(src:RefId) : [] -> [Doc] @M;
-  gen pairExpr(left:RefId, right:RefId) : [] -> [Doc] @M;
-  gen projectExpr(ix:Str, src:RefId) : [] -> [Doc] @M;
-  gen unsupportedStep(name:Str) : [Doc] -> [Doc] @M;
-  gen unsupportedNested(name:Str) : [Doc, Doc] -> [Doc] @M;
-
-  rule computational beginDoc_def -> (name:Str, inputs:RefIds) : [] -> [Doc] @M =
-    beginDoc(name = name, inputs = inputs) ==
-      ((text(s = name) ; prefix(s = "export const ") ; suffix(s = " = (")) * renderVarList(ids = inputs)) ; cat
-      ; suffix(s = ") => {\n")
-
-  rule computational endDoc_def -> (outputs:RefIds) : [] -> [Doc] @M =
-    endDoc(outputs = outputs) ==
-      ((text(s = "  return ") * renderReturnExpr(outputs = outputs)) ; cat)
-      ; suffix(s = ";\n};\n")
-
-  rule computational assignStmt_def -> (dst:RefId) : [Doc] -> [Doc] @M =
-    assignStmt(dst = dst) ==
-      (((renderVar(id = dst) ; prefix(s = "  const ") ; suffix(s = " = ")) * id[Doc]) ; cat)
-      ; suffix(s = ";\n")
-
-  rule computational aliasStmt_def -> (src:RefId, dst:RefId) : [] -> [Doc] @M =
-    aliasStmt(src = src, dst = dst) ==
-      renderVar(id = src) ; assignStmt(dst = dst)
-
-  rule computational dupStmt_def -> (src:RefId, dst0:RefId, dst1:RefId) : [] -> [Doc] @M =
-    dupStmt(src = src, dst0 = dst0, dst1 = dst1) ==
-      (aliasStmt(src = src, dst = dst0) * aliasStmt(src = src, dst = dst1)) ; cat
-
-  rule computational binaryExpr_def -> (op:Str, left:RefId, right:RefId) : [] -> [Doc] @M =
-    binaryExpr(op = op, left = left, right = right) ==
-      ((renderVar(id = left) * renderVar(id = right)) ; joinWith(sep = op))
-      ; wrap(open = "(", close = ")")
-
-  rule computational unaryExpr_def -> (fn:Str, src:RefId) : [] -> [Doc] @M =
-    unaryExpr(fn = fn, src = src) ==
-      renderVar(id = src) ; call1(fn = fn)
-
-  rule computational negExpr_def -> (src:RefId) : [] -> [Doc] @M =
-    negExpr(src = src) ==
-      renderVar(id = src) ; prefix(s = "(-") ; suffix(s = ")")
-
-  rule computational pairExpr_def -> (left:RefId, right:RefId) : [] -> [Doc] @M =
-    pairExpr(left = left, right = right) ==
-      ((renderVar(id = left) * renderVar(id = right)) ; joinWith(sep = ", "))
-      ; wrap(open = "[", close = "]")
-
-  rule computational projectExpr_def -> (ix:Str, src:RefId) : [] -> [Doc] @M =
-    projectExpr(ix = ix, src = src) ==
-      renderVar(id = src) ; suffix(s = ix)
-
-  rule computational unsupportedStep_def -> (name:Str) : [Doc] -> [Doc] @M =
-    unsupportedStep(name = name) ==
-      ((id[Doc] * ((text(s = "  /* unsupported: ") * text(s = name)) ; cat ; suffix(s = " */\n"))) ; cat)
-
-  rule computational unsupportedNested_def -> (name:Str) : [Doc, Doc] -> [Doc] @M =
-    unsupportedNested(name = name) ==
-      (((id[Doc] * id[Doc]) ; cat) * ((text(s = "  /* unsupported: ") * text(s = name)) ; cat ; suffix(s = " */\n"))) ; cat
+      ((text(s = "[") * renderVarListWithHead(head = head, tail = refIds_cons(next, rest))) ; cat)
+      ; (id[Doc] * text(s = "]")) ; cat
 }
 
 morphism emitJS : SmoothLam_Q -> SmoothLam_JS where {
@@ -347,6 +258,7 @@ morphism emitJS : SmoothLam_Q -> SmoothLam_JS where {
   gen digit9 @M -> digit9
   gen refId_nil @M -> refId_nil
   gen refId_cons @M -> refId_cons
+  gen refId_label @M -> refId_label(label = label)
   gen refIds_nil @M -> refIds_nil
   gen refIds_cons @M -> refIds_cons
   gen fold_Digit @M -> fold_Digit(r_Digit)[?b0, ?b1, ?b2, ?b3, ?b4, ?b5, ?b6, ?b7, ?b8, ?b9]
@@ -354,51 +266,125 @@ morphism emitJS : SmoothLam_Q -> SmoothLam_JS where {
   gen fold_RefIds @M -> fold_RefIds(r_RefIds)[?b0, ?b1]
 
   gen q_begin @M ->
-    ((text(s = "export const timesSinAD = (") * renderVarList(ids = inputs)) ; cat)
-    ; (id[Doc] * text(s = ") => {\n")) ; cat
+    (((text(s = "export const timesSinAD = (") * renderVarList(ids = inputs)) ; cat) * text(s = ") => {\n")) ; cat
 
   gen q_end @M ->
-    (id[Doc] * (((text(s = "  return ") * renderReturnExpr(outputs = outputs)) ; cat) ; suffix(s = ";\n};\n"))) ; cat
+    (id[Doc] * ((((text(s = "  return ") * renderReturnExpr(outputs = outputs)) ; cat) * text(s = ";\n};\n")) ; cat)) ; cat
 
   gen q_comp_ctx_ext @M ->
-    (id[Doc] * (renderVar(id = in0) ; assignStmt(dst = out0))) ; cat
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ";\n")) ; cat
+    )) ; cat
 
   gen q_comp_var @M ->
-    (id[Doc] * (renderVar(id = in0) ; assignStmt(dst = out0))) ; cat
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ";\n")) ; cat
+    )) ; cat
 
   gen q_comp_reindex @M ->
-    (id[Doc] * (renderVar(id = in0) ; assignStmt(dst = out0))) ; cat
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ";\n")) ; cat
+    )) ; cat
 
   gen q_dup @M ->
-    ((id[Doc] * (renderVar(id = in0) ; assignStmt(dst = out0))) ; cat)
-    ; (id[Doc] * (renderVar(id = in0) ; assignStmt(dst = out1))) ; cat
+    ((id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ";\n")) ; cat
+    )) ; cat)
+    ; (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out1)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ";\n")) ; cat
+    )) ; cat
 
   gen q_mkPair @M ->
-    (id[Doc] * (((renderVar(id = in0) * renderVar(id = in1)) ; joinWith(sep = ", ")) ; wrap(open = "[", close = "]") ; assignStmt(dst = out0))) ; cat
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = [t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ", t")) ; cat
+      ; (id[Doc] * renderRefId(id = in1)) ; cat
+      ; (id[Doc] * text(s = "];\n")) ; cat
+    )) ; cat
 
   gen q_fst @M ->
-    (id[Doc] * (renderVar(id = in0) ; suffix(s = "[0]") ; assignStmt(dst = out0))) ; cat
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = "[0];\n")) ; cat
+    )) ; cat
 
   gen q_snd @M ->
-    (id[Doc] * (renderVar(id = in0) ; suffix(s = "[1]") ; assignStmt(dst = out0))) ; cat
-  gen q_lam @M -> unsupportedNested(name = "q_lam")
-  gen q_app @M -> unsupportedStep(name = "q_app")
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = "[1];\n")) ; cat
+    )) ; cat
+  gen q_lam @M ->
+    (((id[Doc] * id[Doc]) ; cat) * ((text(s = "  /* unsupported: q_lam */") * text(s = "\n")) ; cat)) ; cat
+  gen q_app @M ->
+    (id[Doc] * ((text(s = "  /* unsupported: q_app */") * text(s = "\n")) ; cat)) ; cat
   gen q_add @M ->
-    (id[Doc] * (((renderVar(id = in0) * renderVar(id = in1)) ; joinWith(sep = " + ")) ; wrap(open = "(", close = ")") ; assignStmt(dst = out0))) ; cat
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = (t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = " + t")) ; cat
+      ; (id[Doc] * renderRefId(id = in1)) ; cat
+      ; (id[Doc] * text(s = ");\n")) ; cat
+    )) ; cat
 
   gen q_mul @M ->
-    (id[Doc] * (((renderVar(id = in0) * renderVar(id = in1)) ; joinWith(sep = " * ")) ; wrap(open = "(", close = ")") ; assignStmt(dst = out0))) ; cat
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = (t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = " * t")) ; cat
+      ; (id[Doc] * renderRefId(id = in1)) ; cat
+      ; (id[Doc] * text(s = ");\n")) ; cat
+    )) ; cat
 
   gen q_sin @M ->
-    (id[Doc] * (renderVar(id = in0) ; call1(fn = "Math.sin") ; assignStmt(dst = out0))) ; cat
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = Math.sin(t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ");\n")) ; cat
+    )) ; cat
 
   gen q_cos @M ->
-    (id[Doc] * (renderVar(id = in0) ; call1(fn = "Math.cos") ; assignStmt(dst = out0))) ; cat
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = Math.cos(t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ");\n")) ; cat
+    )) ; cat
 
   gen q_neg @M ->
-    (id[Doc] * (renderVar(id = in0) ; prefix(s = "(-") ; suffix(s = ")") ; assignStmt(dst = out0))) ; cat
-  gen q_res_box @M -> unsupportedNested(name = "q_res_box")
-  gen q_res_feedback @M -> unsupportedNested(name = "q_res_feedback")
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = (-t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ");\n")) ; cat
+    )) ; cat
+  gen q_res_box @M ->
+    (((id[Doc] * id[Doc]) ; cat) * ((text(s = "  /* unsupported: q_res_box */") * text(s = "\n")) ; cat)) ; cat
+  gen q_res_feedback @M ->
+    (((id[Doc] * id[Doc]) ; cat) * ((text(s = "  /* unsupported: q_res_feedback */") * text(s = "\n")) ; cat)) ; cat
 }
 
 pipeline quoted_single where {
@@ -421,7 +407,7 @@ pipeline js_single where {
   normalize { policy = "computational_lr"; fuel = 500; };
   quote using SharePair into SmoothLam_Q;
   apply emitJS;
-  normalize { policy = "computational_lr"; fuel = 20000; };
+  normalize { policy = "computational_lr"; fuel = 1000; };
   extract Doc { stdout = true; };
 }
 
@@ -431,7 +417,7 @@ pipeline js_double where {
   normalize { policy = "computational_lr"; fuel = 500; };
   quote using SharePair into SmoothLam_Q;
   apply emitJS;
-  normalize { policy = "computational_lr"; fuel = 20000; };
+  normalize { policy = "computational_lr"; fuel = 1000; };
   extract Doc { stdout = true; };
 }
 

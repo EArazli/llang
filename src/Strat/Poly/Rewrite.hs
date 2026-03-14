@@ -80,18 +80,20 @@ rewriteOnce tt =
   rewriteOnceRaw tt
 
 rewriteOnceTopRaw :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceTopRaw tt spliceMapper rules diag = go rules
+rewriteOnceTopRaw tt spliceMapper rules diag =
+  let hostIndex = buildHostIndex diag
+   in go hostIndex rules
   where
-    go [] = Right Nothing
-    go (r:rs) = do
+    go _ [] = Right Nothing
+    go hostIndex (r:rs) = do
       if dMode (rrLHS r) /= dMode diag
-        then go rs
+        then go hostIndex rs
         else do
           rejectSplice "rewrite rule lhs" (rrLHS r)
-          matches <- findAllMatches (mkMatchConfig tt r) (rrLHS r) diag
+          matches <- findAllMatchesWithIndex (mkMatchConfig tt r) (rrLHS r) hostIndex diag
           tryMatches matches
       where
-        tryMatches [] = go rs
+        tryMatches [] = go hostIndex rs
         tryMatches (m:ms) =
           case applyMatchWithMapper tt spliceMapper r m diag of
             Left _ -> tryMatches ms

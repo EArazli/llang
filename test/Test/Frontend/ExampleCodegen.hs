@@ -125,6 +125,7 @@ testPairAutodiffShare = do
   let out = prOutput result
   assertBool "expected reflected quote prologue" ("q_begin" `T.isInfixOf` out)
   assertBool "expected reflected RefIds boundary encoding" ("refIds_cons" `T.isInfixOf` out)
+  assertBool "expected reflected atomic RefId labels" ("refId_label" `T.isInfixOf` out)
   assertBool "expected reflected duplication nodes" ("q_dup" `T.isInfixOf` out)
   assertBool "expected reflected sine binding" ("q_sin" `T.isInfixOf` out)
   assertBool "expected reflected cosine binding" ("q_cos" `T.isInfixOf` out)
