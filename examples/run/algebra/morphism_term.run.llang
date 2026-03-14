@@ -16,19 +16,31 @@ morphism Double : Invol -> Invol where {
   gen comp_ctx_ext @M -> comp_ctx_ext(a)
   gen comp_var @M -> comp_var(a)
   gen comp_reindex @M -> comp_reindex(a)
-  gen f @ M -> f ; f
+  gen f @M -> f ; f
+}
+
+module_surface InvolRunUnit where {
+  doctrine Invol;
+  mode M;
+}
+
+language InvolRunLang where {
+  doctrine Invol;
+  module_surface InvolRunUnit;
+}
+
+module InvolRuns in InvolRunLang where {
+  let main
+  ---
+  f
+  ---
+  export { main };
 }
 
 pipeline main where {
+  project export main;
   normalize;
   apply Double;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine Invol;
-  source mode M;
-}
----
-f
----
+build main from InvolRuns using main;

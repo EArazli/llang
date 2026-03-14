@@ -22,16 +22,29 @@ morphism emitDoc : IR -> Doc where {
   gen add @M -> cat
 }
 
-pipeline compile_doc where {
-  normalize { policy = "topmost"; fuel = 50; };
-  apply emitDoc;
-  extract Doc { stdout = true };
+module_surface SimpleCodegenRunUnit where {
+  doctrine IR;
+  mode M;
 }
 
-run main using compile_doc where {
-  source doctrine IR;
-  source mode M;
+language SimpleCodegenRunLang where {
+  doctrine IR;
+  module_surface SimpleCodegenRunUnit;
 }
----
-lit1 * lit2 ; add
----
+
+module SimpleCodegenRuns in SimpleCodegenRunLang where {
+  let main
+  ---
+  lit1 * lit2 ; add
+  ---
+  export { main };
+}
+
+pipeline compile_doc where {
+  project export main;
+  normalize { policy = "topmost"; fuel = 50; };
+  apply emitDoc;
+  emit via Doc { stdout = true; };
+}
+
+build main from SimpleCodegenRuns using compile_doc;

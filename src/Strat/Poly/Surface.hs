@@ -35,7 +35,7 @@ data SurfaceParamKind
   = SPKIdent
   | SPKLiteral
   | SPKType
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 elabPolySurfaceDecl :: Text -> Doctrine -> Maybe Doctrine -> SurfaceSpec -> Either Text PolySurfaceDef
 elabPolySurfaceDecl name doc mBaseDoc spec = do
@@ -114,7 +114,7 @@ ensureBaseInclusion mode docBase docSurface =
 data RuleInfo = RuleInfo
   { riNamedKinds :: M.Map Text SurfaceParamKind
   , riExprCount :: Int
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 emptyRuleInfo :: RuleInfo
 emptyRuleInfo = RuleInfo
@@ -189,7 +189,6 @@ validateTemplate :: RuleInfo -> TemplateExpr -> Either Text ()
 validateTemplate info templ =
   case templ of
     TId _ -> Right ()
-    TTermRef _ -> Right ()
     TBox _ inner -> validateTemplate info inner
     TTrace _ inner -> validateTemplate info inner
     TLoop inner -> validateTemplate info inner

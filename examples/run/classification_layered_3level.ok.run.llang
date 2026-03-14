@@ -24,15 +24,27 @@ doctrine ClassificationLayered3 where {
   gen idUnit : [Unit] -> [Unit] @Tm;
 }
 
-pipeline main where {
-  normalize;
-  extract diagram;
+module_surface ClassificationLayered3RunUnit where {
+  doctrine ClassificationLayered3;
+  mode Tm;
 }
 
-run main using main where {
-  source doctrine ClassificationLayered3;
-  source mode Tm;
+language ClassificationLayered3RunLang where {
+  doctrine ClassificationLayered3;
+  module_surface ClassificationLayered3RunUnit;
 }
----
-idUnit
----
+
+module ClassificationLayered3Runs in ClassificationLayered3RunLang where {
+  let main
+  ---
+  idUnit
+  ---
+  export { main };
+}
+
+pipeline main where {
+  project export main;
+  normalize;
+}
+
+build main from ClassificationLayered3Runs using main;

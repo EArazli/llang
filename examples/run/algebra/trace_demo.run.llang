@@ -6,9 +6,6 @@ doctrine TraceDemo where {
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_M : [] -> [M.U_M] @M;
   gen T : [] -> [M.U_M] @M;
-
-  -- A body suitable for tracing 1 wire:
-  -- dom = [T, T], cod = [T, T]
   gen step2 : [T, T] -> [T, T] @M;
 }
 
@@ -17,16 +14,27 @@ fragment ShareTrace in TraceDemo mode M where {
 
 derived doctrine TraceDemo_Q = reflect quotation of TraceDemo mode M;
 
+module_surface TraceDemoRunUnit where {
+  doctrine TraceDemo;
+  mode M;
+}
+
+language TraceDemoRunLang where {
+  doctrine TraceDemo;
+  module_surface TraceDemoRunUnit;
+}
+
+module TraceDemoRuns in TraceDemoRunLang where {
+  let main
+  ---
+  trace 1 { step2 }
+  ---
+  export { main };
+}
+
 pipeline main where {
+  project export main;
   quote using ShareTrace into TraceDemo_Q;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine TraceDemo;
-  source mode M;
-}
-
----
-trace 1 { step2 }
----
+build main from TraceDemoRuns using main;

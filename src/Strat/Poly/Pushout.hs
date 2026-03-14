@@ -1954,8 +1954,6 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
           mArgs' <- renameRawGenArgs tyVarNames tmVarNames mode genName mArgs
           mBinderArgs' <- mapM (mapM (renameRawBinderArg tyVarNames tmVarNames mode)) mBinderArgs
           pure (PolyAST.RDGen (renderGenName genName') mArgs' mBinderArgs')
-        PolyAST.RDTermRef name ->
-          Right (PolyAST.RDTermRef name)
         PolyAST.RDSplice name ->
           Right (PolyAST.RDSplice name)
         PolyAST.RDBox name inner ->
@@ -2238,6 +2236,10 @@ renameDiagram modeRen modRen tyRen permRen genRen diag =
         PGen gen args bargs -> do
           let gen' = M.findWithDefault gen (mode, gen) genRen
           pure (PGen gen' args bargs)
+        PProvider ref ->
+          pure (PProvider ref)
+        PModuleRef ref ->
+          pure (PModuleRef ref)
         PSplice x me ->
           pure (PSplice x (renameModExpr modeRen modRen me))
         PTmMeta v -> do
@@ -2689,6 +2691,10 @@ renameEdgePayloadAlpha tyMap tmMap payload =
         g
         (map (renameCodeArgAlpha tyMap tmMap) args)
         (map (renameBinderArgAlpha tyMap tmMap) bargs)
+    PProvider ref ->
+      PProvider ref
+    PModuleRef ref ->
+      PModuleRef ref
     PBox name inner ->
       PBox name (renameDiagramAlpha tyMap tmMap inner)
     PFeedback inner ->
@@ -2714,6 +2720,10 @@ normalizeDiagramModes mt diag = do
         PGen g args bargs -> do
           bargs' <- mapM normalizeBinderArg bargs
           pure edge { ePayload = PGen g args bargs' }
+        PProvider ref ->
+          pure edge { ePayload = PProvider ref }
+        PModuleRef ref ->
+          pure edge { ePayload = PModuleRef ref }
         PBox name inner -> do
           inner' <- normalizeDiagramModes mt inner
           pure edge { ePayload = PBox name inner' }
@@ -3088,6 +3098,8 @@ checkGenerated label mor =
       case ePayload edge of
         PSplice _ _ -> True
         PGen _ _ bargs -> any binderArgHasSplice bargs
+        PProvider _ -> False
+        PModuleRef _ -> False
         PBox _ inner -> diagramHasSplice inner
         PFeedback inner -> diagramHasSplice inner
         PTmMeta _ -> False

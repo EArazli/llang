@@ -12,7 +12,6 @@ doctrine LambdaBeta where {
     var(a) == id[a]
   rule computational reindex_id -> (a@M) : [a] -> [a] @M =
     reindex(a) == id[a]
-
   gen lam : [binder { x : A } : [A]] -> [A] @M;
   gen app : [A, A] -> [A] @M;
 
@@ -20,14 +19,27 @@ doctrine LambdaBeta where {
     (lam[?Body] * id[A]) ; app == splice(?Body)
 }
 
-pipeline debug where {
-  normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
+module_surface LambdaBetaRunUnit where {
+  doctrine LambdaBeta;
+  mode M;
 }
 
-run main using debug where {
-  source doctrine LambdaBeta;
-  source mode M;
+language LambdaBetaRunLang where {
+  doctrine LambdaBeta;
+  module_surface LambdaBetaRunUnit;
 }
----
-(lam[id[A]] * id[A]) ; app
+
+module LambdaBetaRuns in LambdaBetaRunLang where {
+  let main
+  ---
+  (lam[id[A]] * id[A]) ; app
+  ---
+  export { main };
+}
+
+pipeline debug where {
+  project export main;
+  normalize { policy = "topmost"; fuel = 50; };
+}
+
+build main from LambdaBetaRuns using debug;

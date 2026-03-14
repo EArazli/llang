@@ -1,4 +1,4 @@
-import "../../../stdlib/nat.llang";
+include "../../../stdlib/nat.llang";
 
 doctrine Peano extends Nat where {
 }

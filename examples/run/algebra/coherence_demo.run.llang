@@ -1,13 +1,26 @@
-import "../../lib/algebra/coherence_demo.llang";
+include "../../lib/algebra/coherence_demo.llang";
+
+module_surface CoherenceDemoRunUnit where {
+  doctrine CoherenceDemo;
+  mode M;
+}
+
+language CoherenceDemoRunLang where {
+  doctrine CoherenceDemo;
+  module_surface CoherenceDemoRunUnit;
+}
+
+module CoherenceDemoRuns in CoherenceDemoRunLang where {
+  let main
+  ---
+  f
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize { policy = "all_oriented"; };
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine CoherenceDemo;
-}
----
-f
----
+build main from CoherenceDemoRuns using main;

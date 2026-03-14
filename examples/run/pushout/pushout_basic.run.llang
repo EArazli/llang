@@ -1,14 +1,26 @@
-import "../../lib/pushout/pushout_basic.llang";
+include "../../lib/pushout/pushout_basic.llang";
+
+module_surface PushoutBasicRunUnit where {
+  doctrine Both;
+  mode M;
+}
+
+language PushoutBasicRunLang where {
+  doctrine Both;
+  module_surface PushoutBasicRunUnit;
+}
+
+module PushoutBasicRuns in PushoutBasicRunLang where {
+  let main
+  ---
+  Left_inl_g ; Right_inr_g
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine Both;
-  source mode M;
-}
----
-Left_inl_g ; Right_inr_g
----
+build main from PushoutBasicRuns using main;

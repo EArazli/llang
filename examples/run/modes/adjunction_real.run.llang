@@ -1,4 +1,4 @@
-import "../../../stdlib/schema.adjunction.llang";
+include "../../../stdlib/schema.adjunction.llang";
 
 doctrine AdjReal where {
   mode C classifiedBy C via C.U_C;
@@ -16,12 +16,9 @@ doctrine AdjReal where {
   modality U : L -> C;
   lift_classifier F = F;
   lift_classifier U = U;
-
   mod_eq U.F -> id@C;
   mod_eq F.U -> id@L;
-
   gen X : [] -> [C.U_C] @C;
-
   gen eta(a@C) : [a] -> [U(F(a))] @C;
   gen eps(b@L) : [F(U(b))] -> [b] @L;
 
@@ -64,15 +61,27 @@ morphism adjInst : SchemaAdjunction -> AdjReal where {
 
 implements SchemaAdjunction for AdjReal using adjInst;
 
-pipeline debug where {
-  normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
+module_surface AdjRealRunUnit where {
+  doctrine AdjReal;
+  mode L;
 }
 
-run triangle_left using debug where {
-  source doctrine AdjReal;
-  source mode L;
+language AdjRealRunLang where {
+  doctrine AdjReal;
+  module_surface AdjRealRunUnit;
 }
----
-id[F(C.X)]
----
+
+module AdjRealRuns in AdjRealRunLang where {
+  let triangle_left
+  ---
+  id[F(C.X)]
+  ---
+  export { triangle_left };
+}
+
+pipeline debug where {
+  project export triangle_left;
+  normalize { policy = "topmost"; fuel = 50; };
+}
+
+build triangle_left from AdjRealRuns using debug;

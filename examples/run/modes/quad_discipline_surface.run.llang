@@ -1,69 +1,79 @@
-import "../../lib/modes/quad_discipline.llang";
+include "../../lib/modes/quad_discipline.llang";
+
+module_surface QuadDisciplineRunUnit where {
+  doctrine QuadDiscipline;
+}
+
+language QuadDisciplineRunLang where {
+  doctrine QuadDiscipline;
+  module_surface QuadDisciplineRunUnit;
+}
+
+module QuadDisciplineRuns in QuadDisciplineRunLang where {
+  let main where {
+    mode Cart;
+    surface QuadCart;
+  }
+  ---
+  diag {
+    in x:Cart.Base;
+    out pair(x, x)
+  }
+  ---
+  let rel_dup where {
+    mode Rel;
+    surface QuadRel;
+  }
+  ---
+  diag {
+    in x:Rel.Base;
+    out pair(x, x)
+  }
+  ---
+  let cart_drop where {
+    mode Cart;
+    surface QuadCart;
+  }
+  ---
+  diag {
+    in x:Cart.Base;
+    out unit
+  }
+  ---
+  let aff_drop where {
+    mode Aff;
+    surface QuadAff;
+  }
+  ---
+  diag {
+    in x:Aff.Base;
+    out unit
+  }
+  ---
+  export { main, rel_dup, cart_drop, aff_drop };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine QuadDiscipline;
-  source mode Cart;
-  source surface QuadCart;
-}
----
-diag {
-  in x:Cart.Base;
-  out pair(x, x)
-}
----
-
-pipeline legacy_rel_dup where {
+pipeline rel_dup where {
+  project export rel_dup;
   normalize;
-  extract diagram;
 }
 
-run rel_dup using legacy_rel_dup where {
-  source doctrine QuadDiscipline;
-  source mode Rel;
-  source surface QuadRel;
-}
----
-diag {
-  in x:Rel.Base;
-  out pair(x, x)
-}
----
-
-pipeline legacy_cart_drop where {
+pipeline cart_drop where {
+  project export cart_drop;
   normalize;
-  extract diagram;
 }
 
-run cart_drop using legacy_cart_drop where {
-  source doctrine QuadDiscipline;
-  source mode Cart;
-  source surface QuadCart;
-}
----
-diag {
-  in x:Cart.Base;
-  out unit
-}
----
-
-pipeline legacy_aff_drop where {
+pipeline aff_drop where {
+  project export aff_drop;
   normalize;
-  extract diagram;
 }
 
-run aff_drop using legacy_aff_drop where {
-  source doctrine QuadDiscipline;
-  source mode Aff;
-  source surface QuadAff;
-}
----
-diag {
-  in x:Aff.Base;
-  out unit
-}
----
+build main from QuadDisciplineRuns using main;
+build rel_dup from QuadDisciplineRuns using rel_dup;
+build cart_drop from QuadDisciplineRuns using cart_drop;
+build aff_drop from QuadDisciplineRuns using aff_drop;

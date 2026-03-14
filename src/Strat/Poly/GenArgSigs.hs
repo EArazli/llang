@@ -33,6 +33,10 @@ withStructuralZeroParamGenArgSigs diags tt = do
           acc1 <- ensureSig mode g args acc
           acc2 <- foldM collectCodeArg acc1 args
           foldM collectBinderArg acc2 bargs
+        PProvider _ ->
+          Right acc
+        PModuleRef _ ->
+          Right acc
         PBox _ inner ->
           collectDiagram acc inner
         PFeedback inner ->

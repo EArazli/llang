@@ -1,9 +1,23 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 module Strat.DSL.Elab
-  ( elabRawFile
+  ( ModuleDataReprElaborator
+  , ModuleDataReprRegistry
+  , ModuleSurfacePlugin(..)
+  , ModuleSurfacePluginRegistry
+  , standardModuleDataReprRegistry
+  , standardModuleSurfacePluginRegistry
+  , elabRawFile
+  , elabRawFileWithModuleDataReprs
+  , elabRawFileWithModuleSurfacePlugins
   , elabRawFileWithEnv
+  , elabRawFileWithEnvAndModuleDataReprs
+  , elabRawFileWithEnvAndModuleSurfacePlugins
   , elabRawFileWithEnvAndBudget
+  , elabRawFileWithEnvAndBudgetAndModuleDataReprs
+  , elabRawFileWithEnvAndBudgetAndRegistries
+  , lookupInterface
+  , ensureModuleMatchesInterface
   ) where
 
 import Control.Monad (foldM)
@@ -14,10 +28,48 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import qualified Data.Set as S
 import Data.Map.Strict (Map)
+import Strat.Common.ModuleRef (ModuleValueRef(..), appendModuleValueRefAdapter)
+import Strat.Common.OpaqueType
+  ( opaqueInterfaceTypeName
+  , opaqueModuleDataDescriptorPrefix
+  , opaqueModuleDataProviderDescriptorWithPrefix
+  , opaqueModuleDataProviderInterface
+  , opaqueModuleDataTypeName
+  )
+import Strat.Common.Provider (ModuleProvider(..), ProviderRef(..), appendProviderAdapter)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.DSL.AST
+import Strat.DSL.Parse (parseInterfaceItemsText, parseModuleItemsText)
 import Strat.Frontend.Env
-import Strat.Frontend.Compile (compileDiagramArtifact)
+  ( ModuleEnv(..)
+  , DoctrineFunctorDef(..)
+  , FunctorParamDef(..)
+  , ProofStats(..)
+  , emptyEnv
+  , ScopedType(..)
+  , ScopedValue(..)
+  )
+import Strat.Frontend.Model
+  ( LanguageDef(..)
+  , CustomExpansionDef(..)
+  , ModuleElaboratorDef(..)
+  , ModuleDataReprDef(..)
+  , ModuleSurfaceCapability(..)
+  , ModuleSurfaceDef(..)
+  , InterfaceItemDef(..)
+  , InterfaceTypeSig(..)
+  , InterfaceValueSig(..)
+  , InterfaceDef(..)
+  , ModuleImport(..)
+  , ModuleItemDef(..)
+  , ModuleDataDef(..)
+  , ModuleTypeDef(..)
+  , ModuleValueDef(..)
+  , ModuleDef(..)
+  , BuildDef(..)
+  )
+import qualified Strat.Frontend.Model as FM
+import Strat.Frontend.Compile (CompiledDiagramArtifact(..), compileDiagramArtifact)
 import Strat.Pipeline
 import Strat.Poly.DSL.AST (rpdExtends, rpdName)
 import qualified Strat.Poly.DSL.AST as PolyAST
@@ -31,6 +83,7 @@ import Strat.Poly.DSL.Elab
   )
 import Strat.Poly.Obj
   ( Obj(..)
+  , CodeArg(..)
   , CodeTerm(..)
   , mkCon
   , pattern OVar
@@ -46,7 +99,14 @@ import Strat.Poly.Obj
   , TmVar(..)
   , TermDiagram(..)
   )
-import Strat.Poly.Diagram (Diagram(..), genDWithArgs)
+import Strat.Poly.Diagram
+  ( Diagram(..)
+  , genDWithArgs
+  , diagramDom
+  , diagramCod
+  , mapModuleValueRefsDiagram
+  , mapProviderRefsDiagram
+  )
 import Strat.Poly.Doctrine
   ( Doctrine(..)
   , BinderSig(..)
@@ -61,10 +121,12 @@ import Strat.Poly.Doctrine
   , genericGenDiagram
   , gdPlainDom
   , isTypeDeclGenNameInTables
+  , lookupCtorRefForOwnerInTables
+  , lookupCtorSigForOwnerInTables
   , lookupGenDeclInDoctrine
   , validateDoctrine
   )
-import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..))
+import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..), emptyDiagram, freshPort, addEdgePayload, validateDiagram)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Literal (LiteralKind(..))
 import Strat.Poly.ModeTheory
@@ -92,37 +154,101 @@ import Strat.Poly.Pushout
   , mkInclusionMorphism
   , renameDoctrine
   )
-import Strat.Poly.Surface (elabPolySurfaceDecl)
+import Strat.Poly.Surface (PolySurfaceDef(..), elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 import Strat.Poly.Proof (SearchBudget, defaultSearchBudget, renderSearchLimit)
-import Strat.Poly.TypeTheory (TypeParamSig(..))
+import Strat.Poly.TypeTheory (TypeParamSig(..), TypeTheory)
 import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.DefEq (termExprToDiagramChecked)
+import Strat.Poly.DefEq (normalizeObjDeep, termExprToDiagramChecked)
 import Strat.Poly.ObjClassifier (modeUniverseObj, modeClassifierMode)
+import Strat.Poly.DSL.Elab.Term
+  ( elabObjExpr
+  , elabObjExprInScope
+  , elabObjExprInferOwnerInScope
+  , mkTypeMetaVar
+  )
+import qualified Strat.Poly.UnifyObj as U
+import Strat.Util.List (dedupe)
 
 
 elabRawFile :: RawFile -> Either Text ModuleEnv
-elabRawFile = elabRawFileWithEnvAndBudget defaultSearchBudget emptyEnv
+elabRawFile =
+  elabRawFileWithEnvAndBudgetAndRegistries
+    defaultSearchBudget
+    standardModuleDataReprRegistry
+    standardModuleSurfacePluginRegistry
+    emptyEnv
+
+
+elabRawFileWithModuleDataReprs :: ModuleDataReprRegistry -> RawFile -> Either Text ModuleEnv
+elabRawFileWithModuleDataReprs registry =
+  elabRawFileWithEnvAndBudgetAndRegistries defaultSearchBudget registry standardModuleSurfacePluginRegistry emptyEnv
+
+
+elabRawFileWithModuleSurfacePlugins :: ModuleSurfacePluginRegistry -> RawFile -> Either Text ModuleEnv
+elabRawFileWithModuleSurfacePlugins registry =
+  elabRawFileWithEnvAndBudgetAndRegistries defaultSearchBudget standardModuleDataReprRegistry registry emptyEnv
 
 elabRawFileWithEnv :: ModuleEnv -> RawFile -> Either Text ModuleEnv
-elabRawFileWithEnv = elabRawFileWithEnvAndBudget defaultSearchBudget
+elabRawFileWithEnv =
+  elabRawFileWithEnvAndBudgetAndRegistries
+    defaultSearchBudget
+    standardModuleDataReprRegistry
+    standardModuleSurfacePluginRegistry
+
+
+elabRawFileWithEnvAndModuleDataReprs :: ModuleDataReprRegistry -> ModuleEnv -> RawFile -> Either Text ModuleEnv
+elabRawFileWithEnvAndModuleDataReprs =
+  \registry ->
+    elabRawFileWithEnvAndBudgetAndRegistries
+      defaultSearchBudget
+      registry
+      standardModuleSurfacePluginRegistry
+
+
+elabRawFileWithEnvAndModuleSurfacePlugins :: ModuleSurfacePluginRegistry -> ModuleEnv -> RawFile -> Either Text ModuleEnv
+elabRawFileWithEnvAndModuleSurfacePlugins =
+  elabRawFileWithEnvAndBudgetAndRegistries
+    defaultSearchBudget
+    standardModuleDataReprRegistry
 
 elabRawFileWithEnvAndBudget :: SearchBudget -> ModuleEnv -> RawFile -> Either Text ModuleEnv
-elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
-  (env, rawTerms, rawRuns) <- foldM step (baseEnv, [], []) decls
-  envWithTerms <- elabTerms env rawTerms
-  runs <- elabRuns envWithTerms rawRuns
-  pure envWithTerms { meRuns = runs }
+elabRawFileWithEnvAndBudget budget =
+  elabRawFileWithEnvAndBudgetAndRegistries
+    budget
+    standardModuleDataReprRegistry
+    standardModuleSurfacePluginRegistry
+
+
+elabRawFileWithEnvAndBudgetAndModuleDataReprs
+  :: SearchBudget
+  -> ModuleDataReprRegistry
+  -> ModuleEnv
+  -> RawFile
+  -> Either Text ModuleEnv
+elabRawFileWithEnvAndBudgetAndModuleDataReprs budget moduleDataReprs =
+  elabRawFileWithEnvAndBudgetAndRegistries budget moduleDataReprs standardModuleSurfacePluginRegistry
+
+
+elabRawFileWithEnvAndBudgetAndRegistries
+  :: SearchBudget
+  -> ModuleDataReprRegistry
+  -> ModuleSurfacePluginRegistry
+  -> ModuleEnv
+  -> RawFile
+  -> Either Text ModuleEnv
+elabRawFileWithEnvAndBudgetAndRegistries budget moduleDataReprs moduleSurfacePlugins baseEnv (RawFile decls) =
+  foldM step baseEnv decls
   where
-    step (env, rawTerms, rawRuns) decl =
+    step env decl =
       case decl of
-        DeclImport _ -> Right (env, rawTerms, rawRuns)
+        DeclImport _ -> Right env
         DeclDoctrine raw -> do
           env' <- insertDoctrine budget env raw
-          pure (env', rawTerms, rawRuns)
+          pure env'
         DeclDoctrinePushout name leftMor rightMor -> do
           env' <- insertPushout env name leftMor rightMor
-          pure (env', rawTerms, rawRuns)
+          pure env'
         DeclDoctrineCoproduct name leftDoc rightDoc -> do
           ensureAbsent "doctrine" name (meDoctrines env)
           left <- lookupDoctrine env leftDoc
@@ -139,22 +265,28 @@ elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
                         (M.insert (PolyMorph.morName inl) inl
                           (M.insert (PolyMorph.morName inr) inr (meMorphisms env)))
                   }
-          pure (env', rawTerms, rawRuns)
+          pure env'
         DeclDoctrineFunctor functorDecl -> do
           env' <- elabDoctrineFunctor budget env functorDecl
-          pure (env', rawTerms, rawRuns)
+          pure env'
         DeclDoctrineApply applyDecl -> do
           env' <- elabDoctrineApply budget env applyDecl
-          pure (env', rawTerms, rawRuns)
+          pure env'
         DeclDoctrineEffects name base effects -> do
           env' <- elabDoctrineEffects budget env name base effects
-          pure (env', rawTerms, rawRuns)
+          pure env'
         DeclFragment rawFragment -> do
           env' <- insertFragmentDecl env rawFragment
-          pure (env', rawTerms, rawRuns)
+          pure env'
         DeclDerivedDoctrine rawDerived -> do
           env' <- insertDerivedDoctrine env rawDerived
-          pure (env', rawTerms, rawRuns)
+          pure env'
+        DeclModuleElaborator rawElaborator -> do
+          env' <- insertModuleElaborator moduleSurfacePlugins env rawElaborator
+          pure env'
+        DeclModuleDataRepr rawDataRepr -> do
+          env' <- insertModuleDataRepr moduleDataReprs env rawDataRepr
+          pure env'
         DeclSurface name spec -> do
           ensureAbsent "surface" name (meSurfaces env)
           doc <- lookupDoctrine env (ssDoctrine spec)
@@ -167,12 +299,27 @@ elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
                   else Just <$> lookupDoctrine env baseName
           def <- elabPolySurfaceDecl name doc mBaseDoc spec
           let env' = env { meSurfaces = M.insert name def (meSurfaces env) }
-          pure (env', rawTerms, rawRuns)
+          pure env'
+        DeclModuleSurface rawModuleSurface -> do
+          env' <- insertModuleSurface moduleDataReprs moduleSurfacePlugins env rawModuleSurface
+          pure env'
+        DeclLanguage rawLang -> do
+          env' <- insertLanguage env rawLang
+          pure env'
+        DeclInterface rawInterface -> do
+          env' <- insertInterface moduleDataReprs moduleSurfacePlugins env rawInterface
+          pure env'
+        DeclModule rawModule -> do
+          env' <- insertModule moduleDataReprs moduleSurfacePlugins env rawModule
+          pure env'
+        DeclBuild rawBuild -> do
+          env' <- insertBuild env rawBuild
+          pure env'
         DeclPipeline rawPipeline -> do
           ensureAbsent "pipeline" (rplName rawPipeline) (mePipelines env)
           pipeline <- elabPipeline rawPipeline
           let env' = env { mePipelines = M.insert (plName pipeline) pipeline (mePipelines env) }
-          pure (env', rawTerms, rawRuns)
+          pure env'
         DeclMorphism morphDecl -> do
           let name = rpmName morphDecl
           ensureAbsent "morphism" name (meMorphisms env)
@@ -184,7 +331,7 @@ elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
           let env' =
                 addMorphismProofCount proofCount
                   (env { meMorphisms = M.insert name morph (meMorphisms env) })
-          pure (env', rawTerms, rawRuns)
+          pure env'
         DeclImplements iface tgt morphName -> do
           ((key, name), proofCount) <- elabImplements budget env iface tgt morphName
           let defaults = M.findWithDefault [] key (meImplDefaults env)
@@ -192,11 +339,7 @@ elabRawFileWithEnvAndBudget budget baseEnv (RawFile decls) = do
           let env' =
                 addImplementsProofCount proofCount
                   (env { meImplDefaults = M.insert key defaults' (meImplDefaults env) })
-          pure (env', rawTerms, rawRuns)
-        DeclRun rawRun ->
-          pure (env, rawTerms, rawRuns <> [rawRun])
-        DeclTerm rawTerm ->
-          pure (env, rawTerms <> [rawTerm], rawRuns)
+          pure env'
 
 
 ensureAbsent :: Text -> Text -> M.Map Text v -> Either Text ()
@@ -1068,7 +1211,39 @@ deriveReflectedQuotationDoctrine env targetName baseDoc mode = do
     case uniqueStringLiteralTy baseDoc mode of
       Nothing -> Right doc6
       Just labelTy ->
-        insertGeneratedGen doc6 mode (simpleGen "refId_label" [tmParam "label" labelTy] [] [refIdTy])
+        do
+          doc6a <- insertGeneratedGen doc6 mode (simpleGen "refId_label" [tmParam "label" labelTy] [] [refIdTy])
+          insertGeneratedGen
+            doc6a
+            mode
+            ( simpleGen
+                "q_provider"
+                [ tmParam "provider" labelTy
+                , tmParam "interface" labelTy
+                , tmParam "descriptor" labelTy
+                , tmParam "value" labelTy
+                , tmParam "adapter" labelTy
+                , tmParam "inputs" refIdsTy
+                , tmParam "outputs" refIdsTy
+                ]
+                [seqTy]
+                [seqTy]
+            )
+          >>= \doc6b ->
+            insertGeneratedGen
+              doc6b
+              mode
+              ( simpleGen
+                  "q_module_ref"
+                  [ tmParam "module" labelTy
+                  , tmParam "value" labelTy
+                  , tmParam "adapter" labelTy
+                  , tmParam "inputs" refIdsTy
+                  , tmParam "outputs" refIdsTy
+                  ]
+                  [seqTy]
+                  [seqTy]
+              )
   let sourceGens =
         [ entry
         | entry@(srcGen, _) <- M.toAscList (M.findWithDefault M.empty mode (dGens baseDoc))
@@ -1215,10 +1390,1868 @@ insertGeneratedGen doc mode decl =
               { dGens = M.insert mode (M.insert genName decl modeGens) (dGens doc) }
 
 
+insertLanguage :: ModuleEnv -> RawLanguage -> Either Text ModuleEnv
+insertLanguage env raw = do
+  let name = rlangName raw
+  ensureAbsent "language" name (meLanguages env)
+  _ <- lookupDoctrine env (rlangDoctrine raw)
+  case rlangModuleSurface raw of
+    Nothing -> Right ()
+    Just moduleSurfaceName ->
+      case M.lookup moduleSurfaceName (meModuleSurfaces env) of
+        Nothing -> Left ("Unknown module_surface: " <> moduleSurfaceName)
+        Just moduleSurface ->
+          if msdDoctrine moduleSurface /= rlangDoctrine raw
+            then Left ("language " <> name <> ": module_surface doctrine mismatch")
+            else Right ()
+  let lang =
+        LanguageDef
+          { ldName = name
+          , ldDoctrine = rlangDoctrine raw
+          , ldModuleSurface = rlangModuleSurface raw
+          }
+  pure env { meLanguages = M.insert name lang (meLanguages env) }
+
+
+standardModuleSurfaceCapabilities :: S.Set ModuleSurfaceCapability
+standardModuleSurfaceCapabilities =
+  S.fromList
+    [ MSCImport
+    , MSCForeignImport
+    , MSCType
+    , MSCData
+    , MSCValue
+    , MSCExport
+    , MSCExportType
+    , MSCExportInterface
+    ]
+
+
+toModuleSurfaceCapability :: RawModuleSurfaceCapability -> ModuleSurfaceCapability
+toModuleSurfaceCapability raw =
+  case raw of
+    RMSCImport -> MSCImport
+    RMSCForeignImport -> MSCForeignImport
+    RMSCType -> MSCType
+    RMSCData -> MSCData
+    RMSCValue -> MSCValue
+    RMSCExport -> MSCExport
+    RMSCExportType -> MSCExportType
+    RMSCExportInterface -> MSCExportInterface
+    RMSCCustom -> MSCCustom
+
+
+insertModuleElaborator :: ModuleSurfacePluginRegistry -> ModuleEnv -> RawModuleElaborator -> Either Text ModuleEnv
+insertModuleElaborator moduleSurfacePlugins env raw = do
+  let name = rmeName raw
+  ensureAbsent "module_elaborator" name (meModuleElaborators env)
+  _ <- resolveModuleSurfacePlugin moduleSurfacePlugins env S.empty (rmeBase raw)
+  let def =
+        ModuleElaboratorDef
+          { medName = name
+          , medBase = rmeBase raw
+          , medInterfaceCustom = M.map toCustomExpansionDef (rmeInterfaceCustom raw)
+          , medModuleCustom = M.map toCustomExpansionDef (rmeModuleCustom raw)
+          }
+  pure env { meModuleElaborators = M.insert name def (meModuleElaborators env) }
+
+
+insertModuleDataRepr :: ModuleDataReprRegistry -> ModuleEnv -> RawModuleDataReprDecl -> Either Text ModuleEnv
+insertModuleDataRepr moduleDataReprs env raw = do
+  let name = rmdrName raw
+  ensureAbsent "data_repr" name (meModuleDataReprs env)
+  _ <- resolveModuleDataReprChoice moduleDataReprs env (rmdrBase raw)
+  case rmdrProviderInterface raw of
+    Nothing -> Right ()
+    Just ifaceName -> do
+      _ <- lookupInterface env ifaceName
+      pure ()
+  let def =
+        ModuleDataReprDef
+          { mdrName = name
+          , mdrBase = rmdrBase raw
+          , mdrProviderInterface = rmdrProviderInterface raw
+          , mdrDescriptorPrefix = rmdrDescriptorPrefix raw
+          }
+      env' = env { meModuleDataReprs = M.insert name def (meModuleDataReprs env) }
+  _ <- resolveModuleDataReprChoice moduleDataReprs env' name
+  pure env'
+
+
+toCustomExpansionDef :: RawCustomExpansion -> CustomExpansionDef
+toCustomExpansionDef expansion =
+  case expansion of
+    RCXInlineItems -> CEDInlineItems
+
+
+moduleSurfaceForLanguage :: ModuleEnv -> LanguageDef -> Either Text ModuleSurfaceDef
+moduleSurfaceForLanguage env lang =
+  case ldModuleSurface lang of
+    Nothing ->
+      Right
+        ModuleSurfaceDef
+          { msdName = ldName lang <> ".__implicit_module_surface"
+          , msdDoctrine = ldDoctrine lang
+          , msdElaborator = "standard"
+          , msdMode = Nothing
+          , msdExprSurface = Nothing
+          , msdDefaultDataRepr = Nothing
+          , msdUses = []
+          , msdCapabilities = standardModuleSurfaceCapabilities
+          }
+    Just surfaceName ->
+      case M.lookup surfaceName (meModuleSurfaces env) of
+        Nothing -> Left ("Unknown module_surface: " <> surfaceName)
+        Just surface -> Right surface
+
+
+moduleSurfaceAllows :: ModuleSurfaceDef -> ModuleSurfaceCapability -> Bool
+moduleSurfaceAllows surface cap =
+  cap `S.member` msdCapabilities surface
+
+
+insertModuleSurface :: ModuleDataReprRegistry -> ModuleSurfacePluginRegistry -> ModuleEnv -> RawModuleSurface -> Either Text ModuleEnv
+insertModuleSurface moduleDataReprs moduleSurfacePlugins env raw = do
+  let name = rmsName raw
+  ensureAbsent "module_surface" name (meModuleSurfaces env)
+  _ <- lookupDoctrine env (rmsDoctrine raw)
+  case rmsExprSurface raw of
+    Nothing -> Right ()
+    Just surfaceName ->
+      case M.lookup surfaceName (meSurfaces env) of
+        Nothing -> Left ("Unknown surface: " <> surfaceName)
+        Just surf ->
+          if psDoctrine surf == rmsDoctrine raw
+            then Right ()
+            else Left ("module_surface " <> name <> ": expr_surface doctrine mismatch")
+  case rmsElaborator raw of
+    Nothing -> Right ()
+    Just elaboratorName -> do
+      _ <- resolveModuleSurfacePlugin moduleSurfacePlugins env S.empty elaboratorName
+      pure ()
+  case rmsDefaultDataRepr raw of
+    Nothing -> Right ()
+    Just reprName -> do
+      _ <- resolveModuleDataReprChoice moduleDataReprs env reprName
+      pure ()
+  let moduleSurface =
+        ModuleSurfaceDef
+          { msdName = name
+          , msdDoctrine = rmsDoctrine raw
+          , msdElaborator = maybe "standard" id (rmsElaborator raw)
+          , msdMode = rmsMode raw
+          , msdExprSurface = rmsExprSurface raw
+          , msdDefaultDataRepr = rmsDefaultDataRepr raw
+          , msdUses = rmsUses raw
+          , msdCapabilities =
+              if null (rmsCapabilities raw)
+                then standardModuleSurfaceCapabilities
+                else S.fromList (map toModuleSurfaceCapability (rmsCapabilities raw))
+          }
+  pure env { meModuleSurfaces = M.insert name moduleSurface (meModuleSurfaces env) }
+
+
+insertInterface :: ModuleDataReprRegistry -> ModuleSurfacePluginRegistry -> ModuleEnv -> RawInterface -> Either Text ModuleEnv
+insertInterface moduleDataReprs moduleSurfacePlugins env raw = do
+  let name = riName raw
+  ensureAbsent "interface" name (meInterfaces env)
+  (docName, surfaceElab) <- resolveInterfaceTarget moduleDataReprs moduleSurfacePlugins env (riTarget raw)
+  state <- foldM (insertInterfaceItem surfaceElab) emptyInterfaceState (riItems raw)
+  let iface =
+        InterfaceDef
+          { idefName = name
+          , idefDoctrine = docName
+          , idefItems = reverse (ifsRevItems state)
+          , idefTypes = ifsTypes state
+          , idefValues = ifsValues state
+          }
+  pure env { meInterfaces = M.insert name iface (meInterfaces env) }
+
+
+data InterfaceState = InterfaceState
+  { ifsRevItems :: [InterfaceItemDef]
+  , ifsTypes :: M.Map Text InterfaceTypeSig
+  , ifsValues :: M.Map Text InterfaceValueSig
+  }
+
+
+emptyInterfaceState :: InterfaceState
+emptyInterfaceState =
+  InterfaceState
+    { ifsRevItems = []
+    , ifsTypes = M.empty
+    , ifsValues = M.empty
+    }
+
+
+insertInterfaceItem :: ModuleSurfaceElaborator -> InterfaceState -> RawInterfaceItem -> Either Text InterfaceState
+insertInterfaceItem surfaceElab st rawItem =
+  case rawItem of
+    RIICustom rawCustom -> do
+      if mseAllows surfaceElab MSCCustom
+        then Right ()
+        else Left ("module_surface " <> msdName (mseSurface surfaceElab) <> " does not allow custom declarations")
+      expanded <- mseExpandInterfaceCustom surfaceElab rawCustom
+      foldM (insertInterfaceItem surfaceElab) st expanded
+    RIIType rawType -> do
+      types <-
+        mseElabInterfaceType surfaceElab
+          Nothing
+          (ifsTypes st)
+          rawType
+      pure
+        st
+          { ifsRevItems = IIDType (rawInterfaceTypeName rawType) : ifsRevItems st
+          , ifsTypes = types
+          }
+    RIIValue rawValue -> do
+      values <-
+        mseElabInterfaceValue surfaceElab
+          Nothing
+          (interfaceTypeReprs (ifsTypes st))
+          (ifsValues st)
+          rawValue
+      pure
+        st
+          { ifsRevItems = IIDValue (rivName rawValue) : ifsRevItems st
+          , ifsValues = values
+          }
+
+resolveInterfaceTarget
+  :: ModuleDataReprRegistry
+  -> ModuleSurfacePluginRegistry
+  -> ModuleEnv
+  -> Text
+  -> Either Text (Text, ModuleSurfaceElaborator)
+resolveInterfaceTarget moduleDataReprs moduleSurfacePlugins env target =
+  case M.lookup target (meLanguages env) of
+    Just lang -> do
+      surfaceElab <- resolveModuleSurfaceElaborator moduleDataReprs moduleSurfacePlugins env lang
+      Right (ldDoctrine lang, surfaceElab)
+    Nothing -> do
+      _ <- lookupDoctrine env target
+      let lang =
+            LanguageDef
+              { ldName = target <> ".__implicit_language"
+              , ldDoctrine = target
+              , ldModuleSurface = Nothing
+              }
+      surfaceElab <- resolveModuleSurfaceElaborator moduleDataReprs moduleSurfacePlugins env lang
+      Right (target, surfaceElab)
+
+
+insertInterfaceType
+  :: Doctrine
+  -> Maybe Text
+  -> M.Map Text InterfaceTypeSig
+  -> RawInterfaceType
+  -> Either Text (M.Map Text InterfaceTypeSig)
+insertInterfaceType doc mDefaultMode acc raw =
+  if M.member name acc
+    then Left ("Duplicate interface type name: " <> name)
+    else do
+      (mode, repr, mBody) <-
+        case raw of
+          RITOpaque {} -> do
+            mode <- resolveInterfaceMode doc mDefaultMode (ritMode raw)
+            repr <- mkOpaqueInterfaceType doc mode name
+            pure (mode, repr, Nothing)
+          RITAlias {} -> do
+            body <- elabScopedTypeExpr doc mDefaultMode (ritMode raw) (interfaceTypeReprs acc) (ritBody raw)
+            pure (objOwnerMode body, body, Just body)
+      let sig =
+            InterfaceTypeSig
+              { itsName = name
+              , itsMode = mode
+              , itsRepr = repr
+              , itsBody = mBody
+              }
+      pure (M.insert name sig acc)
+  where
+    name = rawInterfaceTypeName raw
+
+
+rawInterfaceTypeName :: RawInterfaceType -> Text
+rawInterfaceTypeName raw =
+  case raw of
+    RITOpaque { ritName = n } -> n
+    RITAlias { ritName = n } -> n
+
+
+insertInterfaceValue
+  :: Doctrine
+  -> Maybe Text
+  -> M.Map Text Obj
+  -> M.Map Text InterfaceValueSig
+  -> RawInterfaceValue
+  -> Either Text (M.Map Text InterfaceValueSig)
+insertInterfaceValue doc mDefaultMode typeScope acc raw =
+  if M.member (rivName raw) acc
+    then Left ("Duplicate interface value name: " <> rivName raw)
+    else do
+      mode <- resolveInterfaceMode doc mDefaultMode (rivMode raw)
+      dom <- mapM (elabObjExprInScope typeScope doc [] [] M.empty mode) (rivDom raw)
+      cod <- mapM (elabObjExprInScope typeScope doc [] [] M.empty mode) (rivCod raw)
+      let sig =
+            InterfaceValueSig
+              { ivsName = rivName raw
+              , ivsMode = mode
+              , ivsDom = dom
+              , ivsCod = cod
+              }
+      pure (M.insert (rivName raw) sig acc)
+
+
+interfaceTypeReprs :: M.Map Text InterfaceTypeSig -> M.Map Text Obj
+interfaceTypeReprs =
+  M.map itsRepr
+
+
+resolveInterfaceMode :: Doctrine -> Maybe Text -> Maybe Text -> Either Text ModeName
+resolveInterfaceMode doc mDefaultMode mDeclared =
+  case chooseModeText mDeclared mDefaultMode of
+    Just name ->
+      let mode = ModeName name
+       in if M.member mode (mtModes (dModes doc))
+            then Right mode
+            else Left ("unknown mode " <> name)
+    Nothing ->
+      case M.keys (mtModes (dModes doc)) of
+        [mode] -> Right mode
+        [] -> Left "doctrine has no modes"
+        _ -> Left "interface item must specify a mode"
+
+
+chooseModeText :: Maybe Text -> Maybe Text -> Maybe Text
+chooseModeText m1 m2 =
+  case m1 of
+    Just x -> Just x
+    Nothing -> m2
+
+
+mkOpaqueInterfaceType :: Doctrine -> ModeName -> Text -> Either Text Obj
+mkOpaqueInterfaceType doc mode name = do
+  meta <- mkTypeMetaVar doc mode (opaqueInterfaceTypeName name)
+  pure Obj { objOwnerMode = mode, objCode = CTMeta meta }
+
+
+elabScopedTypeExpr :: Doctrine -> Maybe Text -> Maybe Text -> M.Map Text Obj -> PolyAST.RawPolyObjExpr -> Either Text Obj
+elabScopedTypeExpr doc mDefaultMode mDeclared typeScope raw =
+  case chooseModeText mDeclared mDefaultMode of
+    Just name -> do
+      let mode = ModeName name
+      if M.member mode (mtModes (dModes doc))
+        then elabObjExprInScope typeScope doc [] [] M.empty mode raw
+        else Left ("unknown mode " <> name)
+    Nothing ->
+      elabObjExprInferOwnerInScope typeScope doc [] [] M.empty raw
+
+
+data ModuleSurfacePlugin = ModuleSurfacePlugin
+  { mspName :: Text
+  , mspExpandInterfaceCustom
+      :: ModuleSurfaceDef
+      -> ModuleEnv
+      -> Doctrine
+      -> RawCustomItem
+      -> Either Text [RawInterfaceItem]
+  , mspExpandModuleCustom
+      :: ModuleSurfaceDef
+      -> ModuleEnv
+      -> LanguageDef
+      -> RawCustomItem
+      -> Either Text [RawModuleItem]
+  , mspElabInterfaceType
+      :: ModuleSurfaceDef
+      -> ModuleEnv
+      -> Doctrine
+      -> Maybe Text
+      -> M.Map Text InterfaceTypeSig
+      -> RawInterfaceType
+      -> Either Text (M.Map Text InterfaceTypeSig)
+  , mspElabInterfaceValue
+      :: ModuleSurfaceDef
+      -> ModuleEnv
+      -> Doctrine
+      -> Maybe Text
+      -> M.Map Text Obj
+      -> M.Map Text InterfaceValueSig
+      -> RawInterfaceValue
+      -> Either Text (M.Map Text InterfaceValueSig)
+  , mspElabModuleData
+      :: ModuleDataReprRegistry
+      -> ModuleSurfaceDef
+      -> ModuleEnv
+      -> LanguageDef
+      -> M.Map Text ScopedType
+      -> M.Map Text ScopedValue
+      -> M.Map Text ModuleTypeDef
+      -> M.Map Text ModuleValueDef
+      -> M.Map Text ModuleDataDef
+      -> RawModuleData
+      -> Either Text ModuleDataDef
+  , mspElabModuleType
+      :: ModuleSurfaceDef
+      -> ModuleEnv
+      -> LanguageDef
+      -> M.Map Text ScopedType
+      -> M.Map Text ModuleTypeDef
+      -> RawModuleType
+      -> Either Text (M.Map Text ModuleTypeDef)
+  , mspElabModuleValue
+      :: ModuleSurfaceDef
+      -> ModuleEnv
+      -> LanguageDef
+      -> M.Map Text ScopedValue
+      -> M.Map Text ScopedType
+      -> M.Map Text ModuleTypeDef
+      -> M.Map Text ModuleValueDef
+      -> RawModuleValue
+      -> Either Text (M.Map Text ModuleValueDef)
+  }
+
+
+type ModuleSurfacePluginRegistry = M.Map Text ModuleSurfacePlugin
+
+
+standardModuleSurfacePluginRegistry :: ModuleSurfacePluginRegistry
+standardModuleSurfacePluginRegistry =
+  M.fromList [("standard", standardModuleSurfacePlugin)]
+
+
+standardModuleSurfacePlugin :: ModuleSurfacePlugin
+standardModuleSurfacePlugin =
+  ModuleSurfacePlugin
+    { mspName = "standard"
+    , mspExpandInterfaceCustom =
+        \surface _env _doc raw ->
+          Left
+            ( "module_surface "
+                <> msdName surface
+                <> ": custom interface item "
+                <> rciTag raw
+                <> " is not supported by elaborator standard"
+            )
+    , mspExpandModuleCustom =
+        \surface _env _lang raw ->
+          Left
+            ( "module_surface "
+                <> msdName surface
+                <> ": custom module item "
+                <> rciTag raw
+                <> " is not supported by elaborator standard"
+            )
+    , mspElabInterfaceType =
+        \surface _env doc mDefaultMode acc rawType ->
+          insertInterfaceType doc (chooseModeText (msdMode surface) mDefaultMode) acc rawType
+    , mspElabInterfaceValue =
+        \surface _env doc mDefaultMode typeScope acc rawValue ->
+          insertInterfaceValue doc (chooseModeText (msdMode surface) mDefaultMode) typeScope acc rawValue
+    , mspElabModuleData =
+        \moduleDataReprs surface env lang importedTypes importedValues localTypes localValues dataPkgs rawData ->
+          elabModuleData
+            moduleDataReprs
+            surface
+            env
+            lang
+            importedTypes
+            importedValues
+            localTypes
+            localValues
+            dataPkgs
+            rawData
+    , mspElabModuleType =
+        \surface env lang importedTypes localTypes rawType ->
+          elabModuleType env lang surface importedTypes localTypes rawType
+    , mspElabModuleValue =
+        \surface env lang importedTerms importedTypes localTypes localValues rawValue ->
+          elabModuleValue env lang surface importedTerms importedTypes localTypes localValues rawValue
+    }
+
+
+insertModule :: ModuleDataReprRegistry -> ModuleSurfacePluginRegistry -> ModuleEnv -> RawModule -> Either Text ModuleEnv
+insertModule moduleDataReprs moduleSurfacePlugins env raw = do
+  let name = rmName raw
+  ensureAbsent "module" name (meModules env)
+  lang <-
+    case M.lookup (rmLanguage raw) (meLanguages env) of
+      Nothing -> Left ("Unknown language: " <> rmLanguage raw)
+      Just ld -> Right ld
+  _ <- lookupDoctrine env (ldDoctrine lang)
+  surfaceElab <- resolveModuleSurfaceElaborator moduleDataReprs moduleSurfacePlugins env lang
+  if msdDoctrine (mseSurface surfaceElab) == ldDoctrine lang
+    then Right ()
+    else Left ("language " <> ldName lang <> ": module_surface doctrine mismatch")
+  state <- foldM (insertModuleItem env lang surfaceElab) emptyModuleState (rmItems raw)
+  let modDef :: ModuleDef
+      modDef =
+        ModuleDef
+          name
+          (ldName lang)
+          (ldDoctrine lang)
+          (reverse (msRevImports state))
+          (reverse (msRevItems state))
+          (isProviders (msImported state))
+          (msDataPackages state)
+          (msTypes state)
+          (msValues state)
+          (msExportTypes state)
+          (msExportValueSigs state)
+          (msExports state)
+          (reverse (msRevExportInterfaces state))
+  pure env { meModules = M.insert name modDef (meModules env) }
+
+
+data ModuleState = ModuleState
+  { msRevImports :: [ModuleImport]
+  , msRevItems :: [ModuleItemDef]
+  , msImported :: ImportedScope
+  , msDataPackages :: M.Map Text ModuleDataDef
+  , msTypes :: M.Map Text ModuleTypeDef
+  , msValues :: M.Map Text ModuleValueDef
+  , msExportTypes :: M.Map Text ModuleTypeDef
+  , msExportValueSigs :: M.Map Text InterfaceValueSig
+  , msExports :: M.Map Text ModuleValueDef
+  , msRevExportInterfaces :: [Text]
+  }
+
+
+data ModuleSurfaceElaborator = ModuleSurfaceElaborator
+  { mseSurface :: ModuleSurfaceDef
+  , mseAllows :: ModuleSurfaceCapability -> Bool
+  , mseExpandInterfaceCustom
+      :: RawCustomItem
+      -> Either Text [RawInterfaceItem]
+  , mseExpandModuleCustom
+      :: RawCustomItem
+      -> Either Text [RawModuleItem]
+  , mseElabInterfaceType
+      :: Maybe Text
+      -> M.Map Text InterfaceTypeSig
+      -> RawInterfaceType
+      -> Either Text (M.Map Text InterfaceTypeSig)
+  , mseElabInterfaceValue
+      :: Maybe Text
+      -> M.Map Text Obj
+      -> M.Map Text InterfaceValueSig
+      -> RawInterfaceValue
+      -> Either Text (M.Map Text InterfaceValueSig)
+  , mseElabData
+      :: M.Map Text ScopedType
+      -> M.Map Text ScopedValue
+      -> M.Map Text ModuleTypeDef
+      -> M.Map Text ModuleValueDef
+      -> M.Map Text ModuleDataDef
+      -> RawModuleData
+      -> Either Text ModuleDataDef
+  , mseElabType
+      :: M.Map Text ScopedType
+      -> M.Map Text ModuleTypeDef
+      -> RawModuleType
+      -> Either Text (M.Map Text ModuleTypeDef)
+  , mseElabValue
+      :: M.Map Text ScopedValue
+      -> M.Map Text ScopedType
+      -> M.Map Text ModuleTypeDef
+      -> M.Map Text ModuleValueDef
+      -> RawModuleValue
+      -> Either Text (M.Map Text ModuleValueDef)
+  }
+
+
+emptyModuleState :: ModuleState
+emptyModuleState =
+  ModuleState
+    { msRevImports = []
+    , msRevItems = []
+    , msImported = emptyImportedScope
+    , msDataPackages = M.empty
+    , msTypes = M.empty
+    , msValues = M.empty
+    , msExportTypes = M.empty
+    , msExportValueSigs = M.empty
+    , msExports = M.empty
+    , msRevExportInterfaces = []
+    }
+
+
+resolveModuleSurfaceElaborator
+  :: ModuleDataReprRegistry
+  -> ModuleSurfacePluginRegistry
+  -> ModuleEnv
+  -> LanguageDef
+  -> Either Text ModuleSurfaceElaborator
+resolveModuleSurfaceElaborator moduleDataReprs moduleSurfacePlugins env lang = do
+  surface <- moduleSurfaceForLanguage env lang
+  doc <- lookupDoctrine env (msdDoctrine surface)
+  plugin <- resolveModuleSurfacePlugin moduleSurfacePlugins env S.empty (msdElaborator surface)
+  pure
+    ModuleSurfaceElaborator
+      { mseSurface = surface
+      , mseAllows = moduleSurfaceAllows surface
+      , mseExpandInterfaceCustom =
+          \rawCustom ->
+            mspExpandInterfaceCustom plugin surface env doc rawCustom
+      , mseExpandModuleCustom =
+          \rawCustom ->
+            mspExpandModuleCustom plugin surface env lang rawCustom
+      , mseElabInterfaceType =
+          \mDefaultMode ifaceTypes rawType ->
+            mspElabInterfaceType plugin surface env doc mDefaultMode ifaceTypes rawType
+      , mseElabInterfaceValue =
+          \mDefaultMode typeScope ifaceValues rawValue ->
+            mspElabInterfaceValue plugin surface env doc mDefaultMode typeScope ifaceValues rawValue
+      , mseElabData =
+          \importedTypes importedValues localTypes localValues dataPkgs rawData ->
+            mspElabModuleData plugin moduleDataReprs surface env lang importedTypes importedValues localTypes localValues dataPkgs rawData
+      , mseElabType =
+          \importedTypes localTypes rawType ->
+            mspElabModuleType plugin surface env lang importedTypes localTypes rawType
+      , mseElabValue =
+          \importedTerms importedTypes localTypes localValues rawValue ->
+            mspElabModuleValue plugin surface env lang importedTerms importedTypes localTypes localValues rawValue
+      }
+
+
+resolveModuleSurfacePlugin
+  :: ModuleSurfacePluginRegistry
+  -> ModuleEnv
+  -> S.Set Text
+  -> Text
+  -> Either Text ModuleSurfacePlugin
+resolveModuleSurfacePlugin pluginRegistry env visiting name
+  | name `S.member` visiting =
+      Left ("module_surface elaborator cycle involving " <> name)
+  | otherwise =
+      case M.lookup name pluginRegistry of
+        Just plugin -> Right plugin
+        Nothing ->
+          case M.lookup name (meModuleElaborators env) of
+            Nothing -> Left ("Unknown module_surface elaborator: " <> name)
+            Just def -> do
+              base <- resolveModuleSurfacePlugin pluginRegistry env (S.insert name visiting) (medBase def)
+              pure
+                base
+                  { mspName = medName def
+                  , mspExpandInterfaceCustom = expandInterfaceCustom def base
+                  , mspExpandModuleCustom = expandModuleCustom def base
+                  }
+  where
+    expandInterfaceCustom def base surface env' doc rawCustom =
+      case M.lookup (rciTag rawCustom) (medInterfaceCustom def) of
+        Just expansion -> expandInterfaceBody def expansion rawCustom
+        Nothing -> mspExpandInterfaceCustom base surface env' doc rawCustom
+
+    expandModuleCustom def base surface env' lang rawCustom =
+      case M.lookup (rciTag rawCustom) (medModuleCustom def) of
+        Just expansion -> expandModuleBody def expansion rawCustom
+        Nothing -> mspExpandModuleCustom base surface env' lang rawCustom
+
+    expandInterfaceBody def expansion rawCustom =
+      case expansion of
+        CEDInlineItems ->
+          firstPrefix
+            ("module_elaborator " <> medName def <> ": ")
+            (parseInterfaceItemsText (rciBody rawCustom))
+
+    expandModuleBody def expansion rawCustom =
+      case expansion of
+        CEDInlineItems ->
+          firstPrefix
+            ("module_elaborator " <> medName def <> ": ")
+            (parseModuleItemsText (rciBody rawCustom))
+
+
+insertModuleItem :: ModuleEnv -> LanguageDef -> ModuleSurfaceElaborator -> ModuleState -> RawModuleItem -> Either Text ModuleState
+insertModuleItem env lang surfaceElab st rawItem =
+  case rawItem of
+    RMCustom rawCustom -> do
+      if mseAllows surfaceElab MSCCustom
+        then Right ()
+        else Left ("module_surface " <> msdName (mseSurface surfaceElab) <> " does not allow custom declarations")
+      expanded <- mseExpandModuleCustom surfaceElab rawCustom
+      foldM (insertModuleItem env lang surfaceElab) st expanded
+    RMImport rawImport -> do
+      case rawImport of
+        RawModuleImport{}
+          | not (mseAllows surfaceElab MSCImport) ->
+              Left ("module_surface " <> msdName (mseSurface surfaceElab) <> " does not allow local imports")
+        RawForeignImport{}
+          | not (mseAllows surfaceElab MSCForeignImport) ->
+              Left ("module_surface " <> msdName (mseSurface surfaceElab) <> " does not allow foreign imports")
+        _ -> Right ()
+      imported <- importModuleItem env (ldDoctrine lang) (msImported st) rawImport
+      let modImport = rawModuleImportToDef rawImport
+      pure
+        st
+          { msRevImports = modImport : msRevImports st
+          , msRevItems = MIDImport modImport : msRevItems st
+          , msImported = imported
+          }
+    RMData rawData -> do
+      if mseAllows surfaceElab MSCData
+        then Right ()
+        else Left ("module_surface " <> msdName (mseSurface surfaceElab) <> " does not allow data declarations")
+      dataPkg <-
+        mseElabData surfaceElab
+          (moduleTypesAsScope (isTypes (msImported st)))
+          (moduleValuesAsScope (isValues (msImported st)))
+          (msTypes st)
+          (msValues st)
+          (msDataPackages st)
+          rawData
+      pure
+        st
+          { msRevItems = MIDData (mddName dataPkg) (mddCtorNames dataPkg) : msRevItems st
+          , msDataPackages = M.insert (mddName dataPkg) dataPkg (msDataPackages st)
+          , msTypes = M.insert (rmdName rawData) (mddTypeDef dataPkg) (msTypes st)
+          , msValues = M.union (mddCtorDefs dataPkg) (msValues st)
+          }
+    RMType rawType -> do
+      if mseAllows surfaceElab MSCType
+        then Right ()
+        else Left ("module_surface " <> msdName (mseSurface surfaceElab) <> " does not allow type declarations")
+      types <-
+        mseElabType surfaceElab
+          (moduleTypesAsScope (isTypes (msImported st)))
+          (msTypes st)
+          rawType
+      pure
+        st
+          { msRevItems = MIDType (rmtName rawType) : msRevItems st
+          , msTypes = types
+          }
+    RMValue rawValue -> do
+      if mseAllows surfaceElab MSCValue
+        then Right ()
+        else Left ("module_surface " <> msdName (mseSurface surfaceElab) <> " does not allow value declarations")
+      values <-
+        mseElabValue surfaceElab
+          (moduleValuesAsScope (isValues (msImported st)))
+          (moduleTypesAsScope (isTypes (msImported st)))
+          (msTypes st)
+          (msValues st)
+          rawValue
+      pure
+        st
+          { msRevItems = MIDValue (rmvName rawValue) : msRevItems st
+          , msValues = values
+          }
+    RMTypeExport rawExports -> do
+      if mseAllows surfaceElab MSCExportType
+        then Right ()
+        else Left ("module_surface " <> msdName (mseSurface surfaceElab) <> " does not allow type exports")
+      exportTypes <- extendModuleTypeExports (moduleTypeScope st) (msExportTypes st) rawExports
+      pure
+        st
+          { msRevItems =
+              foldr (\rawExport acc -> MIDExportType (rmteLocal rawExport) (rmtePublic rawExport) : acc) (msRevItems st) rawExports
+          , msExportTypes = exportTypes
+          }
+    RMExport rawExports -> do
+      if mseAllows surfaceElab MSCExport
+        then Right ()
+        else Left ("module_surface " <> msdName (mseSurface surfaceElab) <> " does not allow exports")
+      exports <- extendModuleExports (moduleValueScope st) (msExports st) rawExports
+      exportValueSigs <- extendModuleExportValueSigs (moduleValueScope st) (msExportValueSigs st) rawExports
+      pure
+        st
+          { msRevItems =
+              foldr (\rawExport acc -> MIDExport (rmeLocal rawExport) (rmePublic rawExport) : acc) (msRevItems st) rawExports
+          , msExportValueSigs = exportValueSigs
+          , msExports = exports
+          }
+    RMExportInterface ifaceName -> do
+      if mseAllows surfaceElab MSCExportInterface
+        then Right ()
+        else Left ("module_surface " <> msdName (mseSurface surfaceElab) <> " does not allow interface exports")
+      ensureModuleMatchesInterface env (ldDoctrine lang) (msExportTypes st) (msExports st) ifaceName
+      pure
+        st
+          { msRevItems = MIDExportInterface ifaceName : msRevItems st
+          , msRevExportInterfaces = ifaceName : msRevExportInterfaces st
+          }
+
+
+moduleTypeScope :: ModuleState -> M.Map Text ModuleTypeDef
+moduleTypeScope st =
+  M.union (msTypes st) (isTypes (msImported st))
+
+
+moduleValueScope :: ModuleState -> M.Map Text ModuleValueDef
+moduleValueScope st =
+  M.union (msValues st) (isValues (msImported st))
+
+
+rawModuleImportToDef :: RawModuleImport -> ModuleImport
+rawModuleImportToDef rawImport =
+  case rawImport of
+    RawModuleImport {} ->
+      ModuleImport
+        { miModule = rmiModule rawImport
+        , miAlias = rmiAlias rawImport
+        , miInterface = rmiInterface rawImport
+        , miAdapters =
+            case rmiAdapter rawImport of
+              Nothing -> []
+              Just adapter -> [adapter]
+        }
+    RawForeignImport {} ->
+      ModuleForeignImport
+        { miForeignName = rfiName rawImport
+        , miForeignInterface = rfiInterface rawImport
+        , miForeignDescriptor = rfiProvider rawImport
+        , miForeignAdapters =
+            case rfiAdapter rawImport of
+              Nothing -> []
+              Just adapter -> [adapter]
+        }
+
+
+data ImportedScope = ImportedScope
+  { isValues :: M.Map Text ModuleValueDef
+  , isTypes :: M.Map Text ModuleTypeDef
+  , isProviders :: [ModuleProvider]
+  }
+
+
+emptyImportedScope :: ImportedScope
+emptyImportedScope =
+  ImportedScope
+    { isValues = M.empty
+    , isTypes = M.empty
+    , isProviders = []
+    }
+
+
+extendModuleExports
+  :: M.Map Text ModuleValueDef
+  -> M.Map Text ModuleValueDef
+  -> [RawModuleExport]
+  -> Either Text (M.Map Text ModuleValueDef)
+extendModuleExports scopeValues =
+  foldM step
+  where
+    step acc rawExport =
+      case M.lookup (rmeLocal rawExport) scopeValues of
+        Nothing -> Left ("module: unknown export " <> rmeLocal rawExport)
+        Just mv ->
+          if M.member (rmePublic rawExport) acc
+            then Left ("module: duplicate export name " <> rmePublic rawExport)
+            else Right (M.insert (rmePublic rawExport) mv acc)
+
+
+extendModuleExportValueSigs
+  :: M.Map Text ModuleValueDef
+  -> M.Map Text InterfaceValueSig
+  -> [RawModuleExport]
+  -> Either Text (M.Map Text InterfaceValueSig)
+extendModuleExportValueSigs scopeValues =
+  foldM step
+  where
+    step acc rawExport =
+      case M.lookup (rmeLocal rawExport) scopeValues of
+        Nothing -> Left ("module: unknown export " <> rmeLocal rawExport)
+        Just mv ->
+          if M.member (rmePublic rawExport) acc
+            then Left ("module: duplicate export name " <> rmePublic rawExport)
+            else do
+              sig <- moduleValueSigOf (rmePublic rawExport) mv
+              Right (M.insert (rmePublic rawExport) sig acc)
+
+
+moduleValueSigOf :: Text -> ModuleValueDef -> Either Text InterfaceValueSig
+moduleValueSigOf publicName mv = do
+  dom <- diagramDom (mvdDiagram mv)
+  cod <- diagramCod (mvdDiagram mv)
+  pure
+    InterfaceValueSig
+      { ivsName = publicName
+      , ivsMode = mvdMode mv
+      , ivsDom = dom
+      , ivsCod = cod
+      }
+
+
+extendModuleTypeExports
+  :: M.Map Text ModuleTypeDef
+  -> M.Map Text ModuleTypeDef
+  -> [RawModuleTypeExport]
+  -> Either Text (M.Map Text ModuleTypeDef)
+extendModuleTypeExports scopeTypes =
+  foldM step
+  where
+    step acc rawExport =
+      case M.lookup (rmteLocal rawExport) scopeTypes of
+        Nothing -> Left ("module: unknown type export " <> rmteLocal rawExport)
+        Just mt ->
+          if M.member (rmtePublic rawExport) acc
+            then Left ("module: duplicate type export name " <> rmtePublic rawExport)
+            else Right (M.insert (rmtePublic rawExport) mt acc)
+
+
+moduleTypesAsScope :: M.Map Text ModuleTypeDef -> M.Map Text ScopedType
+moduleTypesAsScope =
+  M.map
+    (\mt ->
+      ScopedType
+        { stDoctrine = mtdDoctrine mt
+        , stMode = mtdMode mt
+        , stBody = mtdBody mt
+        })
+
+
+scopedTypeBodies :: M.Map Text ScopedType -> M.Map Text Obj
+scopedTypeBodies =
+  M.map stBody
+
+
+moduleValuesAsScope :: M.Map Text ModuleValueDef -> M.Map Text ScopedValue
+moduleValuesAsScope =
+  M.map
+    (\mv ->
+      ScopedValue
+        { svDoctrine = mvdDoctrine mv
+        , svMode = mvdMode mv
+        , svDiagram = mvdDiagram mv
+        })
+
+
+importModuleItem :: ModuleEnv -> Text -> ImportedScope -> RawModuleImport -> Either Text ImportedScope
+importModuleItem env doctrineName acc rawImport =
+  case rawImport of
+    RawModuleImport {} -> importLocalModule
+    RawForeignImport {} -> importForeignModule
+  where
+    importLocalModule = do
+      modDef <-
+        case M.lookup (rmiModule rawImport) (meModules env) of
+          Nothing -> Left ("Unknown module import: " <> rmiModule rawImport)
+          Just md -> Right md
+      (selectedTypes, selectedValues) <-
+        case rmiInterface rawImport of
+          Nothing ->
+            Right (mdExportTypes modDef, mdExportValueSigs modDef)
+          Just ifaceName -> do
+            ensureModuleMatchesInterface env (mdDoctrine modDef) (mdExportTypes modDef) (mdExports modDef) ifaceName
+            iface <- lookupInterface env ifaceName
+            pure
+              ( M.restrictKeys (mdExportTypes modDef) (M.keysSet (idefTypes iface))
+              , M.restrictKeys (mdExportValueSigs modDef) (M.keysSet (idefValues iface))
+              )
+      symbolicValues <- materializeLocalValues (mdDoctrine modDef) (FM.mdName modDef) selectedValues
+      (adaptedTypes, adaptedValues) <-
+        adaptImportedDefinitions
+          env
+          "module import"
+          (mdDoctrine modDef)
+          doctrineName
+          (case rmiAdapter rawImport of
+            Nothing -> []
+            Just adapter -> [adapter])
+          selectedTypes
+          symbolicValues
+      let localizedTypes = localizeImportedTypes (rmiAlias rawImport) adaptedTypes
+          localizedValues = localizeImportedValues (rmiAlias rawImport) adaptedValues
+      mergeImportedScope acc localizedTypes localizedValues []
+
+    importForeignModule = do
+      iface <- lookupInterface env (rfiInterface rawImport)
+      let provider0 =
+            ModuleProvider
+              { mpName = rfiName rawImport
+              , mpInterface = rfiInterface rawImport
+              , mpDescriptor = rfiProvider rawImport
+              , mpAdapters = []
+              }
+          provider = appendProviderAdapter (rfiAdapter rawImport) provider0
+      manifestTypes <- materializeForeignTypes iface
+      foreignValues <- traverse (providerValueDef provider0 (idefDoctrine iface)) (idefValues iface)
+      (adaptedTypes, adaptedValues) <-
+        adaptImportedDefinitions
+          env
+          "module foreign import"
+          (idefDoctrine iface)
+          doctrineName
+          (case rfiAdapter rawImport of
+            Nothing -> []
+            Just adapter -> [adapter])
+          manifestTypes
+          foreignValues
+      let localizedTypes = localizeImportedTypes (Just (rfiName rawImport)) adaptedTypes
+          localizedValues = localizeImportedValues (Just (rfiName rawImport)) adaptedValues
+      mergeImportedScope acc localizedTypes localizedValues [provider]
+
+    providerValueDef provider docName sig = do
+      doc <- lookupDoctrine env docName
+      gd <-
+        lookupGenDeclInDoctrine
+          ("module: foreign import missing generator " <> ivsName sig)
+          doc
+          (ivsMode sig)
+          (GenName (ivsName sig))
+      if null (gdParams gd)
+        then Right ()
+        else Left ("module: foreign import generator " <> ivsName sig <> " must not take parameters")
+      if all isPortShape (gdDom gd)
+        then Right ()
+        else Left ("module: foreign import generator " <> ivsName sig <> " must not take binder inputs")
+      if gdPlainDom gd == ivsDom sig && gdCod gd == ivsCod sig
+        then
+          do
+            diag <- providerRefDiagram (ivsMode sig) (ivsDom sig) (ivsCod sig) ref
+            Right
+              ModuleValueDef
+                { mvdName = ivsName sig
+                , mvdDoctrine = docName
+                , mvdMode = ivsMode sig
+                , mvdDiagram = diag
+                , mvdPolicy = defaultModuleValuePolicy
+                , mvdFuel = defaultModuleValueFuel
+                }
+        else Left ("module: foreign import generator " <> ivsName sig <> " signature mismatch")
+      where
+        ref =
+          ProviderRef
+            { prProvider = provider
+            , prValueName = ivsName sig
+            }
+
+    isPortShape sh =
+      case sh of
+        InPort _ -> True
+        InBinder _ -> False
+
+    materializeForeignTypes iface =
+      foldM step M.empty (M.toList (idefTypes iface))
+      where
+        step acc (name, sig) =
+          let body = maybe (itsRepr sig) id (itsBody sig)
+          in Right
+               ( M.insert
+                   name
+                   (ModuleTypeDef name (idefDoctrine iface) (itsMode sig) body)
+                   acc
+               )
+
+    materializeLocalValues doctrineName0 moduleName =
+      foldM step M.empty . M.toList
+      where
+        step acc (publicName, sig) = do
+          let ref =
+                ModuleValueRef
+                  { mvrModule = moduleName
+                  , mvrValueName = publicName
+                  , mvrAdapters = []
+                  }
+          diag <- moduleValueRefDiagram (ivsMode sig) (ivsDom sig) (ivsCod sig) ref
+          pure
+            ( M.insert
+                publicName
+                ModuleValueDef
+                  { mvdName = publicName
+                  , mvdDoctrine = doctrineName0
+                  , mvdMode = ivsMode sig
+                  , mvdDiagram = diag
+                  , mvdPolicy = defaultModuleValuePolicy
+                  , mvdFuel = defaultModuleValueFuel
+                  }
+                acc
+            )
+
+
+adaptImportedDefinitions
+  :: ModuleEnv
+  -> Text
+  -> Text
+  -> Text
+  -> [Text]
+  -> M.Map Text ModuleTypeDef
+  -> M.Map Text ModuleValueDef
+  -> Either Text (M.Map Text ModuleTypeDef, M.Map Text ModuleValueDef)
+adaptImportedDefinitions _env _label srcDoctrine tgtDoctrine [] tys vals
+  | srcDoctrine == tgtDoctrine =
+      Right (tys, vals)
+adaptImportedDefinitions _env label srcDoctrine tgtDoctrine [] _tys _vals =
+  Left
+    ( label
+        <> ": doctrine mismatch between "
+        <> srcDoctrine
+        <> " and "
+        <> tgtDoctrine
+        <> "; add `using <morphism>`"
+    )
+adaptImportedDefinitions env label srcDoctrine tgtDoctrine adapters tys vals = do
+  (docFinal, tys', vals') <- foldM step (srcDoctrine, tys, vals) adapters
+  if docFinal == tgtDoctrine
+    then Right (tys', vals')
+    else
+      Left
+        ( label
+            <> ": adapter chain resolved to doctrine "
+            <> docFinal
+            <> ", expected "
+            <> tgtDoctrine
+        )
+  where
+    step (docName, tys0, vals0) morphName = do
+      mor <- lookupMorphism env morphName
+      if dName (PolyMorph.morSrc mor) == docName
+        then Right ()
+        else
+          Left
+            ( label
+                <> ": adapter "
+                <> morphName
+                <> " has source doctrine "
+                <> dName (PolyMorph.morSrc mor)
+                <> ", expected "
+                <> docName
+            )
+      tys1 <- traverse (translateModuleTypeDef mor) tys0
+      vals1 <- traverse (translateModuleValueDef mor) vals0
+      pure (dName (PolyMorph.morTgt mor), tys1, vals1)
+
+
+translateModuleTypeDef :: PolyMorph.Morphism -> ModuleTypeDef -> Either Text ModuleTypeDef
+translateModuleTypeDef mor mtd = do
+  body' <- PolyMorph.applyMorphismTy mor (mtdBody mtd)
+  pure
+    mtd
+      { mtdDoctrine = dName (PolyMorph.morTgt mor)
+      , mtdMode = objOwnerMode body'
+      , mtdBody = body'
+      }
+
+
+translateModuleValueDef :: PolyMorph.Morphism -> ModuleValueDef -> Either Text ModuleValueDef
+translateModuleValueDef mor mvd = do
+  diag' <- PolyMorph.applyMorphismDiagram mor (mvdDiagram mvd)
+  let diag'' =
+        mapModuleValueRefsDiagram (adaptModuleValueRef (Just (PolyMorph.morName mor)))
+          (mapProviderRefsDiagram (adaptProviderRef (Just (PolyMorph.morName mor))) diag')
+  pure
+    mvd
+      { mvdDoctrine = dName (PolyMorph.morTgt mor)
+      , mvdMode = dMode diag''
+      , mvdDiagram = diag''
+      }
+
+
+adaptProviderRef :: Maybe Text -> ProviderRef -> ProviderRef
+adaptProviderRef mAdapter ref =
+  ref { prProvider = appendProviderAdapter mAdapter (prProvider ref) }
+
+
+adaptModuleValueRef :: Maybe Text -> ModuleValueRef -> ModuleValueRef
+adaptModuleValueRef mAdapter =
+  appendModuleValueRefAdapter mAdapter
+
+
+providerRefDiagram :: ModeName -> [Obj] -> [Obj] -> ProviderRef -> Either Text Diagram
+providerRefDiagram mode dom cod ref = do
+  let (ins, d0) = allocPorts dom (emptyDiagram mode [])
+  let (outs, d1) = allocPorts cod d0
+  d2 <- addEdgePayload (PProvider ref) ins outs d1
+  let d3 = d2 { dIn = ins, dOut = outs }
+  validateDiagram d3
+  pure d3
+  where
+    allocPorts [] diag = ([], diag)
+    allocPorts (ty:rest) diag =
+      let (pid, diag1) = freshPort ty diag
+          (pids, diag2) = allocPorts rest diag1
+       in (pid : pids, diag2)
+
+
+moduleValueRefDiagram :: ModeName -> [Obj] -> [Obj] -> ModuleValueRef -> Either Text Diagram
+moduleValueRefDiagram mode dom cod ref = do
+  let (ins, d0) = allocPorts dom (emptyDiagram mode [])
+  let (outs, d1) = allocPorts cod d0
+  d2 <- addEdgePayload (PModuleRef ref) ins outs d1
+  let d3 = d2 { dIn = ins, dOut = outs }
+  validateDiagram d3
+  pure d3
+  where
+    allocPorts [] diag = ([], diag)
+    allocPorts (ty:rest) diag =
+      let (pid, diag1) = freshPort ty diag
+          (pids, diag2) = allocPorts rest diag1
+       in (pid : pids, diag2)
+
+
+mergeImportedScope
+  :: ImportedScope
+  -> M.Map Text ModuleTypeDef
+  -> M.Map Text ModuleValueDef
+  -> [ModuleProvider]
+  -> Either Text ImportedScope
+mergeImportedScope acc tys vals providers = do
+  case M.keys (M.intersection (isTypes acc) tys) of
+    [] -> Right ()
+    (bad:_) -> Left ("module: duplicate imported type " <> bad)
+  case M.keys (M.intersection (isValues acc) vals) of
+    [] -> Right ()
+    (bad:_) -> Left ("module: duplicate imported value " <> bad)
+  pure
+    ImportedScope
+      { isTypes = M.union (isTypes acc) tys
+      , isValues = M.union (isValues acc) vals
+      , isProviders = L.nub (isProviders acc <> providers)
+      }
+
+
+localizeImportedTypes :: Maybe Text -> M.Map Text ModuleTypeDef -> M.Map Text ModuleTypeDef
+localizeImportedTypes mAlias =
+  M.fromList
+    . map localizeOne
+    . M.toList
+  where
+    qualifyName name =
+      case mAlias of
+        Nothing -> name
+        Just alias -> alias <> "::" <> name
+
+    localizeOne (name, mt) =
+      let localName = qualifyName name
+       in (localName, ModuleTypeDef localName (mtdDoctrine mt) (mtdMode mt) (mtdBody mt))
+
+
+localizeImportedValues :: Maybe Text -> M.Map Text ModuleValueDef -> M.Map Text ModuleValueDef
+localizeImportedValues mAlias =
+  M.fromList
+    . map localizeOne
+    . M.toList
+  where
+    qualifyName name =
+      case mAlias of
+        Nothing -> name
+        Just alias -> alias <> "::" <> name
+
+    localizeOne (name, mv) =
+      let localName = qualifyName name
+       in (localName, mv { mvdName = localName })
+
+
+type ModuleDataReprElaborator =
+  ModuleSurfaceDef
+  -> ModuleEnv
+  -> LanguageDef
+  -> M.Map Text ScopedType
+  -> M.Map Text ScopedValue
+  -> M.Map Text ModuleTypeDef
+  -> M.Map Text ModuleValueDef
+  -> RawModuleData
+  -> Either Text ModuleDataDef
+
+
+type ModuleDataReprRegistry = M.Map Text ModuleDataReprElaborator
+
+
+data ResolvedModuleDataRepr
+  = RMRDirect Text
+  | RMROpaqueConfigured Text Text
+
+
+standardModuleDataReprRegistry :: ModuleDataReprRegistry
+standardModuleDataReprRegistry =
+  M.fromList
+    [ ( "doctrine_data"
+      , \surface env lang importedTypes importedValues localTypes localValues raw ->
+          elabDoctrineBackedModuleData
+            surface
+            env
+            lang
+            importedTypes
+            importedValues
+            localTypes
+            localValues
+            raw
+            "doctrine_data"
+      )
+    , ( "opaque_data"
+      , \surface env lang importedTypes importedValues localTypes localValues raw ->
+          elabOpaqueModuleData
+            surface
+            env
+            lang
+            importedTypes
+            importedValues
+            localTypes
+            localValues
+            raw
+      )
+    ]
+
+
+elabModuleData
+  :: ModuleDataReprRegistry
+  -> ModuleSurfaceDef
+  -> ModuleEnv
+  -> LanguageDef
+  -> M.Map Text ScopedType
+  -> M.Map Text ScopedValue
+  -> M.Map Text ModuleTypeDef
+  -> M.Map Text ModuleValueDef
+  -> M.Map Text ModuleDataDef
+  -> RawModuleData
+  -> Either Text ModuleDataDef
+elabModuleData reprRegistry surface env lang importedTypes importedValues localTypes localValues dataPkgs raw = do
+  let name = rmdName raw
+  if M.member name dataPkgs
+    then Left ("Duplicate module data name: " <> name)
+    else Right ()
+  if M.member name localTypes || M.member name importedTypes
+    then Left ("Duplicate module type name: " <> name)
+    else Right ()
+  if null (rmdCtors raw)
+    then Left ("module data " <> name <> ": expected at least one constructor")
+    else Right ()
+  let reprName = maybe (maybe "doctrine_data" id (msdDefaultDataRepr surface)) id (rmdRepr raw)
+  resolvedRepr <- resolveModuleDataReprChoice reprRegistry env reprName
+  case resolvedRepr of
+    RMRDirect baseName -> do
+      reprElab <-
+        case M.lookup baseName reprRegistry of
+          Nothing -> Left ("module data " <> name <> ": unknown representation " <> reprName)
+          Just elabRepr -> Right elabRepr
+      pkg <- reprElab surface env lang importedTypes importedValues localTypes localValues raw
+      pure pkg { mddRepr = reprName }
+    RMROpaqueConfigured providerInterface descriptorPrefix ->
+      elabOpaqueModuleDataConfigured
+        reprName
+        providerInterface
+        descriptorPrefix
+        surface
+        env
+        lang
+        importedTypes
+        importedValues
+        localTypes
+        localValues
+        raw
+
+
+resolveModuleDataReprChoice
+  :: ModuleDataReprRegistry
+  -> ModuleEnv
+  -> Text
+  -> Either Text ResolvedModuleDataRepr
+resolveModuleDataReprChoice reprRegistry env =
+  go S.empty
+  where
+    go visiting reprName
+      | reprName `S.member` visiting =
+          Left ("data_repr cycle involving " <> reprName)
+      | reprName == "opaque_data" =
+          Right (RMROpaqueConfigured opaqueModuleDataProviderInterface opaqueModuleDataDescriptorPrefix)
+      | M.member reprName reprRegistry =
+          Right (RMRDirect reprName)
+      | otherwise =
+          case M.lookup reprName (meModuleDataReprs env) of
+            Nothing -> Left ("unknown representation " <> reprName)
+            Just def -> do
+              baseResolved <- go (S.insert reprName visiting) (mdrBase def)
+              applyOverrides reprName def baseResolved
+
+    applyOverrides reprName def resolved =
+      case resolved of
+        RMROpaqueConfigured providerInterface descriptorPrefix ->
+          Right
+            ( RMROpaqueConfigured
+                (maybe providerInterface id (mdrProviderInterface def))
+                (maybe descriptorPrefix id (mdrDescriptorPrefix def))
+            )
+        RMRDirect baseName ->
+          case (mdrProviderInterface def, mdrDescriptorPrefix def) of
+            (Nothing, Nothing) -> Right (RMRDirect baseName)
+            _ ->
+              Left
+                ( "data_repr "
+                    <> reprName
+                    <> ": provider_interface and descriptor_prefix are only supported for opaque_data"
+                )
+
+
+elabDoctrineBackedModuleData
+  :: ModuleSurfaceDef
+  -> ModuleEnv
+  -> LanguageDef
+  -> M.Map Text ScopedType
+  -> M.Map Text ScopedValue
+  -> M.Map Text ModuleTypeDef
+  -> M.Map Text ModuleValueDef
+  -> RawModuleData
+  -> Text
+  -> Either Text ModuleDataDef
+elabDoctrineBackedModuleData surface env lang importedTypes importedValues localTypes localValues raw reprName = do
+  doc <- lookupDoctrine env (ldDoctrine lang)
+  ownerMode <- resolveInterfaceMode doc (msdMode surface) (rmdMode raw)
+  ctorTables <- deriveCtorTables doc
+  typeRef <-
+    case lookupCtorRefForOwnerInTables doc ctorTables ownerMode (ObjName (rmdName raw)) of
+      Nothing -> Left ("module data " <> rmdName raw <> ": doctrine is missing type constructor " <> rmdName raw)
+      Just ref -> Right ref
+  typeParams <- lookupCtorSigForOwnerInTables doc ctorTables ownerMode typeRef
+  if null typeParams
+    then Right ()
+    else Left ("module data " <> rmdName raw <> ": doctrine-backed representation only supports nullary type constructors")
+  ensureDistinctTexts ("module data " <> rmdName raw <> ": duplicate constructor name") (map rmcName (rmdCtors raw))
+  let typeObj =
+        Obj
+          { objOwnerMode = ownerMode
+          , objCode = CTCon typeRef []
+          }
+      typeDef =
+        ModuleTypeDef (rmdName raw) (ldDoctrine lang) ownerMode typeObj
+      typeScope =
+        M.insert
+          (rmdName raw)
+          typeObj
+          (scopedTypeBodies (M.union (moduleTypesAsScope localTypes) importedTypes))
+  ctorDefs <- foldM (elabCtor doc ownerMode typeScope) M.empty (rmdCtors raw)
+  pure
+    ModuleDataDef
+      { mddName = rmdName raw
+      , mddDoctrine = ldDoctrine lang
+      , mddMode = ownerMode
+      , mddRepr = reprName
+      , mddTypeDef = typeDef
+      , mddCtorDefs = ctorDefs
+      , mddCtorNames = map rmcName (rmdCtors raw)
+      }
+  where
+    elabCtor doc ownerMode typeScope acc rawCtor = do
+      let ctorName = rmcName rawCtor
+      if M.member ctorName acc || M.member ctorName localValues || M.member ctorName importedValues
+        then Left ("Duplicate module value name: " <> ctorName)
+        else Right ()
+      gd <-
+        lookupGenDeclInDoctrine
+          ("module data " <> rmdName raw <> ": doctrine is missing constructor " <> ctorName)
+          doc
+          ownerMode
+          (GenName ctorName)
+      if null (gdParams gd)
+        then Right ()
+        else Left ("module data " <> rmdName raw <> ": constructor " <> ctorName <> " must not take type or term parameters")
+      if all isPortInput (gdDom gd)
+        then Right ()
+        else Left ("module data " <> rmdName raw <> ": constructor " <> ctorName <> " must not take binder inputs")
+      checkDoctrineBackedCtorSig doc ownerMode typeScope raw gd rawCtor
+      diag <- genericGenDiagram gd
+      pure
+        ( M.insert
+            ctorName
+            ModuleValueDef
+              { mvdName = ctorName
+              , mvdDoctrine = ldDoctrine lang
+              , mvdMode = ownerMode
+              , mvdDiagram = diag
+              , mvdPolicy = defaultModuleValuePolicy
+              , mvdFuel = defaultModuleValueFuel
+              }
+            acc
+        )
+
+    isPortInput sh =
+      case sh of
+        InPort _ -> True
+        InBinder _ -> False
+
+
+elabOpaqueModuleData
+  :: ModuleSurfaceDef
+  -> ModuleEnv
+  -> LanguageDef
+  -> M.Map Text ScopedType
+  -> M.Map Text ScopedValue
+  -> M.Map Text ModuleTypeDef
+  -> M.Map Text ModuleValueDef
+  -> RawModuleData
+  -> Either Text ModuleDataDef
+elabOpaqueModuleData surface env lang importedTypes importedValues localTypes localValues raw = do
+  elabOpaqueModuleDataConfigured
+    "opaque_data"
+    opaqueModuleDataProviderInterface
+    opaqueModuleDataDescriptorPrefix
+    surface
+    env
+    lang
+    importedTypes
+    importedValues
+    localTypes
+    localValues
+    raw
+
+
+elabOpaqueModuleDataConfigured
+  :: Text
+  -> Text
+  -> Text
+  -> ModuleSurfaceDef
+  -> ModuleEnv
+  -> LanguageDef
+  -> M.Map Text ScopedType
+  -> M.Map Text ScopedValue
+  -> M.Map Text ModuleTypeDef
+  -> M.Map Text ModuleValueDef
+  -> RawModuleData
+  -> Either Text ModuleDataDef
+elabOpaqueModuleDataConfigured reprName providerInterface descriptorPrefix surface env lang importedTypes importedValues localTypes localValues raw = do
+  doc <- lookupDoctrine env (ldDoctrine lang)
+  ownerMode <- resolveInterfaceMode doc (msdMode surface) (rmdMode raw)
+  ensureDistinctTexts ("module data " <> rmdName raw <> ": duplicate constructor name") (map rmcName (rmdCtors raw))
+  meta <- mkTypeMetaVar doc ownerMode (opaqueModuleDataTypeName (rmdName raw))
+  let typeObj = Obj { objOwnerMode = ownerMode, objCode = CTMeta meta }
+  let typeDef =
+        ModuleTypeDef (rmdName raw) (ldDoctrine lang) ownerMode typeObj
+      typeScope =
+        M.insert
+          (rmdName raw)
+          typeObj
+          (scopedTypeBodies (M.union (moduleTypesAsScope localTypes) importedTypes))
+  ctorDefs <- foldM (elabCtor doc ownerMode typeScope) M.empty (rmdCtors raw)
+  pure
+    ModuleDataDef
+      { mddName = rmdName raw
+      , mddDoctrine = ldDoctrine lang
+      , mddMode = ownerMode
+      , mddRepr = reprName
+      , mddTypeDef = typeDef
+      , mddCtorDefs = ctorDefs
+      , mddCtorNames = map rmcName (rmdCtors raw)
+      }
+  where
+    dataProvider =
+      ModuleProvider
+        { mpName = rmdName raw
+        , mpInterface = providerInterface
+        , mpDescriptor = opaqueModuleDataProviderDescriptorWithPrefix descriptorPrefix (rmdName raw)
+        , mpAdapters = []
+        }
+
+    elabCtor doc ownerMode typeScope acc rawCtor = do
+      let ctorName = rmcName rawCtor
+      if M.member ctorName acc || M.member ctorName localValues || M.member ctorName importedValues
+        then Left ("Duplicate module value name: " <> ctorName)
+        else Right ()
+      sigMode <- resolveInterfaceMode doc (Just (modeNameText ownerMode)) (rvsMode (rmcSig rawCtor))
+      if sigMode == ownerMode
+        then Right ()
+        else Left ("module data " <> rmdName raw <> ": constructor " <> ctorName <> " mode mismatch")
+      dom <- mapM (elabObjExprInScope typeScope doc [] [] M.empty ownerMode) (rvsDom (rmcSig rawCtor))
+      cod <- mapM (elabObjExprInScope typeScope doc [] [] M.empty ownerMode) (rvsCod (rmcSig rawCtor))
+      diag <-
+        providerRefDiagram
+          ownerMode
+          dom
+          cod
+          ProviderRef
+            { prProvider = dataProvider
+            , prValueName = ctorName
+            }
+      pure
+        ( M.insert
+            ctorName
+            ModuleValueDef
+              { mvdName = ctorName
+              , mvdDoctrine = ldDoctrine lang
+              , mvdMode = ownerMode
+              , mvdDiagram = diag
+              , mvdPolicy = defaultModuleValuePolicy
+              , mvdFuel = defaultModuleValueFuel
+              }
+            acc
+        )
+
+
+checkDoctrineBackedCtorSig
+  :: Doctrine
+  -> ModeName
+  -> M.Map Text Obj
+  -> RawModuleData
+  -> GenDecl
+  -> RawModuleCtor
+  -> Either Text ()
+checkDoctrineBackedCtorSig doc ownerMode typeScope rawData gd rawCtor = do
+  sigMode <- resolveInterfaceMode doc (Just (modeNameText ownerMode)) (rvsMode (rmcSig rawCtor))
+  if sigMode == ownerMode
+    then Right ()
+    else Left ("module data " <> rmdName rawData <> ": constructor " <> rmcName rawCtor <> " mode mismatch")
+  dom <- mapM (elabObjExprInScope typeScope doc [] [] M.empty ownerMode) (rvsDom (rmcSig rawCtor))
+  cod <- mapM (elabObjExprInScope typeScope doc [] [] M.empty ownerMode) (rvsCod (rmcSig rawCtor))
+  if dom == gdPlainDom gd
+    then Right ()
+    else Left ("module data " <> rmdName rawData <> ": constructor " <> rmcName rawCtor <> " domain mismatch")
+  if cod == gdCod gd
+    then Right ()
+    else Left ("module data " <> rmdName rawData <> ": constructor " <> rmcName rawCtor <> " codomain mismatch")
+
+
+ensureDistinctTexts :: Text -> [Text] -> Either Text ()
+ensureDistinctTexts label names =
+  if S.size (S.fromList names) == length names
+    then Right ()
+    else Left label
+
+
+firstPrefix :: Text -> Either Text a -> Either Text a
+firstPrefix prefix =
+  either (Left . (prefix <>)) Right
+
+
+defaultModuleValuePolicy :: RewritePolicy
+defaultModuleValuePolicy = UseStructuralAsBidirectional
+
+
+defaultModuleValueFuel :: Int
+defaultModuleValueFuel = 50
+
+
+modeNameText :: ModeName -> Text
+modeNameText (ModeName name) = name
+
+
+elabModuleType
+  :: ModuleEnv
+  -> LanguageDef
+  -> ModuleSurfaceDef
+  -> M.Map Text ScopedType
+  -> M.Map Text ModuleTypeDef
+  -> RawModuleType
+  -> Either Text (M.Map Text ModuleTypeDef)
+elabModuleType env lang surface importedTypes acc raw =
+  if M.member (rmtName raw) acc || M.member (rmtName raw) importedTypes
+    then Left ("Duplicate module type name: " <> rmtName raw)
+    else do
+      doc <- lookupDoctrine env (ldDoctrine lang)
+      let typeScope = scopedTypeBodies (M.union (moduleTypesAsScope acc) importedTypes)
+      body <- elabScopedTypeExpr doc (msdMode surface) (rmtMode raw) typeScope (rmtBody raw)
+      let typeDef =
+            ModuleTypeDef (rmtName raw) (ldDoctrine lang) (objOwnerMode body) body
+      pure (M.insert (rmtName raw) typeDef acc)
+
+
+elabModuleValue
+  :: ModuleEnv
+  -> LanguageDef
+  -> ModuleSurfaceDef
+  -> M.Map Text ScopedValue
+  -> M.Map Text ScopedType
+  -> M.Map Text ModuleTypeDef
+  -> M.Map Text ModuleValueDef
+  -> RawModuleValue
+  -> Either Text (M.Map Text ModuleValueDef)
+elabModuleValue env lang surface importedTerms importedTypes localTypes acc raw = do
+  if M.member (rmvName raw) acc || M.member (rmvName raw) importedTerms
+    then Left ("Duplicate module value name: " <> rmvName raw)
+    else do
+      let sigMode = rmvSig raw >>= rvsMode
+      case (sigMode, rmvMode raw) of
+        (Just sig, Just declMode)
+          | sig /= declMode ->
+              Left ("module " <> rmvName raw <> ": conflicting mode annotations")
+        _ -> Right ()
+      let scopeTerms = moduleValuesAsScope acc
+          scopeTypes = moduleTypesAsScope localTypes
+          valueScope = M.unions [scopeTerms, importedTerms]
+          typeScope = scopedTypeBodies (M.unions [scopeTypes, importedTypes])
+          doctrineName = ldDoctrine lang
+          uses = dedupe (msdUses surface <> rmvUses raw)
+          surfaceName = case rmvSurface raw of
+            Just s -> Just s
+            Nothing -> msdExprSurface surface
+          modeName = chooseModeText sigMode (chooseModeText (rmvMode raw) (msdMode surface))
+          fuel = maybe 50 id (rmvFuel raw)
+          policyName = maybe "UseStructuralAsBidirectional" id (rmvPolicy raw)
+      policy <- parsePolicy policyName
+      CompiledDiagramArtifact
+        { cdaDoctrine = docFinal
+        , cdaNormalizedDiagram = normDiag
+        } <-
+        case
+            compileDiagramArtifact
+              valueScope
+              typeScope
+              env
+              doctrineName
+              modeName
+              surfaceName
+              uses
+              (rmvMorphisms raw)
+              policy
+              fuel
+              (rmvExprText raw) of
+          Left err -> Left ("module " <> rmvName raw <> ": " <> err)
+          Right ok -> Right ok
+      checkModuleValueSignature docFinal typeScope normDiag raw
+      let valueDef =
+            ModuleValueDef
+              { mvdName = rmvName raw
+              , mvdDoctrine = dName docFinal
+              , mvdMode = dMode normDiag
+              , mvdDiagram = normDiag
+              , mvdPolicy = policy
+              , mvdFuel = fuel
+              }
+      pure (M.insert (rmvName raw) valueDef acc)
+
+
+checkModuleValueSignature :: Doctrine -> M.Map Text Obj -> Diagram -> RawModuleValue -> Either Text ()
+checkModuleValueSignature _doc _typeScope _diag raw
+  | Nothing <- rmvSig raw = Right ()
+checkModuleValueSignature doc typeScope diag raw =
+  case rmvSig raw of
+    Nothing -> Right ()
+    Just sig -> do
+      let actualMode = dMode diag
+          declaredMode =
+            case rvsMode sig of
+              Nothing -> actualMode
+              Just name -> ModeName name
+      if declaredMode == actualMode
+        then Right ()
+        else Left ("module " <> rmvName raw <> ": signature mode mismatch")
+      dom <- mapM (elabObjExprInScope typeScope doc [] [] M.empty declaredMode) (rvsDom sig)
+      cod <- mapM (elabObjExprInScope typeScope doc [] [] M.empty declaredMode) (rvsCod sig)
+      actualDom <- diagramDom diag
+      actualCod <- diagramCod diag
+      if dom == actualDom
+        then Right ()
+        else Left ("module " <> rmvName raw <> ": declared domain does not match elaborated body")
+      if cod == actualCod
+        then Right ()
+        else Left ("module " <> rmvName raw <> ": declared codomain does not match elaborated body")
+
+
+insertBuild :: ModuleEnv -> RawBuild -> Either Text ModuleEnv
+insertBuild env raw = do
+  ensureAbsent "build" (rbName raw) (meBuilds env)
+  _ <-
+    case M.lookup (rbModule raw) (meModules env) of
+      Nothing -> Left ("Unknown module: " <> rbModule raw)
+      Just _ -> Right ()
+  _ <-
+    case M.lookup (rbPipeline raw) (mePipelines env) of
+      Nothing -> Left ("Unknown pipeline: " <> rbPipeline raw)
+      Just _ -> Right ()
+  let buildDef :: BuildDef
+      buildDef =
+        BuildDef
+          { bdName = rbName raw
+          , bdModule = rbModule raw
+          , bdPipeline = rbPipeline raw
+          }
+  pure env { meBuilds = M.insert (rbName raw) buildDef (meBuilds env) }
+
+
+lookupInterface :: ModuleEnv -> Text -> Either Text InterfaceDef
+lookupInterface env name =
+  case M.lookup name (meInterfaces env) of
+    Nothing -> Left ("Unknown interface: " <> name)
+    Just iface -> Right iface
+
+
+ensureModuleMatchesInterface
+  :: ModuleEnv
+  -> Text
+  -> M.Map Text ModuleTypeDef
+  -> M.Map Text ModuleValueDef
+  -> Text
+  -> Either Text ()
+ensureModuleMatchesInterface env doctrineName types values ifaceName = do
+  iface <- lookupInterface env ifaceName
+  if idefDoctrine iface /= doctrineName
+    then Left ("interface " <> ifaceName <> " doctrine mismatch")
+    else do
+      doc <- lookupDoctrine env doctrineName
+      let checkType doc' iface' (name, sig) =
+            case M.lookup name types of
+              Nothing -> Left ("interface " <> ifaceName <> ": missing type " <> name)
+              Just mt -> ensureModuleTypeMatchesSig doc' iface' types ifaceName mt sig
+
+          checkValue doc' iface' (name, sig0) =
+            case M.lookup name values of
+              Nothing -> Left ("interface " <> ifaceName <> ": missing value " <> name)
+              Just mv -> do
+                sig <- instantiateInterfaceValueSig doc' iface' types sig0
+                ensureModuleValueMatchesSig ifaceName mv sig
+      mapM_ (checkType doc iface) (M.toList (idefTypes iface))
+      mapM_ (checkValue doc iface) (M.toList (idefValues iface))
+
+
+ensureModuleTypeMatchesSig :: Doctrine -> InterfaceDef -> M.Map Text ModuleTypeDef -> Text -> ModuleTypeDef -> InterfaceTypeSig -> Either Text ()
+ensureModuleTypeMatchesSig doc iface exportedTypes ifaceName mt sig = do
+  if mtdMode mt /= itsMode sig
+    then Left ("interface " <> ifaceName <> ": type " <> moduleTypeName mt <> " mode mismatch")
+    else Right ()
+  case itsBody sig of
+    Nothing -> Right ()
+    Just expected -> do
+      tt <- doctrineTypeTheory doc
+      subst <- buildOpaqueTypeSubst tt iface exportedTypes
+      expected' <- normalizeObjDeep tt =<< U.applySubstObj tt subst expected
+      actual' <- normalizeObjDeep tt (mtdBody mt)
+      if expected' == actual'
+        then Right ()
+        else Left ("interface " <> ifaceName <> ": type " <> moduleTypeName mt <> " definition mismatch")
+
+
+moduleTypeName :: ModuleTypeDef -> Text
+moduleTypeName (ModuleTypeDef name _ _ _) = name
+
+
+instantiateInterfaceValueSig
+  :: Doctrine
+  -> InterfaceDef
+  -> M.Map Text ModuleTypeDef
+  -> InterfaceValueSig
+  -> Either Text InterfaceValueSig
+instantiateInterfaceValueSig doc iface exportedTypes sig = do
+  tt <- doctrineTypeTheory doc
+  subst <- buildOpaqueTypeSubst tt iface exportedTypes
+  dom <- mapM (U.applySubstObj tt subst) (ivsDom sig)
+  cod <- mapM (U.applySubstObj tt subst) (ivsCod sig)
+  pure sig { ivsDom = dom, ivsCod = cod }
+
+
+buildOpaqueTypeSubst
+  :: TypeTheory
+  -> InterfaceDef
+  -> M.Map Text ModuleTypeDef
+  -> Either Text U.Subst
+buildOpaqueTypeSubst _tt iface exportedTypes =
+  U.mkSubst
+    [ (v, CAObj (mtdBody mt))
+    | (name, sig) <- M.toList (idefTypes iface)
+    , Nothing <- [itsBody sig]
+    , Just mt <- [M.lookup name exportedTypes]
+    , Obj { objCode = CTMeta v } <- [itsRepr sig]
+    ]
+
+
+ensureModuleValueMatchesSig :: Text -> ModuleValueDef -> InterfaceValueSig -> Either Text ()
+ensureModuleValueMatchesSig ifaceName mv sig = do
+  if mvdMode mv /= ivsMode sig
+    then Left ("interface " <> ifaceName <> ": value " <> mvdName mv <> " mode mismatch")
+    else Right ()
+  dom <- diagramDom (mvdDiagram mv)
+  cod <- diagramCod (mvdDiagram mv)
+  if dom /= ivsDom sig
+    then Left ("interface " <> ifaceName <> ": value " <> mvdName mv <> " domain mismatch")
+    else Right ()
+  if cod /= ivsCod sig
+    then Left ("interface " <> ifaceName <> ": value " <> mvdName mv <> " codomain mismatch")
+    else Right ()
+
+
 elabPipeline :: RawPipeline -> Either Text Pipeline
 elabPipeline raw = do
   phases <- mapM elabPhase (rplPhases raw)
-  pure Pipeline { plName = rplName raw, plPhases = phases }
+  let pipeline = Pipeline { plName = rplName raw, plPhases = phases }
+  validatePipeline pipeline
+  pure pipeline
 
 
 elabPhase :: RawPhase -> Either Text Phase
@@ -1231,15 +3264,31 @@ elabPhase raw =
       Right (Normalize policy fuel)
     RPQuoteInto fragmentName targetName ->
       Right (QuoteInto fragmentName targetName)
-    RPExtractValue doctrineName opts ->
-      case doctrineName of
-        "Doc" ->
-          Right (ExtractValue "Doc" (ExtractDoc (maybe True id (rveStdout opts))))
-        "FileTree" ->
-          Right (ExtractValue "FileTree" (ExtractFileTree (maybe "./out" id (rveRoot opts))))
-        _ ->
-          Left ("pipeline: unsupported extractor doctrine " <> doctrineName)
-    RPExtractDiagramPretty -> Right ExtractDiagramPretty
+    RPLink name ->
+      Right (LinkModule name)
+    RPBundleAll ->
+      Right BundleAll
+    RPBundle items ->
+      Right
+        ( BundleExports
+            [ BundleItem
+                { biSource = rbiSource item
+                , biTarget = rbiTarget item
+                }
+            | item <- items
+            ]
+        )
+    RPProjectExport name ->
+      Right (ProjectExport name)
+    RPEmitVia backendName opts ->
+      Right
+        ( EmitVia
+            BackendSpec
+              { bsName = backendName
+              , bsStdout = rveStdout opts
+              , bsRoot = rveRoot opts
+              }
+        )
 
 
 parsePipelinePolicy :: Maybe Text -> Either Text RewritePolicy
@@ -1249,6 +3298,15 @@ parsePipelinePolicy mName =
     "computational_lr" -> Right UseOnlyComputationalLR
     "all_oriented" -> Right UseAllOriented
     other -> parsePolicy other
+
+
+validatePipeline :: Pipeline -> Either Text ()
+validatePipeline pipeline = go PKModule (plPhases pipeline)
+  where
+    go _ [] = Right ()
+    go kind (phase:rest) = do
+      next <- phaseTransition phase kind
+      go next rest
 
 
 lookupDoctrine :: ModuleEnv -> Text -> Either Text Doctrine
@@ -1287,88 +3345,6 @@ elabImplements budget env ifaceName tgtName morphName = do
               ImplementsCheckUndecided label lim ->
                 Left ("implements obligation undecided: " <> label <> " (" <> renderSearchLimit lim <> ")")
           Right (((ifaceName, tgtName), morphName), proofCount)
-
-
-elabRuns :: ModuleEnv -> [RawNamedRun] -> Either Text (M.Map Text Run)
-elabRuns env raws = foldM step M.empty raws
-  where
-    step acc raw = do
-      let name = rnrName raw
-      if M.member name acc
-        then Left ("Duplicate run name: " <> name)
-        else do
-          runDef <- elabRun env raw
-          pure (M.insert name runDef acc)
-
-
-elabRun :: ModuleEnv -> RawNamedRun -> Either Text Run
-elabRun env raw = do
-  let rr = rnrRun raw
-  pipelineName <- maybe (Left "run: missing pipeline") Right (rrPipeline rr)
-  doctrineName <- maybe (Left "run: missing source doctrine") Right (rrDoctrine rr)
-  _ <- lookupDoctrine env doctrineName
-  _ <-
-    case M.lookup pipelineName (mePipelines env) of
-      Nothing -> Left ("Unknown pipeline: " <> pipelineName)
-      Just _ -> Right ()
-  case rrSurface rr of
-    Nothing -> Right ()
-    Just surfaceName ->
-      case M.lookup surfaceName (meSurfaces env) of
-        Nothing -> Left ("Unknown surface: " <> surfaceName)
-        Just _surfaceDef -> Right ()
-  exprText <- maybe (Left "run: missing expression") Right (rrExprText rr)
-  pure
-    Run
-      { runName = rnrName raw
-      , runUses = rrUses rr
-      , runPipeline = pipelineName
-      , runDoctrine = doctrineName
-      , runMode = rrMode rr
-      , runSurface = rrSurface rr
-      , runExprText = exprText
-      }
-
-
-elabTerms :: ModuleEnv -> [RawNamedTerm] -> Either Text ModuleEnv
-elabTerms env raws = foldM step env raws
-  where
-    step acc raw = do
-      let name = rntName raw
-      if M.member name (meTerms acc)
-        then Left ("Duplicate term name: " <> name)
-        else do
-          term <- elabTerm acc (rntTerm raw)
-          let terms' = M.insert name term (meTerms acc)
-          pure acc { meTerms = terms' }
-
-
-elabTerm :: ModuleEnv -> RawTerm -> Either Text TermDef
-elabTerm env raw = do
-  doctrine <- maybe (Left "term: missing doctrine") Right (rtDoctrine raw)
-  let fuel = maybe 50 id (rtFuel raw)
-  let policyName = maybe "UseStructuralAsBidirectional" id (rtPolicy raw)
-  policy <- parsePolicy policyName
-  (docFinal, _inputDiag, normDiag) <-
-    case
-        compileDiagramArtifact
-          env
-          doctrine
-          (rtMode raw)
-          (rtSurface raw)
-          (rtUses raw)
-          (rtMorphisms raw)
-          policy
-          fuel
-          (rtExprText raw) of
-      Left err -> Left ("term: " <> err)
-      Right ok -> Right ok
-  pure
-    TermDef
-      { tdDoctrine = dName docFinal
-      , tdMode = dMode normDiag
-      , tdDiagram = normDiag
-      }
 
 
 buildPolyFromBase :: SearchBudget -> Text -> Text -> ModuleEnv -> Doctrine -> Either Text (PolyMorph.Morphism, Int)

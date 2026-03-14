@@ -4,18 +4,15 @@ This project treats "canonical doctrine coverage" as an explicit list of named a
 
 ## Canonical Targets
 
-| Target | Runnable / Load Artifact | Primary Validating Tests |
+| Target | Executable / Load Artifact | Primary Validating Tests |
 | --- | --- | --- |
-| Two-layer classification (`Ty` classifies `Tm`) | `examples/run/classification_resolution.ok.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`two-layer classification target`), `test/Test/Poly/ClassificationResolution.hs` |
-| Three-layer classification (`Kd -> Ty -> Tm`) | `examples/run/classification_layered_3level.ok.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`three-layer classification target`), `test/Test/Poly/ClassificationResolution.hs` |
-| Dependent doctrine elaboration/use | `examples/run/dependent/vec.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`dependent doctrine target`), `test/Test/Poly/Dependent.hs` |
-| Pushout doctrine composition | `examples/run/pushout/nat_bool_plus.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`pushout doctrine target`), `test/Test/Poly/Pushout.hs` |
-| Classified modalities / classifier-lift coherence | `examples/run/modes/adjunction_real.run.llang` (`run triangle_left`) | `test/Test/Frontend/CanonicalCoverage.hs` (`classified modality target`), `test/Test/Poly/ModeTheory.hs`, `test/Test/Poly/ModeTransforms.hs` |
-| Effects composition via functor/apply | `examples/run/effects/combined_with_handler.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`effects composition target`), `test/Test/Frontend/StdlibIntegration.hs` |
-| Explicit sharing quotation behavior | `examples/run/sharing/basic_quote.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`sharing quote target`), `test/Test/Frontend/Pipeline.hs` |
-| Codegen pipeline behavior | `examples/run/codegen/simple_codegen.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`codegen target`), `test/Test/Frontend/ExampleCodegen.hs` |
-| Data macro doctrine path | `examples/run/data/list.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`data macro target`), `test/Test/Poly/DataMacro.hs` |
-| Data folds (catamorphisms) | `examples/run/data/list_fold_length.run.llang` (`run main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`data fold target`), `test/Test/Poly/DataMacro.hs` |
+| Build-native module/doc emission | `examples/build/hello_doc.llang` (`build main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`hello doc module target`), `test/Test/Frontend/Builds.hs` |
+| Module linking and bundling | `examples/build/bundle_docs.llang` (`build main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`bundle doc target`), `test/Test/Frontend/Builds.hs` |
+| Doctrine-backed module data packages | `examples/build/doctrine_data_package.llang` (`build main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`module data package target`), `test/Test/Frontend/Builds.hs`, `test/Test/Frontend/ExamplesSmoke.hs` |
+| Structured JS codegen | `examples/build/logic_full_adder_codegen.llang` (`build main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`logic codegen target`), `test/Test/Frontend/ExampleCodegen.hs` |
+| Explicit sharing quotation behavior | `examples/build/explicit_sharing_js_codegen.llang` (`build main`) | `test/Test/Frontend/CanonicalCoverage.hs` (`sharing quotation target`), `test/Test/Frontend/Pipeline.hs`, `test/Test/Frontend/ExampleCodegen.hs` |
+| Type-changing AD build path | `examples/build/autodiff_times_sin.llang` (`build main`, `build core`) | `test/Test/Frontend/CanonicalCoverage.hs` (`autodiff js target`, `autodiff core target`), `test/Test/Frontend/ExampleCodegen.hs`, `test/Test/Poly/Morphism.hs` |
+| Endomorphic AD quotation path | `examples/build/autodiff_times_sin_pair_core.llang` (`build share`) | `test/Test/Frontend/CanonicalCoverage.hs` (`pair autodiff share target`), `test/Test/Frontend/ExampleCodegen.hs` |
 | Adjunction schema artifact elaboration | `stdlib/schema.adjunction.llang` | `test/Test/Frontend/CanonicalCoverage.hs` (`schema adjunction target`) |
 | Monad schema artifact elaboration | `stdlib/schema.monad.llang` | `test/Test/Frontend/CanonicalCoverage.hs` (`schema monad target`) |
 
@@ -23,6 +20,6 @@ This project treats "canonical doctrine coverage" as an explicit list of named a
 
 - Coverage claims are limited to the targets listed above.
 - General broad checks still exist:
-  - `test/Test/Frontend/ExamplesSmoke.hs` (all non-`xfail` runnable examples),
+  - `test/Test/Frontend/ExamplesSmoke.hs` (all build examples),
   - `test/Test/Frontend/StdlibIntegration.hs` (all stdlib files elaborate),
   but those are treated as supplemental checks rather than the canonical-target claim source.

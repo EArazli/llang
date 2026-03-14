@@ -71,6 +71,12 @@ identRaw = lexeme identBody
 ident :: Parser Text
 ident = identRaw
 
+scopedIdentRaw :: Parser Text
+scopedIdentRaw = T.intercalate "::" <$> sepBy1 identBody (string "::")
+
+scopedIdent :: Parser Text
+scopedIdent = lexeme scopedIdentRaw
+
 stringLiteral :: Parser Text
 stringLiteral = lexeme $ do
   _ <- char '"'
@@ -310,7 +316,6 @@ templateTerm =
     , try templateLoop
     , try templateTrace
     , try templateHole
-    , try templateTermRef
     , try templateGen
     , parens templateExpr
     ]
@@ -337,7 +342,7 @@ hashIdent = lexeme (char '#' *> identBody)
 
 identTemplate :: Parser Text
 identTemplate = do
-  name <- ident
+  name <- scopedIdent
   if name `elem` templateReserved
     then fail "reserved keyword in template expression"
     else pure name
@@ -391,12 +396,6 @@ templateHole = lexeme $ do
   case number of
     Just ds -> pure (THole (read ds))
     Nothing -> OVar <$> identBody
-
-templateTermRef :: Parser TemplateExpr
-templateTermRef = do
-  _ <- symbol "@"
-  name <- ident
-  pure (TTermRef name)
 
 templateGenArgs :: Parser [TemplateGenArg]
 templateGenArgs = do

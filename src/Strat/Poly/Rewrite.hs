@@ -108,6 +108,8 @@ rewriteOnceNestedRaw tt spliceMapper rules diag =
     go ((edgeKey, edge):rest) =
       case ePayload edge of
         PSplice _ _ -> Left "rewriteOnce: splice nodes are not allowed in evaluation terms"
+        PProvider _ -> go rest
+        PModuleRef _ -> go rest
         PBox name inner -> do
           innerRes <- rewriteOnceRawWithMapper tt spliceMapper rules inner
           case innerRes of
@@ -205,6 +207,8 @@ rewriteInEdge :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -
 rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
   case ePayload edge of
     PSplice _ _ -> Left "rewriteAll: splice nodes are not allowed in evaluation terms"
+    PProvider _ -> Right []
+    PModuleRef _ -> Right []
     PBox name inner -> do
       innerRes <- rewriteAllWithMapper tt spliceMapper cap rules inner
       mapM

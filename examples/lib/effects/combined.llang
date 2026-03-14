@@ -1,5 +1,5 @@
-import "../../../stdlib/effects/exception.template.llang"
-import "../../../stdlib/effects/writer.template.llang"
+include "../../../stdlib/effects/exception.template.llang"
+include "../../../stdlib/effects/writer.template.llang"
 
 doctrine Base where {
   mode M classifiedBy M via M.U_M;

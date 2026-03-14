@@ -1,5 +1,5 @@
-import "../../../stdlib/struct.cartesian.llang";
-import "../../../stdlib/nat.llang";
-import "../../../stdlib/bool.llang";
+include "../../../stdlib/struct.cartesian.llang";
+include "../../../stdlib/nat.llang";
+include "../../../stdlib/bool.llang";
 
 doctrine NatBool = pushout Nat.fromBase Bool.fromBase;

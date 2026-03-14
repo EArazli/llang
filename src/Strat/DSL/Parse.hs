@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.DSL.Parse
   ( parseRawFile
+  , parseInterfaceItemsText
+  , parseModuleItemsText
   ) where
 
 import Strat.DSL.AST
@@ -29,9 +31,26 @@ parseRawFile input =
     Left err -> Left (T.pack (errorBundlePretty err))
     Right rf -> Right rf
 
+
+parseInterfaceItemsText :: Text -> Either Text [RawInterfaceItem]
+parseInterfaceItemsText =
+  parseTextWith "<interface custom>" (sc *> many interfaceItem <* eof)
+
+
+parseModuleItemsText :: Text -> Either Text [RawModuleItem]
+parseModuleItemsText =
+  parseTextWith "<module custom>" (sc *> many (try (sc *> moduleItem)) <* eof)
+
+
+parseTextWith :: String -> Parser a -> Text -> Either Text a
+parseTextWith sourceLabel parser input =
+  case runParser parser sourceLabel input of
+    Left err -> Left (T.pack (errorBundlePretty err))
+    Right ok -> Right ok
+
 rawFile :: Parser RawFile
 rawFile = do
-  decls <- many (sc *> decl)
+  decls <- many (try (sc *> decl))
   pure (RawFile decls)
 
 -- Declarations
@@ -43,16 +62,21 @@ decl =
     <|> doctrineDecl
     <|> fragmentDecl
     <|> derivedDoctrineDecl
+    <|> moduleElaboratorDecl
+    <|> moduleDataReprDecl
     <|> morphismDecl
+    <|> moduleSurfaceDecl
+    <|> languageDecl
+    <|> interfaceDecl
+    <|> moduleDecl
+    <|> buildDecl
     <|> surfaceDecl
     <|> pipelineDecl
     <|> implementsDecl
-    <|> termDecl
-    <|> runDecl
 
 importDecl :: Parser RawDecl
 importDecl = do
-  _ <- symbol "import"
+  _ <- symbol "include"
   path <- stringLiteral
   optionalSemi
   pure (DeclImport (T.unpack path))
@@ -155,12 +179,470 @@ doctrineDecl = do
 
 surfaceDecl :: Parser RawDecl
 surfaceDecl = do
-  _ <- symbol "surface"
+  _ <- (symbol "expr_surface" <|> symbol "surface")
   name <- scopedIdent
   _ <- symbol "where"
   spec <- surfaceSpecBlock
   optionalSemi
   pure (DeclSurface name spec)
+
+moduleSurfaceDecl :: Parser RawDecl
+moduleSurfaceDecl = do
+  _ <- symbol "module_surface"
+  name <- scopedIdent
+  _ <- symbol "where"
+  items <- moduleSurfaceBlock
+  doctrineName <-
+    case [d | MSDoctrine d <- items] of
+      [d] -> pure d
+      [] -> fail "module_surface: missing doctrine"
+      _ -> fail "module_surface: duplicate doctrine item"
+  optionalSemi
+  pure
+    ( DeclModuleSurface
+        RawModuleSurface
+          { rmsName = name
+          , rmsDoctrine = doctrineName
+          , rmsElaborator = firstJust [elab | MSElaborator elab <- items]
+          , rmsMode = firstJust [m | MSMode m <- items]
+          , rmsExprSurface = firstJust [s | MSExprSurface s <- items]
+          , rmsDefaultDataRepr = firstJust [r | MSDataRepr r <- items]
+          , rmsUses = concat [ns | MSUses ns <- items]
+          , rmsCapabilities = [cap | MSAllow cap <- items]
+          }
+    )
+  where
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
+
+data ModuleSurfaceItem
+  = MSDoctrine Text
+  | MSElaborator Text
+  | MSMode Text
+  | MSExprSurface Text
+  | MSDataRepr Text
+  | MSUses [Text]
+  | MSAllow RawModuleSurfaceCapability
+
+moduleSurfaceBlock :: Parser [ModuleSurfaceItem]
+moduleSurfaceBlock = do
+  _ <- symbol "{"
+  items <- many moduleSurfaceItem
+  _ <- symbol "}"
+  pure items
+
+moduleSurfaceItem :: Parser ModuleSurfaceItem
+moduleSurfaceItem =
+  moduleSurfaceDoctrineItem
+    <|> moduleSurfaceElaboratorItem
+    <|> moduleSurfaceModeItem
+    <|> moduleSurfaceExprSurfaceItem
+    <|> moduleSurfaceDataReprItem
+    <|> moduleSurfaceUsesItem
+    <|> moduleSurfaceAllowItem
+
+moduleSurfaceDoctrineItem :: Parser ModuleSurfaceItem
+moduleSurfaceDoctrineItem = do
+  _ <- symbol "doctrine"
+  name <- scopedIdent
+  optionalSemi
+  pure (MSDoctrine name)
+
+moduleSurfaceElaboratorItem :: Parser ModuleSurfaceItem
+moduleSurfaceElaboratorItem = do
+  _ <- symbol "elaborator"
+  name <- scopedIdent
+  optionalSemi
+  pure (MSElaborator name)
+
+moduleSurfaceModeItem :: Parser ModuleSurfaceItem
+moduleSurfaceModeItem = do
+  _ <- symbol "mode"
+  name <- scopedIdent
+  optionalSemi
+  pure (MSMode name)
+
+moduleSurfaceExprSurfaceItem :: Parser ModuleSurfaceItem
+moduleSurfaceExprSurfaceItem = do
+  _ <- (symbol "expr_surface" <|> symbol "surface")
+  name <- scopedIdent
+  optionalSemi
+  pure (MSExprSurface name)
+
+moduleSurfaceDataReprItem :: Parser ModuleSurfaceItem
+moduleSurfaceDataReprItem = do
+  _ <- symbol "data_repr"
+  name <- scopedIdent
+  optionalSemi
+  pure (MSDataRepr name)
+
+moduleSurfaceUsesItem :: Parser ModuleSurfaceItem
+moduleSurfaceUsesItem = do
+  _ <- symbol "uses"
+  _ <- optional (symbol ":")
+  names <- ident `sepBy1` symbol ","
+  optionalSemi
+  pure (MSUses names)
+
+moduleSurfaceAllowItem :: Parser ModuleSurfaceItem
+moduleSurfaceAllowItem = do
+  _ <- symbol "allow"
+  cap <-
+    (RMSCForeignImport <$ symbol "foreign_import")
+      <|> (RMSCExportInterface <$ symbol "export_interface")
+      <|> (RMSCExportType <$ (symbol "export_type" <|> symbol "type_export"))
+      <|> (RMSCImport <$ symbol "import")
+      <|> (RMSCType <$ symbol "type")
+      <|> (RMSCData <$ symbol "data")
+      <|> (RMSCValue <$ symbol "value")
+      <|> (RMSCExport <$ symbol "export")
+      <|> (RMSCCustom <$ symbol "custom")
+  optionalSemi
+  pure (MSAllow cap)
+
+languageDecl :: Parser RawDecl
+languageDecl = do
+  _ <- symbol "language"
+  name <- scopedIdent
+  _ <- symbol "where"
+  items <- languageBlock
+  doctrineName <-
+    case [d | LangDoctrine d <- items] of
+      [d] -> pure d
+      [] -> fail "language: missing doctrine"
+      _ -> fail "language: duplicate doctrine item"
+  optionalSemi
+  pure
+    ( DeclLanguage
+        RawLanguage
+          { rlangName = name
+          , rlangDoctrine = doctrineName
+          , rlangModuleSurface = firstJust [s | LangModuleSurface s <- items]
+          }
+    )
+  where
+    firstJust [] = Nothing
+    firstJust (x:_) = Just x
+
+data LanguageItem
+  = LangDoctrine Text
+  | LangModuleSurface Text
+
+languageBlock :: Parser [LanguageItem]
+languageBlock = do
+  _ <- symbol "{"
+  items <- many languageItem
+  _ <- symbol "}"
+  pure items
+
+languageItem :: Parser LanguageItem
+languageItem =
+  languageDoctrineItem
+    <|> languageModuleSurfaceItem
+
+languageDoctrineItem :: Parser LanguageItem
+languageDoctrineItem = do
+  _ <- symbol "doctrine"
+  name <- scopedIdent
+  optionalSemi
+  pure (LangDoctrine name)
+
+languageModuleSurfaceItem :: Parser LanguageItem
+languageModuleSurfaceItem = do
+  _ <- symbol "module_surface"
+  name <- scopedIdent
+  optionalSemi
+  pure (LangModuleSurface name)
+
+interfaceDecl :: Parser RawDecl
+interfaceDecl = do
+  _ <- symbol "interface"
+  name <- scopedIdent
+  _ <- symbol "in"
+  target <- scopedIdent
+  _ <- symbol "where"
+  items <- interfaceBlock
+  optionalSemi
+  pure
+    ( DeclInterface
+        RawInterface
+          { riName = name
+          , riTarget = target
+          , riItems = items
+          }
+    )
+
+interfaceBlock :: Parser [RawInterfaceItem]
+interfaceBlock = do
+  _ <- symbol "{"
+  items <- many interfaceItem
+  _ <- symbol "}"
+  pure items
+
+interfaceItem :: Parser RawInterfaceItem
+interfaceItem =
+  try interfaceCustomItem
+    <|> try interfaceOpaqueTypeItem
+    <|> try interfaceTypeAliasItem
+    <|> interfaceValueItem
+
+interfaceCustomItem :: Parser RawInterfaceItem
+interfaceCustomItem = do
+  _ <- symbol "custom"
+  tag <- scopedIdent
+  body <- runBody
+  optionalSemi
+  pure (RIICustom (RawCustomItem tag body))
+
+interfaceOpaqueTypeItem :: Parser RawInterfaceItem
+interfaceOpaqueTypeItem = do
+  _ <- symbol "opaque"
+  _ <- symbol "type"
+  name <- scopedIdent
+  mMode <- optional (symbol "@" *> scopedIdent)
+  optionalSemi
+  pure (RIIType (RITOpaque name mMode))
+
+interfaceTypeAliasItem :: Parser RawInterfaceItem
+interfaceTypeAliasItem = do
+  _ <- symbol "type"
+  name <- scopedIdent
+  mMode <- optional (symbol "@" *> scopedIdent)
+  _ <- symbol "="
+  body <- polyObjExpr
+  optionalSemi
+  pure (RIIType (RITAlias name mMode body))
+
+rawValueSig :: Parser RawValueSig
+rawValueSig = do
+  _ <- symbol ":"
+  dom <- polyContext
+  _ <- symbol "->"
+  cod <- polyContext
+  mMode <- optional (symbol "@" *> scopedIdent)
+  pure
+    RawValueSig
+      { rvsMode = mMode
+      , rvsDom = dom
+      , rvsCod = cod
+      }
+
+interfaceValueItem :: Parser RawInterfaceItem
+interfaceValueItem = do
+  _ <- symbol "val"
+  name <- scopedIdent
+  sig <- rawValueSig
+  optionalSemi
+  pure
+    ( RIIValue
+        RawInterfaceValue
+          { rivName = name
+          , rivMode = rvsMode sig
+          , rivDom = rvsDom sig
+          , rivCod = rvsCod sig
+          }
+    )
+
+moduleDecl :: Parser RawDecl
+moduleDecl = do
+  _ <- symbol "module"
+  name <- scopedIdent
+  _ <- symbol "in"
+  lang <- scopedIdent
+  _ <- symbol "where"
+  items <- moduleBlock
+  optionalSemi
+  pure
+    ( DeclModule
+        RawModule
+          { rmName = name
+          , rmLanguage = lang
+          , rmItems = items
+          }
+    )
+
+moduleBlock :: Parser [RawModuleItem]
+moduleBlock = do
+  _ <- symbol "{"
+  items <- many (try (sc *> moduleItem))
+  _ <- symbol "}"
+  pure items
+
+moduleItem :: Parser RawModuleItem
+moduleItem =
+  try moduleImportItem
+    <|> try moduleDataItem
+    <|> try moduleTypeItem
+    <|> try moduleExportItem
+    <|> try moduleCustomItem
+    <|> moduleValueItem
+
+moduleCustomItem :: Parser RawModuleItem
+moduleCustomItem = do
+  _ <- symbol "custom"
+  tag <- scopedIdent
+  body <- runBody
+  optionalSemi
+  pure (RMCustom (RawCustomItem tag body))
+
+moduleImportItem :: Parser RawModuleItem
+moduleImportItem = do
+  _ <- symbol "import"
+  item <-
+    try foreignImportItem
+      <|> localImportItem
+  optionalSemi
+  pure (RMImport item)
+  where
+    localImportItem = do
+      name <- scopedIdent
+      mAlias <- optional (symbol "as" *> scopedIdent)
+      mIface <- optional (symbol ":" *> scopedIdent)
+      mAdapter <- optional (symbol "using" *> scopedIdent)
+      pure
+        RawModuleImport
+          { rmiModule = name
+          , rmiAlias = mAlias
+          , rmiInterface = mIface
+          , rmiAdapter = mAdapter
+          }
+
+    foreignImportItem = do
+      _ <- symbol "foreign"
+      name <- scopedIdent
+      _ <- symbol ":"
+      iface <- scopedIdent
+      _ <- symbol "via"
+      provider <- stringLiteral
+      mAdapter <- optional (symbol "using" *> scopedIdent)
+      pure
+        RawForeignImport
+          { rfiName = name
+          , rfiInterface = iface
+          , rfiProvider = T.unpack provider
+          , rfiAdapter = mAdapter
+          }
+
+moduleTypeItem :: Parser RawModuleItem
+moduleTypeItem = do
+  _ <- symbol "type"
+  name <- scopedIdent
+  mMode <- optional (symbol "@" *> scopedIdent)
+  _ <- symbol "="
+  body <- polyObjExpr
+  optionalSemi
+  pure
+    ( RMType
+        RawModuleType
+          { rmtName = name
+          , rmtMode = mMode
+          , rmtBody = body
+          }
+    )
+
+
+moduleDataItem :: Parser RawModuleItem
+moduleDataItem = do
+  _ <- symbol "data"
+  name <- scopedIdent
+  mMode <- optional (symbol "@" *> scopedIdent)
+  mRepr <- optional (symbol "using" *> scopedIdent)
+  _ <- symbol "where"
+  _ <- symbol "{"
+  ctors <- many moduleCtorDecl
+  _ <- symbol "}"
+  optionalSemi
+  pure
+    ( RMData
+        RawModuleData
+          { rmdName = name
+          , rmdMode = mMode
+          , rmdRepr = mRepr
+          , rmdCtors = ctors
+          }
+    )
+
+
+moduleCtorDecl :: Parser RawModuleCtor
+moduleCtorDecl = do
+  _ <- symbol "ctor"
+  name <- scopedIdent
+  sig <- rawValueSig
+  optionalSemi
+  pure
+    RawModuleCtor
+      { rmcName = name
+      , rmcSig = sig
+      }
+
+moduleExportItem :: Parser RawModuleItem
+moduleExportItem = do
+  _ <- symbol "export"
+  ( do
+      _ <- symbol "interface"
+      iface <- scopedIdent
+      optionalSemi
+      pure (RMExportInterface iface)
+    )
+    <|> do
+      _ <- symbol "type"
+      _ <- symbol "{"
+      names <- moduleTypeExportSpec `sepBy1` symbol ","
+      _ <- symbol "}"
+      optionalSemi
+      pure (RMTypeExport names)
+    <|> do
+      _ <- symbol "{"
+      names <- moduleExportSpec `sepBy1` symbol ","
+      _ <- symbol "}"
+      optionalSemi
+      pure (RMExport names)
+
+moduleExportSpec :: Parser RawModuleExport
+moduleExportSpec = do
+  localName <- scopedIdent
+  publicName <- option localName (symbol "as" *> scopedIdent)
+  pure
+    RawModuleExport
+      { rmeLocal = localName
+      , rmePublic = publicName
+      }
+
+moduleTypeExportSpec :: Parser RawModuleTypeExport
+moduleTypeExportSpec = do
+  localName <- scopedIdent
+  publicName <- option localName (symbol "as" *> scopedIdent)
+  pure
+    RawModuleTypeExport
+      { rmteLocal = localName
+      , rmtePublic = publicName
+      }
+
+moduleValueItem :: Parser RawModuleItem
+moduleValueItem =
+  RMValue <$> moduleValueDecl
+
+
+moduleValueDecl :: Parser RawModuleValue
+moduleValueDecl = do
+  _ <- symbol "let"
+  name <- scopedIdent
+  mSig <- optional (try rawValueSig)
+  items <- option [] (symbol "where" *> valueBlock)
+  exprText <- runBody
+  optionalSemi
+  pure (buildModuleValue name mSig items exprText)
+
+buildDecl :: Parser RawDecl
+buildDecl = do
+  _ <- symbol "build"
+  name <- scopedIdent
+  _ <- symbol "from"
+  moduleName <- scopedIdent
+  _ <- symbol "using"
+  pipelineName <- scopedIdent
+  optionalSemi
+  pure (DeclBuild (RawBuild name moduleName pipelineName))
 
 fragmentDecl :: Parser RawDecl
 fragmentDecl = do
@@ -189,6 +671,166 @@ derivedDoctrineDecl = do
   modeName <- scopedIdent
   optionalSemi
   pure (DeclDerivedDoctrine (RawDerivedDoctrine name baseName modeName))
+
+
+moduleElaboratorDecl :: Parser RawDecl
+moduleElaboratorDecl = do
+  _ <- symbol "module_elaborator"
+  name <- scopedIdent
+  _ <- symbol "where"
+  items <- moduleElaboratorBlock
+  baseName <-
+    case [base | MEBase base <- items] of
+      [base] -> pure base
+      [] -> fail "module_elaborator: missing extends item"
+      _ -> fail "module_elaborator: duplicate extends item"
+  ifaceCustom <- uniquePairs "module_elaborator: duplicate interface custom tag" [(tag, expansion) | MEInterfaceCustom tag expansion <- items]
+  moduleCustom <- uniquePairs "module_elaborator: duplicate module custom tag" [(tag, expansion) | MEModuleCustom tag expansion <- items]
+  optionalSemi
+  pure
+    ( DeclModuleElaborator
+        RawModuleElaborator
+          { rmeName = name
+          , rmeBase = baseName
+          , rmeInterfaceCustom = ifaceCustom
+          , rmeModuleCustom = moduleCustom
+          }
+    )
+  where
+    uniquePairs errLabel pairs =
+      if S.size (S.fromList (map fst pairs)) == length pairs
+        then pure (M.fromList pairs)
+        else fail errLabel
+
+
+data ModuleElaboratorItem
+  = MEBase Text
+  | MEInterfaceCustom Text RawCustomExpansion
+  | MEModuleCustom Text RawCustomExpansion
+
+
+moduleElaboratorBlock :: Parser [ModuleElaboratorItem]
+moduleElaboratorBlock = do
+  _ <- symbol "{"
+  items <- many moduleElaboratorItem
+  _ <- symbol "}"
+  pure items
+
+
+moduleElaboratorItem :: Parser ModuleElaboratorItem
+moduleElaboratorItem =
+  moduleElaboratorBaseItem
+    <|> try moduleElaboratorInterfaceCustomItem
+    <|> moduleElaboratorModuleCustomItem
+
+
+moduleElaboratorBaseItem :: Parser ModuleElaboratorItem
+moduleElaboratorBaseItem = do
+  _ <- symbol "extends"
+  name <- scopedIdent
+  optionalSemi
+  pure (MEBase name)
+
+
+moduleElaboratorInterfaceCustomItem :: Parser ModuleElaboratorItem
+moduleElaboratorInterfaceCustomItem = do
+  _ <- symbol "interface"
+  _ <- symbol "custom"
+  tag <- scopedIdent
+  _ <- symbol "as"
+  expansion <- customExpansion
+  optionalSemi
+  pure (MEInterfaceCustom tag expansion)
+
+
+moduleElaboratorModuleCustomItem :: Parser ModuleElaboratorItem
+moduleElaboratorModuleCustomItem = do
+  _ <- symbol "module"
+  _ <- symbol "custom"
+  tag <- scopedIdent
+  _ <- symbol "as"
+  expansion <- customExpansion
+  optionalSemi
+  pure (MEModuleCustom tag expansion)
+
+
+customExpansion :: Parser RawCustomExpansion
+customExpansion =
+  RCXInlineItems <$ (symbol "items" <|> symbol "inline_items")
+
+
+moduleDataReprDecl :: Parser RawDecl
+moduleDataReprDecl = do
+  _ <- symbol "data_repr"
+  name <- scopedIdent
+  _ <- symbol "where"
+  items <- moduleDataReprBlock
+  baseName <-
+    case [base | MDRBase base <- items] of
+      [base] -> pure base
+      [] -> fail "data_repr: missing extends item"
+      _ -> fail "data_repr: duplicate extends item"
+  providerInterface <- atMostOne "data_repr: duplicate provider_interface item" [iface | MDRProviderInterface iface <- items]
+  descriptorPrefix <- atMostOne "data_repr: duplicate descriptor_prefix item" [prefix | MDRDescriptorPrefix prefix <- items]
+  optionalSemi
+  pure
+    ( DeclModuleDataRepr
+        RawModuleDataReprDecl
+          { rmdrName = name
+          , rmdrBase = baseName
+          , rmdrProviderInterface = providerInterface
+          , rmdrDescriptorPrefix = descriptorPrefix
+          }
+    )
+  where
+    atMostOne _ [] = pure Nothing
+    atMostOne _ [x] = pure (Just x)
+    atMostOne errLabel _ = fail errLabel
+
+
+data ModuleDataReprItem
+  = MDRBase Text
+  | MDRProviderInterface Text
+  | MDRDescriptorPrefix Text
+
+
+moduleDataReprBlock :: Parser [ModuleDataReprItem]
+moduleDataReprBlock = do
+  _ <- symbol "{"
+  items <- many moduleDataReprItem
+  _ <- symbol "}"
+  pure items
+
+
+moduleDataReprItem :: Parser ModuleDataReprItem
+moduleDataReprItem =
+  moduleDataReprBaseItem
+    <|> moduleDataReprProviderInterfaceItem
+    <|> moduleDataReprDescriptorPrefixItem
+
+
+moduleDataReprBaseItem :: Parser ModuleDataReprItem
+moduleDataReprBaseItem = do
+  _ <- symbol "extends"
+  name <- scopedIdent
+  optionalSemi
+  pure (MDRBase name)
+
+
+moduleDataReprProviderInterfaceItem :: Parser ModuleDataReprItem
+moduleDataReprProviderInterfaceItem = do
+  _ <- symbol "provider_interface"
+  name <- scopedIdent
+  optionalSemi
+  pure (MDRProviderInterface name)
+
+
+moduleDataReprDescriptorPrefixItem :: Parser ModuleDataReprItem
+moduleDataReprDescriptorPrefixItem = do
+  _ <- symbol "descriptor_prefix"
+  prefix <- stringLiteral
+  optionalSemi
+  pure (MDRDescriptorPrefix prefix)
 
 pipelineDecl :: Parser RawDecl
 pipelineDecl = do
@@ -224,24 +866,6 @@ implementsDecl = do
   name <- qualifiedIdent
   optionalSemi
   pure (DeclImplements iface tgt name)
-
-runDecl :: Parser RawDecl
-runDecl = do
-  _ <- symbol "run"
-  name <- scopedIdent
-  using <- symbol "using" *> scopedIdent
-  items <- symbol "where" *> runBlock
-  mExprText <- optional (try runBody)
-  optionalSemi
-  pure (DeclRun (RawNamedRun name (buildRun (Just using) items mExprText)))
-
-termDecl :: Parser RawDecl
-termDecl = do
-  _ <- symbol "term"
-  name <- scopedIdent
-  items <- option [] (symbol "where" *> termBlock)
-  exprText <- runBody
-  pure (DeclTerm (RawNamedTerm name (buildTerm items exprText)))
 
 runBody :: Parser Text
 runBody = do
@@ -696,7 +1320,6 @@ polyDiagExpr = makeExprParser polyDiagTerm operators
 polyDiagTerm :: Parser PolyAST.RawDiagExpr
 polyDiagTerm =
   polyMetaVarTerm
-    <|> polyTermRefTerm
     <|> polyMapTerm
     <|> try polyIdTerm
     <|> polySpliceTerm
@@ -773,12 +1396,6 @@ polyGenArg =
       term <- polyObjExpr
       pure (PolyAST.RGNamed field term)
     positional = PolyAST.RGPos <$> polyObjExpr
-
-polyTermRefTerm :: Parser PolyAST.RawDiagExpr
-polyTermRefTerm = do
-  _ <- symbol "@"
-  name <- ident
-  pure (PolyAST.RDTermRef name)
 
 polyBoxTerm :: Parser PolyAST.RawDiagExpr
 polyBoxTerm = do
@@ -1031,7 +1648,10 @@ pipelineItem =
   pipelineApplyItem
     <|> pipelineNormalizeItem
     <|> try pipelineQuoteItem
-    <|> pipelineExtractItem
+    <|> try pipelineLinkItem
+    <|> try pipelineBundleItem
+    <|> try pipelineProjectItem
+    <|> pipelineEmitItem
 
 pipelineApplyItem :: Parser RawPhase
 pipelineApplyItem = do
@@ -1092,18 +1712,54 @@ pipelineQuoteItem = do
   optionalSemi
   pure (RPQuoteInto fragment target)
 
-pipelineExtractItem :: Parser RawPhase
-pipelineExtractItem = do
-  _ <- symbol "extract"
-  (do
-      _ <- symbol "diagram"
+pipelineLinkItem :: Parser RawPhase
+pipelineLinkItem = do
+  _ <- symbol "link"
+  name <- scopedIdent
+  optionalSemi
+  pure (RPLink name)
+
+pipelineBundleItem :: Parser RawPhase
+pipelineBundleItem = do
+  _ <- symbol "bundle"
+  ( do
+      _ <- symbol "all"
       optionalSemi
-      pure RPExtractDiagramPretty)
+      pure RPBundleAll
+    )
     <|> do
-      doctrineName <- ident
-      opts <- option (RawValueExtractOpts Nothing Nothing) valueExtractOptsBlock
+      _ <- symbol "{"
+      items <- bundleItem `sepBy1` symbol ","
+      _ <- symbol "}"
       optionalSemi
-      pure (RPExtractValue doctrineName opts)
+      pure (RPBundle items)
+
+bundleItem :: Parser RawBundleItem
+bundleItem = do
+  sourceName <- scopedIdent
+  targetName <- option sourceName (symbol "as" *> scopedIdent)
+  pure
+    RawBundleItem
+      { rbiSource = sourceName
+      , rbiTarget = targetName
+      }
+
+pipelineProjectItem :: Parser RawPhase
+pipelineProjectItem = do
+  _ <- symbol "project"
+  _ <- symbol "export"
+  name <- scopedIdent
+  optionalSemi
+  pure (RPProjectExport name)
+
+pipelineEmitItem :: Parser RawPhase
+pipelineEmitItem = do
+  _ <- symbol "emit"
+  _ <- symbol "via"
+  backendName <- scopedIdent
+  opts <- option (RawValueExtractOpts Nothing Nothing) valueExtractOptsBlock
+  optionalSemi
+  pure (RPEmitVia backendName opts)
 
 fragmentBlock :: Parser [RawFragmentItem]
 fragmentBlock = do
@@ -1169,160 +1825,85 @@ valueExtractOptItem =
       optionalSemi
       pure (VERoot p)
 
--- Run block
+data ValueItem
+  = ValueMode Text
+  | ValueSurface Text
+  | ValueApply Text
+  | ValueUses [Text]
+  | ValuePolicy Text
+  | ValueFuel Int
 
-data RunItem
-  = RunSourceDoctrine Text
-  | RunSourceMode Text
-  | RunSourceSurface Text
-  | RunUses [Text]
-
-runBlock :: Parser [RunItem]
-runBlock = do
+valueBlock :: Parser [ValueItem]
+valueBlock = do
   _ <- symbol "{"
-  items <- many runItem
+  items <- many valueItem
   _ <- symbol "}"
   pure items
 
-runItem :: Parser RunItem
-runItem =
-  runUsesItem
-    <|> runSourceItem
+valueItem :: Parser ValueItem
+valueItem =
+  valueModeItem
+    <|> valueSurfaceItem
+    <|> valueApplyItem
+    <|> valueUsesItem
+    <|> valuePolicyItem
+    <|> valueFuelItem
 
-runSourceItem :: Parser RunItem
-runSourceItem = do
-  _ <- symbol "source"
-  ( do
-      _ <- symbol "doctrine"
-      name <- ident
-      optionalSemi
-      pure (RunSourceDoctrine name)
-    )
-    <|> ( do
-            _ <- symbol "mode"
-            name <- ident
-            optionalSemi
-            pure (RunSourceMode name)
-        )
-    <|> ( do
-            _ <- symbol "surface"
-            name <- ident
-            optionalSemi
-            pure (RunSourceSurface name)
-        )
-
-runUsesItem :: Parser RunItem
-runUsesItem = do
-  _ <- symbol "uses"
-  _ <- symbol "["
-  files <- stringLiteral `sepBy` symbol ","
-  _ <- symbol "]"
-  optionalSemi
-  pure (RunUses files)
-
-buildRun :: Maybe Text -> [RunItem] -> Maybe Text -> RawRun
-buildRun mPipeline items mExprText =
-  RawRun
-    { rrPipeline = mPipeline
-    , rrDoctrine = firstJust [ d | RunSourceDoctrine d <- items ]
-    , rrMode = firstJust [ m | RunSourceMode m <- items ]
-    , rrSurface = firstJust [ s | RunSourceSurface s <- items ]
-    , rrUses = concat [ ns | RunUses ns <- items ]
-    , rrExprText = mExprText
-    }
-  where
-    firstJust [] = Nothing
-    firstJust (x:_) = Just x
-
--- Term block
-
-data TermItem
-  = TermDoctrine Text
-  | TermMode Text
-  | TermSurface Text
-  | TermApply Text
-  | TermUses [Text]
-  | TermPolicy Text
-  | TermFuel Int
-
-termBlock :: Parser [TermItem]
-termBlock = do
-  _ <- symbol "{"
-  items <- many termItem
-  _ <- symbol "}"
-  pure items
-
-termItem :: Parser TermItem
-termItem =
-  termDoctrineItem
-    <|> termModeItem
-    <|> termSurfaceItem
-    <|> termApplyItem
-    <|> termUsesItem
-    <|> termPolicyItem
-    <|> termFuelItem
-
-termDoctrineItem :: Parser TermItem
-termDoctrineItem = do
-  _ <- symbol "doctrine"
-  name <- ident
-  optionalSemi
-  pure (TermDoctrine name)
-
-termModeItem :: Parser TermItem
-termModeItem = do
+valueModeItem :: Parser ValueItem
+valueModeItem = do
   _ <- keyword "mode"
   name <- ident
   optionalSemi
-  pure (TermMode name)
+  pure (ValueMode name)
 
-termSurfaceItem :: Parser TermItem
-termSurfaceItem = do
-  _ <- symbol "surface"
+valueSurfaceItem :: Parser ValueItem
+valueSurfaceItem = do
+  _ <- (symbol "expr_surface" <|> symbol "surface")
   name <- ident
   optionalSemi
-  pure (TermSurface name)
+  pure (ValueSurface name)
 
-termApplyItem :: Parser TermItem
-termApplyItem = do
+valueApplyItem :: Parser ValueItem
+valueApplyItem = do
   _ <- symbol "apply"
   name <- ident
   optionalSemi
-  pure (TermApply name)
+  pure (ValueApply name)
 
-termUsesItem :: Parser TermItem
-termUsesItem = do
+valueUsesItem :: Parser ValueItem
+valueUsesItem = do
   _ <- symbol "uses"
   _ <- optional (symbol ":")
   names <- ident `sepBy1` symbol ","
   optionalSemi
-  pure (TermUses names)
+  pure (ValueUses names)
 
-termPolicyItem :: Parser TermItem
-termPolicyItem = do
+valuePolicyItem :: Parser ValueItem
+valuePolicyItem = do
   _ <- symbol "policy"
   name <- ident
   optionalSemi
-  pure (TermPolicy name)
+  pure (ValuePolicy name)
 
-termFuelItem :: Parser TermItem
-termFuelItem = do
+valueFuelItem :: Parser ValueItem
+valueFuelItem = do
   _ <- symbol "fuel"
   n <- fromIntegral <$> integer
   optionalSemi
-  pure (TermFuel n)
+  pure (ValueFuel n)
 
-buildTerm :: [TermItem] -> Text -> RawTerm
-buildTerm items exprText =
-  RawTerm
-    { rtDoctrine = firstJust [ d | TermDoctrine d <- items ]
-    , rtMode = firstJust [ m | TermMode m <- items ]
-    , rtSurface = firstJust [ s | TermSurface s <- items ]
-    , rtMorphisms = [ n | TermApply n <- items ]
-    , rtUses = concat [ ns | TermUses ns <- items ]
-    , rtPolicy = firstJust [ p | TermPolicy p <- items ]
-    , rtFuel = firstJust [ f | TermFuel f <- items ]
-    , rtExprText = exprText
+buildModuleValue :: Text -> Maybe RawValueSig -> [ValueItem] -> Text -> RawModuleValue
+buildModuleValue name mSig items exprText =
+  RawModuleValue
+    { rmvName = name
+    , rmvSig = mSig
+    , rmvMode = firstJust [m | ValueMode m <- items]
+    , rmvSurface = firstJust [s | ValueSurface s <- items]
+    , rmvMorphisms = [n | ValueApply n <- items]
+    , rmvUses = concat [ns | ValueUses ns <- items]
+    , rmvPolicy = firstJust [p | ValuePolicy p <- items]
+    , rmvFuel = firstJust [f | ValueFuel f <- items]
+    , rmvExprText = exprText
     }
   where
     firstJust [] = Nothing

@@ -10,23 +10,33 @@ doctrine ClassificationResolution where {
   gen comp_var(a@Tm) : [a] -> [a] @Tm;
   gen comp_reindex(a@Tm) : [a] -> [a] @Tm;
   comprehension Tm where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
-
   gen U : [] -> [Ty.U_Ty] @Ty;
   gen Unit : [] -> [Ty.U] @Ty;
   gen Arr(a@Tm, b@Tm) : [] -> [Ty.U] @Ty;
-
   gen idArr : [Arr(Unit, Unit)] -> [Arr(Unit, Unit)] @Tm;
 }
 
-pipeline main where {
-  normalize;
-  extract diagram;
+module_surface ClassificationResolutionRunUnit where {
+  doctrine ClassificationResolution;
+  mode Tm;
 }
 
-run main using main where {
-  source doctrine ClassificationResolution;
-  source mode Tm;
+language ClassificationResolutionRunLang where {
+  doctrine ClassificationResolution;
+  module_surface ClassificationResolutionRunUnit;
 }
----
-idArr
----
+
+module ClassificationResolutionRuns in ClassificationResolutionRunLang where {
+  let main
+  ---
+  idArr
+  ---
+  export { main };
+}
+
+pipeline main where {
+  project export main;
+  normalize;
+}
+
+build main from ClassificationResolutionRuns using main;

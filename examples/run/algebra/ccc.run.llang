@@ -1,21 +1,33 @@
-import "../../lib/surfaces/ccc_surface/ccc.llang";
+include "../../lib/surfaces/ccc_surface/ccc.llang";
+
+module_surface CccRunUnit where {
+  doctrine CCC;
+  mode M;
+}
+
+language CccRunLang where {
+  doctrine CCC;
+  module_surface CccRunUnit;
+}
+
+module CccRuns in CccRunLang where {
+  let beta_app
+  ---
+  (
+    eval(Obj, Obj)
+    *
+    (
+      (curry(Obj, Obj, Obj) * id[Hom(Obj, Obj)])
+      ; pair(exp(Obj, Obj), Obj, Obj)
+    )
+  ) ; comp(Obj, prod(exp(Obj, Obj), Obj), Obj)
+  ---
+  export { beta_app };
+}
 
 pipeline debug where {
+  project export beta_app;
   normalize { policy = "computational_lr"; fuel = 200; };
-  extract diagram;
 }
 
-run beta_app using debug where {
-  source doctrine CCC;
-  source mode M;
-}
----
-(
-  eval(Obj, Obj)
-  *
-  (
-    (curry(Obj, Obj, Obj) * id[Hom(Obj, Obj)])
-    ; pair(exp(Obj, Obj), Obj, Obj)
-  )
-) ; comp(Obj, prod(exp(Obj, Obj), Obj), Obj)
----
+build beta_app from CccRuns using debug;

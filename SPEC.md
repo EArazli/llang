@@ -804,49 +804,203 @@ Quotation semantics:
   semantics.
 
 This reflected quotation doctrine is then consumed by ordinary userland
-morphisms, rewrites, or extractors. Backend-local naming or cleanup belongs
+morphisms, rewrites, or host backends. Backend-local naming or cleanup belongs
 there, not in quotation.
 
-## 12. Artifact extraction
+## 12. Modules, Builds, and Host Emission
 
-llang provides host-backed extractors for producing runnable artifacts from diagrams:
+### 12.1 Languages and Module Surfaces
 
-- `extract Doc { stdout = ... }`
-- `extract FileTree { root = ... }`
+A `language` declaration selects:
 
-These extractors interpret diagrams into a fixed semantic algebra implemented by the kernel. The interpretation is only defined on a small “artifact fragment” of generators and types.
+- a doctrine, and
+- optionally a `module_surface`.
 
-### 12.1 Extractable fragments
+A `module_surface` supplies declaration-layer policy for interfaces and modules:
 
-Let `D` be a doctrine and `M` a mode of `D`. Write `Doc_M` for the nullary type constructor `Doc` in mode `M` and `FileTree_M` for the nullary type constructor `FileTree` in mode `M`.
+- doctrine,
+- elaborator name,
+- default mode,
+- default expression surface,
+- default module-data representation,
+- default `uses`,
+- and allowed declaration capabilities.
 
-A doctrine `D` supports **Doc extraction in mode `M`** iff `D` contains, in mode `M`, generators with the following signatures and no binder inputs:
+If a language omits an explicit `module_surface`, the implementation uses an
+implicit surface with the language doctrine, elaborator `standard`, no default
+mode or expression surface, no default module-data representation, no default
+`uses`, and the standard capability set.
+
+### 12.2 Interfaces and Modules
+
+Interfaces and modules elaborate relative to the resolved module surface.
+
+Standard declaration forms are:
+
+- interface items: `type`, `opaque type`, `val`, and `custom <tag> --- ... ---`
+- module items: `import`, `import foreign`, `data`, `type`, `let`, `export`,
+  `export type`, `export interface`, and `custom <tag> --- ... ---`
+
+Interface/module elaboration is ordered:
+
+- earlier declarations are visible to later ones,
+- later declarations are not visible earlier,
+- imports are available only after their declaration site.
+
+### 12.3 Module Elaborators
+
+A `module_elaborator` declaration extends an existing elaborator:
+
+- `module_elaborator Name where { extends Base; ... }`
+
+Current source-level extensibility is by expansion of tagged custom items:
+
+- `interface custom Tag as items;`
+- `module custom Tag as items;`
+
+For `... as items`, the custom-item body is reparsed as an inline sequence of
+ordinary interface/module items in the existing declaration grammar.
+
+This is declaration-surface extensibility, not kernel extensibility:
+
+- elaborators do not add new kernel declaration forms,
+- elaborators do not open the parser to arbitrary new syntax beyond
+  `custom <tag> --- ... ---` payloads.
+
+### 12.4 Module `data` and `data_repr`
+
+Module `data` declarations elaborate to declaration packages, not doctrine
+extensions.
+
+They introduce:
+
+- a local module type binding,
+- constructor value bindings,
+- and retained module-data package metadata.
+
+A `data_repr` declaration extends an existing module-data representation:
+
+- `data_repr Name where { extends Base; ... }`
+
+Current shipped base representations are:
+
+- `doctrine_data`
+- `opaque_data`
+
+`doctrine_data` semantics:
+
+- the doctrine already contains the type constructor and constructor generators,
+- the module declaration packages those doctrine entities as module bindings.
+
+`opaque_data` semantics:
+
+- the package type is represented by an opaque placeholder type,
+- constructors elaborate to provider-backed values.
+
+Source-defined `data_repr` declarations may:
+
+- alias an existing representation, and
+- when extending `opaque_data`, override `provider_interface` and
+  `descriptor_prefix`.
+
+### 12.5 Module Imports and Linking
+
+Module imports elaborate to abstract module references and imported type/value
+scope entries.
+
+Local imports may be restricted by interface and adapted through morphism
+chains; foreign imports may be restricted by interface and adapted through
+provider adapter chains.
+
+Build-time `link` composes module artifacts structurally:
+
+- linked modules must share a language and doctrine,
+- components are merged by component name,
+- same-name components must be equal,
+- imports are satisfied against present linked components,
+- unresolved imports remain abstract until an explicit closing boundary
+  (`project export`, `bundle`, `emit via`, or module `quote`).
+
+### 12.6 Module Quotation
+
+`quote using Frag into D_Q` on a module artifact is a module-level lowering step:
+
+1. close the module artifact,
+2. quote each closed exported/local value into `D_Q`,
+3. produce a value-only quoted module artifact.
+
+Quoted whole-module artifacts therefore retain:
+
+- values,
+- exports,
+- component structure.
+
+Quoted whole-module artifacts do not retain:
+
+- imports,
+- providers,
+- type bindings,
+- exported type bindings,
+- data packages,
+- export interfaces.
+
+### 12.7 Host Emission
+
+llang provides host-backed emission through pipeline phases:
+
+- `emit via Doc { stdout = ... }`
+- `emit via FileTree { root = ... }`
+
+Emission consumes:
+
+- a diagram directly,
+- a bundle entry set, or
+- a module (by first closing it and bundling all exports).
+
+These host backends interpret diagrams into a fixed semantic algebra
+implemented by the host/runtime layer. The interpretation is only defined on a
+small artifact fragment of generators and types.
+
+Let `D` be a doctrine and `M` a mode of `D`. Write `Doc_M` for the nullary type
+constructor `Doc` in mode `M` and `FileTree_M` for the nullary type constructor
+`FileTree` in mode `M`.
+
+A doctrine `D` supports **Doc emission in mode `M`** iff `D` contains, in mode
+`M`, generators with the following signatures and no binder inputs:
 
 - `empty : [] -> [Doc_M]`
-- `text(x : Str) : [] -> [Doc_M]` where `Str` is a nullary type constructor in mode `M` marked `literal Str @M = string`
+- `text(x : Str) : [] -> [Doc_M]` where `Str` is a nullary type constructor in
+  mode `M` marked `literal Str @M = string`
 - `line : [] -> [Doc_M]`
 - `cat : [Doc_M, Doc_M] -> [Doc_M]`
-- `indent(n : Int) : [Doc_M] -> [Doc_M]` where `Int` is a nullary type constructor in mode `M` marked `literal Int @M = int`
+- `indent(n : Int) : [Doc_M] -> [Doc_M]` where `Int` is a nullary type
+  constructor in mode `M` marked `literal Int @M = int`
 
-A doctrine `D` supports **FileTree extraction in mode `M`** iff it supports Doc extraction in mode `M` and also contains, in mode `M`, generators with the following signatures and no binder inputs:
+A doctrine `D` supports **FileTree emission in mode `M`** iff it supports Doc
+emission in mode `M` and also contains, in mode `M`, generators with the
+following signatures and no binder inputs:
 
-- `singleFile(path : Str) : [Doc_M] -> [FileTree_M]` where `Str` is a nullary type constructor in mode `M` marked `literal Str @M = string`
+- `singleFile(path : Str) : [Doc_M] -> [FileTree_M]` where `Str` is a nullary
+  type constructor in mode `M` marked `literal Str @M = string`
 - `concatTree : [FileTree_M, FileTree_M] -> [FileTree_M]`
 
-### 12.2 Pipeline semantics
+Given `emit via Doc` or `emit via FileTree` applied to a diagram artifact
+`(D, d)`:
 
-Given a pipeline phase `extract Doc` or `extract FileTree` applied to an artifact `(D, d)`:
+1. Let `M = mode(d)`. The runtime checks that `D` supports the corresponding
+   artifact fragment in `M`.
+2. The diagram must have no open inputs, and all declared outputs must be
+   produced.
+3. Evaluation is defined only for the supported generator subset above. Any
+   other generator, as well as boxes, feedback, splice, term-meta, internal
+   drop, module refs, or provider refs, causes emission to fail.
+4. `emit via Doc` / `emit via FileTree` interpret the supported generators into
+   host `Doc` / `FileTree` values.
 
-1. Let `M = mode(d)`. The kernel checks that `D` supports the corresponding extractable fragment in `M`.
-2. The diagram must have no open inputs, and all declared outputs must be produced (extraction fails on open input/output ports).
-3. Evaluation is defined only for the generator subset above. Any other generator, as well as boxes, feedback, splice, term-meta, or internal-drop payloads, causes extraction to fail.
-4. `extract Doc` / `extract FileTree` interpret the supported generators into host `Doc` / `FileTree` values.
-
-### 12.3 Conservative extensions
-
-Extraction depends only on the presence of the extractable fragment in the diagram’s mode, not on the doctrine’s global name.
-
-Therefore, a doctrine may conservatively extend `Doc`/`Artifact` with additional generators and equations (e.g. derived pretty-printing combinators) and still be extractable after normalization into the extractable fragment.
+Emission depends only on the presence of the supported fragment in the
+diagram’s mode, not on the doctrine’s global name. Therefore, a doctrine may
+conservatively extend `Doc`/`Artifact` with additional generators and equations
+and still be emittable after normalization into the supported fragment.
 
 ## 13. Restrictions
 

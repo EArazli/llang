@@ -1,4 +1,4 @@
-import "./struct.cartesian.llang";
+include "./struct.cartesian.llang";
 
 doctrine Nat extends StructCartesian where {
   gen Nat : [] -> [U_M] @M;

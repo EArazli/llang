@@ -285,6 +285,10 @@ validateDiagram diag = do
         PGen _ args binderArgs -> do
           mapM_ checkCodeArg args
           mapM_ checkBinderArg binderArgs
+        PProvider _ ->
+          Right ()
+        PModuleRef _ ->
+          Right ()
         PBox _ inner -> do
           if dMode inner /= dMode diag
             then Left "validateDiagram: box mode mismatch"
@@ -465,6 +469,8 @@ validateLiteralEdges tt = go
         PGen _ args bargs -> do
           mapM_ checkCodeArg args
           mapM_ checkBinderArg bargs
+        PProvider _ -> Right ()
+        PModuleRef _ -> Right ()
         PBox _ inner -> go inner
         PFeedback inner -> go inner
         PTmLit lit ->
@@ -630,6 +636,8 @@ shiftDiagram portOff edgeOff diag =
       shiftPayload payload =
         case payload of
           PGen g args bargs -> PGen g (map shiftCodeArg args) (map shiftBinderArg bargs)
+          PProvider ref -> PProvider ref
+          PModuleRef ref -> PModuleRef ref
           PBox name inner -> PBox name (shiftDiagram portOff edgeOff inner)
           PFeedback inner -> PFeedback (shiftDiagram portOff edgeOff inner)
           PSplice x me -> PSplice x me
@@ -739,6 +747,8 @@ reindexDiagramForDisplay diag = do
           args' <- mapM (rewriteCodeArgDiagrams reindexDiagramForDisplay) args
           bargs' <- mapM mapBinderArg bargs
           Right (PGen g args' bargs')
+        PProvider ref -> Right (PProvider ref)
+        PModuleRef ref -> Right (PModuleRef ref)
         PBox name inner -> do
           inner' <- reindexDiagramForDisplay inner
           Right (PBox name inner')
@@ -778,6 +788,8 @@ data BinderArgKey
 
 data PayloadKey
   = PKGen GenName [CodeArg] [BinderArgKey]
+  | PKProvider ByteString
+  | PKModuleRef ByteString
   | PKBox ByteString
   | PKFeedback ByteString
   | PKSplice BinderMetaVar ModExpr
@@ -825,6 +837,10 @@ canonPayload payload =
       args' <- mapM (rewriteCodeArgDiagrams canonDiagramRaw) args
       bargs' <- mapM canonBinderArg bargs
       pure (PGen g args' bargs')
+    PProvider ref ->
+      pure (PProvider ref)
+    PModuleRef ref ->
+      pure (PModuleRef ref)
     PBox _ inner -> do
       inner' <- canonDiagramRaw inner
       pure (PBox (BoxName "") inner')
@@ -934,6 +950,10 @@ colorKeyFor diag v =
         PGen g args bargs -> do
           bargs' <- mapM binderArgKey bargs
           pure (PKGen g args bargs')
+        PProvider ref ->
+          Right (PKProvider (BS8.pack (show ref)))
+        PModuleRef ref ->
+          Right (PKModuleRef (BS8.pack (show ref)))
         PBox _ inner ->
           Right (PKBox (BS8.pack (show inner)))
         PFeedback inner ->

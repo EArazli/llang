@@ -1,12 +1,4 @@
-MiniFun JS codegen example
+Legacy-path MiniFun examples
 
-This example shows a tiny surface language (MiniFun) elaborated to ConsoleExpr,
-compiled to `Doc`, and emitted as source text.
-
-Run:
-  stack run -- examples/run/codegen/minifun/concat2.run.llang
-
-Expected output:
-- a single line of emitted source text
-- `print((nextLine() + nextLine()))`
-- llang does not execute the emitted code
+These files now use the build/module frontend while keeping the historical
+`examples/run/codegen/minifun/**` paths.

@@ -171,6 +171,10 @@ diagramToBTm cfg sortEq diag boundaryVars expectedSort = do
                               sortTy <- requirePortSort diag "NbE: missing generator output sort" pid
                               pure BTm { btSort = sortTy, btExpr = BGen g headArgs inputArgs }
                             else Left "NbE: non-lam generators with binder args are unsupported in NbE"
+                PProvider _ ->
+                  Left "NbE: provider nodes are unsupported in definitional normalization"
+                PModuleRef _ ->
+                  Left "NbE: module-reference nodes are unsupported in definitional normalization"
                 PTmMeta v -> do
                   sortTy <- requirePortSort diag "NbE: missing PTmMeta output sort" pid
                   let v' = v { tmvSort = sortTy }
@@ -666,6 +670,8 @@ rejectUnsupportedDiagram cfg diag = do
         PGen _ args bargs -> do
           mapM_ checkCodeArg args
           mapM_ checkBinderArg bargs
+        PProvider _ -> Left "NbE: provider nodes are unsupported in definitional normalization"
+        PModuleRef _ -> Left "NbE: module-reference nodes are unsupported in definitional normalization"
         PTmMeta _ -> Right ()
         PTmLit _ -> Right ()
         PInternalDrop -> Right ()

@@ -10,19 +10,38 @@ module Strat.DSL.AST
   , RawFragmentItem(..)
   , RawFragmentDecl(..)
   , RawDerivedDoctrine(..)
-  , RawRun(..)
-  , RawNamedRun(..)
+  , RawCustomExpansion(..)
+  , RawModuleElaborator(..)
+  , RawModuleDataReprDecl(..)
+  , RawLanguage(..)
+  , RawModuleSurfaceCapability(..)
+  , RawModuleSurface(..)
+  , RawCustomItem(..)
+  , RawInterface(..)
+  , RawInterfaceItem(..)
+  , RawInterfaceType(..)
+  , RawInterfaceValue(..)
+  , RawModule(..)
+  , RawModuleItem(..)
+  , RawModuleImport(..)
+  , RawModuleData(..)
+  , RawModuleCtor(..)
+  , RawModuleType(..)
+  , RawModuleExport(..)
+  , RawModuleTypeExport(..)
+  , RawModuleValue(..)
+  , RawValueSig(..)
+  , RawBuild(..)
   , RawDoctrineFunctor(..)
   , RawFunctorParam(..)
   , RawDoctrineApply(..)
-  , RawTerm(..)
-  , RawNamedTerm(..)
   , RawPolyMorphism(..)
   , RawPolyMorphismItem(..)
   , RawPolyModeMap(..)
   , RawPolyModalityMap(..)
   , RawPolyTypeMap(..)
   , RawPolyGenMap(..)
+  , RawBundleItem(..)
   ) where
 
 import Data.Text (Text)
@@ -45,12 +64,17 @@ data RawDecl
   | DeclDoctrineApply RawDoctrineApply
   | DeclFragment RawFragmentDecl
   | DeclDerivedDoctrine RawDerivedDoctrine
+  | DeclModuleElaborator RawModuleElaborator
+  | DeclModuleDataRepr RawModuleDataReprDecl
   | DeclSurface Text SurfaceSpec
+  | DeclModuleSurface RawModuleSurface
+  | DeclLanguage RawLanguage
+  | DeclInterface RawInterface
+  | DeclModule RawModule
+  | DeclBuild RawBuild
   | DeclPipeline RawPipeline
   | DeclMorphism RawPolyMorphism
   | DeclImplements Text Text Text
-  | DeclRun RawNamedRun
-  | DeclTerm RawNamedTerm
   deriving (Eq, Show)
 
 newtype RawFile = RawFile [RawDecl]
@@ -79,9 +103,18 @@ data RawPhase
   = RPApply Text
   | RPNormalize RawNormalizeOpts
   | RPQuoteInto Text Text
-  | RPExtractValue Text RawValueExtractOpts
-  | RPExtractDiagramPretty
+  | RPLink Text
+  | RPBundleAll
+  | RPBundle [RawBundleItem]
+  | RPProjectExport Text
+  | RPEmitVia Text RawValueExtractOpts
   deriving (Eq, Show)
+
+
+data RawBundleItem = RawBundleItem
+  { rbiSource :: Text
+  , rbiTarget :: Text
+  } deriving (Eq, Show)
 
 data RawFragmentItem
   = RFIncludeGen Text
@@ -105,19 +138,192 @@ data RawDerivedDoctrine = RawDerivedDoctrine
   } deriving (Eq, Show)
 
 
-data RawRun = RawRun
-  { rrPipeline :: Maybe Text
-  , rrDoctrine :: Maybe Text
-  , rrMode :: Maybe Text
-  , rrSurface :: Maybe Text
-  , rrUses :: [Text]
-  , rrExprText :: Maybe Text
+data RawCustomExpansion
+  = RCXInlineItems
+  deriving (Eq, Ord, Show)
+
+
+data RawModuleElaborator = RawModuleElaborator
+  { rmeName :: Text
+  , rmeBase :: Text
+  , rmeInterfaceCustom :: Map Text RawCustomExpansion
+  , rmeModuleCustom :: Map Text RawCustomExpansion
   } deriving (Eq, Show)
 
 
-data RawNamedRun = RawNamedRun
-  { rnrName :: Text
-  , rnrRun :: RawRun
+data RawModuleDataReprDecl = RawModuleDataReprDecl
+  { rmdrName :: Text
+  , rmdrBase :: Text
+  , rmdrProviderInterface :: Maybe Text
+  , rmdrDescriptorPrefix :: Maybe Text
+  } deriving (Eq, Show)
+
+
+data RawLanguage = RawLanguage
+  { rlangName :: Text
+  , rlangDoctrine :: Text
+  , rlangModuleSurface :: Maybe Text
+  } deriving (Eq, Show)
+
+
+data RawModuleSurfaceCapability
+  = RMSCImport
+  | RMSCForeignImport
+  | RMSCType
+  | RMSCData
+  | RMSCValue
+  | RMSCExport
+  | RMSCExportType
+  | RMSCExportInterface
+  | RMSCCustom
+  deriving (Eq, Ord, Show)
+
+
+data RawModuleSurface = RawModuleSurface
+  { rmsName :: Text
+  , rmsDoctrine :: Text
+  , rmsElaborator :: Maybe Text
+  , rmsMode :: Maybe Text
+  , rmsExprSurface :: Maybe Text
+  , rmsDefaultDataRepr :: Maybe Text
+  , rmsUses :: [Text]
+  , rmsCapabilities :: [RawModuleSurfaceCapability]
+  } deriving (Eq, Show)
+
+
+data RawInterfaceType
+  = RITOpaque
+      { ritName :: Text
+      , ritMode :: Maybe Text
+      }
+  | RITAlias
+      { ritName :: Text
+      , ritMode :: Maybe Text
+      , ritBody :: PolyAST.RawPolyObjExpr
+      }
+  deriving (Eq, Show)
+
+
+data RawInterfaceValue = RawInterfaceValue
+  { rivName :: Text
+  , rivMode :: Maybe Text
+  , rivDom :: PolyAST.RawPolyContext
+  , rivCod :: PolyAST.RawPolyContext
+  } deriving (Eq, Show)
+
+
+data RawInterface = RawInterface
+  { riName :: Text
+  , riTarget :: Text
+  , riItems :: [RawInterfaceItem]
+  } deriving (Eq, Show)
+
+
+data RawCustomItem = RawCustomItem
+  { rciTag :: Text
+  , rciBody :: Text
+  } deriving (Eq, Show)
+
+
+data RawInterfaceItem
+  = RIIType RawInterfaceType
+  | RIIValue RawInterfaceValue
+  | RIICustom RawCustomItem
+  deriving (Eq, Show)
+
+
+data RawModuleImport
+  = RawModuleImport
+      { rmiModule :: Text
+      , rmiAlias :: Maybe Text
+      , rmiInterface :: Maybe Text
+      , rmiAdapter :: Maybe Text
+      }
+  | RawForeignImport
+      { rfiName :: Text
+      , rfiInterface :: Text
+      , rfiProvider :: FilePath
+      , rfiAdapter :: Maybe Text
+      }
+  deriving (Eq, Show)
+
+
+data RawModuleType = RawModuleType
+  { rmtName :: Text
+  , rmtMode :: Maybe Text
+  , rmtBody :: PolyAST.RawPolyObjExpr
+  } deriving (Eq, Show)
+
+
+data RawModuleCtor = RawModuleCtor
+  { rmcName :: Text
+  , rmcSig :: RawValueSig
+  } deriving (Eq, Show)
+
+
+data RawModuleData = RawModuleData
+  { rmdName :: Text
+  , rmdMode :: Maybe Text
+  , rmdRepr :: Maybe Text
+  , rmdCtors :: [RawModuleCtor]
+  } deriving (Eq, Show)
+
+
+data RawModuleExport = RawModuleExport
+  { rmeLocal :: Text
+  , rmePublic :: Text
+  } deriving (Eq, Show)
+
+
+data RawModuleTypeExport = RawModuleTypeExport
+  { rmteLocal :: Text
+  , rmtePublic :: Text
+  } deriving (Eq, Show)
+
+
+data RawValueSig = RawValueSig
+  { rvsMode :: Maybe Text
+  , rvsDom :: PolyAST.RawPolyContext
+  , rvsCod :: PolyAST.RawPolyContext
+  } deriving (Eq, Show)
+
+
+data RawModuleValue = RawModuleValue
+  { rmvName :: Text
+  , rmvSig :: Maybe RawValueSig
+  , rmvMode :: Maybe Text
+  , rmvSurface :: Maybe Text
+  , rmvUses :: [Text]
+  , rmvMorphisms :: [Text]
+  , rmvPolicy :: Maybe Text
+  , rmvFuel :: Maybe Int
+  , rmvExprText :: Text
+  } deriving (Eq, Show)
+
+
+data RawModule = RawModule
+  { rmName :: Text
+  , rmLanguage :: Text
+  , rmItems :: [RawModuleItem]
+  } deriving (Eq, Show)
+
+
+data RawModuleItem
+  = RMImport RawModuleImport
+  | RMData RawModuleData
+  | RMType RawModuleType
+  | RMValue RawModuleValue
+  | RMCustom RawCustomItem
+  | RMTypeExport [RawModuleTypeExport]
+  | RMExport [RawModuleExport]
+  | RMExportInterface Text
+  deriving (Eq, Show)
+
+
+data RawBuild = RawBuild
+  { rbName :: Text
+  , rbModule :: Text
+  , rbPipeline :: Text
   } deriving (Eq, Show)
 
 data RawFunctorParam = RawFunctorParam
@@ -136,22 +342,6 @@ data RawDoctrineApply = RawDoctrineApply
   , rdaFunctor :: Text
   , rdaTarget :: Text
   , rdaUsing :: Map Text Text
-  } deriving (Eq, Show)
-
-data RawTerm = RawTerm
-  { rtDoctrine :: Maybe Text
-  , rtMode :: Maybe Text
-  , rtSurface :: Maybe Text
-  , rtUses :: [Text]
-  , rtMorphisms :: [Text]
-  , rtPolicy :: Maybe Text
-  , rtFuel :: Maybe Int
-  , rtExprText :: Text
-  } deriving (Eq, Show)
-
-data RawNamedTerm = RawNamedTerm
-  { rntName :: Text
-  , rntTerm :: RawTerm
   } deriving (Eq, Show)
 
 data RawPolyMorphism = RawPolyMorphism

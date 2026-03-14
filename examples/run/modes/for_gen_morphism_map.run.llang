@@ -6,7 +6,6 @@ doctrine ForGenSchemaMap where {
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_M : [] -> [M.U_M] @M;
   gen X : [] -> [M.U_M] @M;
-
   gen op(a@M) : [a] -> [a] @M;
 
   obligation mapped_op for_gen @M =
@@ -21,7 +20,6 @@ doctrine ForGenTargetMap where {
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_M : [] -> [M.U_M] @M;
   gen X : [] -> [M.U_M] @M;
-
   gen discard(a@M) : [a] -> [] @M;
   gen keep(a@M) : [a] -> [a] @M;
   gen op2(a@M) : [a] -> [a] @M;
@@ -38,14 +36,26 @@ morphism fgMapInst : ForGenSchemaMap -> ForGenTargetMap where {
 
 implements ForGenSchemaMap for ForGenTargetMap using fgMapInst;
 
-pipeline debug where {
-  extract diagram;
+module_surface ForGenRunUnit where {
+  doctrine ForGenTargetMap;
+  mode M;
 }
 
-run sanity using debug where {
-  source doctrine ForGenTargetMap;
-  source mode M;
+language ForGenRunLang where {
+  doctrine ForGenTargetMap;
+  module_surface ForGenRunUnit;
 }
----
-discard(M.X)
----
+
+module ForGenRuns in ForGenRunLang where {
+  let sanity
+  ---
+  discard(M.X)
+  ---
+  export { sanity };
+}
+
+pipeline debug where {
+  project export sanity;
+}
+
+build sanity from ForGenRuns using debug;

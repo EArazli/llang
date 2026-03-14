@@ -1,14 +1,26 @@
-import "../../lib/algebra/cat.llang";
+include "../../lib/algebra/cat.llang";
+
+module_surface CatRunUnit where {
+  doctrine Cat;
+  mode M;
+}
+
+language CatRunLang where {
+  doctrine Cat;
+  module_surface CatRunUnit;
+}
+
+module CatRuns in CatRunLang where {
+  let main
+  ---
+  f ; g ; h
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine Cat;
-  source mode M;
-}
----
-f ; g ; h
----
+build main from CatRuns using main;

@@ -386,6 +386,10 @@ payloadSubsts tt flex lhs tySubst p1 p2 =
             (BAMeta x, BAMeta y) ->
               if x == y then Right [tySubst0] else Right []
             _ -> Right []
+    (PProvider ref1, PProvider ref2)
+      | ref1 == ref2 -> Right [tySubst]
+    (PModuleRef ref1, PModuleRef ref2)
+      | ref1 == ref2 -> Right [tySubst]
     (PBox _ d1, PBox _ d2) -> do
       mapLeft
         fatalSubstError
@@ -422,6 +426,8 @@ payloadCompatible p1 p2 =
         && length args1 == length args2
         && and (zipWith sameArgKind args1 args2)
         && length bargs1 == length bargs2
+    (PProvider ref1, PProvider ref2) -> ref1 == ref2
+    (PModuleRef ref1, PModuleRef ref2) -> ref1 == ref2
     (PBox _ _, PBox _ _) -> True
     (PFeedback _, PFeedback _) -> True
     (PSplice x me1, PSplice y me2) -> x == y && me1 == me2

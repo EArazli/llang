@@ -1,0 +1,64 @@
+doctrine ColorDoc where {
+  mode C classifiedBy C via C.U_C;
+  gen comp_ctx_ext(a@C) : [a] -> [a] @C;
+  gen comp_var(a@C) : [a] -> [a] @C;
+  gen comp_reindex(a@C) : [a] -> [a] @C;
+  comprehension C where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_C : [] -> [U_C] @C;
+  data Color @C where {
+    Red : [];
+    Blue : [];
+    Wrap : [Color];
+  }
+}
+
+module_surface ColorUnit where {
+  doctrine ColorDoc;
+  mode C;
+}
+
+language ColorLang where {
+  doctrine ColorDoc;
+  module_surface ColorUnit;
+}
+
+interface ColorSig in ColorLang where {
+  opaque type Color @C;
+  val Red : [] -> [Color] @C;
+  val Wrap : [Color] -> [Color] @C;
+}
+
+module Palette in ColorLang where {
+  data Color @C using doctrine_data where {
+    ctor Red : [] -> [Color] @C;
+    ctor Blue : [] -> [Color] @C;
+    ctor Wrap : [Color] -> [Color] @C;
+  }
+
+  let main : [] -> [Color] @C
+  ---
+  Red ; Wrap
+  ---
+
+  export type { Color };
+  export { Red, Wrap, main };
+  export interface ColorSig;
+}
+
+module App in ColorLang where {
+  import Palette as P : ColorSig;
+
+  let main : [] -> [P::Color] @C
+  ---
+  P::Red ; P::Wrap
+  ---
+
+  export { main };
+}
+
+pipeline p where {
+  project export main;
+}
+
+build pkg from Palette using p;
+build main from App using p;

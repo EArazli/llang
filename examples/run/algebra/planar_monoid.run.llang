@@ -1,20 +1,36 @@
-import "../../lib/algebra/planar_monoid.llang";
+include "../../lib/algebra/planar_monoid.llang";
+
+module_surface PlanarMonoidRunUnit where {
+  doctrine PlanarMonoid;
+  mode M;
+}
+
+language PlanarMonoidRunLang where {
+  doctrine PlanarMonoid;
+  module_surface PlanarMonoidRunUnit;
+}
+
+module PlanarMonoidRuns in PlanarMonoidRunLang where {
+  let main
+  ---
+  (unit * unit) ; mul
+  ---
+  let assoc_unit
+  ---
+  (unit * (unit * unit)) ; (id[A] * mul) ; mul
+  ---
+  export { main, assoc_unit };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine PlanarMonoid;
+pipeline assoc_unit where {
+  project export assoc_unit;
+  normalize;
 }
----
-(unit * unit) ; mul
----
 
-run assoc_unit using main where {
-  source doctrine PlanarMonoid;
-}
----
-(unit * (unit * unit)) ; (id[A] * mul) ; mul
----
+build main from PlanarMonoidRuns using main;
+build assoc_unit from PlanarMonoidRuns using assoc_unit;

@@ -1,29 +1,41 @@
-import "../../lib/modes/staging_mode_map.llang";
+include "../../lib/modes/staging_mode_map.llang";
+
+module_surface StagingRunUnit where {
+  doctrine Staging;
+}
+
+language StagingRunLang where {
+  doctrine Staging;
+  module_surface StagingRunUnit;
+}
+
+module StagingRuns in StagingRunLang where {
+  let main where {
+    surface StageExpr;
+  }
+  ---
+  stage
+  ---
+  let ct where {
+    surface StageExprCT;
+  }
+  ---
+  stageq
+  ---
+  export { main, ct };
+}
 
 pipeline main where {
+  project export main;
   normalize;
   apply StageToStage2;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine Staging;
-  source surface StageExpr;
-}
----
-stage
----
-
-pipeline legacy_ct where {
+pipeline ct where {
+  project export ct;
   normalize;
   apply StageToStage2;
-  extract diagram;
 }
 
-run ct using legacy_ct where {
-  source doctrine Staging;
-  source surface StageExprCT;
-}
----
-stageq
----
+build main from StagingRuns using main;
+build ct from StagingRuns using ct;

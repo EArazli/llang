@@ -1,4 +1,4 @@
-import "./struct.symmetric.llang";
+include "./struct.symmetric.llang";
 
 doctrine StructCartesian extends StructSymmetric where {
   gen dup (a@M) : [a] -> [a, a] @M;

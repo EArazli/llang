@@ -233,6 +233,10 @@ validateActionSemanticsWithBudgetResult budget doc = do
       case ePayload edge of
         PGen g _ bargs ->
           S.insert g (foldMap binderArgGens bargs)
+        PProvider _ ->
+          S.empty
+        PModuleRef _ ->
+          S.empty
         PBox _ inner ->
           diagramGens inner
         PFeedback inner ->
@@ -613,6 +617,10 @@ normalizeDiagramObjExprs mt diag = do
       case payload of
         PGen g args bargs ->
           PGen g args <$> mapM normalizeBinderArg bargs
+        PProvider ref ->
+          pure (PProvider ref)
+        PModuleRef ref ->
+          pure (PModuleRef ref)
         PBox name inner ->
           PBox name <$> normalizeDiagramObjExprs mt inner
         PFeedback inner ->

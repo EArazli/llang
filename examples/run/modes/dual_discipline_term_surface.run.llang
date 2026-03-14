@@ -1,35 +1,43 @@
-import "../../lib/modes/dual_discipline_term_surface.llang";
+include "../../lib/modes/dual_discipline_term_surface.llang";
 
-pipeline legacy_cart_dup where {
+module_surface DualDisciplineRunUnit where {
+  doctrine DualDiscipline;
+  mode Cart;
+  surface DupTermCart;
+}
+
+language DualDisciplineRunLang where {
+  doctrine DualDiscipline;
+  module_surface DualDisciplineRunUnit;
+}
+
+module DualDisciplineRuns in DualDisciplineRunLang where {
+  let cart_dup
+  ---
+  diag {
+    in x:Cart.Num;
+    out sink(x, x)
+  }
+  ---
+  let cart_drop
+  ---
+  diag {
+    in x:Cart.Num;
+    out one
+  }
+  ---
+  export { cart_dup, cart_drop };
+}
+
+pipeline cart_dup where {
+  project export cart_dup;
   normalize;
-  extract diagram;
 }
 
-run cart_dup using legacy_cart_dup where {
-  source doctrine DualDiscipline;
-  source mode Cart;
-  source surface DupTermCart;
-}
----
-diag {
-  in x:Cart.Num;
-  out sink(x, x)
-}
----
-
-pipeline legacy_cart_drop where {
+pipeline cart_drop where {
+  project export cart_drop;
   normalize;
-  extract diagram;
 }
 
-run cart_drop using legacy_cart_drop where {
-  source doctrine DualDiscipline;
-  source mode Cart;
-  source surface DupTermCart;
-}
----
-diag {
-  in x:Cart.Num;
-  out one
-}
----
+build cart_dup from DualDisciplineRuns using cart_dup;
+build cart_drop from DualDisciplineRuns using cart_drop;

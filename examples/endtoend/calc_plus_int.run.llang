@@ -53,7 +53,6 @@ surface CalcSurface where {
   }
 
   expr {
-    -- `Comp` forms
     atom:
       "program" "{" <expr> "}" => $1 ; toProgram
     | "bind" ident(name) "<-" "(" <expr> ")" ";" <expr> => ($2 * $1) ; bindComp(name = #name)
@@ -62,7 +61,6 @@ surface CalcSurface where {
     | "read" "(" ")" => readComp
     ;
 
-    -- `Step` forms
     atom:
       "let" ident(name) "=" "(" <expr> ")" => $1 ; letStmt(name = #name)
     | "set" ident(name) "=" "(" <expr> ")" => $1 ; setStmt(name = #name)
@@ -73,7 +71,6 @@ surface CalcSurface where {
     | "print" "(" <expr> ")" => $1 ; printStmt
     ;
 
-    -- `Expr` forms
     atom:
       "toInt" "(" <expr> ")" => $1 ; toIntExpr
     | "empty" "(" <expr> ")" => $1 ; isEmptyExpr
@@ -147,11 +144,11 @@ doctrine JSAst where {
 
   gen toProgram : [JBlock, JExpr] -> [JsProgram] @M;
 
-  rule computational varLenEqZero_def -> : [] -> [JExpr] @M =
+  rule computational varLenEqZero_def -> (n : Str) : [] -> [JExpr] @M =
     varLenEqZero(name = n) ==
       ((varRef(name = n) ; lengthExpr) * zeroLit) ; eqExpr
 
-  rule computational varBetweenStr_def -> : [] -> [JExpr] @M =
+  rule computational varBetweenStr_def -> (n : Str, lo : Str, hi : Str) : [] -> [JExpr] @M =
     varBetweenStr(name = n, low = lo, high = hi) ==
       (
         ((varRef(name = n) * stringLit(value = lo)) ; gteExpr)
@@ -159,11 +156,11 @@ doctrine JSAst where {
         ((varRef(name = n) * stringLit(value = hi)) ; lteExpr)
       ) ; andExpr
 
-  rule computational varCharCodeAt0LteInt_def -> : [] -> [JExpr] @M =
+  rule computational varCharCodeAt0LteInt_def -> (n : Str, m : Str) : [] -> [JExpr] @M =
     varCharCodeAt0LteInt(name = n, max = m) ==
       ((varRef(name = n) ; charCodeAt0Expr) * intLit(value = m)) ; lteExpr
 
-  rule computational constLambda1_def -> : [JExpr] -> [JStmt] @M =
+  rule computational constLambda1_def -> (n : Str, a : Str) : [JExpr] -> [JStmt] @M =
     constLambda1(name = n, arg = a) ==
       lambda1(arg = a) ; constDecl(name = n)
 }
@@ -196,26 +193,26 @@ doctrine PrettyArtifact extends Artifact where {
   rule computational append_def -> : [Doc, Doc] -> [Doc] @Artifact =
     append == cat
 
-  rule computational prefix_def -> : [Doc] -> [Doc] @Artifact =
+  rule computational prefix_def -> (p : Str) : [Doc] -> [Doc] @Artifact =
     prefix(s = p) ==
       (text(s = p) * id[Doc]) ; append
 
-  rule computational suffix_def -> : [Doc] -> [Doc] @Artifact =
+  rule computational suffix_def -> (p : Str) : [Doc] -> [Doc] @Artifact =
     suffix(s = p) ==
       (id[Doc] * text(s = p)) ; append
 
-  rule computational wrap_def -> : [Doc] -> [Doc] @Artifact =
+  rule computational wrap_def -> (l : Str, r : Str) : [Doc] -> [Doc] @Artifact =
     wrap(open = l, close = r) ==
       prefix(s = l) ; suffix(s = r)
 
-  rule computational joinWith_def -> : [Doc, Doc] -> [Doc] @Artifact =
+  rule computational joinWith_def -> (s : Str) : [Doc, Doc] -> [Doc] @Artifact =
     joinWith(sep = s) ==
       (((id[Doc] * text(s = s)) ; append) * id[Doc]) ; append
 
   rule computational quoted_def -> : [Doc] -> [Doc] @Artifact =
     quoted == wrap(open = "\"", close = "\"")
 
-  rule computational call1_def -> : [Doc] -> [Doc] @Artifact =
+  rule computational call1_def -> (f : Str) : [Doc] -> [Doc] @Artifact =
     call1(fn = f) ==
       prefix(s = "(") ; prefix(s = f) ; suffix(s = ")")
 
@@ -224,32 +221,32 @@ doctrine PrettyArtifact extends Artifact where {
       ((id[Doc] ; wrap(open = "(", close = ")")) * (id[Doc] ; wrap(open = "(", close = ")")))
       ; joinWith(sep = "")
 
-  rule computational infix_def -> : [Doc, Doc] -> [Doc] @Artifact =
+  rule computational infix_def -> (o : Str) : [Doc, Doc] -> [Doc] @Artifact =
     infix(op = o) ==
       joinWith(sep = o) ; wrap(open = "(", close = ")")
 
-  rule computational field_def -> : [Doc] -> [Doc] @Artifact =
+  rule computational field_def -> (n : Str) : [Doc] -> [Doc] @Artifact =
     field(name = n) == suffix(s = ".") ; suffix(s = n)
 
   rule computational charCodeAt0_def -> : [Doc] -> [Doc] @Artifact =
     charCodeAt0 == suffix(s = ".charCodeAt(0)")
 
-  rule computational lambda1_def -> : [Doc] -> [Doc] @Artifact =
+  rule computational lambda1_def -> (a : Str) : [Doc] -> [Doc] @Artifact =
     lambda1(arg = a) == prefix(s = " => ") ; prefix(s = a)
 
   rule computational iifeBlock_def -> : [Doc] -> [Doc] @Artifact =
     iifeBlock == (id[Doc] ; indent(n = 2)) ; prefix(s = "(() => {") ; suffix(s = "\n})()")
 
-  rule computational decl_def -> : [Doc] -> [Doc] @Artifact =
+  rule computational decl_def -> (k : Str, n : Str) : [Doc] -> [Doc] @Artifact =
     decl(kw = k, name = n) == prefix(s = " = ") ; prefix(s = n) ; prefix(s = " ") ; prefix(s = k)
 
-  rule computational assign_def -> : [Doc] -> [Doc] @Artifact =
+  rule computational assign_def -> (n : Str) : [Doc] -> [Doc] @Artifact =
     assign(name = n) == prefix(s = " = ") ; prefix(s = n)
 
   rule computational ifHead_def -> : [Doc] -> [Doc] @Artifact =
     ifHead == prefix(s = "(") ; prefix(s = "if ") ; suffix(s = ")")
 
-  rule computational forOfHead_def -> : [Doc] -> [Doc] @Artifact =
+  rule computational forOfHead_def -> (n : Str) : [Doc] -> [Doc] @Artifact =
     forOfHead(name = n) ==
       prefix(s = " of ") ; prefix(s = n) ; prefix(s = "const ") ; prefix(s = "(") ; prefix(s = "for ") ; suffix(s = ")")
 
@@ -260,7 +257,7 @@ doctrine PrettyArtifact extends Artifact where {
   rule computational ifBlock_def -> : [Doc, Doc] -> [Doc] @Artifact =
     ifBlock == (((id[Doc] ; ifHead) * id[Doc]) ; blockWithHead)
 
-  rule computational forOfBlock_def -> : [Doc, Doc] -> [Doc] @Artifact =
+  rule computational forOfBlock_def -> (n : Str) : [Doc, Doc] -> [Doc] @Artifact =
     forOfBlock(name = n) == (((id[Doc] ; forOfHead(name = n)) * id[Doc]) ; blockWithHead)
 
   rule computational stmtTerm_def -> : [Doc] -> [Doc] @Artifact =
@@ -597,51 +594,65 @@ morphism erasePretty : PrettyArtifact -> Artifact where {
     (((id[Doc] * line) ; cat) * id[Doc]) ; cat
 }
 
+module_surface CalcRunUnit where {
+  doctrine Calc;
+  mode M;
+  surface CalcSurface;
+}
+
+language CalcRunLang where {
+  doctrine Calc;
+  module_surface CalcRunUnit;
+}
+
+module CalcPrograms in CalcRunLang where {
+  let main
+  ---
+  program {
+    bind src <- (read());
+    run {
+      if (empty(src)) {
+        fail("error: expected expression like 1+2+3")
+      };
+      let total = (0);
+      let current = ("");
+      for ch in (src) {
+        if (digit(ch)) {
+          set current = (current + ch);
+          continue
+        };
+        if (plus(ch)) {
+          if (empty(current)) {
+            fail("error: malformed expression; expected integer before +")
+          };
+          set total = (total + toInt(current));
+          set current = ("");
+          continue
+        };
+        if (space(ch)) {
+          continue
+        };
+        fail("error: unexpected character")
+      };
+      if (empty(current)) {
+        fail("error: expression cannot end with +")
+      };
+      set total = (total + toInt(current));
+      print(total)
+    }
+  }
+  ---
+  export { main };
+}
+
 pipeline build where {
+  project export main;
   normalize { policy = "topmost"; fuel = 120; };
   apply lowerCalc;
   normalize { policy = "computational_lr"; fuel = 240; };
   apply emitJS;
   apply erasePretty;
-  extract FileTree { root = "./examples/endtoend/out" };
+  emit via FileTree { root = "./examples/endtoend/out"; };
 }
-run main using build where {
-  source doctrine Calc;
-  source mode M;
-  source surface CalcSurface;
-}
----
-program {
-  bind src <- (read());
-  run {
-    if (empty(src)) {
-      fail("error: expected expression like 1+2+3")
-    };
-    let total = (0);
-    let current = ("");
-    for ch in (src) {
-      if (digit(ch)) {
-        set current = (current + ch);
-        continue
-      };
-      if (plus(ch)) {
-        if (empty(current)) {
-          fail("error: malformed expression; expected integer before +")
-        };
-        set total = (total + toInt(current));
-        set current = ("");
-        continue
-      };
-      if (space(ch)) {
-        continue
-      };
-      fail("error: unexpected character")
-    };
-    if (empty(current)) {
-      fail("error: expression cannot end with +")
-    };
-    set total = (total + toInt(current));
-    print(total)
-  }
-}
----
+
+build main from CalcPrograms using build;

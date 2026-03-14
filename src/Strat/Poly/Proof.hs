@@ -82,7 +82,7 @@ data SearchBudget = SearchBudget
   { sbMaxDepth :: Int
   , sbMaxStates :: Int
   , sbTimeoutMs :: Int
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 defaultSearchBudget :: SearchBudget
 defaultSearchBudget =

@@ -92,12 +92,12 @@ data BinderSig = BinderSig
   { bsTmCtx :: [Obj]
   , bsDom :: Context
   , bsCod :: Context
-  } deriving (Eq, Ord, Show)
+  } deriving (Eq, Ord, Read, Show)
 
 data InputShape
   = InPort Obj
   | InBinder BinderSig
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data GenDecl = GenDecl
   { gdName :: GenName
@@ -106,7 +106,7 @@ data GenDecl = GenDecl
   , gdDom :: [InputShape]
   , gdCod :: Context
   , gdLiteralKind :: Maybe LiteralKind
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 gdTyVars :: GenDecl -> [TmVar]
 gdTyVars = teleTyVars . gdParams
@@ -118,7 +118,7 @@ data ModAction = ModAction
   { maMod :: ModName
   , maGenMap :: M.Map (ModeName, GenName) Diagram
   , maPolicy :: RewritePolicy
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data ObligationDecl = ObligationDecl
   { obName :: Text
@@ -132,7 +132,7 @@ data ObligationDecl = ObligationDecl
   , obLHSExpr :: RawOblExpr
   , obRHSExpr :: RawOblExpr
   , obPolicy :: RewritePolicy
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 obTyVars :: ObligationDecl -> [TmVar]
 obTyVars
@@ -197,7 +197,7 @@ data Doctrine = Doctrine
   , dCells2 :: [Cell2]
   , dActions :: M.Map ModName ModAction
   , dObligations :: [ObligationDecl]
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 doctrineTypeTheory :: Doctrine -> Either Text TypeTheory
 doctrineTypeTheory = mkTypeTheory
@@ -346,7 +346,7 @@ data NbePrimitives = NbePrimitives
   , nbepAppGen :: GenName
   , nbepArrTyCon :: ObjName
   }
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 renderModeNameText :: ModeName -> Text
 renderModeNameText (ModeName n) = n

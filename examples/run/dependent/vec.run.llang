@@ -1,13 +1,26 @@
-import "../../lib/dependent/vec.llang";
+include "../../lib/dependent/vec.llang";
+
+module_surface VecRunUnit where {
+  doctrine VecDependent;
+  mode M;
+}
+
+language VecRunLang where {
+  doctrine VecDependent;
+  module_surface VecRunUnit;
+}
+
+module VecRuns in VecRunLang where {
+  let main
+  ---
+  mk22(A) ; expect22(A)
+  ---
+  export { main };
+}
 
 pipeline debug where {
+  project export main;
   normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
 }
 
-run main using debug where {
-  source doctrine VecDependent;
-  source mode M;
-}
----
-mk22(A) ; expect22(A)
+build main from VecRuns using debug;

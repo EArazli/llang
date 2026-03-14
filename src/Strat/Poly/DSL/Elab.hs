@@ -8,6 +8,9 @@ module Strat.Poly.DSL.Elab
   , elabPolyMorphismWithBudget
   , elabPolyMorphismWithBudgetResult
   , elabDiagExpr
+  , elabDiagExprInScope
+  , elabDiagExprWith
+  , elabDiagExprWithInScope
   , ImplementsCheckResult(..)
   , ImplementsProof(..)
   , checkImplementsObligationsWithBudget
@@ -29,12 +32,14 @@ import Strat.DSL.AST
   , RawPolyMorphism(..)
   , RawPolyMorphismItem(..)
   , RawPolyTypeMap(..)
-  )
+    )
 import Strat.Frontend.Env (ModuleEnv(..))
 import Strat.Poly.DSL.Elab.Diag
   ( BinderMetaMode(..)
   , elabDiagExpr
+  , elabDiagExprInScope
   , elabDiagExprWith
+  , elabDiagExprWithInScope
   , ensureMode
   , lookupGen
   , renderGenName
@@ -62,11 +67,20 @@ import Strat.Poly.DSL.Elab.Term
   )
 import Strat.Poly.Diagram
 import Strat.Poly.Doctrine
-import Strat.Poly.Graph (BinderMetaVar(..))
+import Strat.Poly.Graph
+  ( BinderArg(..)
+  , BinderMetaVar(..)
+  , EdgePayload(..)
+  , addEdgePayload
+  , emptyDiagram
+  , freshPort
+  , validateDiagram
+  )
 import Strat.Poly.ModeTheory
 import Strat.Poly.Morphism
 import Strat.Poly.Names
 import Strat.Poly.Obj
+import Strat.Pipeline (DerivedDoctrine(..))
 import Strat.Poly.Proof
   ( SearchBudget(..)
   , defaultSearchBudget
@@ -110,7 +124,9 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
         , morCheck = checkMode
         , morPolicy = policy
         }
-  genMap <- foldM (addGenMap src tgt ttSrc ttTgt tgtCtorTables modeMap mor0) M.empty [ g | RPMGen g <- rpmItems raw ]
+  explicitGenMap <- foldM (addGenMap src tgt ttSrc ttTgt tgtCtorTables modeMap mor0) M.empty [ g | RPMGen g <- rpmItems raw ]
+  autoFillNames <- reflectedAutoFillNames env src
+  genMap <- autoFillImplicitGenMaps autoFillNames src srcCtorTables tgt ttSrc ttTgt tgtCtorTables modeMap mor0 explicitGenMap
   ensureAllGenMapped src srcCtorTables genMap
   let mor = Morphism
         { morName = rpmName raw
@@ -298,6 +314,148 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       let slots = [ bs | InBinder bs <- gdDom gen ]
           holes = [ BinderMetaVar ("b" <> T.pack (show i)) | i <- [0 .. length slots - 1] ]
       in fmap M.fromList (mapM (mapOne ttSrc ttTgt tgtTables mor) (zip holes slots))
+    autoFillImplicitGenMaps autoFillNames src srcTables tgt ttSrc ttTgt tgtTables modeMap mor0 mp =
+      foldM addMissing mp (allAutoMappableGens autoFillNames src srcTables)
+      where
+        addMissing acc (modeSrc, gen)
+          | M.member (modeSrc, gdName gen) acc = Right acc
+          | otherwise =
+              case inferImplicitGenImage autoFillNames tgt ttSrc ttTgt tgtTables modeMap mor0 modeSrc gen of
+                Nothing -> Right acc
+                Just image -> Right (M.insert (modeSrc, gdName gen) image acc)
+    inferImplicitGenImage autoFillNames tgt ttSrc ttTgt tgtTables modeMap mor0 modeSrc gen
+      | gdName gen `S.notMember` autoFillNames = Nothing
+      | otherwise =
+          either (const Nothing) id $ do
+            modeTgt <- lookupModeMap modeMap modeSrc
+            targetGen <- lookupGeneratorMaybe tgt modeTgt (gdName gen)
+            case targetGen of
+              Nothing -> Right Nothing
+              Just targetGen' -> do
+                mappedParams <- mapM (mapParam ttSrc ttTgt tgtTables mor0) (gdParams gen)
+                mappedDom <- mapM (mapInputShape ttSrc ttTgt tgtTables mor0) (gdDom gen)
+                mappedCod <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor0) (gdCod gen)
+                if generatorParamsCompatible mappedParams (gdParams targetGen')
+                    && mappedDom == gdDom targetGen'
+                    && mappedCod == gdCod targetGen'
+                    && gdLiteralKind gen == gdLiteralKind targetGen'
+                  then Just <$> mkImplicitGenImage modeTgt (gdName targetGen') mappedParams mappedDom mappedCod
+                  else Right Nothing
+    allAutoMappableGens autoFillNames src ctorTables =
+      [ (mode, gd)
+      | (mode, table) <- M.toList (dGens src)
+      , gd <- M.elems table
+      , not (isTypeDeclGenNameInTables src ctorTables mode (ObjName (renderGenName (gdName gd))))
+      , gdName gd `S.member` autoFillNames
+      ]
+    lookupGeneratorMaybe doc mode name =
+      Right (M.lookup mode (dGens doc) >>= M.lookup name)
+    mapParam ttSrc ttTgt tgtTables mor param =
+      case param of
+        GP_Ty v -> GP_Ty <$> mapTyVarMode ttSrc ttTgt tgtTables mor v
+        GP_Tm v -> GP_Tm <$> mapTmVarSort ttSrc ttTgt tgtTables mor v
+    mapInputShape ttSrc ttTgt tgtTables mor shape =
+      case shape of
+        InPort ty -> InPort <$> applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor ty
+        InBinder sig -> InBinder <$> applyMorphismBinderSigWithTables tgtTables mor sig
+    generatorParamsCompatible xs ys =
+      length xs == length ys && and (zipWith paramCompatible xs ys)
+    paramCompatible srcParam tgtParam =
+      case (srcParam, tgtParam) of
+        (GP_Ty srcVar, GP_Ty tgtVar) ->
+          tmVarOwner srcVar == tmVarOwner tgtVar
+            && tmvSort srcVar == tmvSort tgtVar
+        (GP_Tm srcVar, GP_Tm tgtVar) ->
+          tmvSort srcVar == tmvSort tgtVar
+        _ -> False
+    mkImplicitGenImage mode genName params dom cod = do
+      args <- mapM paramArg params
+      let binderSlots = [ () | InBinder _ <- dom ]
+          bargs =
+            [ BAMeta (BinderMetaVar ("b" <> T.pack (show i)))
+            | i <- [0 .. length binderSlots - 1]
+            ]
+          portsDom = [ ty | InPort ty <- dom ]
+          binderSigs =
+            M.fromList
+              [ (BinderMetaVar ("b" <> T.pack (show i)), sig)
+              | (i, sig) <- zip [0 :: Int ..] [ sig | InBinder sig <- dom ]
+              ]
+          (ins, diag0) = allocPorts portsDom (emptyDiagram mode [])
+          (outs, diag1) = allocPorts cod diag0
+      diag2 <- addEdgePayload (PGen genName args bargs) ins outs diag1
+      let diag3 = diag2 { dIn = ins, dOut = outs }
+      validateDiagram diag3
+      pure (GenImage diag3 binderSigs)
+      where
+        allocPorts [] diag = ([], diag)
+        allocPorts (ty:rest) diag =
+          let (pid, diag1) = freshPort ty diag
+              (pids, diag2) = allocPorts rest diag1
+           in (pid : pids, diag2)
+        paramArg param =
+          case param of
+            GP_Ty v -> Right (CAObj (OVar v))
+            GP_Tm v -> CATm <$> tmVarDiagram v
+        tmVarDiagram v = do
+          let (outPid, d0) = freshPort (tmvSort v) (emptyDiagram (objOwnerMode (tmvSort v)) [])
+          d1 <- addEdgePayload (PTmMeta v) [] [outPid] d0
+          let d2 = d1 { dOut = [outPid] }
+          validateDiagram d2
+          pure (TermDiagram d2)
+    reflectedAutoFillNames env' srcDoc =
+      case M.lookup (dName srcDoc) (meDerivedDoctrines env') of
+        Just DerivedReflectQuotation { ddBase = baseName } -> do
+          baseDoc <-
+            case M.lookup baseName (meDoctrines env') of
+              Nothing -> Left ("Unknown doctrine: " <> baseName)
+              Just doc -> Right doc
+          baseTables <- deriveCtorTables baseDoc
+          let baseReflectedNames =
+                S.fromList
+                  [ GenName ("q_" <> renderGenName (gdName gd))
+                  | (_, table) <- M.toList (dGens baseDoc)
+                  , gd <- M.elems table
+                  , not
+                      ( isTypeDeclGenNameInTables
+                          baseDoc
+                          baseTables
+                          (gdMode gd)
+                          (ObjName (renderGenName (gdName gd)))
+                      )
+                  ]
+              supportNames =
+                S.fromList
+                  [ GenName "digit0"
+                  , GenName "digit1"
+                  , GenName "digit2"
+                  , GenName "digit3"
+                  , GenName "digit4"
+                  , GenName "digit5"
+                  , GenName "digit6"
+                  , GenName "digit7"
+                  , GenName "digit8"
+                  , GenName "digit9"
+                  , GenName "refId_nil"
+                  , GenName "refId_cons"
+                  , GenName "refId_label"
+                  , GenName "refIds_nil"
+                  , GenName "refIds_cons"
+                  , GenName "q_begin"
+                  , GenName "q_end"
+                  , GenName "q_res_box"
+                  , GenName "q_res_feedback"
+                  , GenName "q_provider"
+                  , GenName "q_module_ref"
+                  ]
+              sourceNames =
+                S.fromList
+                  [ gdName gd
+                  | table <- M.elems (dGens srcDoc)
+                  , gd <- M.elems table
+                  ]
+          pure (S.intersection sourceNames (baseReflectedNames `S.union` supportNames))
+        Nothing -> Right S.empty
     mapOne ttSrc ttTgt tgtTables mor (hole, sig) = do
       tmCtx' <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor) (bsTmCtx sig)
       dom' <- mapM (applyMorphismTyWithCaches ttSrc ttTgt tgtTables mor) (bsDom sig)

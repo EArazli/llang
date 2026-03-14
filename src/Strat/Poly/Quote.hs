@@ -15,6 +15,8 @@ import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Strat.Common.ModuleRef (ModuleValueRef(..), renderModuleValueRefAdapterChain)
+import Strat.Common.Provider (ModuleProvider(..), ProviderRef(..), renderProviderAdapterChain)
 import Strat.Pipeline (FragmentDecl(..))
 import Strat.Poly.DefEq (termExprToDiagramChecked)
 import Strat.Poly.Diagram (Diagram, unionDiagram)
@@ -74,6 +76,20 @@ data SharedBinding
       , sbIns :: [RefId]
       , sbOuts :: [RefId]
       , sbInner :: SharedProgram
+      }
+  | BindProvider
+      { sbKind :: SharedBindingKind
+      , sbScope :: [RefId]
+      , sbProviderRef :: ProviderRef
+      , sbIns :: [RefId]
+      , sbOuts :: [RefId]
+      }
+  | BindModuleRef
+      { sbKind :: SharedBindingKind
+      , sbScope :: [RefId]
+      , sbModuleRef :: ModuleValueRef
+      , sbIns :: [RefId]
+      , sbOuts :: [RefId]
       }
   | BindFeedback
       { sbScope :: [RefId]
@@ -182,6 +198,38 @@ quoteEdge doc mode fragment sourceDiag st edge =
       if included
         then shareBinding gen args binders
         else emitBinding SBResidual gen args binders
+    PProvider ref -> do
+      inputRefs <- mapPortRefs (eIns edge)
+      (outs, st1) <- allocOutputRefs sourceDiag st (eOuts edge)
+      let binding =
+            BindProvider
+              { sbKind = SBResidual
+              , sbScope = qsScope st
+              , sbProviderRef = ref
+              , sbIns = inputRefs
+              , sbOuts = outs
+              }
+      pure
+        st1
+          { qsBindingsRev = binding : qsBindingsRev st1
+          , qsScope = qsScope st1 <> outs
+          }
+    PModuleRef ref -> do
+      inputRefs <- mapPortRefs (eIns edge)
+      (outs, st1) <- allocOutputRefs sourceDiag st (eOuts edge)
+      let binding =
+            BindModuleRef
+              { sbKind = SBResidual
+              , sbScope = qsScope st
+              , sbModuleRef = ref
+              , sbIns = inputRefs
+              , sbOuts = outs
+              }
+      pure
+        st1
+          { qsBindingsRev = binding : qsBindingsRev st1
+          , qsScope = qsScope st1 <> outs
+          }
     PBox _ inner -> do
       innerProgram <- quoteNestedProgram doc mode fragment (frCrossBoxes fragment) inner
       inputRefs <- mapPortRefs (eIns edge)
@@ -400,6 +448,10 @@ ensureReflectedTarget doc program = do
           requireGenText (reflectedBindingGenNameText gen)
         BindBox {} ->
           Right ()
+        BindProvider {} ->
+          requireGenText reflectedProviderGenNameText
+        BindModuleRef {} ->
+          requireGenText reflectedModuleRefGenNameText
         BindFeedback {} ->
           Right ()
     requireGenText name =
@@ -425,6 +477,30 @@ reflectBinding doc program (seqPort, host0) binding =
       pure (seqOut, host3)
     BindBox { sbIns = ins, sbOuts = outs, sbInner = inner } ->
       reflectStructuredBinding doc program "q_res_box" seqPort host0 ins outs inner
+    BindProvider { sbProviderRef = ref, sbIns = ins, sbOuts = outs } -> do
+      metaArgs <- providerMetaArgs doc (spMode program) ref
+      refArgs <- mapM (refIdArg doc (spMode program)) (ins <> outs)
+      let seqTy = reflectedSeqTy (spMode program)
+          (seqOut, host1) = freshPort seqTy host0
+      host2 <-
+        addEdgePayload
+          (PGen (GenName reflectedProviderGenNameText) (metaArgs <> refArgs) [])
+          [seqPort]
+          [seqOut]
+          host1
+      pure (seqOut, host2)
+    BindModuleRef { sbModuleRef = ref, sbIns = ins, sbOuts = outs } -> do
+      metaArgs <- moduleRefMetaArgs doc (spMode program) ref
+      refArgs <- mapM (refIdArg doc (spMode program)) (ins <> outs)
+      let seqTy = reflectedSeqTy (spMode program)
+          (seqOut, host1) = freshPort seqTy host0
+      host2 <-
+        addEdgePayload
+          (PGen (GenName reflectedModuleRefGenNameText) (metaArgs <> refArgs) [])
+          [seqPort]
+          [seqOut]
+          host1
+      pure (seqOut, host2)
     BindFeedback { sbIns = ins, sbOuts = outs, sbBody = body } ->
       reflectStructuredBinding doc program "q_res_feedback" seqPort host0 ins outs body
 
@@ -571,6 +647,14 @@ reflectedBindingGenNameText :: GenName -> Text
 reflectedBindingGenNameText (GenName name) = "q_" <> name
 
 
+reflectedProviderGenNameText :: Text
+reflectedProviderGenNameText = "q_provider"
+
+
+reflectedModuleRefGenNameText :: Text
+reflectedModuleRefGenNameText = "q_module_ref"
+
+
 reflectedSeqTy :: ModeName -> Obj
 reflectedSeqTy mode = mkCon (ObjRef mode (ObjName "Seq")) []
 
@@ -627,6 +711,43 @@ fastRefIdLabelSort doc mode = do
 
 refIdLabelText :: RefId -> Text
 refIdLabelText (RefId n) = T.pack (show n)
+
+
+stringLiteralArg :: Doctrine -> ModeName -> Text -> Either Text CodeArg
+stringLiteralArg doc mode txt = CATm <$> stringLiteralTerm doc mode txt
+
+
+stringLiteralTerm :: Doctrine -> ModeName -> Text -> Either Text TermDiagram
+stringLiteralTerm doc mode txt = do
+  tt <- doctrineTypeTheory doc
+  sortTy <-
+    case fastRefIdLabelSort doc mode of
+      Left err -> Left err
+      Right (Just ty) -> Right ty
+      Right Nothing -> Left "quote: reflected provider bindings require a unique string literal sort"
+  termExprToDiagramChecked tt [] sortTy (TMLit (LString txt))
+
+
+providerMetaArgs :: Doctrine -> ModeName -> ProviderRef -> Either Text [CodeArg]
+providerMetaArgs doc mode ref =
+  mapM (stringLiteralArg doc mode)
+    [ mpName provider
+    , mpInterface provider
+    , T.pack (mpDescriptor provider)
+    , prValueName ref
+    , renderProviderAdapterChain provider
+    ]
+  where
+    provider = prProvider ref
+
+
+moduleRefMetaArgs :: Doctrine -> ModeName -> ModuleValueRef -> Either Text [CodeArg]
+moduleRefMetaArgs doc mode ref =
+  mapM (stringLiteralArg doc mode)
+    [ mvrModule ref
+    , mvrValueName ref
+    , renderModuleValueRefAdapterChain ref
+    ]
 
 
 reflectedBeginGen :: GenName

@@ -32,7 +32,8 @@ User-facing changes:
 - Applying a morphism now translates the diagram mode and type‑variable modes via
   the mode map.
 - `pushout` still requires **mode‑preserving** morphisms (identity mode map).
-- New example: `examples/mode_map_demo.run.llang`.
+- Canonical example coverage lives in `examples/build/**`; `examples/run/**` now
+  contains restored build-native entrypoints at the historic paths.
 
 ## Surface Structural Discipline
 
@@ -55,14 +56,58 @@ User-facing changes:
 - Surfaces may declare `base D;`. When present and `D != doctrine`, elaboration normalizes
   away surface-only generators and returns a diagram in the base doctrine.
 
-## Terms and `@term` References
+## Module Values and `@value` References
 
 User-facing changes:
 
-- New top-level `term <Name>` blocks compile a diagram and store its **normalized** form.
-  `term` supports doctrine/mode/surface/uses/apply/policy/fuel configuration and compiles
-  directly (without run pipelines).
-- Diagram expressions accept `@<TermName>` to splice a named term into a diagram.
+- Top-level `term` blocks were removed.
+- Named reusable diagrams now live inside `module` declarations as `let`-bound values.
+- Module values are referenced by bare name in later declarations, e.g. `hello; cat`.
+- Legacy `@value` splice syntax is rejected.
+
+## Languages + Module Surfaces
+
+User-facing changes:
+
+- `language` declarations no longer carry direct `mode` / `expr_surface` items.
+- `language` declarations no longer carry declaration-default `uses` items; interface defaults
+  belong on the selected `module_surface`.
+- Declaration-layer defaults now live in a first-class `module_surface`:
+  `module_surface DocUnit where { doctrine Doc; mode Doc; }`
+- Languages bind to that declaration surface explicitly:
+  `language DocLang where { doctrine Doc; module_surface DocUnit; }`
+- Module/interface elaboration uses the resolved module-surface defaults for mode and
+  expression-surface selection.
+- Declaration surfaces are now configurable from source through
+  `module_elaborator` declarations, but the extensibility point is still bounded:
+  `custom <tag> --- ... ---` bodies expand into ordinary interface/module items.
+
+## Recursive Module Groups
+
+User-facing changes:
+
+- `rec { ... }` inside `module` blocks has been removed.
+- Recursive program structure now needs an explicit representation in the selected
+  language surface or doctrine, rather than a placeholder module-level group syntax.
+
+## Module `data` Packages
+
+User-facing changes:
+
+- Ordinary program/module `data` declarations now elaborate as declaration packages, not
+  doctrine extensions.
+- Current syntax:
+  `data T @M where { ctor C : [] -> [T] @M; ... }`
+- Representation choice is now explicit and source-definable through `data_repr`.
+  Shipped base representations are `doctrine_data` and `opaque_data`.
+- `doctrine_data` is doctrine-backed packaging:
+  the language doctrine must already provide the type constructor and constructor generators.
+- `opaque_data` packages opaque module-level types with provider-backed constructors and may be
+  configured from source via `provider_interface` and `descriptor_prefix`.
+- Module `data` introduces a local type binding plus constructor value bindings, so later
+  declarations use the packaged constructors as ordinary module values, e.g. `Red ; Wrap`.
+- Parametric module `data` is currently rejected with a dedicated diagnostic; the current
+  module/interface type-binding layer is still monomorphic.
 
 ## Coercion Morphisms + Implicit Coercion Paths
 
@@ -71,8 +116,8 @@ User-facing changes:
 - Morphism blocks accept `coercion;` to mark a morphism as eligible for implicit coercion.
 - Doctrines defined with `extends` generate `<Name>.fromBase` coercion morphisms, and
   pushout/coproduct-generated morphisms are also marked coercions.
-- Runs and terms must end in the declared doctrine; if not, the compiler attempts a **unique
-  shortest** coercion path. Ambiguous or missing paths are now errors.
+- Module values must elaborate in the declared language doctrine; if not, the compiler attempts a
+  **unique shortest** coercion path. Ambiguous or missing paths are now errors.
 
 ## Doctrine Templates + Instantiation
 
@@ -96,10 +141,10 @@ User-facing changes:
 - `data T (a@M) @M where { C : [...]; ... }` expands to a `type` declaration plus
   constructor `gen`s with codomain `[T(a,...)]`.
 
-## Pipeline-Based Runs
+## Build-Oriented Execution
 
 User-facing changes:
 
-- Runs are now `run <Name> using <Pipeline> where { source ... }` with explicit `pipeline` declarations.
-- `run_spec` has been removed.
-- Run-level `model` and `show ...` clauses have been removed.
+- Legacy `run` declarations have been removed.
+- Entry points are explicit `build <Name> from <Module> using <Pipeline>;` declarations.
+- Historic paths under `examples/run/**` are now build-native examples, not a separate execution model.

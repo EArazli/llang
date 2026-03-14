@@ -22,16 +22,28 @@ fragment Share in D mode M where {
 
 derived doctrine D_Q = reflect quotation of D mode M;
 
-pipeline p where {
-  normalize { policy = "topmost"; fuel = 50; };
-  quote using Share into D_Q;
-  extract diagram;
+module_surface SharingRunUnit where {
+  doctrine D;
+  mode M;
 }
 
-run main using p where {
-  source doctrine D;
-  source mode M;
+language SharingRunLang where {
+  doctrine D;
+  module_surface SharingRunUnit;
 }
----
-a ; dup(T) ; (b * b) ; (c * c)
----
+
+module SharingRuns in SharingRunLang where {
+  let main
+  ---
+  a ; dup(T) ; (b * b) ; (c * c)
+  ---
+  export { main };
+}
+
+pipeline p where {
+  project export main;
+  normalize { policy = "topmost"; fuel = 50; };
+  quote using Share into D_Q;
+}
+
+build main from SharingRuns using p;

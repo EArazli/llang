@@ -1,0 +1,168 @@
+doctrine LogicJS where {
+  mode M acyclic classifiedBy M via M.U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_M : [] -> [M.U_M] @M;
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
+
+  gen B : [] -> [M.U_M] @M;
+  gen P : [] -> [M.U_M] @M;
+
+  gen true  : [] -> [B] @M;
+  gen false : [] -> [B] @M;
+  gen var( s:Str ) : [] -> [B] @M;
+
+  gen not : [B] -> [B] @M;
+  gen and : [B, B] -> [B] @M;
+  gen or  : [B, B] -> [B] @M;
+  gen xor : [B, B] -> [B] @M;
+
+  rule computational and_true_r -> : [B] -> [B] @M =
+    (true * ?x) ; and == ?x
+
+  rule computational xor_false_r -> : [B] -> [B] @M =
+    (false * ?x) ; xor == ?x
+
+  gen emit2( name:Str, k1:Str, k2:Str ) : [B, B] -> [P] @M;
+  gen concat : [P, P] -> [P] @M;
+}
+
+fragment ShareLogic in LogicJS mode M where {
+}
+
+derived doctrine LogicJS_Q = reflect quotation of LogicJS mode M;
+
+morphism emitJS : LogicJS -> Doc where {
+  check structural;
+
+  mode M -> Doc;
+  type Str @M -> Str @Doc;
+
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+
+  type B @M -> Doc @Doc;
+  type P @M -> Doc @Doc;
+
+  gen true  @M -> text(s = "true")
+  gen false @M -> text(s = "false")
+
+  -- env["x"]
+  gen var @M ->
+    ((text(s = "env[\"") * text(s = s)) ; cat) ;
+    (id[Doc] * text(s = "\"]")) ; cat
+
+  gen not @M ->
+    (text(s = "(!") * id[Doc]) ; cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen and @M ->
+    (((text(s = "(") * id[Doc]) ; cat) * id[Doc]) ;
+    (((id[Doc] * text(s = " && ")) ; cat) * id[Doc]) ;
+    cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen or @M ->
+    (((text(s = "(") * id[Doc]) ; cat) * id[Doc]) ;
+    (((id[Doc] * text(s = " || ")) ; cat) * id[Doc]) ;
+    cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  gen xor @M ->
+    (((text(s = "(") * id[Doc]) ; cat) * id[Doc]) ;
+    (((id[Doc] * text(s = " !== ")) ; cat) * id[Doc]) ;
+    cat ;
+    (id[Doc] * text(s = ")")) ; cat
+
+  -- export const <name> = env => ({ <k1>: e1, <k2>: e2 });
+  gen emit2 @M ->
+    (
+      ((((id[Doc] * ((((text(s = ", ") * text(s = k2)) ; cat) * text(s = ": ")) ; cat)) ; cat) * id[Doc]) ; cat)
+      ;
+      (
+        (
+          (((((((text(s = "export const ") * text(s = name)) ; cat) * text(s = " = env => ({ ")) ; cat) * text(s = k1)) ; cat) * text(s = ": ")) ; cat
+        ) * id[Doc]
+      ) ; cat
+      ;
+      (
+        (id[Doc] * ((text(s = " });") * line) ; cat) ; cat
+      )
+    )
+    )
+
+  -- doc1 ++ "\n\n" ++ doc2
+  gen concat @M ->
+    (((id[Doc] * line) ; cat ; (id[Doc] * line) ; cat) * id[Doc]) ; cat
+}
+
+module_surface LogicUnit where {
+  doctrine LogicJS;
+  mode M;
+}
+
+language LogicLang where {
+  doctrine LogicJS;
+  module_surface LogicUnit;
+}
+
+module LogicPrograms in LogicLang where {
+  let main_prog
+  ---
+  (
+    (
+      (
+        ((var(s = "a") * var(s = "b")) ; xor)
+        *
+        ((var(s = "a") * var(s = "b")) ; and)
+      ) ; emit2(name = "halfAdder", k1 = "sum", k2 = "carry")
+    )
+    *
+    (
+      (
+        (
+          ((var(s = "a") * var(s = "b")) ; xor) * var(s = "cin")
+        ) ; xor
+        *
+        (
+          (
+            ((var(s = "a") * var(s = "b")) ; and)
+            *
+            ((var(s = "cin") * ((var(s = "a") * var(s = "b")) ; xor)) ; and)
+          ) ; or
+        )
+      ) ; emit2(name = "fullAdder", k1 = "sum", k2 = "carry")
+    )
+  ) ; concat
+  ---
+
+  let share_prog
+  ---
+  (
+    ((var(s = "a") * var(s = "b")) ; xor)
+    *
+    ((var(s = "a") * var(s = "b")) ; and)
+  ) ; emit2(name = "halfAdder", k1 = "sum", k2 = "carry")
+  ---
+
+  export { main_prog, share_prog };
+}
+
+pipeline js_codegen where {
+  project export main_prog;
+  normalize { policy = "computational_lr"; fuel = 200; };
+  apply emitJS;
+  emit via Doc { stdout = true; };
+}
+
+pipeline show_share where {
+  project export share_prog;
+  quote using ShareLogic into LogicJS_Q;
+}
+
+build main from LogicPrograms using js_codegen;
+build share from LogicPrograms using show_share;

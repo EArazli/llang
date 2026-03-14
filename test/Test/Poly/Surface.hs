@@ -13,7 +13,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
-import Strat.Frontend.Env (emptyEnv, ModuleEnv(..), TermDef(..))
+import Strat.Frontend.Env (emptyEnv, ModuleEnv(..), ScopedValue(..))
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.ModeTheory (ModeName(..), ClassificationDecl(..), ModeTheory(..))
 import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), CodeArg(..), CodeTerm(..), mkCon, mkModeMetaVar, boundTmIndicesTerm)
@@ -22,7 +22,7 @@ import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(
 import Strat.Poly.Morphism (Morphism(..), MorphismCheck(..), GenImage(..))
 import Strat.Poly.Surface.Parse (parseSurfaceSpec)
 import Strat.Poly.Surface (PolySurfaceDef, elabPolySurfaceDecl)
-import Strat.Poly.Surface.Elab (elabSurfaceExpr)
+import Strat.Poly.Surface.Elab (elabSurfaceExpr, elabSurfaceExprInScope)
 import Strat.Poly.Diagram (idD, genD, diagramDom, diagramCod)
 import Strat.Poly.Graph (Diagram(..), Edge(..), EdgePayload(..), unPortId)
 import Strat.Poly.DiagramIso (diagramIsoEq)
@@ -47,7 +47,7 @@ tests =
     , testCase "surface elaborates constructor args in signature owner modes" testSurfaceConstructorArgOwnerModes
     , testCase "surface type annotations support term-indexed constructor args" testSurfaceConstructorTermArgInTypeAnnotation
     , testCase "surface term-indexed annotations can reference bound terms" testSurfaceConstructorTermArgUsesBoundBinder
-    , testCase "template @TermName splice uses module term" testSurfaceTemplateSplice
+    , testCase "template bare declaration ref uses scoped value" testSurfaceTemplateSplice
     , testCase "surface template trace elaborates to feedback with outer boundary" testSurfaceTemplateTrace
     , testCase "surface elaboration eliminates to base doctrine" testSurfaceEliminatesToBaseDoctrine
     ]
@@ -87,7 +87,7 @@ spliceSpecText =
     , "  symbols: ;"
     , "}"
     , "expr {"
-    , "  atom: \"use\" => @T;"
+    , "  atom: \"use\" => T;"
     , "}"
     ]
 
@@ -851,14 +851,11 @@ testSurfaceTemplateSplice = do
   let doc = mkDoctrine True True
   surf <- either (assertFailure . T.unpack) pure (mkSurfaceWithSpec spliceSpecText doc)
   let termDiag = idD modeM [typeA]
-  let env =
-        emptyEnv
-          { meTerms =
-              M.fromList
-                [ ("T", TermDef { tdDoctrine = "TestDoc", tdMode = modeM, tdDiagram = termDiag })
-                ]
-          }
-  out <- either (assertFailure . T.unpack) pure (elabSurfaceDiagram env doc surf "use")
+  let valueScope =
+        M.fromList
+          [ ("T", ScopedValue { svDoctrine = "TestDoc", svMode = modeM, svDiagram = termDiag })
+          ]
+  out <- either (assertFailure . T.unpack) pure (fmap snd (elabSurfaceExprInScope valueScope M.empty emptyEnv doc surf "use"))
   iso <-
     case diagramIsoEq out termDiag of
       Left err -> assertFailure (T.unpack err)

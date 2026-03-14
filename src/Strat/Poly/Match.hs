@@ -54,6 +54,7 @@ data ArgKind = AKObj | AKTm
 
 data PayloadTag
   = PTGen
+  | PTProvider
   | PTBox
   | PTFeedback
   | PTSplice
@@ -185,6 +186,8 @@ payloadCompatible p h =
         && length args1 == length args2
         && and (zipWith sameArgKind args1 args2)
         && length bargs1 == length bargs2
+    (PProvider ref1, PProvider ref2) -> ref1 == ref2
+    (PModuleRef ref1, PModuleRef ref2) -> ref1 == ref2
     (PBox _ _, PBox _ _) -> True
     (PFeedback _, PFeedback _) -> True
     (PSplice x me1, PSplice y me2) -> x == y && me1 == me2
@@ -308,6 +311,12 @@ payloadSubsts tt flex lhs match patEdge hostEdge =
               | otherwise -> Right []
             _ -> Right []
 
+    (PProvider ref1, PProvider ref2)
+      | ref1 == ref2 -> Right [(mTySubst match, mBinderSub match)]
+      | otherwise -> Right []
+    (PModuleRef ref1, PModuleRef ref2)
+      | ref1 == ref2 -> Right [(mTySubst match, mBinderSub match)]
+      | otherwise -> Right []
     (PBox _ d1, PBox _ d2) -> do
       subs <- diagramIsoMatchWithVarsFrom tt flex (mTySubst match) d1 d2
       pure [ (tySub', mBinderSub match) | tySub' <- subs ]
@@ -426,6 +435,8 @@ edgeSig edge =
     payloadTag payload =
       case payload of
         PGen _ _ _ -> PTGen
+        PProvider _ -> PTProvider
+        PModuleRef _ -> PTProvider
         PBox _ _ -> PTBox
         PFeedback _ -> PTFeedback
         PSplice _ _ -> PTSplice

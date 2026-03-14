@@ -15,14 +15,21 @@ module Strat.Poly.Diagram
   , diagramCod
   , applySubstDiagram
   , freeVarsDiagram
+  , providerRefsDiagram
+  , moduleValueRefsDiagram
+  , mapProviderRefsDiagram
+  , mapModuleValueRefsDiagram
   , binderArgMetaVarsDiagram
   , spliceMetaVarsDiagram
   , binderMetaVarsDiagram
   ) where
 
+import Control.Monad.Identity (runIdentity)
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
+import Strat.Common.ModuleRef (ModuleValueRef)
+import Strat.Common.Provider (ProviderRef)
 import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Obj (Context, Obj, TmVar(..), CodeArg(..), freeVarsObj, freeVarsTerm)
@@ -163,6 +170,47 @@ freeVarsDiagram =
       case arg of
         CAObj obj -> freeVarsObj obj
         CATm tm -> freeVarsTerm tm
+
+providerRefsDiagram :: Diagram -> S.Set ProviderRef
+providerRefsDiagram =
+  foldDiagram (\_ -> mempty) onPayload (\_ -> mempty) (\_ -> mempty)
+  where
+    onPayload payload =
+      case payload of
+        PProvider ref -> S.singleton ref
+        _ -> S.empty
+
+
+moduleValueRefsDiagram :: Diagram -> S.Set ModuleValueRef
+moduleValueRefsDiagram =
+  foldDiagram (\_ -> mempty) onPayload (\_ -> mempty) (\_ -> mempty)
+  where
+    onPayload payload =
+      case payload of
+        PModuleRef ref -> S.singleton ref
+        _ -> S.empty
+
+
+mapProviderRefsDiagram :: (ProviderRef -> ProviderRef) -> Diagram -> Diagram
+mapProviderRefsDiagram f =
+  runIdentity . traverseDiagram pure onPayload pure pure
+  where
+    onPayload payload =
+      pure $
+        case payload of
+          PProvider ref -> PProvider (f ref)
+          _ -> payload
+
+
+mapModuleValueRefsDiagram :: (ModuleValueRef -> ModuleValueRef) -> Diagram -> Diagram
+mapModuleValueRefsDiagram f =
+  runIdentity . traverseDiagram pure onPayload pure pure
+  where
+    onPayload payload =
+      pure $
+        case payload of
+          PModuleRef ref -> PModuleRef (f ref)
+          _ -> payload
 
 binderArgMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
 binderArgMetaVarsDiagram =

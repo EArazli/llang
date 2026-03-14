@@ -1,0 +1,41 @@
+doctrine PingDoc where {
+  mode M classifiedBy M via M.U_M;
+  gen U_M : [] -> [U_M] @M;
+  gen Doc : [] -> [U_M] @M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  gen ping : [] -> [Doc] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+}
+
+module_surface PingUnit where {
+  doctrine PingDoc;
+  mode M;
+}
+
+language PingLang where {
+  doctrine PingDoc;
+  module_surface PingUnit;
+}
+
+interface PingSig in PingLang where {
+  val ping : [] -> [Doc] @M;
+}
+
+module App in PingLang where {
+  import foreign Remote : PingSig via "provider:ping";
+
+  let main : [] -> [Doc] @M
+  ---
+  Remote::ping
+  ---
+
+  export { main };
+}
+
+pipeline p where {
+  project export main;
+}
+
+build main from App using p;

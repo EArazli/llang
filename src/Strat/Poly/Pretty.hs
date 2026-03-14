@@ -9,6 +9,8 @@ import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Strat.Common.ModuleRef (ModuleValueRef(..), renderModuleValueRefAdapterChain)
+import Strat.Common.Provider (ProviderRef(..), ModuleProvider(..), renderProviderAdapterChain)
 import Strat.Poly.Graph
 import Strat.Poly.Obj
 import Strat.Poly.Names (GenName(..), BoxName(..))
@@ -59,6 +61,36 @@ renderEdges edges = do
                 <> renderGenCall g args
                 <> bargsTxt
                 <> " ["
+                <> renderPortList (eIns e)
+                <> "] -> ["
+                <> renderPortList (eOuts e)
+                <> "]"
+            )
+        PProvider ref ->
+          Right
+            ( "  "
+                <> renderEdgeId (eId e)
+                <> ": provider("
+                <> mpName (prProvider ref)
+                <> "::"
+                <> prValueName ref
+                <> providerDescriptorSuffix ref
+                <> ") ["
+                <> renderPortList (eIns e)
+                <> "] -> ["
+                <> renderPortList (eOuts e)
+                <> "]"
+            )
+        PModuleRef ref ->
+          Right
+            ( "  "
+                <> renderEdgeId (eId e)
+                <> ": import("
+                <> mvrModule ref
+                <> "::"
+                <> mvrValueName ref
+                <> renderModuleValueRefAdapterChain ref
+                <> ") ["
                 <> renderPortList (eIns e)
                 <> "] -> ["
                 <> renderPortList (eOuts e)
@@ -215,5 +247,13 @@ renderEdgeId (EdgeId k) = "e" <> T.pack (show k)
 
 renderBinderMeta :: BinderMetaVar -> Text
 renderBinderMeta (BinderMetaVar x) = "?" <> x
+
+providerDescriptorSuffix :: ProviderRef -> Text
+providerDescriptorSuffix ref =
+  " via "
+    <> T.pack (mpDescriptor provider)
+    <> renderProviderAdapterChain provider
+  where
+    provider = prProvider ref
 
 -- renderType and renderMode come from Strat.Poly.ObjPretty

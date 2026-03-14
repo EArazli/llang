@@ -107,13 +107,13 @@ data Morphism = Morphism
   , morGenMap  :: M.Map (ModeName, GenName) GenImage
   , morCheck :: MorphismCheck
   , morPolicy  :: RewritePolicy
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data MorphismCheck
   = CheckAll
   | CheckStructural
   | CheckNone
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data MorphismCheckResult
   = MorphismCheckProved [(Text, JoinProof)]
@@ -123,12 +123,12 @@ data MorphismCheckResult
 data GenImage = GenImage
   { giDiagram :: Diagram
   , giBinderSigs :: M.Map BinderMetaVar BinderSig
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data TypeTemplate = TypeTemplate
   { ttParams :: [GenParam]
   , ttBody :: Obj
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 mapMode :: Morphism -> ModeName -> Either Text ModeName
 mapMode mor mode =

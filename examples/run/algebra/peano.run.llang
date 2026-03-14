@@ -1,4 +1,4 @@
-import "../../lib/algebra/peano.llang";
+include "../../lib/algebra/peano.llang";
 
 surface PeanoTerm where {
   doctrine Peano;
@@ -25,17 +25,30 @@ surface PeanoTerm where {
   }
 }
 
-pipeline debug where {
-  normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
+module_surface PeanoRunUnit where {
+  doctrine Peano;
+  mode M;
+  surface PeanoTerm;
 }
 
-run main using debug where {
-  source doctrine Peano;
-  source mode M;
-  source surface PeanoTerm;
+language PeanoRunLang where {
+  doctrine Peano;
+  module_surface PeanoRunUnit;
 }
----
-term {
-  out add(S(Z), S(Z))
+
+module PeanoRuns in PeanoRunLang where {
+  let main
+  ---
+  term {
+    out add(S(Z), S(Z))
+  }
+  ---
+  export { main };
 }
+
+pipeline debug where {
+  project export main;
+  normalize { policy = "topmost"; fuel = 50; };
+}
+
+build main from PeanoRuns using debug;

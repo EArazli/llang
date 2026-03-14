@@ -1,4 +1,4 @@
-import "../../../stdlib/struct.cartesian.llang";
+include "../../../stdlib/struct.cartesian.llang";
 
 doctrine CartMonoid extends StructCartesian where {
   gen A : [] -> [U_M] @M;

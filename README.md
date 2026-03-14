@@ -1,19 +1,21 @@
 # llang
 
-Typed doctrine kernel with rewriting, modular doctrine composition, a DSL, and a small CLI.
+Typed doctrine kernel with rewriting, modular doctrine composition, a DSL, and a build-oriented CLI.
 
-See `SPEC.md` for the kernel semantics, `examples/README.md` for runnable examples, and `docs/CANONICAL_COVERAGE.md` for explicit canonical-target coverage artifacts.
+See `SPEC.md` for current semantics, `RESTRICTIONS.md` for deliberate implementation boundaries, `examples/README.md` for the current example set, and `docs/CANONICAL_COVERAGE.md` for explicit coverage targets.
 
 Examples:
 - JS codegen output:
-  `stack run -- examples/run/codegen/logic_full_adder_codegen.run.llang --run main`
+  `stack run -- examples/build/logic_full_adder_codegen.llang --build main`
+- Doctrine-backed module data package:
+  `stack run -- examples/build/doctrine_data_package.llang --build main`
 - Reflected quotation debug view for the same example:
-  `stack run -- examples/run/codegen/logic_full_adder_codegen.run.llang --run share`
-- Pair-based forward AD lowered to shared JS from the reflected quotation IR after one differentiation pass:
-  `stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run main`
-- The same pair-based example, but with `forwardAD` applied twice before the same reflected-JS path:
-  `stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run main2`
-- Inspect the reflected quotation IR for that same example:
-  `stack run -- examples/endtoend/autodiff_times_sin_pair_core.run.llang --run share`
-- Write extracted `FileTree` artifacts to disk (only when `--output` is passed):
-  `stack run -- examples/run/codegen/jsartifact_filetree_hello.run.llang --output`
+  `stack run -- examples/build/logic_full_adder_codegen.llang --build share`
+- Pair-based forward AD lowered to shared JS:
+  `stack run -- examples/build/autodiff_times_sin_pair_core.llang --build main`
+- The same pair-based example after two AD passes:
+  `stack run -- examples/build/autodiff_times_sin_pair_core.llang --build main2`
+- Inspect the reflected quotation IR directly:
+  `stack run -- examples/build/autodiff_times_sin_pair_core.llang --build share`
+- Write emitted `FileTree` artifacts to disk:
+  `stack run -- examples/build/autodiff_times_sin.llang --build main --output`

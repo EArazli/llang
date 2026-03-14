@@ -3,6 +3,8 @@
 module Strat.Poly.Syntax
   ( ObjName(..)
   , ObjRef(..)
+  , ProviderRef(..)
+  , ModuleValueRef(..)
   , mkModeMetaVar
   , identityModExpr
   , TmVar(..)
@@ -27,50 +29,54 @@ module Strat.Poly.Syntax
 
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
+import Strat.Common.ModuleRef (ModuleValueRef(..))
+import Strat.Common.Provider (ProviderRef(..))
 import Strat.Poly.Literal (Literal)
 import Strat.Poly.ModeSyntax (ModeName, ModExpr(..))
 import Strat.Poly.Names (BoxName, GenName)
 
 
-newtype ObjName = ObjName Text deriving (Eq, Ord, Show)
+newtype ObjName = ObjName Text deriving (Eq, Ord, Read, Show)
 
 data ObjRef = ObjRef
   { orMode :: ModeName
   , orName :: ObjName
-  } deriving (Eq, Ord, Show)
+  } deriving (Eq, Ord, Read, Show)
 
 data TmVar = TmVar
   { tmvName :: Text
   , tmvSort :: Obj
   , tmvScope :: Int
   , tmvOwnerMode :: Maybe ModeName
-  } deriving (Show)
+  } deriving (Read, Show)
 
-newtype PortId = PortId Int deriving (Eq, Ord, Show)
-newtype EdgeId = EdgeId Int deriving (Eq, Ord, Show)
-newtype BinderMetaVar = BinderMetaVar Text deriving (Eq, Ord, Show)
+newtype PortId = PortId Int deriving (Eq, Ord, Read, Show)
+newtype EdgeId = EdgeId Int deriving (Eq, Ord, Read, Show)
+newtype BinderMetaVar = BinderMetaVar Text deriving (Eq, Ord, Read, Show)
 
 data BinderArg
   = BAConcrete Diagram
   | BAMeta BinderMetaVar
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data EdgePayload
   = PGen GenName [CodeArg] [BinderArg]
+  | PProvider ProviderRef
+  | PModuleRef ModuleValueRef
   | PBox BoxName Diagram
   | PFeedback Diagram
   | PSplice BinderMetaVar ModExpr
   | PTmMeta TmVar
   | PTmLit Literal
   | PInternalDrop
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data Edge = Edge
   { eId :: EdgeId
   , ePayload :: EdgePayload
   , eIns :: [PortId]
   , eOuts :: [PortId]
-  } deriving (Eq, Ord, Show)
+  } deriving (Eq, Ord, Read, Show)
 
 data Diagram = Diagram
   { dMode :: ModeName
@@ -84,27 +90,27 @@ data Diagram = Diagram
   , dEdges :: IM.IntMap Edge
   , dNextPort :: Int
   , dNextEdge :: Int
-  } deriving (Eq, Ord, Show)
+  } deriving (Eq, Ord, Read, Show)
 
 newtype TermDiagram = TermDiagram { unTerm :: Diagram }
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data CodeArg
   = CAObj Obj
   | CATm TermDiagram
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data CodeTerm
   = CTMeta TmVar
   | CTCon ObjRef [CodeArg]
   | CTLift ModExpr CodeTerm
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data Obj = Obj
   { objOwnerMode :: ModeName
   , objCode :: CodeTerm
   }
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 metaSortObj :: ModeName -> Obj
 metaSortObj mode =
@@ -152,7 +158,7 @@ sameTmVarId v w = tmVarIdKey v == tmVarIdKey w
 type Context = [Obj]
 
 newtype CanonDiagram = CanonDiagram { unCanon :: Diagram }
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 unPortId :: PortId -> Int
 unPortId (PortId x) = x

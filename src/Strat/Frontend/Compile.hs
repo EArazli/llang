@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Frontend.Compile
   ( compileDiagramArtifact
+  , CompiledDiagramArtifact(..)
   , compileSourceDiagram
   , applyMorphisms
   ) where
@@ -8,25 +9,36 @@ module Strat.Frontend.Compile
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Strat.Common.OpaqueType (isOpaqueTypeName)
 import Strat.Common.Rules (RewritePolicy(..))
-import Strat.Frontend.Env (ModuleEnv(..))
+import Strat.Frontend.Env (ModuleEnv(..), ScopedValue(..))
 import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
-import Strat.Poly.DSL.Elab (elabDiagExpr)
+import Strat.Poly.DSL.Elab (elabDiagExprInScope)
 import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
 import Strat.Poly.Diagram (Diagram, freeVarsDiagram)
 import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
-import Strat.Poly.Obj (TmVar(..))
+import Strat.Poly.Obj (Obj, TmVar(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (rulesFromPolicy)
 import Strat.Poly.Surface (PolySurfaceDef(..))
-import Strat.Poly.Surface.Elab (elabSurfaceExpr)
+import Strat.Poly.Surface.Elab (elabSurfaceNodeInScope)
+import Strat.Poly.Surface.Parse (parseSurfaceExpr)
 import Strat.Poly.Morphism (Morphism(..), applyMorphismDiagram)
 
 
+data CompiledDiagramArtifact = CompiledDiagramArtifact
+  { cdaDoctrine :: Doctrine
+  , cdaInputDiagram :: Diagram
+  , cdaNormalizedDiagram :: Diagram
+  }
+
+
 compileDiagramArtifact
-  :: ModuleEnv
+  :: M.Map Text ScopedValue
+  -> M.Map Text Obj
+  -> ModuleEnv
   -> Text        -- target doctrine name
   -> Maybe Text  -- mode override
   -> Maybe Text  -- surface
@@ -35,9 +47,9 @@ compileDiagramArtifact
   -> RewritePolicy
   -> Int
   -> Text        -- expr text
-  -> Either Text (Doctrine, Diagram, Diagram)
-compileDiagramArtifact env targetName mMode mSurface uses morphs policy fuel exprText = do
-  (docUsed, diagUsed) <- compileSourceDiagram env targetName mMode mSurface uses exprText
+  -> Either Text CompiledDiagramArtifact
+compileDiagramArtifact valueScope typeScope env targetName mMode mSurface uses morphs policy fuel exprText = do
+  (docUsed, diagUsed) <- compileSourceDiagram valueScope typeScope env targetName mMode mSurface uses exprText
   (docApplied, diagApplied) <- applyMorphisms env docUsed diagUsed morphs
   (docFinal, diagFinal) <-
     if dName docApplied == targetName
@@ -53,29 +65,37 @@ compileDiagramArtifact env targetName mMode mSurface uses morphs policy fuel exp
         case status of
           Finished d -> d
           OutOfFuel d -> d
-  pure (docFinal, diagFinal, norm)
+  pure
+    CompiledDiagramArtifact
+      { cdaDoctrine = docFinal
+      , cdaInputDiagram = diagFinal
+      , cdaNormalizedDiagram = norm
+      }
 
 compileSourceDiagram
-  :: ModuleEnv
+  :: M.Map Text ScopedValue
+  -> M.Map Text Obj
+  -> ModuleEnv
   -> Text
   -> Maybe Text
   -> Maybe Text
   -> [Text]
   -> Text
   -> Either Text (Doctrine, Diagram)
-compileSourceDiagram env targetName mMode mSurface uses exprText = do
+compileSourceDiagram valueScope typeScope env targetName mMode mSurface uses exprText = do
   docTarget <- lookupDoctrine env targetName
   (docSurface, _mode, diag0) <- case mSurface of
     Nothing -> do
       mode <- resolveMode docTarget mMode Nothing
       rawExpr <- parseDiagExpr exprText
-      diag <- elabDiagExpr env docTarget mode [] rawExpr
+      diag <- elabDiagExprInScope valueScope typeScope env docTarget mode [] rawExpr
       pure (docTarget, mode, diag)
     Just name -> do
       surf <- lookupSurface env name
       docSurface <- lookupDoctrine env (psDoctrine surf)
       mode <- resolveMode docSurface mMode (Just surf)
-      (docOut, diagOut) <- elabSurfaceExpr env docSurface surf exprText
+      node <- parseSurfaceExpr (psSpec surf) exprText
+      (docOut, diagOut) <- elabSurfaceNodeInScope valueScope typeScope env docSurface surf node
       pure (docOut, mode, diagOut)
   morphsFromUses <- resolveUses env targetName uses
   (docUsed, diagUsed) <- applyMorphisms env docSurface diag0 morphsFromUses
@@ -87,7 +107,7 @@ compileSourceDiagram env targetName mMode mSurface uses exprText = do
         case coerceDiagramTo env docUsed diagUsed targetName of
           Right ok -> Right ok
           Left err -> Left (renderMismatch usesMismatch err)
-  let unresolved = S.toList (freeVarsDiagram diagFinal)
+  let unresolved = filter (not . isOpaquePlaceholderVar) (S.toList (freeVarsDiagram diagFinal))
   if null unresolved
     then Right ()
   else
@@ -98,6 +118,8 @@ compileSourceDiagram env targetName mMode mSurface uses exprText = do
            <> " (likely missing explicit arguments)")
   pure (docFinal, diagFinal)
   where
+    isOpaquePlaceholderVar v =
+      isOpaqueTypeName (tmvName v)
     punctuate _ [] = []
     punctuate _ [x] = [x]
     punctuate sep (x:xs) = x : map (sep <>) xs

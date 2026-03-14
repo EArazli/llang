@@ -40,7 +40,6 @@ polyDiagTerm =
     <|> polyTraceTerm
     <|> polyLoopTerm
     <|> polyBoxTerm
-    <|> polyTermRefTerm
     <|> polyGenTerm
     <|> parens polyDiagExpr
 
@@ -70,12 +69,6 @@ polySpliceTerm = do
   meta <- binderMetaVar
   _ <- symbol ")"
   pure (RDSplice meta)
-
-polyTermRefTerm :: Parser RawDiagExpr
-polyTermRefTerm = do
-  _ <- symbol "@"
-  name <- ident
-  pure (RDTermRef name)
 
 polyBoxTerm :: Parser RawDiagExpr
 polyBoxTerm = do

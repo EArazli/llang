@@ -280,6 +280,16 @@ algoEq =
               foldl step (Right [()]) (zip bargs1 bargs2)
           | otherwise ->
               Right []
+        (PProvider ref1, PProvider ref2)
+          | ref1 == ref2 ->
+              Right [()]
+          | otherwise ->
+              Right []
+        (PModuleRef ref1, PModuleRef ref2)
+          | ref1 == ref2 ->
+              Right [()]
+          | otherwise ->
+              Right []
         (PBox _ d1, PBox _ d2) ->
           recurse () d1 d2
         (PFeedback d1, PFeedback d2) ->
@@ -327,6 +337,8 @@ algoEq =
             && args1 == args2
             && length bargs1 == length bargs2
             && and (zipWith binderShape bargs1 bargs2)
+        (PProvider ref1, PProvider ref2) -> ref1 == ref2
+        (PModuleRef ref1, PModuleRef ref2) -> ref1 == ref2
         (PBox _ _, PBox _ _) -> True
         (PFeedback _, PFeedback _) -> True
         (PSplice x me1, PSplice y me2) -> x == y && me1 == me2
@@ -415,6 +427,16 @@ algoMatch tt flex =
                       Right []
                 _ ->
                   Right []
+        (PProvider ref1, PProvider ref2)
+          | ref1 == ref2 ->
+              Right [extra]
+          | otherwise ->
+              Right []
+        (PModuleRef ref1, PModuleRef ref2)
+          | ref1 == ref2 ->
+              Right [extra]
+          | otherwise ->
+              Right []
         (PBox _ d1, PBox _ d2) ->
           recurse extra d1 d2
         (PFeedback d1, PFeedback d2) ->
@@ -447,6 +469,8 @@ algoMatch tt flex =
             && length bargs1 == length bargs2
             && and (zipWith sameArgKind args1 args2)
             && and (zipWith binderShape bargs1 bargs2)
+        (PProvider ref1, PProvider ref2) -> ref1 == ref2
+        (PModuleRef ref1, PModuleRef ref2) -> ref1 == ref2
         (PBox _ _, PBox _ _) -> True
         (PFeedback _, PFeedback _) -> True
         (PSplice x me1, PSplice y me2) -> x == y && me1 == me2

@@ -1,0 +1,39 @@
+module_surface DocUnit where {
+  doctrine Doc;
+  mode Doc;
+}
+
+language DocLang where {
+  doctrine Doc;
+  module_surface DocUnit;
+}
+
+interface GreetingSig in DocLang where {
+  val hello : [] -> [Doc] @Doc;
+}
+
+module Greeting in DocLang where {
+  let hello
+  ---
+  text("hello")
+  ---
+  export { hello };
+  export interface GreetingSig;
+}
+
+module App in DocLang where {
+  import Greeting as Lib : GreetingSig;
+
+  let main
+  ---
+  (Lib::hello * text(" from modules")); cat
+  ---
+
+  export { main };
+}
+
+pipeline p where {
+  emit via Doc { stdout = true; };
+}
+
+build main from App using p;

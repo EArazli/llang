@@ -1,23 +1,15 @@
-Runnable examples
+Runnable legacy-path examples
 
-Files under `examples/run/**` are runnable entrypoints. They may import shared
-modules from `examples/lib/**`.
-
-`examples/run/xfail/**` are runnable but intentionally fail with checker/surface
-errors.
+Files under `examples/run/**` are restored entrypoints that now use the
+build/module frontend. The old `run` construct is gone; these files keep the
+historic paths while exposing ordinary `build` targets.
 
 From the repo root, run any example with:
 
-  stack run -- <path-to-run-file>
+  `stack run -- <path-to-example>`
 
-If you have the `llang` executable on your PATH, you can also run:
+If a file defines multiple builds, pass `--build <name>`:
 
-  llang <path-to-run-file>
+  `stack run -- <path-to-example> --build <name>`
 
-Notes:
-- Pipelines are explicit (`pipeline ...`) and runs bind a pipeline via
-  `run ... using ... where { source ... }`.
-- Some files define multiple `run` blocks. For those, pass `--run <name>`:
-  `stack run -- <path-to-run-file> --run <name>`.
-- To materialize `FileTree` artifacts to disk, pass `--output`; otherwise the
-  CLI only prints the extracted file listing/content.
+To materialize `FileTree` output to disk, pass `--output`.

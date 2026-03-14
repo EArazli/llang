@@ -8,16 +8,27 @@ module Strat.Frontend.Env
   , addProofStats
   , subProofStats
   , proofStatsTotal
-  , TermDef(..)
+  , ScopedType(..)
+  , ScopedValue(..)
   , emptyEnv
   , mergeEnv
   ) where
 
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
-import Strat.Pipeline (Pipeline, Run, DerivedDoctrine, FragmentDecl)
+import Strat.Pipeline (Pipeline, DerivedDoctrine, FragmentDecl)
+import Strat.Frontend.Model
+  ( LanguageDef
+  , ModuleElaboratorDef
+  , ModuleDataReprDef
+  , ModuleSurfaceDef
+  , InterfaceDef
+  , ModuleDef
+  , BuildDef
+  )
 import Strat.Poly.Kernel (Doctrine)
 import Strat.Poly.Diagram (Diagram)
+import Strat.Poly.Obj (Obj)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Morphism (Morphism)
 import Strat.Poly.Surface (PolySurfaceDef)
@@ -29,7 +40,7 @@ data ProofStats = ProofStats
   , psActionProofs :: Int
   , psImplementsProofs :: Int
   }
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 emptyProofStats :: ProofStats
 emptyProofStats =
@@ -60,16 +71,23 @@ proofStatsTotal ps =
   psMorphismProofs ps + psActionProofs ps + psImplementsProofs ps
 
 
-data TermDef = TermDef
-  { tdDoctrine :: Text
-  , tdMode :: ModeName
-  , tdDiagram :: Diagram
-  } deriving (Eq, Show)
+data ScopedType = ScopedType
+  { stDoctrine :: Text
+  , stMode :: ModeName
+  , stBody :: Obj
+  } deriving (Eq, Read, Show)
+
+
+data ScopedValue = ScopedValue
+  { svDoctrine :: Text
+  , svMode :: ModeName
+  , svDiagram :: Diagram
+  } deriving (Eq, Read, Show)
 
 data FunctorParamDef = FunctorParamDef
   { fpdName :: Text
   , fpdSchemaName :: Text
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data DoctrineFunctorDef = DoctrineFunctorDef
   { dfName :: Text
@@ -77,23 +95,28 @@ data DoctrineFunctorDef = DoctrineFunctorDef
   , dfIface :: Doctrine
   , dfBody :: Doctrine
   , dfIncl :: Morphism
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 
 data ModuleEnv = ModuleEnv
   { meDoctrines :: M.Map Text Doctrine
   , meMorphisms :: M.Map Text Morphism
   , meSurfaces :: M.Map Text PolySurfaceDef
+  , meModuleElaborators :: M.Map Text ModuleElaboratorDef
+  , meModuleDataReprs :: M.Map Text ModuleDataReprDef
+  , meModuleSurfaces :: M.Map Text ModuleSurfaceDef
   , mePipelines :: M.Map Text Pipeline
+  , meLanguages :: M.Map Text LanguageDef
+  , meInterfaces :: M.Map Text InterfaceDef
+  , meModules :: M.Map Text ModuleDef
+  , meBuilds :: M.Map Text BuildDef
   , meFragments :: M.Map Text FragmentDecl
   , meDerivedDoctrines :: M.Map Text DerivedDoctrine
   , meImplDefaults :: M.Map (Text, Text) [Text]
-  , meRuns :: M.Map Text Run
-  , meTerms :: M.Map Text TermDef
   , meFunctors :: M.Map Text DoctrineFunctorDef
   , meProofStats :: ProofStats
   }
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 
 emptyEnv :: ModuleEnv
@@ -102,12 +125,17 @@ emptyEnv =
     { meDoctrines = M.empty
     , meMorphisms = M.empty
     , meSurfaces = M.empty
+    , meModuleElaborators = M.empty
+    , meModuleDataReprs = M.empty
+    , meModuleSurfaces = M.empty
     , mePipelines = M.empty
+    , meLanguages = M.empty
+    , meInterfaces = M.empty
+    , meModules = M.empty
+    , meBuilds = M.empty
     , meFragments = M.empty
     , meDerivedDoctrines = M.empty
     , meImplDefaults = M.empty
-    , meRuns = M.empty
-    , meTerms = M.empty
     , meFunctors = M.empty
     , meProofStats = emptyProofStats
     }
@@ -118,24 +146,34 @@ mergeEnv a b = do
   docs <- mergeMap "doctrine" meDoctrines
   morphs <- mergeMap "morphism" meMorphisms
   surfs <- mergeMap "surface" meSurfaces
+  moduleElaborators <- mergeMap "module_elaborator" meModuleElaborators
+  moduleDataReprs <- mergeMap "data_repr" meModuleDataReprs
+  moduleSurfaces <- mergeMap "module_surface" meModuleSurfaces
   pipelines <- mergeMap "pipeline" mePipelines
+  languages <- mergeMap "language" meLanguages
+  interfaces <- mergeMap "interface" meInterfaces
+  modules_ <- mergeMap "module" meModules
+  builds <- mergeMap "build" meBuilds
   fragments <- mergeMap "fragment" meFragments
   derived <- mergeMap "derived doctrine" meDerivedDoctrines
   let impls = mergeImplDefaults (meImplDefaults a) (meImplDefaults b)
-  runs <- mergeMap "run" meRuns
-  terms <- mergeMap "term" meTerms
   functors <- mergeMap "doctrine_functor" meFunctors
   pure
     ModuleEnv
       { meDoctrines = docs
       , meMorphisms = morphs
       , meSurfaces = surfs
+      , meModuleElaborators = moduleElaborators
+      , meModuleDataReprs = moduleDataReprs
+      , meModuleSurfaces = moduleSurfaces
       , mePipelines = pipelines
+      , meLanguages = languages
+      , meInterfaces = interfaces
+      , meModules = modules_
+      , meBuilds = builds
       , meFragments = fragments
       , meDerivedDoctrines = derived
       , meImplDefaults = impls
-      , meRuns = runs
-      , meTerms = terms
       , meFunctors = functors
       , meProofStats = addProofStats (meProofStats a) (meProofStats b)
       }

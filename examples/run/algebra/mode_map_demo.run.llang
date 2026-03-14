@@ -13,7 +13,6 @@ doctrine D where {
   gen U_V : [] -> [V.U_V] @V;
   gen A : [] -> [C.U_C] @C;
   gen B : [] -> [V.U_V] @V;
-
   gen f : [A] -> [A] @C;
   gen g : [B] -> [B] @V;
 }
@@ -32,16 +31,28 @@ morphism CtoV : D -> D where {
   gen g @V -> g
 }
 
-pipeline main where {
-  normalize;
-  apply CtoV;
-  extract diagram;
+module_surface ModeMapDemoRunUnit where {
+  doctrine D;
+  mode C;
 }
 
-run main using main where {
-  source doctrine D;
-  source mode C;
+language ModeMapDemoRunLang where {
+  doctrine D;
+  module_surface ModeMapDemoRunUnit;
 }
----
-f
----
+
+module ModeMapDemoRuns in ModeMapDemoRunLang where {
+  let main
+  ---
+  f
+  ---
+  export { main };
+}
+
+pipeline main where {
+  project export main;
+  normalize;
+  apply CtoV;
+}
+
+build main from ModeMapDemoRuns using main;

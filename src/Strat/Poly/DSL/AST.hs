@@ -40,7 +40,7 @@ data RawPolyDoctrine = RawPolyDoctrine
   { rpdName :: Text
   , rpdExtends :: Maybe Text
   , rpdItems :: [RawPolyItem]
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawPolyItem
   = RPMode RawModeDecl
@@ -55,64 +55,64 @@ data RawPolyItem
   | RPData RawPolyDataDecl
   | RPGen RawPolyGenDecl
   | RPRule RawPolyRuleDecl
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data RawCompDecl = RawCompDecl
   { rcmpMode :: Text
   , rcmpCtxExt :: Text
   , rcmpVar :: Text
   , rcmpReindex :: Text
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawDefEqEngine
   = RDETRS
   | RDENBE
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data RawModeDecl = RawModeDecl
   { rmdName :: Text
   , rmdAcyclic :: Bool
   , rmdDefEqEngine :: Maybe RawDefEqEngine
   , rmdClassifiedBy :: Maybe RawClassifiedByDecl
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawClassifierLiftDecl = RawClassifierLiftDecl
   { rclModality :: Text
   , rclLift :: RawModExpr
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawClassifiedByDecl = RawClassifiedByDecl
   { rcdClassifier :: Text
   , rcdUniverse :: RawPolyObjExpr
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawModExpr
   = RMId Text
   | RMComp [Text]
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data RawModalityDecl = RawModalityDecl
   { rmodName :: Text
   , rmodSrc :: Text
   , rmodTgt :: Text
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawModEqDecl = RawModEqDecl
   { rmeLHS :: RawModExpr
   , rmeRHS :: RawModExpr
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawModTransformDecl = RawModTransformDecl
   { rmtName :: Text
   , rmtFrom :: RawModExpr
   , rmtTo :: RawModExpr
   , rmtWitness :: Maybe Text
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawActionDecl = RawActionDecl
   { radModName :: Text
   , radGenMap :: [(Text, RawDiagExpr)]
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawObligationDecl = RawObligationDecl
   { rodName :: Text
@@ -123,7 +123,7 @@ data RawObligationDecl = RawObligationDecl
   , rodMode :: Text
   , rodLHS :: RawOblExpr
   , rodRHS :: RawOblExpr
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawOblExpr
   = ROEDiag RawDiagExpr
@@ -133,35 +133,35 @@ data RawOblExpr
   | ROELiftCod RawDiagExpr
   | ROEComp RawOblExpr RawOblExpr
   | ROETensor RawOblExpr RawOblExpr
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data RawLiteralDecl = RawLiteralDecl
   { rldTypeName :: Text
   , rldOwnerMode :: Text
   , rldKind :: LiteralKind
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawParamDecl
   = RPDType RawTyVarDecl
   | RPDTerm RawTmVarDecl
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data RawTmVarDecl = RawTmVarDecl
   { rtvdName :: Text
   , rtvdSort :: RawPolyObjExpr
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawPolyCtorDecl = RawPolyCtorDecl
   { rpcName :: Text
   , rpcArgs :: RawPolyContext
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawPolyDataDecl = RawPolyDataDecl
   { rpdTyName :: Text
   , rpdTyVars :: [RawTyVarDecl]
   , rpdTyMode :: Text
   , rpdCtors :: [RawPolyCtorDecl]
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawPolyGenDecl = RawPolyGenDecl
   { rpgName :: Text
@@ -169,7 +169,7 @@ data RawPolyGenDecl = RawPolyGenDecl
   , rpgDom :: [RawInputShape]
   , rpgCod :: RawPolyContext
   , rpgMode :: Text
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawPolyRuleDecl = RawPolyRuleDecl
   { rprClass :: RuleClass
@@ -181,34 +181,34 @@ data RawPolyRuleDecl = RawPolyRuleDecl
   , rprMode :: Text
   , rprLHS :: RawDiagExpr
   , rprRHS :: RawDiagExpr
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawInputShape
   = RIPort RawPolyObjExpr
   | RIBinder [RawBinderVarDecl] RawPolyContext
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data RawBinderVarDecl = RawBinderVarDecl
   { rbvName :: Text
   , rbvType :: RawPolyObjExpr
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawTypeRef = RawTypeRef
   { rtrMode :: Maybe Text
   , rtrName :: Text
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawTyVarDecl = RawTyVarDecl
   { rtvName :: Text
   , rtvMode :: Maybe Text
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data RawPolyObjExpr
   = RPTVar Text
   | RPTCon RawTypeRef [RawPolyObjExpr]
   | RPTMod RawModExpr RawPolyObjExpr
   | RPLit Literal
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 type RawPolyContext = [RawPolyObjExpr]
 
@@ -216,7 +216,6 @@ data RawDiagExpr
   = RDId RawPolyContext
   | RDMetaVar Text
   | RDGen Text (Maybe [RawGenArg]) (Maybe [RawBinderArg])
-  | RDTermRef Text
   | RDSplice Text
   | RDBox Text RawDiagExpr
   | RDTrace Int RawDiagExpr
@@ -224,14 +223,14 @@ data RawDiagExpr
   | RDMap RawModExpr RawDiagExpr
   | RDComp RawDiagExpr RawDiagExpr
   | RDTensor RawDiagExpr RawDiagExpr
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data RawBinderArg
   = RBAExpr RawDiagExpr
   | RBAMeta Text
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data RawGenArg
   = RGPos RawPolyObjExpr
   | RGNamed Text RawPolyObjExpr
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)

@@ -1,14 +1,26 @@
-import "../../lib/algebra/ski.llang";
+include "../../lib/algebra/ski.llang";
+
+module_surface SkiRunUnit where {
+  doctrine SKI;
+  mode M;
+}
+
+language SkiRunLang where {
+  doctrine SKI;
+  module_surface SkiRunUnit;
+}
+
+module SkiRuns in SkiRunLang where {
+  let main
+  ---
+  (((((s * k) ; app) * k) ; app) * id[T]) ; app
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine SKI;
-  source mode M;
-}
----
-(((((s * k) ; app) * k) ; app) * id[T]) ; app
----
+build main from SkiRuns using main;

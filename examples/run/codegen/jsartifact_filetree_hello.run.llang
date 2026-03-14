@@ -5,15 +5,28 @@ doctrine JSArtifact extends Artifact where {
     jsHello == text("console.log('hello');")
 }
 
-pipeline main where {
-  normalize { policy = "computational_lr"; fuel = 50; };
-  extract FileTree { root = "./out" };
+module_surface JSArtifactRunUnit where {
+  doctrine JSArtifact;
+  mode Artifact;
 }
 
-run main using main where {
-  source doctrine JSArtifact;
-  source mode Artifact;
+language JSArtifactRunLang where {
+  doctrine JSArtifact;
+  module_surface JSArtifactRunUnit;
 }
----
-jsHello; singleFile("main.mjs")
----
+
+module JSArtifactRuns in JSArtifactRunLang where {
+  let main
+  ---
+  jsHello; singleFile("main.mjs")
+  ---
+  export { main };
+}
+
+pipeline main where {
+  project export main;
+  normalize { policy = "computational_lr"; fuel = 50; };
+  emit via FileTree { root = "./out"; };
+}
+
+build main from JSArtifactRuns using main;

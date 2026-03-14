@@ -1,0 +1,35 @@
+module_surface DocUnit where {
+  doctrine Doc;
+  mode Doc;
+}
+
+language DocLang where {
+  doctrine Doc;
+  module_surface DocUnit;
+}
+
+module A in DocLang where {
+  let hello
+  ---
+  text("hello")
+  ---
+
+  export { hello };
+}
+
+module B in DocLang where {
+  let world
+  ---
+  text("world")
+  ---
+
+  export { world };
+}
+
+pipeline p where {
+  link B;
+  bundle { hello as alpha, world };
+  emit via Doc { stdout = true; };
+}
+
+build main from A using p;

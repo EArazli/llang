@@ -1,14 +1,26 @@
-import "../../lib/templates/state.template.llang"
+include "../../lib/templates/state.template.llang";
+
+module_surface StateRunUnit where {
+  doctrine StateNat;
+  mode M;
+}
+
+language StateRunLang where {
+  doctrine StateNat;
+  module_surface StateRunUnit;
+}
+
+module StateRuns in StateRunLang where {
+  let main
+  ---
+  get
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine StateNat;
-  source mode M;
-}
----
-get
----
+build main from StateRuns using main;

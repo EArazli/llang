@@ -20,7 +20,6 @@ doctrine SurfaceTarget where {
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_M : [] -> [M.U_M] @M;
   gen A : [] -> [M.U_M] @M;
-
   gen copy(a@M) : [a] -> [a, a] @M;
   gen kill(a@M) : [a] -> [] @M;
   gen f : [A, A] -> [A] @M;
@@ -65,31 +64,48 @@ surface Surf where {
   }
 }
 
-pipeline debug where {
+module_surface CartesianSurfaceRunUnit where {
+  doctrine SurfaceTarget;
+}
+
+language CartesianSurfaceRunLang where {
+  doctrine SurfaceTarget;
+  module_surface CartesianSurfaceRunUnit;
+}
+
+module CartesianSurfaceRuns in CartesianSurfaceRunLang where {
+  let implicit_dup where {
+    mode M;
+    surface Surf;
+  }
+  ---
+  term {
+    in x:A;
+    out f(x, x)
+  }
+  ---
+  let implicit_drop where {
+    mode M;
+    surface Surf;
+  }
+  ---
+  term {
+    in x:A;
+    out unit
+  }
+  ---
+  export { implicit_dup, implicit_drop };
+}
+
+pipeline implicit_dup where {
+  project export implicit_dup;
   normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
 }
 
-run implicit_dup using debug where {
-  source doctrine SurfaceTarget;
-  source mode M;
-  source surface Surf;
+pipeline implicit_drop where {
+  project export implicit_drop;
+  normalize { policy = "topmost"; fuel = 50; };
 }
----
-term {
-  in x:A;
-  out f(x, x)
-}
----
 
-run implicit_drop using debug where {
-  source doctrine SurfaceTarget;
-  source mode M;
-  source surface Surf;
-}
----
-term {
-  in x:A;
-  out unit
-}
----
+build implicit_dup from CartesianSurfaceRuns using implicit_dup;
+build implicit_drop from CartesianSurfaceRuns using implicit_drop;

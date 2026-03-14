@@ -1,0 +1,466 @@
+doctrine SmoothLam where {
+  mode M acyclic classifiedBy M via M.U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_M : [] -> [M.U_M] @M;
+
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
+
+  gen R : [] -> [M.U_M] @M;
+  gen Pair(a@M, b@M) : [] -> [M.U_M] @M;
+  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;
+  gen dup(a@M) : [a] -> [a, a] @M;
+  gen mkPair(a@M, b@M) : [a, b] -> [Pair(a, b)] @M;
+  gen fst(a@M, b@M) : [Pair(a, b)] -> [a] @M;
+  gen snd(a@M, b@M) : [Pair(a, b)] -> [b] @M;
+
+  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;
+  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;
+
+  rule computational beta -> (a@M, b@M) : [a] -> [b] @M =
+    (lam(a, b)[?Body] * id[a]) ; app(a, b) == splice(?Body)
+
+  gen add : [R, R] -> [R] @M;
+  gen mul : [R, R] -> [R] @M;
+  gen sin : [R] -> [R] @M;
+  gen cos : [R] -> [R] @M;
+  gen neg : [R] -> [R] @M;
+}
+
+morphism forwardAD : SmoothLam -> SmoothLam where {
+  check structural;
+
+  mode M -> M;
+  type Str @M -> Str @M;
+  type R @M -> Pair(R, R) @M;
+
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+
+  gen dup @M -> dup(a)
+  gen mkPair @M -> mkPair(a, b)
+  gen fst @M -> fst(a, b)
+  gen snd @M -> snd(a, b)
+  gen lam @M -> lam(a, b)[?b0]
+  gen app @M -> app(a, b)
+
+  gen add @M ->
+    (mkPair(Pair(R, R), Pair(R, R))
+    ; dup(Pair(Pair(R, R), Pair(R, R)))
+    ; (
+        (dup(Pair(Pair(R, R), Pair(R, R)))
+          ; ((fst(Pair(R, R), Pair(R, R)) ; fst(R, R)) * (snd(Pair(R, R), Pair(R, R)) ; fst(R, R)))
+          ; add)
+        *
+        (dup(Pair(Pair(R, R), Pair(R, R)))
+          ; ((fst(Pair(R, R), Pair(R, R)) ; snd(R, R)) * (snd(Pair(R, R), Pair(R, R)) ; snd(R, R)))
+          ; add)
+      )
+    ; mkPair(R, R))
+
+  gen mul @M ->
+    (mkPair(Pair(R, R), Pair(R, R))
+    ; dup(Pair(Pair(R, R), Pair(R, R)))
+    ; (
+        (dup(Pair(Pair(R, R), Pair(R, R)))
+          ; ((fst(Pair(R, R), Pair(R, R)) ; fst(R, R)) * (snd(Pair(R, R), Pair(R, R)) ; fst(R, R)))
+          ; mul)
+        *
+        (dup(Pair(Pair(R, R), Pair(R, R)))
+          ; (
+              (dup(Pair(Pair(R, R), Pair(R, R)))
+                ; ((fst(Pair(R, R), Pair(R, R)) ; fst(R, R)) * (snd(Pair(R, R), Pair(R, R)) ; snd(R, R)))
+                ; mul)
+              *
+              (dup(Pair(Pair(R, R), Pair(R, R)))
+                ; ((fst(Pair(R, R), Pair(R, R)) ; snd(R, R)) * (snd(Pair(R, R), Pair(R, R)) ; fst(R, R)))
+                ; mul)
+            )
+            ; add)
+      )
+    ; mkPair(R, R))
+
+  gen sin @M ->
+    (dup(Pair(R, R))
+    ; (
+        (fst(R, R) ; sin)
+        *
+        (dup(Pair(R, R)) ; ((fst(R, R) ; cos) * snd(R, R)) ; mul)
+      )
+    ; mkPair(R, R))
+
+  gen cos @M ->
+    (dup(Pair(R, R))
+    ; (
+        (fst(R, R) ; cos)
+        *
+        (dup(Pair(R, R)) ; ((fst(R, R) ; sin) * snd(R, R)) ; mul ; neg)
+      )
+    ; mkPair(R, R))
+
+  gen neg @M ->
+    (dup(Pair(R, R))
+    ; ((fst(R, R) ; neg) * (snd(R, R) ; neg))
+    ; mkPair(R, R))
+}
+
+fragment SharePair in SmoothLam mode M where {
+  include gen mkPair;
+  include gen fst;
+  include gen snd;
+  include gen add;
+  include gen mul;
+  include gen sin;
+  include gen cos;
+  include gen neg;
+  cross binders = true;
+  cross boxes = true;
+  cross feedback = true;
+}
+
+derived doctrine SmoothLam_Q = reflect quotation of SmoothLam mode M;
+
+doctrine SmoothLam_JS extends SmoothLam_Q where {
+  gen Int : [] -> [M.U_M] @M;
+  literal Int @M = int;
+  gen Doc : [] -> [M.U_M] @M;
+  gen empty : [] -> [Doc] @M;
+  gen text(s:Str) : [] -> [Doc] @M;
+  gen line : [] -> [Doc] @M;
+  gen cat : [Doc, Doc] -> [Doc] @M;
+  gen indent(n:Int) : [Doc] -> [Doc] @M;
+
+  gen renderDigit(d:Digit) : [] -> [Doc] @M;
+  gen renderRefId(id:RefId) : [] -> [Doc] @M;
+  gen renderVarList(ids:RefIds) : [] -> [Doc] @M;
+  gen renderVarListTail(ids:RefIds) : [] -> [Doc] @M;
+  gen renderVarListWithHead(head:RefId, tail:RefIds) : [] -> [Doc] @M;
+  gen renderReturnExpr(outputs:RefIds) : [] -> [Doc] @M;
+  gen renderReturnTail(head:RefId, tail:RefIds) : [] -> [Doc] @M;
+
+  rule computational renderDigit_0 -> : [] -> [Doc] @M =
+    renderDigit(d = digit0) == text(s = "0")
+
+  rule computational renderDigit_1 -> : [] -> [Doc] @M =
+    renderDigit(d = digit1) == text(s = "1")
+
+  rule computational renderDigit_2 -> : [] -> [Doc] @M =
+    renderDigit(d = digit2) == text(s = "2")
+
+  rule computational renderDigit_3 -> : [] -> [Doc] @M =
+    renderDigit(d = digit3) == text(s = "3")
+
+  rule computational renderDigit_4 -> : [] -> [Doc] @M =
+    renderDigit(d = digit4) == text(s = "4")
+
+  rule computational renderDigit_5 -> : [] -> [Doc] @M =
+    renderDigit(d = digit5) == text(s = "5")
+
+  rule computational renderDigit_6 -> : [] -> [Doc] @M =
+    renderDigit(d = digit6) == text(s = "6")
+
+  rule computational renderDigit_7 -> : [] -> [Doc] @M =
+    renderDigit(d = digit7) == text(s = "7")
+
+  rule computational renderDigit_8 -> : [] -> [Doc] @M =
+    renderDigit(d = digit8) == text(s = "8")
+
+  rule computational renderDigit_9 -> : [] -> [Doc] @M =
+    renderDigit(d = digit9) == text(s = "9")
+
+  rule computational renderRefId_label -> (label:Str) : [] -> [Doc] @M =
+    renderRefId(id = refId_label(label)) == text(s = label)
+
+  rule computational renderRefId_nil -> : [] -> [Doc] @M =
+    renderRefId(id = refId_nil) == empty
+
+  rule computational renderRefId_cons -> (d:Digit, tail:RefId) : [] -> [Doc] @M =
+    renderRefId(id = refId_cons(d, tail)) ==
+      (renderDigit(d = d) * renderRefId(id = tail)) ; cat
+
+  rule computational renderVarList_nil -> : [] -> [Doc] @M =
+    renderVarList(ids = refIds_nil) == empty
+
+  rule computational renderVarList_cons -> (head:RefId, tail:RefIds) : [] -> [Doc] @M =
+    renderVarList(ids = refIds_cons(head, tail)) ==
+      renderVarListWithHead(head = head, tail = tail)
+
+  rule computational renderVarListTail_nil -> : [] -> [Doc] @M =
+    renderVarListTail(ids = refIds_nil) == empty
+
+  rule computational renderVarListTail_cons -> (head:RefId, tail:RefIds) : [] -> [Doc] @M =
+    renderVarListTail(ids = refIds_cons(head, tail)) ==
+      (((((text(s = ", ") * text(s = "t")) ; cat) * renderRefId(id = head)) ; cat) * renderVarListTail(ids = tail)) ; cat
+
+  rule computational renderVarListWithHead_def -> (head:RefId, tail:RefIds) : [] -> [Doc] @M =
+    renderVarListWithHead(head = head, tail = tail) ==
+      ((((text(s = "t") * renderRefId(id = head)) ; cat) * renderVarListTail(ids = tail)) ; cat)
+
+  rule computational renderReturn_nil -> : [] -> [Doc] @M =
+    renderReturnExpr(outputs = refIds_nil) == text(s = "undefined")
+
+  rule computational renderReturn_cons -> (head:RefId, tail:RefIds) : [] -> [Doc] @M =
+    renderReturnExpr(outputs = refIds_cons(head, tail)) ==
+      renderReturnTail(head = head, tail = tail)
+
+  rule computational renderReturnTail_nil -> (head:RefId) : [] -> [Doc] @M =
+    renderReturnTail(head = head, tail = refIds_nil) == (text(s = "t") * renderRefId(id = head)) ; cat
+
+  rule computational renderReturnTail_cons -> (head:RefId, next:RefId, rest:RefIds) : [] -> [Doc] @M =
+    renderReturnTail(head = head, tail = refIds_cons(next, rest)) ==
+      ((text(s = "[") * renderVarListWithHead(head = head, tail = refIds_cons(next, rest))) ; cat)
+      ; (id[Doc] * text(s = "]")) ; cat
+}
+
+morphism emitJS : SmoothLam_Q -> SmoothLam_JS where {
+  check structural;
+
+  mode M -> M;
+  type Str @M -> Str @M;
+  type R @M -> R @M;
+  type Pair(a@M, b@M) @M -> Pair(a, b) @M;
+  type Arr(a@M, b@M) @M -> Arr(a, b) @M;
+  type Seq @M -> Doc @M;
+  type Prog @M -> Doc @M;
+  type Digit @M -> Digit @M;
+  type RefId @M -> RefId @M;
+  type RefIds @M -> RefIds @M;
+
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+
+  gen dup @M -> dup(a)
+  gen mkPair @M -> mkPair(a, b)
+  gen fst @M -> fst(a, b)
+  gen snd @M -> snd(a, b)
+  gen lam @M -> lam(a, b)[?b0]
+  gen app @M -> app(a, b)
+  gen add @M -> add
+  gen mul @M -> mul
+  gen sin @M -> sin
+  gen cos @M -> cos
+  gen neg @M -> neg
+
+  gen digit0 @M -> digit0
+  gen digit1 @M -> digit1
+  gen digit2 @M -> digit2
+  gen digit3 @M -> digit3
+  gen digit4 @M -> digit4
+  gen digit5 @M -> digit5
+  gen digit6 @M -> digit6
+  gen digit7 @M -> digit7
+  gen digit8 @M -> digit8
+  gen digit9 @M -> digit9
+  gen refId_nil @M -> refId_nil
+  gen refId_cons @M -> refId_cons
+  gen refId_label @M -> refId_label(label = label)
+  gen refIds_nil @M -> refIds_nil
+  gen refIds_cons @M -> refIds_cons
+  gen fold_Digit @M -> fold_Digit(r_Digit)[?b0, ?b1, ?b2, ?b3, ?b4, ?b5, ?b6, ?b7, ?b8, ?b9]
+  gen fold_RefId @M -> fold_RefId(r_RefId)[?b0, ?b1]
+  gen fold_RefIds @M -> fold_RefIds(r_RefIds)[?b0, ?b1]
+
+  gen q_begin @M ->
+    (((text(s = "export const timesSinAD = (") * renderVarList(ids = inputs)) ; cat) * text(s = ") => {\n")) ; cat
+
+  gen q_end @M ->
+    (id[Doc] * ((((text(s = "  return ") * renderReturnExpr(outputs = outputs)) ; cat) * text(s = ";\n};\n")) ; cat)) ; cat
+
+  gen q_comp_ctx_ext @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ";\n")) ; cat
+    )) ; cat
+
+  gen q_comp_var @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ";\n")) ; cat
+    )) ; cat
+
+  gen q_comp_reindex @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ";\n")) ; cat
+    )) ; cat
+
+  gen q_dup @M ->
+    ((id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ";\n")) ; cat
+    )) ; cat)
+    ; (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out1)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ";\n")) ; cat
+    )) ; cat
+
+  gen q_mkPair @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = [t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ", t")) ; cat
+      ; (id[Doc] * renderRefId(id = in1)) ; cat
+      ; (id[Doc] * text(s = "];\n")) ; cat
+    )) ; cat
+
+  gen q_fst @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = "[0];\n")) ; cat
+    )) ; cat
+
+  gen q_snd @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = "[1];\n")) ; cat
+    )) ; cat
+  gen q_lam @M ->
+    (((id[Doc] * id[Doc]) ; cat) * ((text(s = "  /* unsupported: q_lam */") * text(s = "\n")) ; cat)) ; cat
+  gen q_app @M ->
+    (id[Doc] * ((text(s = "  /* unsupported: q_app */") * text(s = "\n")) ; cat)) ; cat
+  gen q_add @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = (t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = " + t")) ; cat
+      ; (id[Doc] * renderRefId(id = in1)) ; cat
+      ; (id[Doc] * text(s = ");\n")) ; cat
+    )) ; cat
+
+  gen q_mul @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = (t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = " * t")) ; cat
+      ; (id[Doc] * renderRefId(id = in1)) ; cat
+      ; (id[Doc] * text(s = ");\n")) ; cat
+    )) ; cat
+
+  gen q_sin @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = Math.sin(t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ");\n")) ; cat
+    )) ; cat
+
+  gen q_cos @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = Math.cos(t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ");\n")) ; cat
+    )) ; cat
+
+  gen q_neg @M ->
+    (id[Doc] * (
+      ((text(s = "  const t") * renderRefId(id = out0)) ; cat)
+      ; (id[Doc] * text(s = " = (-t")) ; cat
+      ; (id[Doc] * renderRefId(id = in0)) ; cat
+      ; (id[Doc] * text(s = ");\n")) ; cat
+    )) ; cat
+  gen q_res_box @M ->
+    (((id[Doc] * id[Doc]) ; cat) * ((text(s = "  /* unsupported: q_res_box */") * text(s = "\n")) ; cat)) ; cat
+  gen q_res_feedback @M ->
+    (((id[Doc] * id[Doc]) ; cat) * ((text(s = "  /* unsupported: q_res_feedback */") * text(s = "\n")) ; cat)) ; cat
+  gen q_provider @M ->
+    (id[Doc] * (
+      (text(s = "  /* provider ") * text(s = provider)) ; cat
+      ; (id[Doc] * text(s = "::")) ; cat
+      ; (id[Doc] * text(s = value)) ; cat
+      ; (id[Doc] * text(s = " via ")) ; cat
+      ; (id[Doc] * text(s = descriptor)) ; cat
+      ; (id[Doc] * text(s = " */\n")) ; cat
+    )) ; cat
+  gen q_module_ref @M ->
+    (id[Doc] * (
+      (text(s = "  /* import ") * text(s = module)) ; cat
+      ; (id[Doc] * text(s = "::")) ; cat
+      ; (id[Doc] * text(s = value)) ; cat
+      ; (id[Doc] * text(s = " ")) ; cat
+      ; (id[Doc] * text(s = adapter)) ; cat
+      ; (id[Doc] * text(s = " */\n")) ; cat
+    )) ; cat
+}
+
+module_surface SmoothUnit where {
+  doctrine SmoothLam;
+  mode M;
+}
+
+language SmoothLang where {
+  doctrine SmoothLam;
+  module_surface SmoothUnit;
+}
+
+module Programs in SmoothLang where {
+  let prog
+  ---
+  dup(R) ; (id[R] * (id[R] ; sin)) ; mul
+  ---
+
+  export { prog };
+}
+
+pipeline quoted_single where {
+  project export prog;
+  apply forwardAD;
+  normalize { policy = "computational_lr"; fuel = 500; };
+  quote using SharePair into SmoothLam_Q;
+}
+
+pipeline quoted_double where {
+  project export prog;
+  apply forwardAD;
+  apply forwardAD;
+  normalize { policy = "computational_lr"; fuel = 500; };
+  quote using SharePair into SmoothLam_Q;
+}
+
+pipeline js_single where {
+  project export prog;
+  apply forwardAD;
+  normalize { policy = "computational_lr"; fuel = 500; };
+  quote using SharePair into SmoothLam_Q;
+  apply emitJS;
+  normalize { policy = "computational_lr"; fuel = 1000; };
+  emit via Doc { stdout = true; };
+}
+
+pipeline js_double where {
+  project export prog;
+  apply forwardAD;
+  apply forwardAD;
+  normalize { policy = "computational_lr"; fuel = 500; };
+  quote using SharePair into SmoothLam_Q;
+  apply emitJS;
+  normalize { policy = "computational_lr"; fuel = 1000; };
+  emit via Doc { stdout = true; };
+}
+
+build main from Programs using js_single;
+build main2 from Programs using js_double;
+build share from Programs using quoted_single;
+build share2 from Programs using quoted_double;

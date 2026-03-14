@@ -26,8 +26,11 @@ import qualified Test.Poly.Acyclic as PolyAcyclic
 import qualified Test.Poly.Feedback as PolyFeedback
 import qualified Test.DSL.Functors as DSLFunctors
 import qualified Test.Value.Doc as ValueDoc
+import qualified Test.Host.Backend as HostBackend
+import qualified Test.Frontend.Loader as FrontendLoader
 import qualified Test.Frontend.Pipeline as FrontendPipeline
 import qualified Test.Frontend.ExampleCodegen as FrontendExampleCodegen
+import qualified Test.Frontend.Builds as FrontendBuilds
 import qualified Test.Frontend.ExamplesSmoke as FrontendExamplesSmoke
 import qualified Test.Frontend.StdlibIntegration as FrontendStdlibIntegration
 import qualified Test.Frontend.CanonicalCoverage as FrontendCanonicalCoverage
@@ -62,7 +65,10 @@ main =
       , PolyFeedback.tests
       , DSLFunctors.tests
       , ValueDoc.tests
+      , HostBackend.tests
+      , FrontendLoader.tests
       , FrontendPipeline.tests
+      , FrontendBuilds.tests
       , FrontendExampleCodegen.tests
       , FrontendCanonicalCoverage.tests
       , FrontendExamplesSmoke.tests

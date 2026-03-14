@@ -211,6 +211,10 @@ materializeResolvedUniverses ops st doc =
       case payload of
         PGen g args bargs ->
           PGen g args (map rewriteBinderArg bargs)
+        PProvider ref ->
+          PProvider ref
+        PModuleRef ref ->
+          PModuleRef ref
         PBox name inner ->
           PBox name (rewriteDiagram inner)
         PFeedback inner ->

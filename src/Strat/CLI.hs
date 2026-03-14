@@ -7,7 +7,8 @@ module Strat.CLI
 
 import Strat.Frontend.Loader (loadModuleWithBudget)
 import Strat.Frontend.Env (ModuleEnv(..), ProofStats(..), proofStatsTotal)
-import Strat.Frontend.Run (runWithEnv, selectRun, RunResult(..), Artifact(..))
+import Strat.Frontend.Build (buildWithEnv, selectBuild, BuildResult(..), BuildProduct(..))
+import Strat.Host.Backend (HostArtifact(..))
 import Strat.Poly.Proof (SearchBudget(..), defaultSearchBudget)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -20,7 +21,7 @@ import System.IO (stderr)
 
 data CLIOptions = CLIOptions
   { optFile :: FilePath
-  , optRun  :: Maybe Text
+  , optBuild  :: Maybe Text
   , optOutput :: Bool
   , optSearchBudget :: SearchBudget
   }
@@ -35,10 +36,10 @@ parseArgs args =
     parseRest opts rest =
       case rest of
         [] -> Right opts
-        "--run" : name : xs ->
-          case optRun opts of
-            Just _ -> Left "duplicate --run flag"
-            Nothing -> parseRest opts { optRun = Just (T.pack name) } xs
+        "--build" : name : xs ->
+          case optBuild opts of
+            Just _ -> Left "duplicate --build flag"
+            Nothing -> parseRest opts { optBuild = Just (T.pack name) } xs
         "--output" : xs ->
           if optOutput opts
             then Left "duplicate --output flag"
@@ -71,23 +72,24 @@ runCLI opts = do
   case envResult of
     Left err -> pure (Left err)
     Right env ->
-      case selectRun env (optRun opts) of
-        Left err -> pure (Left err)
+      case selectBuild env (optBuild opts) of
+        Left err ->
+          pure (Left err)
         Right spec ->
-          case runWithEnv env spec of
+          case buildWithEnv env spec of
             Left err -> pure (Left err)
             Right res -> do
               TIO.hPutStrLn stderr (renderProofSummary (meProofStats env))
               if optOutput opts
-                then writeExtractedFiles (prArtifact res)
+                then writeExtractedFiles (brArtifact res)
                 else pure ()
-              pure (Right (prOutput res))
+              pure (Right (brOutput res))
 
-writeExtractedFiles :: Artifact -> IO ()
+writeExtractedFiles :: BuildProduct -> IO ()
 writeExtractedFiles art =
   case art of
-    ArtExtracted _ files ->
-      mapM_ writeOne (M.toList files)
+    BPHost host ->
+      mapM_ writeOne (M.toList (haFiles host))
     _ -> pure ()
   where
     writeOne (path, body) = do
@@ -97,9 +99,9 @@ writeExtractedFiles art =
 usage :: Text
 usage =
   T.unlines
-    [ "Usage: llang-exe FILE [--run NAME] [--output] [--max-depth N] [--max-states N] [--timeout-ms N]"
-    , "Run a named run in FILE (default: main or the only run)."
-    , "--output enables writing extracted FileTree artifacts to disk."
+    [ "Usage: llang-exe FILE [--build NAME] [--output] [--max-depth N] [--max-states N] [--timeout-ms N]"
+    , "Run a named build in FILE (default: main or the only build)."
+    , "--output enables writing emitted file artifacts to disk."
     , "Search-budget flags tune auto-proof search during module elaboration/checking."
     ]
 

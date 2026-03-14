@@ -1,5 +1,5 @@
-import "../../../stdlib/struct.cartesian.llang";
-import "./struct_caps.llang";
+include "../../../stdlib/struct.cartesian.llang";
+include "./struct_caps.llang";
 
 doctrine QuadDiscipline where {
   mode Lin classifiedBy Lin via Lin.U_Lin;

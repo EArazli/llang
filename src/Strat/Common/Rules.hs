@@ -5,13 +5,13 @@ module Strat.Common.Rules
   ) where
 
 data RuleClass = Structural | Computational
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data Orientation = LR | RL | Bidirectional | Unoriented
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data RewritePolicy
   = UseOnlyComputationalLR
   | UseStructuralAsBidirectional
   | UseAllOriented
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)

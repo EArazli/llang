@@ -1,14 +1,26 @@
-import "../../lib/pushout/nat_bool.llang";
+include "../../lib/pushout/nat_bool.llang";
+
+module_surface NatBoolRunUnit where {
+  doctrine NatBool;
+  mode M;
+}
+
+language NatBoolRunLang where {
+  doctrine NatBool;
+  module_surface NatBoolRunUnit;
+}
+
+module NatBoolRuns in NatBoolRunLang where {
+  let main
+  ---
+  (Nat_inl_Z * (Nat_inl_Z ; Nat_inl_S)) ; Nat_inl_add
+  ---
+  export { main };
+}
 
 pipeline debug where {
+  project export main;
   normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
 }
 
-run main using debug where {
-  source doctrine NatBool;
-  source mode M;
-}
----
-(Nat_inl_Z * (Nat_inl_Z ; Nat_inl_S)) ; Nat_inl_add
----
+build main from NatBoolRuns using debug;

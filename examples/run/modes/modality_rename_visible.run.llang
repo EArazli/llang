@@ -1,15 +1,28 @@
-import "../../lib/modes/staging_mode_map.llang";
+include "../../lib/modes/staging_mode_map.llang";
+
+module_surface StagingVisibleRunUnit where {
+  doctrine Staging;
+}
+
+language StagingVisibleRunLang where {
+  doctrine Staging;
+  module_surface StagingVisibleRunUnit;
+}
+
+module StagingVisibleRuns in StagingVisibleRunLang where {
+  let main where {
+    surface StageExprCT;
+  }
+  ---
+  stageq
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize;
   apply StageToStage2;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine Staging;
-  source surface StageExprCT;
-}
----
-stageq
----
+build main from StagingVisibleRuns using main;

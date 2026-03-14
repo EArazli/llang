@@ -49,24 +49,24 @@ import Strat.Poly.Term.Confluence (checkConfluent)
 data DefEqEngine
   = DefEqTRS
   | DefEqNBE
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data ModeInfo = ModeInfo
   { miName :: ModeName
   , miDefEqEngine :: DefEqEngine
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data CompDecl = CompDecl
   { compCtxExt :: GenName
   , compVar :: GenName
   , compReindex :: GenName
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data ClassificationDecl = ClassificationDecl
   { cdClassifier :: ModeName
   , cdUniverse :: Obj
   , cdComp :: Maybe CompDecl
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data ModeTheory = ModeTheory
   { mtModes :: Map ModeName ModeInfo
@@ -76,7 +76,7 @@ data ModeTheory = ModeTheory
   , mtClassifiedBy :: Map ModeName ClassificationDecl
   , mtClassifierLifts :: Map ModName ModExpr
   }
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 
 emptyModeTheory :: ModeTheory

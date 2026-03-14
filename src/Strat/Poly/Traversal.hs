@@ -28,6 +28,8 @@ foldDiagram onDiag onPayload onCodeArg onBArg = goDiag
       onPayload p
         <> case p of
           PGen _ args bargs -> foldMap goCodeArg args <> foldMap goBArg bargs
+          PProvider _ -> mempty
+          PModuleRef _ -> mempty
           PBox _ inner -> goDiag inner
           PFeedback inner -> goDiag inner
           PSplice _ _ -> mempty
@@ -73,6 +75,10 @@ traverseDiagram onDiag onPayload onCodeArg onBArg = goDiag
             args' <- traverse goCodeArg args
             bargs' <- traverse goBArg bargs
             pure (PGen g args' bargs')
+          PProvider ref ->
+            pure (PProvider ref)
+          PModuleRef ref ->
+            pure (PModuleRef ref)
           PBox name inner -> do
             inner' <- goDiag inner
             pure (PBox name inner')

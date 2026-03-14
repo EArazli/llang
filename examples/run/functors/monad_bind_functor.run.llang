@@ -1,4 +1,4 @@
-import "../../../stdlib/schema.monad.llang";
+include "../../../stdlib/schema.monad.llang";
 
 doctrine IdMonad where {
   mode C classifiedBy C via T(C.U_C);
@@ -11,7 +11,6 @@ doctrine IdMonad where {
   mod_eq T.T -> T;
   gen U_C : [] -> [T(C.U_C)] @C;
   gen A : [] -> [T(C.U_C)] @C;
-
   gen ret(a@C) : [a] -> [T(a)] @C;
   gen join(a@C) : [T(T(a))] -> [T(a)] @C;
 
@@ -55,14 +54,27 @@ doctrine_functor AddBind(M : SchemaMonad) where {
 
 doctrine IdMonadBind = apply AddBind to IdMonad using { M = monadInst; };
 
-pipeline showBind where {
-  normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
+module_surface MonadBindRunUnit where {
+  doctrine IdMonadBind;
+  mode C;
 }
 
-run showBind using showBind where {
-  source doctrine IdMonadBind;
-  source mode C;
+language MonadBindRunLang where {
+  doctrine IdMonadBind;
+  module_surface MonadBindRunUnit;
 }
----
-U_C ; bind(C.U_C, C.U_C)[ret(C.U_C)]
+
+module MonadBindRuns in MonadBindRunLang where {
+  let showBind
+  ---
+  U_C ; bind(C.U_C, C.U_C)[ret(C.U_C)]
+  ---
+  export { showBind };
+}
+
+pipeline showBind where {
+  project export showBind;
+  normalize { policy = "topmost"; fuel = 50; };
+}
+
+build showBind from MonadBindRuns using showBind;

@@ -9,65 +9,88 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 
 import Strat.DSL.Parse (parseRawFile)
-import Strat.DSL.Elab (elabRawFile, elabRawFileWithEnv)
-import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
-import Strat.Poly.Diagram (genD)
-import Strat.Poly.ModeTheory (ModeName(..))
-import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), mkCon)
+import Strat.DSL.Elab (elabRawFileWithEnv)
+import Strat.Frontend.Env (ModuleEnv(..), emptyEnv)
+import Strat.Frontend.Prelude (preludeDoctrines)
 
 
 tests :: TestTree
 tests =
   testGroup
     "DSL.TermRefsInDecls"
-    [ testCase "term ref in morphism RHS" testTermRefInMorphism
+    [ testCase "module values can reference prior declarations by bare name" testModuleValueRef
+    , testCase "legacy @value syntax is rejected" testLegacyValueRefRejected
     ]
 
-testTermRefInMorphism :: Assertion
-testTermRefInMorphism = do
-  baseEnv <- buildBaseEnv
-  let src = T.unlines
-        [ "morphism Id : D -> D where {"
-        , "  gen f @M -> @t"
-        , "}"
-        ]
-  case parseRawFile src of
-    Left err -> assertFailure (T.unpack err)
-    Right rf ->
-      case elabRawFileWithEnv baseEnv rf of
-        Left err -> assertFailure (T.unpack err)
-        Right env ->
-          assertBool "expected morphism Id" (M.member "Id" (meMorphisms env))
 
-buildBaseEnv :: IO ModuleEnv
-buildBaseEnv = do
-  let src = T.unlines
-        [ "doctrine D where {"
-        , "  mode M classifiedBy M via U_M;"
-        , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
-        , "  gen comp_var(a@M) : [a] -> [a] @M;"
-        , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
-        , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
-        , "  gen U_M : [] -> [U_M] @M;"
-        , "  gen A : [] -> [U_M] @M;"
-        , "  gen f : [A] -> [A] @M;"
+testModuleValueRef :: Assertion
+testModuleValueRef = do
+  let src =
+        T.unlines
+          [ "module_surface DocUnit where {"
+          , "  doctrine Doc;"
+          , "  mode Doc;"
+          , "}"
+          , "language DocLang where {"
+          , "  doctrine Doc;"
+          , "  module_surface DocUnit;"
+          , "}"
+          , "module Greeting in DocLang where {"
+          , "  let hello"
+          , "  ---"
+          , "  text(\"hello\")"
+          , "  ---"
+          , "  let main"
+          , "  ---"
+          , "  (hello * text(\"!\")); cat"
+          , "  ---"
+          , "  export { main };"
+          , "}"
+          ]
+  env <- requireRight (elabProgram src)
+  assertBool "expected compiled module" (M.member "Greeting" (meModules env))
+
+
+testLegacyValueRefRejected :: Assertion
+testLegacyValueRefRejected =
+  case parseRawFile src of
+    Left _ -> pure ()
+    Right _ -> assertFailure "expected legacy @value syntax to be rejected"
+  where
+    src =
+      T.unlines
+        [ "module_surface DocUnit where {"
+        , "  doctrine Doc;"
+        , "  mode Doc;"
+        , "}"
+        , "language DocLang where {"
+        , "  doctrine Doc;"
+        , "  module_surface DocUnit;"
+        , "}"
+        , "module Greeting in DocLang where {"
+        , "  let hello"
+        , "  ---"
+        , "  text(\"hello\")"
+        , "  ---"
+        , "  let main"
+        , "  ---"
+        , "  (@hello * text(\"!\")); cat"
+        , "  ---"
+        , "  export { main };"
         , "}"
         ]
-  env <- case parseRawFile src of
-    Left err -> assertFailure (T.unpack err)
-    Right rf ->
-      case elabRawFile rf of
-        Left err -> assertFailure (T.unpack err)
-        Right e -> pure e
-  let mode = ModeName "M"
-  let ty = mkCon (ObjRef mode (ObjName "A")) []
-  diag <- case genD mode [ty] [ty] (GenName "f") of
-    Left err -> assertFailure (T.unpack err)
-    Right d -> pure d
-  let term = TermDef
-        { tdDoctrine = "D"
-        , tdMode = mode
-        , tdDiagram = diag
-        }
-  pure env { meTerms = M.insert "t" term (meTerms env) }
+
+
+elabProgram :: T.Text -> Either T.Text ModuleEnv
+elabProgram src = do
+  raw <- parseRawFile src
+  elabRawFileWithEnv env0 raw
+  where
+    env0 = emptyEnv { meDoctrines = preludeDoctrines }
+
+
+requireRight :: Either T.Text a -> IO a
+requireRight res =
+  case res of
+    Left err -> assertFailure (T.unpack err) >> fail "unreachable"
+    Right x -> pure x

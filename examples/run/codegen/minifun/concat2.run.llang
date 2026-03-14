@@ -1,4 +1,4 @@
-import "../../../lib/codegen/minifun/minifun.surface.llang";
+include "../../../lib/codegen/minifun/minifun.surface.llang";
 
 morphism emitJS : ConsoleExpr -> Doc where {
   mode M -> Doc;
@@ -7,15 +7,12 @@ morphism emitJS : ConsoleExpr -> Doc where {
   gen comp_reindex @M -> comp_reindex(a)
   type Str @M -> Doc @Doc;
   type Unit @M -> Doc @Doc;
-
   gen readLine @M -> text(s = "nextLine()")
-
   gen concat @M ->
     (((text(s = "(") * id[Doc]) ; cat) * id[Doc]) ;
     (((id[Doc] * text(s = " + ")) ; cat) * id[Doc]) ;
     cat ;
     (id[Doc] * text(s = ")")) ; cat
-
   gen printLine @M ->
     (text(s = "print(") * id[Doc]) ;
     cat ;
@@ -23,17 +20,30 @@ morphism emitJS : ConsoleExpr -> Doc where {
     cat
 }
 
-pipeline compile_doc where {
-  normalize { policy = "topmost"; fuel = 50; };
-  apply emitJS;
-  extract Doc { stdout = true; };
+module_surface MiniFunRunUnit where {
+  doctrine ConsoleExpr;
+  mode M;
+  surface MiniFun;
 }
 
-run main using compile_doc where {
-  source doctrine ConsoleExpr;
-  source mode M;
-  source surface MiniFun;
+language MiniFunRunLang where {
+  doctrine ConsoleExpr;
+  module_surface MiniFunRunUnit;
 }
----
-printLine(concat(readLine, readLine))
----
+
+module MiniFunRuns in MiniFunRunLang where {
+  let main
+  ---
+  printLine(concat(readLine, readLine))
+  ---
+  export { main };
+}
+
+pipeline compile_doc where {
+  project export main;
+  normalize { policy = "topmost"; fuel = 50; };
+  apply emitJS;
+  emit via Doc { stdout = true; };
+}
+
+build main from MiniFunRuns using compile_doc;

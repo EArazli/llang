@@ -9,7 +9,7 @@ import Strat.Poly.Syntax (TmVar)
 data GenParam
   = GP_Ty TmVar
   | GP_Tm TmVar
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 teleTyVars :: [GenParam] -> [TmVar]
 teleTyVars ps = [v | GP_Ty v <- ps]

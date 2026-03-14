@@ -1,13 +1,26 @@
-import "../../lib/algebra/cart_monoid.llang";
+include "../../lib/algebra/cart_monoid.llang";
+
+module_surface CartMonoidRunUnit where {
+  doctrine CartMonoid;
+  mode M;
+}
+
+language CartMonoidRunLang where {
+  doctrine CartMonoid;
+  module_surface CartMonoidRunUnit;
+}
+
+module CartMonoidRuns in CartMonoidRunLang where {
+  let main
+  ---
+  dup(A) ; mul
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine CartMonoid;
-}
----
-dup(A) ; mul
----
+build main from CartMonoidRuns using main;

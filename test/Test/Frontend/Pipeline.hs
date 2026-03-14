@@ -3,32 +3,31 @@ module Test.Frontend.Pipeline
   ( tests
   ) where
 
-import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit
 import Data.Text (Text)
 import qualified Data.Text as T
-import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFileWithEnv)
+import Strat.DSL.Parse (parseRawFile)
+import Strat.Frontend.Build (BuildResult(..), buildWithEnv, selectBuild)
 import Strat.Frontend.Env (ModuleEnv, emptyEnv, meDoctrines)
 import Strat.Frontend.Prelude (preludeDoctrines)
-import Strat.Frontend.Run (selectRun, runWithEnv, RunResult(..))
-
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit
 
 tests :: TestTree
 tests =
   testGroup
     "Frontend.Pipeline"
     [ testCase "derived reflected quotation requires acyclic mode" testDerivedRequiresAcyclic
+    , testCase "invalid pipeline product flow is rejected during elaboration" testInvalidPipelineFlowRejected
     , testCase "old fragment role syntax is rejected" testOldFragmentSyntaxRejected
     , testCase "old transform-derived syntax is rejected" testOldTransformDerivedSyntaxRejected
     , testCase "old quote policy syntax is rejected" testOldQuotePolicyRejected
-    , testCase "extract JS is rejected as an unsupported host extractor" testExtractJsRejected
+    , testCase "emit via JS is rejected as an unsupported host backend" testEmitJsRejected
     , testCase "included generators are shared in reflected output" testIncludedQuoted
     , testCase "excluded generators stay duplicated in reflected output" testResidualQuoted
     , testCase "cross binders false leaves nested sharing disabled" testCrossBindersFalse
     , testCase "cross binders true recursively shares nested bindings" testCrossBindersTrue
     ]
-
 
 testDerivedRequiresAcyclic :: Assertion
 testDerivedRequiresAcyclic =
@@ -38,36 +37,47 @@ testDerivedRequiresAcyclic =
     Right _ ->
       assertFailure "expected elaboration to reject non-acyclic derived doctrine"
 
+testInvalidPipelineFlowRejected :: Assertion
+testInvalidPipelineFlowRejected =
+  case elabProgram src of
+    Left err ->
+      assertBool "expected module-only phase rejection" ("normalize expects" `T.isInfixOf` err)
+    Right _ ->
+      assertFailure "expected elaboration to reject invalid pipeline product flow"
+  where
+    src =
+      T.unlines
+        [ "pipeline p where {"
+        , "  emit via Doc { stdout = true; };"
+        , "  normalize;"
+        , "}"
+        ]
 
 testOldFragmentSyntaxRejected :: Assertion
 testOldFragmentSyntaxRejected =
-  assertParseFails
-    (T.unlines
+  assertParseFails $
+    T.unlines
       [ baseDoctrine
       , "fragment Share in D mode M where {"
       , "  gen f = share;"
       , "}"
       ]
-    )
-
 
 testOldTransformDerivedSyntaxRejected :: Assertion
 testOldTransformDerivedSyntaxRejected =
-  assertParseFails
-    (T.unlines
+  assertParseFails $
+    T.unlines
       [ baseDoctrine
       , "fragment Share in D mode M where {"
       , "  include gen f;"
       , "}"
       , "derived doctrine D_Q = transform explicit_sharing using Share;"
       ]
-    )
-
 
 testOldQuotePolicyRejected :: Assertion
 testOldQuotePolicyRejected =
-  assertParseFails
-    (T.unlines
+  assertParseFails $
+    T.unlines
       [ baseDoctrine
       , "fragment Share in D mode M where {"
       , "  include gen f;"
@@ -77,81 +87,94 @@ testOldQuotePolicyRejected =
       , "  quote into D_Q with { naming = \"boundary_labels_first\"; };"
       , "}"
       ]
-    )
 
-
-testExtractJsRejected :: Assertion
-testExtractJsRejected =
-  case elabProgram src of
-    Left err ->
-      assertBool "expected unsupported extractor rejection" ("unsupported extractor doctrine JS" `T.isInfixOf` err)
-    Right _ ->
-      assertFailure "expected elaboration to reject extract JS"
+testEmitJsRejected :: Assertion
+testEmitJsRejected = do
+  env <- require (elabProgram src)
+  buildDef <- require (selectBuild env (Just "main"))
+  err <- requireLeft (buildWithEnv env buildDef)
+  assertBool "expected unknown backend rejection" ("unknown backend" `T.isInfixOf` T.toLower err)
   where
     src =
       T.unlines
         [ baseDoctrine
+        , "module_surface QuoteUnit where {"
+        , "  doctrine D;"
+        , "  mode M;"
+        , "}"
+        , "language QuoteLang where {"
+        , "  doctrine D;"
+        , "  module_surface QuoteUnit;"
+        , "}"
         , "fragment Share in D mode M where {"
         , "  include gen a;"
         , "}"
         , "derived doctrine D_Q = reflect quotation of D mode M;"
-        , "pipeline p where {"
-        , "  quote using Share into D_Q;"
-        , "  extract JS { stdout = true; };"
+        , "module Main in QuoteLang where {"
+        , "  let main"
+        , "  ---"
+        , "  a"
+        , "  ---"
+        , "  export { main };"
         , "}"
+        , "pipeline p where {"
+        , "  project export main;"
+        , "  quote using Share into D_Q;"
+        , "  emit via JS { stdout = true; };"
+        , "}"
+        , "build main from Main using p;"
         ]
-
 
 testIncludedQuoted :: Assertion
 testIncludedQuoted = do
   result <- runNamed includedQuoteProgram "main"
-  let out = prOutput result
+  let out = brOutput result
   assertEqual "expected one shared q_a binding" 1 (countOccurrences "q_a" out)
   assertEqual "expected one shared q_f binding" 1 (countOccurrences "q_f" out)
   assertBool "expected reflected q_begin" ("q_begin" `T.isInfixOf` out)
   assertBool "expected reflected RefIds encoding" ("refIds_cons" `T.isInfixOf` out)
   assertBool "expected reflected q_end" ("q_end" `T.isInfixOf` out)
 
-
 testResidualQuoted :: Assertion
 testResidualQuoted = do
   result <- runNamed residualQuoteProgram "main"
-  let out = prOutput result
+  let out = brOutput result
   assertEqual "expected one shared q_a binding" 1 (countOccurrences "q_a" out)
   assertEqual "expected duplicated q_f bindings" 2 (countOccurrences "q_f" out)
-
 
 testCrossBindersFalse :: Assertion
 testCrossBindersFalse = do
   result <- runNamed binderResidualProgram "main"
-  let out = prOutput result
+  let out = brOutput result
   assertEqual "expected nested q_a duplication" 2 (countOccurrences "q_a" out)
   assertEqual "expected nested q_f duplication" 2 (countOccurrences "q_f" out)
   assertBool "expected reflected wrap binding" ("q_wrap" `T.isInfixOf` out)
 
-
 testCrossBindersTrue :: Assertion
 testCrossBindersTrue = do
   result <- runNamed binderIncludedProgram "main"
-  let out = prOutput result
+  let out = brOutput result
   assertEqual "expected nested q_a sharing" 1 (countOccurrences "q_a" out)
   assertEqual "expected nested q_f sharing" 1 (countOccurrences "q_f" out)
   assertBool "expected reflected wrap binding" ("q_wrap" `T.isInfixOf` out)
 
-
-runNamed :: Text -> Text -> IO RunResult
-runNamed src runName = do
+runNamed :: Text -> Text -> IO BuildResult
+runNamed src buildName = do
   env <- require (elabProgram src)
-  runDef <- require (selectRun env (Just runName))
-  require (runWithEnv env runDef)
+  buildDef <- require (selectBuild env (Just buildName))
+  require (buildWithEnv env buildDef)
 
+requireLeft :: Either Text a -> IO Text
+requireLeft res =
+  case res of
+    Left err -> pure err
+    Right _ -> assertFailure "expected failure" >> fail "unreachable"
 
 assertParseFails :: Text -> Assertion
 assertParseFails src =
   case parseRawFile src of
     Left _ -> pure ()
     Right _ -> assertFailure "expected parse failure"
-
 
 countOccurrences :: Text -> Text -> Int
 countOccurrences needle haystack
@@ -164,14 +187,12 @@ countOccurrences needle haystack
           | T.null rest -> acc
           | otherwise -> go (T.drop (T.length needle) rest) (acc + 1)
 
-
 elabProgram :: Text -> Either Text ModuleEnv
 elabProgram src = do
   raw <- parseRawFile src
   elabRawFileWithEnv env0 raw
   where
     env0 = emptyEnv { meDoctrines = preludeDoctrines }
-
 
 nonAcyclicProgram :: Text
 nonAcyclicProgram =
@@ -189,7 +210,6 @@ nonAcyclicProgram =
     , "derived doctrine D_Q = reflect quotation of D mode M;"
     ]
 
-
 includedQuoteProgram :: Text
 includedQuoteProgram =
   mkQuoteProgram
@@ -198,14 +218,12 @@ includedQuoteProgram =
     ]
     "((a ; f) * (a ; f)) ; join"
 
-
 residualQuoteProgram :: Text
 residualQuoteProgram =
   mkQuoteProgram
     [ "include gen a;"
     ]
     "((a ; f) * (a ; f)) ; join"
-
 
 binderResidualProgram :: Text
 binderResidualProgram =
@@ -216,7 +234,6 @@ binderResidualProgram =
     ]
     "wrap[((a ; f) * (a ; f)) ; join]"
 
-
 binderIncludedProgram :: Text
 binderIncludedProgram =
   mkQuoteProgram
@@ -226,30 +243,36 @@ binderIncludedProgram =
     ]
     "wrap[((a ; f) * (a ; f)) ; join]"
 
-
 mkQuoteProgram :: [Text] -> Text -> Text
 mkQuoteProgram fragmentItems exprText =
-  T.unlines
-    ( [ baseDoctrine
-      , "fragment Share in D mode M where {"
-      ]
-        <> map ("  " <>) fragmentItems
-        <> [ "}"
-           , "derived doctrine D_Q = reflect quotation of D mode M;"
-           , "pipeline p where {"
-           , "  quote using Share into D_Q;"
-           , "  extract diagram;"
-           , "}"
-           , "run main using p where {"
-           , "  source doctrine D;"
-           , "  source mode M;"
-           , "}"
-           , "---"
-           , exprText
-           , "---"
-           ]
-    )
-
+  T.unlines $
+    [ baseDoctrine
+    , "module_surface QuoteUnit where {"
+    , "  doctrine D;"
+    , "  mode M;"
+    , "}"
+    , "language QuoteLang where {"
+    , "  doctrine D;"
+    , "  module_surface QuoteUnit;"
+    , "}"
+    , "fragment Share in D mode M where {"
+    ]
+      <> map ("  " <>) fragmentItems
+      <> [ "}"
+         , "derived doctrine D_Q = reflect quotation of D mode M;"
+         , "module Main in QuoteLang where {"
+         , "  let main"
+         , "  ---"
+         , exprText
+         , "  ---"
+         , "  export { main };"
+         , "}"
+         , "pipeline p where {"
+         , "  project export main;"
+         , "  quote using Share into D_Q;"
+         , "}"
+         , "build main from Main using p;"
+         ]
 
 baseDoctrine :: Text
 baseDoctrine =
@@ -268,7 +291,6 @@ baseDoctrine =
     , "  gen wrap : [binder { } : [T]] -> [T] @M;"
     , "}"
     ]
-
 
 require :: Either Text a -> IO a
 require (Left err) = assertFailure (show err) >> fail "unreachable"

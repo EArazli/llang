@@ -1,14 +1,26 @@
-import "../../lib/algebra/loop_demo.llang";
+include "../../lib/algebra/loop_demo.llang";
+
+module_surface LoopDemoRunUnit where {
+  doctrine LoopDemo;
+  mode M;
+}
+
+language LoopDemoRunLang where {
+  doctrine LoopDemo;
+  module_surface LoopDemoRunUnit;
+}
+
+module LoopDemoRuns in LoopDemoRunLang where {
+  let main
+  ---
+  loop { dup ; (id[A] * f) }
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine LoopDemo;
-  source mode M;
-}
----
-loop { dup ; (id[A] * f) }
----
+build main from LoopDemoRuns using main;

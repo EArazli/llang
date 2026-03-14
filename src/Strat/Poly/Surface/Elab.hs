@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Strat.Poly.Surface.Elab
   ( elabSurfaceExpr
+  , elabSurfaceExprInScope
+  , elabSurfaceNodeInScope
   ) where
 
 import Control.Monad (foldM)
@@ -13,7 +15,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
 import Strat.Common.Rules (RewritePolicy(..))
-import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
+import Strat.Frontend.Env (ModuleEnv(..), ScopedValue(..))
 import Strat.Poly.Doctrine
   ( Doctrine(..)
   , CtorTables
@@ -94,15 +96,21 @@ freeFlexCtx =
 -- Public entrypoint
 
 elabSurfaceExpr :: ModuleEnv -> Doctrine -> PolySurfaceDef -> Text -> Either Text (Doctrine, Diagram)
-elabSurfaceExpr menv docS surf src = do
+elabSurfaceExpr = elabSurfaceExprInScope M.empty M.empty
+
+elabSurfaceExprInScope :: M.Map Text ScopedValue -> M.Map Text Obj -> ModuleEnv -> Doctrine -> PolySurfaceDef -> Text -> Either Text (Doctrine, Diagram)
+elabSurfaceExprInScope valueScope typeScope menv docS surf src = do
+  node <- parseSurfaceExpr (psSpec surf) src
+  elabSurfaceNodeInScope valueScope typeScope menv docS surf node
+
+elabSurfaceNodeInScope :: M.Map Text ScopedValue -> M.Map Text Obj -> ModuleEnv -> Doctrine -> PolySurfaceDef -> SurfaceNode -> Either Text (Doctrine, Diagram)
+elabSurfaceNodeInScope valueScope typeScope menv docS surf node = do
   let mode = psMode surf
-  let spec = psSpec surf
   ctorTables <- deriveCtorTables docS
   tt <- doctrineTypeTheoryFromTables docS ctorTables
-  node <- parseSurfaceExpr spec src
   ops <- requireStructuralOps menv docS mode
   env0 <- initEnv
-  surfDiag <- evalFresh (elabNode menv docS ctorTables tt mode ops env0 node)
+  surfDiag <- evalFresh (elabNode valueScope typeScope menv docS ctorTables tt mode ops env0 node)
   if M.null (sdUses surfDiag)
     then pure ()
     else Left "surface: unresolved variables"
@@ -184,6 +192,8 @@ gensInDiagram diag =
     edgeGens edge =
       case ePayload edge of
         PGen g _ bargs -> S.insert g (S.unions (map binderGens bargs))
+        PProvider _ -> S.empty
+        PModuleRef _ -> S.empty
         PBox _ inner -> gensInDiagram inner
         PFeedback inner -> gensInDiagram inner
         PSplice _ _ -> S.empty
@@ -204,6 +214,8 @@ surfaceMeasure sigma diag =
         PGen g _ bargs ->
           let own = if g `S.member` sigma then 1 else 0
            in own + sum (map binderMeasure bargs)
+        PProvider _ -> 0
+        PModuleRef _ -> 0
         PBox _ inner -> surfaceMeasure sigma inner
         PFeedback inner -> surfaceMeasure sigma inner
         PSplice _ _ -> 0
@@ -241,14 +253,15 @@ envTmCtx env =
   map snd (visibleTermBinders (eeTmBinders env))
 
 elabSurfaceObjExprWithTablesInCtx
-  :: Doctrine
+  :: M.Map Text Obj
+  -> Doctrine
   -> CtorTables
   -> [(Text, Obj)]
   -> ModeName
   -> RawPolyObjExpr
   -> Either Text Obj
-elabSurfaceObjExprWithTablesInCtx doc ctorTables termBinders mode expr =
-  PolyDSL.elabObjExprWithTablesImplicitMetas doc ctorTables [] [] tmBound mode expr
+elabSurfaceObjExprWithTablesInCtx typeScope doc ctorTables termBinders mode expr =
+  PolyDSL.elabObjExprWithTablesImplicitMetasInScope typeScope doc ctorTables [] [] tmBound mode expr
   where
     visibleBinders = visibleTermBinders termBinders
 
@@ -443,10 +456,10 @@ data RuntimeBinder
   | RBValue Text Int
   deriving (Eq, Show)
 
-elabNode :: ModuleEnv -> Doctrine -> CtorTables -> TypeTheory -> ModeName -> StructuralOps -> ElabEnv -> SurfaceNode -> Fresh SurfDiag
-elabNode menv doc ctorTables tt mode ops env node = do
-  typeSubst <- liftEither (buildTypeSubst doc ctorTables tt mode env (snParams node))
-  (mBinder, mBodyHole, bodyEnv) <- prepareBinder doc ctorTables tt mode env (snParams node) (snBinder node)
+elabNode :: M.Map Text ScopedValue -> M.Map Text Obj -> ModuleEnv -> Doctrine -> CtorTables -> TypeTheory -> ModeName -> StructuralOps -> ElabEnv -> SurfaceNode -> Fresh SurfDiag
+elabNode valueScope typeScope menv doc ctorTables tt mode ops env node = do
+  typeSubst <- liftEither (buildTypeSubst typeScope doc ctorTables tt mode env (snParams node))
+  (mBinder, mBodyHole, bodyEnv) <- prepareBinder typeScope doc ctorTables tt mode env (snParams node) (snBinder node)
   let children = snChildren node
   childDiags <-
     mapM
@@ -455,13 +468,14 @@ elabNode menv doc ctorTables tt mode ops env node = do
               case mBodyHole of
                 Just bodyIdx | idx == bodyIdx -> bodyEnv
                 _ -> env
-         in elabNode menv doc ctorTables tt mode ops childEnv child)
+         in elabNode valueScope typeScope menv doc ctorTables tt mode ops childEnv child)
       (zip [1 ..] children)
-  surf <- evalTemplate menv doc ctorTables tt mode ops env (snParams node) typeSubst childDiags (snTemplate node)
+  surf <- evalTemplate valueScope typeScope menv doc ctorTables tt mode ops env (snParams node) typeSubst childDiags (snTemplate node)
   applyBinder tt doc mode ops mBinder surf
 
 prepareBinder
-  :: Doctrine
+  :: M.Map Text Obj
+  -> Doctrine
   -> CtorTables
   -> TypeTheory
   -> ModeName
@@ -469,14 +483,14 @@ prepareBinder
   -> M.Map Text SurfaceParam
   -> Maybe BinderDecl
   -> Fresh (Maybe RuntimeBinder, Maybe Int, ElabEnv)
-prepareBinder _doc _ctorTables _tt _mode env _params Nothing =
+prepareBinder _typeScope _doc _ctorTables _tt _mode env _params Nothing =
   pure (Nothing, Nothing, env)
-prepareBinder doc ctorTables tt mode env params (Just decl) =
+prepareBinder typeScope doc ctorTables tt mode env params (Just decl) =
   case decl of
     BindIn varCap typeCap bodyHole -> do
       varName <- liftEither (requireIdentParam params varCap)
       tyRaw <- liftEither (requireTypeParam params typeCap)
-      tyAnn <- liftEither (elabSurfaceObjExprWithTablesInCtx doc ctorTables (eeTmBinders env) mode tyRaw)
+      tyAnn <- liftEither (elabSurfaceObjExprWithTablesInCtx typeScope doc ctorTables (eeTmBinders env) mode tyRaw)
       if objMode tyAnn /= mode
         then liftEither (Left "surface: binder type must be in surface mode")
         else pure ()
@@ -517,12 +531,12 @@ elabVarRef tt subst tmCtx name ty = do
   let base0 = varSurf tmCtx name ty'
   liftEither (applySubstSurf tt subst base0)
 
-elabZeroArgGen :: Doctrine -> CtorTables -> TypeTheory -> ModeName -> ElabEnv -> Text -> Fresh SurfDiag
-elabZeroArgGen doc ctorTables tt mode env name = do
+elabZeroArgGen :: M.Map Text Obj -> Doctrine -> CtorTables -> TypeTheory -> ModeName -> ElabEnv -> Text -> Fresh SurfDiag
+elabZeroArgGen typeScope doc ctorTables tt mode env name = do
   gen <- liftEither (lookupGen doc mode (GenName name))
   if null (gdPlainDom gen) && null (gdParams gen)
     then do
-      diag <- genDFromDecl doc ctorTables tt mode env M.empty gen Nothing []
+      diag <- genDFromDecl typeScope doc ctorTables tt mode env M.empty gen Nothing []
       pure (emptySurf diag)
     else liftEither (Left ("surface: unknown variable " <> name))
 
@@ -530,7 +544,9 @@ elabZeroArgGen doc ctorTables tt mode env name = do
 -- Template evaluation
 
 evalTemplate
-  :: ModuleEnv
+  :: M.Map Text ScopedValue
+  -> M.Map Text Obj
+  -> ModuleEnv
   -> Doctrine
   -> CtorTables
   -> TypeTheory
@@ -542,7 +558,7 @@ evalTemplate
   -> [SurfDiag]
   -> TemplateExpr
   -> Fresh SurfDiag
-evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList templ =
+evalTemplate valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst childList templ =
   case templ of
     THole n ->
       case drop (n - 1) childList of
@@ -554,20 +570,10 @@ evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList templ 
           Just (SPIdent v) -> pure v
           _ -> liftEither (Left ("surface: variable placeholder requires ident capture: " <> cap))
       case M.lookup varName (eeVars env) of
-        Nothing -> elabZeroArgGen doc ctorTables tt mode env varName
+        Nothing -> elabZeroArgGen typeScope doc ctorTables tt mode env varName
         Just ty -> elabVarRef tt subst (envTmCtx env) varName ty
-    TTermRef name ->
-      case M.lookup name (meTerms menv) of
-        Nothing -> liftEither (Left ("surface: unknown term reference @" <> name))
-        Just td ->
-          if tdDoctrine td /= dName doc
-            then liftEither (Left ("surface: term @" <> name <> " doctrine mismatch"))
-            else
-              if tdMode td /= mode
-                then liftEither (Left ("surface: term @" <> name <> " mode mismatch"))
-                else pure (emptySurf (tdDiagram td))
     TId ctx -> do
-      ctx'0 <- liftEither (mapM (elabSurfaceObjExprWithTablesInCtx doc ctorTables (eeTmBinders env) mode) ctx)
+      ctx'0 <- liftEither (mapM (elabSurfaceObjExprWithTablesInCtx typeScope doc ctorTables (eeTmBinders env) mode) ctx)
       ctx' <- liftEither (mapM (applySubstObj tt subst) ctx'0)
       pure (emptySurf (idDTm mode (envTmCtx env) ctx'))
     TGen ref mArgs mBinderArgs -> do
@@ -578,30 +584,41 @@ evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList templ 
             case M.lookup cap paramMap of
               Just (SPIdent name) -> pure name
               _ -> liftEither (Left ("surface: generator hole requires ident capture: " <> cap))
-      gen <- liftEither (lookupGen doc mode (GenName genName))
-      bargs <- evalTemplateBinderArgs menv doc ctorTables tt mode ops env paramMap subst childList mBinderArgs
-      diag <- genDFromDecl doc ctorTables tt mode env paramMap gen mArgs bargs
-      pure (emptySurf diag)
+      case (mArgs, mBinderArgs, M.lookup genName valueScope) of
+        (Nothing, Nothing, Just scoped) ->
+          if svDoctrine scoped /= dName doc
+            then liftEither (Left ("surface: value " <> genName <> " doctrine mismatch"))
+            else
+              if svMode scoped /= mode
+                then liftEither (Left ("surface: value " <> genName <> " mode mismatch"))
+                else pure (emptySurf (svDiagram scoped))
+        _ -> do
+          gen <- liftEither (lookupGen doc mode (GenName genName))
+          bargs <- evalTemplateBinderArgs valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst childList mBinderArgs
+          diag <- genDFromDecl typeScope doc ctorTables tt mode env paramMap gen mArgs bargs
+          pure (emptySurf diag)
     TBox name inner -> do
-      innerDiag <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList inner
+      innerDiag <- evalTemplate valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst childList inner
       liftEither (boxSurf mode name innerDiag)
     TTrace k inner -> do
-      innerDiag <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList inner
+      innerDiag <- evalTemplate valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst childList inner
       liftEither (traceSurf mode k innerDiag)
     TLoop inner -> do
-      innerDiag <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList inner
+      innerDiag <- evalTemplate valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst childList inner
       liftEither (loopSurf innerDiag)
     TComp a b -> do
-      d1 <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList a
-      d2 <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList b
+      d1 <- evalTemplate valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst childList a
+      d2 <- evalTemplate valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst childList b
       liftEither (compSurf tt d1 d2)
     TTensor a b -> do
-      d1 <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList a
-      d2 <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst childList b
+      d1 <- evalTemplate valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst childList a
+      d2 <- evalTemplate valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst childList b
       liftEither (tensorSurf d1 d2)
 
 evalTemplateBinderArgs
-  :: ModuleEnv
+  :: M.Map Text ScopedValue
+  -> M.Map Text Obj
+  -> ModuleEnv
   -> Doctrine
   -> CtorTables
   -> TypeTheory
@@ -613,24 +630,24 @@ evalTemplateBinderArgs
   -> [SurfDiag]
   -> Maybe [TemplateBinderArg]
   -> Fresh [BinderArg]
-evalTemplateBinderArgs _menv _doc _ctorTables _tt _mode _ops _env _paramMap _subst _children Nothing =
+evalTemplateBinderArgs _valueScope _typeScope _menv _doc _ctorTables _tt _mode _ops _env _paramMap _subst _children Nothing =
   pure []
-evalTemplateBinderArgs menv doc ctorTables tt mode ops env paramMap subst children (Just args) =
+evalTemplateBinderArgs valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst children (Just args) =
   mapM evalOne args
   where
     evalOne arg =
       case arg of
         TBAMeta name -> pure (BAMeta (BinderMetaVar name))
         TBAExpr expr -> do
-          sd <- evalTemplate menv doc ctorTables tt mode ops env paramMap subst children expr
+          sd <- evalTemplate valueScope typeScope menv doc ctorTables tt mode ops env paramMap subst children expr
           if M.null (sdUses sd)
             then do
               liftEither (validateDiagram (sdDiag sd))
               pure (BAConcrete (sdDiag sd))
             else liftEither (Left "surface: binder argument uses unresolved surface variables")
 
-buildTypeSubst :: Doctrine -> CtorTables -> TypeTheory -> ModeName -> ElabEnv -> M.Map Text SurfaceParam -> Either Text Subst
-buildTypeSubst doc ctorTables tt mode env paramMap = do
+buildTypeSubst :: M.Map Text Obj -> Doctrine -> CtorTables -> TypeTheory -> ModeName -> ElabEnv -> M.Map Text SurfaceParam -> Either Text Subst
+buildTypeSubst typeScope doc ctorTables tt mode env paramMap = do
   pairs <- mapM toPair (M.toList paramMap)
   let localTy = M.fromList (concat pairs)
   localSub <- U.mkSubst [ (v, CAObj ty) | (v, ty) <- M.toList localTy ]
@@ -640,7 +657,7 @@ buildTypeSubst doc ctorTables tt mode env paramMap = do
     toPair (name, param) =
       case param of
         SPType rawTy -> do
-          ty <- elabSurfaceObjExprWithTablesInCtx doc ctorTables (eeTmBinders env) mode rawTy
+          ty <- elabSurfaceObjExprWithTablesInCtx typeScope doc ctorTables (eeTmBinders env) mode rawTy
           var <- PolyDSL.mkTypeMetaVar doc mode name
           pure [(var, ty)]
         _ -> pure []
@@ -697,7 +714,8 @@ normalizeTemplateGenArgs params args =
         GP_Tm v -> Ty.tmvName v
 
 elabTemplateTyArg
-  :: Doctrine
+  :: M.Map Text Obj
+  -> Doctrine
   -> CtorTables
   -> TypeTheory
   -> ElabEnv
@@ -705,7 +723,7 @@ elabTemplateTyArg
   -> ModeName
   -> TemplateArgExpr
   -> Either Text Obj
-elabTemplateTyArg doc ctorTables tt env paramMap expectedMode argExpr = do
+elabTemplateTyArg typeScope doc ctorTables tt env paramMap expectedMode argExpr = do
   raw <-
     case argExpr of
       TAExpr expr -> Right expr
@@ -715,11 +733,12 @@ elabTemplateTyArg doc ctorTables tt env paramMap expectedMode argExpr = do
           Just (SPIdent name) -> Right (RPTVar name)
           Just (SPLit _) -> Left "surface: type argument hole cannot use a literal capture"
           Nothing -> Left ("surface: unknown template capture: " <> cap)
-  ty0 <- elabSurfaceObjExprWithTablesInCtx doc ctorTables (eeTmBinders env) expectedMode raw
+  ty0 <- elabSurfaceObjExprWithTablesInCtx typeScope doc ctorTables (eeTmBinders env) expectedMode raw
   applySubstObj tt (eeTypeSubst env) ty0
 
 elabTemplateTmArg
-  :: Doctrine
+  :: M.Map Text Obj
+  -> Doctrine
   -> CtorTables
   -> TypeTheory
   -> ElabEnv
@@ -727,10 +746,10 @@ elabTemplateTmArg
   -> Obj
   -> TemplateArgExpr
   -> Either Text TermDiagram
-elabTemplateTmArg doc ctorTables tt env paramMap expectedSort argExpr =
+elabTemplateTmArg typeScope doc ctorTables tt env paramMap expectedSort argExpr =
   case argExpr of
     TAExpr expr ->
-      elabSurfaceTmArg doc ctorTables tt env expectedSort expr
+      elabSurfaceTmArg typeScope doc ctorTables tt env expectedSort expr
     TAHole cap ->
       case M.lookup cap paramMap of
         Just (SPLit lit) ->
@@ -739,22 +758,23 @@ elabTemplateTmArg doc ctorTables tt env paramMap expectedSort argExpr =
           | literalKindForObj tt expectedSort == Just LKString ->
               mkLiteralTerm tt (envTmCtx env) expectedSort (LString name)
           | otherwise ->
-              elabSurfaceTmArg doc ctorTables tt env expectedSort (RPTVar name)
+              elabSurfaceTmArg typeScope doc ctorTables tt env expectedSort (RPTVar name)
         Just (SPType _) ->
           Left "surface: term argument hole cannot use a <type> capture"
         Nothing ->
           Left ("surface: unknown template capture: " <> cap)
 
 elabSurfaceTmArg
-  :: Doctrine
+  :: M.Map Text Obj
+  -> Doctrine
   -> CtorTables
   -> TypeTheory
   -> ElabEnv
   -> Obj
   -> RawPolyObjExpr
   -> Either Text TermDiagram
-elabSurfaceTmArg doc ctorTables tt env expectedSort raw =
-  case PolyDSL.elabTmTermWithTables doc ctorTables [] [] tmBound (Just expectedSort) raw of
+elabSurfaceTmArg typeScope doc ctorTables tt env expectedSort raw =
+  case PolyDSL.elabTmTermWithTablesInScope typeScope doc ctorTables [] [] tmBound (Just expectedSort) raw of
     Right tm -> Right tm
     Left err ->
       case raw of
@@ -1007,7 +1027,8 @@ lookupGen doc mode name =
     renderGen (GenName g) = g
 
 genDFromDecl
-  :: Doctrine
+  :: M.Map Text Obj
+  -> Doctrine
   -> CtorTables
   -> TypeTheory
   -> ModeName
@@ -1017,7 +1038,7 @@ genDFromDecl
   -> Maybe [TemplateGenArg]
   -> [BinderArg]
   -> Fresh Diagram
-genDFromDecl doc ctorTables tt mode env paramMap gen mArgs bargs = do
+genDFromDecl typeScope doc ctorTables tt mode env paramMap gen mArgs bargs = do
   rawArgs <- liftEither (requiredTemplateGenArgs (gdParams gen) mArgs)
   argExprs <- liftEither (normalizeTemplateGenArgs (gdParams gen) rawArgs)
   (freshParams, renameSubst) <- liftEither (GA.freshGenParams tt (envTmCtx env) (gdParams gen))
@@ -1026,8 +1047,8 @@ genDFromDecl doc ctorTables tt mode env paramMap gen mArgs bargs = do
     liftEither
       ( GA.elabGenArgsSequentialWith
           tt
-          (\v argExpr -> elabTemplateTyArg doc ctorTables tt env paramMap (Ty.tmVarOwner v) argExpr)
-          (\expectedSort _ rawArg -> elabTemplateTmArg doc ctorTables tt env paramMap expectedSort rawArg)
+          (\v argExpr -> elabTemplateTyArg typeScope doc ctorTables tt env paramMap (Ty.tmVarOwner v) argExpr)
+          (\expectedSort _ rawArg -> elabTemplateTmArg typeScope doc ctorTables tt env paramMap expectedSort rawArg)
           freshParams
           argExprs
       )

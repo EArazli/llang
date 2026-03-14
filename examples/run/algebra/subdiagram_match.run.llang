@@ -1,14 +1,26 @@
-import "../../lib/algebra/subdiagram_match.llang";
+include "../../lib/algebra/subdiagram_match.llang";
+
+module_surface SubdiagramRunUnit where {
+  doctrine Subdiagram;
+  mode M;
+}
+
+language SubdiagramRunLang where {
+  doctrine Subdiagram;
+  module_surface SubdiagramRunUnit;
+}
+
+module SubdiagramRuns in SubdiagramRunLang where {
+  let main
+  ---
+  h ; f ; g ; h
+  ---
+  export { main };
+}
 
 pipeline debug where {
+  project export main;
   normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
 }
 
-run main using debug where {
-  source doctrine Subdiagram;
-  source mode M;
-}
----
-h ; f ; g ; h
----
+build main from SubdiagramRuns using debug;

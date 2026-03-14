@@ -1,15 +1,27 @@
-import "../../lib/algebra/monoid_to_string.llang";
+include "../../lib/algebra/monoid_to_string.llang";
+
+module_surface MonoidToStringRunUnit where {
+  doctrine Monoid;
+  mode M;
+}
+
+language MonoidToStringRunLang where {
+  doctrine Monoid;
+  module_surface MonoidToStringRunUnit;
+}
+
+module MonoidToStringRuns in MonoidToStringRunLang where {
+  let main
+  ---
+  (unit * unit) ; mul
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize;
   apply MonoidToString;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine Monoid;
-  source mode M;
-}
----
-(unit * unit) ; mul
----
+build main from MonoidToStringRuns using main;

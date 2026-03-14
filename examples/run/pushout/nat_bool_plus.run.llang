@@ -1,14 +1,26 @@
-import "../../lib/pushout/nat_bool_plus.llang";
+include "../../lib/pushout/nat_bool_plus.llang";
+
+module_surface NatBoolPlusRunUnit where {
+  doctrine NatBoolPlus;
+  mode M;
+}
+
+language NatBoolPlusRunLang where {
+  doctrine NatBoolPlus;
+  module_surface NatBoolPlusRunUnit;
+}
+
+module NatBoolPlusRuns in NatBoolPlusRunLang where {
+  let main
+  ---
+  Nat_inl_Z ; Nat_inl_S ; isZero
+  ---
+  export { main };
+}
 
 pipeline debug where {
+  project export main;
   normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
 }
 
-run main using debug where {
-  source doctrine NatBoolPlus;
-  source mode M;
-}
----
-Nat_inl_Z ; Nat_inl_S ; isZero
----
+build main from NatBoolPlusRuns using debug;

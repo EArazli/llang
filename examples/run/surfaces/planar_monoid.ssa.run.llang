@@ -1,19 +1,31 @@
-import "../../lib/surfaces/planar_monoid.ssa.surface.llang";
+include "../../lib/surfaces/planar_monoid.ssa.surface.llang";
+
+module_surface PlanarSsaRunUnit where {
+  doctrine CartMonoid;
+  mode M;
+  surface PlanarSSA;
+}
+
+language PlanarSsaRunLang where {
+  doctrine CartMonoid;
+  module_surface PlanarSsaRunUnit;
+}
+
+module PlanarSsaRuns in PlanarSsaRunLang where {
+  let main
+  ---
+  diag {
+    in x:A;
+    in y:A;
+    out mul(x, y);
+  }
+  ---
+  export { main };
+}
 
 pipeline debug where {
+  project export main;
   normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
 }
 
-run main using debug where {
-  source doctrine CartMonoid;
-  source mode M;
-  source surface PlanarSSA;
-}
----
-diag {
-  in x:A;
-  in y:A;
-  out mul(x, y);
-}
----
+build main from PlanarSsaRuns using debug;

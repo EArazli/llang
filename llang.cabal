@@ -20,6 +20,12 @@ extra-source-files:
     CHANGELOG.md
     examples/README.md
 data-files:
+    examples/build/hello_doc.llang
+    examples/build/bundle_docs.llang
+    examples/build/logic_full_adder_codegen.llang
+    examples/build/explicit_sharing_js_codegen.llang
+    examples/build/autodiff_times_sin.llang
+    examples/build/autodiff_times_sin_pair_core.llang
     examples/lib/dependent/vec.llang
     examples/lib/algebra/box_match.llang
     examples/lib/algebra/cart_monoid.llang
@@ -37,13 +43,9 @@ data-files:
     examples/lib/effects/combined.llang
     examples/lib/modes/dual_discipline_surface.llang
     examples/lib/modes/dual_discipline_term_surface.llang
-    examples/lib/modes/lnl.counit.term.llang
-    examples/lib/modes/lnl.llang
     examples/lib/modes/quad_discipline.llang
-    examples/lib/modes/struct_caps.llang
-    examples/lib/modes/staging.llang
     examples/lib/modes/staging_mode_map.llang
-    examples/lib/modes/uf_cancel.llang
+    examples/lib/modes/struct_caps.llang
     examples/lib/pushout/category_bool_nat_base.llang
     examples/lib/pushout/comm_monoid.llang
     examples/lib/pushout/nat_bool.llang
@@ -52,65 +54,7 @@ data-files:
     examples/lib/pushout/pushout_extend.llang
     examples/lib/surfaces/ccc_surface/ccc.llang
     examples/lib/surfaces/planar_monoid.ssa.surface.llang
-    examples/lib/surfaces/template_splice_demo.surface.llang
     examples/lib/templates/state.template.llang
-    examples/lib/terms/splice_source.llang
-    examples/lib/terms/term_defs.llang
-    examples/run/algebra/box_match.run.llang
-    examples/run/algebra/cart_monoid.run.llang
-    examples/run/algebra/cat.run.llang
-    examples/run/algebra/ccc.run.llang
-    examples/run/algebra/coherence_demo.run.llang
-    examples/run/algebra/loop_demo.run.llang
-    examples/run/algebra/mode_map_demo.run.llang
-    examples/run/algebra/monoid_to_string.run.llang
-    examples/run/algebra/morphism_term.run.llang
-    examples/run/algebra/peano.run.llang
-    examples/run/algebra/planar_monoid.run.llang
-    examples/run/algebra/ski.run.llang
-    examples/run/algebra/subdiagram_match.run.llang
-    examples/run/codegen/simple_codegen.run.llang
-    examples/run/codegen/logic_full_adder_codegen.run.llang
-    examples/run/codegen/minifun/concat2.run.llang
-    examples/run/data/list.run.llang
-    examples/run/dependent/graded_monad.run.llang
-    examples/run/dependent/implicit_binder_index.run.llang
-    examples/run/dependent/lambda_beta.run.llang
-    examples/run/doc/hello_doc.run.llang
-    examples/run/effects/combined_with_handler.run.llang
-    examples/run/sharing/basic_quote.run.llang
-    examples/run/dependent/vec.run.llang
-    examples/run/modes/dual_discipline_term_surface.run.llang
-    examples/run/modes/lnl.counit.run.llang
-    examples/run/modes/lnl.unit.run.llang
-    examples/run/modes/modality_rename_visible.run.llang
-    examples/run/modes/quad_discipline_surface.run.llang
-    examples/run/modes/staging.run.llang
-    examples/run/modes/staging_mode_map.run.llang
-    examples/run/modes/uf_cancel.run.llang
-    examples/run/pushout/comm_monoid.run.llang
-    examples/run/pushout/nat_bool.run.llang
-    examples/run/pushout/nat_bool_plus.run.llang
-    examples/run/pushout/pushout_basic.run.llang
-    examples/run/surfaces/implements_uses.run.llang
-    examples/run/surfaces/planar_monoid.ssa.run.llang
-    examples/run/surfaces/template_splice_demo.run.llang
-    examples/run/templates/state.run.llang
-    examples/run/terms/cart_monoid.term.run.llang
-    examples/run/terms/stlc_bool.term.run.llang
-    examples/run/terms/term_ref.run.llang
-    examples/run/classification_resolution.ok.run.llang
-    examples/run/classification_forward_ref.ok.run.llang
-    examples/run/classification_layered_3level.ok.run.llang
-    examples/run/xfail/README.md
-    examples/run/xfail/classification_cycle.fail.run.llang
-    examples/run/xfail/classification_missing_classifier.fail.run.llang
-    examples/run/xfail/classification_wrong_classifier.fail.run.llang
-    examples/run/xfail/algebra/no_dup_error.fail.run.llang
-    examples/run/xfail/dependent/free_index_must_fail.fail.run.llang
-    examples/run/xfail/modes/dual_discipline_term_surface.fail.run.llang
-    examples/run/xfail/modes/quad_discipline_surface.fail.run.llang
-    examples/run/xfail/pushout/pushout_extend_confluence.fail.run.llang
     stdlib/bool.llang
     stdlib/data/list.llang
     stdlib/effects/exception.template.llang
@@ -130,15 +74,19 @@ source-repository head
 library
   exposed-modules:
       Strat.CLI
+      Strat.Common.ModuleRef
+      Strat.Common.OpaqueType
       Strat.Common.Rules
       Strat.DSL.AST
       Strat.DSL.Elab
       Strat.DSL.Parse
+      Strat.Frontend.Build
       Strat.Frontend.Coerce
       Strat.Frontend.Env
       Strat.Frontend.Loader
+      Strat.Frontend.Model
       Strat.Frontend.Prelude
-      Strat.Frontend.Run
+      Strat.Host.Backend
       Strat.Pipeline
       Strat.Poly.Cell2
       Strat.Poly.Coherence
@@ -192,6 +140,8 @@ library
       Strat.Poly.TypeTheory
       Strat.Poly.UnifyObj
   other-modules:
+      Strat.Frontend.CompilerFingerprint
+      Strat.Common.Provider
       Strat.Poly.BeckChevalleyObligations
       Strat.Frontend.Compile
       Strat.Poly.GenArgs
@@ -204,6 +154,7 @@ library
       Strat.Poly.Term.Termination
       Strat.Poly.Traversal
       Strat.Poly.ObjPretty
+      Strat.Util.Fingerprint
       Strat.Util.List
   hs-source-dirs:
       src
@@ -217,6 +168,7 @@ library
     , megaparsec
     , mtl
     , parser-combinators
+    , template-haskell
     , text
   default-language: Haskell2010
 
@@ -271,8 +223,11 @@ test-suite llang-test
       Test.Poly.ClassificationResolution
       Test.Poly.Slots
       Test.DSL.Functors
+      Test.Host.Backend
+      Test.Frontend.Loader
       Test.Value.Doc
       Test.Frontend.Pipeline
+      Test.Frontend.Builds
       Test.Frontend.ExampleCodegen
       Test.Frontend.CanonicalCoverage
       Test.Frontend.ExamplesSmoke

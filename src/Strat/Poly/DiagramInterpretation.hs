@@ -99,6 +99,11 @@ interpretDiagram interp diagSrc = do
           bargsMapped <- mapM (mapBinderArg interp) bargsSrc
           diOnGenEdge interp src tgt edgeKey edgeSrc bargsMapped
 
+        PProvider ref ->
+          updateEdgePayload tgt edgeKey (PProvider ref)
+        PModuleRef ref ->
+          updateEdgePayload tgt edgeKey (PModuleRef ref)
+
         PBox nm inner -> do
           inner' <- interpretDiagram interp inner
           updateEdgePayload tgt edgeKey (PBox nm inner')
@@ -273,6 +278,10 @@ instantiateGenImageBindersWithMapper tt mapSplice binderSigs holeSub diag0 = do
         PGen g args bargs -> do
           bargs' <- mapM recurseBinderArg bargs
           pure edge { ePayload = PGen g args bargs' }
+        PProvider ref ->
+          pure edge { ePayload = PProvider ref }
+        PModuleRef ref ->
+          pure edge { ePayload = PModuleRef ref }
         PBox name inner -> do
           inner' <- instantiateGenImageBindersWithMapper tt mapSplice binderSigs holeSub inner
           pure edge { ePayload = PBox name inner' }

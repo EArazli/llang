@@ -1,4 +1,4 @@
-import "./console.llang";
+include "./console.llang";
 
 surface MiniFun where {
   doctrine ConsoleExpr;

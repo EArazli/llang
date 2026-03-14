@@ -288,6 +288,8 @@ rewriteInEdge :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Diagram -
 rewriteInEdge spliceMapper tt cap rules diag (edgeKey, edge) =
   case ePayload edge of
     PSplice _ _ -> Left "rewriteAll: splice nodes are not allowed in evaluation terms"
+    PProvider _ -> Right []
+    PModuleRef _ -> Right []
     PBox name inner -> do
       innerRes <- rewriteAllWithProof spliceMapper tt cap rules inner
       mapM (replaceBox name) innerRes

@@ -1,4 +1,4 @@
-import "./nat_bool.llang";
+include "./nat_bool.llang";
 
 doctrine NatBoolPlus extends NatBool where {
   gen isZero : [Nat_inl_Nat] -> [Bool_inr_Bool] @M;

@@ -4,16 +4,12 @@ doctrine ActionBinderHoles where {
   gen comp_var(a@M) : [a] -> [a] @M;
   gen comp_reindex(a@M) : [a] -> [a] @M;
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
-
   modality Box : M -> M;
   lift_classifier Box = id@M;
-
   gen U_M : [] -> [Box(M.U_M)] @M;
   gen A : [] -> [Box(M.U_M)] @M;
-
   gen lam : [binder { x : A } : [A]] -> [A] @M;
   gen app : [A, A] -> [A] @M;
-
   gen lamB : [binder { x : A } : [A]] -> [A] @M;
   gen appB : [A, A] -> [A] @M;
 
@@ -23,14 +19,26 @@ doctrine ActionBinderHoles where {
   }
 }
 
-pipeline debug where {
-  extract diagram;
-};
-
-run main using debug where {
-  source doctrine ActionBinderHoles;
-  source mode M;
+module_surface ActionBinderHolesRunUnit where {
+  doctrine ActionBinderHoles;
+  mode M;
 }
 
----
-map[Box]((lam[id[A]] * id[A]) ; app)
+language ActionBinderHolesRunLang where {
+  doctrine ActionBinderHoles;
+  module_surface ActionBinderHolesRunUnit;
+}
+
+module ActionBinderHolesRuns in ActionBinderHolesRunLang where {
+  let main
+  ---
+  map[Box]((lam[id[A]] * id[A]) ; app)
+  ---
+  export { main };
+}
+
+pipeline debug where {
+  project export main;
+}
+
+build main from ActionBinderHolesRuns using debug;

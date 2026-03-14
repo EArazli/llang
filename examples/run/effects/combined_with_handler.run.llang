@@ -1,4 +1,4 @@
-import "../../lib/effects/combined.llang";
+include "../../lib/effects/combined.llang";
 
 doctrine Handled extends Base where {
   gen handleRaise : [Err] -> [] @M;
@@ -16,23 +16,46 @@ morphism Handle : Combined -> Handled where {
   gen WriterW_inr_tell @M -> handleTell
 }
 
-term CombinedProg where {
+module_surface CombinedRunUnit where {
   doctrine Combined;
   mode M;
 }
----
-WriterW_inr_tell * ExnE_inl_raise
----
+
+language CombinedRunLang where {
+  doctrine Combined;
+  module_surface CombinedRunUnit;
+}
+
+module CombinedPrograms in CombinedRunLang where {
+  let combined_prog
+  ---
+  WriterW_inr_tell * ExnE_inl_raise
+  ---
+  export { combined_prog };
+}
+
+module_surface HandledRunUnit where {
+  doctrine Handled;
+  mode M;
+}
+
+language HandledRunLang where {
+  doctrine Handled;
+  module_surface HandledRunUnit;
+}
+
+module HandledRuns in HandledRunLang where {
+  import CombinedPrograms as Prog using Handle;
+  let main
+  ---
+  Prog::combined_prog
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine Handled;
-  source mode M;
-}
----
-@CombinedProg
----
+build main from HandledRuns using main;

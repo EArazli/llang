@@ -18,13 +18,13 @@ data LiteralKind
   = LKInt
   | LKString
   | LKBool
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 data Literal
   = LInt Int
   | LString Text
   | LBool Bool
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Read, Show)
 
 literalKind :: Literal -> LiteralKind
 literalKind lit =

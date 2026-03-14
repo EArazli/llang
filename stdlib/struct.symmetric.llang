@@ -1,4 +1,4 @@
-import "./struct.planar.llang";
+include "./struct.planar.llang";
 
 doctrine StructSymmetric extends StructPlanar where {
   gen swap (a@M, b@M) : [a, b] -> [b, a] @M;

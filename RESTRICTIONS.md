@@ -109,3 +109,34 @@ To make this mathematically well-defined (strategy-independent), the kernel requ
 - **Confluence:** all critical pairs must be joinable (checked by normalizing both sides).
 
 The kernel still does not perform completion: users must provide a convergent presentation themselves.
+
+## 15. Module / Build Scope
+
+- `link` is currently **structural component-graph composition**, not a full
+  signature/substitution module calculus.
+  Linked modules must share a language and doctrine; imports are satisfied
+  against present linked components and equal-name components must be equal.
+- Whole-module `quote` is a **closure-and-lowering** step.
+  It first closes the module graph, then quotes values into the target
+  doctrine, and the resulting artifact is value-only.
+  It does **not** preserve typed/import/provider metadata as a translated typed
+  module graph.
+- `module_surface` elaborator extensibility is bounded to the existing
+  declaration grammar.
+  Source-defined `module_elaborator` declarations may expand
+  `custom <tag> --- ... ---` items into ordinary interface/module items, but
+  they do not define new parser syntax or new kernel declaration kinds.
+- Source-defined `data_repr` declarations are aliases/configuration over
+  existing host-side representation semantics.
+  They may reuse `doctrine_data` or configure `opaque_data`, but genuinely new
+  representation behavior still requires host-side implementation.
+- The shipped standard module-data representations are intentionally small:
+  `doctrine_data` and `opaque_data`.
+  `doctrine_data` currently requires doctrine-provided **nullary** type
+  constructors for packaged module data.
+
+## 16. Host Backend Scope
+
+- Host backends are a Haskell-side registry consumed by `emit via ...`.
+  They are injectable/configurable on the host side, but they are not currently
+  userland-defined or dynamically loaded from source files.

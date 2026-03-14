@@ -19,7 +19,7 @@ data Cell2 = Cell2
   , c2LHS :: Diagram
   , c2RHS :: Diagram
   }
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 c2TyVars :: Cell2 -> [TmVar]
 c2TyVars

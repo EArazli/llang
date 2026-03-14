@@ -1,22 +1,36 @@
-import "../../lib/pushout/comm_monoid.llang";
+include "../../lib/pushout/comm_monoid.llang";
+
+module_surface CommMonoidRunUnit where {
+  doctrine CommMonoid;
+  mode M;
+}
+
+language CommMonoidRunLang where {
+  doctrine CommMonoid;
+  module_surface CommMonoidRunUnit;
+}
+
+module CommMonoidRuns in CommMonoidRunLang where {
+  let main
+  ---
+  (Monoid_inl_e * Monoid_inl_e) ; m
+  ---
+  let comm_swap
+  ---
+  swap(Obj, Obj) ; m
+  ---
+  export { main, comm_swap };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine CommMonoid;
-  source mode M;
+pipeline comm_swap where {
+  project export comm_swap;
+  normalize;
 }
----
-(Monoid_inl_e * Monoid_inl_e) ; m
----
 
-run comm_swap using main where {
-  source doctrine CommMonoid;
-  source mode M;
-}
----
-swap(Obj, Obj) ; m
----
+build main from CommMonoidRuns using main;
+build comm_swap from CommMonoidRuns using comm_swap;

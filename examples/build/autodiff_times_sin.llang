@@ -1,0 +1,248 @@
+doctrine SmoothLam where {
+  mode M acyclic classifiedBy M via M.U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_M : [] -> [M.U_M] @M;
+
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
+
+  gen R : [] -> [M.U_M] @M;
+  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;
+  gen Program : [] -> [M.U_M] @M;
+
+  gen dup(a@M) : [a] -> [a, a] @M;
+
+  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;
+  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;
+
+  rule computational beta -> (a@M, b@M) : [a] -> [b] @M =
+    (lam(a, b)[?Body] * id[a]) ; app(a, b) == splice(?Body)
+
+  gen mul : [R, R] -> [R] @M;
+  gen sin : [R] -> [R] @M;
+
+  gen emitUnaryModule( fn:Str, path:Str ) : [Arr(R, R)] -> [Program] @M;
+}
+
+doctrine DualCore where {
+  mode M acyclic classifiedBy M via M.U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_M : [] -> [M.U_M] @M;
+
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
+
+  gen R : [] -> [M.U_M] @M;
+  gen Dual : [] -> [M.U_M] @M;
+  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;
+  gen Program : [] -> [M.U_M] @M;
+
+  gen dup(a@M) : [a] -> [a, a] @M;
+  gen swap(a@M, b@M) : [a, b] -> [b, a] @M;
+
+  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;
+  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;
+
+  rule computational beta -> (a@M, b@M) : [a] -> [b] @M =
+    (lam(a, b)[?Body] * id[a]) ; app(a, b) == splice(?Body)
+
+  gen mkDual : [R, R] -> [Dual] @M;
+  gen splitDual : [Dual] -> [R, R] @M;
+  gen addR : [R, R] -> [R] @M;
+  gen mulR : [R, R] -> [R] @M;
+  gen sinR : [R] -> [R] @M;
+  gen cosR : [R] -> [R] @M;
+
+  gen dmul : [Dual, Dual] -> [Dual] @M;
+  gen dsin : [Dual] -> [Dual] @M;
+
+  rule computational dsin_def -> : [Dual] -> [Dual] @M =
+    dsin ==
+      splitDual
+      ; (dup(R) * id[R])
+      ; (sinR * (cosR * id[R]))
+      ; (id[R] * mulR)
+      ; mkDual
+
+  rule computational dmul_def -> : [Dual, Dual] -> [Dual] @M =
+    dmul ==
+      (splitDual * splitDual)
+      ; (dup(R) * id[R] * id[R] * id[R])
+      ; (id[R] * id[R] * id[R] * dup(R) * id[R])
+      ; (id[R] * swap(R, R) * id[R] * id[R] * id[R])
+      ; (id[R] * swap(R, R) * id[R] * id[R] * id[R])
+      ; (id[R] * id[R] * id[R] * id[R] * swap(R, R))
+      ; (id[R] * id[R] * id[R] * swap(R, R) * id[R])
+      ; (mulR * ((mulR * mulR) ; addR))
+      ; mkDual
+
+  gen emitUnaryModule( fn:Str, path:Str ) : [Arr(Dual, Dual)] -> [Program] @M;
+}
+
+doctrine DualJS where {
+  mode M acyclic classifiedBy M via M.U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen U_M : [] -> [M.U_M] @M;
+
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
+  gen Int : [] -> [M.U_M] @M;
+  literal Int @M = int;
+
+  gen R : [] -> [M.U_M] @M;
+  gen Dual : [] -> [M.U_M] @M;
+  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;
+  gen Doc : [] -> [M.U_M] @M;
+  gen FileTree : [] -> [M.U_M] @M;
+
+  gen empty : [] -> [Doc] @M;
+  gen text( s:Str ) : [] -> [Doc] @M;
+  gen line : [] -> [Doc] @M;
+  gen cat : [Doc, Doc] -> [Doc] @M;
+  gen indent( n:Int ) : [Doc] -> [Doc] @M;
+  gen singleFile( path:Str ) : [Doc] -> [FileTree] @M;
+  gen concatTree : [FileTree, FileTree] -> [FileTree] @M;
+
+  gen inputDual( name:Str ) : [] -> [Dual] @M;
+  gen dup(a@M) : [a] -> [a, a] @M;
+  gen swap(a@M, b@M) : [a, b] -> [b, a] @M;
+
+  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;
+  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;
+
+  rule computational beta -> (a@M, b@M) : [a] -> [b] @M =
+    (lam(a, b)[?Body] * id[a]) ; app(a, b) == splice(?Body)
+
+  gen mkDual : [R, R] -> [Dual] @M;
+  gen splitDual : [Dual] -> [R, R] @M;
+  gen addR : [R, R] -> [R] @M;
+  gen mulR : [R, R] -> [R] @M;
+  gen sinR : [R] -> [R] @M;
+  gen cosR : [R] -> [R] @M;
+
+  gen dmul : [Dual, Dual] -> [Dual] @M;
+  gen dsin : [Dual] -> [Dual] @M;
+
+  gen renderDual : [Dual] -> [Doc] @M;
+  gen emitUnaryModule( fn:Str, path:Str ) : [Arr(Dual, Dual)] -> [FileTree] @M;
+
+  rule computational dup_input -> (n : Str) : [] -> [Dual, Dual] @M =
+    inputDual(name = n) ; dup(Dual) == inputDual(name = n) * inputDual(name = n)
+
+  rule computational render_input -> (n : Str) : [] -> [Doc] @M =
+    inputDual(name = n) ; renderDual ==
+      text("dx")
+
+  rule computational render_dmul -> : [Dual, Dual] -> [Doc] @M =
+    dmul ; renderDual ==
+      (((text("mulDual(") * (id[Dual] ; renderDual)) ; cat) ; (id[Doc] * text(", ")) ; cat)
+      * (id[Dual] ; renderDual)
+      ; cat
+      ; (id[Doc] * text(")")) ; cat
+
+  rule computational render_dsin -> : [Dual] -> [Doc] @M =
+    dsin ; renderDual ==
+      (text("sinDual(") * (id[Dual] ; renderDual)) ; cat
+      ; (id[Doc] * text(")")) ; cat
+
+  rule computational emit_module -> (f : Str, p : Str) : [] -> [FileTree] @M =
+    lam(Dual, Dual)[?Body] ; emitUnaryModule(fn = f, path = p) ==
+      (text("const mulDual = (l, r) => ({\n  value: (l.value * r.value),\n  derivative: ((l.value * r.derivative) + (l.derivative * r.value))\n});\n\nconst sinDual = u => ({\n  value: Math.sin(u.value),\n  derivative: (Math.cos(u.value) * u.derivative)\n});\n\nexport const ") * text(f))
+      ; cat
+      ; (id[Doc] * text(" = x => {\n  const dx = { value: x, derivative: 1 };\n  return ")) ; cat
+      ; (id[Doc] * (inputDual(name = "x") ; splice(?Body) ; renderDual)) ; cat
+      ; (id[Doc] * text(";\n};\n")) ; cat
+      ; singleFile(p)
+}
+
+morphism forwardAD : SmoothLam -> DualCore where {
+  check structural;
+
+  mode M -> M;
+  type Str @M -> Str @M;
+  type R @M -> Dual @M;
+
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+
+  gen dup @M -> dup(a)
+  gen lam @M -> lam(a, b)[?b0]
+  gen app @M -> app(a, b)
+  gen mul @M -> dmul
+  gen sin @M -> dsin
+  gen emitUnaryModule @M -> emitUnaryModule(fn = fn, path = path)
+}
+
+morphism emitJS : DualCore -> DualJS where {
+  check structural;
+
+  mode M -> M;
+  type Str @M -> Str @M;
+
+  gen comp_ctx_ext @M -> comp_ctx_ext(a)
+  gen comp_var @M -> comp_var(a)
+  gen comp_reindex @M -> comp_reindex(a)
+
+  type Program @M -> FileTree @M;
+
+  gen dup @M -> dup(a)
+  gen swap @M -> swap(a, b)
+  gen lam @M -> lam(a, b)[?b0]
+  gen app @M -> app(a, b)
+  gen mkDual @M -> mkDual
+  gen splitDual @M -> splitDual
+  gen addR @M -> addR
+  gen mulR @M -> mulR
+  gen sinR @M -> sinR
+  gen cosR @M -> cosR
+  gen dmul @M -> dmul
+  gen dsin @M -> dsin
+  gen emitUnaryModule @M -> emitUnaryModule(fn = fn, path = path)
+}
+
+module_surface SmoothUnit where {
+  doctrine SmoothLam;
+  mode M;
+}
+
+language SmoothLang where {
+  doctrine SmoothLam;
+  module_surface SmoothUnit;
+}
+
+module Programs in SmoothLang where {
+  let prog
+  ---
+  lam(R, R)[(lam(R, R)[dup(R) ; (id[R] * (id[R] ; sin)) ; mul] * id[R]) ; app(R, R)]
+  ; emitUnaryModule(fn = "timesSin", path = "times_sin.mjs")
+  ---
+
+  export { prog };
+}
+
+pipeline build where {
+  project export prog;
+  apply forwardAD;
+  apply emitJS;
+  normalize { policy = "computational_lr"; fuel = 200; };
+  emit via FileTree { root = "./examples/endtoend/out" };
+}
+
+pipeline showCore where {
+  project export prog;
+  apply forwardAD;
+  normalize { policy = "computational_lr"; fuel = 300; };
+}
+
+build main from Programs using build;
+build core from Programs using showCore;

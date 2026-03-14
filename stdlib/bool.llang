@@ -1,4 +1,4 @@
-import "./struct.cartesian.llang";
+include "./struct.cartesian.llang";
 
 doctrine Bool extends StructCartesian where {
   gen Bool : [] -> [U_M] @M;

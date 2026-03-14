@@ -1,4 +1,4 @@
-import "./category_bool_nat_base.llang";
+include "./category_bool_nat_base.llang";
 
 doctrine BothPlus extends Both where {
   gen k : [Obj] -> [Obj] @M;

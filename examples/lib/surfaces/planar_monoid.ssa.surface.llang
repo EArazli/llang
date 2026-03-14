@@ -1,4 +1,4 @@
-import "../algebra/cart_monoid.llang";
+include "../algebra/cart_monoid.llang";
 
 surface PlanarSSA where {
   doctrine CartMonoid;

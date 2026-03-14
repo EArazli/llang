@@ -4,7 +4,9 @@ module Strat.Poly.DSL.Elab.Diag
   , elabRuleLHS
   , elabRuleRHS
   , elabDiagExpr
+  , elabDiagExprInScope
   , elabDiagExprWith
+  , elabDiagExprWithInScope
   , lookupGen
   , unifyBoundary
   , mkForGenDiag
@@ -12,6 +14,7 @@ module Strat.Poly.DSL.Elab.Diag
   , ensureMode
   , renderModeName
   , ensureAcyclicMode
+  , topologicalEdges
   ) where
 
 import Control.Monad (foldM)
@@ -22,13 +25,13 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import Strat.Frontend.Coerce (coerceDiagramTo)
-import Strat.Frontend.Env (ModuleEnv(..), TermDef(..))
+import Strat.Frontend.Env (ModuleEnv(..), ScopedValue(..))
 import Strat.Poly.DSL.AST
 import Strat.Poly.DSL.Elab.Resolve (elabRawModExpr)
 import Strat.Poly.DSL.Elab.Term
   ( elabContextWithTables
-  , elabObjExprWithTables
-  , elabTmTerm
+  , elabObjExprWithTablesInScope
+  , elabTmTermInScope
   , mkTypeMetaVar
   , ownerModeForTypeMeta
   )
@@ -164,8 +167,11 @@ elabRuleRHS env doc mode tyVars tmVars binderSigs expr = do
     else Left "rule RHS introduces fresh binder metas"
 
 elabDiagExpr :: ModuleEnv -> Doctrine -> ModeName -> [TmVar] -> RawDiagExpr -> Either Text Diagram
-elabDiagExpr env doc mode ruleVars expr = do
-  (diag, _) <- elabDiagExprWith env doc mode [] ruleVars [] M.empty BMNoMeta False False expr
+elabDiagExpr = elabDiagExprInScope M.empty M.empty
+
+elabDiagExprInScope :: M.Map Text ScopedValue -> M.Map Text Obj -> ModuleEnv -> Doctrine -> ModeName -> [TmVar] -> RawDiagExpr -> Either Text Diagram
+elabDiagExprInScope valueScope typeScope env doc mode ruleVars expr = do
+  (diag, _) <- elabDiagExprWithInScope valueScope typeScope env doc mode [] ruleVars [] M.empty BMNoMeta False False expr
   ensureAcyclicMode doc mode diag
   pure diag
 
@@ -182,11 +188,30 @@ elabDiagExprWith
   -> Bool
   -> RawDiagExpr
   -> Either Text (Diagram, M.Map BinderMetaVar BinderSig)
-elabDiagExprWith env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice allowImplicitGenArgs expr =
-  ensureLinearMetaVars expr *> evalFresh (elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice allowImplicitGenArgs expr)
+elabDiagExprWith = elabDiagExprWithInScope M.empty M.empty
+
+elabDiagExprWithInScope
+  :: M.Map Text ScopedValue
+  -> M.Map Text Obj
+  -> ModuleEnv
+  -> Doctrine
+  -> ModeName
+  -> [Obj]
+  -> [TmVar]
+  -> [TmVar]
+  -> M.Map BinderMetaVar BinderSig
+  -> BinderMetaMode
+  -> Bool
+  -> Bool
+  -> RawDiagExpr
+  -> Either Text (Diagram, M.Map BinderMetaVar BinderSig)
+elabDiagExprWithInScope valueScope typeScope env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice allowImplicitGenArgs expr =
+  ensureLinearMetaVars expr *> evalFresh (elabDiagExprWithFresh valueScope typeScope env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice allowImplicitGenArgs expr)
 
 elabDiagExprWithFresh
-  :: ModuleEnv
+  :: M.Map Text ScopedValue
+  -> M.Map Text Obj
+  -> ModuleEnv
   -> Doctrine
   -> ModeName
   -> [Obj]
@@ -198,7 +223,7 @@ elabDiagExprWithFresh
   -> Bool
   -> RawDiagExpr
   -> Fresh (Diagram, M.Map BinderMetaVar BinderSig)
-elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice allowImplicitGenArgs expr = do
+elabDiagExprWithFresh valueScope typeScope env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice allowImplicitGenArgs expr = do
   ttDoc <- liftEither (doctrineTypeTheory doc)
   let ctorTables = ttCtorTablesByOwner ttDoc
   build ttDoc ctorTables tmCtx binderSigs0 expr
@@ -217,63 +242,14 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           let (pid, d0) = freshPort ty (emptyDiagram mode curTmCtx)
           d1 <- liftEither (setPortLabel pid name d0)
           pure (d1 { dIn = [pid], dOut = [pid] }, binderSigs)
-        RDGen name mArgs mBinderArgs -> do
-          gen <- liftEither (lookupGen doc mode (GenName name))
-          (freshParams, renameSubst) <- liftEither (GA.freshGenParams ttDoc curTmCtx (gdParams gen))
-          let genFresh = gen { gdParams = freshParams }
-          dom0 <- applySubstCtxDoc ttDoc renameSubst (gdPlainDom gen)
-          cod0 <- applySubstCtxDoc ttDoc renameSubst (gdCod gen)
-          binderSlots0 <- mapM (applySubstBinderSig ttDoc renameSubst) [ bs | InBinder bs <- gdDom gen ]
-          (genArgs, argSubst, dom, cod, binderSlots) <-
-            case mArgs of
-              Nothing
-                | allowImplicitGenArgs -> do
-                    genArgs <- liftEither (implicitGenArgs ttDoc curTmCtx freshParams)
-                    argSubst <- liftEither (instantiateGenParams ttDoc genFresh genArgs)
-                    dom <- applySubstCtxDoc ttDoc argSubst dom0
-                    cod <- applySubstCtxDoc ttDoc argSubst cod0
-                    binderSlots <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
-                    pure (genArgs, argSubst, dom, cod, binderSlots)
-              _ -> do
-                rawArgs <- liftEither (resolveGenArgs (gdParams gen) mArgs)
-                args <- liftEither (normalizeGenArgs (gdParams gen) rawArgs)
-                (genArgs, argSubst) <-
-                  liftEither
-                    ( GA.elabGenArgsSequentialWith
-                        ttDoc
-                        (elabTyArg ctorTables)
-                        (\expectedSort _ rawArg -> elabTmArg ttDoc curTmCtx expectedSort rawArg)
-                        freshParams
-                        args
-                    )
-                dom <- applySubstCtxDoc ttDoc argSubst dom0
-                cod <- applySubstCtxDoc ttDoc argSubst cod0
-                binderSlots <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
-                pure (genArgs, argSubst, dom, cod, binderSlots)
-          (binderArgs, binderSigs') <- elaborateBinderArgs ttDoc binderSigs binderSlots mBinderArgs
-          diag <- liftEither (mkGenDiag curTmCtx (gdName gen) genArgs binderArgs dom cod)
-          pure (diag, binderSigs')
-        RDTermRef name -> do
-          term <- liftEither (lookupTerm env name)
-          if tdDoctrine term == dName doc
-            then
-              if tdMode term /= mode
-                then liftEither (Left ("term @" <> name <> " has mode " <> renderModeName (tdMode term) <> ", expected " <> renderModeName mode))
-                else
-                  if dTmCtx (tdDiagram term) == curTmCtx
-                    then pure (tdDiagram term, binderSigs)
-                    else liftEither (Left ("term @" <> name <> " has incompatible term context"))
-            else do
-              srcDoc <- liftEither (lookupDoctrine env (tdDoctrine term))
-              (doc', diag') <- liftEither (coerceDiagramTo env srcDoc (tdDiagram term) (dName doc))
-              if dName doc' /= dName doc
-                then liftEither (Left ("term @" <> name <> " has doctrine " <> tdDoctrine term <> ", expected " <> dName doc))
-                else if dMode diag' /= mode
-                  then liftEither (Left ("term @" <> name <> " has mode " <> renderModeName (dMode diag') <> ", expected " <> renderModeName mode))
-                  else
-                    if dTmCtx diag' == curTmCtx
-                      then pure (diag', binderSigs)
-                      else liftEither (Left ("term @" <> name <> " has incompatible term context"))
+        RDGen name Nothing Nothing ->
+          case M.lookup name valueScope of
+            Just scoped ->
+              useScopedValue curTmCtx binderSigs name scoped
+            Nothing ->
+              elaborateGenerator curTmCtx binderSigs name Nothing Nothing
+        RDGen name mArgs mBinderArgs ->
+          elaborateGenerator curTmCtx binderSigs name mArgs mBinderArgs
         RDSplice name ->
           if allowSplice
             then do
@@ -357,6 +333,8 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           me <- liftEither (elabRawModExpr (dModes doc) rawMe)
           (inner, binderSigs') <-
             elabDiagExprWithFresh
+              valueScope
+              typeScope
               env
               doc
               (meSrc me)
@@ -382,6 +360,64 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           (d2, binderSigs2) <- build ttDoc ctorTables curTmCtx binderSigs1 b
           dTen <- liftEither (tensorD d1 d2)
           pure (dTen, binderSigs2)
+      where
+        elaborateGenerator curTmCtx' binderSigs name mArgs mBinderArgs = do
+          gen <- liftEither (lookupGen doc mode (GenName name))
+          (freshParams, renameSubst) <- liftEither (GA.freshGenParams ttDoc curTmCtx' (gdParams gen))
+          let genFresh = gen { gdParams = freshParams }
+          dom0 <- applySubstCtxDoc ttDoc renameSubst (gdPlainDom gen)
+          cod0 <- applySubstCtxDoc ttDoc renameSubst (gdCod gen)
+          binderSlots0 <- mapM (applySubstBinderSig ttDoc renameSubst) [ bs | InBinder bs <- gdDom gen ]
+          (genArgs, argSubst, dom, cod, binderSlots) <-
+            case mArgs of
+              Nothing
+                | allowImplicitGenArgs -> do
+                    genArgs <- liftEither (implicitGenArgs ttDoc curTmCtx' freshParams)
+                    argSubst <- liftEither (instantiateGenParams ttDoc genFresh genArgs)
+                    dom <- applySubstCtxDoc ttDoc argSubst dom0
+                    cod <- applySubstCtxDoc ttDoc argSubst cod0
+                    binderSlots <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
+                    pure (genArgs, argSubst, dom, cod, binderSlots)
+              _ -> do
+                rawArgs <- liftEither (resolveGenArgs (gdParams gen) mArgs)
+                args <- liftEither (normalizeGenArgs (gdParams gen) rawArgs)
+                (genArgs, argSubst) <-
+                  liftEither
+                    ( GA.elabGenArgsSequentialWith
+                        ttDoc
+                        (elabTyArg ctorTables)
+                        (\expectedSort _ rawArg -> elabTmArg ttDoc curTmCtx' expectedSort rawArg)
+                        freshParams
+                        args
+                    )
+                dom <- applySubstCtxDoc ttDoc argSubst dom0
+                cod <- applySubstCtxDoc ttDoc argSubst cod0
+                binderSlots <- mapM (applySubstBinderSig ttDoc argSubst) binderSlots0
+                pure (genArgs, argSubst, dom, cod, binderSlots)
+          (binderArgs, binderSigs') <- elaborateBinderArgs ttDoc binderSigs binderSlots mBinderArgs
+          diag <- liftEither (mkGenDiag curTmCtx' (gdName gen) genArgs binderArgs dom cod)
+          pure (diag, binderSigs')
+
+        useScopedValue curTmCtx' binderSigs name scoped =
+          if svDoctrine scoped == dName doc
+            then
+              if svMode scoped /= mode
+                then liftEither (Left ("value " <> name <> " has mode " <> renderModeName (svMode scoped) <> ", expected " <> renderModeName mode))
+                else
+                  if dTmCtx (svDiagram scoped) == curTmCtx'
+                    then pure (svDiagram scoped, binderSigs)
+                    else liftEither (Left ("value " <> name <> " has incompatible term context"))
+            else do
+              srcDoc <- liftEither (lookupDoctrine env (svDoctrine scoped))
+              (doc', diag') <- liftEither (coerceDiagramTo env srcDoc (svDiagram scoped) (dName doc))
+              if dName doc' /= dName doc
+                then liftEither (Left ("value " <> name <> " has doctrine " <> svDoctrine scoped <> ", expected " <> dName doc))
+                else if dMode diag' /= mode
+                  then liftEither (Left ("value " <> name <> " has mode " <> renderModeName (dMode diag') <> ", expected " <> renderModeName mode))
+                  else
+                    if dTmCtx diag' == curTmCtx'
+                      then pure (diag', binderSigs)
+                      else liftEither (Left ("value " <> name <> " has incompatible term context"))
 
     elaborateBinderArgs ttDoc binderSigs binderSlots mBinderArgs =
       case (binderSlots, mBinderArgs) of
@@ -399,6 +435,8 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
             RBAExpr exprArg -> do
               (diagArg, _) <-
                 elabDiagExprWithFresh
+                  valueScope
+                  typeScope
                   env
                   doc
                   mode
@@ -441,13 +479,13 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
 
     elabTyArg ctorTables v rawArg = do
       ownerMode <- ownerModeForTypeMeta doc v
-      tyArg <- elabObjExprWithTables doc ctorTables tyVars tmVars M.empty ownerMode rawArg
+      tyArg <- elabObjExprWithTablesInScope typeScope doc ctorTables tyVars tmVars M.empty ownerMode rawArg
       if objOwnerMode tyArg == ownerMode
         then pure tyArg
         else Left "generator type argument mode mismatch"
 
     elabTmArg ttDoc curTmCtx expectedSort rawArg =
-      case elabTmTerm doc tyVars tmVars M.empty (Just expectedSort) rawArg of
+      case elabTmTermInScope typeScope doc tyVars tmVars M.empty (Just expectedSort) rawArg of
         Right tm -> pure tm
         Left err ->
           case rawArg of
@@ -534,11 +572,6 @@ elabDiagExprWithFresh env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allo
           (pids, diag2) = allocPorts rest diag1
       in (pid:pids, diag2)
 
-    lookupTerm env' name =
-      case M.lookup name (meTerms env') of
-        Nothing -> Left ("unknown term: " <> name)
-        Just term -> Right term
-
     lookupDoctrine env' name =
       case M.lookup name (meDoctrines env') of
         Nothing -> Left ("Unknown doctrine: " <> name)
@@ -553,7 +586,6 @@ metaVarsIn expr =
       case mBinderArgs of
         Nothing -> []
         Just args -> concatMap binderArgMetaVars args
-    RDTermRef _ -> []
     RDSplice _ -> []
     RDBox _ inner -> metaVarsIn inner
     RDTrace _ inner -> metaVarsIn inner

@@ -1,0 +1,50 @@
+doctrine Arith where {
+  mode M acyclic classifiedBy M via U_M;
+  gen comp_ctx_ext(a@M) : [a] -> [a] @M;
+  gen comp_var(a@M) : [a] -> [a] @M;
+  gen comp_reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+  gen Str : [] -> [M.U_M] @M;
+  literal Str @M = string;
+  gen U_M : [] -> [U_M] @M;
+  gen I : [] -> [U_M] @M;
+  gen lit( n:Str ) : [] -> [I] @M;
+  gen add : [I, I] -> [I] @M;
+  gen dup : [I] -> [I, I] @M;
+  gen print : [I] -> [] @M;
+}
+
+fragment ShareArith in Arith mode M where {
+  include gen dup;
+  cross binders = false;
+  cross boxes = false;
+  cross feedback = false;
+}
+
+derived doctrine Arith_Q = reflect quotation of Arith mode M;
+
+module_surface ArithUnit where {
+  doctrine Arith;
+  mode M;
+}
+
+language ArithLang where {
+  doctrine Arith;
+  module_surface ArithUnit;
+}
+
+module ArithPrograms in ArithLang where {
+  let prog
+  ---
+  lit(n = "1") * lit(n = "2") ; add ; dup ; add ; print
+  ---
+
+  export { prog };
+}
+
+pipeline main where {
+  project export prog;
+  quote using ShareArith into Arith_Q;
+}
+
+build main from ArithPrograms using main;

@@ -3,159 +3,117 @@ module Test.Value.Doc
   ( tests
   ) where
 
-import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit
+import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Map.Strict as M
-import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFileWithEnv)
+import Strat.DSL.Parse (parseRawFile)
+import Strat.Frontend.Build (BuildProduct(..), BuildResult(..), buildWithEnv, selectBuild)
 import Strat.Frontend.Env (ModuleEnv, emptyEnv, meDoctrines)
 import Strat.Frontend.Prelude (preludeDoctrines)
-import Strat.Frontend.Run (selectRun, runWithEnv, RunResult(..), Artifact(..))
-
+import Strat.Host.Backend (HostArtifact(..))
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit
 
 tests :: TestTree
 tests =
   testGroup
     "Value.Doc"
-    [ testCase "Doc extractor renders indent/cat/line" testDocExtraction
-    , testCase "Artifact FileTree extractor renders embedded Doc content" testArtifactFileTreeExtraction
-    , testCase "Doc extractor works for doctrines extending Doc" testExtendedDocExtraction
-    , testCase "FileTree extractor works for doctrines extending Artifact" testExtendedArtifactFileTreeExtraction
-    , testCase "Doc extractor ignores builtin parameter names" testDocExtractionIgnoresBuiltinParamNames
-    , testCase "Doc extractor rejects doctrines missing required generators" testDocExtractionMissingGenerator
-    , testCase "Doc extractor rejects non-string text literal type" testDocExtractionWrongLiteralKind
-    , testCase "Doc extractor rejects text with extra term parameters" testDocExtractionExtraTextParam
-    , testCase "Doc extractor rejects indent with non-int literal type" testDocExtractionWrongIndentLiteralKind
-    , testCase "FileTree extractor rejects wrong singleFile signature" testFileTreeExtractionWrongSingleFileSig
-    , testCase "FileTree extractor rejects singleFile with extra term parameters" testFileTreeExtractionExtraSingleFileParam
+    [ testCase "Doc emitter renders indent/cat/line" testDocExtraction
+    , testCase "FileTree emitter renders embedded Doc content" testArtifactFileTreeExtraction
+    , testCase "Doc emitter works for doctrines extending Doc" testExtendedDocExtraction
+    , testCase "FileTree emitter works for doctrines extending Artifact" testExtendedArtifactFileTreeExtraction
+    , testCase "Doc emitter ignores builtin parameter names" testDocExtractionIgnoresBuiltinParamNames
+    , testCase "Doc emitter rejects doctrines missing required generators" testDocExtractionMissingGenerator
+    , testCase "Doc emitter rejects non-string text literal type" testDocExtractionWrongLiteralKind
+    , testCase "Doc emitter rejects text with extra term parameters" testDocExtractionExtraTextParam
+    , testCase "Doc emitter rejects indent with non-int literal type" testDocExtractionWrongIndentLiteralKind
+    , testCase "FileTree emitter rejects wrong singleFile signature" testFileTreeExtractionWrongSingleFileSig
+    , testCase "FileTree emitter rejects singleFile with extra term parameters" testFileTreeExtractionExtraSingleFileParam
     ]
-
 
 testDocExtraction :: Assertion
 testDocExtraction = do
-  env <- require (elabDocProgram docProgram)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  prOutput result @?= "a\n  b"
-
+  result <- require (runProgram docProgram)
+  brOutput result @?= "a\n  b"
 
 testArtifactFileTreeExtraction :: Assertion
 testArtifactFileTreeExtraction = do
-  env <- require (elabDocProgram artifactFileTreeProgram)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  case prArtifact result of
-    ArtExtracted _ files ->
+  result <- require (runProgram artifactFileTreeProgram)
+  case brArtifact result of
+    BPHost HostArtifact { haFiles = files } ->
       M.lookup "./out/hello.txt" files @?= Just "hello"
     _ ->
-      assertFailure "expected extracted FileTree artifact"
-
+      assertFailure "expected emitted FileTree artifact"
 
 testExtendedDocExtraction :: Assertion
 testExtendedDocExtraction = do
-  env <- require (elabDocProgram extendedDocProgram)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  prOutput result @?= "(x)"
-
+  result <- require (runProgram extendedDocProgram)
+  brOutput result @?= "(x)"
 
 testExtendedArtifactFileTreeExtraction :: Assertion
 testExtendedArtifactFileTreeExtraction = do
-  env <- require (elabDocProgram extendedArtifactFileTreeProgram)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  case prArtifact result of
-    ArtExtracted _ files ->
+  result <- require (runProgram extendedArtifactFileTreeProgram)
+  case brArtifact result of
+    BPHost HostArtifact { haFiles = files } ->
       M.lookup "./out/main.mjs" files @?= Just "console.log('hello');"
     _ ->
-      assertFailure "expected extracted FileTree artifact"
-
+      assertFailure "expected emitted FileTree artifact"
 
 testDocExtractionIgnoresBuiltinParamNames :: Assertion
 testDocExtractionIgnoresBuiltinParamNames = do
-  env <- require (elabDocProgram renamedBuiltinParamProgram)
-  runDef <- require (selectRun env (Just "main"))
-  result <- require (runWithEnv env runDef)
-  prOutput result @?= "a\n  b"
-
+  result <- require (runProgram renamedBuiltinParamProgram)
+  brOutput result @?= "a\n  b"
 
 testDocExtractionMissingGenerator :: Assertion
 testDocExtractionMissingGenerator = do
-  env <- require (elabDocProgram missingCatProgram)
-  runDef <- require (selectRun env (Just "main"))
-  err <- requireLeft (runWithEnv env runDef)
-  assertBool "expected missing cat diagnostic" ("pipeline: extract Doc: missing generator 'cat' in mode M" `T.isInfixOf` err)
-
+  err <- requireLeft (runProgram missingCatProgram)
+  assertBool "expected missing cat diagnostic" ("missing generator 'cat' in mode M" `T.isInfixOf` err)
 
 testDocExtractionWrongLiteralKind :: Assertion
 testDocExtractionWrongLiteralKind = do
-  env <- require (elabDocProgram badTextLiteralKindProgram)
-  runDef <- require (selectRun env (Just "main"))
-  err <- requireLeft (runWithEnv env runDef)
-  assertBool "expected text parameter literal kind diagnostic" ("pipeline: extract Doc: generator 'text' sole term parameter must admit string literals" `T.isInfixOf` err)
-
+  err <- requireLeft (runProgram badTextLiteralKindProgram)
+  assertBool "expected text parameter literal kind diagnostic" ("generator 'text' sole term parameter must admit string literals" `T.isInfixOf` err)
 
 testDocExtractionExtraTextParam :: Assertion
 testDocExtractionExtraTextParam = do
-  env <- require (elabDocProgram badTextExtraParamProgram)
-  runDef <- require (selectRun env (Just "main"))
-  err <- requireLeft (runWithEnv env runDef)
-  assertBool "expected text arity diagnostic" ("pipeline: extract Doc: generator 'text' must have exactly one sole term parameter" `T.isInfixOf` err)
-
+  err <- requireLeft (runProgram badTextExtraParamProgram)
+  assertBool "expected text arity diagnostic" ("generator 'text' must have exactly one sole term parameter" `T.isInfixOf` err)
 
 testDocExtractionWrongIndentLiteralKind :: Assertion
 testDocExtractionWrongIndentLiteralKind = do
-  env <- require (elabDocProgram badIndentLiteralKindProgram)
-  runDef <- require (selectRun env (Just "main"))
-  err <- requireLeft (runWithEnv env runDef)
-  assertBool "expected indent parameter literal kind diagnostic" ("pipeline: extract Doc: generator 'indent' sole term parameter must admit int literals" `T.isInfixOf` err)
-
+  err <- requireLeft (runProgram badIndentLiteralKindProgram)
+  assertBool "expected indent parameter literal kind diagnostic" ("generator 'indent' sole term parameter must admit int literals" `T.isInfixOf` err)
 
 testFileTreeExtractionWrongSingleFileSig :: Assertion
 testFileTreeExtractionWrongSingleFileSig = do
-  env <- require (elabDocProgram badSingleFileSigProgram)
-  runDef <- require (selectRun env (Just "main"))
-  err <- requireLeft (runWithEnv env runDef)
-  assertBool "expected singleFile signature diagnostic" ("pipeline: extract FileTree: generator 'singleFile' has wrong signature; expected [Doc]->[FileTree] in mode M" `T.isInfixOf` err)
-
+  err <- requireLeft (runProgram badSingleFileSigProgram)
+  assertBool "expected singleFile signature diagnostic" ("generator 'singleFile' has wrong signature; expected [Doc]->[FileTree] in mode M" `T.isInfixOf` err)
 
 testFileTreeExtractionExtraSingleFileParam :: Assertion
 testFileTreeExtractionExtraSingleFileParam = do
-  env <- require (elabDocProgram badSingleFileExtraParamProgram)
-  runDef <- require (selectRun env (Just "main"))
-  err <- requireLeft (runWithEnv env runDef)
-  assertBool "expected singleFile arity diagnostic" ("pipeline: extract FileTree: generator 'singleFile' must have exactly one sole term parameter" `T.isInfixOf` err)
-
+  err <- requireLeft (runProgram badSingleFileExtraParamProgram)
+  assertBool "expected singleFile arity diagnostic" ("generator 'singleFile' must have exactly one sole term parameter" `T.isInfixOf` err)
 
 docProgram :: Text
 docProgram =
-  "pipeline p where {\n"
-    <> "  extract Doc { stdout = true };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine Doc;\n"
-    <> "  source mode Doc;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "text(\"a\") * (line * text(\"b\"); cat); cat; indent(2)\n"
-    <> "---\n"
-
+  docBuildProgram "DocLang" "Doc" "Doc" "text(\"a\") * (line * text(\"b\"); cat); cat; indent(2)" $
+    T.unlines
+      [ "pipeline p where {"
+      , "  project export main;"
+      , "  emit via Doc { stdout = true; };"
+      , "}"
+      ]
 
 artifactFileTreeProgram :: Text
 artifactFileTreeProgram =
-  "pipeline p where {\n"
-    <> "  extract FileTree { root = \"./out\" };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine Artifact;\n"
-    <> "  source mode Artifact;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "text(\"hello\"); singleFile(\"hello.txt\")\n"
-    <> "---\n"
-
+  docBuildProgram "ArtifactLang" "Artifact" "Artifact" "text(\"hello\"); singleFile(\"hello.txt\")" $
+    T.unlines
+      [ "pipeline p where {"
+      , "  project export main;"
+      , "  emit via FileTree { root = \"./out\" };"
+      , "}"
+      ]
 
 extendedDocProgram :: Text
 extendedDocProgram =
@@ -164,18 +122,14 @@ extendedDocProgram =
     <> "  rule computational parens_def -> : [Doc] -> [Doc] @Doc =\n"
     <> "    parens == (text(\"(\") * id[Doc]) ; cat ; (id[Doc] * text(\")\")) ; cat\n"
     <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  normalize { policy = \"computational_lr\"; fuel = 50; };\n"
-    <> "  extract Doc { stdout = true };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine PrettyDoc;\n"
-    <> "  source mode Doc;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "text(\"x\"); parens\n"
-    <> "---\n"
-
+    <> docBuildProgram "PrettyDocLang" "PrettyDoc" "Doc" "text(\"x\"); parens"
+         (T.unlines
+           [ "pipeline p where {"
+           , "  project export main;"
+           , "  normalize { policy = \"computational_lr\"; fuel = 50; };"
+           , "  emit via Doc { stdout = true; };"
+           , "}"
+           ])
 
 extendedArtifactFileTreeProgram :: Text
 extendedArtifactFileTreeProgram =
@@ -184,18 +138,14 @@ extendedArtifactFileTreeProgram =
     <> "  rule computational jsHello_def -> : [] -> [Doc] @Artifact =\n"
     <> "    jsHello == text(\"console.log('hello');\")\n"
     <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  normalize { policy = \"computational_lr\"; fuel = 50; };\n"
-    <> "  extract FileTree { root = \"./out\" };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine JSArtifact;\n"
-    <> "  source mode Artifact;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "jsHello; singleFile(\"main.mjs\")\n"
-    <> "---\n"
-
+    <> docBuildProgram "JSArtifactLang" "JSArtifact" "Artifact" "jsHello; singleFile(\"main.mjs\")"
+         (T.unlines
+           [ "pipeline p where {"
+           , "  project export main;"
+           , "  normalize { policy = \"computational_lr\"; fuel = 50; };"
+           , "  emit via FileTree { root = \"./out\" };"
+           , "}"
+           ])
 
 renamedBuiltinParamProgram :: Text
 renamedBuiltinParamProgram =
@@ -217,17 +167,13 @@ renamedBuiltinParamProgram =
     <> "  gen cat : [Doc, Doc] -> [Doc] @M;\n"
     <> "  gen indent(depth:Int) : [Doc] -> [Doc] @M;\n"
     <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  extract Doc { stdout = true };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine RenamedBuiltinParams;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "text(\"a\") * (line * text(\"b\"); cat); cat; indent(2)\n"
-    <> "---\n"
-
+    <> docBuildProgram "RenamedBuiltinLang" "RenamedBuiltinParams" "M" "text(\"a\") * (line * text(\"b\"); cat); cat; indent(2)"
+         (T.unlines
+           [ "pipeline p where {"
+           , "  project export main;"
+           , "  emit via Doc { stdout = true; };"
+           , "}"
+           ])
 
 missingCatProgram :: Text
 missingCatProgram =
@@ -248,17 +194,13 @@ missingCatProgram =
     <> "  gen line : [] -> [Doc] @M;\n"
     <> "  gen indent(n:Int) : [Doc] -> [Doc] @M;\n"
     <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  extract Doc { stdout = true };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine MissingCat;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "empty\n"
-    <> "---\n"
-
+    <> docBuildProgram "MissingCatLang" "MissingCat" "M" "empty"
+         (T.unlines
+           [ "pipeline p where {"
+           , "  project export main;"
+           , "  emit via Doc { stdout = true; };"
+           , "}"
+           ])
 
 badTextLiteralKindProgram :: Text
 badTextLiteralKindProgram =
@@ -280,17 +222,13 @@ badTextLiteralKindProgram =
     <> "  gen cat : [Doc, Doc] -> [Doc] @M;\n"
     <> "  gen indent(n:Int) : [Doc] -> [Doc] @M;\n"
     <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  extract Doc { stdout = true };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine BadTextLiteralKind;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "empty\n"
-    <> "---\n"
-
+    <> docBuildProgram "BadTextLiteralKindLang" "BadTextLiteralKind" "M" "empty"
+         (T.unlines
+           [ "pipeline p where {"
+           , "  project export main;"
+           , "  emit via Doc { stdout = true; };"
+           , "}"
+           ])
 
 badTextExtraParamProgram :: Text
 badTextExtraParamProgram =
@@ -312,17 +250,13 @@ badTextExtraParamProgram =
     <> "  gen cat : [Doc, Doc] -> [Doc] @M;\n"
     <> "  gen indent(n:Int) : [Doc] -> [Doc] @M;\n"
     <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  extract Doc { stdout = true };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine BadTextExtraParam;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "empty\n"
-    <> "---\n"
-
+    <> docBuildProgram "BadTextExtraParamLang" "BadTextExtraParam" "M" "empty"
+         (T.unlines
+           [ "pipeline p where {"
+           , "  project export main;"
+           , "  emit via Doc { stdout = true; };"
+           , "}"
+           ])
 
 badIndentLiteralKindProgram :: Text
 badIndentLiteralKindProgram =
@@ -344,17 +278,13 @@ badIndentLiteralKindProgram =
     <> "  gen cat : [Doc, Doc] -> [Doc] @M;\n"
     <> "  gen indent(path:Path) : [Doc] -> [Doc] @M;\n"
     <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  extract Doc { stdout = true };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine BadIndentLiteralKind;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "empty\n"
-    <> "---\n"
-
+    <> docBuildProgram "BadIndentLiteralKindLang" "BadIndentLiteralKind" "M" "empty"
+         (T.unlines
+           [ "pipeline p where {"
+           , "  project export main;"
+           , "  emit via Doc { stdout = true; };"
+           , "}"
+           ])
 
 badSingleFileSigProgram :: Text
 badSingleFileSigProgram =
@@ -379,17 +309,13 @@ badSingleFileSigProgram =
     <> "  gen singleFile(path:Str) : [] -> [FileTree] @M;\n"
     <> "  gen concatTree : [FileTree, FileTree] -> [FileTree] @M;\n"
     <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  extract FileTree { root = \"./out\" };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine BadSingleFileSig;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "singleFile(\"main.mjs\")\n"
-    <> "---\n"
-
+    <> docBuildProgram "BadSingleFileSigLang" "BadSingleFileSig" "M" "singleFile(\"main.mjs\")"
+         (T.unlines
+           [ "pipeline p where {"
+           , "  project export main;"
+           , "  emit via FileTree { root = \"./out\" };"
+           , "}"
+           ])
 
 badSingleFileExtraParamProgram :: Text
 badSingleFileExtraParamProgram =
@@ -414,17 +340,41 @@ badSingleFileExtraParamProgram =
     <> "  gen singleFile(path:Str, suffix:Str) : [Doc] -> [FileTree] @M;\n"
     <> "  gen concatTree : [FileTree, FileTree] -> [FileTree] @M;\n"
     <> "}\n"
-    <> "pipeline p where {\n"
-    <> "  extract FileTree { root = \"./out\" };\n"
-    <> "}\n"
-    <> "run main using p where {\n"
-    <> "  source doctrine BadSingleFileExtraParam;\n"
-    <> "  source mode M;\n"
-    <> "}\n"
-    <> "---\n"
-    <> "empty; singleFile(\"main.mjs\", \"backup\")\n"
-    <> "---\n"
+    <> docBuildProgram "BadSingleFileExtraParamLang" "BadSingleFileExtraParam" "M" "empty; singleFile(\"main.mjs\", \"backup\")"
+         (T.unlines
+           [ "pipeline p where {"
+           , "  project export main;"
+           , "  emit via FileTree { root = \"./out\" };"
+           , "}"
+           ])
 
+docBuildProgram :: Text -> Text -> Text -> Text -> Text -> Text
+docBuildProgram langName doctrineName modeName exprText pipelineText =
+  T.unlines
+    [ "module_surface " <> langName <> "Unit where {"
+    , "  doctrine " <> doctrineName <> ";"
+    , "  mode " <> modeName <> ";"
+    , "}"
+    , "language " <> langName <> " where {"
+    , "  doctrine " <> doctrineName <> ";"
+    , "  module_surface " <> langName <> "Unit;"
+    , "}"
+    , "module Main in " <> langName <> " where {"
+    , "  let main"
+    , "  ---"
+    , exprText
+    , "  ---"
+    , "  export { main };"
+    , "}"
+    , T.stripEnd pipelineText
+    , "build main from Main using p;"
+    ]
+
+runProgram :: Text -> Either Text BuildResult
+runProgram src = do
+  env <- elabDocProgram src
+  buildDef <- selectBuild env (Just "main")
+  buildWithEnv env buildDef
 
 elabDocProgram :: Text -> Either Text ModuleEnv
 elabDocProgram src = do
@@ -432,11 +382,9 @@ elabDocProgram src = do
   let baseEnv = emptyEnv { meDoctrines = preludeDoctrines }
   elabRawFileWithEnv baseEnv raw
 
-
 require :: Either Text a -> IO a
 require (Left err) = assertFailure (show err) >> fail "unreachable"
 require (Right a) = pure a
-
 
 requireLeft :: Either Text a -> IO Text
 requireLeft (Left err) = pure err

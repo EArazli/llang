@@ -13,14 +13,27 @@ doctrine NbeInferNonDefault where {
     (abs(a, b)[?Body] * id[a]) ; ev(a, b) == splice(?Body)
 }
 
-pipeline debug where {
-  normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
+module_surface NbeInferRunUnit where {
+  doctrine NbeInferNonDefault;
+  mode M;
 }
 
-run main using debug where {
-  source doctrine NbeInferNonDefault;
-  source mode M;
+language NbeInferRunLang where {
+  doctrine NbeInferNonDefault;
+  module_surface NbeInferRunUnit;
 }
----
-(abs(A, A)[id[A]] * id[A]) ; ev(A, A)
+
+module NbeInferRuns in NbeInferRunLang where {
+  let main
+  ---
+  (abs(A, A)[id[A]] * id[A]) ; ev(A, A)
+  ---
+  export { main };
+}
+
+pipeline debug where {
+  project export main;
+  normalize { policy = "topmost"; fuel = 50; };
+}
+
+build main from NbeInferRuns using debug;

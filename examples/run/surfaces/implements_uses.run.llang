@@ -6,9 +6,9 @@ doctrine Iface where {
   comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
   gen U_M : [] -> [M.U_M] @M;
   gen A : [] -> [M.U_M] @M;
-  gen dup (a@M) : [a] -> [a, a] @M;
-  gen drop (a@M) : [a] -> [] @M;
-  gen swap (a@M, b@M) : [a, b] -> [b, a] @M;
+  gen dup(a@M) : [a] -> [a, a] @M;
+  gen drop(a@M) : [a] -> [] @M;
+  gen swap(a@M, b@M) : [a, b] -> [b, a] @M;
   gen f : [A] -> [A] @M;
 }
 
@@ -44,20 +44,33 @@ surface IfaceSSA where {
   }
 }
 
-pipeline debug where {
-  normalize { policy = "topmost"; fuel = 50; };
-  extract diagram;
+module_surface ImplementsUsesRunUnit where {
+  doctrine Target;
 }
 
-run main using debug where {
-  source doctrine Target;
-  source mode M;
-  source surface IfaceSSA;
-  uses ["Iface"];
+language ImplementsUsesRunLang where {
+  doctrine Target;
+  module_surface ImplementsUsesRunUnit;
 }
----
-diag {
-  in x:A;
-  out f(x);
+
+module ImplementsUsesRuns in ImplementsUsesRunLang where {
+  let main where {
+    mode M;
+    surface IfaceSSA;
+    uses Iface;
+  }
+  ---
+  diag {
+    in x:A;
+    out f(x);
+  }
+  ---
+  export { main };
 }
----
+
+pipeline debug where {
+  project export main;
+  normalize { policy = "topmost"; fuel = 50; };
+}
+
+build main from ImplementsUsesRuns using debug;

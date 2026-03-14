@@ -1,13 +1,26 @@
-import "../../lib/algebra/box_match.llang";
+include "../../lib/algebra/box_match.llang";
+
+module_surface BoxMatchRunUnit where {
+  doctrine BoxMatch;
+  mode M;
+}
+
+language BoxMatchRunLang where {
+  doctrine BoxMatch;
+  module_surface BoxMatchRunUnit;
+}
+
+module BoxMatchRuns in BoxMatchRunLang where {
+  let main
+  ---
+  box B { g }
+  ---
+  export { main };
+}
 
 pipeline main where {
+  project export main;
   normalize;
-  extract diagram;
 }
 
-run main using main where {
-  source doctrine BoxMatch;
-}
----
-box B { g }
----
+build main from BoxMatchRuns using main;

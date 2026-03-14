@@ -28,7 +28,7 @@ data PolySurfaceDef = PolySurfaceDef
   , psBaseDoctrine :: Maybe Text
   , psMode :: ModeName
   , psSpec :: SurfaceSpec
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data SurfaceSpec = SurfaceSpec
   { ssName :: Text
@@ -37,25 +37,25 @@ data SurfaceSpec = SurfaceSpec
   , ssMode :: Text
   , ssLexer :: Maybe LexerSpec
   , ssExprSpec :: Maybe ExprSpec
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data LexerSpec = LexerSpec
   { lsKeywords :: [Text]
   , lsSymbols :: [Text]
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data ExprSpec = ExprSpec
   { esAtoms :: [ExprRule]
   , esPrefixes :: [ExprRule]
   , esInfixes :: [InfixRule]
   , esApp :: Maybe AppRule
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data ExprRule = ExprRule
   { erPattern :: [PatItem]
   , erAction :: Action
   , erBinder :: Maybe BinderDecl
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data BinderDecl
   = BindIn
@@ -68,21 +68,21 @@ data BinderDecl
       , bdValueHole :: Int
       , bdBodyHole :: Int
       }
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data InfixAssoc = AssocL | AssocR
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data InfixRule = InfixRule
   { irAssoc :: InfixAssoc
   , irPrec :: Int
   , irToken :: Text
   , irAction :: Action
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 newtype AppRule = AppRule
   { arAction :: Action
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show)
 
 data PatItem
   = PatLit Text
@@ -92,22 +92,21 @@ data PatItem
   | PatBool (Maybe Text)
   | PatExpr
   | PatType (Maybe Text)
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data Action
   = ActionExpr
   | ActionTemplate TemplateExpr
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data GenRef
   = GenLit Text
   | GenHole Text
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data TemplateExpr
   = TId [RawPolyObjExpr]
   | TGen GenRef (Maybe [TemplateGenArg]) (Maybe [TemplateBinderArg])
-  | TTermRef Text
   | TBox Text TemplateExpr
   | TTrace Int TemplateExpr
   | TLoop TemplateExpr
@@ -115,19 +114,19 @@ data TemplateExpr
   | TTensor TemplateExpr TemplateExpr
   | THole Int
   | OVar Text
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data TemplateBinderArg
   = TBAExpr TemplateExpr
   | TBAMeta Text
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data TemplateGenArg
   = TGNamed Text TemplateArgExpr
   | TGPos TemplateArgExpr
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)
 
 data TemplateArgExpr
   = TAHole Text
   | TAExpr RawPolyObjExpr
-  deriving (Eq, Show)
+  deriving (Eq, Read, Show)

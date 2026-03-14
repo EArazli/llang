@@ -1,4 +1,4 @@
-import "./dual_discipline_surface.llang";
+include "./dual_discipline_surface.llang";
 
 surface DupTermCart where {
   doctrine DualDiscipline;
