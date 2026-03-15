@@ -1,0 +1,60 @@
+-- Best-effort approximation of the standard QIIT Con/Ty signature.
+-- The current elaborator does not allow later term parameters to depend on
+-- earlier term parameters in a generator telescope, so Ty is flattened here.
+doctrine QIITContextTyApprox where {
+  mode S classifiedBy S via S.U_S;
+  gen ctx_ext(a@S) : [a] -> [a] @S;
+  gen var(a@S) : [a] -> [a] @S;
+  gen reindex(a@S) : [a] -> [a] @S;
+  comprehension S where { ctx_ext = ctx_ext; var = var; reindex = reindex; };
+  gen U_S : [] -> [S.U_S] @S;
+
+  gen Con : [] -> [S.U_S] @S;
+  gen Ty : [] -> [S.U_S] @S;
+  gen empty : [] -> [Con] @S;
+  gen base : [] -> [Ty] @S;
+  gen extend(g : Con, a : Ty) : [] -> [Con] @S;
+  gen sigma(a : Ty, b : Ty) : [] -> [Ty] @S;
+
+  rule computational ctx_ext_id -> (a@S) : [a] -> [a] @S =
+    ctx_ext(a) == id[a]
+
+  rule computational var_id -> (a@S) : [a] -> [a] @S =
+    var(a) == id[a]
+
+  rule computational reindex_id -> (a@S) : [a] -> [a] @S =
+    reindex(a) == id[a]
+
+  rule computational sigma_assoc -> (a : Ty, b : Ty, c : Ty) : [] -> [Ty] @S =
+    sigma(sigma(a, b), c) == sigma(a, sigma(b, c))
+
+  rule computational sigma_quot -> (g : Con, a : Ty, b : Ty) : [] -> [Con] @S =
+    extend(extend(g, a), b) == extend(g, sigma(a, b))
+
+}
+
+module_surface QIITContextTyRunUnit where {
+  doctrine QIITContextTyApprox;
+  mode S;
+}
+
+language QIITContextTyRunLang where {
+  doctrine QIITContextTyApprox;
+  module_surface QIITContextTyRunUnit;
+}
+
+module QIITContextTyRuns in QIITContextTyRunLang where {
+  let assoc_left
+  ---
+  extend(extend(extend(empty, base), base), base)
+  ---
+
+  export { assoc_left };
+}
+
+pipeline normalize_assoc where {
+  project export assoc_left;
+  normalize { policy = "topmost"; fuel = 100; };
+}
+
+build assoc_left from QIITContextTyRuns using normalize_assoc;
