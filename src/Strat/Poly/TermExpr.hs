@@ -13,8 +13,9 @@ module Strat.Poly.TermExpr
   , resolveHeadArgsExpr
   , resolvedHeadFlatArgs
   , applyHeadSubstObj
-  , bindHeadSubst
   , instantiateMetaBody
+  , normalizeCtxStructurally
+  , normalizeTermDiagramStructurally
   , validateTermGraph
   , freeTmVarsExpr
   , boundGlobalsExpr
@@ -28,19 +29,21 @@ import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Strat.Poly.Alpha (freshenTmHeadSigAgainstWithMaps)
 import Strat.Poly.Graph
   ( Diagram(..)
   , Edge(..)
   , EdgePayload(..)
   , PortId(..)
   , addEdgePayload
+  , canonDiagramRaw
   , diagramPortObj
   , emptyDiagram
   , freshPort
-  , setPortLabel
   , unEdgeId
   , unPortId
   , validateDiagram
+  , weakenDiagramTmCtxToModePrefix
   )
 import Strat.Poly.Literal (LiteralKind, literalKind)
 import Strat.Poly.ModeTheory (ModeName, meSrc)
@@ -52,13 +55,13 @@ import Strat.Poly.Obj
   , TermDiagram(..)
   , TmVar(..)
   , defaultMetaArgs
+  , freeVarsObj
   , modeCtxGlobals
   , normalizeObjExpr
   , objOwnerMode
-  , orName
   )
-import Strat.Poly.ObjClassifier (modeClassifierMode)
-import Strat.Poly.Tele (CtorSig(..), GenParam(..))
+import Strat.Poly.Subst (TermSubstOps(..), applySubstObjWith, bindHeadSubst, mkSubst)
+import Strat.Poly.Tele (GenParam(..))
 import Strat.Poly.Term.AST
   ( TermHeadArg(..)
   , TermExpr(..)
@@ -73,6 +76,7 @@ import Strat.Poly.TypeTheory
   , literalKindForObj
   , lookupTmHeadSig
   )
+import Strat.Poly.Traversal (traverseDiagram)
 
 data TermConvEnv = TermConvEnv
   { tcLookupSig :: ModeName -> GenName -> Maybe TmHeadSig
@@ -94,6 +98,22 @@ resolvedHeadFlatArgs :: ResolvedHeadArgs -> [TermHeadArg]
 resolvedHeadFlatArgs resolved =
   rhaStoredExprArgs resolved <> map (THATm . snd) (rhaInputs resolved)
 
+termSubstOps :: TypeTheory -> TermConvEnv -> TermSubstOps
+termSubstOps tt convEnv =
+  TermSubstOps
+    { tsoNormalizeObj = tcNormalizeSort convEnv
+    , tsoNormalizeTermDiagram = \_ _ tm -> normalizeTermDiagramStructurally tt convEnv (dTmCtx (unTerm tm)) tm
+    , tsoDiagramToTermExpr = diagramToTermExprWith tt convEnv
+    , tsoTermExprToDiagram = termExprToDiagramWith tt convEnv
+    , tsoNormalizeCtx = normalizeCtxStructurally tt convEnv
+    , tsoRequireHeadSig = \tmCtx currentSort f flatArgs -> requireHeadSig convEnv tmCtx currentSort f flatArgs
+    , tsoResolveHeadFlatArgs =
+        \tmCtx currentSort f flatArgs ->
+          resolvedHeadFlatArgs <$> resolveHeadArgsExpr tt convEnv tmCtx M.empty currentSort f flatArgs
+    , tsoApplyHeadSubstObj = \tmCtx headSubst obj -> applyHeadSubstObj tt convEnv tmCtx headSubst obj
+    , tsoInstantiateMetaBody = instantiateMetaBody
+    }
+
 termExprToDiagram
   :: TypeTheory
   -> [Obj]
@@ -113,14 +133,14 @@ termExprToDiagramWith
 termExprToDiagramWith tt convEnv tmCtx expectedSort tm = do
   expectedSort' <- tcNormalizeSort convEnv tmCtx expectedSort
   let mode = objOwnerMode expectedSort'
-  let modeInputsAll = modeCtxEntries tmCtx mode
   needed <- requiredModePrefixLen tmCtx mode tm
-  let modeInputs = take needed modeInputsAll
-  let (inPorts, d0) = allocPorts (map snd modeInputs) (emptyDiagram mode tmCtx)
-  d1 <- annotateInputs modeInputs inPorts d0
-  let base = d1 { dIn = inPorts, dOut = [] }
-  (root, d2) <- go modeInputs modeInputsAll inPorts base expectedSort' tm
-  let withOut = d2 { dOut = [root] }
+  let tmCtx' = tmCtxModePrefix tmCtx mode needed
+  let modeInputsAll = modeCtxEntries tmCtx' mode
+  let modeInputs = modeInputsAll
+  let (inPorts, d0) = allocPorts (map snd modeInputs) (emptyDiagram mode tmCtx')
+  let base = d0 { dIn = inPorts, dOut = [] }
+  (root, d1) <- go modeInputs modeInputsAll inPorts base expectedSort' tm
+  let withOut = d1 { dOut = [root] }
   out <- saturateUnusedPrefixInputs withOut
   validateTermGraph out
   pure (TermDiagram out)
@@ -129,7 +149,19 @@ termExprToDiagramWith tt convEnv tmCtx expectedSort tm = do
       case currentTm of
         TMMeta v metaArgs -> do
           vSort <- tcNormalizeSort convEnv tmCtx (tmvSort v)
-          ensureSortEq "termExprToDiagram: metavariable sort mismatch" vSort currentSort
+          ok <- tcSortEq convEnv tmCtx vSort currentSort
+          if ok
+            then Right ()
+            else
+              Left
+                ( "termExprToDiagram: metavariable sort mismatch for "
+                    <> tmvName v
+                    <> " (expected "
+                    <> T.pack (show currentSort)
+                    <> ", got "
+                    <> T.pack (show vSort)
+                    <> ")"
+                )
           if length metaArgs == tmvScope v
             then Right ()
             else
@@ -186,12 +218,6 @@ termExprToDiagramWith tt convEnv tmCtx expectedSort tm = do
           case nth' inPorts localIx of
             Nothing -> Left "termExprToDiagram: internal metavariable input mapping failure"
             Just pid -> Right pid
-
-    annotateInputs modeInputs inPorts diag =
-      foldM
-        (\d ((globalTm, _), pid) -> setPortLabel pid ("tmctx:" <> T.pack (show globalTm)) d)
-        diag
-        (zip modeInputs inPorts)
 
     ensureSortEq err lhs rhs = do
       ok <- tcSortEq convEnv tmCtx lhs rhs
@@ -257,7 +283,14 @@ diagramGraphToTermExprWith tt convEnv tmCtx expectedSort diag = do
       outOk <- tcSortEq convEnv tmCtx outTy expectedSort'
       if outOk
         then Right ()
-        else Left "diagramToTermExpr: output sort mismatch"
+        else
+          Left
+            ( "diagramToTermExpr: output sort mismatch (expected "
+                <> T.pack (show expectedSort')
+                <> ", got "
+                <> T.pack (show outTy)
+                <> ")"
+            )
       diagramGraphToTermExprCore tt convEnv tmCtx diag expectedSort'
     _ -> Left "diagramToTermExpr: term diagram must have exactly one output"
   where
@@ -306,7 +339,7 @@ diagramGraphToTermExprCore tt convEnv tmCtx diag expectedSort = do
     [outPort] -> termAt S.empty expectedSort outPort
     _ -> Left "diagramToTermExpr: term diagram must have exactly one output"
   where
-    modeInputs = modeCtxEntries (dTmCtx diag) (dMode diag)
+    modeInputs = modeCtxEntries tmCtx (dMode diag)
     nIn = length (dIn diag)
     localToGlobal = map fst (take nIn modeInputs)
     inMap = M.fromList (zip (dIn diag) [0 :: Int ..])
@@ -343,7 +376,9 @@ diagramGraphToTermExprCore tt convEnv tmCtx diag expectedSort = do
               case ePayload producer of
                 PGen gen args bargs
                   | null bargs -> do
-                      sig <- requireHeadSigByArity gen args (length (eIns producer))
+                      sig0 <- requireHeadSigByArity gen args (length (eIns producer))
+                      let used = S.unions (map freeVarsObj (currentSort : tmCtx))
+                      let (sig, _, _) = freshenTmHeadSigAgainstWithMaps used sig0
                       (storedArgs, substAfterParams) <- rebuildStoredArgs sig args
                       inputArgs <- rebuildInputs (S.insert pid seen) substAfterParams (zip (thsInputs sig) (eIns producer))
                       resSort0 <- applyHeadSubstObj tt convEnv tmCtx substAfterParams (thsRes sig)
@@ -394,13 +429,13 @@ diagramGraphToTermExprCore tt convEnv tmCtx diag expectedSort = do
     requireHeadSigByArity gen args inputArity =
       case tcLookupSig convEnv (dMode diag) gen of
         Nothing -> Left "diagramToTermExpr: unknown term head"
-        Just sig
-          | length (thsParams sig) /= length args ->
+        Just sig0
+          | length (thsParams sig0) /= length args ->
               Left "diagramToTermExpr: stored argument arity mismatch"
-          | length (thsInputs sig) /= inputArity ->
+          | length (thsInputs sig0) /= inputArity ->
               Left "diagramToTermExpr: term head input arity mismatch"
           | otherwise ->
-              Right sig
+              Right sig0
 
     rebuildStoredArgs sig args =
       foldM
@@ -419,7 +454,8 @@ diagramGraphToTermExprCore tt convEnv tmCtx diag expectedSort = do
         (GP_Tm v, CATm tmArg) -> do
           expectedArgSort0 <- applyHeadSubstObj tt convEnv tmCtx substAcc (tmvSort v)
           expectedArgSort <- tcNormalizeSort convEnv tmCtx expectedArgSort0
-          expr <- diagramToTermExprWith tt convEnv tmCtx expectedArgSort tmArg
+          storedTmCtx <- normalizeCtxStructurally tt convEnv (dTmCtx (unTerm tmArg))
+          expr <- diagramToTermExprWith tt convEnv storedTmCtx expectedArgSort tmArg
           tmArg' <- termExprToDiagramWith tt convEnv tmCtx expectedArgSort expr
           subst' <- bindHeadSubst v (CATm tmArg') substAcc
           pure (acc <> [THATm expr], subst')
@@ -525,6 +561,14 @@ modeCtxEntries tmCtx mode =
   , Just ty <- [nth' tmCtx i]
   ]
 
+tmCtxModePrefix :: [Obj] -> ModeName -> Int -> [Obj]
+tmCtxModePrefix tmCtx mode needed =
+  case take needed (modeCtxGlobals tmCtx mode) of
+    [] -> []
+    globals ->
+      let cutoff = maximum globals
+       in take (cutoff + 1) tmCtx
+
 allocPorts :: [Obj] -> Diagram -> ([PortId], Diagram)
 allocPorts [] diag = ([], diag)
 allocPorts (ty:rest) diag =
@@ -583,10 +627,66 @@ normalizeSortStructurally tt convEnv tmCtx obj =
         CAObj innerObj ->
           CAObj <$> normalizeSortStructurally tt convEnv tmCtx innerObj
         CATm tmArg -> do
-          sortTy0 <- termDiagramSort tmArg
-          sortTy <- normalizeSortStructurally tt convEnv tmCtx sortTy0
-          expr <- diagramToTermExprWith tt convEnv tmCtx sortTy tmArg
-          CATm <$> termExprToDiagramWith tt convEnv tmCtx sortTy expr
+          CATm <$> normalizeTermDiagramStructurally tt convEnv (dTmCtx (unTerm tmArg)) tmArg
+
+normalizeCtxStructurally
+  :: TypeTheory
+  -> TermConvEnv
+  -> [Obj]
+  -> Either Text [Obj]
+normalizeCtxStructurally tt convEnv =
+  go []
+  where
+    go _ [] = Right []
+    go ctxAcc (ty : rest) = do
+      ty' <- normalizeSortStructurally tt convEnv ctxAcc ty
+      rest' <- go (ctxAcc <> [ty']) rest
+      pure (ty' : rest')
+
+normalizeTermDiagramStructurally
+  :: TypeTheory
+  -> TermConvEnv
+  -> [Obj]
+  -> TermDiagram
+  -> Either Text TermDiagram
+normalizeTermDiagramStructurally tt convEnv tmCtx0 (TermDiagram diag) = do
+  tmCtx <- normalizeCtxStructurally tt convEnv tmCtx0
+  diag' <- normalizeDiagramLocal diag
+  diag'' <- weakenDiagramTmCtxToModePrefix tmCtx diag'
+  portObj' <- IM.traverseWithKey (\_ ty -> normalizeSortStructurally tt convEnv tmCtx ty) (dPortObj diag'')
+  canon <- canonDiagramRaw diag'' { dTmCtx = tmCtx, dPortObj = portObj' }
+  pure (TermDiagram canon)
+  where
+    normalizeDiagramLocal =
+      traverseDiagram onDiag pure pure pure
+
+    onDiag d = do
+      dTmCtx' <- normalizeCtxStructurally tt convEnv (dTmCtx d)
+      edges' <- IM.traverseWithKey (\_ edge -> normalizeEdge dTmCtx' edge) (dEdges d)
+      portObj' <- IM.traverseWithKey (\_ ty -> normalizeSortStructurally tt convEnv dTmCtx' ty) (dPortObj d)
+      pure d { dTmCtx = dTmCtx', dPortObj = portObj', dEdges = edges' }
+
+    normalizeEdge tmCtx edge = do
+      payload' <- normalizePayload tmCtx (ePayload edge)
+      pure edge { ePayload = payload' }
+
+    normalizePayload tmCtx payload =
+      case payload of
+        PGen g args bargs -> do
+          args' <- traverse (normalizeCodeArg tmCtx) args
+          pure (PGen g args' bargs)
+        PTmMeta v -> do
+          sort' <- normalizeSortStructurally tt convEnv tmCtx (tmvSort v)
+          pure (PTmMeta v { tmvSort = sort' })
+        other ->
+          pure other
+
+    normalizeCodeArg tmCtx arg =
+      case arg of
+        CAObj innerObj ->
+          CAObj <$> normalizeSortStructurally tt convEnv tmCtx innerObj
+        CATm innerTm ->
+          Right (CATm innerTm)
 
 requireHeadSig :: TermConvEnv -> [Obj] -> Obj -> GenName -> [TermHeadArg] -> Either Text TmHeadSig
 requireHeadSig convEnv tmCtx sortTy f args = do
@@ -610,13 +710,14 @@ resolveHeadArgsExpr
   -> [TermHeadArg]
   -> Either Text ResolvedHeadArgs
 resolveHeadArgsExpr tt convEnv tmCtx outerSubst currentSort f flatArgs = do
-  sig <- requireHeadSig convEnv tmCtx currentSort f flatArgs
-  let subst0 = foldr M.delete outerSubst (map paramVar (thsParams sig))
+  sig0 <- requireHeadSig convEnv tmCtx currentSort f flatArgs
+  let used = M.keysSet outerSubst
+  let (sig, _, _) = freshenTmHeadSigAgainstWithMaps used sig0
   let (paramArgs, inputArgs) = splitAt (length (thsParams sig)) flatArgs
   (storedCodeRev, storedExprRev, substAfterParams) <-
     foldM
       stepParam
-      ([], [], subst0)
+      ([], [], outerSubst)
       (zip (thsParams sig) paramArgs)
   inputsRev <-
     foldM
@@ -637,10 +738,6 @@ resolveHeadArgsExpr tt convEnv tmCtx outerSubst currentSort f flatArgs = do
           }
     else Left "termExprToDiagram: term head result sort mismatch"
   where
-    paramVar param =
-      case param of
-        GP_Ty v -> v
-        GP_Tm v -> v
 
     stepParam (codeAcc, exprAcc, substAcc) (param, arg) =
       case (param, arg) of
@@ -653,8 +750,11 @@ resolveHeadArgsExpr tt convEnv tmCtx outerSubst currentSort f flatArgs = do
         (GP_Tm v, THATm tmArg) -> do
           expectedArgSort0 <- applyHeadSubstObj tt convEnv tmCtx substAcc (tmvSort v)
           expectedArgSort <- tcNormalizeSort convEnv tmCtx expectedArgSort0
-          tmDiag <- termExprToDiagramWith tt convEnv tmCtx expectedArgSort tmArg
-          tmArg' <- diagramToTermExprWith tt convEnv tmCtx expectedArgSort tmDiag
+          tmArg' <- rewriteHeadExpr tt convEnv tmCtx substAcc expectedArgSort tmArg
+          tmDiag <-
+            case termExprToDiagramWith tt convEnv tmCtx expectedArgSort tmArg' of
+              Left err -> Left ("resolveHeadArgsExpr: parameter elaboration failed: " <> err)
+              Right tmDiag -> Right tmDiag
           subst' <- bindHeadSubst v (CATm tmDiag) substAcc
           pure (CATm tmDiag : codeAcc, THATm tmArg' : exprAcc, subst')
         (GP_Tm _, THAObj _) ->
@@ -667,8 +767,11 @@ resolveHeadArgsExpr tt convEnv tmCtx outerSubst currentSort f flatArgs = do
           THAObj _ -> Left "termExprToDiagram: expected term input argument"
       expectedArgSort0 <- applyHeadSubstObj tt convEnv tmCtx substAfterParams argSort
       expectedArgSort <- tcNormalizeSort convEnv tmCtx expectedArgSort0
-      argDiag <- termExprToDiagramWith tt convEnv tmCtx expectedArgSort argTm
-      argTm' <- diagramToTermExprWith tt convEnv tmCtx expectedArgSort argDiag
+      argTm' <- rewriteHeadExpr tt convEnv tmCtx substAfterParams expectedArgSort argTm
+      _ <-
+        case termExprToDiagramWith tt convEnv tmCtx expectedArgSort argTm' of
+          Left err -> Left ("resolveHeadArgsExpr: input elaboration failed: " <> err)
+          Right tmDiag -> Right tmDiag
       pure ((expectedArgSort, argTm') : acc)
 
 rewriteHeadExpr
@@ -693,16 +796,25 @@ rewriteHeadExpr tt convEnv tmCtx subst currentSort expr =
     TMMeta v args ->
       case M.lookup v subst of
         Nothing -> do
-          vSort <- tcNormalizeSort convEnv tmCtx (tmvSort v)
+          vSort0 <- applyHeadSubstObj tt convEnv tmCtx subst (tmvSort v)
+          vSort <- tcNormalizeSort convEnv tmCtx vSort0
           ok <- tcSortEq convEnv tmCtx vSort currentSort
           if ok
-            then Right expr
-            else Left "termExprToDiagram: metavariable sort mismatch"
+            then Right (TMMeta (v { tmvSort = vSort }) args)
+            else
+              Left
+                ( "termExprToDiagram: metavariable sort mismatch for "
+                    <> tmvName v
+                    <> " (expected "
+                    <> T.pack (show currentSort)
+                    <> ", got "
+                    <> T.pack (show vSort)
+                    <> ")"
+                )
         Just (CAObj _) ->
           Left "termExprToDiagram: expected term-valued substitution for term metavariable"
         Just (CATm tmSub) -> do
-          sortTy <- termDiagramSort tmSub
-          body <- diagramToTermExprWith tt convEnv tmCtx sortTy tmSub
+          body <- diagramToTermExprWith tt convEnv tmCtx currentSort tmSub
           body' <- instantiateMetaBody tmCtx v args body
           rewriteHeadExpr tt convEnv tmCtx (M.delete v subst) currentSort body'
     TMGen f flatArgs -> do
@@ -723,92 +835,10 @@ applyHeadSubstObj
   -> HeadSubst
   -> Obj
   -> Either Text Obj
-applyHeadSubstObj tt convEnv tmCtx subst ty =
-  tcNormalizeSort convEnv tmCtx =<< go ty
-  where
-    go obj =
-      case objCode obj of
-        CTMeta v ->
-          case M.lookup v subst of
-            Just (CAObj replacement) -> Right replacement
-            Just (CATm _) -> Left "termExprToDiagram: expected object-valued substitution in object sort"
-            Nothing -> Right obj
-        CTCon ref args -> do
-          let owner = objOwnerMode obj
-          let codeMode = modeClassifierMode (ttModes tt) owner
-          let sigTable = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
-          args' <-
-            case M.lookup (orName ref) sigTable of
-              Just sig
-                | length (csParams sig) == length args ->
-                    fst <$> foldM goArgBySig ([], subst) (zip (csParams sig) args)
-              Just _ ->
-                Left "termExprToDiagram: constructor arity mismatch during sort instantiation"
-              Nothing ->
-                mapM goArgUnknown args
-          pure obj { objCode = CTCon ref args' }
-        CTLift me inner -> do
-          innerObj <- go (Obj (meSrc me) inner)
-          pure obj { objCode = CTLift me (objCode innerObj) }
+applyHeadSubstObj tt convEnv _tmCtx subst ty = do
+  subst' <- mkSubst (M.toList subst)
+  applySubstObjWith (termSubstOps tt convEnv) tt subst' ty
 
-    goArgBySig (acc, substAcc) (param, arg) =
-      case (param, arg) of
-        (GP_Ty v, CAObj innerObj) -> do
-          innerObj' <- go innerObj
-          subst' <- bindHeadSubst v (CAObj innerObj') substAcc
-          Right (acc <> [CAObj innerObj'], subst')
-        (GP_Ty _, CATm _) ->
-          Left "termExprToDiagram: expected object argument while instantiating sort"
-        (GP_Tm v, CATm tmArg) -> do
-          sortTy' <- applyHeadSubstObj tt convEnv tmCtx substAcc (tmvSort v)
-          tmArg' <- applyHeadSubstTermDiagram tt convEnv tmCtx substAcc sortTy' tmArg
-          subst' <- bindHeadSubst v (CATm tmArg') substAcc
-          Right (acc <> [CATm tmArg'], subst')
-        (GP_Tm _, CAObj _) ->
-          Left "termExprToDiagram: expected term argument while instantiating sort"
-
-    goArgUnknown arg =
-      case arg of
-        CAObj innerObj -> CAObj <$> go innerObj
-        CATm tmArg -> do
-          sortTy0 <- termDiagramSort tmArg
-          sortTy <- applyHeadSubstObj tt convEnv tmCtx subst sortTy0
-          CATm <$> applyHeadSubstTermDiagram tt convEnv tmCtx subst sortTy tmArg
-
-applyHeadSubstTermDiagram
-  :: TypeTheory
-  -> TermConvEnv
-  -> [Obj]
-  -> HeadSubst
-  -> Obj
-  -> TermDiagram
-  -> Either Text TermDiagram
-applyHeadSubstTermDiagram tt convEnv tmCtx subst expectedSort tm = do
-  expr <- diagramToTermExprWith tt convEnv tmCtx expectedSort tm
-  expr' <- rewriteHeadExpr tt convEnv tmCtx subst expectedSort expr
-  termExprToDiagramWith tt convEnv tmCtx expectedSort expr'
-
-bindHeadSubst :: TmVar -> CodeArg -> HeadSubst -> Either Text HeadSubst
-bindHeadSubst v arg subst =
-  case M.lookup v subst of
-    Nothing -> Right (M.insert v arg subst)
-    Just old
-      | sameCategory old arg -> Right subst
-      | otherwise -> Left "termExprToDiagram: inconsistent generator-parameter substitution category"
-  where
-    sameCategory (CAObj _) (CAObj _) = True
-    sameCategory (CATm _) (CATm _) = True
-    sameCategory _ _ = False
-
-termDiagramSort :: TermDiagram -> Either Text Obj
-termDiagramSort tmArg =
-  case dOut (unTerm tmArg) of
-    [outPid] ->
-      case diagramPortObj (unTerm tmArg) outPid of
-        Just sortTy -> Right sortTy
-        Nothing -> Left "termExprToDiagram: missing stored term-arg output sort"
-    _ ->
-      Left "termExprToDiagram: stored term argument must have exactly one output"
 
 instantiateMetaBody
   :: [Obj]

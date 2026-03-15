@@ -22,7 +22,6 @@ import Strat.Poly.Obj
   , defaultMetaArgs
   , modeCtxGlobals
   , objMode
-  , tmVarOwner
   )
 import Strat.Poly.Tele (GenParam(..))
 import Strat.Poly.Term.AST (TermExpr(..))

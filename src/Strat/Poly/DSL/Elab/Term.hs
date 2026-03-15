@@ -30,7 +30,9 @@ module Strat.Poly.DSL.Elab.Term
   ) where
 
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Text (Text)
+import Strat.Poly.Alpha (freshenCtorSigAgainst, freshenTmHeadSigAgainst)
 import Strat.Poly.DSL.AST
 import Strat.Poly.DSL.Elab.Resolve (elabRawModExpr)
 import Strat.Poly.DefEq (normalizeObjDeepWithCtx, termExprToDiagramChecked)
@@ -44,7 +46,7 @@ import Strat.Poly.ObjResolve
   ( resolveTypeRefInClassifierInTables
   , resolveTypeRefInClassifierMaybeInTables
   )
-import Strat.Poly.Tele (CtorSig(..), GenParam(..))
+import Strat.Poly.Tele (CtorSig(..))
 import Strat.Poly.TeleArgs (elabTeleArgsSequentialWith)
 import Strat.Poly.Term.AST (TermHeadArg(..))
 import Strat.Poly.TermExpr (TermExpr(..))
@@ -399,7 +401,8 @@ elabObjExprWithTables_ typeScope pol doc ctorTables tyVars tmVars tmBound expect
                   }
         Nothing -> do
           ref <- resolveTypeRefInClassifierInTables doc ctorTables expectedOwnerMode classifierMode rawRef
-          sig <- lookupCtorSigForOwnerInTables doc ctorTables expectedOwnerMode ref
+          sig0 <- lookupCtorSigForOwnerInTables doc ctorTables expectedOwnerMode ref
+          let sig = freshenCtorSigAgainst (S.fromList (tyVars <> tmVars)) sig0
           if length (csParams sig) /= length args
             then Left "type constructor arity mismatch"
             else do
@@ -556,7 +559,7 @@ elabTmTermWithTablesInScope
   -> Maybe Obj
   -> RawPolyObjExpr
   -> Either Text TermDiagram
-elabTmTermWithTablesInScope typeScope doc ctorTables _tyVars tmVars tmBound mExpected raw =
+elabTmTermWithTablesInScope typeScope doc ctorTables tyVars tmVars tmBound mExpected raw =
   do
     ttDoc <- doctrineElabTypeTheoryFromTables doc ctorTables
     tmCtx <- mkTmCtx
@@ -600,10 +603,12 @@ elabTmTermWithTablesInScope typeScope doc ctorTables _tyVars tmVars tmBound mExp
           case rtrMode rawRef of
             Just _ -> Left "term head names must be unqualified"
             Nothing -> do
-              (funName, sig) <-
+              (funName, sig0) <-
                 case mExp of
                   Just expected -> lookupTmFunByNameInTables doc ctorTables expected (rtrName rawRef) (length args)
                   Nothing -> lookupTmFunAnyInTables doc ctorTables (rtrName rawRef) (length args)
+              let expectedVars = maybe S.empty freeVarsObj mExp
+              let sig = freshenTmHeadSigAgainst (S.unions [S.fromList (tyVars <> tmVars), expectedVars]) sig0
               flatArgs <- elabHeadArgs ttDoc ctorTables tmCtx sig args
               pure (TMGen funName flatArgs, thsRes sig)
 
@@ -621,7 +626,7 @@ elabTmTermWithTablesInScope typeScope doc ctorTables _tyVars tmVars tmBound mExp
           (flatArgs, substAcc) <- acc
           case param of
             GP_Ty v -> do
-              obj <- elabObjExprWithTablesInScope typeScope doc ctorTables [] tmVars M.empty (tmVarOwner v) rawArg
+              obj <- elabObjExprWithTablesInScope typeScope doc ctorTables tyVars tmVars M.empty (tmVarOwner v) rawArg
               singleton <- U.mkSubst [(v, CAObj obj)]
               substNext <- U.composeSubst ttDoc singleton substAcc
               Right (flatArgs <> [THAObj obj], substNext)

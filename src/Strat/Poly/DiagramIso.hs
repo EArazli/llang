@@ -387,10 +387,15 @@ algoMatch tt flex =
       case applySubstCtx tt (ieTySubst extra) (dTmCtx left) of
         Left _ -> Right []
         Right tmCtx' ->
-          case unifyObjFlex tt tmCtx' flex (ieTySubst extra) ty1 ty2 of
-            Left _ -> Right []
-            Right tySubst' ->
-              Right [extra { ieTySubst = tySubst' }]
+          if S.null flex
+            then do
+              ok <- defEqObj tt tmCtx' ty1 ty2
+              Right [extra | ok]
+            else
+              case unifyObjFlex tt tmCtx' flex (ieTySubst extra) ty1 ty2 of
+                Left _ -> Right []
+                Right tySubst' ->
+                  Right [extra { ieTySubst = tySubst' }]
 
     comparePayload left _ recurse extra p1 p2 =
       case (p1, p2) of

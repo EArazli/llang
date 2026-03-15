@@ -714,7 +714,20 @@ testPushoutTypePermutationCommutes = do
   iso <- case diagramIsoEq d2 d3 of
     Left err -> assertFailure (T.unpack err)
     Right ok -> pure ok
-  assertBool "expected pushout type permutation to commute" iso
+  if iso
+    then pure ()
+    else
+      assertFailure
+        ( "expected pushout type permutation to commute\n"
+            <> "d1="
+            <> show d1
+            <> "\n"
+            <> "d2="
+            <> show d2
+            <> "\n"
+            <> "d3="
+            <> show d3
+        )
 
 testPushoutAcceptsModeMap :: Assertion
 testPushoutAcceptsModeMap = do

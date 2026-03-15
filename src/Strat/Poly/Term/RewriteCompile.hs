@@ -8,13 +8,15 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Strat.Poly.Graph (Diagram(..), diagramPortObj)
+import Strat.Poly.Graph (Diagram(..), diagramPortObj, weakenDiagramTmCtxTo)
 import Strat.Poly.ModeTheory (ModeName, ModeTheory(..))
 import qualified Strat.Poly.TypeTheory as TT
 import Strat.Poly.Obj (Obj, TmVar(..), defaultMetaArgs, sameTmVarId, unTerm)
 import Strat.Poly.TermExpr
   ( TermExpr(..)
   , diagramGraphToTermExpr
+  , normalizeCtxStructurally
+  , structuralConvEnv
   )
 import Strat.Poly.Term.AST (TermHeadArg(..))
 import Strat.Poly.Term.RewriteSystem (TRS, TRule(..), mkTRS, boundVarSet)
@@ -47,8 +49,11 @@ compileTermRules tt mode = do
 
     toExpr side ruleIx varCtx tm =
       let d0 = unTerm tm
-          d = d0 { dTmCtx = varCtx }
        in do
+            varCtx' <- normalizeCtxStructurally tt (structuralConvEnv tt) varCtx
+            dTmCtx' <- normalizeCtxStructurally tt (structuralConvEnv tt) (dTmCtx d0)
+            let d1 = d0 { dTmCtx = dTmCtx' }
+            d <- weakenDiagramTmCtxTo varCtx' d1
             expectedSort <- expectedOutSort d
             mapLeft
               ( \err ->
@@ -65,7 +70,7 @@ compileTermRules tt mode = do
                     <> "): "
                     <> err
               )
-              (diagramGraphToTermExpr tt varCtx expectedSort d)
+              (diagramGraphToTermExpr tt varCtx' expectedSort d)
 
     expectedOutSort d =
       case dOut d of

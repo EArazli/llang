@@ -18,6 +18,7 @@ import qualified Data.Set as S
 import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVarsFrom)
 import Strat.Poly.DiagramInterpretation (requirePortType)
+import Strat.Poly.DefEq (defEqObj)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName)
 import Strat.Poly.Obj (TmVar, sameTmVarId)
@@ -110,7 +111,8 @@ findAllMatchesWithIndexMaybeSeed cfg lhs hostIndex mSeedEdges host
   | otherwise = do
       lhsTmCtx <- applySubstCtx tt emptySubst (dTmCtx lhs)
       hostTmCtx <- applySubstCtx tt emptySubst (dTmCtx host)
-      if lhsTmCtx /= hostTmCtx
+      tmCtxOk <- defEqCtx lhsTmCtx hostTmCtx
+      if not tmCtxOk
         then Right []
         else do
           let lhsEdges = IM.elems (dEdges lhs)
@@ -122,6 +124,16 @@ findAllMatchesWithIndexMaybeSeed cfg lhs hostIndex mSeedEdges host
   where
     tt = mcTheory cfg
     flex = mcFlex cfg
+
+    defEqCtx leftCtx rightCtx = go [] leftCtx rightCtx
+      where
+        go _ [] [] = Right True
+        go tmCtxAcc (a:as) (b:bs) = do
+          ok <- defEqObj tt tmCtxAcc a b
+          if ok
+            then go (tmCtxAcc <> [a]) as bs
+            else Right False
+        go _ _ _ = Right False
 
     go acc match adj allEdgeIds lhsSigs =
       case pickNextEdge match adj allEdgeIds (candidateCount match lhsSigs) of

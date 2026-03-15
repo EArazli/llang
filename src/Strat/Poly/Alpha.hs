@@ -4,16 +4,23 @@ module Strat.Poly.Alpha
   , renameTmVarAlpha
   , renameParamAlpha
   , renameTypeAlpha
+  , renameHeadArgAlpha
+  , renameTermExprAlpha
   , renameCodeArgAlpha
   , renameBinderArgAlpha
   , renameDiagramAlpha
   , renameTermDiagramAlpha
   , canonicalizeCtorSig
+  , freshenCtorSigAgainstWithMaps
+  , freshenCtorSigAgainst
+  , freshenTmHeadSigAgainstWithMaps
+  , freshenTmHeadSigAgainst
   ) where
 
 import Data.Functor.Identity (runIdentity)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import qualified Data.Text as T
 import Strat.Poly.Graph (BinderArg(..), Diagram(..), EdgePayload(..))
 import Strat.Poly.Obj
@@ -26,6 +33,8 @@ import Strat.Poly.Obj
   )
 import Strat.Poly.Tele (CtorSig(..), GenParam(..), teleDistinctNames)
 import Strat.Poly.Traversal (traverseDiagram)
+import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
+import Strat.Poly.TypeTheory (TmHeadSig(..))
 
 renameParamAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> GenParam -> GenParam
 renameParamAlpha tyMap tmMap param =
@@ -91,6 +100,20 @@ renameCodeArgAlpha tyMap tmMap arg =
     CAObj ty -> CAObj (renameTypeAlpha tyMap tmMap ty)
     CATm tm -> CATm (renameTermDiagramAlpha tyMap tmMap tm)
 
+renameHeadArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> TermHeadArg -> TermHeadArg
+renameHeadArgAlpha tyMap tmMap arg =
+  case arg of
+    THAObj ty -> THAObj (renameTypeAlpha tyMap tmMap ty)
+    THATm tm -> THATm (renameTermExprAlpha tyMap tmMap tm)
+
+renameTermExprAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> TermExpr -> TermExpr
+renameTermExprAlpha tyMap tmMap expr =
+  case expr of
+    TMBound i -> TMBound i
+    TMMeta v args -> TMMeta (renameTmVarAlpha tyMap tmMap v) args
+    TMGen g args -> TMGen g (map (renameHeadArgAlpha tyMap tmMap) args)
+    TMLit lit -> TMLit lit
+
 renameBinderArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> BinderArg -> BinderArg
 renameBinderArgAlpha tyMap tmMap barg =
   case barg of
@@ -127,3 +150,91 @@ canonicalizeCtorSig params = do
                   , tmvSort = renameTypeAlpha tyMap tmMap (tmvSort v)
                   }
           go tyIx (tmIx + 1) tyMap (M.insert v v' tmMap) (GP_Tm v' : acc) rest
+
+freshenCtorSigAgainst :: S.Set TmVar -> CtorSig -> CtorSig
+freshenCtorSigAgainst used0 =
+  (\(sig, _, _) -> sig) . freshenCtorSigAgainstWithMaps used0
+
+freshenCtorSigAgainstWithMaps
+  :: S.Set TmVar
+  -> CtorSig
+  -> (CtorSig, M.Map TmVar TmVar, M.Map TmVar TmVar)
+freshenCtorSigAgainstWithMaps used0 (CtorSig params) =
+  (CtorSig params', tyMap, tmMap)
+  where
+    (params', tyMap, tmMap, _) = freshenParamsAgainst used0 params
+
+freshenTmHeadSigAgainst :: S.Set TmVar -> TmHeadSig -> TmHeadSig
+freshenTmHeadSigAgainst used0 =
+  (\(sig, _, _) -> sig) . freshenTmHeadSigAgainstWithMaps used0
+
+freshenTmHeadSigAgainstWithMaps
+  :: S.Set TmVar
+  -> TmHeadSig
+  -> (TmHeadSig, M.Map TmVar TmVar, M.Map TmVar TmVar)
+freshenTmHeadSigAgainstWithMaps used0 sig =
+  ( sig
+      { thsParams = params'
+      , thsInputs = map (renameTypeAlpha tyMap tmMap) (thsInputs sig)
+      , thsRes = renameTypeAlpha tyMap tmMap (thsRes sig)
+      }
+  , tyMap
+  , tmMap
+  )
+  where
+    (params', tyMap, tmMap, _) = freshenParamsAgainst used0 (thsParams sig)
+
+freshenParamsAgainst
+  :: S.Set TmVar
+  -> [GenParam]
+  -> ([GenParam], M.Map TmVar TmVar, M.Map TmVar TmVar, S.Set TmVar)
+freshenParamsAgainst used0 =
+  go used0 M.empty M.empty []
+  where
+    go used tyMap tmMap acc [] =
+      (reverse acc, tyMap, tmMap, used)
+    go used tyMap tmMap acc (param : rest) =
+      case param of
+        GP_Ty v ->
+          let v' = freshenTyParam used tyMap tmMap v
+           in go
+                (S.insert v' used)
+                (M.insert v v' tyMap)
+                tmMap
+                (GP_Ty v' : acc)
+                rest
+        GP_Tm v ->
+          let v' = freshenTmParam used tyMap tmMap v
+           in go
+                (S.insert v' used)
+                tyMap
+                (M.insert v v' tmMap)
+                (GP_Tm v' : acc)
+                rest
+
+freshenTyParam :: S.Set TmVar -> M.Map TmVar TmVar -> M.Map TmVar TmVar -> TmVar -> TmVar
+freshenTyParam used tyMap tmMap v =
+  fresh
+    { tmvSort = renameTypeAlpha tyMap tmMap (tmvSort v)
+    , tmvOwnerMode = Just (tmVarOwner fresh)
+    }
+  where
+    fresh = v { tmvName = pickFreshName used v 0 }
+
+freshenTmParam :: S.Set TmVar -> M.Map TmVar TmVar -> M.Map TmVar TmVar -> TmVar -> TmVar
+freshenTmParam used tyMap tmMap v =
+  fresh { tmvSort = renameTypeAlpha tyMap tmMap (tmvSort v) }
+  where
+    fresh = v { tmvName = pickFreshName used v 0 }
+
+pickFreshName :: S.Set TmVar -> TmVar -> Int -> T.Text
+pickFreshName used v n =
+  let base = tmvName v
+      name =
+        if n == 0
+          then base
+          else base <> "#" <> T.pack (show (n - 1))
+      candidate = v { tmvName = name }
+   in if candidate `S.member` used
+        then pickFreshName used v (n + 1)
+        else name

@@ -102,6 +102,7 @@ library:
   - Strat.Poly.Kernel
   - Strat.Poly.ModeSyntax
   - Strat.Poly.ObjResolve
+  - Strat.Poly.Subst
   - Strat.Poly.Term.Confluence
   - Strat.Poly.Term.Termination
   - Strat.Poly.Traversal

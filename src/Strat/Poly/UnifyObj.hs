@@ -24,6 +24,7 @@ module Strat.Poly.UnifyObj
   , applySubstCtx
   , normalizeSubst
   , composeSubst
+  , substIsEmpty
   ) where
 
 import Data.Text (Text)
@@ -32,6 +33,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import Control.Monad (foldM)
+import Strat.Poly.Alpha (freshenTmHeadSigAgainst)
 import Strat.Poly.Literal (Literal, literalKind)
 import Strat.Poly.ModeTheory (ModeName(..), ModName(..), ModExpr(..))
 import Strat.Poly.Names (GenName(..))
@@ -43,7 +45,6 @@ import Strat.Poly.Graph
   , EdgePayload(..)
   , PortId(..)
   , diagramPortObj
-  , weakenDiagramTmCtxTo
   , unPortId
   , unEdgeId
   )
@@ -54,20 +55,41 @@ import Strat.Poly.TypeTheory
   , lookupTmHeadSig
   )
 import Strat.Poly.Tele (CtorSig(..), GenParam(..))
-import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.DefEq
   ( normalizeObjDeepWithCtx
   , normalizeTermDiagram
   , termToDiagram
   )
+import Strat.Poly.Subst
+  ( Subst
+  , TermSubstOps(..)
+  , applySubstCtxWith
+  , applySubstDiagramWith
+  , applySubstObjWith
+  , applySubstTmInCtxWith
+  , applySubstTmWith
+  , bindHeadSubst
+  , codeBindings
+  , composeSubstWith
+  , emptySubst
+  , insertCodeMeta
+  , insertTmMeta
+  , lookupCodeMeta
+  , lookupTmMeta
+  , mkSubst
+  , normalizeSubstWith
+  , substDomain
+  , substIsEmpty
+  , tmBindings
+  )
 import Strat.Poly.TermExpr
   ( TermExpr(..)
   , ResolvedHeadArgs(..)
   , applyHeadSubstObj
-  , bindHeadSubst
   , boundGlobalsExpr
   , diagramToTermExpr
   , instantiateMetaBody
+  , normalizeCtxStructurally
   , resolveHeadArgsExpr
   , resolvedHeadFlatArgs
   , structuralConvEnv
@@ -75,88 +97,66 @@ import Strat.Poly.TermExpr
   )
 import Strat.Poly.Term.AST (TermHeadArg(..))
 
-
-newtype Subst = Subst
-  { unSubst :: M.Map TmVar CodeArg
-  }
-  deriving (Eq, Ord, Show)
-
 data PortHead
   = PHBound Int
   | PHGen GenName [CodeArg] [PortId]
   | PHMeta TmVar
   | PHLit Literal
 
-lookupMeta :: Subst -> TmVar -> Maybe CodeArg
-lookupMeta subst v =
-  M.lookup v (unSubst subst)
+unifySubstOps :: TypeTheory -> TermSubstOps
+unifySubstOps tt =
+  TermSubstOps
+    { tsoNormalizeObj = normalizeObjDeepWithCtx tt
+    , tsoNormalizeTermDiagram = normalizeTermDiagram tt
+    , tsoDiagramToTermExpr = diagramToTermExpr tt
+    , tsoTermExprToDiagram = termExprToDiagram tt
+    , tsoNormalizeCtx = normalizeCtxStructurally tt (structuralConvEnv tt)
+    , tsoRequireHeadSig = requireTmHeadSig tt
+    , tsoResolveHeadFlatArgs =
+        \tmCtx currentSort f flatArgs ->
+          resolvedHeadFlatArgs <$> resolveHeadArgsExpr tt (structuralConvEnv tt) tmCtx M.empty currentSort f flatArgs
+    , tsoApplyHeadSubstObj = \tmCtx headSubst obj -> applyHeadSubstObj tt (structuralConvEnv tt) tmCtx headSubst obj
+    , tsoInstantiateMetaBody = instantiateMetaBody
+    }
 
-lookupTmMeta :: Subst -> TmVar -> Maybe TermDiagram
-lookupTmMeta subst v =
-  case lookupMeta subst v of
-    Just (CATm tm) -> Just tm
-    _ -> Nothing
+requireTmHeadSig :: TypeTheory -> [Obj] -> Obj -> GenName -> [TermHeadArg] -> Either Text TmHeadSig
+requireTmHeadSig tt curCtx currentSort f args = do
+  currentSort' <- normalizeObjDeepWithCtx tt curCtx currentSort
+  sig <-
+    case lookupTmHeadSig tt (objOwnerMode currentSort') f of
+      Nothing -> Left "applySubstTm: unknown term head"
+      Just s -> Right s
+  if length (thsParams sig) + length (thsInputs sig) == length args
+    then Right sig
+    else Left "applySubstTm: term head arity mismatch"
 
-lookupCodeMeta :: Subst -> TmVar -> Maybe Obj
-lookupCodeMeta subst v =
-  case lookupMeta subst v of
-    Just (CAObj t) -> Just t
-    _ -> Nothing
+applySubstObj :: TypeTheory -> Subst -> Obj -> Either Text Obj
+applySubstObj tt =
+  applySubstObjWith (unifySubstOps tt) tt
 
-tmBindings :: Subst -> [(TmVar, TermDiagram)]
-tmBindings subst =
-  [ (v, tm)
-  | (v, CATm tm) <- M.toList (unSubst subst)
-  ]
+applySubstTm :: TypeTheory -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
+applySubstTm tt =
+  applySubstTmWith (unifySubstOps tt) tt
 
-codeBindings :: Subst -> [(TmVar, Obj)]
-codeBindings subst =
-  [ (v, t)
-  | (v, CAObj t) <- M.toList (unSubst subst)
-  ]
+applySubstTmInCtx :: TypeTheory -> [Obj] -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
+applySubstTmInCtx tt =
+  applySubstTmInCtxWith (unifySubstOps tt) tt
 
-allBindings :: Subst -> [(TmVar, CodeArg)]
-allBindings = M.toList . unSubst
+applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
+applySubstDiagram tt =
+  applySubstDiagramWith (unifySubstOps tt) tt
 
-insertMeta :: TmVar -> CodeArg -> Subst -> Either Text Subst
-insertMeta v arg subst =
-  case lookupMeta subst v of
-    Just old | category old /= category arg ->
-      Left
-        ( "insertMeta: category conflict for metavariable "
-            <> tmvName v
-            <> " (existing "
-            <> category old
-            <> ", new "
-            <> category arg
-            <> ")"
-        )
-    _ ->
-      Right subst { unSubst = M.insert v arg (unSubst subst) }
-  where
-    category :: CodeArg -> Text
-    category binding =
-      case binding of
-        CAObj _ -> "type-level"
-        CATm _ -> "term-level"
+applySubstCtx :: TypeTheory -> Subst -> Context -> Either Text Context
+applySubstCtx tt =
+  applySubstCtxWith (unifySubstOps tt) tt
 
-insertCodeMeta :: TmVar -> Obj -> Subst -> Either Text Subst
-insertCodeMeta v t subst =
-  insertMeta v (CAObj t) subst
+normalizeSubst :: TypeTheory -> Subst -> Either Text Subst
+normalizeSubst tt =
+  normalizeSubstWith (unifySubstOps tt) tt
 
-insertTmMeta :: TmVar -> TermDiagram -> Subst -> Either Text Subst
-insertTmMeta v tm subst =
-  insertMeta v (CATm tm) subst
-
-mkSubst :: [(TmVar, CodeArg)] -> Either Text Subst
-mkSubst bindings =
-  foldM
-    (\subst (v, arg) -> insertMeta v arg subst)
-    emptySubst
-    bindings
-
-emptySubst :: Subst
-emptySubst = Subst M.empty
+composeSubst :: TypeTheory -> Subst -> Subst -> Either Text Subst
+composeSubst tt =
+  composeSubstWith (unifySubstOps tt) tt
 
 unifyObj :: TypeTheory -> Obj -> Obj -> Either Text Subst
 unifyObj tt t1 t2 =
@@ -651,7 +651,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
       sig <-
         case lookupTmHeadSig tt (objOwnerMode currentSort') f of
           Nothing -> Left "unifyTm: unknown term head"
-          Just sig' -> Right sig'
+          Just sig' -> Right (freshenHeadSigAgainstSubst s sig')
       if length (thsParams sig) + length (thsInputs sig) /= arity
         then Left "unifyTm: term head arity mismatch"
         else Right ()
@@ -817,9 +817,10 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                   Left "unifyTm: expected object-valued stored arg"
                 (GP_Tm v, CATm tmArg) -> do
                   sort' <- applyHeadSubstObj tt (structuralConvEnv tt) tmCtx headSubst (tmvSort v)
-                  tmExpr <- THATm <$> diagramToTermExpr tt tmCtx sort' tmArg
-                  headSubst' <- bindHeadSubst v (CATm tmArg) headSubst
-                  go (tmExpr : acc) headSubst' paramsRest argsRest
+                  tmExpr <- diagramToTermExpr tt tmCtx sort' tmArg
+                  tmDiag <- termExprToDiagram tt tmCtx sort' tmExpr
+                  headSubst' <- bindHeadSubst v (CATm tmDiag) headSubst
+                  go (THATm tmExpr : acc) headSubst' paramsRest argsRest
                 (GP_Tm _, CAObj _) ->
                   Left "unifyTm: expected term-valued stored arg"
 
@@ -843,327 +844,15 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
         , Just globalTm <- [resolveTmCtxIndex tmCtx (dMode diag) local]
         ]
 
-applySubstObj :: TypeTheory -> Subst -> Obj -> Either Text Obj
-applySubstObj tt subst ty = do
-  raw <- goTy S.empty ty
-  tmCtx <- inferObjTmCtx raw
-  normalizeObjDeepWithCtx tt tmCtx raw
-  where
-    -- | Infer a term-context large enough to deep-normalize an object by
-    -- | merging the term-contexts of all embedded term arguments.
-    --
-    -- This is the least upper bound of all embedded dTmCtx's under the prefix order
-    -- (implemented by mergeTermCtx). If an Obj contains embedded terms whose contexts
-    -- are incompatible (non-prefix-compatible), the Obj is ill-formed and we fail.
-    inferObjTmCtx :: Obj -> Either Text [Obj]
-    inferObjTmCtx o = do
-      let ctxs = collectObjCtxs o
-      foldM mergeTermCtx [] ctxs
-
-    collectObjCtxs :: Obj -> [[Obj]]
-    collectObjCtxs Obj { objCode = code } = collectCodeCtxs code
-
-    collectCodeCtxs :: CodeTerm -> [[Obj]]
-    collectCodeCtxs c =
-      case c of
-        CTMeta _ -> []
-        CTLift _ inner -> collectCodeCtxs inner
-        CTCon _ args -> concatMap collectArgCtxs args
-
-    collectArgCtxs :: CodeArg -> [[Obj]]
-    collectArgCtxs a =
-      case a of
-        CAObj inner -> collectObjCtxs inner
-        CATm tm -> [dTmCtx (unTerm tm)]
-
-    goTy seen expr =
-      let ownerMode = objOwnerMode expr
-          codeMode = modeClassifierMode (ttModes tt) ownerMode
-       in do
-            code' <- goCode seen ownerMode codeMode (objCode expr)
-            Right expr { objCode = code' }
-
-    goCode seen ownerMode codeMode code =
-      case code of
-        CTMeta v ->
-          case lookupCodeMeta subst v of
-            Nothing -> Right code
-            Just t ->
-              if v `S.member` seen
-                then Right code
-                else do
-                  let tCodeMode = modeClassifierMode (ttModes tt) (objOwnerMode t)
-                  if tCodeMode == codeMode
-                    then goCode (S.insert v seen) (objOwnerMode t) codeMode (objCode t)
-                    else Left "applySubstObj: code metavariable mode mismatch"
-        CTCon ref args -> do
-          if orMode ref == codeMode || isOpaqueMetaSort ref
-            then Right ()
-            else Left "applySubstObj: constructor mode does not match current code mode"
-          let sigTableForCode = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
-          args' <-
-            case M.lookup (orName ref) sigTableForCode of
-              Just sig ->
-                if length (csParams sig) /= length args
-                  then Left "applySubstObj: type constructor arity mismatch"
-                  else fst <$> foldM (goArgBySig seen) ([], M.empty) (zip (csParams sig) args)
-              Nothing ->
-                mapM (goArgNoSig seen) args
-          Right (CTCon ref args')
-        CTLift me innerCode -> do
-          if meTgt me == codeMode
-            then do
-              inner' <- goCode seen ownerMode (meSrc me) innerCode
-              Right (CTLift me inner')
-            else Left "applySubstObj: lift target does not match current code mode"
-
-    isOpaqueMetaSort ref =
-      case orName ref of
-        ObjName "__obj_meta_sort" -> True
-        _ -> False
-
-    goArgBySig seen (acc, headSubst) (param, arg) =
-      case (param, arg) of
-        (GP_Ty v, CAObj innerTy) -> do
-          innerTy' <- goTy seen innerTy
-          headSubst' <- bindHeadSubst v (CAObj innerTy') headSubst
-          Right (acc <> [CAObj innerTy'], headSubst')
-        (GP_Tm v, CATm tmArg) -> do
-          sort' <- applyHeadSubstObj tt (structuralConvEnv tt) (dTmCtx (unTerm tmArg)) headSubst (tmvSort v)
-          tmArg' <- applySubstTm tt subst sort' tmArg
-          headSubst' <- bindHeadSubst v (CATm tmArg') headSubst
-          Right (acc <> [CATm tmArg'], headSubst')
-        (GP_Ty _, CATm _) ->
-          Left "applySubstObj: expected type argument for constructor parameter"
-        (GP_Tm _, CAObj _) ->
-          Left "applySubstObj: expected term argument for constructor parameter"
-
-    goArgNoSig seen arg =
-      case arg of
-        CAObj innerTy -> CAObj <$> goTy seen innerTy
-        CATm tmArg -> do
-          sort <- inferTmSortFromDiagram tt subst tmArg
-          CATm <$> applySubstTm tt subst sort tmArg
-
-applySubstTm :: TypeTheory -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
-applySubstTm tt subst expectedSort tm =
-  applySubstTmInCtx tt (dTmCtx (unTerm tm)) subst expectedSort tm
-
-applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
-applySubstDiagram tt subst =
-  traverseDiagram onDiag onPayload onCodeArg pure
-  where
-    onDiag d = do
-      dPortObj' <- IM.traverseWithKey (\_ ty -> applySubstObj tt subst ty) (dPortObj d)
-      dTmCtx' <- mapM (applySubstObj tt subst) (dTmCtx d)
-      pure d { dTmCtx = dTmCtx', dPortObj = dPortObj' }
-    onPayload payload =
-      case payload of
-        PGen g args bargs ->
-          pure (PGen g args bargs)
-        PTmMeta v -> do
-          sort' <- applySubstObj tt subst (tmvSort v)
-          pure (PTmMeta (v { tmvSort = sort' }))
-        PTmLit lit ->
-          pure (PTmLit lit)
-        _ -> pure payload
-
-    onCodeArg arg =
-      case arg of
-        CAObj obj -> CAObj <$> applySubstObj tt subst obj
-        CATm tmArg -> do
-          sort <- inferTmSortFromDiagram tt subst tmArg
-          CATm <$> applySubstTm tt subst sort tmArg
-
-applySubstTmInCtx :: TypeTheory -> [Obj] -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
-applySubstTmInCtx tt tmCtx subst expectedSort tm = do
-  tmCtx' <- applySubstCtx tt subst tmCtx
-  expectedSort0 <- applySubstObj tt subst expectedSort
-  expectedSort' <- normalizeObjDeepWithCtx tt tmCtx' expectedSort0
-  tmGraph0 <- applySubstDiagram tt subst (unTerm tm)
-  tmGraph <- weakenDiagramTmCtxTo tmCtx' tmGraph0
-  let tmSub = TermDiagram tmGraph
-  expr <- diagramToTermExpr tt tmCtx' expectedSort' tmSub
-  (tmCtxOut, expr') <- substituteTermExprMetas tt subst tmCtx' expectedSort' expr
-  expectedSortOut <- normalizeObjDeepWithCtx tt tmCtxOut expectedSort0
-  tm' <- termExprToDiagram tt tmCtxOut expectedSortOut expr'
-  normalizeTermDiagram tt tmCtxOut expectedSortOut tm'
-
-applySubstCtx :: TypeTheory -> Subst -> Context -> Either Text Context
-applySubstCtx tt subst = mapM (applySubstObj tt subst)
-
-normalizeSubst :: TypeTheory -> Subst -> Either Text Subst
-normalizeSubst tt subst = do
-  pairs <- mapM normBinding (allBindings subst)
-  Right
-    ( Subst
-        ( M.fromList
-            [ (v, binding)
-            | (v, binding) <- pairs
-            , not (isIdentity v binding)
-            ]
-        )
-    )
-  where
-    normBinding (v, binding) =
-      case binding of
-        CAObj t -> do
-          t' <- applySubstObj tt subst t
-          pure (v, CAObj t')
-        CATm t -> do
-          sort' <- applySubstObj tt subst (tmvSort v)
-          t' <- applySubstTm tt subst sort' t
-          pure (v { tmvSort = sort' }, CATm t')
-
-    isIdentity v binding =
-      case binding of
-        CAObj t -> t == OVar v
-        CATm t -> isTmIdentity v t
-
-composeSubst :: TypeTheory -> Subst -> Subst -> Either Text Subst
-composeSubst tt s2 s1 = do
-  appliedPairs <- mapM (substPair s2) (allBindings s1)
-  let appliedMap = M.fromList appliedPairs
-  ensureCategoryCompatible appliedMap (unSubst s2)
-  normalizeSubst tt (Subst (M.union appliedMap (unSubst s2)))
-  where
-    substPair subst (v, binding) =
-      case binding of
-        CAObj t -> do
-          t' <- applySubstObj tt subst t
-          pure (v, CAObj t')
-        CATm t -> do
-          sort' <- applySubstObj tt subst (tmvSort v)
-          t' <- applySubstTm tt subst sort' t
-          pure (v { tmvSort = sort' }, CATm t')
-
-    ensureCategoryCompatible left right =
-      mapM_ checkPair (M.toList (M.intersectionWith (,) left right))
-
-    checkPair (v, (leftBinding, rightBinding))
-      | sameCategory leftBinding rightBinding = Right ()
-      | otherwise =
-          Left
-            ( "composeSubst: category conflict for metavariable "
-                <> tmvName v
-            )
-
-    sameCategory a b =
-      case (a, b) of
-        (CAObj _, CAObj _) -> True
-        (CATm _, CATm _) -> True
-        _ -> False
-
-substituteTermExprMetas
-  :: TypeTheory
-  -> Subst
-  -> [Obj]
-  -> Obj
-  -> TermExpr
-  -> Either Text ([Obj], TermExpr)
-substituteTermExprMetas tt subst =
-  go S.empty
-  where
-    go seen curCtx currentSort expr =
-      case expr of
-        TMMeta v args -> do
-          sort' <- applySubstObj tt subst (tmvSort v)
-          let v' = v { tmvSort = sort' }
-          case lookupTmMeta subst v' of
-            Nothing -> Right (curCtx, TMMeta v' args)
-            Just tmSub ->
-              if v' `S.member` seen
-                then Right (curCtx, TMMeta v' args)
-                else do
-                  subCtx0 <- applySubstCtx tt subst (dTmCtx (unTerm tmSub))
-                  sortSub <- normalizeObjDeepWithCtx tt subCtx0 sort'
-                  subExpr0 <- diagramToTermExpr tt subCtx0 sortSub tmSub
-                  merged0 <- mergeTermCtx curCtx subCtx0
-                  subExpr <- instantiateMetaBody merged0 v' args subExpr0
-                  (subCtx, subExpr') <- go (S.insert v' seen) merged0 currentSort subExpr
-                  Right (subCtx, subExpr')
-        TMBound _ -> Right (curCtx, expr)
-        TMGen f args -> do
-          sig <- requireSig curCtx currentSort f (length args)
-          let (paramArgs, inputArgs) = splitAt (length (thsParams sig)) args
-          (ctxAfterParams, paramArgsRev, headSubst) <-
-            foldM
-              (stepParam seen)
-              (curCtx, [], M.empty)
-              (zip (thsParams sig) paramArgs)
-          (ctxOut, inputArgsRev) <-
-            foldM
-              (stepInput seen headSubst)
-              (ctxAfterParams, [])
-              (zip (thsInputs sig) inputArgs)
-          currentSort' <- normalizeObjDeepWithCtx tt ctxOut =<< applySubstObj tt subst currentSort
-          let flatArgs = reverse paramArgsRev <> reverse inputArgsRev
-          resolved <- resolveHeadArgsExpr tt (structuralConvEnv tt) ctxOut M.empty currentSort' f flatArgs
-          Right (ctxOut, TMGen f (resolvedHeadFlatArgs resolved))
-        TMLit _ -> Right (curCtx, expr)
-
-    stepParam seen (ctxAcc, acc, headSubst) (param, arg) =
-      case (param, arg) of
-        (GP_Ty v, THAObj obj) -> do
-          obj' <- normalizeObjDeepWithCtx tt ctxAcc =<< applySubstObj tt subst obj
-          headSubst' <- bindHeadSubst v (CAObj obj') headSubst
-          Right (ctxAcc, THAObj obj' : acc, headSubst')
-        (GP_Ty _, THATm _) -> Left "applySubstTm: expected object-valued parameter argument"
-        (GP_Tm v, THATm tm0) -> do
-          sort0 <- applyHeadSubstObj tt (structuralConvEnv tt) ctxAcc headSubst (tmvSort v)
-          sort' <- normalizeObjDeepWithCtx tt ctxAcc =<< applySubstObj tt subst sort0
-          (ctxArg, tm1) <- go seen ctxAcc sort' tm0
-          ctxNext <- mergeTermCtx ctxAcc ctxArg
-          tmDiag <- termExprToDiagram tt ctxNext sort' tm1
-          headSubst' <- bindHeadSubst v (CATm tmDiag) headSubst
-          Right (ctxNext, THATm tm1 : acc, headSubst')
-        (GP_Tm _, THAObj _) -> Left "applySubstTm: expected term-valued parameter argument"
-
-    stepInput seen headSubst (ctxAcc, acc) (argSort, arg) = do
-      sort0 <- applyHeadSubstObj tt (structuralConvEnv tt) ctxAcc headSubst argSort
-      sort' <- normalizeObjDeepWithCtx tt ctxAcc =<< applySubstObj tt subst sort0
-      tmExpr <-
-        case arg of
-          THATm tm0 -> Right tm0
-          THAObj _ -> Left "applySubstTm: expected term input argument"
-      (ctxArg, argExpr) <- go seen ctxAcc sort' tmExpr
-      ctxNext <- mergeTermCtx ctxAcc ctxArg
-      Right (ctxNext, THATm argExpr : acc)
-
-    requireSig curCtx currentSort f arity = do
-      currentSort' <- normalizeObjDeepWithCtx tt curCtx =<< applySubstObj tt subst currentSort
-      sig <-
-        case lookupTmHeadSig tt (objOwnerMode currentSort') f of
-          Nothing -> Left "applySubstTm: unknown term head"
-          Just s -> Right s
-      if length (thsParams sig) + length (thsInputs sig) == arity
-        then Right sig
-        else Left "applySubstTm: term head arity mismatch"
-
-mergeTermCtx :: [Obj] -> [Obj] -> Either Text [Obj]
-mergeTermCtx left right =
-  let maxLen = max (length left) (length right)
-  in mapM pick [0 :: Int .. maxLen - 1]
-  where
-    pick i =
-      case (nth left i, nth right i) of
-        (Just a, Just b) ->
-          if a == b
-            then Right a
-            else Left "applySubstTm: incompatible term contexts during substitution"
-        (Just a, Nothing) -> Right a
-        (Nothing, Just b) -> Right b
-        (Nothing, Nothing) -> Left "applySubstTm: internal context merge failure"
+freshenHeadSigAgainstSubst :: Subst -> TmHeadSig -> TmHeadSig
+freshenHeadSigAgainstSubst subst =
+  freshenTmHeadSigAgainst (substDomain subst)
 
 inferExpectedTmSort :: TypeTheory -> [Obj] -> Subst -> TermDiagram -> TermDiagram -> Either Text Obj
 inferExpectedTmSort tt tmCtx subst lhs rhs =
-  case inferTmSortFromTerm tt tmCtx subst lhs of
+  case inferTmSortFromDiagram tt subst lhs of
     Right ty -> Right ty
-    Left _ -> inferTmSortFromTerm tt tmCtx subst rhs
-
-inferTmSortFromTerm :: TypeTheory -> [Obj] -> Subst -> TermDiagram -> Either Text Obj
-inferTmSortFromTerm tt _ixCtx subst tm =
-  inferTmSortFromDiagram tt subst tm
+    Left _ -> inferTmSortFromDiagram tt subst rhs
 
 inferTmSortFromDiagram :: TypeTheory -> Subst -> TermDiagram -> Either Text Obj
 inferTmSortFromDiagram tt subst tm =
@@ -1238,24 +927,6 @@ occursTmVarExpr v tm =
       case arg of
         THAObj _ -> False
         THATm tm0 -> occursTmVarExpr v tm0
-
-isTmIdentity :: TmVar -> TermDiagram -> Bool
-isTmIdentity v tm =
-  case IM.elems (dEdges (unTerm tm)) of
-    [edge] ->
-      case (ePayload edge, eIns edge, eOuts edge, dIn (unTerm tm), dOut (unTerm tm)) of
-        (PTmMeta w, [], [outPid], [], [outBoundary]) ->
-          outPid == outBoundary && v == w
-        _ -> False
-    _ -> False
-
-nth :: [a] -> Int -> Maybe a
-nth xs i
-  | i < 0 = Nothing
-  | otherwise =
-      case drop i xs of
-        (y:_) -> Just y
-        [] -> Nothing
 
 renderObj :: Obj -> Text
 renderObj ty =

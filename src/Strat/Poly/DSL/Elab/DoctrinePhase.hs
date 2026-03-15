@@ -55,7 +55,6 @@ import Strat.Poly.DSL.Elab.Term
   , elabInputShapes
   , elabObjExprWithTables
   , elabParamDecls
-  , provisionalCtorSort
   )
 import Strat.Poly.Diagram
 import Strat.Poly.DiagramInterpretation (binderHoleNames)
@@ -402,21 +401,8 @@ elabPolyItem env st item =
       if M.member gname table0
         then Left "duplicate generator name"
         else Right ()
-      let provisional =
-            GenDecl
-              { gdName = gname
-              , gdMode = mode
-              , gdParams = params
-              , gdDom = []
-              , gdCod = [provisionalCtorSort doc mode]
-              , gdLiteralKind = Nothing
-              }
-      let docForElab =
-            doc
-              { dGens = M.insert mode (M.insert gname provisional table0) (dGens doc)
-              }
-      dom <- elabInputShapes docForElab mode tyVars tmVars (rpgDom decl)
-      cod <- elabContext docForElab mode tyVars tmVars M.empty (rpgCod decl)
+      dom <- elabInputShapes doc mode tyVars tmVars (rpgDom decl)
+      cod <- elabContext doc mode tyVars tmVars M.empty (rpgCod decl)
       let gen = GenDecl
             { gdName = gname
             , gdMode = mode

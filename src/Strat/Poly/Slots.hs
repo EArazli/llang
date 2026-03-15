@@ -40,7 +40,8 @@ import Strat.Poly.Obj
   , pattern OATm
   )
 import Strat.Poly.Tele (CtorSig(..), GenParam(..))
-import Strat.Poly.TermExpr (applyHeadSubstObj, bindHeadSubst, structuralConvEnv)
+import Strat.Poly.Subst (bindHeadSubst)
+import Strat.Poly.TermExpr (applyHeadSubstObj, structuralConvEnv)
 import Strat.Poly.Syntax (Diagram(..), Edge(..), EdgePayload(..), BinderArg(..), TmVar(..))
 
 data SlotKind

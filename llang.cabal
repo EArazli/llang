@@ -94,6 +94,7 @@ library
       Strat.Poly.CriticalPairs
       Strat.Poly.DefEq
       Strat.Poly.Diagram
+      Strat.Poly.DiagramInfo
       Strat.Poly.DiagramInterpretation
       Strat.Poly.DiagramIso
       Strat.Poly.Doctrine
@@ -120,6 +121,7 @@ library
       Strat.Poly.Obj
       Strat.Poly.ObjClassifier
       Strat.Poly.ObjNormalize
+      Strat.Poly.PendingUniverse
       Strat.Poly.Pretty
       Strat.Poly.Proof
       Strat.Poly.Pushout
@@ -151,6 +153,7 @@ library
       Strat.Poly.Kernel
       Strat.Poly.ModeSyntax
       Strat.Poly.ObjResolve
+      Strat.Poly.Subst
       Strat.Poly.Term.Confluence
       Strat.Poly.Term.Termination
       Strat.Poly.Traversal

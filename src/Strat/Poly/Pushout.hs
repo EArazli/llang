@@ -13,8 +13,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
-import qualified Data.List as L
-import Control.Monad (filterM, foldM, zipWithM)
+import Control.Monad (filterM, foldM)
 import Data.Functor.Identity (runIdentity)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
@@ -22,7 +21,6 @@ import Strat.Poly.Alpha
   ( renameBinderArgAlpha
   , renameCodeArgAlpha
   , renameDiagramAlpha
-  , renameParamAlpha
   , renameTmVarAlpha
   , renameTyVarAlpha
   , renameTypeAlpha
@@ -52,7 +50,7 @@ import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..), c2TyVars, c2TmVars)
 import Strat.Poly.Traversal (traverseDiagram)
-import Strat.Poly.Tele (CtorSig(..), GenParam(..))
+import Strat.Poly.Tele (CtorSig(..))
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.DefEq (termExprToDiagramChecked, defEqObj)
 import qualified Strat.Poly.DSL.AST as PolyAST
@@ -240,7 +238,11 @@ computePolyPushout name f g = do
       renameGensC
   let inl = inl0 { morCheck = CheckNone }
   let inr = inr0 { morCheck = CheckNone }
-  glue0 <- composeMorphisms (name <> ".glue") g inr
+  -- The pushout presentation keeps interface parameter order in the source
+  -- representative presentation, even when canonical constructor names come
+  -- from the right leg. Compose through the leg that already transports its
+  -- target images back into that presentation.
+  glue0 <- composeMorphisms (name <> ".glue") f inl
   let glue = glue0 { morIsCoercion = True }
   checkGenerated "inl" inl
   checkGenerated "inr" inr

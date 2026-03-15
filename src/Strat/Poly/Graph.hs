@@ -30,6 +30,7 @@ module Strat.Poly.Graph
   , getPortLabel
   , setPortLabel
   , weakenDiagramTmCtxTo
+  , weakenDiagramTmCtxToModePrefix
   , diagramPortIds
   , unionDisjointIntMap
   ) where
@@ -63,7 +64,7 @@ import Strat.Poly.Syntax
   , CodeTerm(..)
   , TmVar(..)
   )
-import Strat.Poly.Obj (boundTmIndicesObj, objOwnerMode)
+import Strat.Poly.Obj (boundTmIndicesObj)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.TypeTheory (TypeTheory, literalKindForObj)
 import Strat.Util.List (dedupe)
@@ -110,7 +111,48 @@ weakenDiagramTmCtxTo :: [Obj] -> Diagram -> Either Text Diagram
 weakenDiagramTmCtxTo tmCtxHost diag =
   if dTmCtx diag `L.isPrefixOf` tmCtxHost
     then Right diag { dTmCtx = tmCtxHost }
-    else Left "weakenDiagramTmCtxTo: image term-context is not a prefix of host term-context"
+    else
+      Left
+        ( "weakenDiagramTmCtxTo: image term-context is not a prefix of host term-context"
+            <> " (image="
+            <> T.pack (show (dTmCtx diag))
+            <> ", host="
+            <> T.pack (show tmCtxHost)
+            <> ")"
+        )
+
+weakenDiagramTmCtxToModePrefix :: [Obj] -> Diagram -> Either Text Diagram
+weakenDiagramTmCtxToModePrefix tmCtxHost diag =
+  let hostPrefix = tmCtxModePrefixForHost tmCtxHost (dMode diag) (modeLocalCount (dTmCtx diag) (dMode diag))
+   in if dTmCtx diag `L.isPrefixOf` hostPrefix
+        then Right diag { dTmCtx = hostPrefix }
+        else
+          Left
+            ( "weakenDiagramTmCtxToModePrefix: image term-context is not a prefix of host mode-prefix"
+                <> " (image="
+                <> T.pack (show (dTmCtx diag))
+                <> ", hostPrefix="
+                <> T.pack (show hostPrefix)
+                <> ", host="
+                <> T.pack (show tmCtxHost)
+                <> ")"
+            )
+  where
+    modeLocalCount tmCtx mode =
+      length [() | ty <- tmCtx, objOwnerMode ty == mode]
+
+    tmCtxModePrefixForHost tmCtx mode needed =
+      case take needed (modeGlobals tmCtx mode) of
+        [] -> []
+        globals ->
+          let cutoff = maximum globals
+           in take (cutoff + 1) tmCtx
+
+    modeGlobals tmCtx mode =
+      [ i
+      | (i, ty) <- zip [0 :: Int ..] tmCtx
+      , objOwnerMode ty == mode
+      ]
 
 freshPort :: Obj -> Diagram -> (PortId, Diagram)
 freshPort ty diag =

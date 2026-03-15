@@ -98,6 +98,9 @@ tests =
     , testCase "checked term conversion rejects bad generalized head sorts" testCheckedTermConversionRejectsBadHeadSort
     , testCase "binder metas + splice rewrite" testBinderMetaSplice
     , testCase "explicit binder term args can reference bound term vars" testExplicitBinderTermArg
+    , testCase "rule head type args elaborate in surrounding type-variable scope" testRuleHeadTypeArgsSeeTyVars
+    , testCase "generated comprehension laws terminate on dependent Id codomains" testDependentIdCompLaws
+    , testCase "nested dependent term-head arguments elaborate without self-capture" testNestedDependentHeadArgElaborates
     ]
 
 require :: Either Text a -> IO a
@@ -592,6 +595,71 @@ testExplicitBinderTermArg = do
   raw <- require (parseDiagExpr "wrap[use(n)]")
   diag <- require (elabDiagExpr env doc (ModeName "M") [] raw)
   assertBool "expected no unresolved metavariables" (S.null (freeVarsDiagram diag))
+
+testRuleHeadTypeArgsSeeTyVars :: Assertion
+testRuleHeadTypeArgsSeeTyVars = do
+  let src = T.unlines
+        [ "doctrine RuleHeadTypeArgs where {"
+        , "  mode S classifiedBy S via S.U_S;"
+        , "  gen ctx_ext(a@S) : [a] -> [a] @S;"
+        , "  gen var(a@S) : [a] -> [a] @S;"
+        , "  gen reindex(a@S) : [a] -> [a] @S;"
+        , "  comprehension S where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  gen U_S : [] -> [S.U_S] @S;"
+        , "  gen Id(a@S, x : a, y : a) : [] -> [S.U_S] @S;"
+        , "  gen refl(a@S, x : a) : [] -> [Id(a, x, x)] @S;"
+        , "  gen sym(a@S, x : a, y : a, p : Id(a, x, y)) : [] -> [Id(a, y, x)] @S;"
+        , "  rule computational sym_refl -> (a@S, x : a) : [] -> [Id(a, x, x)] @S ="
+        , "    sym(a, x, x, refl(a, x)) == refl(a, x)"
+        , "}"
+        ]
+  _ <- require (parseRawFile src >>= elabRawFile)
+  pure ()
+
+testDependentIdCompLaws :: Assertion
+testDependentIdCompLaws = do
+  let src = T.unlines
+        [ "doctrine DependentIdComp where {"
+        , "  mode S classifiedBy S via S.U_S;"
+        , "  gen ctx_ext(a@S) : [a] -> [a] @S;"
+        , "  gen var(a@S) : [a] -> [a] @S;"
+        , "  gen reindex(a@S) : [a] -> [a] @S;"
+        , "  comprehension S where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  gen U_S : [] -> [S.U_S] @S;"
+        , "  gen Id(a@S, x : a, y : a) : [] -> [S.U_S] @S;"
+        , "  gen Con : [] -> [S.U_S] @S;"
+        , "  gen Ty(g : Con) : [] -> [S.U_S] @S;"
+        , "  gen extend(g : Con, a : Ty(g)) : [] -> [Con] @S;"
+        , "  gen tri(g : Con, a : Ty(g), b : Ty(extend(g, a))) : [] -> [Con] @S;"
+        , "  gen same_tri(g : Con, a : Ty(g), b : Ty(extend(g, a))) : [] -> [Id(Con, tri(g, a, b), tri(g, a, b))] @S;"
+        , "}"
+        ]
+  _ <- require (parseRawFile src >>= elabRawFile)
+  pure ()
+
+testNestedDependentHeadArgElaborates :: Assertion
+testNestedDependentHeadArgElaborates = do
+  let src = T.unlines
+        [ "doctrine NestedDependentHeadArg where {"
+        , "  mode S classifiedBy S via S.U_S;"
+        , "  gen ctx_ext(a@S) : [a] -> [a] @S;"
+        , "  gen var(a@S) : [a] -> [a] @S;"
+        , "  gen reindex(a@S) : [a] -> [a] @S;"
+        , "  comprehension S where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  gen U_S : [] -> [S.U_S] @S;"
+        , "  gen Id(a@S, x : a, y : a) : [] -> [S.U_S] @S;"
+        , "  gen Con : [] -> [S.U_S] @S;"
+        , "  gen Ty(g : Con) : [] -> [S.U_S] @S;"
+        , "  gen empty : [] -> [Con] @S;"
+        , "  gen base(g : Con) : [] -> [Ty(g)] @S;"
+        , "  gen extend(g : Con, a : Ty(g)) : [] -> [Con] @S;"
+        , "  gen sigma(g : Con, a : Ty(g), b : Ty(extend(g, a))) : [] -> [Ty(g)] @S;"
+        , "  gen pack(g : Con, a : Ty(g), b : Ty(extend(g, a))) : [] -> [Con] @S;"
+        , "  gen mixed(g : Con, a : Ty(g), b : Ty(extend(g, a))) : [] -> [Id(Con, pack(g, a, b), extend(g, sigma(g, a, b)))] @S;"
+        , "}"
+        ]
+  _ <- require (parseRawFile src >>= elabRawFile)
+  pure ()
 
 mkBetaInput :: ModeName -> Obj -> BinderArg -> Either Text Diagram
 mkBetaInput mode aTy lamArg = do

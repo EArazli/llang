@@ -47,6 +47,7 @@ import Strat.Poly.ModeTheory
 import Strat.Poly.Alpha (canonicalizeCtorSig)
 import Strat.Poly.Obj
 import Strat.Poly.ObjClassifier (classifierOfMode, classifierModeForCtorUse, modeClassifierMode, modeUniverseObj)
+import Strat.Poly.PendingUniverse (pendingUniverseSeedInnerRef)
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
   , ttCtorTablesByOwner
@@ -72,7 +73,7 @@ import Strat.Poly.Graph
   , validateDiagram
   )
 import Strat.Poly.Cell2
-import Strat.Poly.Tele (CtorSig(..), GenParam(..), teleDistinctNames, telePrefixTmVars, telePrefixTyVars, teleTyVars, teleTmVars, teleVars)
+import Strat.Poly.Tele (CtorSig(..), GenParam(..), teleDistinctNames, teleTyVars, teleTmVars)
 import Strat.Poly.DSL.AST (RawOblExpr(..))
 import Strat.Poly.UnifyObj (Subst, applySubstCtx, applySubstObj, composeSubst, emptySubst, mkSubst, unifyCtx)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
@@ -781,8 +782,8 @@ cellPairToTmRule heads tmVars lhs0 rhs0 = do
   boundaryVars <- mkInputVars lhs0
   let vars = boundaryVars <> tmVars
   let varCtx = map tmvSort vars
-  let lhs = lhs0 { dTmCtx = varCtx }
-  let rhs = rhs0 { dTmCtx = varCtx }
+  lhs <- either (const Nothing) Just (weakenDiagramTmCtxTo varCtx lhs0)
+  rhs <- either (const Nothing) Just (weakenDiagramTmCtxTo varCtx rhs0)
   ensureTermDiagram lhs
   ensureTermDiagram rhs
   ensureRuleFunSigs lhs
@@ -1045,11 +1046,22 @@ deriveCtorTables doc = do
           ]
 
     implicitUniverseCtor classifierMode universeNorm =
-      case universeNorm of
-        Obj _ (CTCon ref [])
+      case implicitUniverseCtorRef classifierMode (objCode universeNorm) of
+        Just ref -> Right (M.singleton (orName ref) (CtorSig []))
+        Nothing -> Right M.empty
+
+    implicitUniverseCtorRef classifierMode code =
+      case code of
+        CTCon ref []
           | orMode ref == classifierMode ->
-              Right (M.singleton (orName ref) (CtorSig []))
-        _ -> Right M.empty
+              Just ref
+        _ | Just ref <- pendingUniverseSeedInnerRef code
+            , orMode ref == classifierMode ->
+              Just ref
+        CTLift _ inner ->
+          implicitUniverseCtorRef classifierMode inner
+        _ ->
+          Nothing
 
     normalizeUniverseIfReady tt ownerMode universe = do
       universeNorm <- normalizeObjExpr (dModes doc) universe
@@ -1083,14 +1095,28 @@ deriveCtorTables doc = do
         _ -> Right acc
 
     eligibilityDefEq tt ownerMode gd tmCtx codTy universeNorm =
-      case defEqObj tt tmCtx codTy universeNorm of
-        Right ok -> Right ok
-        Left err
-          | shouldDeferEligibilityError err ->
-              Right False
+      case shallowCtorEligibilityMismatch codTy universeNorm of
+        Right True -> Right False
+        Right False ->
+          case defEqObj tt tmCtx codTy universeNorm of
+            Right ok -> Right ok
+            Left err
+              | shouldDeferEligibilityError err ->
+                  Right False
+            Left err ->
+              Left
+                ( "deriveCtorTables: constructor eligibility defeq failed for "
+                    <> renderMode (gdMode gd)
+                    <> "."
+                    <> renderGen (gdName gd)
+                    <> " while checking owner mode "
+                    <> renderMode ownerMode
+                    <> ": "
+                    <> err
+                )
         Left err ->
           Left
-            ( "deriveCtorTables: constructor eligibility defeq failed for "
+            ( "deriveCtorTables: constructor eligibility head normalization failed for "
                 <> renderMode (gdMode gd)
                 <> "."
                 <> renderGen (gdName gd)
@@ -1102,6 +1128,16 @@ deriveCtorTables doc = do
 
     shouldDeferEligibilityError err =
       "unknown type constructor" `T.isInfixOf` err
+
+    shallowCtorEligibilityMismatch codTy universeNorm = do
+      codTy' <- normalizeObjExpr (dModes doc) codTy
+      universeNorm' <- normalizeObjExpr (dModes doc) universeNorm
+      pure (headMismatch codTy' universeNorm')
+
+    headMismatch lhs rhs =
+      case (objCode lhs, objCode rhs) of
+        (CTCon refL _, CTCon refR _) -> refL /= refR
+        _ -> False
 
     mergeCtorTables a b =
       foldM

@@ -18,19 +18,16 @@ import Strat.Poly.ModeTheory
   , ModName(..)
   , ModeName(..)
   , ModeTheory(..)
-  , classifierLiftForModExpr
   , mdSrc
   , mdTgt
   )
 import Strat.Poly.Obj
-  ( CodeArg(..)
-  , CodeTerm(..)
-  , Obj(..)
+  ( Obj
   , ObjName(..)
   , ObjRef(..)
-  , normalizeObjExpr
   )
 import Strat.Poly.ObjClassifier (modeClassifierMode)
+import Strat.Poly.PendingUniverse (mkPendingUniverseSeed)
 
 elabRawModExpr :: ModeTheory -> RawModExpr -> Either Text ModExpr
 elabRawModExpr mt raw =
@@ -70,7 +67,8 @@ elabRawModExpr mt raw =
         else Left "modality composition type mismatch"
 
 unresolvedClassUniverse :: Doctrine -> ModeName -> RawPolyObjExpr -> Either Text Obj
-unresolvedClassUniverse doc expectedOwnerMode = go expectedOwnerMode
+unresolvedClassUniverse doc expectedOwnerMode raw =
+  mkPendingUniverseSeed expectedOwnerMode <$> go expectedOwnerMode raw
   where
     mt = dModes doc
 
@@ -78,41 +76,48 @@ unresolvedClassUniverse doc expectedOwnerMode = go expectedOwnerMode
       case raw of
         RPTVar name ->
           Right
-            Obj
-              { objOwnerMode = ownerMode
-              , objCode =
-                  CTCon
-                    ObjRef
-                      { orMode = modeClassifierMode mt ownerMode
-                      , orName = ObjName name
-                      }
-                    []
+            ObjRef
+              { orMode = modeClassifierMode mt ownerMode
+              , orName = ObjName name
               }
-        RPTMod rawMe innerRaw -> do
-          me <- elabRawModExpr mt rawMe
-          if meTgt me == ownerMode
-            then Right ()
-            else Left "classifiedBy universe mode mismatch"
-          inner <- go (meSrc me) innerRaw
-          codeLift <- classifierLiftForModExpr mt me
-          normalizeObjExpr
-            mt
-            Obj
-              { objOwnerMode = ownerMode
-              , objCode = CTLift codeLift (objCode inner)
-              }
+        RPTMod rawMe innerRaw ->
+          case elabRawModExpr mt rawMe of
+            Right me ->
+              if meTgt me == ownerMode
+                then go (meSrc me) innerRaw
+                else Left "classifiedBy universe mode mismatch"
+            Left _ ->
+              go ownerMode innerRaw
         RPTCon rawRef args ->
-          do
-            args' <- mapM (\arg -> CAObj <$> go ownerMode arg) args
-            let refMode = maybe (modeClassifierMode mt ownerMode) ModeName (rtrMode rawRef)
-            Right
-              Obj
-                { objOwnerMode = ownerMode
-                , objCode =
-                    CTCon
-                      ObjRef
-                        { orMode = refMode
-                        , orName = ObjName (rtrName rawRef)
-                        }
-                      args'
-                }
+          case asModalityCall rawRef args of
+            Just (rawMe, innerRaw) ->
+              case elabRawModExpr mt rawMe of
+                Right me ->
+                  if meTgt me == ownerMode
+                    then go (meSrc me) innerRaw
+                    else Left "classifiedBy universe mode mismatch"
+                Left _ ->
+                  go ownerMode innerRaw
+            Nothing ->
+              case args of
+                [] ->
+                  let refMode = maybe (modeClassifierMode mt ownerMode) ModeName (rtrMode rawRef)
+                   in Right
+                        ObjRef
+                          { orMode = refMode
+                          , orName = ObjName (rtrName rawRef)
+                          }
+                [innerRaw] ->
+                  go ownerMode innerRaw
+                _ ->
+                  Left "classifiedBy universe seed must expose a base constructor through unary wrappers"
+        RPLit _ ->
+          Left "literal is not allowed in classifiedBy universe"
+
+    asModalityCall rawRef0 args0 =
+      case (rtrMode rawRef0, rtrName rawRef0, args0) of
+        (Nothing, name, [inner]) ->
+          Just (RMComp [name], inner)
+        (Just modeTok, name, [inner]) ->
+          Just (RMComp [modeTok, name], inner)
+        _ -> Nothing
