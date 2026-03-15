@@ -40,8 +40,10 @@ import Strat.Poly.Obj
 import Strat.Poly.Diagram (idDTm)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Strat.Poly.Graph (Diagram(..), emptyDiagram, freshPort, addEdgePayload, validateDiagram, EdgePayload(..))
-import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), modeOnlyTypeTheory)
+import Strat.Poly.Tele (CtorSig(..))
+import Strat.Poly.TypeTheory (TypeTheory(..), modeOnlyTypeTheory)
 import Test.Poly.Helpers (mkModes)
+import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToCtorSig)
 import qualified Strat.Poly.UnifyObj as U
 
 
@@ -453,6 +455,6 @@ withCtorSigs tt entries =
   where
     table =
       foldl
-        (\acc (ref, sig) -> M.insertWith M.union (orMode ref) (M.singleton (orName ref) sig) acc)
+        (\acc (ref, sig) -> M.insertWith M.union (orMode ref) (M.singleton (orName ref) (flatParamsToCtorSig (orMode ref) sig)) acc)
         M.empty
         entries

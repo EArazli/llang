@@ -37,7 +37,6 @@ import Strat.Poly.Obj
   )
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
-  , TypeParamSig(..)
   , TmHeadSig(..)
   , TmRule(..)
   , modeOnlyTypeTheory
@@ -45,6 +44,8 @@ import Strat.Poly.TypeTheory
   , setModeTermRules
   , setModeTermTRS
   )
+import Strat.Poly.Tele (CtorSig(..), GenParam(..))
+import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToCtorSig)
 import Strat.Poly.DefEq (normalizeObjDeep, normalizeTermDiagram, validateTermDiagram)
 import qualified Strat.Poly.DefEq as DE
 import Strat.Poly.UnifyObj (unifyTm, unifyObjFlex, emptySubst, lookupTmMeta)
@@ -673,6 +674,6 @@ withCtorSigs tt entries =
   where
     table =
       foldl
-        (\acc (ref, sig) -> M.insertWith M.union (orMode ref) (M.singleton (orName ref) sig) acc)
+        (\acc (ref, sig) -> M.insertWith M.union (orMode ref) (M.singleton (orName ref) (flatParamsToCtorSig (orMode ref) sig)) acc)
         M.empty
         entries

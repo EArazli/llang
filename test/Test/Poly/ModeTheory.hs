@@ -35,7 +35,8 @@ import Strat.Poly.Doctrine
   , doctrineTypeTheory
   , gdPlainDom
   )
-import Strat.Poly.TypeTheory (TypeTheory(..), TypeParamSig(..), modeOnlyTypeTheory)
+import Strat.Poly.Tele (CtorSig(..))
+import Strat.Poly.TypeTheory (TypeTheory(..), modeOnlyTypeTheory)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Syntax (BinderMetaVar(..))
 import Strat.Poly.Diagram (genDTm, genD, diagramDom, diagramCod)
@@ -46,6 +47,7 @@ import Strat.Poly.DefEq (normalizeObjDeepWithCtx)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Strat.Poly.Proof (defaultSearchBudget)
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
+import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToCtorSig)
 
 
 tests :: TestTree

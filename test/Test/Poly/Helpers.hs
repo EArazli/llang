@@ -20,7 +20,8 @@ import Strat.Poly.GenArgSigs (withStructuralZeroParamGenArgSigs)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Obj (Obj, ObjName(..), ObjRef(..), TmVar(..), mkCon)
-import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..))
+import Strat.Poly.TypeTheory (TypeTheory)
+import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToGenParams)
 
 
 mkModes :: [ModeName] -> ModeTheory
@@ -79,46 +80,11 @@ ctorDecl mode ctorName sig =
   GenDecl
     { gdName = GenName (objNameText ctorName)
     , gdMode = mode
-    , gdParams = params
+    , gdParams = flatParamsToGenParams mode sig
     , gdDom = []
     , gdCod = [universeObj mode]
     , gdLiteralKind = Nothing
     }
-  where
-    tyPos =
-      [ (pos, v)
-      | (pos, TPS_Ty m) <- zip [0 :: Int ..] sig
-      , let v =
-              TmVar
-                { tmvName = "a" <> T.pack (show pos)
-                , tmvSort = universeObj m
-                , tmvScope = 0
-                , tmvOwnerMode = Just m
-                }
-      ]
-    tmPos =
-      [ (pos, v)
-      | (pos, TPS_Tm sortTy) <- zip [0 :: Int ..] sig
-      , let v =
-              TmVar
-                { tmvName = "x" <> T.pack (show pos)
-                , tmvSort = sortTy
-                , tmvScope = 0
-                , tmvOwnerMode = Just mode
-                }
-      ]
-    tyVars = map snd tyPos
-    tmVars = map snd tmPos
-    params =
-      [ case ps of
-          TPS_Ty _ -> GP_Ty (lookupByPos pos tyPos)
-          TPS_Tm _ -> GP_Tm (lookupByPos pos tmPos)
-      | (pos, ps) <- zip [0 :: Int ..] sig
-      ]
-    lookupByPos pos xs =
-      case lookup pos xs of
-        Just v -> v
-        Nothing -> error "ctorDecl: missing parameter position"
 
 addSelfClassifications :: [ModeName] -> ModeTheory -> ModeTheory
 addSelfClassifications modes mt =

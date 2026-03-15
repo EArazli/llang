@@ -6,7 +6,7 @@ module Strat.Poly.TypeTheory
   , ttCtorTablesByOwner
   , literalKindForObj
   , DefFragment(..)
-  , TypeParamSig(..)
+  , CtorSig(..)
   , TmHeadSig(..)
   , GenArgSig(..)
   , TmRule(..)
@@ -36,9 +36,9 @@ import Strat.Poly.ObjClassifier (modeClassifierMode)
 import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
 import Strat.Poly.Term.NBE.Config (NbeConfig, defaultNbeConfig)
 import Strat.Poly.Obj
-import Strat.Poly.Tele (GenParam)
+import Strat.Poly.Tele (CtorSig(..), GenParam)
 
-type CtorSigEnv = M.Map ModeName (M.Map ObjName [TypeParamSig])
+type CtorSigEnv = M.Map ModeName (M.Map ObjName CtorSig)
 type UniverseCtors = M.Map ModeName (S.Set ObjName)
 
 
@@ -66,11 +66,6 @@ data TypeTheory = TypeTheory
   , ttDefFragments :: M.Map ModeName DefFragment
   , ttStrictCtorLookup :: Bool
   } deriving (Eq, Show)
-
-data TypeParamSig
-  = TPS_Ty ModeName
-  | TPS_Tm Obj
-  deriving (Eq, Ord, Show)
 
 data TmHeadSig = TmHeadSig
   { thsParams :: [GenParam]

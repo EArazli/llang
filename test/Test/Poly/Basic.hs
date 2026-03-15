@@ -34,7 +34,7 @@ import Strat.Poly.Diagram
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..), validateDoctrine)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
-import Strat.Poly.TypeTheory (TypeParamSig(..), modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 import Strat.Poly.Graph
   ( Diagram(..)
   , EdgeId(..)
@@ -51,6 +51,7 @@ import Strat.Poly.Graph
   )
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
+import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToGenParams)
 
 
 tests :: TestTree

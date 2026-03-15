@@ -1,24 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Strat.Poly.GenArgs
+module Strat.Poly.TeleArgs
   ( Fresh
   , evalFresh
   , freshInt
   , liftEither
   , bindCodeArg
-  , freshGenParams
-  , freshGenParamsFresh
-  , elabGenArgsSequential
-  , elabGenArgsSequentialWith
+  , freshTeleParams
+  , freshTeleParamsFresh
+  , elabTeleArgsSequentialWith
   ) where
 
 import Control.Monad (foldM)
-import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import Strat.Poly.DSL.AST (RawPolyObjExpr)
-import Strat.Poly.DSL.Elab.Term (elabObjExprWithTables, elabTmTermWithTables)
 import Strat.Poly.DefEq (termExprToDiagramChecked)
-import Strat.Poly.Doctrine (CtorTables, Doctrine)
 import Strat.Poly.Obj
   ( CodeArg(..)
   , Obj(..)
@@ -30,7 +25,7 @@ import Strat.Poly.Obj
   , tmVarOwner
   )
 import Strat.Poly.Tele (GenParam(..))
-import Strat.Poly.TermExpr (TermExpr(..))
+import Strat.Poly.Term.AST (TermExpr(..))
 import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.UnifyObj (Subst, applySubstObj, composeSubst, emptySubst, mkSubst)
 
@@ -72,12 +67,12 @@ bindCodeArg tt v arg subst = do
   singleton <- mkSubst [(v, arg)]
   composeSubst tt singleton subst
 
-freshGenParams :: TypeTheory -> [Obj] -> [GenParam] -> Either Text ([GenParam], Subst)
-freshGenParams tt tmCtx =
-  evalFresh . freshGenParamsFresh tt tmCtx
+freshTeleParams :: TypeTheory -> [Obj] -> [GenParam] -> Either Text ([GenParam], Subst)
+freshTeleParams tt tmCtx =
+  evalFresh . freshTeleParamsFresh tt tmCtx
 
-freshGenParamsFresh :: TypeTheory -> [Obj] -> [GenParam] -> Fresh ([GenParam], Subst)
-freshGenParamsFresh tt tmCtx = go emptySubst []
+freshTeleParamsFresh :: TypeTheory -> [Obj] -> [GenParam] -> Fresh ([GenParam], Subst)
+freshTeleParamsFresh tt tmCtx = go emptySubst []
   where
     go subst acc [] =
       pure (reverse acc, subst)
@@ -93,36 +88,14 @@ freshGenParamsFresh tt tmCtx = go emptySubst []
           subst' <- liftEither (bindCodeArg tt v (CATm tm) subst)
           go subst' (GP_Tm fresh : acc) rest
 
-elabGenArgsSequential
-  :: Doctrine
-  -> CtorTables
-  -> TypeTheory
-  -> [Obj]
-  -> [TmVar]
-  -> [TmVar]
-  -> [GenParam]
-  -> [RawPolyObjExpr]
-  -> Either Text ([CodeArg], Subst)
-elabGenArgsSequential doc ctorTables tt tmCtx tyVars tmVars =
-  elabGenArgsSequentialWith
-    tt
-    (\v raw -> do
-      let ownerMode = tmVarOwner v
-      ty <- elabObjExprWithTables doc ctorTables tyVars tmVars M.empty ownerMode raw
-      if tmVarOwner v == tmVarOwner v && objMode ty == ownerMode
-        then Right ty
-        else Left "generator type argument mode mismatch"
-    )
-    (\expectedSort _v raw -> elabTmTermWithTables doc ctorTables tyVars tmVars M.empty (Just expectedSort) raw)
-
-elabGenArgsSequentialWith
+elabTeleArgsSequentialWith
   :: TypeTheory
   -> (TmVar -> a -> Either Text Obj)
   -> (Obj -> TmVar -> a -> Either Text TermDiagram)
   -> [GenParam]
   -> [a]
   -> Either Text ([CodeArg], Subst)
-elabGenArgsSequentialWith tt elabTyArg elabTmArg params args
+elabTeleArgsSequentialWith tt elabTyArg elabTmArg params args
   | length params /= length args =
       Left "generator argument mismatch"
   | otherwise =

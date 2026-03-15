@@ -58,7 +58,7 @@ import Strat.Poly.Obj
   , orName
   )
 import Strat.Poly.ObjClassifier (modeClassifierMode)
-import Strat.Poly.Tele (GenParam(..))
+import Strat.Poly.Tele (CtorSig(..), GenParam(..))
 import Strat.Poly.Term.AST
   ( TermHeadArg(..)
   , TermExpr(..)
@@ -69,7 +69,6 @@ import Strat.Poly.Term.AST
   )
 import Strat.Poly.TypeTheory
   ( TmHeadSig(..)
-  , TypeParamSig(..)
   , TypeTheory(..)
   , literalKindForObj
   , lookupTmHeadSig
@@ -740,9 +739,9 @@ applyHeadSubstObj tt convEnv tmCtx subst ty =
           let sigTable = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
           args' <-
             case M.lookup (orName ref) sigTable of
-              Just params
-                | length params == length args ->
-                    mapM goArgBySig (zip params args)
+              Just sig
+                | length (csParams sig) == length args ->
+                    fst <$> foldM goArgBySig ([], subst) (zip (csParams sig) args)
               Just _ ->
                 Left "termExprToDiagram: constructor arity mismatch during sort instantiation"
               Nothing ->
@@ -752,15 +751,21 @@ applyHeadSubstObj tt convEnv tmCtx subst ty =
           innerObj <- go (Obj (meSrc me) inner)
           pure obj { objCode = CTLift me (objCode innerObj) }
 
-    goArgBySig (TPS_Ty _, CAObj innerObj) =
-      CAObj <$> go innerObj
-    goArgBySig (TPS_Ty _, CATm _) =
-      Left "termExprToDiagram: expected object argument while instantiating sort"
-    goArgBySig (TPS_Tm sortTy, CATm tmArg) = do
-      sortTy' <- applyHeadSubstObj tt convEnv tmCtx subst sortTy
-      CATm <$> applyHeadSubstTermDiagram tt convEnv tmCtx subst sortTy' tmArg
-    goArgBySig (TPS_Tm _, CAObj _) =
-      Left "termExprToDiagram: expected term argument while instantiating sort"
+    goArgBySig (acc, substAcc) (param, arg) =
+      case (param, arg) of
+        (GP_Ty v, CAObj innerObj) -> do
+          innerObj' <- go innerObj
+          subst' <- bindHeadSubst v (CAObj innerObj') substAcc
+          Right (acc <> [CAObj innerObj'], subst')
+        (GP_Ty _, CATm _) ->
+          Left "termExprToDiagram: expected object argument while instantiating sort"
+        (GP_Tm v, CATm tmArg) -> do
+          sortTy' <- applyHeadSubstObj tt convEnv tmCtx substAcc (tmvSort v)
+          tmArg' <- applyHeadSubstTermDiagram tt convEnv tmCtx substAcc sortTy' tmArg
+          subst' <- bindHeadSubst v (CATm tmArg') substAcc
+          Right (acc <> [CATm tmArg'], subst')
+        (GP_Tm _, CAObj _) ->
+          Left "termExprToDiagram: expected term argument while instantiating sort"
 
     goArgUnknown arg =
       case arg of

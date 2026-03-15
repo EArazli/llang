@@ -97,12 +97,11 @@ library:
   - Strat.Common.Provider
   - Strat.Poly.BeckChevalleyObligations
   - Strat.Frontend.Compile
-  - Strat.Poly.GenArgs
+  - Strat.Poly.TeleArgs
   - Strat.Poly.CompObligations
   - Strat.Poly.Kernel
   - Strat.Poly.ModeSyntax
   - Strat.Poly.ObjResolve
-  - Strat.Poly.Tele
   - Strat.Poly.Term.Confluence
   - Strat.Poly.Term.Termination
   - Strat.Poly.Traversal
@@ -149,6 +148,7 @@ tests:
     - Test.Poly.Dependent
     - Test.Poly.NBE
     - Test.Poly.Helpers
+    - Test.Poly.CtorSigCompat
     - Test.Poly.Quote
     - Test.Poly.Acyclic
     - Test.Poly.Feedback

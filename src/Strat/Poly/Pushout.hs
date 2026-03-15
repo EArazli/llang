@@ -18,6 +18,15 @@ import Control.Monad (filterM, foldM, zipWithM)
 import Data.Functor.Identity (runIdentity)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (RuleClass(..), Orientation(..))
+import Strat.Poly.Alpha
+  ( renameBinderArgAlpha
+  , renameCodeArgAlpha
+  , renameDiagramAlpha
+  , renameParamAlpha
+  , renameTmVarAlpha
+  , renameTyVarAlpha
+  , renameTypeAlpha
+  )
 import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
 import Strat.Poly.ModeTheory
@@ -43,9 +52,9 @@ import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), BinderMetaVar
 import Strat.Poly.DiagramIso (diagramIsoEq)
 import Strat.Poly.Cell2 (Cell2(..), c2TyVars, c2TmVars)
 import Strat.Poly.Traversal (traverseDiagram)
+import Strat.Poly.Tele (CtorSig(..), GenParam(..))
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.DefEq (termExprToDiagramChecked, defEqObj)
-import Strat.Poly.TypeTheory (TypeParamSig(..))
 import qualified Strat.Poly.DSL.AST as PolyAST
 
 
@@ -104,7 +113,7 @@ computePolyPushout name f g = do
   srcCtorTables <- deriveCtorTables src
   tgtFCtorTables <- deriveCtorTables (morTgt f)
   tgtGCtorTables <- deriveCtorTables (morTgt g)
-  srcCtors <- allCtorsInTables src srcCtorTables
+  srcCtors <- allCtorSigsInTables src srcCtorTables
   let srcGens = allGensInTables src srcCtorTables
   modePushout <- pushoutModeTheoryPreferRight (sanitizePrefix name <> "_pushout") f g
   (typeMapF, permMapF) <- requireTypeRenameMap f
@@ -860,7 +869,7 @@ requireTypeRenameMap mor = do
   let tgt = morTgt mor
   srcCtorTables <- deriveCtorTables src
   tgtCtorTables <- deriveCtorTables tgt
-  types <- allCtorsInTables src srcCtorTables
+  types <- allCtorSigsInTables src srcCtorTables
   entries <- mapM (typeImage mor tgtCtorTables) types
   let typeMap = M.fromList [ (srcRef, tgtRef) | (srcRef, tgtRef, _) <- entries ]
   permMap <- foldM insertPerm M.empty entries
@@ -872,7 +881,7 @@ requireTypeRenameMap mor = do
           tgtMode <- applyMorphismMode m (orMode srcRef)
           Right (srcRef { orMode = tgtMode }, Nothing)
         Just tmpl -> templateTarget tmpl (sig)
-      ensureTypeExistsInTables (morTgt m) ctorTablesTgt tgtRef (length (sig))
+      ensureTypeExistsInTables (morTgt m) ctorTablesTgt tgtRef (length (csParams sig))
       pure (srcRef, tgtRef, mPerm)
     insertPerm mp (_srcRef, tgtRef, mPerm) =
       case mPerm of
@@ -888,7 +897,7 @@ requireTypeRenameMap mor = do
         OCon tgtRef args
           | length (ttParams tmpl) == arity
           , length args == arity
-          , positionalKindMatch (zip srcParams (ttParams tmpl))
+          , positionalKindMatch (zip (csParams srcParams) (ttParams tmpl))
           , let positions = map (argParamIndex (ttParams tmpl)) args
           , all isJust positions
           , let perm = [ i | Just i <- positions ]
@@ -900,7 +909,7 @@ requireTypeRenameMap mor = do
             pure (tgtRef, inv')
         _ -> Left "poly pushout requires renaming type maps"
       where
-        arity = length srcParams
+        arity = length (csParams srcParams)
 
     positionalKindMatch [] = True
     positionalKindMatch ((srcParam, tmplParam):rest) =
@@ -908,8 +917,8 @@ requireTypeRenameMap mor = do
 
     kindMatch srcParam tmplParam =
       case (srcParam, tmplParam) of
-        (TPS_Ty _, GP_Ty _) -> True
-        (TPS_Tm _, GP_Tm _) -> True
+        (GP_Ty _, GP_Ty _) -> True
+        (GP_Tm _, GP_Tm _) -> True
         _ -> False
 
     argParamIndex params arg =
@@ -1048,7 +1057,7 @@ ensureTypeExistsInTables doc ctorTables ref arity =
   case lookupCtorSigByRefInTables doc ctorTables ref of
     Left _ -> Left "poly pushout: target type missing"
     Right sig
-      | length (sig) == arity -> Right ()
+      | length (csParams sig) == arity -> Right ()
       | otherwise -> Left "poly pushout: target type arity mismatch"
 
 ensureGenExists :: Doctrine -> ModeName -> GenName -> Either Text ()
@@ -1194,7 +1203,7 @@ generatorImageKeys mor genMap =
       tgtMode <- applyMorphismMode mor srcMode
       Right ((srcMode, srcName), (tgtMode, imgName))
 
-ensureTypeClassCompat :: [(ObjRef, [TypeParamSig])] -> M.Map ObjRef ObjRef -> Either Text ()
+ensureTypeClassCompat :: [(ObjRef, CtorSig)] -> M.Map ObjRef ObjRef -> Either Text ()
 ensureTypeClassCompat srcCtors reps =
   mapM_ checkGroup (M.elems groups)
   where
@@ -1240,7 +1249,7 @@ ensureGenClassCompat srcGens reps =
 
 disjointTypeRenames :: M.Map ModeName ModeName -> Text -> TypeRenameMap -> CtorTables -> Doctrine -> Either Text TypeRenameMap
 disjointTypeRenames modeRen prefix interfaceRen tgtCtorTables tgt = do
-  refs <- map fst <$> allCtorsInTables tgt tgtCtorTables
+  refs <- map fst <$> allCtorSigsInTables tgt tgtCtorTables
   pure (fst (foldl step (M.empty, used0) refs))
   where
     interfaceNamesByFinalMode =
@@ -1355,7 +1364,7 @@ mkInterfaceTypeRenameMap
   -> TypePermMap
   -> Either Text (TypeRenameMap, TypePermMap)
 mkInterfaceTypeRenameMap src srcCtorTables leftMap leftPerm rightMap rightPerm = do
-  srcCtors <- allCtorsInTables src srcCtorTables
+  srcCtors <- allCtorSigsInTables src srcCtorTables
   foldM add (M.empty, M.empty) srcCtors
   where
     add (renAcc, permAcc) (srcRef, sig) = do
@@ -1373,7 +1382,7 @@ mkInterfaceTypeRenameMap src srcCtorTables leftMap leftPerm rightMap rightPerm =
           Just existing
             | existing == imgRight -> Right renAcc
             | otherwise -> Left "apply pushout: inconsistent type interface images"
-      let arity = length (sig)
+      let arity = length (csParams sig)
       invLeft <- normalizeInvPerm arity (M.lookup imgLeft leftPerm)
       invRight <- normalizeInvPerm arity (M.lookup imgRight rightPerm)
       rightPermFwd <- invertPermutation arity invRight
@@ -1431,8 +1440,8 @@ collisionTypeRenames
   -> CtorTables
   -> Either Text TypeRenameMap
 collisionTypeRenames modeRen prefix interfaceRen target targetCtorTables body bodyCtorTables = do
-  targetCtors <- allCtorsInTables target targetCtorTables
-  bodyCtors <- allCtorsInTables body bodyCtorTables
+  targetCtors <- allCtorSigsInTables target targetCtorTables
+  bodyCtors <- allCtorSigsInTables body bodyCtorTables
   let targetNamesByFinalMode =
         namesByMode
           [ (orMode ref, orName ref)
@@ -2000,10 +2009,10 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
               ref0 <- resolveRawTypeRefAsType mode ref
               tables <- ctorTablesByDoc
               sig <- lookupCtorSigForOwnerInTables doc tables mode ref0
-              if length (sig) /= length args
+              if length (csParams sig) /= length args
                 then Left "poly pushout: obligation raw type arity mismatch"
                 else do
-                  args0 <- mapM (renameOneArg tyVarNames tmVarNames) (zip (sig) args)
+                  args0 <- mapM (renameOneArg tyVarNames tmVarNames) (zip (csParams sig) args)
                   let args1 =
                         case M.lookup ref0 permRen of
                           Nothing -> Right args0
@@ -2076,10 +2085,10 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
 
     renameOneArg tyVarNames tmVarNames (param, arg) =
       case param of
-        TPS_Ty mode ->
-          renameRawTypeAsType tyVarNames tmVarNames mode arg
-        TPS_Tm sortTy ->
-          renameRawTypeAsTmTerm tmVarNames (objMode sortTy) arg
+        GP_Ty v ->
+          renameRawTypeAsType tyVarNames tmVarNames (tmVarOwner v) arg
+        GP_Tm v ->
+          renameRawTypeAsTmTerm tmVarNames (objMode (tmvSort v)) arg
 
     lookupGenDecl mode genName =
       case M.lookup mode (dGens doc) >>= M.lookup genName of
@@ -2619,34 +2628,6 @@ alphaRenameCellTo fromTy toTy fromTm toTm cell
           rhs' = renameDiagramAlpha tyMap tmMap (c2RHS cell)
       in Right cell { c2Params = params', c2LHS = lhs', c2RHS = rhs' }
 
-renameTyVarAlpha :: M.Map TmVar TmVar -> TmVar -> TmVar
-renameTyVarAlpha tyMap v =
-  M.findWithDefault v v tyMap
-
-renameTmVarAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> TmVar -> TmVar
-renameTmVarAlpha tyMap tmMap v =
-  case M.lookup v tmMap of
-    Just v' -> v'
-    Nothing -> v { tmvSort = renameTypeAlpha tyMap tmMap (tmvSort v) }
-
-renameTypeAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Obj -> Obj
-renameTypeAlpha tyMap tmMap = goObj
-  where
-    goObj ty =
-      ty { objCode = goCode (objCode ty) }
-
-    goCode code =
-      case code of
-        CTMeta v ->
-          CTMeta (renameTyVarAlpha tyMap v)
-        CTCon ref args ->
-          CTCon ref (map goArg args)
-        CTLift me inner ->
-          CTLift me (goCode inner)
-
-    goArg arg =
-      renameCodeArgAlpha tyMap tmMap arg
-
 renameInputShapeAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> InputShape -> InputShape
 renameInputShapeAlpha tyMap tmMap shape =
   case shape of
@@ -2656,32 +2637,6 @@ renameInputShapeAlpha tyMap tmMap shape =
           dom' = map (renameTypeAlpha tyMap tmMap) (bsDom bs)
           cod' = map (renameTypeAlpha tyMap tmMap) (bsCod bs)
       in InBinder bs { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
-
-renameDiagramAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Diagram -> Diagram
-renameDiagramAlpha tyMap tmMap =
-  runIdentity . traverseDiagram onDiag onPayload onCodeArg pure
-  where
-    onDiag d =
-      pure d
-        { dTmCtx = map (renameTypeAlpha tyMap tmMap) (dTmCtx d)
-        , dPortObj = IM.map (renameTypeAlpha tyMap tmMap) (dPortObj d)
-        }
-    onPayload payload =
-      pure (renameEdgePayloadAlpha tyMap tmMap payload)
-    onCodeArg arg =
-      pure (renameCodeArgAlpha tyMap tmMap arg)
-
-renameCodeArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> CodeArg -> CodeArg
-renameCodeArgAlpha tyMap tmMap arg =
-  case arg of
-    CAObj ty -> CAObj (renameTypeAlpha tyMap tmMap ty)
-    CATm (TermDiagram diag) -> CATm (TermDiagram (renameDiagramAlpha tyMap tmMap diag))
-
-renameBinderArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> BinderArg -> BinderArg
-renameBinderArgAlpha tyMap tmMap barg =
-  case barg of
-    BAConcrete inner -> BAConcrete (renameDiagramAlpha tyMap tmMap inner)
-    BAMeta x -> BAMeta x
 
 renameEdgePayloadAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> EdgePayload -> EdgePayload
 renameEdgePayloadAlpha tyMap tmMap payload =
@@ -2850,7 +2805,7 @@ buildTypeMap
   -> Either Text (M.Map ObjRef TypeTemplate)
 buildTypeMap srcCtorTables srcDoc tgtDoc modeRen modRen renames permRen = do
   ttTgt <- doctrineTypeTheory tgtDoc
-  srcCtors <- allCtorsInTables srcDoc srcCtorTables
+  srcCtors <- allCtorSigsInTables srcDoc srcCtorTables
   foldM (add ttTgt) M.empty srcCtors
   where
     add ttTgt mp (ref, sig) = do
@@ -2862,7 +2817,8 @@ buildTypeMap srcCtorTables srcDoc tgtDoc modeRen modRen renames permRen = do
         else do
           tmpl <- renameTemplate ttTgt ref' mPerm (sig)
           Right (M.insert ref tmpl mp)
-    renameTemplate ttTgt tgtRef mPerm params = do
+    renameTemplate ttTgt tgtRef mPerm sig = do
+      let params = csParams sig
       tmplParams <- mapM mkParam (zip [0 :: Int ..] params)
       args0 <- mapM (toArg ttTgt) (zip params tmplParams)
       args <- case mPerm of
@@ -2872,18 +2828,21 @@ buildTypeMap srcCtorTables srcDoc tgtDoc modeRen modRen renames permRen = do
 
     mkParam (i, param) =
       case param of
-        TPS_Ty mode -> do
+        GP_Ty srcVar -> do
+          let mode = tmVarOwner srcVar
           v <- mkTypeMetaVarForMode tgtDoc (renameModeName modeRen mode) ("a" <> T.pack (show i))
           Right (GP_Ty v)
-        TPS_Tm sortTy -> do
+        GP_Tm srcVar -> do
+          let sortTy = tmvSort srcVar
           sortTy' <- renameObjExpr modeRen modRen renames permRen sortTy
           Right (GP_Tm TmVar { tmvName = "i" <> T.pack (show i), tmvSort = sortTy', tmvScope = 0, tmvOwnerMode = Nothing })
 
     toArg tt (srcParam, param) =
       case (srcParam, param) of
-        (TPS_Ty ownerMode, GP_Ty v) ->
+        (GP_Ty srcVar, GP_Ty v) ->
+          let ownerMode = tmVarOwner srcVar in
           Right (OAObj Obj { objOwnerMode = renameModeName modeRen ownerMode, objCode = CTMeta v })
-        (TPS_Tm _, GP_Ty _) ->
+        (GP_Tm _, GP_Ty _) ->
           Left "poly pushout: internal kind mismatch for type template argument"
         (_, GP_Tm v) -> do
           tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMMeta v [])
@@ -2994,12 +2953,13 @@ composeMorphisms name first second = do
       ttSrc <- doctrineTypeTheoryFromTables (morSrc first) srcCtorTables
       firstTgtCtorTables <- deriveCtorTables (morTgt first)
       secondTgtCtorTables <- deriveCtorTables (morTgt second)
-      srcCtors <- allCtorsInTables (morSrc first) srcCtorTables
+      srcCtors <- allCtorSigsInTables (morSrc first) srcCtorTables
       fmap M.fromList (mapM (oneType ttSrc firstTgtCtorTables secondTgtCtorTables) srcCtors)
       where
         oneType ttSrc firstTgtCtorTables secondTgtCtorTables (srcRef, sig) = do
-          paramsSrc <- mapM (mkSourceParam sig) (zip [0 :: Int ..] (sig))
-          argsSrc <- mapM (sourceParamArg ttSrc) (zip (sig) paramsSrc)
+          let params = csParams sig
+          paramsSrc <- mapM (mkSourceParam sig) (zip [0 :: Int ..] params)
+          argsSrc <- mapM (sourceParamArg ttSrc) (zip params paramsSrc)
           let tySrc = mkCon srcRef argsSrc
           tyMid <- applyMorphismTyWithTables firstTgtCtorTables first tySrc
           tyTgt <- applyMorphismTyWithTables secondTgtCtorTables second tyMid
@@ -3008,10 +2968,12 @@ composeMorphisms name first second = do
 
         mkSourceParam _sig (i, param) =
           case param of
-            TPS_Ty mode -> do
+            GP_Ty srcVar -> do
+              let mode = tmVarOwner srcVar
               v <- mkTypeMetaVarForMode (morSrc first) mode ("a" <> T.pack (show i))
               Right (GP_Ty v)
-            TPS_Tm sortTy ->
+            GP_Tm srcVar ->
+              let sortTy = tmvSort srcVar in
               let tmVar =
                     TmVar
                       { tmvName = "t" <> T.pack (show i)
@@ -3023,9 +2985,10 @@ composeMorphisms name first second = do
 
         sourceParamArg ttSrc (srcParam, param) =
           case (srcParam, param) of
-            (TPS_Ty ownerMode, GP_Ty v) ->
+            (GP_Ty srcVar, GP_Ty v) ->
+              let ownerMode = tmVarOwner srcVar in
               Right (OAObj Obj { objOwnerMode = ownerMode, objCode = CTMeta v })
-            (TPS_Tm _, GP_Ty _) ->
+            (GP_Tm _, GP_Ty _) ->
               Left "poly pushout: internal kind mismatch for composed type argument"
             (_, GP_Tm v) -> do
               tm <- termExprToDiagramChecked ttSrc [] (tmvSort v) (TMMeta v [])
@@ -3109,36 +3072,6 @@ checkGenerated label mor =
       case barg of
         BAConcrete inner -> diagramHasSplice inner
         BAMeta _ -> False
-
-allCtorsInTables :: Doctrine -> CtorTables -> Either Text [(ObjRef, [TypeParamSig])]
-allCtorsInTables doc tables = do
-  merged <- foldM insertOwner M.empty (M.toList tables)
-  pure (M.toList merged)
-  where
-    insertOwner acc (ownerMode, table) =
-      let classifierMode = modeClassifierMode (dModes doc) ownerMode
-       in foldM (insertCtor classifierMode) acc (M.toList table)
-
-    insertCtor classifierMode acc (ctorName, sig) =
-      let ref = ObjRef classifierMode ctorName
-       in case M.lookup ref acc of
-            Nothing -> Right (M.insert ref sig acc)
-            Just sig0
-              | sig0 == sig -> Right acc
-              | otherwise -> Left "poly pushout: ambiguous constructor signature across owner modes"
-
-lookupCtorSigByRefInTables :: Doctrine -> CtorTables -> ObjRef -> Either Text [TypeParamSig]
-lookupCtorSigByRefInTables doc tables ref = do
-  let sigs =
-        [ sig
-        | (ownerMode, table) <- M.toList tables
-        , modeClassifierMode (dModes doc) ownerMode == orMode ref
-        , Just sig <- [M.lookup (orName ref) table]
-        ]
-  case L.nub sigs of
-    [] -> Left "poly pushout: target type missing"
-    [sig] -> Right sig
-    _ -> Left "poly pushout: ambiguous constructor signature across owner modes"
 
 allGensInTables :: Doctrine -> CtorTables -> [(ModeName, GenDecl)]
 allGensInTables doc tables =

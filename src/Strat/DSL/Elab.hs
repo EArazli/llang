@@ -118,9 +118,11 @@ import Strat.Poly.Doctrine
   , deriveCtorTables
   , doctrineTypeTheory
   , doctrineTypeTheoryFromTables
+  , allCtorSigsInTables
   , genericGenDiagram
   , gdPlainDom
   , isTypeDeclGenNameInTables
+  , lookupCtorSigByRefInTables
   , lookupCtorRefForOwnerInTables
   , lookupCtorSigForOwnerInTables
   , lookupGenDeclInDoctrine
@@ -157,7 +159,8 @@ import Strat.Poly.Pushout
 import Strat.Poly.Surface (PolySurfaceDef(..), elabPolySurfaceDecl)
 import Strat.Poly.Surface.Spec (ssDoctrine, ssBaseDoctrine)
 import Strat.Poly.Proof (SearchBudget, defaultSearchBudget, renderSearchLimit)
-import Strat.Poly.TypeTheory (TypeParamSig(..), TypeTheory)
+import Strat.Poly.Tele (CtorSig(..), GenParam(..))
+import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.DefEq (normalizeObjDeep, termExprToDiagramChecked)
 import Strat.Poly.ObjClassifier (modeUniverseObj, modeClassifierMode)
@@ -501,43 +504,19 @@ lookupFunctor env name =
     Nothing -> Left ("Unknown doctrine_functor: " <> name)
     Just def -> Right def
 
-allTypeDeclsForDoc :: Doctrine -> Either Text [(ObjRef, [TypeParamSig])]
+allTypeDeclsForDoc :: Doctrine -> Either Text [(ObjRef, CtorSig)]
 allTypeDeclsForDoc doc =
   case deriveCtorTables doc of
     Left err -> Left ("allTypeDeclsForDoc: " <> err)
     Right tables ->
-      allTypeDeclsForDocInTables doc tables
+      allCtorSigsInTables doc tables
 
-allTypeDeclsForDocInTables :: Doctrine -> CtorTables -> Either Text [(ObjRef, [TypeParamSig])]
-allTypeDeclsForDocInTables doc tables = do
-  merged <- foldM insertOwner M.empty (M.toList tables)
-  Right (M.toList merged)
-  where
-    insertOwner acc (ownerMode, table) =
-      let classifierMode = modeClassifierMode (dModes doc) ownerMode
-      in foldM (insertCtor classifierMode) acc (M.toList table)
-
-    insertCtor classifierMode acc (ctorName, sig) =
-      let ref = ObjRef classifierMode ctorName
-      in case M.lookup ref acc of
-          Nothing -> Right (M.insert ref sig acc)
-          Just sig0
-            | sig0 == sig -> Right acc
-            | otherwise -> Left "allTypeDeclsForDoc: ambiguous constructor signature across owner modes"
-
-lookupCtorSigByRef :: Doctrine -> ObjRef -> Either Text [TypeParamSig]
+lookupCtorSigByRef :: Doctrine -> ObjRef -> Either Text CtorSig
 lookupCtorSigByRef doc ref = do
   tables <- deriveCtorTables doc
-  let sigs =
-        [ sig
-        | (ownerMode, table) <- M.toList tables
-        , modeClassifierMode (dModes doc) ownerMode == orMode ref
-        , Just sig <- [M.lookup (orName ref) table]
-        ]
-  case L.nub sigs of
-    [] -> Left "apply: type constructor missing"
-    [sig] -> Right sig
-    _ -> Left "apply: ambiguous constructor signature across owner modes"
+  case lookupCtorSigByRefInTables doc tables ref of
+    Left _ -> Left "apply: type constructor missing"
+    Right sig -> Right sig
 
 resolveApplyMorphisms
   :: ModuleEnv
@@ -671,7 +650,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
       tgtCtorTables <- deriveCtorTables (PolyMorph.morTgt mor)
       tt <- doctrineTypeTheoryFromTables (PolyMorph.morTgt mor) tgtCtorTables
       srcCtorTables <- deriveCtorTables (PolyMorph.morSrc mor)
-      ctors <- allTypeDeclsForDocInTables (PolyMorph.morSrc mor) srcCtorTables
+      ctors <- allCtorSigsInTables (PolyMorph.morSrc mor) srcCtorTables
       let explicit = PolyMorph.morTypeMap mor
       let addType mp (srcRef, sig) =
             case M.lookup srcRef explicit of
@@ -726,13 +705,14 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
     identityTemplate tt tgtCtorTables mor srcRef sig = do
       tgtMode <- PolyMorph.applyMorphismMode mor (orMode srcRef)
       let tgtRef = srcRef { orMode = tgtMode }
-      params <- mapM (mkParam tgtCtorTables mor) (zip [0 :: Int ..] sig)
-      args <- mapM (paramArg tt) (zip sig params)
+      params <- mapM (mkParam tgtCtorTables mor) (zip [0 :: Int ..] (csParams sig))
+      args <- mapM (paramArg tt) (zip (csParams sig) params)
       pure (PolyMorph.TypeTemplate params (mkCon tgtRef args))
 
     mkParam tgtCtorTables mor (i, param) =
       case param of
-        TPS_Ty srcMode -> do
+        GP_Ty srcVar -> do
+          let srcMode = tmVarOwner srcVar
           tgtMode <- PolyMorph.applyMorphismMode mor srcMode
           case modeUniverseObj (dModes (PolyMorph.morTgt mor)) tgtMode of
             Just universe -> do
@@ -754,7 +734,8 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
                     <> renderMode tgtMode
                     <> " classifiedBy ... via ...;` with a declared universe"
                 )
-        TPS_Tm srcSort -> do
+        GP_Tm srcVar -> do
+          let srcSort = tmvSort srcVar
           tgtSort <- PolyMorph.applyMorphismTyWithTables tgtCtorTables mor srcSort
           Right (GP_Tm TmVar { tmvName = "t" <> T.pack (show i), tmvSort = tgtSort, tmvScope = 0, tmvOwnerMode = Nothing })
       where
@@ -762,9 +743,9 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
 
     paramArg tt (srcParam, param) =
       case (srcParam, param) of
-        (TPS_Ty _, GP_Ty v) ->
+        (GP_Ty _, GP_Ty v) ->
           Right (OAObj Obj { objOwnerMode = tmVarOwner v, objCode = CTMeta v })
-        (TPS_Tm _, GP_Ty _) ->
+        (GP_Tm _, GP_Ty _) ->
           Left "apply: internal kind mismatch for type template argument"
         (_, GP_Tm v) -> do
           tm <- termExprToDiagramChecked tt [] (tmvSort v) (TMMeta v [])
@@ -774,7 +755,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
       let srcDoc = PolyMorph.morSrc mor
       let tgtDoc = PolyMorph.morTgt mor
       srcCtorTables <- deriveCtorTables srcDoc
-      srcTypes <- allTypeDeclsForDocInTables srcDoc srcCtorTables
+      srcTypes <- allCtorSigsInTables srcDoc srcCtorTables
       let typeIssues =
             [ (srcRef, issue)
             | (srcRef, srcSig) <- srcTypes
@@ -811,7 +792,7 @@ buildIfaceImplMorphism raw functorDef targetDoc implMorphs = do
               in case lookupCtorSigByRef tgtDoc tgtRef of
                   Left _ -> Just True
                   Right tgtSig ->
-                    if length srcSig == length tgtSig
+                    if length (csParams srcSig) == length (csParams tgtSig)
                       then Nothing
                       else Just False
 
@@ -2793,7 +2774,7 @@ elabDoctrineBackedModuleData surface env lang importedTypes importedValues local
       Nothing -> Left ("module data " <> rmdName raw <> ": doctrine is missing type constructor " <> rmdName raw)
       Just ref -> Right ref
   typeParams <- lookupCtorSigForOwnerInTables doc ctorTables ownerMode typeRef
-  if null typeParams
+  if null (csParams typeParams)
     then Right ()
     else Left ("module data " <> rmdName raw <> ": doctrine-backed representation only supports nullary type constructors")
   ensureDistinctTexts ("module data " <> rmdName raw <> ": duplicate constructor name") (map rmcName (rmdCtors raw))

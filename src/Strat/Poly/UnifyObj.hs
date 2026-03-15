@@ -49,12 +49,11 @@ import Strat.Poly.Graph
   )
 import Strat.Poly.TypeTheory
   ( TypeTheory(..)
-  , TypeParamSig(..)
   , TmHeadSig(..)
   , literalKindForObj
   , lookupTmHeadSig
   )
-import Strat.Poly.Tele (GenParam(..))
+import Strat.Poly.Tele (CtorSig(..), GenParam(..))
 import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.DefEq
   ( normalizeObjDeepWithCtx
@@ -244,9 +243,9 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
                 then Right ()
                 else Left "unifyObjFlex: constructor mode does not match current code mode"
               case M.lookup (orName refA) sigTable of
-                Just params
-                  | length params == length argsA ->
-                      foldl stepBySig (Right s) (zip params (zip argsA argsB))
+                Just sig
+                  | length (csParams sig) == length argsA ->
+                      fst <$> foldM stepBySig (s, M.empty) (zip (csParams sig) (zip argsA argsB))
                 _ ->
                   foldl step (Right s) (zip argsA argsB)
           | otherwise ->
@@ -276,16 +275,22 @@ unifyObjFlex tt tmCtx flex subst t1 t2 = do
           unifyTm tt tmCtx flex s sort tmA tmB
         _ -> Left "unifyObjFlex: mixed type/term arguments cannot unify"
 
-    stepBySig acc (paramSig, (argA, argB)) = do
-      s <- acc
-      case (paramSig, argA, argB) of
-        (TPS_Ty _, CAObj tyA, CAObj tyB) ->
-          unifyObjFlex tt tmCtx flex s tyA tyB
-        (TPS_Tm sort, CATm tmA, CATm tmB) ->
-          unifyTm tt tmCtx flex s sort tmA tmB
-        (TPS_Ty _, _, _) ->
+    stepBySig (s, headSubst) (param, (argA, argB)) =
+      case (param, argA, argB) of
+        (GP_Ty v, CAObj tyA, CAObj tyB) -> do
+          s' <- unifyObjFlex tt tmCtx flex s tyA tyB
+          tyA' <- applySubstObj tt s' tyA
+          headSubst' <- bindHeadSubst v (CAObj tyA') headSubst
+          Right (s', headSubst')
+        (GP_Tm v, CATm tmA, CATm tmB) -> do
+          expectedSort <- applyHeadSubstObj tt (structuralConvEnv tt) tmCtx headSubst (tmvSort v)
+          s' <- unifyTm tt tmCtx flex s expectedSort tmA tmB
+          tmA' <- applySubstTm tt s' expectedSort tmA
+          headSubst' <- bindHeadSubst v (CATm tmA') headSubst
+          Right (s', headSubst')
+        (GP_Ty _, _, _) ->
           Left "unifyObjFlex: expected type argument for constructor parameter"
-        (TPS_Tm _, _, _) ->
+        (GP_Tm _, _, _) ->
           Left "unifyObjFlex: expected term argument for constructor parameter"
 
     unifyTyVar s codeMode v tCode
@@ -406,15 +411,21 @@ unifyGenArgsFlex tt tmCtx flex subst params argsA argsB
   | length params /= length argsA || length params /= length argsB =
       Left "unifyGenArgsFlex: arity mismatch"
   | otherwise =
-      foldM step subst (zip3 params argsA argsB)
+      fst <$> foldM step (subst, M.empty) (zip3 params argsA argsB)
   where
-    step s (param, argA, argB) =
+    step (s, headSubst) (param, argA, argB) =
       case (param, argA, argB) of
-        (GP_Ty _, CAObj tyA, CAObj tyB) ->
-          unifyObjFlex tt tmCtx flex s tyA tyB
+        (GP_Ty v, CAObj tyA, CAObj tyB) -> do
+          s' <- unifyObjFlex tt tmCtx flex s tyA tyB
+          tyA' <- applySubstObj tt s' tyA
+          headSubst' <- bindHeadSubst v (CAObj tyA') headSubst
+          Right (s', headSubst')
         (GP_Tm v, CATm tmA, CATm tmB) -> do
-          expectedSort <- applySubstObj tt s (tmvSort v)
-          unifyTm tt tmCtx flex s expectedSort tmA tmB
+          expectedSort <- applyHeadSubstObj tt (structuralConvEnv tt) tmCtx headSubst (tmvSort v)
+          s' <- unifyTm tt tmCtx flex s expectedSort tmA tmB
+          tmA' <- applySubstTm tt s' expectedSort tmA
+          headSubst' <- bindHeadSubst v (CATm tmA') headSubst
+          Right (s', headSubst')
         (GP_Ty _, CATm _, _) ->
           Left "unifyGenArgsFlex: expected type argument"
         (GP_Ty _, _, CATm _) ->
@@ -775,7 +786,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                                     Right sig'
                               Just _ -> Left "unifyTm: term head arity mismatch in normalized term graph"
                               Nothing -> Left "unifyTm: unknown term head in normalized term graph"
-                          storedArgs <- mapM (uncurry rebuildStoredArg) (zip (thsParams sig) args)
+                          storedArgs <- rebuildStoredArgs (thsParams sig) args
                           inputArgs <- mapM (fmap THATm . go (S.insert pid0 seen)) (eIns edge)
                           Right (TMGen fName (storedArgs <> inputArgs))
                       | otherwise ->
@@ -791,12 +802,26 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
           case M.lookup inp inputs of
             Just i -> Right i
             Nothing -> Left "unifyTm: PTmMeta inputs must connect to boundary inputs"
-        rebuildStoredArg param arg =
-          case (param, arg) of
-            (GP_Ty _, CAObj obj) -> Right (THAObj obj)
-            (GP_Ty _, CATm _) -> Left "unifyTm: expected object-valued stored arg"
-            (GP_Tm v, CATm tmArg) -> THATm <$> diagramToTermExpr tt tmCtx (tmvSort v) tmArg
-            (GP_Tm _, CAObj _) -> Left "unifyTm: expected term-valued stored arg"
+        rebuildStoredArgs params0 args0 = go [] M.empty params0 args0
+          where
+            go acc _ [] [] = Right (reverse acc)
+            go _ _ [] _ = Left "unifyTm: stored arg arity mismatch"
+            go _ _ _ [] = Left "unifyTm: stored arg arity mismatch"
+            go acc headSubst (param:paramsRest) (arg:argsRest) =
+              case (param, arg) of
+                (GP_Ty v, CAObj obj) -> do
+                  obj' <- applyHeadSubstObj tt (structuralConvEnv tt) tmCtx headSubst obj
+                  headSubst' <- bindHeadSubst v (CAObj obj') headSubst
+                  go (THAObj obj' : acc) headSubst' paramsRest argsRest
+                (GP_Ty _, CATm _) ->
+                  Left "unifyTm: expected object-valued stored arg"
+                (GP_Tm v, CATm tmArg) -> do
+                  sort' <- applyHeadSubstObj tt (structuralConvEnv tt) tmCtx headSubst (tmvSort v)
+                  tmExpr <- THATm <$> diagramToTermExpr tt tmCtx sort' tmArg
+                  headSubst' <- bindHeadSubst v (CATm tmArg) headSubst
+                  go (tmExpr : acc) headSubst' paramsRest argsRest
+                (GP_Tm _, CAObj _) ->
+                  Left "unifyTm: expected term-valued stored arg"
 
     producerEdge diag pid =
       case IM.lookup (unPortId pid) (dProd diag) of
@@ -878,10 +903,10 @@ applySubstObj tt subst ty = do
           let sigTableForCode = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
           args' <-
             case M.lookup (orName ref) sigTableForCode of
-              Just params ->
-                if length params /= length args
+              Just sig ->
+                if length (csParams sig) /= length args
                   then Left "applySubstObj: type constructor arity mismatch"
-                  else mapM (goArgBySig seen) (zip params args)
+                  else fst <$> foldM (goArgBySig seen) ([], M.empty) (zip (csParams sig) args)
               Nothing ->
                 mapM (goArgNoSig seen) args
           Right (CTCon ref args')
@@ -897,16 +922,20 @@ applySubstObj tt subst ty = do
         ObjName "__obj_meta_sort" -> True
         _ -> False
 
-    goArgBySig seen (param, arg) =
+    goArgBySig seen (acc, headSubst) (param, arg) =
       case (param, arg) of
-        (TPS_Ty _, CAObj innerTy) ->
-          CAObj <$> goTy seen innerTy
-        (TPS_Tm sortTy, CATm tmArg) -> do
-          sort' <- goTy seen sortTy
-          CATm <$> applySubstTm tt subst sort' tmArg
-        (TPS_Ty _, CATm _) ->
+        (GP_Ty v, CAObj innerTy) -> do
+          innerTy' <- goTy seen innerTy
+          headSubst' <- bindHeadSubst v (CAObj innerTy') headSubst
+          Right (acc <> [CAObj innerTy'], headSubst')
+        (GP_Tm v, CATm tmArg) -> do
+          sort' <- applyHeadSubstObj tt (structuralConvEnv tt) (dTmCtx (unTerm tmArg)) headSubst (tmvSort v)
+          tmArg' <- applySubstTm tt subst sort' tmArg
+          headSubst' <- bindHeadSubst v (CATm tmArg') headSubst
+          Right (acc <> [CATm tmArg'], headSubst')
+        (GP_Ty _, CATm _) ->
           Left "applySubstObj: expected type argument for constructor parameter"
-        (TPS_Tm _, CAObj _) ->
+        (GP_Tm _, CAObj _) ->
           Left "applySubstObj: expected term argument for constructor parameter"
 
     goArgNoSig seen arg =

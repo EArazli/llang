@@ -56,7 +56,7 @@ import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
 import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
-import qualified Strat.Poly.GenArgs as GA
+import qualified Strat.Poly.TeleArgs as TA
 import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurfaceExpr)
 import Strat.Poly.Surface.Spec
 import Strat.Poly.Literal (Literal(..), LiteralKind(..), literalKind)
@@ -1041,11 +1041,11 @@ genDFromDecl
 genDFromDecl typeScope doc ctorTables tt mode env paramMap gen mArgs bargs = do
   rawArgs <- liftEither (requiredTemplateGenArgs (gdParams gen) mArgs)
   argExprs <- liftEither (normalizeTemplateGenArgs (gdParams gen) rawArgs)
-  (freshParams, renameSubst) <- liftEither (GA.freshGenParams tt (envTmCtx env) (gdParams gen))
+  (freshParams, renameSubst) <- liftEither (TA.freshTeleParams tt (envTmCtx env) (gdParams gen))
   let genFresh = gen { gdParams = freshParams }
   (genArgs, _substSeq) <-
     liftEither
-      ( GA.elabGenArgsSequentialWith
+      ( TA.elabTeleArgsSequentialWith
           tt
           (\v argExpr -> elabTemplateTyArg typeScope doc ctorTables tt env paramMap (Ty.tmVarOwner v) argExpr)
           (\expectedSort _ rawArg -> elabTemplateTmArg typeScope doc ctorTables tt env paramMap expectedSort rawArg)

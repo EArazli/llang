@@ -103,9 +103,11 @@ The implementation uses a single object-expression elaborator for both:
 - doctrine/kernel elaboration (strict name resolution), and
 - surface type annotations (implicit holes).
 
-Elaboration is guided by the constructor’s parameter signature `TypeParamSig`:
-- For a parameter `TPS_Ty`, the argument elaborates to an object expression in the classifier and is stored as an object argument (`CAObj`).
-- For a parameter `TPS_Tm s`, the argument elaborates as a term of sort `s` (in the owner mode of `s`) and is stored as a term argument (`CATm`) as a `TermDiagram`.
+Elaboration is guided by the constructor telescope `CtorSig`, whose binders are ordered `GenParam`s:
+- For a parameter `GP_Ty v`, the argument elaborates to an object expression and is stored as an object argument (`CAObj`).
+- For a parameter `GP_Tm v`, the expected sort is the binder sort `tmvSort(v)` instantiated by the earlier actual constructor arguments; the argument elaborates as a term of that instantiated sort and is stored as a term argument (`CATm`) as a `TermDiagram`.
+- Constructor arguments are elaborated left-to-right, threading a local substitution environment built from earlier arguments.
+- The same left-to-right telescope discipline is used when elaborating declaration parameter telescopes, so later term-parameter sorts may refer to earlier type and term parameters.
 
 Surface type annotations additionally adopt the following convention:
 - If an identifier in type position is neither an in-scope explicit type metavariable nor a nullary type constructor in the classifier of the expected owner mode, it elaborates to an *implicit type metavariable* (a hole) of sort `U_m`.
@@ -219,8 +221,9 @@ During elaboration, a `classifiedBy ... via ...` universe expression can be temp
 Current behavior:
 
 - if the raw universe is not immediately classifiable as a simple name/nullary constructor, elaboration stores a temporary pending universe marker;
-- pending universes are resolved after initial mode/generator collection, using object elaboration with constructor tables from `deriveCtorTablesForElab`;
-- this elaboration-time constructor-table path derives tables for resolvable classifier dependencies first, tolerates forward references to not-yet-declared classifier modes, then adds provisional tables for owner modes whose universes are still pending;
+- pending universes are resolved after initial mode/generator collection, using object elaboration with constructor tables from ordinary `deriveCtorTables`;
+- elaboration-time object checking/normalization on this path uses the elaboration-specific type theory (`doctrineElabTypeTheoryFromTables`), which installs constructor-eligibility fragments rather than the final fully inferred defeq fragments, so partially elaborated doctrines remain checkable;
+- this elaboration-time path therefore tolerates forward references to not-yet-declared classifier constructors while still deriving resolvable tables first;
 - after pending resolution, normal doctrine validation still uses full constructor-table derivation and rejects unresolved or inconsistent universes.
 
 This means complex universe expressions (including constructor applications with arguments) are supported in the current elaboration pipeline; they are not restricted to names/nullary constructors.
@@ -244,7 +247,7 @@ Current generated-obligation behavior:
 
 - generated comprehension obligations are installed only when a `comprehension` declaration is present.
 - in the current cut, obligations are generated for:
-  - binder slots on generators with binder inputs (including mixed plain+binder domains) generate full law families (`id_dom`, `id_cod`, `comp_dom`, `comp_cod`, `nat`),
+  - binder slots on generators whose domains are binder-only generate full law families (`id_dom`, `id_cod`, `comp_dom`, `comp_cod`, `nat`),
   - constructor term-argument slots only when:
     - the slot's term sort owner mode equals the classified mode,
     - and the generated law side follows the slot boundary side:
@@ -335,7 +338,7 @@ Per-mode definitional data is represented by `DefFragment`:
 
 Key records:
 
-- object signatures are parameterized by mode and object parameters (`TPS_Ty`, `TPS_Tm`)
+- constructor/object signatures are represented as telescope-valued `CtorSig`s over `GenParam` binders (`GP_Ty`, `GP_Tm`)
 - `GenDecl` supports metavariables with two roles:
   - code metavariables (type-level) represented in object codes as `CTMeta`
   - term metavariables represented on term edges as `PTmMeta`

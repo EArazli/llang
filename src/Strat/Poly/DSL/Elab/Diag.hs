@@ -56,7 +56,7 @@ import Strat.Poly.ModeTheory
 import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Names
 import Strat.Poly.Obj
-import qualified Strat.Poly.GenArgs as GA
+import qualified Strat.Poly.TeleArgs as TA
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.TypeTheory (TypeTheory(..), literalKindForObj, ttCtorTablesByOwner)
 import qualified Strat.Poly.UnifyObj as U
@@ -363,7 +363,7 @@ elabDiagExprWithFresh valueScope typeScope env doc mode tmCtx tyVars tmVars bind
       where
         elaborateGenerator curTmCtx' binderSigs name mArgs mBinderArgs = do
           gen <- liftEither (lookupGen doc mode (GenName name))
-          (freshParams, renameSubst) <- liftEither (GA.freshGenParams ttDoc curTmCtx' (gdParams gen))
+          (freshParams, renameSubst) <- liftEither (TA.freshTeleParams ttDoc curTmCtx' (gdParams gen))
           let genFresh = gen { gdParams = freshParams }
           dom0 <- applySubstCtxDoc ttDoc renameSubst (gdPlainDom gen)
           cod0 <- applySubstCtxDoc ttDoc renameSubst (gdCod gen)
@@ -383,7 +383,7 @@ elabDiagExprWithFresh valueScope typeScope env doc mode tmCtx tyVars tmVars bind
                 args <- liftEither (normalizeGenArgs (gdParams gen) rawArgs)
                 (genArgs, argSubst) <-
                   liftEither
-                    ( GA.elabGenArgsSequentialWith
+                    ( TA.elabTeleArgsSequentialWith
                         ttDoc
                         (elabTyArg ctorTables)
                         (\expectedSort _ rawArg -> elabTmArg ttDoc curTmCtx' expectedSort rawArg)

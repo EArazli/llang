@@ -24,11 +24,12 @@ import Strat.Poly.Obj
   , Obj(..)
   , ObjName(..)
   , ObjRef(..)
+  , TmVar(..)
   )
 import Strat.Poly.DefEq (diagramToTermExprChecked, normalizeObjDeepWithCtx)
 import Strat.Poly.Term.AST (TermHeadArg(..))
 import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.TypeTheory (TypeParamSig(..))
+import Strat.Poly.Tele (CtorSig(..), GenParam(..))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit
 
@@ -167,9 +168,9 @@ testTermArgNormalization = do
   where
     lookupNatSort doc vecRef = do
       ctorTables <- requireEither (deriveCtorTables doc)
-      params <- requireEither (lookupCtorSigForOwnerInTables doc ctorTables (ModeName "Tm") vecRef)
-      case params of
-        (TPS_Tm natSort : _) -> pure natSort
+      sig <- requireEither (lookupCtorSigForOwnerInTables doc ctorTables (ModeName "Tm") vecRef)
+      case csParams sig of
+        (GP_Tm v : _) -> pure (tmvSort v)
         _ -> assertFailure "expected Vec to have first term parameter" >> fail "unreachable"
 
 testLayeredClassification3 :: Assertion

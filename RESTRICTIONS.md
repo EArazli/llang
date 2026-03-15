@@ -93,13 +93,7 @@ Follow-up work item: expand supported definitional fragment after NbE core stabi
 
 - Non-self classification cycles are rejected. Allowing longer cycles would require an explicit universe-level stratification design and implementation.
 
-## 13. Constructor/Surface Caveats
-
-- Constructor term-parameter sorts are required to be closed with respect to the generator's type parameters.
-- Surface type annotations support constructor parameters of kind `TPS_Tm`.
-  Such arguments are elaborated with the same term elaboration path used by doctrine elaboration (including in-scope surface term binders): the raw argument is elaborated as a term-expression `RawPolyObjExpr` to a `TermDiagram` at the required sort and stored as `CATm`.
-
-## 14. Mode Equations
+## 13. Mode Equations
 
 Mode theory `mod_eq` declarations are treated as an oriented rewrite system used to normalize modality expressions (so that definitional equality is equality of normal forms).
 
@@ -110,7 +104,7 @@ To make this mathematically well-defined (strategy-independent), the kernel requ
 
 The kernel still does not perform completion: users must provide a convergent presentation themselves.
 
-## 15. Module / Build Scope
+## 14. Module / Build Scope
 
 - `link` is currently **structural component-graph composition**, not a full
   signature/substitution module calculus.
@@ -135,7 +129,7 @@ The kernel still does not perform completion: users must provide a convergent pr
   `doctrine_data` currently requires doctrine-provided **nullary** type
   constructors for packaged module data.
 
-## 16. Host Backend Scope
+## 15. Host Backend Scope
 
 - Host backends are a Haskell-side registry consumed by `emit via ...`.
   They are injectable/configurable on the host side, but they are not currently

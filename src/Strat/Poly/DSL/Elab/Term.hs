@@ -44,9 +44,11 @@ import Strat.Poly.ObjResolve
   ( resolveTypeRefInClassifierInTables
   , resolveTypeRefInClassifierMaybeInTables
   )
+import Strat.Poly.Tele (CtorSig(..), GenParam(..))
+import Strat.Poly.TeleArgs (elabTeleArgsSequentialWith)
 import Strat.Poly.Term.AST (TermHeadArg(..))
 import Strat.Poly.TermExpr (TermExpr(..))
-import Strat.Poly.TypeTheory (TypeParamSig(..), TmHeadSig(..), literalKindForObj)
+import Strat.Poly.TypeTheory (TmHeadSig(..), literalKindForObj)
 import qualified Strat.Poly.UnifyObj as U
 
 provisionalCtorSort :: Doctrine -> ModeName -> Obj
@@ -136,12 +138,12 @@ ownerModeForTypeMeta doc v =
   where
     renderMode (ModeName n) = n
 
-elabTmDeclVar :: Doctrine -> ModeName -> [TmVar] -> RawTmVarDecl -> Either Text TmVar
-elabTmDeclVar doc defaultMode tyVars decl = do
+elabTmDeclVar :: Doctrine -> ModeName -> [TmVar] -> [TmVar] -> RawTmVarDecl -> Either Text TmVar
+elabTmDeclVar doc defaultMode tyVars tmVars decl = do
   sortTy <-
-    case elabObjExpr doc tyVars [] M.empty defaultMode (rtvdSort decl) of
+    case elabObjExpr doc tyVars tmVars M.empty defaultMode (rtvdSort decl) of
       Right ty -> Right ty
-      Left _ -> elabObjExprInferOwner doc tyVars [] M.empty (rtvdSort decl)
+      Left _ -> elabObjExprInferOwner doc tyVars tmVars M.empty (rtvdSort decl)
   pure TmVar { tmvName = rtvdName decl, tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
 
 elabParamDecls :: Doctrine -> ModeName -> [RawParamDecl] -> Either Text [GenParam]
@@ -162,31 +164,33 @@ elabParamDecls doc defaultMode params = go [] [] [] params
           if name `elem` map tmvName tyAcc || name `elem` map tmvName tmAcc
             then Left "duplicate parameter name"
             else do
-              tmVar <- elabTmDeclVar doc defaultMode tyAcc tmDecl
+              tmVar <- elabTmDeclVar doc defaultMode tyAcc tmAcc tmDecl
               go tyAcc (tmVar:tmAcc) (GP_Tm tmVar : paramAcc) rest
 
 buildTypeTemplateBinders
   :: Doctrine
   -> M.Map ModeName ModeName
-  -> [TypeParamSig]
+  -> CtorSig
   -> [RawParamDecl]
   -> Either Text ([GenParam], [TmVar], [TmVar])
-buildTypeTemplateBinders tgt modeMap sigParams decls = do
+buildTypeTemplateBinders tgt modeMap sig decls = do
   if length sigParams /= length decls
     then Left "morphism: type mapping binder arity mismatch"
     else go [] [] [] (zip sigParams decls)
   where
+    sigParams = csParams sig
+
     go tyAcc tmAcc tmplAcc [] =
       Right (reverse tmplAcc, reverse tyAcc, reverse tmAcc)
     go tyAcc tmAcc tmplAcc ((sigParam, decl):rest) =
       case (sigParam, decl) of
-        (TPS_Ty srcMode, RPDType tyDecl) -> do
-          expectedMode <- lookupMappedMode srcMode
+        (GP_Ty srcVar, RPDType tyDecl) -> do
+          expectedMode <- lookupMappedMode (tmVarOwner srcVar)
           tyVar <- resolveTyVarDecl tgt expectedMode tyDecl
           ensureFreshName tyAcc tmAcc (tmvName tyVar)
           go (tyVar:tyAcc) tmAcc (GP_Ty tyVar:tmplAcc) rest
-        (TPS_Tm srcSort, RPDTerm tmDecl) -> do
-          expectedMode <- lookupMappedMode (objOwnerMode srcSort)
+        (GP_Tm srcVar, RPDTerm tmDecl) -> do
+          expectedMode <- lookupMappedMode (objOwnerMode (tmvSort srcVar))
           tmSort <- elabObjExpr tgt (reverse tyAcc) (reverse tmAcc) M.empty expectedMode (rtvdSort tmDecl)
           if objOwnerMode tmSort /= expectedMode
             then Left "morphism: type mapping term binder mode mismatch"
@@ -194,9 +198,9 @@ buildTypeTemplateBinders tgt modeMap sigParams decls = do
           ensureFreshName tyAcc tmAcc (rtvdName tmDecl)
           let tmVar = TmVar { tmvName = rtvdName tmDecl, tmvSort = tmSort, tmvScope = 0, tmvOwnerMode = Nothing }
           go tyAcc (tmVar:tmAcc) (GP_Tm tmVar:tmplAcc) rest
-        (TPS_Ty _, _) ->
+        (GP_Ty _, _) ->
           Left "morphism: type mapping binder kind mismatch"
-        (TPS_Tm _, _) ->
+        (GP_Tm _, _) ->
           Left "morphism: type mapping binder kind mismatch"
 
     ensureFreshName tyAcc tmAcc name =
@@ -349,8 +353,8 @@ elabObjExprWithTables_ typeScope pol doc ctorTables tyVars tmVars tmBound expect
                     }
               case mRef of
                 Just ref -> do
-                  params <- lookupCtorSigForOwnerInTables doc ctorTables expectedOwnerMode ref
-                  if null params
+                  sig <- lookupCtorSigForOwnerInTables doc ctorTables expectedOwnerMode ref
+                  if null (csParams sig)
                     then Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTCon ref [] }
                     else Left "type constructor arity mismatch"
                 Nothing ->
@@ -395,23 +399,29 @@ elabObjExprWithTables_ typeScope pol doc ctorTables tyVars tmVars tmBound expect
                   }
         Nothing -> do
           ref <- resolveTypeRefInClassifierInTables doc ctorTables expectedOwnerMode classifierMode rawRef
-          params <- lookupCtorSigForOwnerInTables doc ctorTables expectedOwnerMode ref
-          if length params /= length args
+          sig <- lookupCtorSigForOwnerInTables doc ctorTables expectedOwnerMode ref
+          if length (csParams sig) /= length args
             then Left "type constructor arity mismatch"
             else do
-              args' <- mapM (elabOneArg params) (zip params args)
+              tt <- doctrineElabTypeTheoryFromTables doc ctorTables
+              (args', _) <-
+                elabTeleArgsSequentialWith
+                  tt
+                  (\v rawArg -> do
+                    let ownerMode = tmVarOwner v
+                    argTy <- elabObjExprWithTables_ typeScope pol doc ctorTables tyVars tmVars tmBound ownerMode rawArg
+                    if objOwnerMode argTy == ownerMode
+                      then Right argTy
+                      else Left "type constructor argument mode mismatch"
+                  )
+                  (\expectedSort _ rawArg ->
+                    elabTmTermWithTablesInScope typeScope doc ctorTables tyVars tmVars tmBound (Just expectedSort) rawArg
+                  )
+                  (csParams sig)
+                  args
               Right Obj { objOwnerMode = expectedOwnerMode, objCode = CTCon ref args' }
   where
     classifierMode = modeClassifierMode (dModes doc) expectedOwnerMode
-
-    elabOneArg _ (TPS_Ty m, rawArg) = do
-      argTy <- elabObjExprWithTables_ typeScope pol doc ctorTables tyVars tmVars tmBound m rawArg
-      if objOwnerMode argTy == m
-        then Right (CAObj argTy)
-        else Left "type constructor argument mode mismatch"
-    elabOneArg _ (TPS_Tm sortTy, rawArg) = do
-      tmArg <- elabTmTermWithTablesInScope typeScope doc ctorTables tyVars tmVars tmBound (Just sortTy) rawArg
-      Right (CATm tmArg)
 
     asModalityCall rawRef0 args0 =
       case (rtrMode rawRef0, rtrName rawRef0, args0) of
@@ -548,7 +558,7 @@ elabTmTermWithTablesInScope
   -> Either Text TermDiagram
 elabTmTermWithTablesInScope typeScope doc ctorTables _tyVars tmVars tmBound mExpected raw =
   do
-    ttDoc <- doctrineTypeTheoryFromTables doc ctorTables
+    ttDoc <- doctrineElabTypeTheoryFromTables doc ctorTables
     tmCtx <- mkTmCtx
     (expr, inferredSort) <- elabExpr ttDoc ctorTables tmCtx mExpected raw
     let expectedSort = maybe inferredSort id mExpected

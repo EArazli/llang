@@ -18,7 +18,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
-import Control.Monad (unless)
+import Control.Monad (foldM, unless)
 import Strat.Poly.Literal (literalKind)
 import Strat.Poly.Graph
   ( Diagram(..)
@@ -46,6 +46,7 @@ import Strat.Poly.Obj
   , ObjRef(..)
   , TmVar(..)
   , objOwnerMode
+  , tmVarOwner
   , defaultMetaArgs
   , modeCtxGlobals
   , normalizeCodeTerm
@@ -54,16 +55,19 @@ import Strat.Poly.Obj
 import Strat.Poly.TypeTheory
   ( DefFragment(..)
   , TmHeadSig(..)
-  , TypeParamSig(..)
   , TypeTheory(..)
   , defFragmentForMode
   , literalKindForObj
   , termTRSForMode
   , lookupTmHeadSig
   )
+import Strat.Poly.Tele (CtorSig(..), GenParam(..))
 import Strat.Poly.TermExpr
   ( TermExpr(..)
   , TermConvEnv(..)
+  , applyHeadSubstObj
+  , bindHeadSubst
+  , structuralConvEnv
   , termExprToDiagramWith
   , diagramGraphToTermExprWith
   , validateTermGraph
@@ -97,11 +101,12 @@ checkCodeWellFormed tt codeMode code =
         (orMode ref == codeMode || isOpaqueMetaSort ref)
         (Left "checkCodeWellFormed: constructor mode does not match current code mode")
       case M.lookup (orName ref) sigTable of
-        Just params -> do
+        Just sig -> do
           unless
-            (length params == length args)
+            (length (csParams sig) == length args)
             (Left "checkCodeWellFormed: constructor arity mismatch")
-          mapM_ checkArgBySig (zip params args)
+          _ <- foldM checkArgBySig M.empty (zip (csParams sig) args)
+          Right ()
         Nothing ->
           if ttStrictCtorLookup tt
             then Left "checkCodeWellFormed: unknown constructor"
@@ -113,21 +118,23 @@ checkCodeWellFormed tt codeMode code =
   where
     sigTable = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
 
-    checkArgBySig (TPS_Ty expectedOwner, arg) =
-      case arg of
-        CAObj innerObj -> do
+    checkArgBySig substAcc (param, arg) =
+      case (param, arg) of
+        (GP_Ty v, CAObj innerObj) -> do
+          let expectedOwner = tmVarOwner v
           unless
             (objOwnerMode innerObj == expectedOwner)
             (Left "checkCodeWellFormed: type argument owner mode mismatch")
           checkObjWellFormed tt innerObj
-        CATm _ ->
+          bindHeadSubst v (CAObj innerObj) substAcc
+        (GP_Ty _, CATm _) ->
           Left "checkCodeWellFormed: expected type argument"
-    checkArgBySig (TPS_Tm _, arg) =
-      case arg of
-        CAObj _ ->
+        (GP_Tm v, CATm tmArg) -> do
+          expectedSort <- applyHeadSubstObj tt (structuralConvEnv tt) (dTmCtx (unTerm tmArg)) substAcc (tmvSort v)
+          _ <- termToDiagram tt (dTmCtx (unTerm tmArg)) expectedSort tmArg
+          bindHeadSubst v (CATm tmArg) substAcc
+        (GP_Tm _, CAObj _) ->
           Left "checkCodeWellFormed: expected term argument"
-        CATm _ ->
-          Right ()
 
     checkArgUnknown arg =
       case arg of
@@ -153,11 +160,11 @@ normalizeCodeTermDeepWithCtx tt tmCtx codeMode code =
         then Right ()
         else Left "normalizeCodeTermDeepWithCtx: constructor mode does not match current code mode"
       case M.lookup (orName ref) sigTable of
-        Just params ->
-          if length params /= length args
+        Just sig ->
+          if length (csParams sig) /= length args
             then Left "normalizeCodeTermDeepWithCtx: type constructor arity mismatch"
             else do
-              args' <- mapM normalizeArgBySig (zip params args)
+              (args', _) <- foldM normalizeArgBySig ([], M.empty) (zip (csParams sig) args)
               Right (CTCon ref args')
         Nothing ->
           if not (ttStrictCtorLookup tt)
@@ -188,16 +195,21 @@ normalizeCodeTermDeepWithCtx tt tmCtx codeMode code =
       inner' <- normalizeCodeTermDeepWithCtx tt tmCtx (meSrc me) innerCode
       normalizeCodeTerm (ttModes tt) (CTLift me inner')
   where
-    normalizeArgBySig (TPS_Ty _, CAObj tyArg) =
-      CAObj <$> normalizeObjDeepWithCtx tt tmCtx tyArg
-    normalizeArgBySig (TPS_Tm sortTy, CATm tm) = do
-      sortTy' <- normalizeObjDeepWithCtx tt tmCtx sortTy
-      tm' <- normalizeTermDiagram tt tmCtx sortTy' tm
-      Right (CATm tm')
-    normalizeArgBySig (TPS_Ty _, CATm _) =
-      Left "normalizeCodeTermDeepWithCtx: expected type argument"
-    normalizeArgBySig (TPS_Tm _, CAObj _) =
-      Left "normalizeCodeTermDeepWithCtx: expected term argument"
+    normalizeArgBySig (acc, substAcc) (param, arg) =
+      case (param, arg) of
+        (GP_Ty v, CAObj tyArg) -> do
+          tyArg' <- normalizeObjDeepWithCtx tt tmCtx tyArg
+          subst' <- bindHeadSubst v (CAObj tyArg') substAcc
+          Right (acc <> [CAObj tyArg'], subst')
+        (GP_Tm v, CATm tm) -> do
+          sortTy' <- applyHeadSubstObj tt (structuralConvEnv tt) tmCtx substAcc (tmvSort v)
+          tm' <- normalizeTermDiagram tt tmCtx sortTy' tm
+          subst' <- bindHeadSubst v (CATm tm') substAcc
+          Right (acc <> [CATm tm'], subst')
+        (GP_Ty _, CATm _) ->
+          Left "normalizeCodeTermDeepWithCtx: expected type argument"
+        (GP_Tm _, CAObj _) ->
+          Left "normalizeCodeTermDeepWithCtx: expected term argument"
 
     normalizeUnknownArg arg =
       case arg of

@@ -30,6 +30,16 @@ import Control.Monad (foldM)
 import Data.Functor.Identity (runIdentity)
 import Data.Bifunctor (first)
 import Strat.Common.Rules (RewritePolicy(..))
+import Strat.Poly.Alpha
+  ( renameBinderArgAlpha
+  , renameCodeArgAlpha
+  , renameDiagramAlpha
+  , renameParamAlpha
+  , renameTermDiagramAlpha
+  , renameTmVarAlpha
+  , renameTyVarAlpha
+  , renameTypeAlpha
+  )
 import Strat.Poly.Doctrine
 import Strat.Poly.Cell2
 import Strat.Poly.Graph
@@ -50,8 +60,9 @@ import Strat.Poly.DiagramInterpretation
   )
 import Strat.Poly.Names
 import Strat.Poly.Obj
+import Strat.Poly.Tele (CtorSig(..), GenParam(..))
 import Strat.Poly.UnifyObj hiding (applySubstDiagram)
-import Strat.Poly.TypeTheory (TypeTheory, TypeParamSig(..), literalKindForObj)
+import Strat.Poly.TypeTheory (TypeTheory, literalKindForObj)
 import Strat.Poly.DefEq (normalizeObjDeep, defEqObj, termExprToDiagramChecked)
 import Strat.Poly.Literal (renderLiteralKind)
 import Strat.Poly.Rewrite
@@ -912,7 +923,8 @@ validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor = do
   mapM_ (checkEntry ttTgt) (M.toList (morTypeMap mor))
   where
     checkEntry ttTgt (srcRef, tmpl) = do
-      srcParams <- lookupCtorSigByRefInTables (morSrc mor) srcCtorTables srcRef
+      srcSig <- lookupCtorSigByRefInTables (morSrc mor) srcCtorTables srcRef
+      let srcParams = csParams srcSig
       let tmplParams = ttParams tmpl
       if length tmplParams /= length srcParams
         then Left "checkMorphism: type template arity mismatch"
@@ -936,7 +948,8 @@ validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor = do
 
     checkParam ttTgt srcParam tmplParam =
       case (srcParam, tmplParam) of
-        (TPS_Ty srcMode, GP_Ty v) -> do
+        (GP_Ty srcVar, GP_Ty v) -> do
+          let srcMode = tmVarOwner srcVar
           expectedMode <- mapMode mor srcMode
           expectedUniverse <-
             case modeUniverseObj (dModes (morTgt mor)) expectedMode of
@@ -950,7 +963,8 @@ validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor = do
           if sortOk
             then Right ()
             else Left "checkMorphism: type template type-parameter universe mismatch"
-        (TPS_Tm srcSort, GP_Tm tmParam) -> do
+        (GP_Tm srcVar, GP_Tm tmParam) -> do
+          let srcSort = tmvSort srcVar
           expectedMode <- mapMode mor (objMode srcSort)
           if objMode (tmvSort tmParam) == expectedMode
             then do
@@ -960,9 +974,9 @@ validateTypeMap srcCtorTables tgtCtorTables ttSrc ttTgt mor = do
                 then Right ()
                 else Left "checkMorphism: type template term-parameter sort mismatch"
             else Left "checkMorphism: type template term-parameter mode mismatch"
-        (TPS_Ty _, _) ->
+        (GP_Ty _, _) ->
           Left "checkMorphism: type template kind mismatch"
-        (TPS_Tm _, _) ->
+        (GP_Tm _, _) ->
           Left "checkMorphism: type template kind mismatch"
       where
         renderMode (ModeName n) = n
@@ -1258,7 +1272,7 @@ cellKey cell = (dMode (c2LHS cell), c2Name cell)
 buildTypeRenaming :: CtorTables -> CtorTables -> Morphism -> Either Text (Maybe (M.Map ObjRef ObjRef))
 buildTypeRenaming srcCtorTables tgtCtorTables mor = do
   let src = morSrc mor
-  srcCtors <- allCtorsInTables src srcCtorTables
+  srcCtors <- allCtorSigsInTables src srcCtorTables
   case foldl step (Just M.empty) srcCtors of
     Nothing -> Right Nothing
     Just mp ->
@@ -1272,13 +1286,13 @@ buildTypeRenaming srcCtorTables tgtCtorTables mor = do
       let mapped =
             case M.lookup ref (morTypeMap mor) of
               Nothing -> Just ref
-              Just tmpl -> renamingTarget tmpl (length sig)
+              Just tmpl -> renamingTarget tmpl (length (csParams sig))
       case mapped of
         Nothing -> Nothing
         Just tgtRef ->
           case lookupCtorSigByRefInTables tgt tgtCtorTables tgtRef of
             Right sigTgt
-              | length sigTgt == length sig ->
+              | length (csParams sigTgt) == length (csParams sig) ->
                   Just (M.insert ref tgtRef mp)
             _ -> Nothing
 
@@ -1474,85 +1488,6 @@ alphaAlignCellTo target source
              , c2RHS = renameDiagramAlpha tyMap tmMap (c2RHS source)
              }
 
-renameParamAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> GenParam -> GenParam
-renameParamAlpha tyMap tmMap param =
-  case param of
-    GP_Ty v -> GP_Ty (renameTyVarAlpha tyMap v)
-    GP_Tm v -> GP_Tm (renameTmVarAlpha tyMap tmMap v)
-
-renameTyVarAlpha :: M.Map TmVar TmVar -> TmVar -> TmVar
-renameTyVarAlpha tyMap v =
-  M.findWithDefault v v tyMap
-
-renameTmVarAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> TmVar -> TmVar
-renameTmVarAlpha tyMap tmMap v =
-  case M.lookup v tmMap of
-    Just v' -> v'
-    Nothing -> v { tmvSort = renameTypeAlpha tyMap tmMap (tmvSort v) }
-
-renameTypeAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Obj -> Obj
-renameTypeAlpha tyMap tmMap = goObj
-  where
-    goObj ty =
-      ty { objCode = goCode (objCode ty) }
-
-    goCode code =
-      case code of
-        CTMeta v ->
-          CTMeta (renameTyVarAlpha tyMap v)
-        CTCon ref args ->
-          CTCon ref (map goArg args)
-        CTLift me inner ->
-          CTLift me (goCode inner)
-
-    goArg arg =
-      case arg of
-        CAObj ty -> CAObj (goObj ty)
-        CATm tm -> CATm (renameTermDiagramAlpha tyMap tmMap tm)
-
-renameDiagramAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> Diagram -> Diagram
-renameDiagramAlpha tyMap tmMap =
-  runIdentity . traverseDiagram onDiag onPayload onCodeArg onBinderArg
-  where
-    onDiag d =
-      pure d
-        { dTmCtx = map (renameTypeAlpha tyMap tmMap) (dTmCtx d)
-        , dPortObj = IM.map (renameTypeAlpha tyMap tmMap) (dPortObj d)
-        }
-
-    onPayload payload =
-      pure $
-        case payload of
-          PGen g args bargs -> PGen g args bargs
-          PBox name inner -> PBox name inner
-          PFeedback inner -> PFeedback inner
-          PTmMeta v ->
-            PTmMeta (renameTmVarAlpha tyMap tmMap v)
-          other ->
-            other
-
-    onCodeArg arg =
-      pure (renameCodeArgAlpha tyMap tmMap arg)
-
-    onBinderArg barg =
-      pure (renameBinderArgAlpha tyMap tmMap barg)
-
-renameCodeArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> CodeArg -> CodeArg
-renameCodeArgAlpha tyMap tmMap arg =
-  case arg of
-    CAObj ty -> CAObj (renameTypeAlpha tyMap tmMap ty)
-    CATm tm -> CATm (renameTermDiagramAlpha tyMap tmMap tm)
-
-renameBinderArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> BinderArg -> BinderArg
-renameBinderArgAlpha tyMap tmMap barg =
-  case barg of
-    BAConcrete inner -> BAConcrete (renameDiagramAlpha tyMap tmMap inner)
-    BAMeta x -> BAMeta x
-
-renameTermDiagramAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> TermDiagram -> TermDiagram
-renameTermDiagramAlpha tyMap tmMap (TermDiagram diag) =
-  TermDiagram (renameDiagramAlpha tyMap tmMap diag)
-
 allM :: (a -> Either Text Bool) -> [a] -> Either Text Bool
 allM _ [] = Right True
 allM f (x:xs) = do
@@ -1576,36 +1511,6 @@ allGensInTables doc tables =
         [ (modeClassifierMode (dModes doc) ownerMode, S.fromList (M.keys table))
         | (ownerMode, table) <- M.toList tables
         ]
-
-allCtorsInTables :: Doctrine -> CtorTables -> Either Text [(ObjRef, [TypeParamSig])]
-allCtorsInTables doc tables = do
-  merged <- foldM insertOwner M.empty (M.toList tables)
-  pure (M.toList merged)
-  where
-    insertOwner acc (ownerMode, table) =
-      let classifierMode = modeClassifierMode (dModes doc) ownerMode
-       in foldM (insertCtor classifierMode) acc (M.toList table)
-
-    insertCtor classifierMode acc (ctorName, sig) =
-      let ref = ObjRef classifierMode ctorName
-       in case M.lookup ref acc of
-            Nothing -> Right (M.insert ref sig acc)
-            Just sig0
-              | sig0 == sig -> Right acc
-              | otherwise -> Left "ambiguous constructor signature across owner modes"
-
-lookupCtorSigByRefInTables :: Doctrine -> CtorTables -> ObjRef -> Either Text [TypeParamSig]
-lookupCtorSigByRefInTables doc tables ref = do
-  let sigs =
-        [ sig
-        | (ownerMode, table) <- M.toList tables
-        , modeClassifierMode (dModes doc) ownerMode == orMode ref
-        , Just sig <- [M.lookup (orName ref) table]
-        ]
-  case L.nub sigs of
-    [] -> Left "checkMorphism: unknown source type in type map"
-    [sig] -> Right sig
-    _ -> Left "checkMorphism: ambiguous constructor signature across owner modes"
 
 instantiateGen :: TypeTheory -> GenDecl -> Diagram -> Edge -> Either Text Subst
 instantiateGen tt gen diag edge = do

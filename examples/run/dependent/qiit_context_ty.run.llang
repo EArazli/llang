@@ -1,7 +1,7 @@
--- Best-effort approximation of the standard QIIT Con/Ty signature.
--- The current elaborator does not allow later term parameters to depend on
--- earlier term parameters in a generator telescope, so Ty is flattened here.
-doctrine QIITContextTyApprox where {
+-- A small QIIT-style context/type signature using a genuinely dependent telescope.
+-- `Ty` is indexed by a context, `extend` takes a type over that context, and
+-- `sigma`'s second argument lives over the extended context.
+doctrine QIITContextTy where {
   mode S classifiedBy S via S.U_S;
   gen ctx_ext(a@S) : [a] -> [a] @S;
   gen var(a@S) : [a] -> [a] @S;
@@ -10,11 +10,12 @@ doctrine QIITContextTyApprox where {
   gen U_S : [] -> [S.U_S] @S;
 
   gen Con : [] -> [S.U_S] @S;
-  gen Ty : [] -> [S.U_S] @S;
+  gen Ty(g : Con) : [] -> [S.U_S] @S;
   gen empty : [] -> [Con] @S;
-  gen base : [] -> [Ty] @S;
-  gen extend(g : Con, a : Ty) : [] -> [Con] @S;
-  gen sigma(a : Ty, b : Ty) : [] -> [Ty] @S;
+  gen base(g : Con) : [] -> [Ty(g)] @S;
+  gen extend(g : Con, a : Ty(g)) : [] -> [Con] @S;
+  gen sigma(g : Con, a : Ty(g), b : Ty(extend(g, a))) : [] -> [Ty(g)] @S;
+  gen pack(g : Con, a : Ty(g), b : Ty(extend(g, a))) : [] -> [Con] @S;
 
   rule computational ctx_ext_id -> (a@S) : [a] -> [a] @S =
     ctx_ext(a) == id[a]
@@ -25,36 +26,32 @@ doctrine QIITContextTyApprox where {
   rule computational reindex_id -> (a@S) : [a] -> [a] @S =
     reindex(a) == id[a]
 
-  rule computational sigma_assoc -> (a : Ty, b : Ty, c : Ty) : [] -> [Ty] @S =
-    sigma(sigma(a, b), c) == sigma(a, sigma(b, c))
-
-  rule computational sigma_quot -> (g : Con, a : Ty, b : Ty) : [] -> [Con] @S =
-    extend(extend(g, a), b) == extend(g, sigma(a, b))
+  rule computational pack_expand -> (g : Con, a : Ty(g), b : Ty(extend(g, a))) : [] -> [Con] @S =
+    pack(g, a, b) == extend(g, sigma(g, a, b))
 
 }
 
 module_surface QIITContextTyRunUnit where {
-  doctrine QIITContextTyApprox;
+  doctrine QIITContextTy;
   mode S;
 }
 
 language QIITContextTyRunLang where {
-  doctrine QIITContextTyApprox;
+  doctrine QIITContextTy;
   module_surface QIITContextTyRunUnit;
 }
 
 module QIITContextTyRuns in QIITContextTyRunLang where {
-  let assoc_left
+  let packed_context
   ---
-  extend(extend(extend(empty, base), base), base)
+  pack(empty, base(empty), base(extend(empty, base(empty))))
   ---
 
-  export { assoc_left };
+  export { packed_context };
 }
 
-pipeline normalize_assoc where {
-  project export assoc_left;
-  normalize { policy = "topmost"; fuel = 100; };
+pipeline show_packed_context where {
+  project export packed_context;
 }
 
-build assoc_left from QIITContextTyRuns using normalize_assoc;
+build packed_context from QIITContextTyRuns using show_packed_context;

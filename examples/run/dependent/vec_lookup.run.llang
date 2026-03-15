@@ -1,0 +1,55 @@
+-- A compact dependent-argument example.
+-- The later arguments of `lookup` are checked against sorts instantiated from
+-- the earlier length argument `n`.
+doctrine VecLookup where {
+  mode M classifiedBy M via M.U_M;
+  gen U_M : [] -> [M.U_M] @M;
+  gen ctx_ext(a@M) : [a] -> [a] @M;
+  gen var(a@M) : [a] -> [a] @M;
+  gen reindex(a@M) : [a] -> [a] @M;
+  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };
+
+  mode I classifiedBy I via I.U_I;
+  gen U_I : [] -> [I.U_I] @I;
+  gen comp_ctx_ext(a@I) : [a] -> [a] @I;
+  gen comp_var(a@I) : [a] -> [a] @I;
+  gen comp_reindex(a@I) : [a] -> [a] @I;
+  comprehension I where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };
+
+  gen Nat : [] -> [I.U_I] @I;
+  gen Z : [] -> [Nat] @I;
+  gen S : [Nat] -> [Nat] @I;
+
+  gen Vec(n : Nat) : [] -> [M.U_M] @M;
+  gen Fin(n : Nat) : [] -> [M.U_M] @M;
+  gen Out : [] -> [M.U_M] @M;
+
+  gen vec2 : [] -> [Vec(S(S(Z)))] @M;
+  gen idx1 : [] -> [Fin(S(S(Z)))] @M;
+  gen lookup(n : Nat, i : Fin(n), xs : Vec(n)) : [] -> [Out] @M;
+}
+
+module_surface VecLookupRunUnit where {
+  doctrine VecLookup;
+  mode M;
+}
+
+language VecLookupRunLang where {
+  doctrine VecLookup;
+  module_surface VecLookupRunUnit;
+}
+
+module VecLookupRuns in VecLookupRunLang where {
+  let main
+  ---
+  lookup(S(S(Z)), idx1, vec2)
+  ---
+
+  export { main };
+}
+
+pipeline show_main where {
+  project export main;
+}
+
+build main from VecLookupRuns using show_main;
