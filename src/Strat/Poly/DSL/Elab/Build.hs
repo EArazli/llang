@@ -30,6 +30,7 @@ import Strat.Poly.Doctrine
   , ModAction(..)
   , ObligationDecl(..)
   , deriveCtorTables
+  , deriveCtorTablesForElab
   , isTypeDeclGenNameInTables
   )
 import Strat.Poly.ModeTheory
@@ -73,6 +74,7 @@ seedDoctrine name base =
         , dAcyclicModes = S.empty
         , dGens = M.empty
         , dCells2 = []
+        , dBuiltins = []
         , dActions = M.empty
         , dObligations = []
         }
@@ -262,7 +264,7 @@ applyPendingClassifications ops allowSeedFallback st =
       ensureMode doc mode
       let classifier = cdrClassifier rawClass
       ensureMode doc classifier
-      ctorTables <- deriveCtorTables doc
+      ctorTables <- deriveCtorTablesForElab doc
       universe <-
         case cdrUniverse rawClass of
           UniverseResolved u -> Right u
@@ -318,7 +320,7 @@ applyPendingClassifications ops allowSeedFallback st =
         canKeepSeedUniverse classifier0 raw =
           case raw of
             RPTVar _ -> True
-            RPTCon ref [] ->
+            RPTCon ref [] [] ->
               case rtrMode ref of
                 Nothing -> True
                 Just q -> ModeName q == classifier0
@@ -326,7 +328,7 @@ applyPendingClassifications ops allowSeedFallback st =
 
 applyPendingComprehensions :: ElabState -> Doctrine -> Either Text Doctrine
 applyPendingComprehensions st doc0 = do
-  ctorTables <- deriveCtorTables doc0
+  ctorTables <- deriveCtorTablesForElab doc0
   foldM (addOne ctorTables) doc0 (esPendingComp st)
   where
     addOne ctorTables doc rawComp = do

@@ -21,7 +21,7 @@ import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.Obj (Obj, TmVar(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
-import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.Rewrite (rulesForDiagram)
 import Strat.Poly.Surface (PolySurfaceDef(..))
 import Strat.Poly.Surface.Elab (elabSurfaceNodeInScope)
 import Strat.Poly.Surface.Parse (parseSurfaceExpr)
@@ -58,8 +58,8 @@ compileDiagramArtifact valueScope typeScope env targetName mMode mSurface uses m
         case coerceDiagramTo env docApplied diagApplied targetName of
           Right ok -> Right ok
           Left err -> Left ("morphism chain did not reach target doctrine; " <> err)
-  let rules = rulesFromPolicy policy (dCells2 docFinal)
   tt <- doctrineTypeTheory docFinal
+  let rules = rulesForDiagram policy tt diagFinal
   status <- normalizeWithMapper (applyModExpr docFinal) tt fuel rules diagFinal
   let norm =
         case status of

@@ -3,7 +3,6 @@ module Strat.Poly.DSL.AST
   , RawPolyItem(..)
   , RawClassifiedByDecl(..)
   , RawCompDecl(..)
-  , RawDefEqEngine(..)
   , RawModeDecl(..)
   , RawClassifierLiftDecl(..)
   , RawModExpr(..)
@@ -14,6 +13,11 @@ module Strat.Poly.DSL.AST
   , RawObligationDecl(..)
   , RawOblExpr(..)
   , RawLiteralDecl(..)
+  , RawBuiltinDecl(..)
+  , RawBuiltinBranchDecl(..)
+  , RawBuiltinSpec(..)
+  , RawBuiltinSource(..)
+  , RawRecursiveHeadArgSource(..)
   , RawParamDecl(..)
   , RawTmVarDecl(..)
   , RawPolyCtorDecl(..)
@@ -52,6 +56,7 @@ data RawPolyItem
   | RPAction RawActionDecl
   | RPObligation RawObligationDecl
   | RPLiteral RawLiteralDecl
+  | RPBuiltin RawBuiltinDecl
   | RPData RawPolyDataDecl
   | RPGen RawPolyGenDecl
   | RPRule RawPolyRuleDecl
@@ -64,15 +69,9 @@ data RawCompDecl = RawCompDecl
   , rcmpReindex :: Text
   } deriving (Eq, Read, Show)
 
-data RawDefEqEngine
-  = RDETRS
-  | RDENBE
-  deriving (Eq, Read, Show)
-
 data RawModeDecl = RawModeDecl
   { rmdName :: Text
   , rmdAcyclic :: Bool
-  , rmdDefEqEngine :: Maybe RawDefEqEngine
   , rmdClassifiedBy :: Maybe RawClassifiedByDecl
   } deriving (Eq, Read, Show)
 
@@ -141,6 +140,39 @@ data RawLiteralDecl = RawLiteralDecl
   , rldKind :: LiteralKind
   } deriving (Eq, Read, Show)
 
+data RawBuiltinDecl = RawBuiltinDecl
+  { rbdHead :: Text
+  , rbdMode :: Text
+  , rbdSpec :: RawBuiltinSpec
+  } deriving (Eq, Read, Show)
+
+data RawBuiltinSpec
+  = RBSTransport
+  | RBSInductiveElim
+      { rbsScrutineeIndex :: Int
+      , rbsBranches :: [RawBuiltinBranchDecl]
+      }
+  deriving (Eq, Read, Show)
+
+data RawBuiltinBranchDecl = RawBuiltinBranchDecl
+  { rbbCtor :: Text
+  , rbbTmCtxInputs :: [RawBuiltinSource]
+  , rbbInputs :: [RawBuiltinSource]
+  } deriving (Eq, Read, Show)
+
+data RawBuiltinSource
+  = RBISOuterHeadTmParam Int
+  | RBISCtorHeadTmParam Int
+  | RBISOuterInput Int
+  | RBISCtorField Int
+  | RBISRecursiveResult Int [RawRecursiveHeadArgSource]
+  deriving (Eq, Read, Show)
+
+data RawRecursiveHeadArgSource
+  = RRHASOuterHeadArg Int
+  | RRHASCtorArg Int
+  deriving (Eq, Read, Show)
+
 data RawParamDecl
   = RPDType RawTyVarDecl
   | RPDTerm RawTmVarDecl
@@ -205,7 +237,7 @@ data RawTyVarDecl = RawTyVarDecl
 
 data RawPolyObjExpr
   = RPTVar Text
-  | RPTCon RawTypeRef [RawPolyObjExpr]
+  | RPTCon RawTypeRef [RawPolyObjExpr] [RawBinderArg]
   | RPTMod RawModExpr RawPolyObjExpr
   | RPLit Literal
   deriving (Eq, Read, Show)

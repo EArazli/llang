@@ -29,6 +29,7 @@ docDoctrine =
     , dAcyclicModes = S.singleton docMode
     , dGens = M.singleton docMode gens
     , dCells2 = []
+    , dBuiltins = []
     , dActions = M.empty
     , dObligations = []
     }
@@ -60,6 +61,7 @@ artifactDoctrine =
     , dAcyclicModes = S.singleton artifactMode
     , dGens = M.singleton artifactMode gens
     , dCells2 = []
+    , dBuiltins = []
     , dActions = M.empty
     , dObligations = []
     }

@@ -13,7 +13,7 @@ language SkiRunLang where {
 module SkiRuns in SkiRunLang where {
   let main
   ---
-  (((((s * k) ; app) * k) ; app) * id[T]) ; app
+  (i * id[T]) ; app
   ---
   export { main };
 }

@@ -47,7 +47,7 @@ import Strat.Poly.Proof
   , renderSearchLimit
   , checkJoinProofWithMapper
   )
-import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.Rewrite (rulesForDiagram, rulesForMode)
 import Strat.Poly.Slots
   ( Slot(..)
   , SlotId(..)
@@ -56,7 +56,7 @@ import Strat.Poly.Slots
   , extractDoctrineSlotsWithTables
   )
 import Strat.Poly.TypeTheory (TypeTheory(..), ttCtorTablesByOwner)
-import qualified Strat.Poly.UnifyObj as U
+import qualified Strat.Poly.UnifyFlex as UF
 
 data ImplementsCheckResult
   = ImplementsCheckProved [(Text, ImplementsProof)]
@@ -93,8 +93,6 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
             ImplementsCheckProved restProofs ->
               Right (cache2, ImplementsCheckProved (proofs <> restProofs))
 
-    generatedCompRules = rulesFromPolicy UseOnlyComputationalLR (dCells2 tgtDoc)
-
     checkOne cache ttSrc ttTgt tgtCtorTables slotsByGen obl
       | obForGen obl = checkForGen cache ttSrc ttTgt tgtCtorTables slotsByGen obl
       | otherwise = checkPlain cache ttSrc ttTgt tgtCtorTables obl
@@ -110,7 +108,7 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
       let rigidTm = S.fromList tmVarsTgt
       lhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt lhs0
       rhs <- unifyBoundary ttTgt rigidTy rigidTm domTgt codTgt rhs0
-      let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
+      let rules = rulesForDiagram (obPolicy obl) ttTgt lhs
       result <- checkObligationJoin ttTgt rules (obGenerated obl) (obName obl) lhs rhs
       pure (cache, result)
 
@@ -170,7 +168,7 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
                     Right rhs' ->
                       Right rhs'
                 pure (lhsLocked, rhsLocked)
-          let rules = rulesFromPolicy (obPolicy obl) (dCells2 tgtDoc)
+          let rules = rulesForDiagram (obPolicy obl) ttTgt lhs
           generatedSlotOutcome <- checkGeneratedSlot ttTgt slotsByGen modeTgt gen obl label lhs rhs
           case generatedSlotOutcome of
             Just out ->
@@ -366,13 +364,13 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
       domR <- diagramDom rhsHost
       let rigid = S.union rigidTy rigidTm
       let flex0 = S.difference (S.union (freeVarsDiagram lhsHost) (freeVarsDiagram rhsHost)) rigid
-      sDom <- U.unifyCtx tt hostTmCtx flex0 domL domR
+      sDom <- UF.unifyCtx tt hostTmCtx flex0 domL domR
       lhs1 <- applySubstDiagram tt sDom lhsHost
       rhs1 <- applySubstDiagram tt sDom rhsHost
       codL <- diagramCod lhs1
       codR <- diagramCod rhs1
       let flex1 = S.difference (S.union (freeVarsDiagram lhs1) (freeVarsDiagram rhs1)) rigid
-      sCod <- U.unifyCtx tt hostTmCtx flex1 codL codR
+      sCod <- UF.unifyCtx tt hostTmCtx flex1 codL codR
       lhs2 <- applySubstDiagram tt sCod lhs1
       rhs2 <- applySubstDiagram tt sCod rhs1
       pure (lhs2, rhs2)
@@ -684,6 +682,8 @@ checkImplementsObligationsWithBudget budget env tgtDoc morph ifaceDoc = do
               Right (Just (ImplementsCheckProved [(label, ImplementsProofJoin witness)]))
 
     normalizeForGeneratedObligation tt _rules diag =
+      let generatedCompRules = rulesForMode UseOnlyComputationalLR tt (dMode diag)
+       in
       case generatedCompRules of
         [] -> Right diag
         _ -> do
@@ -883,7 +883,7 @@ evalLiftedForAnchor _allowImplicitGenArgs ttSrc ttTgt tgtCtorTables env ifaceDoc
 
     instantiateAt ttDoc opTgt dom0 argTy = do
       let flex = S.difference (freeVarsDiagram opTgt) (S.union rigidTy rigidTm)
-      sDom <- U.unifyCtx ttDoc (dTmCtx opTgt) flex dom0 [argTy]
+      sDom <- UF.unifyCtx ttDoc (dTmCtx opTgt) flex dom0 [argTy]
       applySubstDiagram ttDoc sDom opTgt
 
 elabObligationDiag

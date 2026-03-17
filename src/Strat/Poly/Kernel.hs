@@ -62,7 +62,7 @@ import Strat.Poly.DefEq
   , termExprToDiagramChecked
   , diagramToTermExprChecked
   )
-import Strat.Poly.UnifyObj (unifyObj, unifyObjFlex)
+import Strat.Poly.UnifyFlex (unifyObj, unifyObjFlex)
 
 
 checkDoctrine :: Doctrine -> Either Text ()

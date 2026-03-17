@@ -489,7 +489,7 @@ typeExpr = lexeme (try modApp <|> regular)
       case mQual of
         Just qualName ->
           let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }
-           in pure (RPTCon ref (maybe [] id mArgs))
+           in pure (RPTCon ref (maybe [] id mArgs) [])
         Nothing ->
           case T.uncons name of
             Nothing -> fail "empty type"
@@ -497,13 +497,13 @@ typeExpr = lexeme (try modApp <|> regular)
               case mArgs of
                 Just args ->
                   let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-                   in pure (RPTCon ref args)
+                   in pure (RPTCon ref args [])
                 Nothing ->
                   if isLowerChar c
                     then pure (RPTVar name)
                     else
                       let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-                       in pure (RPTCon ref [])
+                       in pure (RPTCon ref [] [])
     isLowerChar ch = ch >= 'a' && ch <= 'z'
 
 parens :: Parser a -> Parser a

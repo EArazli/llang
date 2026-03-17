@@ -5,8 +5,11 @@ module Strat.Poly.CriticalPairs
   , CriticalPair(..)
   , CriticalPairInfo(..)
   , RuleInfo(..)
-  , criticalPairsForDoctrine
   , criticalPairsForRules
+  , criticalPairsForRulesInTypeTheoryWithMapper
+  , criticalPairsForRulesInTypeTheory
+  , nestedCriticalPairsForRulesInTypeTheoryWithMapper
+  , nestedCriticalPairsForRulesInTypeTheory
   ) where
 
 import Data.Text (Text)
@@ -16,12 +19,17 @@ import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import Data.Functor.Identity (runIdentity)
+import Control.Monad (foldM)
+import Strat.Poly.DefEq (defEqObjWithMapper)
 import Strat.Poly.Graph
 import qualified Strat.Poly.DiagramIso as DiagramIso
 import qualified Strat.Poly.Diagram as Diag
 import Strat.Poly.Diagram
 import Strat.Poly.DiagramInterpretation (requirePortType)
-import Strat.Poly.Match (Match(..))
+import Strat.Poly.Match
+  ( Match(..)
+  )
+import Strat.Poly.ObjEq (ObjEqInCtx)
 import Strat.Poly.Obj
   ( TmVar
     , tmvName
@@ -37,23 +45,42 @@ import Strat.Poly.Obj
   , pattern OATm
   , mapObjExpr
   )
-import qualified Strat.Poly.UnifyObj as U
-import Strat.Poly.Rewrite (RewriteRule(..))
-import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
+import qualified Strat.Poly.Subst as US
+import Strat.Poly.Rewrite
+  ( RewriteRule(..)
+  , SpliceMapper
+  , defaultSpliceMapper
+  , rewriteOnceWithMapper
+  , rewriteAllNested
+  )
+import qualified Strat.Poly.Term.SubstRuntime as SR
+import qualified Strat.Poly.UnifyFlex as UF
 import Strat.Poly.GenArgSigs (withStructuralZeroParamGenArgSigs)
-import Strat.Poly.Cell2 (Cell2(..), c2TyVars, c2TmVars)
-import Strat.Common.Rules (RewritePolicy(..))
-import Strat.Common.Rules (RuleClass(..), Orientation(..))
+import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.ModeTheory (ModeTheory)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName)
 import Strat.Poly.Syntax (CodeArg(..))
 import Strat.Poly.Tele (GenParam)
-import Strat.Poly.TypeTheory (TypeTheory(..), GenArgSig(..), lookupGenArgSig, modeOnlyTypeTheory)
+import Strat.Poly.TypeTheory
+  ( TypeTheory(..)
+  , GenArgSig(..)
+  , TmHeadSig(..)
+  , BinderSig(..)
+  , lookupGenArgSig
+  , lookupTmHeadSig
+  , modeOnlyTypeTheory
+  )
+import Strat.Poly.Term.HeadInst
+  ( diagramBoundaryTypes
+  , instantiateStoredHeadSubst
+  , instantiateStructuralBinderSig
+  , validateConcreteBinderDiagram
+  )
 import Strat.Poly.Traversal (traverseDiagram)
 
 
-type Subst = U.Subst
+type Subst = US.Subst
 
 fatalSubstPrefix :: Text
 fatalSubstPrefix = "criticalPairs: substitution failure: "
@@ -63,6 +90,11 @@ fatalSubstError err = fatalSubstPrefix <> err
 
 isFatalSubstError :: Text -> Bool
 isFatalSubstError = T.isPrefixOf fatalSubstPrefix
+
+isBenignUnifyMismatch :: Text -> Bool
+isBenignUnifyMismatch err =
+  "unifyTm:" `T.isPrefixOf` err
+    || "unifyGenArgsFlex:" `T.isPrefixOf` err
 
 
 data CPMode = CP_All | CP_OnlyStructural | CP_StructuralVsComputational
@@ -94,26 +126,27 @@ data PartialIso = PartialIso
   , piUsedEdges :: S.Set EdgeId
   , piUsedPorts :: S.Set PortId
   , piTySubst :: Subst
+  , piBinderSub1 :: M.Map BinderMetaVar Diagram
+  , piBinderSub2 :: M.Map BinderMetaVar Diagram
   } deriving (Eq, Show)
-
-criticalPairsForDoctrine :: CPMode -> RewritePolicy -> Doctrine -> Either Text [CriticalPairInfo]
-criticalPairsForDoctrine mode policy doc = do
-  tt <- doctrineTypeTheory doc
-  criticalPairsForRulesTT tt mode (rulesWithClass policy (dCells2 doc))
 
 criticalPairsForRules :: ModeTheory -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
 criticalPairsForRules mt mode rules =
   do
     tt <- withStructuralZeroParamGenArgSigs (concatMap ruleDiagrams rules) (modeOnlyTypeTheory mt)
-    criticalPairsForRulesTT tt mode rules
+    criticalPairsForRulesInTypeTheory tt mode rules
 
 ruleDiagrams :: RuleInfo -> [Diagram]
 ruleDiagrams info =
   let rule = riRule info
    in [rrLHS rule, rrRHS rule]
 
-criticalPairsForRulesTT :: TypeTheory -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
-criticalPairsForRulesTT tt mode rules = do
+criticalPairsForRulesInTypeTheory :: TypeTheory -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
+criticalPairsForRulesInTypeTheory tt mode =
+  criticalPairsForRulesInTypeTheoryWithMapper tt defaultSpliceMapper mode
+
+criticalPairsForRulesInTypeTheoryWithMapper :: TypeTheory -> SpliceMapper -> CPMode -> [RuleInfo] -> Either Text [CriticalPairInfo]
+criticalPairsForRulesInTypeTheoryWithMapper tt spliceMapper mode rules = do
   let numbered = zip [0 :: Int ..] rules
   let pairs =
         [ (r1, r2)
@@ -122,10 +155,24 @@ criticalPairsForRulesTT tt mode rules = do
         , i <= j
         , allowedPairSym mode r1 r2
         ]
-  pairsOut <- fmap concat (mapM (uncurry (criticalPairsForPair tt)) pairs)
+  pairsOut <- fmap concat (mapM (uncurry (criticalPairsForPair tt spliceMapper)) pairs)
   dedupCriticalPairs pairsOut
   where
     allowedPairSym m a b = allowedPair m a b || allowedPair m b a
+
+nestedCriticalPairsForRulesInTypeTheory :: TypeTheory -> [RuleInfo] -> Either Text [CriticalPairInfo]
+nestedCriticalPairsForRulesInTypeTheory tt =
+  nestedCriticalPairsForRulesInTypeTheoryWithMapper tt defaultSpliceMapper
+
+nestedCriticalPairsForRulesInTypeTheoryWithMapper :: TypeTheory -> SpliceMapper -> [RuleInfo] -> Either Text [CriticalPairInfo]
+nestedCriticalPairsForRulesInTypeTheoryWithMapper tt spliceMapper rules = do
+  let orderedPairs =
+        [ (r1, r2)
+        | r1 <- rules
+        , r2 <- rules
+        ]
+  pairsOut <- fmap concat (mapM (uncurry (nestedCriticalPairsForPair tt spliceMapper)) orderedPairs)
+  dedupCriticalPairs pairsOut
 
 allowedPair :: CPMode -> RuleInfo -> RuleInfo -> Bool
 allowedPair mode r1 r2 =
@@ -136,74 +183,250 @@ allowedPair mode r1 r2 =
       (riClass r1 == Structural && riClass r2 == Computational)
         || (riClass r1 == Computational && riClass r2 == Structural)
 
-criticalPairsForPair :: TypeTheory -> RuleInfo -> RuleInfo -> Either Text [CriticalPairInfo]
-criticalPairsForPair tt r1 r2 = do
+criticalPairsForPair :: TypeTheory -> SpliceMapper -> RuleInfo -> RuleInfo -> Either Text [CriticalPairInfo]
+criticalPairsForPair tt spliceMapper r1 r2 = do
   let r1' = renameRule 0 (riRule r1)
   let r2' = renameRule 1 (riRule r2)
   let tyFlex = S.fromList (rrTyVars r1' <> rrTyVars r2')
   let flex = S.unions [tyFlex, freeVarsDiagram (rrLHS r1'), freeVarsDiagram (rrLHS r2')]
-  overlaps <- enumerateOverlaps tt flex (rrLHS r1') (rrLHS r2')
-  fmap concat (mapM (buildPair r1 r2 r1' r2') overlaps)
+  let objEq = defEqObjWithMapper tt spliceMapper
+  overlaps <- enumerateOverlaps objEq tt flex (rrLHS r1') (rrLHS r2')
+  rootPairs <- fmap concat (mapM (buildPair r1 r2 r1' r2') overlaps)
+  nested12 <- buildNestedPairsForPair tt spliceMapper r1 r2 r1' r2'
+  nested21 <- buildNestedPairsForPair tt spliceMapper r2 r1 r2' r1'
+  pure (rootPairs <> nested12 <> nested21)
   where
     buildPair r1Info r2Info rule1 rule2 ov = do
-      (host, match1, match2) <- buildOverlapHost tt (rrLHS rule1) (rrLHS rule2) ov
-      if danglingOk (rrLHS rule1) host match1 && danglingOk (rrLHS rule2) host match2
-        then do
-          left <- applyRuleAtMatch tt rule1 match1 host
-          right <- applyRuleAtMatch tt rule2 match2 host
-          overlap' <- canonDiagramRaw host
-          left' <- canonDiagramRaw left
-          right' <- canonDiagramRaw right
-          let cp = CriticalPair
-                { cpRule1 = riLabel r1Info
-                , cpRule2 = riLabel r2Info
-                , cpOverlap = overlap'
-                , cpLeft = left'
-                , cpRight = right'
-                }
-          pure [CriticalPairInfo cp (riClass r1Info) (riClass r2Info)]
-        else Right []
+      case do
+        (host, match1, match2) <- buildOverlapHost tt (rrLHS rule1) (rrLHS rule2) ov
+        if danglingOk (rrLHS rule1) host match1 && danglingOk (rrLHS rule2) host match2
+          then do
+            left <- applyRuleAtMatch tt rule1 match1 host
+            right <- applyRuleAtMatch tt rule2 match2 host
+            overlap' <- canonDiagramRaw host
+            left' <- canonDiagramRaw left
+            right' <- canonDiagramRaw right
+            let cp = CriticalPair
+                  { cpRule1 = riLabel r1Info
+                  , cpRule2 = riLabel r2Info
+                  , cpOverlap = overlap'
+                  , cpLeft = left'
+                  , cpRight = right'
+                  }
+            pure [CriticalPairInfo cp (riClass r1Info) (riClass r2Info)]
+          else Right []
+        of
+          Left err
+            | isFatalSubstError err -> Left err
+            | otherwise -> Right []
+          Right cps -> Right cps
 
-rulesWithClass :: RewritePolicy -> [Cell2] -> [RuleInfo]
-rulesWithClass policy = concatMap (rulesForCellWithClass policy)
+nestedCriticalPairsForPair :: TypeTheory -> SpliceMapper -> RuleInfo -> RuleInfo -> Either Text [CriticalPairInfo]
+nestedCriticalPairsForPair tt spliceMapper outerInfo innerInfo = do
+  let outerRule = renameRule 0 (riRule outerInfo)
+  let innerRule = renameRule 1 (riRule innerInfo)
+  buildNestedPairsForPair tt spliceMapper outerInfo innerInfo outerRule innerRule
 
-rulesForCellWithClass :: RewritePolicy -> Cell2 -> [RuleInfo]
-rulesForCellWithClass policy cell =
-  case policy of
-    UseStructuralAsBidirectional ->
-      case c2Class cell of
-        Structural -> both
-        Computational -> oriented
-    UseOnlyComputationalLR ->
-      case c2Class cell of
-        Computational ->
-          case c2Orient cell of
-            LR -> [mk "lr" (c2LHS cell) (c2RHS cell)]
-            Bidirectional -> [mk "lr" (c2LHS cell) (c2RHS cell)]
-            _ -> []
-        Structural -> []
-    UseAllOriented -> oriented
+buildNestedPairsForPair
+  :: TypeTheory
+  -> SpliceMapper
+  -> RuleInfo
+  -> RuleInfo
+  -> RewriteRule
+  -> RewriteRule
+  -> Either Text [CriticalPairInfo]
+buildNestedPairsForPair tt spliceMapper outerInfo innerInfo outerRule innerRule = do
+  let objEq = defEqObjWithMapper tt spliceMapper
+  rewritten <- rewriteAllNested objEq tt spliceMapper maxBound [innerRule] (rrLHS outerRule)
+  directPairs <- fmap concat (mapM (mkNestedPair outerInfo innerInfo outerRule) rewritten)
+  binderPairs <- buildBinderHolePairs tt spliceMapper outerInfo innerInfo outerRule innerRule
+  pure (directPairs <> binderPairs)
   where
-    mk suffix lhs rhs =
-      let label = c2Name cell <> "." <> suffix
-          rule = RewriteRule
-            { rrName = label
-            , rrLHS = lhs
-            , rrRHS = rhs
-            , rrTyVars = c2TyVars cell
-            , rrTmVars = c2TmVars cell
+    mkNestedPair outerInfo' innerInfo' outerRule' rewritten = do
+      overlap' <- canonDiagramRaw (rrLHS outerRule')
+      left' <- canonDiagramRaw (rrRHS outerRule')
+      right' <- canonDiagramRaw rewritten
+      let cp = CriticalPair
+            { cpRule1 = riLabel outerInfo'
+            , cpRule2 = riLabel innerInfo'
+            , cpOverlap = overlap'
+            , cpLeft = left'
+            , cpRight = right'
             }
-      in RuleInfo label rule (c2Class cell)
-    oriented =
-      case c2Orient cell of
-        LR -> [mk "lr" (c2LHS cell) (c2RHS cell)]
-        RL -> [mk "rl" (c2RHS cell) (c2LHS cell)]
-        Bidirectional -> [mk "lr" (c2LHS cell) (c2RHS cell), mk "rl" (c2RHS cell) (c2LHS cell)]
-        Unoriented -> []
-    both =
-      [ mk "lr" (c2LHS cell) (c2RHS cell)
-      , mk "rl" (c2RHS cell) (c2LHS cell)
-      ]
+      pure [CriticalPairInfo cp (riClass outerInfo') (riClass innerInfo')]
+
+buildBinderHolePairs
+  :: TypeTheory
+  -> SpliceMapper
+  -> RuleInfo
+  -> RuleInfo
+  -> RewriteRule
+  -> RewriteRule
+  -> Either Text [CriticalPairInfo]
+buildBinderHolePairs tt spliceMapper outerInfo innerInfo outerRule innerRule
+  | dMode (rrLHS outerRule) /= dMode (rrLHS innerRule) =
+      Right []
+  | otherwise = do
+      slots <- collectBinderMetaSlots tt (rrLHS outerRule)
+      fmap concat $
+        mapM
+          (buildOneBinderHolePair tt spliceMapper outerInfo innerInfo outerRule innerRule)
+          (M.toList slots)
+
+buildOneBinderHolePair
+  :: TypeTheory
+  -> SpliceMapper
+  -> RuleInfo
+  -> RuleInfo
+  -> RewriteRule
+  -> RewriteRule
+  -> (BinderMetaVar, BinderSig)
+  -> Either Text [CriticalPairInfo]
+buildOneBinderHolePair tt spliceMapper outerInfo innerInfo outerRule innerRule (meta, slot) = do
+  let objEq = defEqObjWithMapper tt spliceMapper
+  mInst <- instantiateRuleForBinderSlot tt slot innerRule
+  case mInst of
+    Nothing ->
+      Right []
+    Just (innerLHS, innerRHS) -> do
+      overlap <- replaceBinderMetaAll meta innerLHS (rrLHS outerRule)
+      rewritten <- replaceBinderMetaAll meta innerRHS (rrLHS outerRule)
+      validateDiagram overlap
+      validateDiagram rewritten
+      case rewriteOnceWithMapper objEq tt spliceMapper [outerRule] overlap of
+        Left _ ->
+          Right []
+        Right Nothing ->
+          Right []
+        Right (Just left) -> do
+          overlap' <- canonDiagramRaw overlap
+          left' <- canonDiagramRaw left
+          right' <- canonDiagramRaw rewritten
+          let cp =
+                CriticalPair
+                  { cpRule1 = riLabel outerInfo
+                  , cpRule2 = riLabel innerInfo
+                  , cpOverlap = overlap'
+                  , cpLeft = left'
+                  , cpRight = right'
+                  }
+          pure [CriticalPairInfo cp (riClass outerInfo) (riClass innerInfo)]
+
+collectBinderMetaSlots :: TypeTheory -> Diagram -> Either Text (M.Map BinderMetaVar BinderSig)
+collectBinderMetaSlots tt = go M.empty
+  where
+    go acc diag =
+      foldM stepEdge acc (IM.elems (dEdges diag))
+      where
+        stepEdge acc0 edge =
+          case ePayload edge of
+            PGen g args bargs -> do
+              acc1 <- foldM stepCodeArg acc0 args
+              acc2 <- foldM stepBinderArg acc1 bargs
+              if not (any isBinderMetaArg bargs)
+                then Right acc2
+                else do
+                  sig <-
+                    case lookupTmHeadSig tt (dMode diag) g of
+                      Nothing -> Left "criticalPairs: missing term-head signature while collecting binder overlaps"
+                      Just sig0 -> Right sig0
+                  if length args /= length (thsParams sig) || length bargs /= length (thsBinders sig)
+                    then Left "criticalPairs: term-head arity mismatch while collecting binder overlaps"
+                    else do
+                      headSubst <- instantiateStoredHeadSubst tt (dTmCtx diag) sig args
+                      slots <- mapM (instantiateStructuralBinderSig tt (dTmCtx diag) headSubst) (thsBinders sig)
+                      foldM insertSite acc2 (zip bargs slots)
+            PBox _ inner ->
+              go acc0 inner
+            PFeedback inner ->
+              go acc0 inner
+            _ ->
+              Right acc0
+
+        isBinderMetaArg barg =
+          case barg of
+            BAMeta _ -> True
+            BAConcrete _ -> False
+
+        stepCodeArg acc0 arg =
+          case arg of
+            CAObj _ -> Right acc0
+            CATm (TermDiagram inner) -> go acc0 inner
+
+        stepBinderArg acc0 barg =
+          case barg of
+            BAConcrete inner -> go acc0 inner
+            BAMeta _ -> Right acc0
+
+        insertSite acc0 (barg, slot) =
+          case barg of
+            BAMeta x ->
+              case M.lookup x acc0 of
+                Nothing -> Right (M.insert x slot acc0)
+                Just slot0
+                  | slot0 == slot -> Right acc0
+                  | otherwise ->
+                      Left "criticalPairs: binder metavariable is used at incompatible binder slots"
+            BAConcrete _ ->
+              Right acc0
+
+instantiateRuleForBinderSlot
+  :: TypeTheory
+  -> BinderSig
+  -> RewriteRule
+  -> Either Text (Maybe (Diagram, Diagram))
+instantiateRuleForBinderSlot tt slot rule = do
+  let lhs0 = rrLHS rule
+      rhs0 = rrRHS rule
+      flex = S.fromList (rrTyVars rule <> rrTmVars rule)
+      binderTmCtx = bsTmCtx slot
+
+  let tryCompat action =
+        case action of
+          Left _ -> Nothing
+          Right x -> Just x
+
+      unifyBoundary subst lhsBoundary slotBoundary
+        | length lhsBoundary /= length slotBoundary = Left "criticalPairs: binder boundary length mismatch"
+        | otherwise =
+            foldM
+              (\substAcc (lhsTy, slotTy) -> UF.unifyObjFlex tt binderTmCtx flex substAcc lhsTy slotTy)
+              subst
+              (zip lhsBoundary slotBoundary)
+
+  lhsDom <- diagramBoundaryTypes lhs0 (dIn lhs0)
+  lhsCod <- diagramBoundaryTypes lhs0 (dOut lhs0)
+  case tryCompat (UF.unifyCtx tt binderTmCtx flex (dTmCtx lhs0) binderTmCtx) of
+    Nothing ->
+      Right Nothing
+    Just subst0 ->
+      case tryCompat (unifyBoundary subst0 lhsDom (bsDom slot)) of
+        Nothing ->
+          Right Nothing
+        Just subst1 ->
+          case tryCompat (unifyBoundary subst1 lhsCod (bsCod slot)) of
+            Nothing ->
+              Right Nothing
+            Just subst2 -> do
+              subst <- SR.normalizeSubst tt subst2
+              lhs' <- SR.applySubstDiagram tt subst lhs0
+              rhs' <- SR.applySubstDiagram tt subst rhs0
+              case (validateConcreteBinderDiagram slot lhs', validateConcreteBinderDiagram slot rhs') of
+                (Right (), Right ()) ->
+                  Right (Just (lhs', rhs'))
+                _ ->
+                  Right Nothing
+
+replaceBinderMetaAll :: BinderMetaVar -> Diagram -> Diagram -> Either Text Diagram
+replaceBinderMetaAll meta replacement =
+  traverseDiagram pure pure pure onBinder
+  where
+    onBinder barg =
+      pure $
+        case barg of
+          BAMeta x
+            | x == meta -> BAConcrete replacement
+          _ -> barg
 
 renameRule :: Int -> RewriteRule -> RewriteRule
 renameRule idx rule =
@@ -257,8 +480,8 @@ renameRule idx rule =
       tmVars' = map renameTmVar (rrTmVars rule)
   in rule { rrLHS = lhs', rrRHS = rhs', rrTyVars = tyvars', rrTmVars = tmVars' }
 
-enumerateOverlaps :: TypeTheory -> S.Set TmVar -> Diagram -> Diagram -> Either Text [PartialIso]
-enumerateOverlaps tt flex l1 l2 =
+enumerateOverlaps :: ObjEqInCtx -> TypeTheory -> S.Set TmVar -> Diagram -> Diagram -> Either Text [PartialIso]
+enumerateOverlaps objEq tt flex l1 l2 =
   if dMode l1 /= dMode l2 || dTmCtx l1 /= dTmCtx l2
     then Right []
     else do
@@ -266,15 +489,15 @@ enumerateOverlaps tt flex l1 l2 =
       let edges2 = sortEdges (IM.elems (dEdges l2))
       fmap concat (mapM (seedFrom edges2) edges1)
   where
-    emptyState = PartialIso M.empty M.empty S.empty S.empty U.emptySubst
+    emptyState = PartialIso M.empty M.empty S.empty S.empty US.emptySubst M.empty M.empty
     seedFrom edges2 e1 =
       fmap concat (mapM (expandFromSeed e1) edges2)
     expandFromSeed e1 e2 = do
-      seeds <- mapEdge tt flex l1 l2 emptyState e1 e2
-      fmap concat (mapM (expandState tt l1 l2 flex) seeds)
+      seeds <- mapEdge objEq tt flex l1 l2 emptyState e1 e2
+      fmap concat (mapM (expandState objEq tt l1 l2 flex) seeds)
 
-expandState :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> PartialIso -> Either Text [PartialIso]
-expandState tt l1 l2 flex st = do
+expandState :: ObjEqInCtx -> TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> PartialIso -> Either Text [PartialIso]
+expandState objEq tt l1 l2 flex st = do
   let mappedPorts = S.fromList (M.keys (piPortMap st))
   let candidates =
         [ e
@@ -282,22 +505,22 @@ expandState tt l1 l2 flex st = do
         , M.notMember (eId e) (piEdgeMap st)
         , any (`S.member` mappedPorts) (eIns e <> eOuts e)
         ]
-  expanded <- fmap concat (mapM (expandEdge tt l1 l2 flex st) candidates)
-  deeper <- fmap concat (mapM (expandState tt l1 l2 flex) expanded)
+  expanded <- fmap concat (mapM (expandEdge objEq tt l1 l2 flex st) candidates)
+  deeper <- fmap concat (mapM (expandState objEq tt l1 l2 flex) expanded)
   pure (st : deeper)
 
-expandEdge :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> PartialIso -> Edge -> Either Text [PartialIso]
-expandEdge tt l1 l2 flex st e1 = do
+expandEdge :: ObjEqInCtx -> TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> PartialIso -> Edge -> Either Text [PartialIso]
+expandEdge objEq tt l1 l2 flex st e1 = do
   let candidates =
         [ e2
         | e2 <- sortEdges (IM.elems (dEdges l2))
         , eId e2 `S.notMember` piUsedEdges st
         , edgeCompatible e1 e2
         ]
-  fmap concat (mapM (mapEdge tt flex l1 l2 st e1) candidates)
+  fmap concat (mapM (mapEdge objEq tt flex l1 l2 st e1) candidates)
 
-mapEdge :: TypeTheory -> S.Set TmVar -> Diagram -> Diagram -> PartialIso -> Edge -> Edge -> Either Text [PartialIso]
-mapEdge tt flex l1 l2 st e1 e2 =
+mapEdge :: ObjEqInCtx -> TypeTheory -> S.Set TmVar -> Diagram -> Diagram -> PartialIso -> Edge -> Edge -> Either Text [PartialIso]
+mapEdge objEq tt flex l1 l2 st e1 e2 =
   if M.member (eId e1) (piEdgeMap st)
     then Right []
     else if eId e2 `S.member` piUsedEdges st
@@ -305,10 +528,20 @@ mapEdge tt flex l1 l2 st e1 e2 =
     else if length (eIns e1) /= length (eIns e2) || length (eOuts e1) /= length (eOuts e2)
       then Right []
       else do
-        substs <- payloadSubsts tt flex l1 (piTySubst st) (ePayload e1) (ePayload e2)
+        substs <-
+          payloadSubsts
+            objEq
+            tt
+            flex
+            l1
+            (piTySubst st)
+            (piBinderSub1 st)
+            (piBinderSub2 st)
+            (ePayload e1)
+            (ePayload e2)
         fmap concat (mapM extendPorts substs)
   where
-    extendPorts tySubst0 = do
+    extendPorts (tySubst0, binderSub1, binderSub2) = do
       let pairs = zip (eIns e1) (eIns e2) <> zip (eOuts e1) (eOuts e2)
       case foldl (extendPort tt l1 l2 flex) (Right (piPortMap st, piUsedPorts st, tySubst0)) pairs of
         Left err ->
@@ -325,6 +558,8 @@ mapEdge tt flex l1 l2 st e1 e2 =
                 , piUsedEdges = usedEdges'
                 , piUsedPorts = usedPorts'
                 , piTySubst = tySubst'
+                , piBinderSub1 = binderSub1
+                , piBinderSub2 = binderSub2
                 }
             ]
 
@@ -339,72 +574,120 @@ extendPort tt l1 l2 flex acc (p1, p2) = do
         then Left "criticalPairs: target port already used"
         else do
           s1 <- unifyPorts tt l1 l2 flex tySubst p1 p2
-          tySubst' <- mapLeft fatalSubstError (U.composeSubst tt s1 tySubst)
+          tySubst' <- mapLeft fatalSubstError (SR.composeSubst tt s1 tySubst)
           Right (M.insert p1 p2 portMap, S.insert p2 usedPorts, tySubst')
 
 unifyPorts :: TypeTheory -> Diagram -> Diagram -> S.Set TmVar -> Subst -> PortId -> PortId -> Either Text Subst
 unifyPorts tt l1 l2 flex subst p1 p2 = do
   pTy <- requirePortType "criticalPairs" l1 p1
   hTy <- requirePortType "criticalPairs" l2 p2
-  pTy' <- mapLeft fatalSubstError (U.applySubstObj tt subst pTy)
-  hTy' <- mapLeft fatalSubstError (U.applySubstObj tt subst hTy)
-  tmCtx' <- mapLeft fatalSubstError (U.applySubstCtx tt subst (dTmCtx l1))
-  U.unifyObjFlex
+  pTy' <- mapLeft fatalSubstError (SR.applySubstObj tt subst pTy)
+  hTy' <- mapLeft fatalSubstError (SR.applySubstObj tt subst hTy)
+  tmCtx' <- mapLeft fatalSubstError (SR.applySubstCtx tt subst (dTmCtx l1))
+  UF.unifyObjFlex
     tt
     tmCtx'
     flex
-    U.emptySubst
+    US.emptySubst
     pTy'
     hTy'
 
-payloadSubsts :: TypeTheory -> S.Set TmVar -> Diagram -> Subst -> EdgePayload -> EdgePayload -> Either Text [Subst]
-payloadSubsts tt flex lhs tySubst p1 p2 =
+payloadSubsts
+  :: ObjEqInCtx
+  -> TypeTheory
+  -> S.Set TmVar
+  -> Diagram
+  -> Subst
+  -> M.Map BinderMetaVar Diagram
+  -> M.Map BinderMetaVar Diagram
+  -> EdgePayload
+  -> EdgePayload
+  -> Either Text [(Subst, M.Map BinderMetaVar Diagram, M.Map BinderMetaVar Diagram)]
+payloadSubsts objEq tt flex lhs tySubst binderSub1 binderSub2 p1 p2 =
   case (p1, p2) of
     (PGen g1 args1 bargs1, PGen g2 args2 bargs2) ->
       if g1 /= g2 || length args1 /= length args2 || length bargs1 /= length bargs2
         then Right []
         else do
-          tmCtx' <- mapLeft fatalSubstError (U.applySubstCtx tt tySubst (dTmCtx lhs))
+          tmCtx' <- mapLeft fatalSubstError (SR.applySubstCtx tt tySubst (dTmCtx lhs))
           case lookupGenArgParams tt (dMode lhs) g1 args1 args2 of
             Nothing -> Right []
             Just params ->
-              case U.unifyGenArgsFlex tt tmCtx' flex tySubst params args1 args2 of
-                Left err -> mapLeft fatalSubstError (Left err)
+              case UF.unifyGenArgsFlex tt tmCtx' flex tySubst params args1 args2 of
+                Left err
+                  | isBenignUnifyMismatch err -> Right []
+                  | otherwise -> mapLeft fatalSubstError (Left err)
                 Right tySubst' ->
-                  foldl step (Right [tySubst']) (zip bargs1 bargs2)
+                  foldl step (Right [(tySubst', binderSub1, binderSub2)]) (zip bargs1 bargs2)
       where
         step acc pair = do
           subs <- acc
-          fmap concat (mapM (\tyS -> binderArgSubsts tyS pair) subs)
+          fmap concat (mapM (\(tyS, sub1, sub2) -> binderArgSubsts tyS sub1 sub2 pair) subs)
 
-        binderArgSubsts tySubst0 (lhsArg, rhsArg) =
+        binderArgSubsts tySubst0 binderSub1' binderSub2' (lhsArg, rhsArg) =
           case (lhsArg, rhsArg) of
-            (BAConcrete d1, BAConcrete d2) ->
-              mapLeft
-                fatalSubstError
-                (DiagramIso.diagramIsoMatchWithVarsFrom tt flex tySubst0 d1 d2)
+            (BAConcrete d1, BAConcrete d2) -> do
+              substs <-
+                mapLeft
+                  fatalSubstError
+                  (DiagramIso.diagramIsoMatchWithVarsFrom objEq tt flex tySubst0 d1 d2)
+              pure [ (tyS, binderSub1', binderSub2') | tyS <- substs ]
+            (BAMeta x, BAConcrete d2) -> do
+              captures <- extendBinderCapture objEq tt flex tySubst0 binderSub1' x d2
+              pure [ (tyS, sub1', binderSub2') | (tyS, sub1') <- captures ]
+            (BAConcrete d1, BAMeta y) -> do
+              captures <- extendBinderCapture objEq tt flex tySubst0 binderSub2' y d1
+              pure [ (tyS, binderSub1', sub2') | (tyS, sub2') <- captures ]
             (BAMeta x, BAMeta y) ->
-              if x == y then Right [tySubst0] else Right []
+              if x == y
+                then Right [(tySubst0, binderSub1', binderSub2')]
+                else Right []
             _ -> Right []
     (PProvider ref1, PProvider ref2)
-      | ref1 == ref2 -> Right [tySubst]
+      | ref1 == ref2 -> Right [(tySubst, binderSub1, binderSub2)]
     (PModuleRef ref1, PModuleRef ref2)
-      | ref1 == ref2 -> Right [tySubst]
+      | ref1 == ref2 -> Right [(tySubst, binderSub1, binderSub2)]
     (PBox _ d1, PBox _ d2) -> do
-      mapLeft
-        fatalSubstError
-        (DiagramIso.diagramIsoMatchWithVarsFrom tt flex tySubst d1 d2)
+      substs <-
+        mapLeft
+          fatalSubstError
+          (DiagramIso.diagramIsoMatchWithVarsFrom objEq tt flex tySubst d1 d2)
+      pure [ (tyS, binderSub1, binderSub2) | tyS <- substs ]
     (PFeedback d1, PFeedback d2) ->
-      mapLeft
-        fatalSubstError
-        (DiagramIso.diagramIsoMatchWithVarsFrom tt flex tySubst d1 d2)
-    (PSplice x me1, PSplice y me2) | x == y && me1 == me2 -> Right [tySubst]
+      do
+        substs <-
+          mapLeft
+            fatalSubstError
+            (DiagramIso.diagramIsoMatchWithVarsFrom objEq tt flex tySubst d1 d2)
+        pure [ (tyS, binderSub1, binderSub2) | tyS <- substs ]
+    (PSplice x me1, PSplice y me2)
+      | x == y && me1 == me2 -> Right [(tySubst, binderSub1, binderSub2)]
     (PTmMeta x, PTmMeta y)
-      | sameTmVarId x y -> Right [tySubst]
+      | sameTmVarId x y -> Right [(tySubst, binderSub1, binderSub2)]
     (PTmLit x, PTmLit y)
-      | x == y -> Right [tySubst]
-    (PInternalDrop, PInternalDrop) -> Right [tySubst]
+      | x == y -> Right [(tySubst, binderSub1, binderSub2)]
+    (PInternalDrop, PInternalDrop) -> Right [(tySubst, binderSub1, binderSub2)]
     _ -> Right []
+
+extendBinderCapture
+  :: ObjEqInCtx
+  -> TypeTheory
+  -> S.Set TmVar
+  -> Subst
+  -> M.Map BinderMetaVar Diagram
+  -> BinderMetaVar
+  -> Diagram
+  -> Either Text [(Subst, M.Map BinderMetaVar Diagram)]
+extendBinderCapture objEq tt flex tySubst binderSub meta captured =
+  case M.lookup meta binderSub of
+    Nothing ->
+      Right [(tySubst, M.insert meta captured binderSub)]
+    Just existing -> do
+      substs <-
+        mapLeft
+          fatalSubstError
+          (DiagramIso.diagramIsoMatchWithVarsFrom objEq tt flex tySubst existing captured)
+      pure [ (tyS, binderSub) | tyS <- substs ]
 
 lookupGenArgParams :: TypeTheory -> ModeName -> GenName -> [CodeArg] -> [CodeArg] -> Maybe [GenParam]
 lookupGenArgParams tt mode g _args1 _args2 =
@@ -446,8 +729,12 @@ sortEdges = L.sortOn (unEdgeId . eId)
 buildOverlapHost :: TypeTheory -> Diagram -> Diagram -> PartialIso -> Either Text (Diagram, Match, Match)
 buildOverlapHost tt l1 l2 ov = do
   let tySubst = piTySubst ov
-  l1' <- applySubstsDiagramLocal tt tySubst l1
-  l2' <- applySubstsDiagramLocal tt tySubst l2
+  (binderSub1, binderSub2) <-
+    resolveOverlapBinderSubs tt tySubst (piBinderSub1 ov) (piBinderSub2 ov)
+  l1Ty <- applySubstsDiagramLocal tt tySubst l1
+  l2Ty <- applySubstsDiagramLocal tt tySubst l2
+  l1' <- instantiateBinderMetasLocal binderSub1 l1Ty
+  l2' <- instantiateBinderMetasLocal binderSub2 l2Ty
   let portMapL2 = M.fromList [ (p2, p1) | (p1, p2) <- M.toList (piPortMap ov) ]
   let edgeMapL2 = M.fromList [ (e2, e1) | (e1, e2) <- M.toList (piEdgeMap ov) ]
   (host1, portMap1, edgeMap1) <- insertEdgesFromL2 l1' l2' portMapL2 edgeMapL2
@@ -458,9 +745,56 @@ buildOverlapHost tt l1 l2 ov = do
           , dOut = dedupePorts (dOut l1' <> mapPorts portMap2 (dOut l2'))
           }
   validateDiagram host3
-  let m1 = mkIdentityMatch tySubst l1'
-  let m2 = mkMatchForL2 tySubst l2' portMap2 edgeMap1
+  let m1 = mkIdentityMatch tySubst binderSub1 l1'
+  let m2 = mkMatchForL2 tySubst binderSub2 l2' portMap2 edgeMap1
   pure (host3, m1, m2)
+
+resolveOverlapBinderSubs
+  :: TypeTheory
+  -> Subst
+  -> M.Map BinderMetaVar Diagram
+  -> M.Map BinderMetaVar Diagram
+  -> Either Text (M.Map BinderMetaVar Diagram, M.Map BinderMetaVar Diagram)
+resolveOverlapBinderSubs tt tySubst binderSub1 binderSub2 = do
+  binderSub1Ty <- mapM (applySubstsDiagramLocal tt tySubst) binderSub1
+  binderSub2Ty <- mapM (applySubstsDiagramLocal tt tySubst) binderSub2
+  let allSubs = M.union binderSub1Ty binderSub2Ty
+      leftKeys = S.fromList (M.keys binderSub1Ty)
+      rightKeys = S.fromList (M.keys binderSub2Ty)
+  resolved <- mapM (resolveCaptured allSubs S.empty) allSubs
+  pure
+    ( M.filterWithKey (\k _ -> k `S.member` leftKeys) resolved
+    , M.filterWithKey (\k _ -> k `S.member` rightKeys) resolved
+    )
+  where
+    resolveCaptured allSubs seen diag =
+      traverseDiagram pure pure pure onBinder diag
+      where
+        onBinder barg =
+          case barg of
+            BAConcrete inner ->
+              pure (BAConcrete inner)
+            BAMeta x ->
+              case M.lookup x allSubs of
+                Nothing -> pure (BAMeta x)
+                Just captured
+                  | x `S.member` seen ->
+                      Left "criticalPairs: binder substitution cycle while building overlap host"
+                  | otherwise ->
+                      BAConcrete <$> resolveCaptured allSubs (S.insert x seen) captured
+
+instantiateBinderMetasLocal :: M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
+instantiateBinderMetasLocal binderSub =
+  traverseDiagram pure pure pure onBinderArg
+  where
+    onBinderArg barg =
+      pure $
+        case barg of
+          BAConcrete inner -> BAConcrete inner
+          BAMeta x ->
+            case M.lookup x binderSub of
+              Nothing -> BAMeta x
+              Just captured -> BAConcrete captured
 
 insertEdgesFromL2 :: Diagram -> Diagram -> M.Map PortId PortId -> M.Map EdgeId EdgeId -> Either Text (Diagram, M.Map PortId PortId, M.Map EdgeId EdgeId)
 insertEdgesFromL2 host l2 portMap edgeMap =
@@ -521,8 +855,8 @@ dedupePorts = go S.empty
       | p `S.member` seen = go seen ps
       | otherwise = p : go (S.insert p seen) ps
 
-mkIdentityMatch :: Subst -> Diagram -> Match
-mkIdentityMatch tySubst diag =
+mkIdentityMatch :: Subst -> M.Map BinderMetaVar Diagram -> Diagram -> Match
+mkIdentityMatch tySubst binderSub diag =
   let ports = diagramPortIds diag
       edges = IM.elems (dEdges diag)
       mPorts = M.fromList [ (p, p) | p <- ports ]
@@ -534,13 +868,13 @@ mkIdentityMatch tySubst diag =
       { mPortMap = mPorts
       , mEdgeMap = mEdges
       , mTySubst = tySubst
-      , mBinderSub = M.empty
+      , mBinderSub = binderSub
       , mUsedHostPorts = usedPorts
       , mUsedHostEdges = usedEdges
       }
 
-mkMatchForL2 :: Subst -> Diagram -> M.Map PortId PortId -> M.Map EdgeId EdgeId -> Match
-mkMatchForL2 tySubst l2 portMap edgeMap =
+mkMatchForL2 :: Subst -> M.Map BinderMetaVar Diagram -> Diagram -> M.Map PortId PortId -> M.Map EdgeId EdgeId -> Match
+mkMatchForL2 tySubst binderSub l2 portMap edgeMap =
   let ports = diagramPortIds l2
       edges = IM.elems (dEdges l2)
       mPorts = M.fromList [ (p, M.findWithDefault p p portMap) | p <- ports ]
@@ -552,7 +886,7 @@ mkMatchForL2 tySubst l2 portMap edgeMap =
       { mPortMap = mPorts
       , mEdgeMap = mEdges
       , mTySubst = tySubst
-      , mBinderSub = M.empty
+      , mBinderSub = binderSub
       , mUsedHostPorts = usedPorts
       , mUsedHostEdges = usedEdges
       }

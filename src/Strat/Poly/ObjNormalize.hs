@@ -3,435 +3,77 @@ module Strat.Poly.ObjNormalize
   ( checkObjWellFormed
   , checkCodeWellFormed
   , normalizeObjDeep
+  , normalizeObjDeepWithMapper
   , normalizeObjDeepWithCtx
+  , normalizeObjDeepWithCtxWithMapper
   , normalizeCodeTermDeepWithCtx
+  , normalizeCodeTermDeepWithCtxWithMapper
   , normalizeTermDiagram
+  , normalizeTermDiagramWithMapper
   , termExprToDiagramChecked
   , diagramToTermExprChecked
   , termToDiagram
+  , termToDiagramWithMapper
   , diagramToTerm
   , validateTermDiagram
   ) where
 
 import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Map.Strict as M
-import qualified Data.Set as S
-import Control.Monad (foldM, unless)
-import Strat.Poly.Graph
-  ( Diagram(..)
-  , PortId
-  , diagramPortObj
-  , validateDiagram
-  , validateLiteralEdges
-  , weakenDiagramTmCtxToModePrefix
-  )
-import Strat.Poly.ModeTheory (ModeName, meSrc, meTgt)
-import Strat.Poly.ObjClassifier (modeClassifierMode)
-import Strat.Poly.Obj
-  ( TermDiagram(..)
-  , CodeArg(..)
-  , CodeTerm(..)
-  , Obj(..)
-  , ObjName(..)
-  , ObjRef(..)
-  , TmVar(..)
-  , objOwnerMode
-  , tmVarOwner
-  , normalizeCodeTerm
-  , normalizeObjExpr
-  )
-import Strat.Poly.TypeTheory
-  ( DefFragment(..)
-  , TypeTheory(..)
-  , defFragmentForMode
-  , literalKindForObj
-  , termTRSForMode
-  , lookupTmHeadSig
-  )
-import Strat.Poly.Tele (CtorSig(..), GenParam(..))
-import Strat.Poly.Subst (bindHeadSubst)
-import Strat.Poly.TermExpr
-  ( TermExpr(..)
-  , TermConvEnv(..)
-  , applyHeadSubstObj
-  , normalizeTermDiagramStructurally
-  , structuralConvEnv
-  , termExprToDiagramWith
-  , diagramGraphToTermExprWith
-  , validateTermGraph
-  )
-import Strat.Poly.Term.Normalize (normalizeTermExpr)
-import Strat.Poly.Term.NBE.Normalize (normalizeDiagramNBE)
+import Strat.Common.Rules (RewritePolicy(..))
+import Strat.Poly.Graph (Diagram, dMode)
+import Strat.Poly.ModeTheory (ModeName)
+import Strat.Poly.Obj (CodeTerm, Obj, TermDiagram)
+import Strat.Poly.Rewrite (rewriteOnceRawWithMapper, rulesForMode)
+import qualified Strat.Poly.Term.DefEqCore as Core
+import qualified Strat.Poly.Term.NormalizeCommon as Common
+import Strat.Poly.Term.NBE.Normalize (normalizeDiagramDefEqWithStep)
+import Strat.Poly.Term.RuleDiagram (SpliceMapper, sameModeSpliceMapper)
+import Strat.Poly.TermExpr (TermExpr)
+import Strat.Poly.TypeTheory (TypeTheory)
 
-
-normalizeObjDeep :: TypeTheory -> Obj -> Either Text Obj
-normalizeObjDeep tt = normalizeObjDeepWithCtx tt []
 
 checkObjWellFormed :: TypeTheory -> Obj -> Either Text ()
-checkObjWellFormed tt obj = do
-  let owner = objOwnerMode obj
-  let codeMode = modeClassifierMode (ttModes tt) owner
-  checkCodeWellFormed tt codeMode (objCode obj)
-  case objCode obj of
-    CTCon ref _ -> do
-      let ownerTable = M.findWithDefault S.empty owner (ttUniverseCtors tt)
-      unless
-        (S.member (orName ref) ownerTable)
-        (Left "checkObjWellFormed: top-level constructor is not eligible for owner mode")
-    _ -> Right ()
+checkObjWellFormed tt =
+  Common.checkObjWellFormedUsing normalizeTermDiagramWithMapper tt
 
 checkCodeWellFormed :: TypeTheory -> ModeName -> CodeTerm -> Either Text ()
-checkCodeWellFormed tt codeMode code =
-  case code of
-    CTMeta _ -> Right ()
-    CTCon ref args -> do
-      unless
-        (orMode ref == codeMode || isOpaqueMetaSort ref)
-        (Left "checkCodeWellFormed: constructor mode does not match current code mode")
-      case M.lookup (orName ref) sigTable of
-        Just sig -> do
-          unless
-            (length (csParams sig) == length args)
-            (Left "checkCodeWellFormed: constructor arity mismatch")
-          _ <- foldM checkArgBySig M.empty (zip (csParams sig) args)
-          Right ()
-        Nothing ->
-          if ttStrictCtorLookup tt
-            then Left "checkCodeWellFormed: unknown constructor"
-            else mapM_ checkArgUnknown args
-    CTLift me inner -> do
-      if meTgt me == codeMode
-        then checkCodeWellFormed tt (meSrc me) inner
-        else Left "checkCodeWellFormed: lift target does not match current code mode"
-  where
-    sigTable = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
+checkCodeWellFormed tt =
+  Common.checkCodeWellFormedUsing normalizeTermDiagramWithMapper tt
 
-    checkArgBySig substAcc (param, arg) =
-      case (param, arg) of
-        (GP_Ty v, CAObj innerObj) -> do
-          let expectedOwner = tmVarOwner v
-          unless
-            (objOwnerMode innerObj == expectedOwner)
-            (Left "checkCodeWellFormed: type argument owner mode mismatch")
-          checkObjWellFormed tt innerObj
-          bindHeadSubst v (CAObj innerObj) substAcc
-        (GP_Ty _, CATm _) ->
-          Left "checkCodeWellFormed: expected type argument"
-        (GP_Tm v, CATm tmArg) -> do
-          expectedSort <- applyHeadSubstObj tt (structuralConvEnv tt) (dTmCtx (unTerm tmArg)) substAcc (tmvSort v)
-          _ <- termToDiagram tt (dTmCtx (unTerm tmArg)) expectedSort tmArg
-          bindHeadSubst v (CATm tmArg) substAcc
-        (GP_Tm _, CAObj _) ->
-          Left "checkCodeWellFormed: expected term argument"
+normalizeObjDeep :: TypeTheory -> Obj -> Either Text Obj
+normalizeObjDeep tt =
+  Common.normalizeObjDeepUsing normalizeTermDiagramWithMapper tt
 
-    checkArgUnknown arg =
-      case arg of
-        CAObj innerObj -> checkObjWellFormed tt innerObj
-        CATm _ -> Right ()
+normalizeObjDeepWithMapper :: TypeTheory -> SpliceMapper -> Obj -> Either Text Obj
+normalizeObjDeepWithMapper tt =
+  Common.normalizeObjDeepWithMapperUsing normalizeTermDiagramWithMapper tt
 
-    isOpaqueMetaSort ref =
-      case orName ref of
-        ObjName "__obj_meta_sort" -> True
-        _ -> False
+normalizeObjDeepWithCtx :: TypeTheory -> [Obj] -> Obj -> Either Text Obj
+normalizeObjDeepWithCtx tt =
+  Common.normalizeObjDeepWithCtxUsing normalizeTermDiagramWithMapper tt
+
+normalizeObjDeepWithCtxWithMapper :: TypeTheory -> SpliceMapper -> [Obj] -> Obj -> Either Text Obj
+normalizeObjDeepWithCtxWithMapper tt =
+  Common.normalizeObjDeepWithCtxWithMapperUsing normalizeTermDiagramWithMapper tt
 
 normalizeCodeTermDeepWithCtx
   :: TypeTheory
   -> [Obj]
-  -> ModeName -- code mode
+  -> ModeName
   -> CodeTerm
   -> Either Text CodeTerm
-normalizeCodeTermDeepWithCtx tt tmCtx codeMode code =
-  case code of
-    CTMeta _ -> Right code
-    CTCon ref args -> do
-      if orMode ref == codeMode || isOpaqueMetaSort ref
-        then Right ()
-        else Left "normalizeCodeTermDeepWithCtx: constructor mode does not match current code mode"
-      case M.lookup (orName ref) sigTable of
-        Just sig ->
-          if length (csParams sig) /= length args
-            then Left "normalizeCodeTermDeepWithCtx: type constructor arity mismatch"
-            else do
-              (args', _) <- foldM normalizeArgBySig ([], M.empty) (zip (csParams sig) args)
-              Right (CTCon ref args')
-        Nothing ->
-          if not (ttStrictCtorLookup tt)
-            then
-              if M.null sigTable
-                then do
-                  -- modeOnlyTypeTheory intentionally omits constructor signatures; normalize structurally.
-                  args' <- mapM normalizeUnknownArg args
-                  Right (CTCon ref args')
-                else
-                  if null args
-                    then Right code
-                    else unknownCtor ref
-            else
-              if M.null sigTable
-                then do
-                  -- modeOnlyTypeTheory intentionally omits constructor signatures; normalize structurally.
-                  args' <- mapM normalizeUnknownArg args
-                  Right (CTCon ref args')
-                else
-                  if null args && isOpaqueNullary ref
-                    then Right code
-                    else unknownCtor ref
-    CTLift me innerCode -> do
-      if meTgt me == codeMode
-        then Right ()
-        else Left "normalizeCodeTermDeepWithCtx: modality target does not match current code mode"
-      inner' <- normalizeCodeTermDeepWithCtx tt tmCtx (meSrc me) innerCode
-      normalizeCodeTerm (ttModes tt) (CTLift me inner')
-  where
-    normalizeArgBySig (acc, substAcc) (param, arg) =
-      case (param, arg) of
-        (GP_Ty v, CAObj tyArg) -> do
-          tyArg' <- normalizeObjDeepWithCtx tt tmCtx tyArg
-          subst' <- bindHeadSubst v (CAObj tyArg') substAcc
-          Right (acc <> [CAObj tyArg'], subst')
-        (GP_Tm v, CATm tm) -> do
-          sortTy' <- applyHeadSubstObj tt (structuralConvEnv tt) tmCtx substAcc (tmvSort v)
-          tm' <- normalizeTermDiagram tt tmCtx sortTy' tm
-          subst' <- bindHeadSubst v (CATm tm') substAcc
-          Right (acc <> [CATm tm'], subst')
-        (GP_Ty _, CATm _) ->
-          Left "normalizeCodeTermDeepWithCtx: expected type argument"
-        (GP_Tm _, CAObj _) ->
-          Left "normalizeCodeTermDeepWithCtx: expected term argument"
+normalizeCodeTermDeepWithCtx tt =
+  Common.normalizeCodeTermDeepWithCtxUsing normalizeTermDiagramWithMapper tt
 
-    normalizeUnknownArg arg =
-      case arg of
-        CAObj tyArg -> CAObj <$> normalizeObjDeepWithCtx tt tmCtx tyArg
-        CATm tm -> Right (CATm tm)
-
-    renderRef ref = T.pack (show ref)
-    renderModeName m = T.pack (show m)
-
-    isOpaqueNullary ref =
-      case orName ref of
-        ObjName "__obj_meta_sort" -> True
-        _ -> False
-
-    isOpaqueMetaSort ref =
-      case orName ref of
-        ObjName "__obj_meta_sort" -> True
-        _ -> False
-
-    unknownCtor ref =
-      Left
-        ( "normalizeCodeTermDeepWithCtx: unknown type constructor "
-            <> renderRef ref
-            <> " (code mode "
-            <> renderModeName codeMode
-            <> "); available refs: "
-            <> renderAvailableRefs
-        )
-
-    renderAvailableRefs =
-      let refs = [ ObjRef codeMode name | name <- M.keys sigTable ]
-       in if null refs
-            then "(none)"
-            else T.intercalate ", " (map renderRef refs)
-
-    sigTable = M.findWithDefault M.empty codeMode (ttCtorSigs tt)
-
-normalizeObjDeepWithCtx :: TypeTheory -> [Obj] -> Obj -> Either Text Obj
-normalizeObjDeepWithCtx tt tmCtx ty = do
-  let codeMode = modeClassifierMode (ttModes tt) (objOwnerMode ty)
-  code' <- normalizeCodeTermDeepWithCtx tt tmCtx codeMode (objCode ty)
-  normalizeObjExpr (ttModes tt) ty { objCode = code' }
-
-normalizeTermDiagram
+normalizeCodeTermDeepWithCtxWithMapper
   :: TypeTheory
+  -> SpliceMapper
   -> [Obj]
-  -> Obj
-  -> TermDiagram
-  -> Either Text TermDiagram
-normalizeTermDiagram tt tmCtx expectedSort term = do
-  expectedSort' <- wrap "normalize-sort" (normalizeObjDeepWithCtx tt tmCtx expectedSort)
-  src <- wrap "widen-tmctx" (weakenDiagramTmCtxToModePrefix tmCtx (unTerm term))
-  let mode = objOwnerMode expectedSort'
-  case defFragmentForMode tt mode of
-    Just DefFragmentNBE { dfNBE = cfg } -> do
-      wrap "validate-diagram" (validateDiagram src)
-      wrap "validate-literals" (validateLiteralEdges tt src)
-      wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' src)
-      out <- wrap "nbe-normalize" (normalizeDiagramNBE cfg tt nbeSortEq tmCtx expectedSort' src)
-      let outGraph = unTerm out
-      wrap "validate-output-graph" (validateDiagram outGraph)
-      wrap "validate-literals" (validateLiteralEdges tt outGraph)
-      wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' outGraph)
-      pure out
-    _ -> do
-      wrap "validate-term-graph" (validateTermGraph src)
-      wrap "validate-literals" (validateLiteralEdges tt src)
-      wrap "check-output-sort" (ensureOutputSortStructural src)
-      let trs = termTRSForMode tt mode
-      expr0 <-
-        wrap
-          "diagram-to-termexpr"
-          (diagramGraphToTermExprWith tt (structuralConvEnv tt) tmCtx expectedSort' src)
-      let expr = normalizeTermExpr trs expr0
-      out <-
-        if expr == expr0
-          then
-            wrap
-              "structural-canon"
-              (normalizeTermDiagramStructurally tt (structuralConvEnv tt) (dTmCtx src) (TermDiagram src))
-          else
-            wrap
-              "termexpr-to-diagram"
-              (termExprToDiagramWith tt (structuralConvEnv tt) tmCtx expectedSort' expr)
-      let outGraph = unTerm out
-      wrap "validate-output-graph" (validateTermGraph outGraph)
-      wrap "validate-literals" (validateLiteralEdges tt outGraph)
-      wrap "check-output-sort" (ensureOutputSortStructural outGraph)
-      if expr == expr0
-        then pure out
-        else do
-          -- Normalize output graph layout by a deterministic structural roundtrip.
-          exprCanon <-
-            wrap
-              "roundtrip-diagram-to-termexpr"
-              (diagramGraphToTermExprWith tt (structuralConvEnv tt) tmCtx expectedSort' outGraph)
-          wrap "roundtrip-termexpr-to-diagram" (termExprToDiagramWith tt (structuralConvEnv tt) tmCtx expectedSort' exprCanon)
-  where
-    nbeSortEq sortCtx tyA tyB = do
-      tyA' <- normalizeObjDeepWithCtx tt sortCtx tyA
-      tyB' <- normalizeObjDeepWithCtx tt sortCtx tyB
-      pure (tyA' == tyB')
-
-    ensureOutputSortStructural termGraph = do
-      out <- requireSingleOut termGraph
-      outSort0 <-
-        case diagramPortObj termGraph out of
-          Nothing -> Left "termToDiagram: missing output port type"
-          Just ty -> Right ty
-      let conv = structuralConvEnv tt
-      outSort <- tcNormalizeSort conv tmCtx outSort0
-      expectedSortStruct <- tcNormalizeSort conv tmCtx expectedSort
-      if outSort == expectedSortStruct
-        then Right ()
-        else Left "termToDiagram: output sort mismatch"
-
-    wrap stage =
-      mapLeft
-          ( \err ->
-              "normalizeTermDiagram[mode="
-                <> renderMode (objOwnerMode expectedSort)
-                <> ", expectedSort="
-                <> T.pack (show expectedSort)
-                <> ", tmCtxSize="
-                <> T.pack (show (length tmCtx))
-                <> ", inArity="
-                <> T.pack (show (length (dIn (unTerm term))))
-                <> ", outArity="
-                <> T.pack (show (length (dOut (unTerm term))))
-                <> ", stage="
-                <> stage
-                <> "]: "
-                <> err
-          )
-
-termToDiagram
-  :: TypeTheory
-  -> [Obj]
-  -> Obj
-  -> TermDiagram
-  -> Either Text Diagram
-termToDiagram tt tmCtx expectedSort (TermDiagram term0) = do
-  expectedSort' <- wrap "normalize-sort" (normalizeObjDeepWithCtx tt tmCtx expectedSort)
-  term <- wrap "widen-tmctx" (weakenDiagramTmCtxToModePrefix tmCtx term0)
-  case defFragmentForMode tt (objOwnerMode expectedSort') of
-    Just DefFragmentNBE {} -> do
-      wrap "validate-diagram" (validateDiagram term)
-      wrap "validate-literals" (validateLiteralEdges tt term)
-    _ -> do
-      _ <- wrap "validate-term-graph" (diagramGraphToTermExprChecked tt tmCtx expectedSort' term)
-      wrap "validate-literals" (validateLiteralEdges tt term)
-  if dMode term == objOwnerMode expectedSort'
-    then Right ()
-    else wrapFail "mode-mismatch" "term mode differs from expected sort mode"
-  wrap "check-output-sort" (ensureOutputSort tt tmCtx expectedSort' term)
-  pure term
-  where
-    wrap stage =
-      mapLeft
-        ( \err ->
-            "termToDiagram[mode="
-              <> renderMode (objOwnerMode expectedSort)
-              <> ", expectedSort="
-              <> T.pack (show expectedSort)
-              <> ", tmCtxSize="
-              <> T.pack (show (length tmCtx))
-              <> ", inArity="
-              <> T.pack (show (length (dIn term0)))
-              <> ", outArity="
-              <> T.pack (show (length (dOut term0)))
-              <> ", stage="
-              <> stage
-              <> "]: "
-              <> err
-        )
-    wrapFail stage msg =
-      Left
-        ( "termToDiagram[mode="
-            <> renderMode (objOwnerMode expectedSort)
-            <> ", expectedSort="
-            <> T.pack (show expectedSort)
-            <> ", tmCtxSize="
-            <> T.pack (show (length tmCtx))
-            <> ", inArity="
-            <> T.pack (show (length (dIn term0)))
-            <> ", outArity="
-            <> T.pack (show (length (dOut term0)))
-            <> ", stage="
-            <> stage
-            <> "]: "
-            <> msg
-        )
-
-diagramToTerm
-  :: TypeTheory
-  -> [Obj]
-  -> Obj
-  -> Diagram
-  -> Either Text TermDiagram
-diagramToTerm tt tmCtx expectedSort term0 = do
-  expectedSort' <- normalizeObjDeepWithCtx tt tmCtx expectedSort
-  let term = term0 { dTmCtx = tmCtx }
-  case defFragmentForMode tt (objOwnerMode expectedSort') of
-    Just DefFragmentNBE {} -> validateDiagram term *> validateLiteralEdges tt term
-    _ -> do
-      _ <- diagramGraphToTermExprChecked tt tmCtx expectedSort' term
-      validateLiteralEdges tt term
-  if dMode term == objOwnerMode expectedSort'
-    then Right ()
-    else Left "diagramToTerm: mode mismatch"
-  ensureOutputSort tt tmCtx expectedSort' term
-  pure (TermDiagram term)
-
-validateTermDiagram :: Diagram -> Either Text ()
-validateTermDiagram = validateTermGraph
-
-ensureOutputSort :: TypeTheory -> [Obj] -> Obj -> Diagram -> Either Text ()
-ensureOutputSort tt tmCtx expectedSort term = do
-  out <- requireSingleOut term
-  outSort <-
-    case diagramPortObj term out of
-      Nothing -> Left "termToDiagram: missing output port type"
-      Just ty -> normalizeObjDeepWithCtx tt tmCtx ty
-  expectedSort' <- normalizeObjDeepWithCtx tt tmCtx expectedSort
-  if outSort == expectedSort'
-    then Right ()
-    else Left "termToDiagram: output sort mismatch"
-
-requireSingleOut :: Diagram -> Either Text PortId
-requireSingleOut term =
-  case dOut term of
-    [pid] -> Right pid
-    _ -> Left "termToDiagram: term diagram must have exactly one output"
+  -> ModeName
+  -> CodeTerm
+  -> Either Text CodeTerm
+normalizeCodeTermDeepWithCtxWithMapper tt =
+  Common.normalizeCodeTermDeepWithCtxWithMapperUsing normalizeTermDiagramWithMapper tt
 
 termExprToDiagramChecked
   :: TypeTheory
@@ -439,10 +81,8 @@ termExprToDiagramChecked
   -> Obj
   -> TermExpr
   -> Either Text TermDiagram
-termExprToDiagramChecked tt tmCtx expectedSort tm = do
-  out <- termExprToDiagramWith tt (checkedConvEnv tt) tmCtx expectedSort tm
-  validateLiteralEdges tt (unTerm out)
-  pure out
+termExprToDiagramChecked tt =
+  Common.termExprToDiagramCheckedUsing normalizeTermDiagramWithMapper tt
 
 diagramToTermExprChecked
   :: TypeTheory
@@ -450,40 +90,76 @@ diagramToTermExprChecked
   -> Obj
   -> TermDiagram
   -> Either Text TermExpr
-diagramToTermExprChecked tt tmCtx expectedSort tm =
-  diagramGraphToTermExprChecked tt tmCtx expectedSort (unTerm tm)
+diagramToTermExprChecked tt =
+  Common.diagramToTermExprCheckedUsing normalizeTermDiagramWithMapper tt
 
-diagramGraphToTermExprChecked
+termToDiagram
+  :: TypeTheory
+  -> [Obj]
+  -> Obj
+  -> TermDiagram
+  -> Either Text Diagram
+termToDiagram tt =
+  Common.termToDiagramUsing normalizeTermDiagramWithMapper tt
+
+termToDiagramWithMapper
+  :: TypeTheory
+  -> SpliceMapper
+  -> [Obj]
+  -> Obj
+  -> TermDiagram
+  -> Either Text Diagram
+termToDiagramWithMapper tt =
+  Common.termToDiagramWithMapperUsing normalizeTermDiagramWithMapper tt
+
+diagramToTerm
   :: TypeTheory
   -> [Obj]
   -> Obj
   -> Diagram
-  -> Either Text TermExpr
-diagramGraphToTermExprChecked tt tmCtx expectedSort diag = do
-  expr <- diagramGraphToTermExprWith tt (checkedConvEnv tt) tmCtx expectedSort diag
-  _ <- termExprToDiagramChecked tt tmCtx expectedSort expr
-  pure expr
+  -> Either Text TermDiagram
+diagramToTerm tt =
+  Common.diagramToTermUsing normalizeTermDiagramWithMapper tt
 
-checkedConvEnv :: TypeTheory -> TermConvEnv
-checkedConvEnv tt =
-  TermConvEnv
-    { tcLookupSig = \mode f -> lookupTmHeadSig tt mode f
-    , tcSortEq = \tmCtx tyA tyB -> do
-        tyA' <- normalizeObjDeepWithCtx tt tmCtx tyA
-        tyB' <- normalizeObjDeepWithCtx tt tmCtx tyB
-        pure (tyA' == tyB')
-    , tcNormalizeSort = normalizeObjDeepWithCtx tt
-    , tcLiteralKindForSort = \tmCtx sortTy -> do
-        sortTy' <- normalizeObjDeepWithCtx tt tmCtx sortTy
-        pure (literalKindForObj tt sortTy')
-    }
+validateTermDiagram :: Diagram -> Either Text ()
+validateTermDiagram =
+  Common.validateTermDiagram
 
-renderMode :: ModeName -> Text
-renderMode mode =
-  T.pack (show mode)
+normalizeTermDiagram
+  :: TypeTheory
+  -> [Obj]
+  -> Obj
+  -> TermDiagram
+  -> Either Text TermDiagram
+normalizeTermDiagram tt =
+  normalizeTermDiagramWithMapper tt (sameModeSpliceMapper "defeq")
 
-mapLeft :: (e -> f) -> Either e a -> Either f a
-mapLeft f mv =
-  case mv of
-    Left err -> Left (f err)
-    Right v -> Right v
+normalizeTermDiagramWithMapper
+  :: TypeTheory
+  -> SpliceMapper
+  -> [Obj]
+  -> Obj
+  -> TermDiagram
+  -> Either Text TermDiagram
+normalizeTermDiagramWithMapper tt spliceMapper tmCtx expectedSort term =
+  Core.normalizeTermDiagramWithMapperUsing normalizeRound tt spliceMapper tmCtx expectedSort term
+  where
+    -- Chosen long-term boundary: public defeq is one normalization path, but
+    -- structural computational rules still act as a diagram-level shell around
+    -- the term semantic core rather than as first-class NbE semantic values.
+    normalizeObjTopWithMapper =
+      Common.normalizeObjDeepWithCtxWithMapperUsing normalizeTermDiagramWithMapper tt spliceMapper
+
+    objEq tmCtx' a b = do
+      aN <- normalizeObjTopWithMapper tmCtx' a
+      bN <- normalizeObjTopWithMapper tmCtx' b
+      pure (aN == bN)
+
+    structuralStep current =
+      let structuralRules = rulesForMode UseOnlyComputationalLR tt (dMode current)
+       in if null structuralRules
+            then Right Nothing
+            else rewriteOnceRawWithMapper objEq tt spliceMapper structuralRules current
+
+    normalizeRound fragment tt' conv tmCtx' expectedSort' src =
+      normalizeDiagramDefEqWithStep fragment tt' conv tmCtx' expectedSort' structuralStep src

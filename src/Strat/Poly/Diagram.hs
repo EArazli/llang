@@ -30,19 +30,17 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Strat.Common.ModuleRef (ModuleValueRef)
 import Strat.Common.Provider (ProviderRef)
+import Strat.Poly.DiagramBuild (allocPorts)
 import Strat.Poly.Graph
 import qualified Strat.Poly.DiagramInfo as DI
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Obj (Context, Obj, TmVar(..), CodeArg(..), freeVarsObj, freeVarsTerm)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.UnifyObj
-  ( Subst
-  , emptySubst
-  , applySubstCtx
-  , unifyCtx
-  )
-import qualified Strat.Poly.UnifyObj as U (applySubstDiagram)
+import Strat.Poly.Subst (Subst, emptySubst)
+import Strat.Poly.Term.SubstRuntime (applySubstCtx)
+import qualified Strat.Poly.Term.SubstRuntime as SubstRuntime (applySubstDiagram)
 import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.UnifyFlex (unifyCtx)
 import Strat.Poly.Traversal (foldDiagram, traverseDiagram)
 
 
@@ -151,7 +149,7 @@ diagramCod diag = mapM (lookupPort "diagramCod") (dOut diag)
         Just ty -> Right ty
 
 applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
-applySubstDiagram = U.applySubstDiagram
+applySubstDiagram = SubstRuntime.applySubstDiagram
 
 freeVarsDiagram :: Diagram -> S.Set TmVar
 freeVarsDiagram = DI.freeVarsDiagram
@@ -218,13 +216,6 @@ spliceMetaVarsDiagram =
 binderMetaVarsDiagram :: Diagram -> S.Set BinderMetaVar
 binderMetaVarsDiagram d =
   binderArgMetaVarsDiagram d <> spliceMetaVarsDiagram d
-
-allocPorts :: Context -> Diagram -> ([PortId], Diagram)
-allocPorts [] diag = ([], diag)
-allocPorts (ty:rest) diag =
-  let (pid, diag1) = freshPort ty diag
-      (pids, diag2) = allocPorts rest diag1
-  in (pid : pids, diag2)
 
 unionDiagram :: Diagram -> Diagram -> Either Text Diagram
 unionDiagram left right

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Strat.Poly.Quote
   ( RefId(..)
   , SharedBindingKind(..)
@@ -39,7 +40,7 @@ import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Literal (Literal(..), LiteralKind(..))
 import Strat.Poly.Obj (CodeArg(..), Obj, ObjName(..), ObjRef(..), TermDiagram(..), mkCon, tmvSort)
-import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
+import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..), pattern TMGen)
 import Strat.Poly.TypeTheory (literalKindForObj)
 
 

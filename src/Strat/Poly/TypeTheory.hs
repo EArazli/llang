@@ -6,22 +6,39 @@ module Strat.Poly.TypeTheory
   , ttCtorTablesByOwner
   , literalKindForObj
   , DefFragment(..)
+  , BinderSig(..)
+  , BuiltinHeadRole(..)
+  , FunctionBuiltin(..)
+  , ExtensionalBuiltin(..)
+  , RecursiveHeadArgSource(..)
+  , BranchInputSource(..)
+  , ElimBranchBuiltin(..)
+  , InductiveElimBuiltin(..)
+  , EliminatorBuiltin(..)
+  , BuiltinHeads(..)
   , CtorSig(..)
   , TmHeadSig(..)
   , GenArgSig(..)
   , TmRule(..)
+  , setModeDiagramRules
+  , emptyBuiltinHeads
   , emptyDefFragment
   , setDefFragment
   , setModeTermHeads
   , setModeTermRules
+  , setModeCompiledRules
+  , setModeBuiltins
   , setModeTermTRS
-  , setModeNBEConfig
   , defFragmentForMode
-  , defEqEngineForMode
   , termHeadsForMode
   , termRulesForMode
+  , diagramRulesForMode
+  , compiledRulesForMode
+  , builtinHeadsForMode
+  , functionBuiltinForMode
+  , extensionalBuiltinForMode
+  , eliminatorBuiltinForMode
   , termTRSForMode
-  , nbeConfigForMode
   , lookupTmHeadSig
   , lookupGenArgSig
   , modeOnlyTypeTheory
@@ -29,31 +46,84 @@ module Strat.Poly.TypeTheory
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Strat.Poly.Cell2 (Cell2)
 import Strat.Poly.Literal (LiteralKind)
-import Strat.Poly.ModeTheory (ModeName, ModeTheory(..), DefEqEngine(..), modeDefEqEngine)
+import Strat.Poly.ModeTheory (ModeName, ModeTheory(..))
 import Strat.Poly.Names (GenName)
 import Strat.Poly.ObjClassifier (modeClassifierMode)
 import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
-import Strat.Poly.Term.NBE.Config (NbeConfig, defaultNbeConfig)
 import Strat.Poly.Obj
 import Strat.Poly.Tele (CtorSig(..), GenParam)
 
 type CtorSigEnv = M.Map ModeName (M.Map ObjName CtorSig)
 type UniverseCtors = M.Map ModeName (S.Set ObjName)
 
+data BuiltinHeadRole
+  = BuiltinExtensional
+  | BuiltinEliminator
+  deriving (Eq, Ord, Read, Show)
+
+data BinderSig = BinderSig
+  { bsTmCtx :: [Obj]
+  , bsDom :: Context
+  , bsCod :: Context
+  } deriving (Eq, Ord, Read, Show)
+
+data FunctionBuiltin = FunctionBuiltin
+  { fbLamGen :: GenName
+  , fbAppGen :: GenName
+  , fbArrTyCon :: ObjName
+  , fbAllowEta :: Bool
+  } deriving (Eq, Ord, Read, Show)
+
+data ExtensionalBuiltin
+  = BuiltinTransport
+  deriving (Eq, Ord, Read, Show)
+
+data RecursiveHeadArgSource
+  = RHOuterHeadArg Int
+  | RHCtorArg Int
+  deriving (Eq, Ord, Read, Show)
+
+data BranchInputSource
+  = BISOuterHeadTmParam Int
+  | BISCtorHeadTmParam Int
+  | BISOuterInput Int
+  | BISCtorField Int
+  | BISRecursiveResult Int [RecursiveHeadArgSource]
+  deriving (Eq, Ord, Read, Show)
+
+data ElimBranchBuiltin = ElimBranchBuiltin
+  { ebbCtorGen :: GenName
+  , ebbTmCtxInputs :: [BranchInputSource]
+  , ebbInputs :: [BranchInputSource]
+  } deriving (Eq, Ord, Read, Show)
+
+data InductiveElimBuiltin = InductiveElimBuiltin
+  { iebScrutineeIndex :: Int
+  , iebScrutineeTyCon :: ObjRef
+  , iebBranches :: [ElimBranchBuiltin]
+  } deriving (Eq, Ord, Read, Show)
+
+data EliminatorBuiltin
+  = BuiltinInductiveElim InductiveElimBuiltin
+  deriving (Eq, Ord, Read, Show)
+
+data BuiltinHeads = BuiltinHeads
+  { bhFunctionSpace :: Maybe FunctionBuiltin
+  , bhExtensionalHeads :: M.Map GenName ExtensionalBuiltin
+  , bhEliminators :: M.Map GenName EliminatorBuiltin
+  , bhHeadRoles :: M.Map GenName BuiltinHeadRole
+  } deriving (Eq, Read, Show)
 
 data DefFragment
-  = DefFragmentTRS
+  = DefFragment
       { dfMode :: ModeName
       , dfHeads :: M.Map GenName TmHeadSig
       , dfRules :: [TmRule]
-      , dfTRS :: TRS
-      }
-  | DefFragmentNBE
-      { dfMode :: ModeName
-      , dfHeads :: M.Map GenName TmHeadSig
-      , dfRules :: [TmRule]
-      , dfNBE :: NbeConfig
+      , dfDiagramRules :: [Cell2]
+      , dfCompiledRules :: TRS
+      , dfBuiltins :: BuiltinHeads
       }
   deriving (Eq, Show)
 
@@ -70,6 +140,7 @@ data TypeTheory = TypeTheory
 data TmHeadSig = TmHeadSig
   { thsParams :: [GenParam]
   , thsInputs :: [Obj]
+  , thsBinders :: [BinderSig]
   , thsRes :: Obj
   } deriving (Eq, Ord, Show)
 
@@ -78,7 +149,8 @@ data GenArgSig = GenArgSig
   } deriving (Eq, Ord, Show)
 
 data TmRule = TmRule
-  { trVars :: [TmVar]
+  { trTyVars :: [TmVar]
+  , trVars :: [TmVar]
   , trLHS :: TermDiagram
   , trRHS :: TermDiagram
   } deriving (Eq, Ord, Show)
@@ -87,11 +159,7 @@ modeOnlyTypeTheory :: ModeTheory -> TypeTheory
 modeOnlyTypeTheory mt =
   let fragments =
         M.fromList
-          [ ( mode
-            , case modeDefEqEngine mt mode of
-                DefEqTRS -> emptyDefFragment mode
-                DefEqNBE -> emptyNBEDefFragment mode
-            )
+          [ (mode, emptyDefFragment mode)
           | mode <- M.keys (mtModes mt)
           ]
    in
@@ -118,22 +186,24 @@ ttCtorTablesByOwner tt =
           eligible = M.findWithDefault S.empty ownerMode (ttUniverseCtors tt)
        in M.filterWithKey (\name _ -> S.member name eligible) sigs
 
-emptyDefFragment :: ModeName -> DefFragment
-emptyDefFragment mode =
-  DefFragmentTRS
-    { dfMode = mode
-    , dfHeads = M.empty
-    , dfRules = []
-    , dfTRS = mkTRS mode []
+emptyBuiltinHeads :: BuiltinHeads
+emptyBuiltinHeads =
+  BuiltinHeads
+    { bhFunctionSpace = Nothing
+    , bhExtensionalHeads = M.empty
+    , bhEliminators = M.empty
+    , bhHeadRoles = M.empty
     }
 
-emptyNBEDefFragment :: ModeName -> DefFragment
-emptyNBEDefFragment mode =
-  DefFragmentNBE
+emptyDefFragment :: ModeName -> DefFragment
+emptyDefFragment mode =
+  DefFragment
     { dfMode = mode
     , dfHeads = M.empty
     , dfRules = []
-    , dfNBE = defaultNbeConfig
+    , dfDiagramRules = []
+    , dfCompiledRules = mkTRS mode []
+    , dfBuiltins = emptyBuiltinHeads
     }
 
 setDefFragment :: DefFragment -> TypeTheory -> TypeTheory
@@ -147,84 +217,58 @@ setModeTermHeads :: ModeName -> M.Map GenName TmHeadSig -> TypeTheory -> TypeThe
 setModeTermHeads mode heads tt =
   setDefFragment fragment tt
   where
-    fragment =
-      case baseFragment of
-        trs@DefFragmentTRS {} -> trs { dfHeads = heads }
-        nbe@DefFragmentNBE {} -> nbe { dfHeads = heads }
-    baseFragment =
-      case defFragmentForMode tt mode of
-        Just existing -> existing
-        Nothing ->
-          case defEqEngineForMode tt mode of
-            DefEqNBE -> emptyNBEDefFragment mode
-            DefEqTRS -> emptyDefFragment mode
-
-setModeTermRules :: ModeName -> [TmRule] -> TypeTheory -> TypeTheory
-setModeTermRules mode rules tt =
-  setDefFragment fragment tt
-  where
-    fragment =
-      case baseFragment of
-        trs@DefFragmentTRS {} -> trs { dfRules = rules }
-        nbe@DefFragmentNBE {} -> nbe { dfRules = rules }
-    baseFragment =
-      case defFragmentForMode tt mode of
-        Just existing -> existing
-        Nothing ->
-          case defEqEngineForMode tt mode of
-            DefEqNBE -> emptyNBEDefFragment mode
-            DefEqTRS -> emptyDefFragment mode
-
-setModeTermTRS :: ModeName -> TRS -> TypeTheory -> TypeTheory
-setModeTermTRS mode trs tt =
-  setDefFragment fragment tt
-  where
-    fragment =
-      case baseFragment of
-        trsFrag@DefFragmentTRS {} ->
-          trsFrag { dfTRS = trs }
-        nbeFrag@DefFragmentNBE {} ->
-          DefFragmentTRS
-            { dfMode = dfMode nbeFrag
-            , dfHeads = dfHeads nbeFrag
-            , dfRules = dfRules nbeFrag
-            , dfTRS = trs
-            }
+    fragment = baseFragment { dfHeads = heads }
     baseFragment =
       case defFragmentForMode tt mode of
         Just existing -> existing
         Nothing -> emptyDefFragment mode
 
-setModeNBEConfig :: ModeName -> NbeConfig -> TypeTheory -> TypeTheory
-setModeNBEConfig mode cfg tt =
+setModeTermRules :: ModeName -> [TmRule] -> TypeTheory -> TypeTheory
+setModeTermRules mode rules tt =
   setDefFragment fragment tt
   where
-    fragment =
-      case baseFragment of
-        trsFrag@DefFragmentTRS {} ->
-          DefFragmentNBE
-            { dfMode = dfMode trsFrag
-            , dfHeads = dfHeads trsFrag
-            , dfRules = dfRules trsFrag
-            , dfNBE = cfg
-            }
-        nbeFrag@DefFragmentNBE {} ->
-          nbeFrag { dfNBE = cfg }
+    fragment = baseFragment { dfRules = rules }
     baseFragment =
       case defFragmentForMode tt mode of
         Just existing -> existing
-        Nothing -> emptyNBEDefFragment mode
+        Nothing -> emptyDefFragment mode
+
+setModeDiagramRules :: ModeName -> [Cell2] -> TypeTheory -> TypeTheory
+setModeDiagramRules mode rules tt =
+  setDefFragment fragment tt
+  where
+    fragment = baseFragment { dfDiagramRules = rules }
+    baseFragment =
+      case defFragmentForMode tt mode of
+        Just existing -> existing
+        Nothing -> emptyDefFragment mode
+
+setModeCompiledRules :: ModeName -> TRS -> TypeTheory -> TypeTheory
+setModeCompiledRules mode compiled tt =
+  setDefFragment fragment tt
+  where
+    fragment = baseFragment { dfCompiledRules = compiled }
+    baseFragment =
+      case defFragmentForMode tt mode of
+        Just existing -> existing
+        Nothing -> emptyDefFragment mode
+
+setModeBuiltins :: ModeName -> BuiltinHeads -> TypeTheory -> TypeTheory
+setModeBuiltins mode builtins tt =
+  setDefFragment fragment tt
+  where
+    fragment = baseFragment { dfBuiltins = builtins }
+    baseFragment =
+      case defFragmentForMode tt mode of
+        Just existing -> existing
+        Nothing -> emptyDefFragment mode
+
+setModeTermTRS :: ModeName -> TRS -> TypeTheory -> TypeTheory
+setModeTermTRS = setModeCompiledRules
 
 defFragmentForMode :: TypeTheory -> ModeName -> Maybe DefFragment
 defFragmentForMode tt mode =
   M.lookup mode (ttDefFragments tt)
-
-defEqEngineForMode :: TypeTheory -> ModeName -> DefEqEngine
-defEqEngineForMode tt mode =
-  case defFragmentForMode tt mode of
-    Just DefFragmentTRS {} -> DefEqTRS
-    Just DefFragmentNBE {} -> DefEqNBE
-    Nothing -> modeDefEqEngine (ttModes tt) mode
 
 termHeadsForMode :: TypeTheory -> ModeName -> M.Map GenName TmHeadSig
 termHeadsForMode tt mode =
@@ -235,22 +279,41 @@ termHeadsForMode tt mode =
 termRulesForMode :: TypeTheory -> ModeName -> [TmRule]
 termRulesForMode tt mode =
   case defFragmentForMode tt mode of
-    Just DefFragmentTRS { dfRules = rules } -> rules
-    Just DefFragmentNBE {} -> []
+    Just DefFragment { dfRules = rules } -> rules
     Nothing -> []
 
-termTRSForMode :: TypeTheory -> ModeName -> TRS
-termTRSForMode tt mode =
+diagramRulesForMode :: TypeTheory -> ModeName -> [Cell2]
+diagramRulesForMode tt mode =
   case defFragmentForMode tt mode of
-    Just DefFragmentTRS { dfTRS = trs } -> trs
-    Just DefFragmentNBE {} -> mkTRS mode []
+    Just DefFragment { dfDiagramRules = rules } -> rules
+    Nothing -> []
+
+compiledRulesForMode :: TypeTheory -> ModeName -> TRS
+compiledRulesForMode tt mode =
+  case defFragmentForMode tt mode of
+    Just DefFragment { dfCompiledRules = trs } -> trs
     Nothing -> mkTRS mode []
 
-nbeConfigForMode :: TypeTheory -> ModeName -> Maybe NbeConfig
-nbeConfigForMode tt mode =
+termTRSForMode :: TypeTheory -> ModeName -> TRS
+termTRSForMode = compiledRulesForMode
+
+builtinHeadsForMode :: TypeTheory -> ModeName -> BuiltinHeads
+builtinHeadsForMode tt mode =
   case defFragmentForMode tt mode of
-    Just DefFragmentNBE { dfNBE = cfg } -> Just cfg
-    _ -> Nothing
+    Just DefFragment { dfBuiltins = builtins } -> builtins
+    Nothing -> emptyBuiltinHeads
+
+functionBuiltinForMode :: TypeTheory -> ModeName -> Maybe FunctionBuiltin
+functionBuiltinForMode tt mode =
+  bhFunctionSpace (builtinHeadsForMode tt mode)
+
+extensionalBuiltinForMode :: TypeTheory -> ModeName -> GenName -> Maybe ExtensionalBuiltin
+extensionalBuiltinForMode tt mode g =
+  M.lookup g (bhExtensionalHeads (builtinHeadsForMode tt mode))
+
+eliminatorBuiltinForMode :: TypeTheory -> ModeName -> GenName -> Maybe EliminatorBuiltin
+eliminatorBuiltinForMode tt mode g =
+  M.lookup g (bhEliminators (builtinHeadsForMode tt mode))
 
 lookupTmHeadSig :: TypeTheory -> ModeName -> GenName -> Maybe TmHeadSig
 lookupTmHeadSig tt mode f =

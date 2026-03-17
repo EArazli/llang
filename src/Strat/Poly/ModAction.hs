@@ -4,6 +4,7 @@ module Strat.Poly.ModAction
   , mapTypeByModExpr
   , mapTypeByModExprWithLift
   , applyAction
+  , ActionSemanticsProof(..)
   , ActionSemanticsResult(..)
   , validateActionSemanticsWithBudgetResult
   , validateActionSemanticsWithBudget
@@ -47,15 +48,23 @@ import Strat.Poly.Proof
   , renderSearchLimit
   , checkJoinProofWithMapper
   )
-import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.Rewrite (rulesForDiagram)
 import Strat.Poly.Obj
-import Strat.Poly.UnifyObj hiding (applySubstDiagram)
+import Strat.Poly.Subst (Subst, emptySubst, mkSubst)
+import Strat.Poly.Term.Compat (sharedTermDiagramContext)
+import Strat.Poly.Term.SubstRuntime (applySubstCtx, applySubstObj, composeSubst)
 import Strat.Poly.TypeTheory
-import Strat.Poly.DefEq (termExprToDiagramChecked)
+import Strat.Poly.UnifyFlex (unifyCtxDiagram)
+import Strat.Poly.DefEq (defEqRuleTermDiagramWithMapper, termExprToDiagramChecked)
 import Strat.Poly.TermExpr (TermExpr(..))
 
+data ActionSemanticsProof
+  = ASPJoin JoinProof
+  | ASPKernelDefEq
+  deriving (Eq, Show)
+
 data ActionSemanticsResult
-  = ActionSemanticsProved [(Text, JoinProof)]
+  = ActionSemanticsProved [(Text, ActionSemanticsProof)]
   | ActionSemanticsUndecided Text SearchLimit
   deriving (Eq, Show)
 
@@ -112,36 +121,26 @@ validateActionSemanticsWithBudgetResult budget doc = do
             , dMode (c2LHS c) == srcMode
             , ruleUsesOnly explicit c
             ]
-      let rules = rulesFromPolicy (maPolicy action) (dCells2 doc)
-      checkRules tt modName rules srcRules
+      checkRules tt modName (maPolicy action) srcRules
 
     checkRules _ _ _ [] = Right (ActionSemanticsProved [])
-    checkRules tt modName rules (cell:rest) = do
-      result <- checkOneRule tt modName rules cell
+    checkRules tt modName policy (cell:rest) = do
+      result <- checkOneRule tt modName policy cell
       case result of
         ActionSemanticsUndecided{} -> Right result
         ActionSemanticsProved proofs -> do
-          restResult <- checkRules tt modName rules rest
+          restResult <- checkRules tt modName policy rest
           case restResult of
             ActionSemanticsUndecided{} -> Right restResult
             ActionSemanticsProved restProofs ->
               Right (ActionSemanticsProved (proofs <> restProofs))
 
-    checkOneRule tt modName rules cell = do
+    checkOneRule tt modName policy cell = do
       cell' <- freshenRuleTyVars tt cell
       lhs <- applyAction doc modName (c2LHS cell')
       rhs <- applyAction doc modName (c2RHS cell')
-      proof <- autoJoinProofWithMapper (applyModExpr doc) tt budget rules lhs rhs
-      case proof of
-        SearchUndecided lim ->
-          Right
-            ( ActionSemanticsUndecided
-                ("rule " <> c2Name cell)
-                lim
-            )
-        SearchProved witness -> do
-          checkJoinProofWithMapper (applyModExpr doc) tt rules witness
-          Right (ActionSemanticsProved [("rule " <> c2Name cell, witness)])
+      let rules = rulesForDiagram policy tt lhs
+      proveActionEquality tt rules ("rule " <> c2Name cell) lhs rhs
 
     checkModEqn tt ctorTables eqn = do
       let lhs = meLHS eqn
@@ -158,8 +157,7 @@ validateActionSemanticsWithBudgetResult budget doc = do
                 , not (isTypeDeclGenNameInTables doc ctorTables srcMode (ObjName (renderGenName (gdName gd))))
                 ]
           let policy = choosePolicy mods
-          let rules = rulesFromPolicy policy (dCells2 doc)
-          checkGens tt lhs rhs rules gens
+          checkGens tt lhs rhs policy gens
         else Right (ActionSemanticsProved [])
       where
         explicitIntersection modNames =
@@ -180,32 +178,56 @@ validateActionSemanticsWithBudgetResult budget doc = do
           Right (explicitActionGenSet (mdSrc decl) action)
 
     checkGens _ _ _ _ [] = Right (ActionSemanticsProved [])
-    checkGens tt lhs rhs rules (gd:rest) = do
-      result <- checkOneGen tt lhs rhs rules gd
+    checkGens tt lhs rhs policy (gd:rest) = do
+      result <- checkOneGen tt lhs rhs policy gd
       case result of
         ActionSemanticsUndecided{} -> Right result
         ActionSemanticsProved proofs -> do
-          restResult <- checkGens tt lhs rhs rules rest
+          restResult <- checkGens tt lhs rhs policy rest
           case restResult of
             ActionSemanticsUndecided{} -> Right restResult
             ActionSemanticsProved restProofs ->
               Right (ActionSemanticsProved (proofs <> restProofs))
 
-    checkOneGen tt lhs rhs rules gd = do
+    checkOneGen tt lhs rhs policy gd = do
       gDiag <- genericGenDiagram gd
       lhsMapped <- applyModExpr doc lhs gDiag
       rhsMapped <- applyModExpr doc rhs gDiag
-      proof <- autoJoinProofWithMapper (applyModExpr doc) tt budget rules lhsMapped rhsMapped
+      let rules = rulesForDiagram policy tt lhsMapped
+      proveActionEquality tt rules ("generator " <> renderGenName (gdName gd)) lhsMapped rhsMapped
+
+    proveActionEquality tt rules label lhs rhs = do
+      proof <- autoJoinProofWithMapper (applyModExpr doc) tt budget rules lhs rhs
       case proof of
-        SearchUndecided lim ->
-          Right
-            ( ActionSemanticsUndecided
-                ("generator " <> renderGenName (gdName gd))
-                lim
-            )
         SearchProved witness -> do
           checkJoinProofWithMapper (applyModExpr doc) tt rules witness
-          Right (ActionSemanticsProved [("generator " <> renderGenName (gdName gd), witness)])
+          Right (ActionSemanticsProved [(label, ASPJoin witness)])
+        SearchUndecided lim -> do
+          kernelWitness <- kernelDefEqFallback tt lhs rhs
+          case kernelWitness of
+            Just True ->
+              Right (ActionSemanticsProved [(label, ASPKernelDefEq)])
+            Just False ->
+              Right (ActionSemanticsUndecided label lim)
+            Nothing ->
+              Right (ActionSemanticsUndecided label lim)
+
+    kernelDefEqFallback tt lhs rhs =
+      case actionTermFallbackContext lhs rhs of
+        Nothing ->
+          Right Nothing
+        Just (tmCtx, lhsTm, rhsTm) ->
+          case defEqRuleTermDiagramWithMapper tt (applyModExpr doc) tmCtx lhsTm rhsTm of
+            Left _ ->
+              Right Nothing
+            Right ok ->
+              Right (Just ok)
+
+    actionTermFallbackContext lhs rhs = do
+      let lhsTm = TermDiagram lhs
+          rhsTm = TermDiagram rhs
+      _ <- either (const Nothing) Just (sharedTermDiagramContext "action kernel fallback" lhsTm rhsTm)
+      pure (dTmCtx lhs, lhsTm, rhsTm)
 
     choosePolicy mods =
       let policies = [ maPolicy action | m <- mods, action <- maybeToList (M.lookup m (dActions doc)) ]

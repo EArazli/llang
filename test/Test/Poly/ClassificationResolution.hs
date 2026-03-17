@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Test.Poly.ClassificationResolution
   ( tests
   ) where
@@ -28,7 +29,7 @@ import Strat.Poly.Obj
   )
 import Strat.Poly.DefEq (diagramToTermExprChecked, normalizeObjDeepWithCtx)
 import Strat.Poly.Term.AST (TermHeadArg(..))
-import Strat.Poly.TermExpr (TermExpr(..))
+import Strat.Poly.TermExpr (TermExpr(..), pattern TMGen)
 import Strat.Poly.Tele (CtorSig(..), GenParam(..))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit

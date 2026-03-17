@@ -10,6 +10,11 @@ import Test.Tasty.HUnit
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text, isInfixOf)
+import qualified Data.Text as T
+import Strat.DSL.Elab (elabRawFile)
+import Strat.DSL.Parse (parseRawFile)
+import Strat.Frontend.Env (ModuleEnv(..))
+import Strat.Poly.Doctrine (Doctrine(..), doctrineTypeTheory)
 import Strat.Poly.ModeTheory
   ( ModeName(..)
   , ModName(..)
@@ -38,13 +43,17 @@ import Strat.Poly.Obj
   , occursVar
   )
 import Strat.Poly.Diagram (idDTm)
+import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Term.AST (TermBinderArg(..), TermHeadArg(..))
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Strat.Poly.Graph (Diagram(..), emptyDiagram, freshPort, addEdgePayload, validateDiagram, EdgePayload(..))
 import Strat.Poly.Tele (CtorSig(..))
 import Strat.Poly.TypeTheory (TypeTheory(..), modeOnlyTypeTheory)
+import qualified Strat.Poly.Subst as US
+import qualified Strat.Poly.Term.SubstRuntime as SR
+import qualified Strat.Poly.UnifyFlex as UF
 import Test.Poly.Helpers (mkModes)
 import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToCtorSig)
-import qualified Strat.Poly.UnifyObj as U
 
 
 tests :: TestTree
@@ -64,6 +73,9 @@ tests =
     , testCase "code metavariable scope uses classifier slice of term context" testCodeMetaScopeClassifierSlice
     , testCase "non-canonical injective term-meta spine solve succeeds" testPatternSolveNonCanonicalInjective
     , testCase "solved term metas instantiate at arbitrary spines" testPatternSubstituteArbitrarySpine
+    , testCase "binder-bearing heads unify rigidly with themselves" testBinderHeadSelfUnify
+    , testCase "scope-0 term metas can solve to binder-bearing heads" testBinderHeadMetaSolve
+    , testCase "solved binder-bearing term metas instantiate at arbitrary spines" testBinderHeadSubstituteArbitrarySpine
     , testCase "non-injective term-meta solving spine is rejected" testPatternRejectNonInjectiveSolve
     , testCase "term-meta arity mismatch is rejected at term and graph boundaries" testPatternArityMismatchRejected
     ]
@@ -94,6 +106,49 @@ buildClassifiedModes ty tm = do
       }
     mt2
 
+requireText :: Either Text a -> IO a
+requireText = either (assertFailure . T.unpack) pure
+
+lookupDoctrineByName :: Text -> ModuleEnv -> IO Doctrine
+lookupDoctrineByName name env =
+  case M.lookup name (meDoctrines env) of
+    Nothing -> assertFailure ("missing doctrine: " <> T.unpack name) >> fail "unreachable"
+    Just doc -> pure doc
+
+modeM :: ModeName
+modeM = ModeName "M"
+
+binderResidualSrc :: Text
+binderResidualSrc =
+  T.unlines
+    [ "doctrine BinderResidual where {"
+    , "  mode M classifiedBy M via M.U_M;"
+    , "  gen U_M : [] -> [M.U_M] @M;"
+    , "  gen A : [] -> [M.U_M] @M;"
+    , "  gen Arr(a@M, b@M) : [] -> [M.U_M] @M;"
+    , "  gen lam(a@M, b@M) : [binder { x : a } : [b]] -> [Arr(a, b)] @M;"
+    , "  gen app(a@M, b@M) : [Arr(a, b), a] -> [b] @M;"
+    , "  gen scope(a@M) : [binder { x : a } : [a]] -> [a] @M;"
+    , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+    , "  gen comp_var(a@M) : [a] -> [a] @M;"
+    , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+    , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+    , "}"
+    ]
+
+mkBinderTypeTheory :: IO TypeTheory
+mkBinderTypeTheory = do
+  env <- requireText (parseRawFile binderResidualSrc >>= elabRawFile)
+  doc <- lookupDoctrineByName "BinderResidual" env
+  requireText (doctrineTypeTheory doc)
+
+mkBinderIdBody :: Obj -> Either Text Diagram
+mkBinderIdBody aTy = do
+  let (x, d0) = freshPort aTy (emptyDiagram modeM [])
+  let body = d0 { dIn = [x], dOut = [x] }
+  validateDiagram body
+  pure body
+
 testSeesObjVarInTermArg :: Assertion
 testSeesObjVarInTermArg = do
   let mode = ModeName "M"
@@ -111,26 +166,26 @@ testSeparateMetaNamespaces = do
       rhsObj = OVar v
       rhsObj2 = mkCon (ObjRef mode (ObjName "T")) []
       rhsTm = TermDiagram (idDTm mode [] [])
-  substCodeFirst <- case U.insertCodeMeta v rhsObj U.emptySubst of
-    Left err -> assertFailure ("unexpected insertCodeMeta failure: " <> show err) >> pure U.emptySubst
+  substCodeFirst <- case US.insertCodeMeta v rhsObj US.emptySubst of
+    Left err -> assertFailure ("unexpected insertCodeMeta failure: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  case U.insertTmMeta v rhsTm substCodeFirst of
+  case US.insertTmMeta v rhsTm substCodeFirst of
     Left _ -> pure ()
     Right _ -> assertFailure "expected term insert after type insert to fail with category conflict"
-  substTmFirst <- case U.insertTmMeta v rhsTm U.emptySubst of
-    Left err -> assertFailure ("unexpected insertTmMeta failure: " <> show err) >> pure U.emptySubst
+  substTmFirst <- case US.insertTmMeta v rhsTm US.emptySubst of
+    Left err -> assertFailure ("unexpected insertTmMeta failure: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  case U.insertCodeMeta v rhsObj substTmFirst of
+  case US.insertCodeMeta v rhsObj substTmFirst of
     Left _ -> pure ()
     Right _ -> assertFailure "expected type insert after term insert to fail with category conflict"
-  substOverwrite <- case U.insertCodeMeta v rhsObj U.emptySubst of
-    Left err -> assertFailure ("unexpected insertCodeMeta failure: " <> show err) >> pure U.emptySubst
+  substOverwrite <- case US.insertCodeMeta v rhsObj US.emptySubst of
+    Left err -> assertFailure ("unexpected insertCodeMeta failure: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  substOverwrite2 <- case U.insertCodeMeta v rhsObj2 substOverwrite of
-    Left err -> assertFailure ("unexpected overwrite failure: " <> show err) >> pure U.emptySubst
+  substOverwrite2 <- case US.insertCodeMeta v rhsObj2 substOverwrite of
+    Left err -> assertFailure ("unexpected overwrite failure: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  U.lookupCodeMeta substOverwrite2 v @?= Just rhsObj2
-  U.lookupTmMeta substOverwrite2 v @?= Nothing
+  US.lookupCodeMeta substOverwrite2 v @?= Just rhsObj2
+  US.lookupTmMeta substOverwrite2 v @?= Nothing
 
 testSubstKeySeparatesOwnerModes :: Assertion
 testSubstKeySeparatesOwnerModes = do
@@ -140,12 +195,12 @@ testSubstKeySeparatesOwnerModes = do
       vB = mkModeMetaVar "x" modeB
       rhsA = mkCon (ObjRef modeA (ObjName "TA")) []
       rhsB = mkCon (ObjRef modeB (ObjName "TB")) []
-  subst <- case U.mkSubst [(vA, OAObj rhsA), (vB, OAObj rhsB)] of
-    Left err -> assertFailure ("unexpected mkSubst failure: " <> show err) >> pure U.emptySubst
+  subst <- case US.mkSubst [(vA, OAObj rhsA), (vB, OAObj rhsB)] of
+    Left err -> assertFailure ("unexpected mkSubst failure: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  length (U.codeBindings subst) @?= 2
-  U.lookupCodeMeta subst vA @?= Just rhsA
-  U.lookupCodeMeta subst vB @?= Just rhsB
+  length (US.codeBindings subst) @?= 2
+  US.lookupCodeMeta subst vA @?= Just rhsA
+  US.lookupCodeMeta subst vB @?= Just rhsB
 
 testNormalizeSubstTermIdentity :: Assertion
 testNormalizeSubstTermIdentity = do
@@ -160,13 +215,13 @@ testNormalizeSubstTermIdentity = do
           , tmvOwnerMode = Just mode
           }
   tmId <- either (assertFailure . show) pure (termExprToDiagram tt [] sortTy (TMMeta v []))
-  subst0 <- case U.mkSubst [(v, OATm tmId)] of
-    Left err -> assertFailure ("unexpected mkSubst failure: " <> show err) >> pure U.emptySubst
+  subst0 <- case US.mkSubst [(v, OATm tmId)] of
+    Left err -> assertFailure ("unexpected mkSubst failure: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  subst <- case U.normalizeSubst tt subst0 of
-    Left err -> assertFailure ("unexpected normalizeSubst failure: " <> show err) >> pure U.emptySubst
+  subst <- case SR.normalizeSubst tt subst0 of
+    Left err -> assertFailure ("unexpected normalizeSubst failure: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  U.tmBindings subst @?= []
+  US.tmBindings subst @?= []
 
 testComposeSubstCategoryConflict :: Assertion
 testComposeSubstCategoryConflict = do
@@ -182,16 +237,16 @@ testComposeSubstCategoryConflict = do
           }
       rhsObj = mkCon (ObjRef mode (ObjName "T")) []
   rhsTm <- either (assertFailure . show) pure (termExprToDiagram tt [] sortTy (TMMeta v []))
-  substObj <- case U.mkSubst [(v, OAObj rhsObj)] of
-    Left err -> assertFailure ("unexpected object mkSubst failure: " <> show err) >> pure U.emptySubst
+  substObj <- case US.mkSubst [(v, OAObj rhsObj)] of
+    Left err -> assertFailure ("unexpected object mkSubst failure: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  substTm <- case U.mkSubst [(v, OATm rhsTm)] of
-    Left err -> assertFailure ("unexpected term mkSubst failure: " <> show err) >> pure U.emptySubst
+  substTm <- case US.mkSubst [(v, OATm rhsTm)] of
+    Left err -> assertFailure ("unexpected term mkSubst failure: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  case U.composeSubst tt substTm substObj of
+  case SR.composeSubst tt substTm substObj of
     Left _ -> pure ()
     Right _ -> assertFailure "expected composeSubst to reject mixed-category collision (tm over obj)"
-  case U.composeSubst tt substObj substTm of
+  case SR.composeSubst tt substObj substTm of
     Left _ -> pure ()
     Right _ -> assertFailure "expected composeSubst to reject mixed-category collision (obj over tm)"
 
@@ -204,7 +259,7 @@ testRejectsCodeMetaScopeEscape = do
       fooRef = ObjRef mode (ObjName "Foo")
       tm = TermDiagram (idDTm mode [sortTy] [sortTy])
       rhs = mkCon fooRef [OATm tm]
-  case U.unifyObjFlex tt [sortTy] (S.singleton v) U.emptySubst (OVar v) rhs of
+  case UF.unifyObjFlex tt [sortTy] (S.singleton v) US.emptySubst (OVar v) rhs of
     Left err ->
       assertBool
         "expected code-meta scope escape error"
@@ -234,7 +289,7 @@ testExpandModSpineNestedOwner = do
       , ModDecl { mdName = modH, mdSrc = modeC, mdTgt = modeA }
       ]
   let tt = modeOnlyTypeTheory mt
-  case U.unifyObjFlex tt [] S.empty U.emptySubst outer outer of
+  case UF.unifyObjFlex tt [] S.empty US.emptySubst outer outer of
     Left err -> assertFailure ("expected nested CTLift unification to succeed: " <> show err)
     Right _ -> pure ()
 
@@ -252,7 +307,7 @@ testExpandModSpineOwnerMismatch = do
   mt <- either (assertFailure . show) pure $
     addModDecl ModDecl { mdName = modF, mdSrc = modeA, mdTgt = modeB } (mkModes [modeA, modeB])
   let tt = modeOnlyTypeTheory mt
-  case U.unifyObjFlex tt [] S.empty U.emptySubst badOuter badOuter of
+  case UF.unifyObjFlex tt [] S.empty US.emptySubst badOuter badOuter of
     Left err ->
       assertBool
         "expected code-mode/target mismatch error from CTLift spine expansion"
@@ -275,10 +330,10 @@ testUnifyUnderCTLiftPathBindsMeta = do
   mt <- either (assertFailure . show) pure $
     addModDecl ModDecl { mdName = modF, mdSrc = modeA, mdTgt = modeB } (mkModes [modeA, modeB])
   let tt = modeOnlyTypeTheory mt
-  subst <- case U.unifyObjFlex tt [] (S.singleton (aVar)) U.emptySubst lhs rhs of
-    Left err -> assertFailure ("expected CTLift unification to succeed: " <> show err) >> pure U.emptySubst
+  subst <- case UF.unifyObjFlex tt [] (S.singleton (aVar)) US.emptySubst lhs rhs of
+    Left err -> assertFailure ("expected CTLift unification to succeed: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  case U.lookupCodeMeta subst aVar of
+  case US.lookupCodeMeta subst aVar of
     Just bound ->
       bound @?= mkCon (ObjRef modeA (ObjName "Unit")) []
     Nothing ->
@@ -294,10 +349,10 @@ testUnifyUnderCTLiftBindsMeta = do
       rhs = Obj { objOwnerMode = modeTm, objCode = CTLift liftId (objCode (mkCon (ObjRef modeTy (ObjName "UnitTy")) [])) }
   mt <- either (assertFailure . show) pure (buildClassifiedModes modeTy modeTm)
   let tt = modeOnlyTypeTheory mt
-  subst <- case U.unifyObjFlex tt [] (S.singleton (aVar)) U.emptySubst lhs rhs of
-    Left err -> assertFailure ("expected CTLift unification to succeed: " <> show err) >> pure U.emptySubst
+  subst <- case UF.unifyObjFlex tt [] (S.singleton (aVar)) US.emptySubst lhs rhs of
+    Left err -> assertFailure ("expected CTLift unification to succeed: " <> show err) >> pure US.emptySubst
     Right s -> pure s
-  case U.lookupCodeMeta subst aVar of
+  case US.lookupCodeMeta subst aVar of
     Just bound ->
       bound @?= Obj { objOwnerMode = modeTm, objCode = CTCon (ObjRef modeTy (ObjName "UnitTy")) [] }
     Nothing ->
@@ -327,11 +382,11 @@ testCodeMetaScopeClassifierSlice = do
   tmOwnerIdx <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx idxTm (TMBound 1))
   let boxTyObj = Obj { objOwnerMode = modeTm, objCode = CTCon boxTyRef [OATm tmTyIdx] }
   let boxTmObj = Obj { objOwnerMode = modeTm, objCode = CTCon boxTmRef [OATm tmOwnerIdx] }
-  case U.unifyObjFlex tt tmCtx (S.singleton vClassifier) U.emptySubst (OVar vClassifier) boxTyObj of
+  case UF.unifyObjFlex tt tmCtx (S.singleton vClassifier) US.emptySubst (OVar vClassifier) boxTyObj of
     Left err ->
       assertFailure ("expected classifier-slice binding to succeed: " <> show err)
     Right _ -> pure ()
-  case U.unifyObjFlex tt tmCtx (S.singleton vOwner) U.emptySubst (OVar vOwner) boxTmObj of
+  case UF.unifyObjFlex tt tmCtx (S.singleton vOwner) US.emptySubst (OVar vOwner) boxTmObj of
     Left err ->
       assertBool
         "expected classifier-slice escape rejection"
@@ -354,11 +409,11 @@ testPatternSolveNonCanonicalInjective = do
           }
   lhs <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMMeta x [1, 0]))
   rhs <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMBound 1))
-  subst <- case U.unifyTm tt tmCtx (S.singleton x) U.emptySubst sortTy lhs rhs of
-    Left err -> assertFailure ("expected non-canonical injective solve to succeed: " <> show err) >> pure U.emptySubst
+  subst <- case UF.unifyTm tt tmCtx (S.singleton x) US.emptySubst sortTy lhs rhs of
+    Left err -> assertFailure ("expected non-canonical injective solve to succeed: " <> show err) >> pure US.emptySubst
     Right s -> pure s
   tmBinding <-
-    case U.lookupTmMeta subst x of
+    case US.lookupTmMeta subst x of
       Nothing -> assertFailure "expected solved term-meta binding" >> pure (TermDiagram (idDTm mode [] []))
       Just tm -> pure tm
   expr <- either (assertFailure . show) pure (diagramToTermExpr tt tmCtx sortTy tmBinding)
@@ -379,16 +434,83 @@ testPatternSubstituteArbitrarySpine = do
           }
   seedL <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMMeta x [1, 0]))
   seedR <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMBound 1))
-  seedSubst <- case U.unifyTm tt tmCtx (S.singleton x) U.emptySubst sortTy seedL seedR of
-    Left err -> assertFailure ("expected seed solve to succeed: " <> show err) >> pure U.emptySubst
+  seedSubst <- case UF.unifyTm tt tmCtx (S.singleton x) US.emptySubst sortTy seedL seedR of
+    Left err -> assertFailure ("expected seed solve to succeed: " <> show err) >> pure US.emptySubst
     Right s -> pure s
   query <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMMeta x [2, 0]))
   want <- either (assertFailure . show) pure (termExprToDiagram tt tmCtx sortTy (TMBound 2))
-  case U.unifyTm tt tmCtx S.empty seedSubst sortTy query want of
+  case UF.unifyTm tt tmCtx S.empty seedSubst sortTy query want of
     Left err ->
       assertFailure
         ( "expected solved meta to instantiate at non-canonical spine; got: "
             <> show err
+        )
+    Right _ ->
+      pure ()
+
+testBinderHeadSelfUnify :: Assertion
+testBinderHeadSelfUnify = do
+  tt <- mkBinderTypeTheory
+  let aTy = mkCon (ObjRef modeM (ObjName "A")) []
+  body <- requireText (mkBinderIdBody aTy)
+  let expr = TMHead (GenName "scope") [THAObj aTy] [TBABody body]
+  tm <- requireText (termExprToDiagram tt [] aTy expr)
+  subst <- case UF.unifyTm tt [] S.empty US.emptySubst aTy tm tm of
+    Left err -> assertFailure ("expected binder head to unify with itself: " <> T.unpack err) >> pure US.emptySubst
+    Right s -> pure s
+  assertBool "expected rigid binder-head self-unification to produce no bindings" (US.substIsEmpty subst)
+
+testBinderHeadMetaSolve :: Assertion
+testBinderHeadMetaSolve = do
+  tt <- mkBinderTypeTheory
+  let aTy = mkCon (ObjRef modeM (ObjName "A")) []
+      x =
+        TmVar
+          { tmvName = "x"
+          , tmvSort = aTy
+          , tmvScope = 0
+          , tmvOwnerMode = Just modeM
+          }
+  body <- requireText (mkBinderIdBody aTy)
+  let rhsExpr = TMHead (GenName "scope") [THAObj aTy] [TBABody body]
+  lhs <- requireText (termExprToDiagram tt [] aTy (TMMeta x []))
+  rhs <- requireText (termExprToDiagram tt [] aTy rhsExpr)
+  subst <- case UF.unifyTm tt [] (S.singleton x) US.emptySubst aTy lhs rhs of
+    Left err -> assertFailure ("expected scope-0 meta solve to succeed for binder head: " <> T.unpack err) >> pure US.emptySubst
+    Right s -> pure s
+  tmBinding <-
+    case US.lookupTmMeta subst x of
+      Nothing -> assertFailure "expected binder-bearing term-meta binding" >> pure (TermDiagram (emptyDiagram modeM []))
+      Just tm -> pure tm
+  expr <- requireText (diagramToTermExpr tt [] aTy tmBinding)
+  expr @?= rhsExpr
+
+testBinderHeadSubstituteArbitrarySpine :: Assertion
+testBinderHeadSubstituteArbitrarySpine = do
+  tt <- mkBinderTypeTheory
+  let aTy = mkCon (ObjRef modeM (ObjName "A")) []
+      tmCtx = [aTy, aTy]
+      x =
+        TmVar
+          { tmvName = "x"
+          , tmvSort = aTy
+          , tmvScope = 1
+          , tmvOwnerMode = Just modeM
+          }
+  body <- requireText (mkBinderIdBody aTy)
+  let rhsExpr = TMHead (GenName "scope") [THAObj aTy] [TBABody body]
+  seedL <- requireText (termExprToDiagram tt tmCtx aTy (TMMeta x [1]))
+  seedR <- requireText (termExprToDiagram tt tmCtx aTy rhsExpr)
+  seedSubst <- case UF.unifyTm tt tmCtx (S.singleton x) US.emptySubst aTy seedL seedR of
+    Left err -> assertFailure ("expected binder-head seed solve to succeed: " <> T.unpack err) >> pure US.emptySubst
+    Right s -> pure s
+  query <- requireText (termExprToDiagram tt tmCtx aTy (TMMeta x [0]))
+  want <- requireText (termExprToDiagram tt tmCtx aTy rhsExpr)
+  case UF.unifyTm tt tmCtx S.empty seedSubst aTy query want of
+    Left err ->
+      assertFailure
+        ( "expected solved binder-bearing meta to instantiate at a different spine; got: "
+            <> T.unpack err
         )
     Right _ ->
       pure ()

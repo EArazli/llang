@@ -24,7 +24,6 @@ import Strat.Poly.ModeTheory
   , ClassificationDecl(..)
   , ModeTheory(..)
   , ModeInfo(..)
-  , DefEqEngine(..)
   , mtModes
   , mtDecls
   )
@@ -249,7 +248,7 @@ checkImplementsObligations env schema impl target =
 mkModes :: S.Set ModeName -> ModeTheory
 mkModes modes =
   ModeTheory
-    { mtModes = M.fromList [ (m, ModeInfo { miName = m, miDefEqEngine = DefEqTRS }) | m <- S.toList modes ]
+    { mtModes = M.fromList [ (m, ModeInfo { miName = m }) | m <- S.toList modes ]
     , mtDecls = M.empty
     , mtEqns = []
     , mtTransforms = M.empty
@@ -474,6 +473,7 @@ mkDoctrine mode name tyVar cellName = do
     , dAcyclicModes = S.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = [cell]
+      , dBuiltins = []
       , dActions = M.empty
       , dObligations = []
                 }
@@ -581,6 +581,7 @@ mkCellDoctrine mode name cls orient = do
             , dAcyclicModes = S.empty
             , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
             , dCells2 = [cell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -625,6 +626,7 @@ mkCellDoctrineWithAlt mode name cls orient = do
             , dAcyclicModes = S.empty
             , dGens = M.fromList [(mode, M.fromList [(gdName genF, genF), (gdName genG, genG)])]
             , dCells2 = [cell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -740,6 +742,7 @@ testPushoutAcceptsModeMap = do
     , dAcyclicModes = S.empty
         , dGens = M.empty
         , dCells2 = []
+      , dBuiltins = []
       , dActions = M.empty
       , dObligations = []
                 }
@@ -791,6 +794,7 @@ testPushoutTypeRefsStayInPushoutModes = do
             , dAcyclicModes = S.empty
             , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -848,6 +852,7 @@ testPushoutDisjointCellRenameUsesOriginalModeKey = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -878,6 +883,7 @@ testPushoutDisjointCellRenameUsesOriginalModeKey = do
                       ]
                   )
             , dCells2 = [leftCell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -888,6 +894,7 @@ testPushoutDisjointCellRenameUsesOriginalModeKey = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -946,6 +953,7 @@ testPushoutDisjointRenamesAfterModeCollapse = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -977,6 +985,7 @@ testPushoutDisjointRenamesAfterModeCollapse = do
                 [ Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2Params = [], c2LHS = lhsL1, c2RHS = rhsL1 }
                 , Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2Params = [], c2LHS = lhsL2, c2RHS = rhsL2 }
                 ]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -987,6 +996,7 @@ testPushoutDisjointRenamesAfterModeCollapse = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -1038,6 +1048,7 @@ testPushoutCellNamesArePerMode = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -1075,6 +1086,7 @@ testPushoutCellNamesArePerMode = do
                 [ Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2Params = [], c2LHS = lhsL, c2RHS = rhsL }
                 , Cell2 { c2Name = "eq", c2Class = Computational, c2Orient = LR, c2Params = [], c2LHS = lhsR, c2RHS = rhsR }
                 ]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1085,6 +1097,7 @@ testPushoutCellNamesArePerMode = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -1135,6 +1148,7 @@ testPushoutNonInjectiveTypeCompatible = do
             , dAcyclicModes = S.empty
             , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1198,6 +1212,7 @@ testPushoutNonInjectiveLiteralKindIncompatible = do
               , dAcyclicModes = S.empty
               , dGens = M.empty
               , dCells2 = []
+              , dBuiltins = []
               , dActions = M.empty
               , dObligations = []
               }
@@ -1267,6 +1282,7 @@ testPushoutNonInjectiveGenCompatible = do
           , dAcyclicModes = S.empty
           , dGens = M.singleton mode (M.fromList [ (GenName g, mkNullary g) | g <- genNames ])
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -1357,6 +1373,7 @@ testPushoutNonInjectiveGenIncompatible = do
             , dAcyclicModes = S.empty
             , dGens = M.singleton mode (M.fromList [(GenName "g1", gen1), (GenName "g2", gen2)])
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1369,6 +1386,7 @@ testPushoutNonInjectiveGenIncompatible = do
             , dAcyclicModes = S.empty
             , dGens = M.singleton mode (M.singleton (GenName "h") (mkNullary "h"))
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1388,6 +1406,7 @@ testPushoutNonInjectiveGenIncompatible = do
                       ]
                   )
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1469,6 +1488,7 @@ testPushoutGlueComposesThroughInr = do
             , dAcyclicModes = S.empty
             , dGens = M.singleton mode (M.singleton (GenName "f") genF)
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1482,6 +1502,7 @@ testPushoutGlueComposesThroughInr = do
             , dAcyclicModes = S.empty
             , dGens = M.singleton mode (M.singleton (GenName "h") genH)
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1554,6 +1575,7 @@ testPushoutGenInjectiveByMode = do
                 , (modeR, M.singleton (GenName genName) (mkNullaryGen modeR genName))
                 ]
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -1616,6 +1638,7 @@ testPushoutTypeRenameDefaultUsesModeMap = do
             , dAcyclicModes = S.empty
             , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1690,6 +1713,7 @@ testPushoutClassificationUniverseFollowsTypeRename = do
             , dAcyclicModes = S.empty
             , dGens = M.singleton mode (M.singleton (gdName uGen) uGen)
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1705,6 +1729,7 @@ testPushoutClassificationUniverseFollowsTypeRename = do
             , dAcyclicModes = S.empty
             , dGens = M.singleton mode (M.singleton (gdName uGen) uGen)
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1717,6 +1742,7 @@ testPushoutClassificationUniverseFollowsTypeRename = do
             , dAcyclicModes = S.empty
             , dGens = M.singleton mode (M.singleton (gdName uGen) uGen)
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -1863,6 +1889,7 @@ testPushoutTermTypeMaps = do
                     , (modeM, M.fromList [(gdName genVec, genVec)])
                     ]
           , dCells2 = []
+      , dBuiltins = []
       , dActions = M.empty
       , dObligations = []
                     }
@@ -1879,6 +1906,7 @@ testPushoutTermTypeMaps = do
                     , (modeM, M.fromList [(gdName genVec2, genVec2)])
                     ]
           , dCells2 = []
+      , dBuiltins = []
       , dActions = M.empty
       , dObligations = []
                     }
@@ -2021,6 +2049,7 @@ testPushoutTypePermutationSortRename = do
                     , (modeM, M.fromList [(gdName genVec, genVec)])
                     ]
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -2037,6 +2066,7 @@ testPushoutTypePermutationSortRename = do
                     , (modeM, M.fromList [(gdName genVec2, genVec2)])
                     ]
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -2112,6 +2142,7 @@ testCoproductMergesDistinctModeTheories = do
             , dAcyclicModes = S.empty
             , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -2124,6 +2155,7 @@ testCoproductMergesDistinctModeTheories = do
             , dAcyclicModes = S.empty
             , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -2169,6 +2201,7 @@ testCoproductObligationRenameElaborates = do
             , dAcyclicModes = S.empty
             , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = [obl]
                         }
@@ -2179,6 +2212,7 @@ testCoproductObligationRenameElaborates = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -2251,6 +2285,7 @@ testCoproductObligationRawModalityRenameElaborates = do
                                     , PolyAST.rtrName = "F"
                                     }
                                   [PolyAST.RPTVar "A"]
+                                  []
                               ]
                           )
                       )
@@ -2291,6 +2326,7 @@ testCoproductObligationRawModalityRenameElaborates = do
           , dAcyclicModes = S.empty
           , dGens = M.singleton mode (M.singleton (GenName "k") genK)
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.singleton modF actionF
           , dObligations = [obl]
                     }
@@ -2301,6 +2337,7 @@ testCoproductObligationRawModalityRenameElaborates = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -2375,6 +2412,7 @@ testCoproductTransformCollisionRenames = do
           , dAcyclicModes = S.empty
           , dGens = M.singleton mode (M.singleton (GenName "w") witness)
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -2434,6 +2472,7 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
             , dAcyclicModes = S.empty
             , dGens = M.fromList [(mode, M.fromList [(GenName "f", genSrc)])]
             , dCells2 = [srcCell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -2446,6 +2485,7 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
             , dAcyclicModes = S.empty
             , dGens = M.fromList [(mode, M.fromList [(GenName "f", genSrc)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -2467,6 +2507,7 @@ testApplyPushoutAcceptsNonCheckAllGlue = do
             , dAcyclicModes = S.empty
             , dGens = M.fromList [(mode, M.fromList [(GenName "g", genTgt)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -2526,6 +2567,7 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -2563,6 +2605,7 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
                   , (modeL2, M.singleton (GenName "g") genL2)
                   ]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -2573,6 +2616,7 @@ testApplyPushoutTypeGenCollisionAfterModeRename = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -2625,6 +2669,7 @@ testApplyPushoutCellCollisionAfterModeRename = do
           , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -2655,6 +2700,7 @@ testApplyPushoutCellCollisionAfterModeRename = do
                       ]
                   )
             , dCells2 = [bodyCell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -2685,6 +2731,7 @@ testApplyPushoutCellCollisionAfterModeRename = do
                       ]
                   )
             , dCells2 = [targetCell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -2758,6 +2805,7 @@ testApplyPushoutModeCollapseUniverseDefEq = do
               , dAcyclicModes = S.empty
               , dGens = gens
               , dCells2 = []
+              , dBuiltins = []
               , dActions = M.empty
               , dObligations = []
                             }
@@ -2894,6 +2942,7 @@ testPushoutCellTmAlphaEq = do
                   , (modeM, M.fromList [(genName, gen)])
                   ]
             , dCells2 = cell
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -2972,6 +3021,7 @@ testPushoutInjectionPreservesBinderArgs = do
     , dAcyclicModes = S.empty
           , dGens = M.empty
           , dCells2 = []
+      , dBuiltins = []
       , dActions = M.empty
       , dObligations = []
                     }
@@ -3060,6 +3110,7 @@ testPushoutAcceptsRenamingWithBinders = do
               , dAcyclicModes = S.empty
               , dGens = M.fromList [(mode, M.fromList [(gName, ifaceGen)])]
               , dCells2 = []
+              , dBuiltins = []
               , dActions = M.empty
               , dObligations = []
                             }
@@ -3073,6 +3124,7 @@ testPushoutAcceptsRenamingWithBinders = do
               , dAcyclicModes = S.empty
               , dGens = M.fromList [(mode, M.fromList [(g1Name, leftGen)])]
               , dCells2 = []
+              , dBuiltins = []
               , dActions = M.empty
               , dObligations = []
                             }
@@ -3132,7 +3184,7 @@ testPushoutAcceptsRenamingWithBinders = do
 mkModeEqTheory :: ModeName -> ModName -> ModName -> ModeTheory
 mkModeEqTheory mode modF modU =
   ModeTheory
-    { mtModes = M.singleton mode (ModeInfo { miName = mode, miDefEqEngine = DefEqTRS })
+    { mtModes = M.singleton mode (ModeInfo { miName = mode })
     , mtDecls =
         M.fromList
           [ (modF, ModDecl modF mode mode)
@@ -3222,6 +3274,7 @@ mkModeEqDoctrine name mt varName useUF = do
     , dAcyclicModes = S.empty
         , dGens = M.fromList [(mode, M.fromList [(GenName "h", genH), (GenName "modal", genModal)])]
         , dCells2 = [cell]
+      , dBuiltins = []
       , dActions = M.empty
       , dObligations = []
                 }
@@ -3324,6 +3377,7 @@ mkClassifiedPushoutDoctrine name tmUniverse tmCtorName = do
           , dAcyclicModes = S.empty
           , dGens = M.fromList [(modeTy, tyTable), (modeTm, tmTable)]
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -3377,6 +3431,7 @@ mkTypeDoctrine mode name types = do
             , dAcyclicModes = S.empty
             , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }

@@ -27,6 +27,7 @@ tests =
     , testCase "excluded generators stay duplicated in reflected output" testResidualQuoted
     , testCase "cross binders false leaves nested sharing disabled" testCrossBindersFalse
     , testCase "cross binders true recursively shares nested bindings" testCrossBindersTrue
+    , testCase "pipeline normalize post-pass uses kernel defeq for term diagrams" testPipelineNormalizeUsesDefEq
     ]
 
 testDerivedRequiresAcyclic :: Assertion
@@ -158,6 +159,13 @@ testCrossBindersTrue = do
   assertEqual "expected nested q_f sharing" 1 (countOccurrences "q_f" out)
   assertBool "expected reflected wrap binding" ("q_wrap" `T.isInfixOf` out)
 
+testPipelineNormalizeUsesDefEq :: Assertion
+testPipelineNormalizeUsesDefEq = do
+  result <- runNamed transportNormalizeProgram "main"
+  let out = brOutput result
+  assertBool "expected normalized pipeline output to retain mk22" ("mk22" `T.isInfixOf` out)
+  assertBool "expected normalized pipeline output to erase expect22 via defeq post-pass" (not ("expect22" `T.isInfixOf` out))
+
 runNamed :: Text -> Text -> IO BuildResult
 runNamed src buildName = do
   env <- require (elabProgram src)
@@ -242,6 +250,57 @@ binderIncludedProgram =
     , "cross binders = true;"
     ]
     "wrap[((a ; f) * (a ; f)) ; join]"
+
+transportNormalizeProgram :: Text
+transportNormalizeProgram =
+  T.unlines
+    [ "doctrine TransportBuiltin where {"
+    , "  mode M classifiedBy M via M.U_M;"
+    , "  gen comp_ctx_ext(a@M) : [a] -> [a] @M;"
+    , "  gen comp_var(a@M) : [a] -> [a] @M;"
+    , "  gen comp_reindex(a@M) : [a] -> [a] @M;"
+    , "  comprehension M where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+    , "  gen U_M : [] -> [M.U_M] @M;"
+    , "  mode I classifiedBy I via I.U_I;"
+    , "  gen i_ctx_ext(a@I) : [a] -> [a] @I;"
+    , "  gen i_var(a@I) : [a] -> [a] @I;"
+    , "  gen i_reindex(a@I) : [a] -> [a] @I;"
+    , "  comprehension I where { ctx_ext = i_ctx_ext; var = i_var; reindex = i_reindex; };"
+    , "  gen U_I : [] -> [I.U_I] @I;"
+    , "  gen Nat : [] -> [I.U_I] @I;"
+    , "  gen A : [] -> [M.U_M] @M;"
+    , "  gen Vec(n : Nat, a@M) : [] -> [M.U_M] @M;"
+    , "  gen Z : [] -> [Nat] @I;"
+    , "  gen S : [Nat] -> [Nat] @I;"
+    , "  gen add : [Nat, Nat] -> [Nat] @I;"
+    , "  rule computational addZ -> : [Nat] -> [Nat] @I ="
+    , "    (Z * id[Nat]) ; add == id[Nat]"
+    , "  rule computational addS -> : [Nat, Nat] -> [Nat] @I ="
+    , "    (S * id[Nat]) ; add == add ; S"
+    , "  gen mk22(a@M) : [] -> [Vec(S(S(Z)), a)] @M;"
+    , "  gen expect22(a@M) : [Vec(add(S(Z), S(Z)), a)] -> [Vec(S(S(Z)), a)] @M;"
+    , "}"
+    , "module_surface VecRunUnit where {"
+    , "  doctrine TransportBuiltin;"
+    , "  mode M;"
+    , "}"
+    , "language VecRunLang where {"
+    , "  doctrine TransportBuiltin;"
+    , "  module_surface VecRunUnit;"
+    , "}"
+    , "module VecRuns in VecRunLang where {"
+    , "  let main"
+    , "  ---"
+    , "  mk22(A) ; expect22(A)"
+    , "  ---"
+    , "  export { main };"
+    , "}"
+    , "pipeline p where {"
+    , "  project export main;"
+    , "  normalize { policy = \"topmost\"; fuel = 50; };"
+    , "}"
+    , "build main from VecRuns using p;"
+    ]
 
 mkQuoteProgram :: [Text] -> Text -> Text
 mkQuoteProgram fragmentItems exprText =

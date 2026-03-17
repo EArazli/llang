@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Strat.Poly.Doctrine
   ( InputShape(..)
   , GenParam(..)
@@ -10,6 +11,9 @@ module Strat.Poly.Doctrine
   , ObligationDecl(..)
   , obTyVars
   , obTmVars
+  , BuiltinDecl(..)
+  , BuiltinSpec(..)
+  , BuiltinBranchDecl(..)
   , Doctrine(..)
   , CtorTables
   , gdPlainDom
@@ -18,7 +22,9 @@ module Strat.Poly.Doctrine
   , doctrineTypeTheory
   , doctrineTypeTheoryFromTables
   , doctrineElabTypeTheoryFromTables
+  , doctrineTypeTheoryBaseFromTables
   , deriveCtorTables
+  , deriveCtorTablesForElab
   , allCtorSigsInTables
   , lookupCtorSigByRefInTables
   , lookupCtorSigForOwnerInTables
@@ -41,8 +47,9 @@ import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 import qualified Data.Text as T
-import Data.Maybe (mapMaybe)
-import Control.Monad (foldM, guard)
+import Data.Bifunctor (first)
+import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
+import Control.Monad (foldM, guard, forM)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Alpha (canonicalizeCtorSig)
 import Strat.Poly.Obj
@@ -52,51 +59,87 @@ import Strat.Poly.TypeTheory
   ( TypeTheory(..)
   , ttCtorTablesByOwner
   , DefFragment(..)
+  , BinderSig(..)
+  , BuiltinHeadRole(..)
+  , FunctionBuiltin(..)
+  , ExtensionalBuiltin(..)
+  , RecursiveHeadArgSource(..)
+  , BranchInputSource(..)
+  , ElimBranchBuiltin(..)
+  , InductiveElimBuiltin(..)
+  , EliminatorBuiltin(..)
+  , BuiltinHeads(..)
   , TmHeadSig(..)
   , GenArgSig(..)
   , TmRule(..)
+  , emptyBuiltinHeads
   , emptyDefFragment
+  , lookupTmHeadSig
+  , termHeadsForMode
   )
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Literal
 import Strat.Poly.Diagram
+import Strat.Poly.DiagramInterpretation
+  ( DiagramInterpretation(..)
+  , applySubstBinderSig
+  , applySubstBinderSigs
+  , binderHoleCaptureRiskMetasDiagram
+  , binderHoleNames
+  , instantiateGenImageBindersWithMapper
+  , interpretDiagram
+  , renameBinderArgMetas
+  , requirePortType
+  , spliceEdge
+  , stableHoleCaptureRenaming
+  )
+import Strat.Poly.DiagramBuild (allocPorts)
 import Strat.Poly.Graph
   ( BinderArg(..)
   , BinderMetaVar(..)
   , Edge(..)
   , EdgePayload(..)
   , addEdgePayload
-  , diagramPortObj
   , emptyDiagram
   , freshPort
+  , unEdgeId
   , unPortId
   , validateDiagram
   )
 import Strat.Poly.Cell2
 import Strat.Poly.Tele (CtorSig(..), GenParam(..), teleDistinctNames, teleTyVars, teleTmVars)
 import Strat.Poly.DSL.AST (RawOblExpr(..))
-import Strat.Poly.UnifyObj (Subst, applySubstCtx, applySubstObj, composeSubst, emptySubst, mkSubst, unifyCtx)
+import Strat.Poly.Subst (Subst, codeBindings, emptySubst, mkSubst, tmBindings)
+import Strat.Poly.Term.Compat (termDiagramOutputSort, unifyCtxCompat)
+import Strat.Poly.Term.SubstRuntime (applySubstCtx, applySubstObj, composeSubst, normalizeSubst)
+import Strat.Poly.UnifyFlex (unifyCtxDiagram, unifyCtx, unifyObjFlex)
 import Strat.Common.Rules (RewritePolicy(..), RuleClass(..), Orientation(..))
 import Strat.Poly.DefEq
   ( checkCodeWellFormed
   , termToDiagram
-  , validateTermDiagram
+  , termExprToDiagramChecked
   , normalizeObjDeep
+  , normalizeObjDeepWithCtx
   , defEqObj
   )
 import Strat.Poly.Term.RewriteCompile (compileAllTermRules)
 import Strat.Poly.Term.Termination (checkTerminatingSCT)
-import Strat.Poly.Term.Confluence (checkConfluent)
-import Strat.Poly.Term.AST (TermExpr(..))
+import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..), TermBinderArg(..), pattern TMGen)
+import Strat.Poly.Term.FragmentConfluence (checkTypeTheoryConfluenceWithMapper)
+import Strat.Poly.Term.HeadInst
+  ( instantiateStoredHeadSubst
+  , instantiateStructuralBinderSig
+  )
+import Strat.Poly.TermExpr
+  ( applyHeadSubstObj
+  , diagramGraphToRuleExpr
+  , instantiateHostBoundObj
+  , instantiateHostBoundCtx
+  , normalizeCtxStructurallyWithPrefix
+  , structuralConvEnv
+  )
 import Strat.Poly.Term.RewriteSystem (TRS, mkTRS)
 import qualified Strat.Poly.Term.RewriteSystem as RS
-import Strat.Poly.Term.NBE.Config (NbeConfig(..), defaultNbeConfig)
-
-data BinderSig = BinderSig
-  { bsTmCtx :: [Obj]
-  , bsDom :: Context
-  , bsCod :: Context
-  } deriving (Eq, Ord, Read, Show)
 
 data InputShape
   = InPort Obj
@@ -148,6 +191,26 @@ obTmVars
   =
   teleTmVars . obParams
 
+data BuiltinDecl = BuiltinDecl
+  { bdHead :: GenName
+  , bdMode :: ModeName
+  , bdSpec :: BuiltinSpec
+  } deriving (Eq, Read, Show)
+
+data BuiltinSpec
+  = BDTransport
+  | BDInductiveElim
+      { bdsScrutineeIndex :: Int
+      , bdsBranches :: [BuiltinBranchDecl]
+      }
+  deriving (Eq, Read, Show)
+
+data BuiltinBranchDecl = BuiltinBranchDecl
+  { bbdCtor :: GenName
+  , bbdTmCtxInputs :: [BranchInputSource]
+  , bbdInputs :: [BranchInputSource]
+  } deriving (Eq, Read, Show)
+
 type CtorTables = M.Map ModeName (M.Map ObjName CtorSig)
 
 gdPlainDom :: GenDecl -> Context
@@ -166,20 +229,16 @@ tmHeadSigForGenDecl :: GenDecl -> Maybe TmHeadSig
 tmHeadSigForGenDecl gd =
   case gdCod gd of
     [res]
-      | all isPort (gdDom gd) ->
+      ->
           Just
             TmHeadSig
               { thsParams = gdParams gd
               , thsInputs = [ ty | InPort ty <- gdDom gd ]
+              , thsBinders = [ bs | InBinder bs <- gdDom gd ]
               , thsRes = res
               }
     _ ->
       Nothing
-  where
-    isPort sh =
-      case sh of
-        InPort _ -> True
-        InBinder _ -> False
 
 isTypeDeclGenNameInTables :: Doctrine -> CtorTables -> ModeName -> ObjName -> Bool
 isTypeDeclGenNameInTables doc tables classifierMode ctorName =
@@ -199,6 +258,7 @@ data Doctrine = Doctrine
   , dAcyclicModes :: S.Set ModeName
   , dGens :: M.Map ModeName (M.Map GenName GenDecl)
   , dCells2 :: [Cell2]
+  , dBuiltins :: [BuiltinDecl]
   , dActions :: M.Map ModName ModAction
   , dObligations :: [ObligationDecl]
   } deriving (Eq, Read, Show)
@@ -222,22 +282,25 @@ mkTypeTheoryFromTables doc ctorTables = do
   tt0 <- doctrineTypeTheoryBaseFromTables doc ctorTables
   trs <- compileAllTermRules tt0
   fragments <- buildCompiledFragments doc tt0 trs
-  pure tt0 { ttDefFragments = fragments }
+  let tt = tt0 { ttDefFragments = fragments }
+  checkTypeTheoryConfluenceWithMapper (applyModExprWithTypeTheory tt doc) tt
+  pure tt
 
 mkElabTypeTheoryFromTables :: Doctrine -> CtorTables -> Either Text TypeTheory
 mkElabTypeTheoryFromTables doc ctorTables = do
   tt0 <- doctrineTypeTheoryBaseFromTables doc ctorTables
   trs <- compileAllTermRules tt0
-  fragments <- buildCtorEligibilityFragments doc tt0 trs
-  pure tt0 { ttDefFragments = fragments }
+  fragments <- buildCtorEligibilityElabFragments doc tt0 trs
+  pure (tt0 { ttDefFragments = fragments })
 
 doctrineTypeTheoryBaseFromTables :: Doctrine -> CtorTables -> Either Text TypeTheory
 doctrineTypeTheoryBaseFromTables doc ctorTables =
   let tmHeads = derivedTmHeads doc ctorTables
-      tmRules = derivedTmRules doc tmHeads
       genArgSigs = derivedGenArgSigs doc
-      fragments0 = mkDefFragments (dModes doc) tmHeads tmRules M.empty
+      diagramRules = derivedDiagramRules doc
    in do
+        tmRules <- derivedTmRules doc tmHeads
+        let fragments0 = mkDefFragments (dModes doc) tmHeads tmRules diagramRules M.empty
         ctorSigs <- ctorSigEnvFromTables doc ctorTables
         pure
           TypeTheory
@@ -303,59 +366,38 @@ mkDefFragments
   :: ModeTheory
   -> M.Map ModeName (M.Map GenName TmHeadSig)
   -> M.Map ModeName [TmRule]
+  -> M.Map ModeName [Cell2]
   -> M.Map ModeName TRS
   -> M.Map ModeName DefFragment
-mkDefFragments mt tmFuns tmRules tmTRS =
+mkDefFragments mt tmFuns tmRules diagramRules tmTRS =
   M.fromList
     [ (mode, mkOne mode)
     | mode <- M.keys (mtModes mt)
     ]
   where
     mkOne mode =
-      case modeDefEqEngine mt mode of
-        DefEqTRS ->
-          DefFragmentTRS
-            { dfMode = mode
-            , dfHeads = M.findWithDefault M.empty mode tmFuns
-            , dfRules = M.findWithDefault [] mode tmRules
-            , dfTRS = M.findWithDefault (mkTRS mode []) mode tmTRS
-            }
-        DefEqNBE ->
-          DefFragmentNBE
-            { dfMode = mode
-            , dfHeads = M.findWithDefault M.empty mode tmFuns
-            , dfRules = M.findWithDefault [] mode tmRules
-            , dfNBE = defaultNbeConfig
-            }
+      DefFragment
+        { dfMode = mode
+        , dfHeads = M.findWithDefault M.empty mode tmFuns
+        , dfRules = M.findWithDefault [] mode tmRules
+        , dfDiagramRules = M.findWithDefault [] mode diagramRules
+        , dfCompiledRules = M.findWithDefault (mkTRS mode []) mode tmTRS
+        , dfBuiltins = emptyBuiltinHeads
+        }
 
 checkFragmentTermination :: DefFragment -> Either Text ()
 checkFragmentTermination fragment =
-  case fragment of
-    DefFragmentNBE {} -> Right ()
-    DefFragmentTRS { dfTRS = trs } ->
-      case checkTerminatingSCT trs of
-        Right () -> Right ()
-        Left err ->
-          Left
+  case checkTerminatingSCT (dfCompiledRules fragment) of
+    Right () -> Right ()
+    Left err ->
+      let trs = dfCompiledRules fragment
+       in Left
             ( err
                 <> "\n  root symbols: "
                 <> renderRootSymbols trs
                 <> "\n  fragment rules:\n"
                 <> renderFragmentRules trs
             )
-
-checkFragmentConfluence :: DefFragment -> Either Text ()
-checkFragmentConfluence fragment =
-  case fragment of
-    DefFragmentNBE {} -> Right ()
-    DefFragmentTRS { dfTRS = trs } -> checkConfluent trs
-
-data NbePrimitives = NbePrimitives
-  { nbepLamGen :: GenName
-  , nbepAppGen :: GenName
-  , nbepArrTyCon :: ObjName
-  }
-  deriving (Eq, Read, Show)
 
 renderModeNameText :: ModeName -> Text
 renderModeNameText (ModeName n) = n
@@ -384,147 +426,258 @@ matchBinaryCon mt expectedClassifier ty = do
           Just (orName ref, a', b')
     _ -> Nothing
 
-inferLamCandidateArr
-  :: ModeTheory
-  -> ModeName
-  -> ModeName
-  -> GenDecl
-  -> Maybe ObjName
-inferLamCandidateArr mt ownerMode classifierMode gd = do
-  guard (gdMode gd == ownerMode)
-  let ports = [ty | InPort ty <- gdDom gd]
-      binders = [bs | InBinder bs <- gdDom gd]
-  guard (null ports)
-  guard (length binders == 1)
-  bs <- case binders of
+inferFunctionHeadEta :: [GenParam] -> Maybe Bool
+inferFunctionHeadEta params =
+  case params of
+    [] -> Just False
+    [GP_Ty _, GP_Ty _] -> Just True
+    _ -> Nothing
+
+inferLamBuiltinHead :: ModeTheory -> ModeName -> TmHeadSig -> Maybe ObjName
+inferLamBuiltinHead mt classifierMode sig = do
+  guard (null (thsInputs sig))
+  guard (length (thsBinders sig) == 1)
+  _ <- inferFunctionHeadEta (thsParams sig)
+  bs <- case thsBinders sig of
     [one] -> Just one
     _ -> Nothing
   guard (length (bsDom bs) == 1)
   guard (length (bsCod bs) == 1)
-  guard (length (gdCod gd) == 1)
-
   aTy0 <- case bsDom bs of
     [a] -> Just a
     _ -> Nothing
   bTy0 <- case bsCod bs of
     [b] -> Just b
     _ -> Nothing
-  outTy0 <- case gdCod gd of
-    [o] -> Just o
-    _ -> Nothing
-
   aTy <- normalizeMaybe mt aTy0
   bTy <- normalizeMaybe mt bTy0
-  outTy <- normalizeMaybe mt outTy0
-
-  (arrName, domTy, codTy) <- matchBinaryCon mt classifierMode outTy
+  resTy <- normalizeMaybe mt (thsRes sig)
+  (arrName, domTy, codTy) <- matchBinaryCon mt classifierMode resTy
   guard (domTy == aTy)
   guard (codTy == bTy)
   pure arrName
 
-inferAppCandidateArr
-  :: ModeTheory
-  -> ModeName
-  -> ModeName
-  -> GenDecl
-  -> Maybe ObjName
-inferAppCandidateArr mt ownerMode classifierMode gd = do
-  guard (gdMode gd == ownerMode)
-  let ports = [ty | InPort ty <- gdDom gd]
-      binders = [bs | InBinder bs <- gdDom gd]
-  guard (null binders)
-  guard (length ports == 2)
-  guard (length (gdCod gd) == 1)
+inferLamBuiltinCandidate :: ModeTheory -> ModeName -> TmHeadSig -> Maybe (ObjName, Bool)
+inferLamBuiltinCandidate mt classifierMode sig = do
+  arrName <- inferLamBuiltinHead mt classifierMode sig
+  etaCapable <- inferFunctionHeadEta (thsParams sig)
+  pure (arrName, etaCapable)
 
-  (funTy0, argTy0) <- case ports of
+inferAppBuiltinHead :: ModeTheory -> ModeName -> TmHeadSig -> Maybe ObjName
+inferAppBuiltinHead mt classifierMode sig = do
+  guard (null (thsBinders sig))
+  guard (length (thsInputs sig) == 2)
+  _ <- inferFunctionHeadEta (thsParams sig)
+  (funTy0, argTy0) <- case thsInputs sig of
     [funTy, argTy] -> Just (funTy, argTy)
     _ -> Nothing
-  resTy0 <- case gdCod gd of
-    [resTy] -> Just resTy
-    _ -> Nothing
-
   funTy <- normalizeMaybe mt funTy0
   argTy <- normalizeMaybe mt argTy0
-  resTy <- normalizeMaybe mt resTy0
-
+  resTy <- normalizeMaybe mt (thsRes sig)
   (arrName, domTy, codTy) <- matchBinaryCon mt classifierMode funTy
   guard (domTy == argTy)
   guard (codTy == resTy)
   pure arrName
 
-inferNbePrimitivesForMode
-  :: Doctrine
-  -> ModeName
-  -> Either Text (Maybe NbePrimitives)
-inferNbePrimitivesForMode doc mode =
-  case arrsWithBoth of
-    [] ->
-      Right Nothing
-    [arr] ->
-      let lams = M.findWithDefault [] arr lamByArr
-          apps = M.findWithDefault [] arr appByArr
-       in case (lams, apps) of
-            ([lamGen], [appGen]) ->
-              Right (Just (NbePrimitives lamGen appGen arr))
-            _ ->
-              Left
-                ( "validateDoctrine: NbE mode "
-                    <> renderModeNameText mode
-                    <> " has ambiguous NbE primitives for arrow constructor `"
-                    <> renderObjNameText arr
-                    <> "`; lambda candidates = ["
-                    <> T.intercalate ", " (map renderGenNameText lams)
-                    <> "], application candidates = ["
-                    <> T.intercalate ", " (map renderGenNameText apps)
-                    <> "]"
-                )
-    _ ->
+inferAppBuiltinCandidate :: ModeTheory -> ModeName -> TmHeadSig -> Maybe (ObjName, Bool)
+inferAppBuiltinCandidate mt classifierMode sig = do
+  arrName <- inferAppBuiltinHead mt classifierMode sig
+  etaCapable <- inferFunctionHeadEta (thsParams sig)
+  pure (arrName, etaCapable)
+
+defaultFunctionBuiltin :: FunctionBuiltin
+defaultFunctionBuiltin =
+  FunctionBuiltin
+    { fbLamGen = GenName "lam"
+    , fbAppGen = GenName "app"
+    , fbArrTyCon = ObjName "Arr"
+    , fbAllowEta = True
+    }
+
+functionBuiltins :: FunctionBuiltin -> BuiltinHeads
+functionBuiltins fb =
+  BuiltinHeads
+    { bhFunctionSpace = Just fb
+    , bhExtensionalHeads = M.empty
+    , bhEliminators = M.empty
+    , bhHeadRoles =
+        M.fromList
+          [ (fbLamGen fb, BuiltinExtensional)
+          , (fbAppGen fb, BuiltinExtensional)
+          ]
+    }
+
+extensionalBuiltins :: M.Map GenName ExtensionalBuiltin -> BuiltinHeads
+extensionalBuiltins builtins =
+  BuiltinHeads
+    { bhFunctionSpace = Nothing
+    , bhExtensionalHeads = builtins
+    , bhEliminators = M.empty
+    , bhHeadRoles = M.map (const BuiltinExtensional) builtins
+    }
+
+eliminatorBuiltins :: M.Map GenName EliminatorBuiltin -> BuiltinHeads
+eliminatorBuiltins builtins =
+  BuiltinHeads
+    { bhFunctionSpace = Nothing
+    , bhExtensionalHeads = M.empty
+    , bhEliminators = builtins
+    , bhHeadRoles = M.map (const BuiltinEliminator) builtins
+    }
+
+mergeBuiltinHeads :: BuiltinHeads -> BuiltinHeads -> Either Text BuiltinHeads
+mergeBuiltinHeads left right = do
+  functionSpace <-
+    case (bhFunctionSpace left, bhFunctionSpace right) of
+      (Just _, Just _) ->
+        Left "validateDoctrine: internal error while merging duplicate function-space builtin metadata"
+      (Just fb, Nothing) -> Right (Just fb)
+      (Nothing, Just fb) -> Right (Just fb)
+      (Nothing, Nothing) -> Right Nothing
+  let overlappingRoles = M.keysSet (bhHeadRoles left) `S.intersection` M.keysSet (bhHeadRoles right)
+  if S.null overlappingRoles
+    then
+      Right
+        BuiltinHeads
+          { bhFunctionSpace = functionSpace
+          , bhExtensionalHeads = M.union (bhExtensionalHeads left) (bhExtensionalHeads right)
+          , bhEliminators = M.union (bhEliminators left) (bhEliminators right)
+          , bhHeadRoles = M.union (bhHeadRoles left) (bhHeadRoles right)
+          }
+    else
       Left
-        ( "validateDoctrine: NbE mode "
-            <> renderModeNameText mode
-            <> " has ambiguous NbE primitives: multiple arrow constructors fit: ["
-            <> T.intercalate ", " (map renderObjNameText arrsWithBoth)
+        ( "validateDoctrine: internal error while merging duplicate builtin-head roles ["
+            <> T.intercalate ", " (map renderGenNameText (S.toList overlappingRoles))
             <> "]"
         )
-  where
-    mt = dModes doc
-    classifierMode = modeClassifierMode mt mode
-    gensInMode = M.elems (M.findWithDefault M.empty mode (dGens doc))
 
-    lamCands :: [(ObjName, GenName)]
-    lamCands =
-      [ (arrName, gdName gd)
-      | gd <- gensInMode
-      , Just arrName <- [inferLamCandidateArr mt mode classifierMode gd]
-      ]
-
-    appCands :: [(ObjName, GenName)]
-    appCands =
-      [ (arrName, gdName gd)
-      | gd <- gensInMode
-      , Just arrName <- [inferAppCandidateArr mt mode classifierMode gd]
-      ]
-
-    lamByArr = M.fromListWith (<>) [ (arr, [g]) | (arr, g) <- lamCands ]
-    appByArr = M.fromListWith (<>) [ (arr, [g]) | (arr, g) <- appCands ]
-
-    arrsWithBoth =
-      [ arr
-      | arr <- M.keys lamByArr
-      , M.member arr appByArr
-      ]
-
-finalizeNbeConfigForMode
+inferFunctionBuiltinForMode
   :: Doctrine
   -> TypeTheory
   -> ModeName
-  -> NbePrimitives
-  -> NbeConfig
-  -> Either Text NbeConfig
-finalizeNbeConfigForMode doc tt mode prims cfg0 = do
+  -> Either Text (Maybe FunctionBuiltin)
+inferFunctionBuiltinForMode doc tt mode =
+  case (M.null lamByArr, M.null appByArr) of
+    (True, True) ->
+      Right Nothing
+    _ | not (null incompleteArrs) ->
+        Left
+          ( "validateDoctrine: mode "
+              <> renderModeNameText mode
+              <> " has incomplete function-space builtin evidence; missing counterpart for arrow constructor(s) ["
+              <> T.intercalate ", " (map renderObjNameText incompleteArrs)
+              <> "]; lambda candidates = {"
+              <> renderCandidateMap lamByArr
+              <> "}, application candidates = {"
+              <> renderCandidateMap appByArr
+              <> "}"
+          )
+    _ ->
+      case completeArrs of
+        [arr] ->
+          let lams = M.findWithDefault [] arr lamByArr
+              apps = M.findWithDefault [] arr appByArr
+           in case (lams, apps) of
+                ([(lamGen, lamEta)], [(appGen, appEta)]) ->
+                  Right
+                    ( Just
+                        defaultFunctionBuiltin
+                          { fbLamGen = lamGen
+                          , fbAppGen = appGen
+                          , fbArrTyCon = arr
+                          , fbAllowEta = lamEta && appEta
+                          }
+                    )
+                _ ->
+                  Left
+                    ( "validateDoctrine: mode "
+                        <> renderModeNameText mode
+                        <> " has ambiguous function-space builtin evidence for arrow constructor `"
+                        <> renderObjNameText arr
+                        <> "`; lambda candidates = ["
+                        <> T.intercalate ", " (map (renderGenNameText . fst) lams)
+                        <> "], application candidates = ["
+                        <> T.intercalate ", " (map (renderGenNameText . fst) apps)
+                        <> "]"
+                    )
+        [] ->
+          Left
+            ( "validateDoctrine: mode "
+                <> renderModeNameText mode
+                <> " has function-space builtin candidates, but no matching lambda/application pair was found"
+            )
+        _ ->
+          Left
+            ( "validateDoctrine: mode "
+                <> renderModeNameText mode
+                <> " has ambiguous function-space builtin evidence: multiple arrow constructors fit ["
+                <> T.intercalate ", " (map renderObjNameText completeArrs)
+                <> "]"
+            )
+  where
+    mt = dModes doc
+    classifierMode = modeClassifierMode mt mode
+    headsInMode = M.toList (termHeadsForMode tt mode)
+
+    lamCands :: [(ObjName, GenName, Bool)]
+    lamCands =
+      [ (arrName, g, etaCapable)
+      | (g, sig) <- headsInMode
+      , Just (arrName, etaCapable) <- [inferLamBuiltinCandidate mt classifierMode sig]
+      ]
+
+    appCands :: [(ObjName, GenName, Bool)]
+    appCands =
+      [ (arrName, g, etaCapable)
+      | (g, sig) <- headsInMode
+      , Just (arrName, etaCapable) <- [inferAppBuiltinCandidate mt classifierMode sig]
+      ]
+
+    lamByArr = M.fromListWith (<>) [ (arr, [(g, etaCapable)]) | (arr, g, etaCapable) <- lamCands ]
+    appByArr = M.fromListWith (<>) [ (arr, [(g, etaCapable)]) | (arr, g, etaCapable) <- appCands ]
+
+    allArrs = S.toList (M.keysSet lamByArr `S.union` M.keysSet appByArr)
+    completeArrs =
+      [ arr
+      | arr <- allArrs
+      , M.member arr lamByArr
+      , M.member arr appByArr
+      ]
+    incompleteArrs =
+      [ arr
+      | arr <- allArrs
+      , not (arr `elem` completeArrs)
+      ]
+    renderCandidateMap mp =
+      T.intercalate
+        "; "
+        [ renderObjNameText arr <> " -> [" <> T.intercalate ", " (map (renderGenNameText . fst) gens) <> "]"
+        | (arr, gens) <- M.toList mp
+        ]
+
+inferAndFinalizeFunctionBuiltins
+  :: Bool
+  -> Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> Either Text BuiltinHeads
+inferAndFinalizeFunctionBuiltins requireCtorEligibility doc tt mode = do
+  inferred <- inferFunctionBuiltinForMode doc tt mode
+  case inferred of
+    Nothing -> Right emptyBuiltinHeads
+    Just fb -> finalizeFunctionBuiltinForMode requireCtorEligibility doc tt mode fb
+
+finalizeFunctionBuiltinForMode
+  :: Bool
+  -> Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> FunctionBuiltin
+  -> Either Text BuiltinHeads
+finalizeFunctionBuiltinForMode requireCtorEligibility doc tt mode fb = do
   let mt = dModes doc
       classifierMode = modeClassifierMode mt mode
-      arrName = nbepArrTyCon prims
+      arrName = fbArrTyCon fb
       arrGenName = GenName (renderObjNameText arrName)
 
   arrDecl <-
@@ -532,9 +685,9 @@ finalizeNbeConfigForMode doc tt mode prims cfg0 = do
       Just gd -> Right gd
       Nothing ->
         Left
-          ( "validateDoctrine: NbE mode "
+          ( "validateDoctrine: mode "
               <> renderModeNameText mode
-              <> " is missing arrow type constructor `"
+              <> " is missing function-space arrow type constructor `"
               <> renderObjNameText arrName
               <> "` (no constructor-like generator `"
               <> renderModeNameText classifierMode
@@ -547,9 +700,9 @@ finalizeNbeConfigForMode doc tt mode prims cfg0 = do
     then pure ()
     else
       Left
-        ( "validateDoctrine: NbE mode "
+        ( "validateDoctrine: mode "
             <> renderModeNameText mode
-            <> " requires arrow type constructor `"
+            <> " requires function-space arrow type constructor `"
             <> renderObjNameText arrName
             <> "` to be constructor-like (no inputs)"
         )
@@ -559,157 +712,1724 @@ finalizeNbeConfigForMode doc tt mode prims cfg0 = do
     then pure ()
     else
       Left
-        ( "validateDoctrine: NbE mode "
+        ( "validateDoctrine: mode "
             <> renderModeNameText mode
-            <> " requires arrow type constructor `"
+            <> " requires function-space arrow type constructor `"
             <> renderObjNameText arrName
             <> "` to take exactly two type parameters"
         )
 
-  case M.lookup mode (ttCtorTablesByOwner tt) >>= M.lookup arrName of
-    Just _ -> pure ()
-    Nothing ->
-      Left
-        ( "validateDoctrine: NbE mode "
-            <> renderModeNameText mode
-            <> " requires arrow type constructor `"
-            <> renderObjNameText arrName
-            <> "` to be eligible for the mode (missing from derived constructor table)"
-        )
+  if requireCtorEligibility
+    then
+      case M.lookup mode (ttCtorTablesByOwner tt) >>= M.lookup arrName of
+        Just _ -> pure ()
+        Nothing ->
+          Left
+            ( "validateDoctrine: mode "
+                <> renderModeNameText mode
+                <> " requires function-space arrow type constructor `"
+                <> renderObjNameText arrName
+                <> "` to be eligible for the mode (missing from derived constructor table)"
+            )
+    else
+      pure ()
 
-  pure
-    cfg0
-      { nbeLamGen = nbepLamGen prims
-      , nbeAppGen = nbepAppGen prims
-      , nbeArrTyCon = nbepArrTyCon prims
-      }
+  pure (functionBuiltins fb)
   where
     isTyParam param =
       case param of
         GP_Ty _ -> True
         GP_Tm _ -> False
 
+inferTransportBuiltinCandidate
+  :: TypeTheory
+  -> TmHeadSig
+  -> Either Text Bool
+inferTransportBuiltinCandidate tt sig =
+  case (thsInputs sig, thsBinders sig) of
+    ([inputSort], []) ->
+      if inputSort == thsRes sig
+        then Right False
+        else
+          defEqObj tt tmCtx inputSort (thsRes sig)
+    _ ->
+      Right False
+  where
+    tmCtx =
+      [ tmvSort v
+      | GP_Tm v <- thsParams sig
+      ]
+
+builtinElimExplicitDeclHint :: Text
+builtinElimExplicitDeclHint =
+  " Add an explicit `builtin eliminator ...` declaration if this head is intended to use builtin eliminator semantics."
+
+computationalCellPairs :: Cell2 -> [(Diagram, Diagram)]
+computationalCellPairs cell =
+  case c2Orient cell of
+    LR -> [(c2LHS cell, c2RHS cell)]
+    RL -> [(c2RHS cell, c2LHS cell)]
+    Bidirectional -> [(c2LHS cell, c2RHS cell), (c2RHS cell, c2LHS cell)]
+    Unoriented -> []
+
+data CtorCaseEvidence = CtorCaseEvidence
+  { cceScrutineeIndex :: Int
+  , cceHeadArgs :: [CodeArg]
+  , cceCtorGen :: GenName
+  , cceBinderIndex :: Maybe Int
+  , cceBranchInputHints :: Maybe [BranchInputSource]
+  }
+
+cellHeadConstructorCasesForMode
+  :: Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> Either Text (M.Map GenName [CtorCaseEvidence])
+cellHeadConstructorCasesForMode doc tt mode =
+  foldM step M.empty (filter ((== Computational) . c2Class) (dCells2 doc))
+  where
+    heads = termHeadsForMode tt mode
+
+    step acc cell =
+      foldM
+        (stepOne cell)
+        acc
+        (computationalCellPairs cell)
+
+    stepOne cell acc (lhs, rhs)
+      | dMode lhs /= mode =
+          Right acc
+      | otherwise =
+          case cellHeadConstructorCase tt heads (c2TmVars cell) lhs rhs of
+            Left _ ->
+              Right acc
+            Right Nothing ->
+              Right acc
+            Right (Just (g, evidence)) ->
+              Right (M.insertWith (flip (<>)) g [evidence] acc)
+
+cellHeadConstructorCase
+  :: TypeTheory
+  -> M.Map GenName TmHeadSig
+  -> [TmVar]
+  -> Diagram
+  -> Diagram
+  -> Either Text (Maybe (GenName, CtorCaseEvidence))
+cellHeadConstructorCase tt heads _tmVars diag rhs =
+  case dOut diag of
+    [outPid] ->
+      case producerEdge diag outPid of
+        Nothing ->
+          pure Nothing
+        Just rootEdge ->
+          case ePayload rootEdge of
+            PGen g args bargs
+              | not (null bargs)
+              , Just sig <- M.lookup g heads
+              , length args == length (thsParams sig)
+              , length (eIns rootEdge) == length (thsInputs sig)
+              , length bargs == length (thsBinders sig)
+              , length (eOuts rootEdge) == 1 ->
+                  case constructorInput (zip [0 :: Int ..] (eIns rootEdge)) of
+                    Just (scrutineeIx, ctor, ctorEdge) -> do
+                      let holeToBinderIndex =
+                            M.fromList
+                              [ (hole, i)
+                              | (i, barg) <- zip [0 :: Int ..] bargs
+                              , BAMeta hole <- [barg]
+                              ]
+                          boundaryHints = boundarySourceHints rootEdge ctorEdge scrutineeIx
+                          (binderIndex, branchInputHints) =
+                            case rhsSpliceEvidence tt rhs boundaryHints of
+                              Just (hole, hints) ->
+                                (M.lookup hole holeToBinderIndex, Just hints)
+                              Nothing ->
+                                (Nothing, Nothing)
+                      pure $
+                        Just
+                          ( g
+                          , CtorCaseEvidence
+                              { cceScrutineeIndex = scrutineeIx
+                              , cceHeadArgs = args
+                              , cceCtorGen = ctor
+                              , cceBinderIndex = binderIndex
+                              , cceBranchInputHints = branchInputHints
+                              }
+                          )
+                    Nothing ->
+                      pure Nothing
+            _ ->
+              pure Nothing
+    _ ->
+      pure Nothing
+  where
+    constructorInput =
+      listToMaybe . mapMaybe one
+      where
+        one (i, pid) = do
+          scrutineeEdge <- producerEdge diag pid
+          case ePayload scrutineeEdge of
+            PGen ctor _ ctorBargs
+              | null ctorBargs
+              , eOuts scrutineeEdge == [pid] ->
+                  Just (i, ctor, scrutineeEdge)
+            _ ->
+              Nothing
+
+    boundarySourceHints rootEdge ctorEdge scrutineeIx =
+      let boundaryLocals = M.fromList (zip (dIn diag) [0 :: Int ..])
+          outerHints =
+            M.fromList
+              [ (localIx, BISOuterInput i)
+              | (i, pid) <- zip [0 :: Int ..] (eIns rootEdge)
+              , i /= scrutineeIx
+              , Just localIx <- [M.lookup pid boundaryLocals]
+              ]
+          ctorHints =
+            M.fromList
+              [ (localIx, BISCtorField i)
+              | (i, pid) <- zip [0 :: Int ..] (eIns ctorEdge)
+              , Just localIx <- [M.lookup pid boundaryLocals]
+              ]
+       in M.union outerHints ctorHints
+
+    rhsSpliceEvidence tt0 rhs0 boundaryHints = do
+      boundarySorts <- either (const Nothing) Just (mapM (\pid -> requirePortType "validateDoctrine: builtin rhs evidence" rhs0 pid) (dIn rhs0))
+      expectedSort <- either (const Nothing) Just (termDiagramOutputSort "validateDoctrine: builtin rhs evidence" rhs0)
+      expr <- either (const Nothing) Just (diagramGraphToRuleExpr tt0 boundarySorts expectedSort rhs0)
+      case expr of
+        TMSplice hole _ args ->
+          let hints = mapM (directBoundarySource boundaryHints) args
+           in fmap (\hs -> (hole, hs)) hints
+        _ ->
+          Nothing
+
+    directBoundarySource boundaryHints tm =
+      case tm of
+        TMBound i ->
+          M.lookup i boundaryHints
+        _ ->
+          Nothing
+
+    producerEdge d pid = do
+      eid <- IM.lookup (unPortId pid) (dProd d)
+      edgeId <- eid
+      IM.lookup (unEdgeId edgeId) (dEdges d)
+
+matchHeadSubst
+  :: TypeTheory
+  -> [GenParam]
+  -> Obj
+  -> Obj
+  -> Either Text (Maybe (M.Map TmVar CodeArg))
+matchHeadSubst tt params pat target = do
+  subst <-
+    case unifyObjFlex tt [] flex emptySubst pat target of
+      Left _ ->
+        pure Nothing
+      Right subst0 ->
+        Just <$> normalizeSubst tt subst0
+  pure
+    ( fmap
+        (\subst0 -> M.fromList (map (\(v, obj) -> (v, CAObj obj)) (codeBindings subst0) <> map (\(v, tm) -> (v, CATm tm)) (tmBindings subst0)))
+        subst
+    )
+  where
+    flex =
+      S.fromList
+        [ v
+        | param <- params
+        , v <-
+            case param of
+              GP_Ty v' -> [v']
+              GP_Tm v' -> [v']
+        ]
+
+instantiateTypeHeadObj
+  :: TypeTheory
+  -> M.Map TmVar CodeArg
+  -> Obj
+  -> Either Text Obj
+instantiateTypeHeadObj tt subst obj = do
+  obj' <- applyHeadSubstObj tt (structuralConvEnv tt) [] subst obj
+  normalizeObjDeep tt obj'
+
+instantiateHeadStoredSubst
+  :: TypeTheory
+  -> TmHeadSig
+  -> [CodeArg]
+  -> Either Text (M.Map TmVar CodeArg)
+instantiateHeadStoredSubst tt sig args =
+  instantiateStoredHeadSubst tt [] sig args
+
+instantiateBuiltinEvidenceBinderSig
+  :: TypeTheory
+  -> M.Map TmVar CodeArg
+  -> BinderSig
+  -> Either Text BinderSig
+instantiateBuiltinEvidenceBinderSig tt headSubst slot = do
+  slot' <- instantiateStructuralBinderSig tt [] headSubst slot
+  let tmCtx0 = bsTmCtx slot'
+  tmCtx <- mapM (normalizeObjDeep tt) tmCtx0
+  let dom0 = bsDom slot'
+  dom <- mapM (normalizeObjDeepWithCtx tt tmCtx) dom0
+  let cod0 = bsCod slot'
+  cod <- mapM (normalizeObjDeepWithCtx tt tmCtx) cod0
+  pure
+    slot'
+      { bsTmCtx = tmCtx
+      , bsDom = dom
+      , bsCod = cod
+      }
+
+directParamIndex :: [GenParam] -> CodeArg -> Maybe Int
+directParamIndex params arg =
+  fst <$> L.find (matchesParam . snd) (zip [0 :: Int ..] params)
+  where
+    matchesParam param =
+      case (param, arg) of
+        (GP_Ty v, CAObj (OVar v')) ->
+          sameTmVarId v v'
+        (GP_Tm v, CATm tm) ->
+          termMetaOnly tm == Just v
+        _ ->
+          False
+
+    termMetaOnly (TermDiagram diag) =
+      case (IM.elems (dEdges diag), dIn diag, dOut diag) of
+        ([edge], [], [outBoundary]) ->
+          case (ePayload edge, eIns edge, eOuts edge) of
+            (PTmMeta v, [], [outPid]) | outPid == outBoundary -> Just v
+            _ -> Nothing
+        _ -> Nothing
+
+scrutineeFamilyShape
+  :: TmHeadSig
+  -> Int
+  -> Maybe (ObjRef, M.Map Int Int)
+scrutineeFamilyShape sig scrutineeIx = do
+  scrutTy <- safeNth (thsInputs sig) scrutineeIx
+  case objCode scrutTy of
+    CTCon ref args ->
+      let headParamByFamilyArg =
+            M.fromList
+              [ (paramIx, familyArgIx)
+              | (familyArgIx, arg) <- zip [0 :: Int ..] args
+              , Just paramIx <- [directParamIndex (thsParams sig) arg]
+              ]
+       in Just (ref, headParamByFamilyArg)
+    _ ->
+      Nothing
+  where
+    safeNth xs i
+      | i < 0 =
+          Nothing
+      | otherwise =
+          case drop i xs of
+            (x:_) -> Just x
+            [] -> Nothing
+
+recursiveCallSourcesForInput
+  :: [GenParam]
+  -> ObjRef
+  -> M.Map Int Int
+  -> [GenParam]
+  -> Obj
+  -> Maybe [RecursiveHeadArgSource]
+recursiveCallSourcesForInput headParams scrutineeRef headParamByFamilyArg ctorParams inputSort =
+  case objCode inputSort of
+    CTCon ref _
+      | ref == scrutineeRef ->
+          mapM sourceForHeadParam (zip [0 :: Int ..] headParams)
+    _ ->
+      Nothing
+  where
+    sourceForHeadParam (headParamIx, _headParam) =
+      case M.lookup headParamIx headParamByFamilyArg of
+        Nothing ->
+          Just (RHOuterHeadArg headParamIx)
+        Just familyArgIx -> do
+          familyArg <- safeNth args familyArgIx
+          case directParamIndex ctorParams familyArg of
+            Just ctorParamIx ->
+              Just (RHCtorArg ctorParamIx)
+            Nothing ->
+              RHOuterHeadArg <$> directParamIndex headParams familyArg
+
+    args =
+      case objCode inputSort of
+        CTCon _ args0 -> args0
+        _ -> []
+
+    safeNth xs i
+      | i < 0 =
+          Nothing
+      | otherwise =
+          case drop i xs of
+            (x:_) -> Just x
+            [] -> Nothing
+
+data TmBranchSource = TmBranchSource
+  { tbsSource :: BranchInputSource
+  , tbsTerm :: TermDiagram
+  , tbsSort :: Obj
+  }
+
+inferTmCtxSources
+  :: TypeTheory
+  -> [TmBranchSource]
+  -> [Obj]
+  -> Either Text (Maybe ([BranchInputSource], M.Map Int TermDiagram))
+inferTmCtxSources tt available wantSorts =
+  go 0 [] M.empty available wantSorts
+  where
+    convEnv = structuralConvEnv tt
+
+    go _ acc subst _ [] =
+      pure (Just (reverse acc, subst))
+    go localIx acc subst remaining (wantSort0 : rest) = do
+      wantSort1 <- instantiateHostBoundObj tt convEnv [] subst wantSort0
+      wantSort <- normalizeObjDeep tt wantSort1
+      case break (\source -> tbsSort source == wantSort) remaining of
+        (before, match : after) ->
+          go
+            (localIx + 1)
+            (tbsSource match : acc)
+            (M.insert localIx (tbsTerm match) subst)
+            (before <> after)
+            rest
+        (_, []) ->
+          pure Nothing
+
+instantiateLocalTmSort
+  :: TypeTheory
+  -> M.Map Int TermDiagram
+  -> Obj
+  -> Either Text Obj
+instantiateLocalTmSort tt localSubst sortTy0 = do
+  sortTy1 <- instantiateHostBoundObj tt (structuralConvEnv tt) [] localSubst sortTy0
+  normalizeObjDeep tt sortTy1
+
+inferBranchSourcesBySort
+  :: [(BranchInputSource, Obj)]
+  -> [Obj]
+  -> [BranchInputSource]
+inferBranchSourcesBySort available wantSorts =
+  go available slotDom
+  where
+    slotDom = wantSorts
+
+    go _ [] = []
+    go remaining (wantSort : rest) =
+      case break (\(_, sourceSort) -> sourceSort == wantSort) remaining of
+        (before, match : after) ->
+          fst match : go (before <> after) rest
+        (_, []) ->
+          []
+
+inferPlainBranchSources
+  :: [(Int, Obj)]
+  -> [Obj]
+  -> M.Map Int [RecursiveHeadArgSource]
+  -> Obj
+  -> [(BranchInputSource, Obj)]
+inferPlainBranchSources outerInputSorts inputSorts recursiveCalls resTy =
+  [ (BISOuterInput i, sortTy)
+  | (i, sortTy) <- outerInputSorts
+  ]
+    <> concat
+      [ (BISCtorField i, sortTy) :
+          [ (BISRecursiveResult i sources, resTy)
+          | Just sources <- [M.lookup i recursiveCalls]
+          ]
+      | (i, sortTy) <- zip [0 :: Int ..] inputSorts
+      ]
+
+inferElimBranchBuiltin
+  :: TypeTheory
+  -> ModeName
+  -> [GenParam]
+  -> [TmBranchSource]
+  -> [Obj]
+  -> Maybe [BranchInputSource]
+  -> ObjRef
+  -> M.Map Int Int
+  -> Obj
+  -> Obj
+  -> GenName
+  -> BinderSig
+  -> Either Text (Maybe ElimBranchBuiltin)
+inferElimBranchBuiltin tt mode headParams outerHeadTmTerms outerInputSorts branchInputHints scrutineeRef headParamByFamilyArg scrutTyNorm resTyNorm ctorGen slot0 = do
+  case lookupTmHeadSig tt mode ctorGen of
+    Nothing ->
+      pure Nothing
+    Just sig
+      | not (null (thsBinders sig)) ->
+          pure Nothing
+      | otherwise -> do
+          mSubst <- matchHeadSubst tt (thsParams sig) (thsRes sig) scrutTyNorm
+          case mSubst of
+            Nothing ->
+              pure Nothing
+            Just subst -> do
+              inputSorts0 <- mapM (instantiateTypeHeadObj tt subst) (thsInputs sig)
+              inputSorts <- mapM (normalizeObjDeep tt) inputSorts0
+              ctorHeadTmTerms <- instantiateTermParamTerms BISCtorHeadTmParam (thsParams sig) subst
+              recursiveCalls <- collectRecursiveCalls sig
+              slotTmCtx <- mapM (normalizeObjDeep tt) (bsTmCtx slot0)
+              tmCtxMatch <- inferTmCtxSources tt (outerHeadTmTerms <> ctorHeadTmTerms) slotTmCtx
+              case tmCtxMatch of
+                Nothing ->
+                  pure Nothing
+                Just (tmCtxInputs, localTmSubst) -> do
+                  slotDom <- mapM (instantiateLocalTmSort tt localTmSubst) (bsDom slot0)
+                  slotCod <- mapM (instantiateLocalTmSort tt localTmSubst) (bsCod slot0)
+                  let plainSources = inferPlainBranchSources (zip [0 :: Int ..] outerInputSorts) inputSorts recursiveCalls resTyNorm
+                  hintedInputs <-
+                    case branchInputHints of
+                      Nothing ->
+                        Right Nothing
+                      Just hints ->
+                        resolveBranchInputHints ctorGen plainSources slotDom hints
+                  let branchInputs =
+                        case hintedInputs of
+                          Just hints -> hints
+                          Nothing -> inferBranchSourcesBySort plainSources slotDom
+                  if slotCod == [resTyNorm]
+                       && length branchInputs == length slotDom
+                    then
+                      pure
+                        ( Just
+                            ElimBranchBuiltin
+                              { ebbCtorGen = ctorGen
+                              , ebbTmCtxInputs = tmCtxInputs
+                              , ebbInputs = branchInputs
+                              }
+                        )
+                    else
+                      pure Nothing
+  where
+    instantiateTermParamTerms mkSource params subst =
+      fmap catMaybes $
+        forM
+          (zip [0 :: Int ..] params)
+          ( \(i, param) ->
+              case param of
+                GP_Ty _ ->
+                  pure Nothing
+                GP_Tm v -> do
+                  sortTy0 <- applyHeadSubstObj tt (structuralConvEnv tt) [] subst (tmvSort v)
+                  sortTy <- normalizeObjDeep tt sortTy0
+                  case M.lookup v subst of
+                    Just (CATm tm) ->
+                      pure
+                        ( Just
+                            TmBranchSource
+                              { tbsSource = mkSource i
+                              , tbsTerm = tm
+                              , tbsSort = sortTy
+                              }
+                        )
+                    Just (CAObj _) ->
+                      Left "validateDoctrine: builtin branch inference expected a term-valued generator parameter substitution"
+                    Nothing ->
+                      pure Nothing
+          )
+
+    collectRecursiveCalls ctorSig =
+      pure
+        ( M.fromList
+            [ (i, sources)
+            | (i, inputSort0) <- zip [0 :: Int ..] (thsInputs ctorSig)
+            , Just sources <-
+                [ recursiveCallSourcesForInput
+                    headParams
+                    scrutineeRef
+                    headParamByFamilyArg
+                    (thsParams ctorSig)
+                    inputSort0
+                ]
+            ]
+        )
+
+    resolveBranchInputHints ctor plainSources slotDom hints
+      | length hints /= length slotDom =
+          Left
+            ( "validateDoctrine: builtin branch inference extracted "
+                <> T.pack (show (length hints))
+                <> " rhs splice inputs for constructor "
+                <> renderGenNameText ctor
+                <> " but the branch binder expects "
+                <> T.pack (show (length slotDom))
+                <> " inputs"
+                <> builtinElimExplicitDeclHint
+            )
+      | and
+          [ maybe False (== wantSort) (lookup hint plainSources)
+          | (hint, wantSort) <- zip hints slotDom
+          ] =
+          Right (Just hints)
+      | otherwise =
+          Left
+            ( "validateDoctrine: builtin branch inference extracted rhs splice inputs for constructor "
+                <> renderGenNameText ctor
+                <> " that do not match the inferred branch binder input sorts"
+                <> builtinElimExplicitDeclHint
+            )
+
+inferInductiveElimBuiltinCandidate
+  :: TypeTheory
+  -> ModeName
+  -> Int
+  -> TmHeadSig
+  -> [CtorCaseEvidence]
+  -> Either Text (Maybe InductiveElimBuiltin)
+inferInductiveElimBuiltinCandidate tt mode scrutineeIx sig ctorCases
+  | null (thsBinders sig) =
+      Right Nothing
+  | otherwise = do
+      case scrutineeFamilyShape sig scrutineeIx of
+        Nothing ->
+          Right Nothing
+        Just (scrutineeRef, headParamByFamilyArg) -> do
+          orderedCases <- assignCasesToBinders ctorCases (thsBinders sig)
+          cases <- mapM (inferOneCase scrutineeRef headParamByFamilyArg) orderedCases
+          pure $
+            case orderedCases of
+              [] ->
+                Nothing
+              _ ->
+                case sequence cases of
+                  Just builtinCases ->
+                    Just
+                      InductiveElimBuiltin
+                        { iebScrutineeIndex = scrutineeIx
+                        , iebScrutineeTyCon = scrutineeRef
+                        , iebBranches = builtinCases
+                        }
+                  Nothing ->
+                    Nothing
+  where
+    assignCasesToBinders cases slots =
+      let slotCount = length slots
+          explicit =
+            [ (ix, evidence)
+            | evidence <- cases
+            , Just ix <- [cceBinderIndex evidence]
+            ]
+          explicitIndices = map fst explicit
+          uniqueExplicit = length (S.fromList explicitIndices) == length explicitIndices
+          inRange = all (\ix -> ix >= 0 && ix < slotCount) explicitIndices
+       in if not uniqueExplicit
+            then
+              Left
+                ("validateDoctrine: builtin eliminator inference found conflicting rhs splice-hole evidence for binder-slot assignment"
+                  <> builtinElimExplicitDeclHint
+                )
+            else
+              if not inRange
+                then
+                  Left
+                    ("validateDoctrine: builtin eliminator inference found out-of-range rhs splice-hole evidence for binder-slot assignment"
+                      <> builtinElimExplicitDeclHint
+                    )
+                else
+                  if length cases /= slotCount
+                    then Right []
+                    else
+                      case explicit of
+                        []
+                          | length cases == slotCount ->
+                              Right (zip cases slots)
+                        _ ->
+                          let complete = length explicit == slotCount
+                              explicitMap = M.fromList explicit
+                           in if complete
+                                then Right [ (explicitMap M.! ix, slot) | (ix, slot) <- zip [0 :: Int ..] slots ]
+                                else Right (zip cases slots)
+
+    inferOneCase scrutineeRef headParamByFamilyArg (evidence, slot0) = do
+      let headArgs = cceHeadArgs evidence
+          ctorGen = cceCtorGen evidence
+          branchInputHints = cceBranchInputHints evidence
+      headSubst <- instantiateHeadStoredSubst tt sig headArgs
+      scrutTy0 <-
+        case safeNth (thsInputs sig) scrutineeIx of
+          Just scrutTy -> Right scrutTy
+          Nothing -> Left "validateDoctrine: builtin inference saw an out-of-bounds scrutinee index"
+      scrutTyNorm <- instantiateTypeHeadObj tt headSubst scrutTy0
+      outerHeadTmTerms <- instantiateTermParamTerms BISOuterHeadTmParam (thsParams sig) headSubst
+      outerInputSorts0 <- mapM (instantiateTypeHeadObj tt headSubst) (thsInputs sig)
+      outerInputSorts <- mapM (normalizeObjDeep tt) outerInputSorts0
+      resTy0 <- applyHeadSubstObj tt (structuralConvEnv tt) [] headSubst (thsRes sig)
+      resTyNorm <- normalizeObjDeep tt resTy0
+      slot <- instantiateBuiltinEvidenceBinderSig tt headSubst slot0
+      inferElimBranchBuiltin tt mode (thsParams sig) outerHeadTmTerms outerInputSorts branchInputHints scrutineeRef headParamByFamilyArg scrutTyNorm resTyNorm ctorGen slot
+
+    safeNth xs i
+      | i < 0 =
+          Nothing
+      | otherwise =
+          case drop i xs of
+            (x:_) -> Just x
+            [] -> Nothing
+
+    instantiateTermParamTerms mkSource params subst =
+      fmap catMaybes $
+        forM
+          (zip [0 :: Int ..] params)
+          ( \(i, param) ->
+              case param of
+                GP_Ty _ ->
+                  pure Nothing
+                GP_Tm v -> do
+                  sortTy0 <- applyHeadSubstObj tt (structuralConvEnv tt) [] subst (tmvSort v)
+                  sortTy <- normalizeObjDeep tt sortTy0
+                  case M.lookup v subst of
+                    Just (CATm tm) ->
+                      pure
+                        ( Just
+                            TmBranchSource
+                              { tbsSource = mkSource i
+                              , tbsTerm = tm
+                              , tbsSort = sortTy
+                              }
+                        )
+                    Just (CAObj _) ->
+                      Left "validateDoctrine: builtin eliminator inference expected a term-valued parameter substitution"
+                    Nothing ->
+                      pure Nothing
+          )
+
+data ExplicitBranchSourceValue = ExplicitBranchSourceValue
+  { ebsvSort :: Obj
+  , ebsvTerm :: TermDiagram
+  }
+
+nthMaybe :: [a] -> Int -> Maybe a
+nthMaybe xs i
+  | i < 0 =
+      Nothing
+  | otherwise =
+      case drop i xs of
+        (x:_) -> Just x
+        [] -> Nothing
+
+mkSymbolicMetaTermDiagram
+  :: Obj
+  -> TmVar
+  -> Either Text TermDiagram
+mkSymbolicMetaTermDiagram sortTy v = do
+  let ownerMode = objOwnerMode sortTy
+      v' = v { tmvSort = sortTy }
+  let (outPid, d0) = freshPort sortTy (emptyDiagram ownerMode [])
+  d1 <- addEdgePayload (PTmMeta v') [] [outPid] d0
+  let d2 = d1 { dOut = [outPid] }
+  validateDiagram d2
+  pure (TermDiagram d2)
+
+mkBoundarySourceTermDiagram
+  :: TypeTheory
+  -> [Obj]
+  -> Obj
+  -> Int
+  -> Either Text TermDiagram
+mkBoundarySourceTermDiagram tt tmCtx sortTy ix =
+  termExprToDiagramChecked tt tmCtx sortTy (TMBound ix)
+
+mkSelfHeadCodeArgs
+  :: TypeTheory
+  -> [GenParam]
+  -> Either Text [CodeArg]
+mkSelfHeadCodeArgs tt =
+  mapM mkOne
+  where
+    mkOne param =
+      case param of
+        GP_Ty v ->
+          Right (CAObj (OVar v))
+        GP_Tm v -> do
+          sortTy <- normalizeObjDeep tt (tmvSort v)
+          CATm <$> mkSymbolicMetaTermDiagram sortTy v
+
+completeCtorParamSubst
+  :: TypeTheory
+  -> [GenParam]
+  -> M.Map TmVar CodeArg
+  -> Either Text (M.Map TmVar CodeArg)
+completeCtorParamSubst tt params matched =
+  foldM step matched params
+  where
+    step subst param =
+      case param of
+        GP_Ty v ->
+          pure (M.insertWith (\_ old -> old) v (CAObj (OVar v)) subst)
+        GP_Tm v -> do
+          sortTy <- normalizeObjDeep tt (tmvSort v)
+          tm <- mkSymbolicMetaTermDiagram sortTy v
+          pure (M.insertWith (\_ old -> old) v (CATm tm) subst)
+
+explicitBranchSourceValues
+  :: TypeTheory
+  -> TmHeadSig
+  -> Int
+  -> ObjRef
+  -> M.Map Int Int
+  -> TmHeadSig
+  -> Either Text (M.Map BranchInputSource ExplicitBranchSourceValue, [Obj], Obj)
+explicitBranchSourceValues tt sig scrutineeIx scrutineeRef headParamByFamilyArg ctorSig = do
+  scrutTy0 <-
+    case nthMaybe (thsInputs sig) scrutineeIx of
+      Just scrutTy -> Right scrutTy
+      Nothing -> Left "validateDoctrine: explicit builtin eliminator scrutinee index is out of bounds"
+  scrutTyNorm <- normalizeObjDeep tt scrutTy0
+  matchedCtorSubst <-
+    matchHeadSubst tt (thsParams ctorSig) (thsRes ctorSig) scrutTyNorm >>= \mSubst ->
+      case mSubst of
+        Nothing ->
+          Left "validateDoctrine: explicit builtin eliminator branch constructor does not match the scrutinee family"
+        Just subst ->
+          Right subst
+  ctorSubst <- completeCtorParamSubst tt (thsParams ctorSig) matchedCtorSubst
+  selfHeadArgs <- mkSelfHeadCodeArgs tt (thsParams sig)
+  ctorHeadArgs <-
+    forM
+      (thsParams ctorSig)
+      ( \param ->
+          case param of
+            GP_Ty v ->
+              case M.lookup v ctorSubst of
+                Just arg -> Right arg
+                Nothing -> Left "validateDoctrine: internal error completing constructor type-parameter substitution"
+            GP_Tm v ->
+              case M.lookup v ctorSubst of
+                Just arg -> Right arg
+                Nothing -> Left "validateDoctrine: internal error completing constructor term-parameter substitution"
+      )
+  outerHeadValues <- fmap catMaybes $
+    forM
+      (zip [0 :: Int ..] (thsParams sig))
+      ( \(i, param) ->
+          case param of
+            GP_Ty _ ->
+              pure Nothing
+            GP_Tm v -> do
+              sortTy <- normalizeObjDeep tt (tmvSort v)
+              tm <- mkSymbolicMetaTermDiagram sortTy v
+              pure (Just (BISOuterHeadTmParam i, ExplicitBranchSourceValue sortTy tm))
+      )
+  outerInputSorts <- mapM (normalizeObjDeep tt) (thsInputs sig)
+  ctorHeadValues <- fmap catMaybes $
+    forM
+      (zip [0 :: Int ..] (thsParams ctorSig))
+      ( \(i, param) ->
+          case param of
+            GP_Ty _ ->
+              pure Nothing
+            GP_Tm v -> do
+              sortTy0 <- applyHeadSubstObj tt (structuralConvEnv tt) [] ctorSubst (tmvSort v)
+              sortTy <- normalizeObjDeep tt sortTy0
+              tm <-
+                case M.lookup v ctorSubst of
+                  Just (CATm tm0) -> Right tm0
+                  Just (CAObj _) -> Left "validateDoctrine: explicit builtin eliminator constructor term parameter instantiated to a type"
+                  Nothing -> Left "validateDoctrine: internal error missing completed constructor term parameter substitution"
+              pure (Just (BISCtorHeadTmParam i, ExplicitBranchSourceValue sortTy tm))
+      )
+  ctorInputSorts <- mapM (instantiateTypeHeadObj tt ctorSubst) (thsInputs ctorSig)
+  resTyNorm <- normalizeObjDeep tt (thsRes sig)
+  let recursiveCalls =
+        M.fromList
+          [ (i, sources)
+          | (i, inputSort0) <- zip [0 :: Int ..] (thsInputs ctorSig)
+          , Just sources <-
+              [ recursiveCallSourcesForInput
+                  (thsParams sig)
+                  scrutineeRef
+                  headParamByFamilyArg
+                  (thsParams ctorSig)
+                  inputSort0
+              ]
+          ]
+  recursiveValues <-
+    forM
+      (M.toAscList recursiveCalls)
+      ( \(i, sources) -> do
+          nextHeadArgs <- mapM (recursiveSourceCodeArg selfHeadArgs ctorHeadArgs) sources
+          nextHeadSubst <- instantiateStoredHeadSubst tt [] sig nextHeadArgs
+          nextRes0 <- applyHeadSubstObj tt (structuralConvEnv tt) [] nextHeadSubst (thsRes sig)
+          nextRes <- normalizeObjDeep tt nextRes0
+          pure (BISRecursiveResult i sources, nextRes)
+      )
+  let boundarySourceSorts =
+        [ (BISOuterInput i, sortTy)
+        | (i, sortTy) <- zip [0 :: Int ..] outerInputSorts
+        ]
+          <> [ (BISCtorField i, sortTy)
+             | (i, sortTy) <- zip [0 :: Int ..] ctorInputSorts
+             ]
+          <> recursiveValues
+      ambientTmCtx = map snd boundarySourceSorts
+  boundaryValues <-
+    fmap M.fromList $
+      forM
+        (zip [0 :: Int ..] boundarySourceSorts)
+        ( \(ix, (source, sortTy)) -> do
+            tm <- mkBoundarySourceTermDiagram tt ambientTmCtx sortTy ix
+            pure (source, ExplicitBranchSourceValue sortTy tm)
+        )
+  pure (M.unions [M.fromList outerHeadValues, M.fromList ctorHeadValues, boundaryValues], ambientTmCtx, resTyNorm)
+  where
+    recursiveSourceCodeArg selfHeadArgs ctorHeadArgs source =
+      case source of
+        RHOuterHeadArg i ->
+          case nthMaybe selfHeadArgs i of
+            Just arg -> Right arg
+            Nothing -> Left "validateDoctrine: explicit builtin eliminator recursive_result refers to a missing outer head argument"
+        RHCtorArg i ->
+          case nthMaybe ctorHeadArgs i of
+            Just arg -> Right arg
+            Nothing -> Left "validateDoctrine: explicit builtin eliminator recursive_result refers to a missing constructor head argument"
+
+validateExplicitBranchSelection
+  :: TypeTheory
+  -> TmHeadSig
+  -> Int
+  -> ObjRef
+  -> M.Map Int Int
+  -> TmHeadSig
+  -> BuiltinBranchDecl
+  -> BinderSig
+  -> Either Text ()
+validateExplicitBranchSelection tt sig scrutineeIx scrutineeRef headParamByFamilyArg ctorSig branchDecl slot0 = do
+  (sourceValues, ambientTmCtx, resTyNorm) <- explicitBranchSourceValues tt sig scrutineeIx scrutineeRef headParamByFamilyArg ctorSig
+  (slotTmCtx, localTmSubst) <- validateLocalTmCtxSources sourceValues ambientTmCtx
+  dom0 <- instantiateHostBoundCtx tt (structuralConvEnv tt) ambientTmCtx localTmSubst (bsDom slot0)
+  dom <- normalizeCtxStructurallyWithPrefix tt (structuralConvEnv tt) slotTmCtx dom0
+  validatePlainSources "input" sourceValues ambientTmCtx (bbdInputs branchDecl) dom
+  cod0 <- instantiateHostBoundCtx tt (structuralConvEnv tt) ambientTmCtx localTmSubst (bsCod slot0)
+  cod <- normalizeCtxStructurallyWithPrefix tt (structuralConvEnv tt) slotTmCtx cod0
+  case cod of
+    [codTy] -> do
+      ok <- defEqObj tt ambientTmCtx codTy resTyNorm
+      if ok
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: explicit builtin eliminator branch "
+                <> renderGenNameText (bbdCtor branchDecl)
+                <> " returns the wrong result sort"
+            )
+    _ ->
+      Left
+        ( "validateDoctrine: explicit builtin eliminator branch "
+            <> renderGenNameText (bbdCtor branchDecl)
+            <> " binder codomain must be exactly one result term"
+        )
+  where
+    validateLocalTmCtxSources sourceValues ambientTmCtx =
+      go 0 [] M.empty (bsTmCtx slot0) (bbdTmCtxInputs branchDecl)
+      where
+        go _ acc subst [] [] =
+          pure (reverse acc, subst)
+        go ix acc subst (expected0 : expectedRest) (source : sourceRest) = do
+          sourceVal <- requireSource sourceValues source
+          expected1 <- instantiateHostBoundObj tt (structuralConvEnv tt) ambientTmCtx subst expected0
+          expected <- normalizeObjDeepWithCtx tt ambientTmCtx expected1
+          ok <- defEqObj tt ambientTmCtx (ebsvSort sourceVal) expected
+          if ok
+            then Right ()
+            else
+              Left
+                ( "validateDoctrine: explicit builtin eliminator branch "
+                    <> renderGenNameText (bbdCtor branchDecl)
+                    <> " local tm-context source sort mismatch at index "
+                    <> T.pack (show ix)
+                )
+          go (ix + 1) (expected : acc) (M.insert ix (ebsvTerm sourceVal) subst) expectedRest sourceRest
+        go _ _ _ _ _ =
+          Left "validateDoctrine: explicit builtin eliminator branch local tm-context arity mismatch"
+
+    validatePlainSources label sourceValues ambientTmCtx sources expectedSorts =
+      sequence_
+        [ do
+            sourceVal <- requireSource sourceValues source
+            ok <- defEqObj tt ambientTmCtx (ebsvSort sourceVal) expected
+            if ok
+              then Right ()
+              else
+                Left
+                  ( "validateDoctrine: explicit builtin eliminator branch "
+                      <> renderGenNameText (bbdCtor branchDecl)
+                      <> " "
+                      <> label
+                      <> " source sort mismatch at index "
+                      <> T.pack (show ix)
+                  )
+        | (ix, (source, expected)) <- zip [0 :: Int ..] (zip sources expectedSorts)
+        ]
+
+    requireSource sourceValues source =
+      case M.lookup source sourceValues of
+        Just one -> Right one
+        Nothing ->
+          Left "validateDoctrine: internal error resolving explicit builtin branch source"
+
+explicitBuiltinDeclsForMode :: Doctrine -> ModeName -> [BuiltinDecl]
+explicitBuiltinDeclsForMode doc mode =
+  [ decl
+  | decl <- dBuiltins doc
+  , bdMode decl == mode
+  ]
+
+explicitExtensionalHeadSetForMode :: Doctrine -> ModeName -> S.Set GenName
+explicitExtensionalHeadSetForMode doc mode =
+  S.fromList
+    [ bdHead decl
+    | decl <- explicitBuiltinDeclsForMode doc mode
+    , case bdSpec decl of
+        BDTransport -> True
+        BDInductiveElim _ _ -> False
+    ]
+
+explicitEliminatorHeadSetForMode :: Doctrine -> ModeName -> S.Set GenName
+explicitEliminatorHeadSetForMode doc mode =
+  S.fromList
+    [ bdHead decl
+    | decl <- explicitBuiltinDeclsForMode doc mode
+    , case bdSpec decl of
+        BDTransport -> False
+        BDInductiveElim _ _ -> True
+    ]
+
+compileExplicitTransportBuiltinsForMode
+  :: Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> Either Text BuiltinHeads
+compileExplicitTransportBuiltinsForMode doc tt mode = do
+  builtins <- fmap M.fromList (mapM compileOne decls)
+  pure (extensionalBuiltins builtins)
+  where
+    decls =
+      [ decl
+      | decl <- explicitBuiltinDeclsForMode doc mode
+      , case bdSpec decl of
+          BDTransport -> True
+          BDInductiveElim _ _ -> False
+      ]
+
+    compileOne decl = do
+      sig <-
+        case lookupTmHeadSig tt mode (bdHead decl) of
+          Nothing ->
+            Left
+              ( "validateDoctrine: explicit builtin transport references unknown term head "
+                  <> renderModeNameText mode
+                  <> "."
+                  <> renderGenNameText (bdHead decl)
+              )
+          Just sig -> Right sig
+      isTransport <- inferTransportBuiltinCandidate tt sig
+      if isTransport
+        then pure (bdHead decl, BuiltinTransport)
+        else
+          Left
+            ( "validateDoctrine: explicit builtin transport head "
+                <> renderModeNameText mode
+                <> "."
+                <> renderGenNameText (bdHead decl)
+                <> " does not match the transport builtin shape"
+            )
+
+compileExplicitEliminatorBuiltinsForMode
+  :: Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> Either Text BuiltinHeads
+compileExplicitEliminatorBuiltinsForMode doc tt mode = do
+  builtins <- fmap M.fromList (mapM compileOne decls)
+  pure (eliminatorBuiltins builtins)
+  where
+    decls =
+      [ decl
+      | decl <- explicitBuiltinDeclsForMode doc mode
+      , case bdSpec decl of
+          BDTransport -> False
+          BDInductiveElim _ _ -> True
+      ]
+
+    compileOne decl =
+      case bdSpec decl of
+        BDTransport ->
+          Left "validateDoctrine: internal error compiling explicit transport builtin as eliminator"
+        BDInductiveElim scrutineeIx branches -> do
+          builtin <- compileExplicitInductiveElimBuiltin (bdHead decl) scrutineeIx branches
+          pure (bdHead decl, BuiltinInductiveElim builtin)
+
+    compileExplicitInductiveElimBuiltin headName scrutineeIx branches = do
+      sig <-
+        case lookupTmHeadSig tt mode headName of
+          Nothing ->
+            Left
+              ( "validateDoctrine: explicit builtin eliminator references unknown term head "
+                  <> renderModeNameText mode
+                  <> "."
+                  <> renderGenNameText headName
+              )
+          Just sig -> Right sig
+      (scrutineeRef, headParamByFamilyArg) <-
+        case scrutineeFamilyShape sig scrutineeIx of
+          Nothing ->
+            Left
+              ( "validateDoctrine: explicit builtin eliminator "
+                  <> renderModeNameText mode
+                  <> "."
+                  <> renderGenNameText headName
+                  <> " has an invalid scrutinee index"
+              )
+          Just shape ->
+            Right shape
+      if length branches == length (thsBinders sig)
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: explicit builtin eliminator "
+                <> renderModeNameText mode
+                <> "."
+                <> renderGenNameText headName
+                <> " has binder-branch arity mismatch"
+            )
+      let branchNames = map bbdCtor branches
+      if length (S.fromList branchNames) == length branchNames
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: explicit builtin eliminator "
+                <> renderModeNameText mode
+                <> "."
+                <> renderGenNameText headName
+                <> " repeats a constructor branch"
+            )
+      compiledBranches <-
+        mapM
+          (uncurry (compileExplicitBranch sig scrutineeIx scrutineeRef headParamByFamilyArg))
+          (zip branches (thsBinders sig))
+      pure
+        InductiveElimBuiltin
+          { iebScrutineeIndex = scrutineeIx
+          , iebScrutineeTyCon = scrutineeRef
+          , iebBranches = compiledBranches
+          }
+
+    compileExplicitBranch sig scrutineeIx scrutineeRef headParamByFamilyArg branchDecl slot0 = do
+      ctorSig <-
+        case lookupTmHeadSig tt mode (bbdCtor branchDecl) of
+          Nothing ->
+            Left
+              ( "validateDoctrine: explicit builtin eliminator branch references unknown constructor head "
+                  <> renderModeNameText mode
+                  <> "."
+                  <> renderGenNameText (bbdCtor branchDecl)
+              )
+          Just ctorSig -> Right ctorSig
+      if null (thsBinders ctorSig)
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: explicit builtin eliminator branch constructor "
+                <> renderModeNameText mode
+                <> "."
+                <> renderGenNameText (bbdCtor branchDecl)
+                <> " must not take binder arguments"
+            )
+      case objCode (thsRes ctorSig) of
+        CTCon ref _ | ref == scrutineeRef ->
+          Right ()
+        _ ->
+          Left
+            ( "validateDoctrine: explicit builtin eliminator branch constructor "
+                <> renderModeNameText mode
+                <> "."
+                <> renderGenNameText (bbdCtor branchDecl)
+                <> " does not return the scrutinee family"
+            )
+      let recursiveCalls =
+            M.fromList
+              [ (i, sources)
+              | (i, inputSort0) <- zip [0 :: Int ..] (thsInputs ctorSig)
+              , Just sources <-
+                  [ recursiveCallSourcesForInput
+                      (thsParams sig)
+                      scrutineeRef
+                      headParamByFamilyArg
+                      (thsParams ctorSig)
+                      inputSort0
+                  ]
+              ]
+      if length (bbdTmCtxInputs branchDecl) == length (bsTmCtx slot0)
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: explicit builtin eliminator branch "
+                <> renderGenNameText (bbdCtor branchDecl)
+                <> " has local tm-context arity mismatch"
+            )
+      if length (bbdInputs branchDecl) == length (bsDom slot0)
+        then Right ()
+        else
+          Left
+            ( "validateDoctrine: explicit builtin eliminator branch "
+                <> renderGenNameText (bbdCtor branchDecl)
+                <> " has input arity mismatch"
+            )
+      mapM_ (validateBranchSource ctorSig recursiveCalls) (bbdTmCtxInputs branchDecl)
+      mapM_ (validateBranchSource ctorSig recursiveCalls) (bbdInputs branchDecl)
+      validateExplicitBranchSelection tt sig scrutineeIx scrutineeRef headParamByFamilyArg ctorSig branchDecl slot0
+      pure
+        ElimBranchBuiltin
+          { ebbCtorGen = bbdCtor branchDecl
+          , ebbTmCtxInputs = bbdTmCtxInputs branchDecl
+          , ebbInputs = bbdInputs branchDecl
+          }
+      where
+        validateBranchSource ctorSig recursiveCalls source =
+          case source of
+            BISOuterHeadTmParam i ->
+              case safeNth (thsParams sig) i of
+                Just (GP_Tm _) -> Right ()
+                Just (GP_Ty _) ->
+                  Left "validateDoctrine: explicit builtin eliminator source outer_head_tm points at a type-valued head parameter"
+                Nothing ->
+                  Left "validateDoctrine: explicit builtin eliminator source outer_head_tm is out of bounds"
+            BISCtorHeadTmParam i ->
+              case safeNth (thsParams ctorSig) i of
+                Just (GP_Tm _) -> Right ()
+                Just (GP_Ty _) ->
+                  Left "validateDoctrine: explicit builtin eliminator source ctor_head_tm points at a type-valued constructor parameter"
+                Nothing ->
+                  Left "validateDoctrine: explicit builtin eliminator source ctor_head_tm is out of bounds"
+            BISOuterInput i ->
+              case safeNth (thsInputs sig) i of
+                Just _ -> Right ()
+                Nothing -> Left "validateDoctrine: explicit builtin eliminator source outer_input is out of bounds"
+            BISCtorField i ->
+              case safeNth (thsInputs ctorSig) i of
+                Just _ -> Right ()
+                Nothing -> Left "validateDoctrine: explicit builtin eliminator source ctor_field is out of bounds"
+            BISRecursiveResult i sources ->
+              case M.lookup i recursiveCalls of
+                Nothing ->
+                  Left "validateDoctrine: explicit builtin eliminator source recursive_result points at a non-recursive constructor field"
+                Just expected
+                  | expected == sources ->
+                      Right ()
+                  | otherwise ->
+                      Left
+                        ( "validateDoctrine: explicit builtin eliminator source recursive_result has the wrong recursive head-argument mapping for constructor "
+                            <> renderGenNameText (bbdCtor branchDecl)
+                        )
+
+    safeNth xs i
+      | i < 0 =
+          Nothing
+      | otherwise =
+          case drop i xs of
+            (x:_) -> Just x
+            [] -> Nothing
+
+inferExtensionalBuiltinsForMode
+  :: Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> S.Set GenName
+  -> Either Text BuiltinHeads
+inferExtensionalBuiltinsForMode _doc tt mode skipHeads = do
+  builtins <- fmap (M.fromList . mapMaybe id) (mapM inferOne headsInMode)
+  pure (extensionalBuiltins builtins)
+  where
+    headsInMode =
+      [ (g, sig)
+      | (g, sig) <- M.toList (termHeadsForMode tt mode)
+      , S.notMember g skipHeads
+      ]
+
+    inferOne (g, sig) = do
+      isTransport <- inferTransportBuiltinCandidate tt sig
+      pure $
+        if isTransport
+          then Just (g, BuiltinTransport)
+          else Nothing
+
+inferEliminatorBuiltinsForMode
+  :: Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> S.Set GenName
+  -> Either Text BuiltinHeads
+inferEliminatorBuiltinsForMode doc tt mode skipHeads = do
+  ctorCasesByHead <- cellHeadConstructorCasesForMode doc tt mode
+  builtins <- fmap (M.fromList . mapMaybe id) (mapM (inferOne ctorCasesByHead) headsInMode)
+  pure (eliminatorBuiltins builtins)
+  where
+    headsInMode =
+      [ (g, sig)
+      | (g, sig) <- M.toList (termHeadsForMode tt mode)
+      , S.notMember g skipHeads
+      ]
+
+    inferOne foldCasesByHead (g, sig) = do
+      inductiveBuiltin <-
+        case M.lookup g foldCasesByHead of
+          Just ctorCases ->
+            inferHeadCtorBuiltin g sig ctorCases
+          _ ->
+            Right Nothing
+      pure (fmap (\builtin -> (g, BuiltinInductiveElim builtin)) inductiveBuiltin)
+
+    inferHeadCtorBuiltin g sig ctorCases = do
+      let ctorCasesByIndex =
+            M.toList
+              ( foldl
+                  (\acc evidence -> M.insertWith (flip (<>)) (cceScrutineeIndex evidence) [evidence] acc)
+                  M.empty
+                  ctorCases
+              )
+      candidates <-
+        fmap catMaybes $
+          mapM
+            (\(scrutineeIx, ctors) -> fmap (fmap (\builtin -> (scrutineeIx, builtin))) (inferInductiveElimBuiltinCandidate tt mode scrutineeIx sig ctors))
+            ctorCasesByIndex
+      case candidates of
+        [] ->
+          Right Nothing
+        [(_, builtin)] ->
+          Right (Just builtin)
+        _ ->
+          Left
+            ( "validateDoctrine: ambiguous constructor-eliminator scrutinee for "
+                <> renderModeNameText mode
+                <> "."
+                <> renderGenNameText g
+                <> "."
+                <> builtinElimExplicitDeclHint
+            )
+
+inferFunctionBuiltinsWithPolicy
+  :: FragmentBuildPolicy
+  -> Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> Either Text BuiltinHeads
+inferFunctionBuiltinsWithPolicy policy doc tt mode =
+  case fbpStrictBuiltinEvidence policy of
+    True ->
+      inferAndFinalizeFunctionBuiltins
+        (fbpRequireBuiltinCtorEligibility policy)
+        doc
+        tt
+        mode
+    False ->
+      case inferFunctionBuiltinForMode doc tt mode of
+        Left _ -> Right emptyBuiltinHeads
+        Right Nothing -> Right emptyBuiltinHeads
+        Right (Just fb) ->
+          case
+            finalizeFunctionBuiltinForMode
+              (fbpRequireBuiltinCtorEligibility policy)
+              doc
+              tt
+              mode
+              fb
+          of
+            Left _ -> Right emptyBuiltinHeads
+            Right builtins -> Right builtins
+
+inferExtensionalBuiltinsWithPolicy
+  :: FragmentBuildPolicy
+  -> Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> S.Set GenName
+  -> Either Text BuiltinHeads
+inferExtensionalBuiltinsWithPolicy policy doc tt mode skipHeads
+  | not (fbpRequireBuiltinCtorEligibility policy) =
+      Right emptyBuiltinHeads
+  | fbpStrictBuiltinEvidence policy =
+      inferExtensionalBuiltinsForMode doc tt mode skipHeads
+  | otherwise =
+      case inferExtensionalBuiltinsForMode doc tt mode skipHeads of
+        Left _ -> Right emptyBuiltinHeads
+        Right builtins -> Right builtins
+
+inferEliminatorBuiltinsWithPolicy
+  :: FragmentBuildPolicy
+  -> Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> S.Set GenName
+  -> Either Text BuiltinHeads
+inferEliminatorBuiltinsWithPolicy policy doc tt mode skipHeads
+  | not (fbpRequireBuiltinCtorEligibility policy) =
+      Right emptyBuiltinHeads
+  | fbpStrictBuiltinEvidence policy =
+      inferEliminatorBuiltinsForMode doc tt mode skipHeads
+  | otherwise =
+      case inferEliminatorBuiltinsForMode doc tt mode skipHeads of
+        Left _ -> Right emptyBuiltinHeads
+        Right builtins -> Right builtins
+
+compileExplicitExtensionalBuiltinsWithPolicy
+  :: FragmentBuildPolicy
+  -> Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> Either Text BuiltinHeads
+compileExplicitExtensionalBuiltinsWithPolicy policy doc tt mode
+  | fbpStrictBuiltinEvidence policy =
+      compileExplicitTransportBuiltinsForMode doc tt mode
+  | otherwise =
+      case compileExplicitTransportBuiltinsForMode doc tt mode of
+        Left _ -> Right emptyBuiltinHeads
+        Right builtins -> Right builtins
+
+compileExplicitEliminatorBuiltinsWithPolicy
+  :: FragmentBuildPolicy
+  -> Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> Either Text BuiltinHeads
+compileExplicitEliminatorBuiltinsWithPolicy policy doc tt mode
+  | fbpStrictBuiltinEvidence policy =
+      compileExplicitEliminatorBuiltinsForMode doc tt mode
+  | otherwise =
+      case compileExplicitEliminatorBuiltinsForMode doc tt mode of
+        Left _ -> Right emptyBuiltinHeads
+        Right builtins -> Right builtins
+
+data FragmentBuildPolicy = FragmentBuildPolicy
+  { fbpStrictBuiltinEvidence :: Bool
+  , fbpRequireBuiltinCtorEligibility :: Bool
+  , fbpCheckTrustedRules :: Bool
+  }
+
+kernelFragmentPolicy :: FragmentBuildPolicy
+kernelFragmentPolicy =
+  FragmentBuildPolicy
+    { fbpStrictBuiltinEvidence = True
+    , fbpRequireBuiltinCtorEligibility = True
+    , fbpCheckTrustedRules = True
+    }
+
+ctorEligibilityFragmentPolicy :: FragmentBuildPolicy
+ctorEligibilityFragmentPolicy =
+  FragmentBuildPolicy
+    { fbpStrictBuiltinEvidence = True
+    , fbpRequireBuiltinCtorEligibility = False
+    , fbpCheckTrustedRules = False
+    }
+
+ctorEligibilityElabFragmentPolicy :: FragmentBuildPolicy
+ctorEligibilityElabFragmentPolicy =
+  FragmentBuildPolicy
+    { fbpStrictBuiltinEvidence = False
+    , fbpRequireBuiltinCtorEligibility = False
+    , fbpCheckTrustedRules = False
+    }
+
+checkFragmentBuiltinRuleSeparation :: DefFragment -> Either Text ()
+checkFragmentBuiltinRuleSeparation fragment =
+  let builtinHeads = M.keysSet (bhHeadRoles (dfBuiltins fragment))
+      overlapping =
+        [ name
+        | rule <- RS.trsRules (dfCompiledRules fragment)
+        , Just name <- [RS.rootKey (RS.trLHS rule)]
+        , S.member name builtinHeads
+        ]
+   in case S.toList (S.fromList overlapping) of
+        [] -> Right ()
+        bad ->
+          Left
+            ( "validateDoctrine: built-in computational heads may not also carry trusted user rewrite rules in the first unified slice (mode "
+                <> renderModeNameText (dfMode fragment)
+                <> ", overlapping heads = ["
+                <> T.intercalate ", " (map renderGenNameText bad)
+                <> "])"
+            )
+
+stripBuiltinEvidenceRules
+  :: Doctrine
+  -> TypeTheory
+  -> ModeName
+  -> BuiltinHeads
+  -> TRS
+  -> Either Text (S.Set GenName, TRS)
+stripBuiltinEvidenceRules doc tt mode builtins trs = do
+  ctorCasesByHead <- cellHeadConstructorCasesForMode doc tt mode
+  let functionHeads =
+        case bhFunctionSpace builtins of
+          Just fb -> [fbAppGen fb]
+          Nothing -> []
+      extensionalHeads = M.keys (bhExtensionalHeads builtins)
+      builtinElimHeads =
+        [ g
+        | (g, BuiltinInductiveElim _) <- M.toList (bhEliminators builtins)
+        ]
+      ruleCount g =
+        length
+          [ ()
+          | rule <- RS.trsRules trs
+          , RS.rootKey (RS.trLHS rule) == Just g
+          ]
+      evidenceCount g =
+        functionEvidenceCount g + eliminatorEvidenceCount g
+      functionEvidenceCount g =
+        case bhFunctionSpace builtins of
+          Just fb
+            | g == fbAppGen fb ->
+                length
+                  [ ()
+                  | rule <- RS.trsRules trs
+                  , isFunctionBetaEvidenceRule fb rule
+                  ]
+          _ ->
+              0
+      eliminatorEvidenceCount g =
+        length (M.findWithDefault [] g ctorCasesByHead)
+      stripHeads =
+        S.fromList
+          [ g
+          | g <- functionHeads <> extensionalHeads <> builtinElimHeads
+          , ruleCount g > 0
+          , ruleCount g == evidenceCount g
+          ]
+      bad =
+        [ g
+        | g <- functionHeads <> extensionalHeads <> builtinElimHeads
+        , ruleCount g > 0
+        , not (S.member g stripHeads)
+        ]
+  if null bad
+    then
+      Right
+        ( stripHeads
+        , mkTRS
+            mode
+            [ rule
+            | rule <- RS.trsRules trs
+            , maybe True (`S.notMember` stripHeads) (RS.rootKey (RS.trLHS rule))
+            ]
+        )
+    else
+      Left
+        ( "validateDoctrine: inferred builtin heads still have non-evidence trusted rules in mode "
+            <> renderModeNameText mode
+            <> " (heads = ["
+            <> T.intercalate ", " (map renderGenNameText bad)
+            <> "])"
+        )
+
+isFunctionBetaEvidenceRule :: FunctionBuiltin -> RS.TRule -> Bool
+isFunctionBetaEvidenceRule fb rule =
+  case (RS.trLHS rule, RS.trRHS rule, RS.trRHSDiagram rule) of
+    (TMHead g flatArgs [], rhs, _)
+      | g == fbAppGen fb
+      , length flatArgs >= 2 ->
+          case splitAt (length flatArgs - 2) flatArgs of
+            (headArgs, [THATm lamExpr, THATm (TMBound 0)]) ->
+              case lamExpr of
+                TMHead lamGen lamArgs [TBAHole hole]
+                  | lamGen == fbLamGen fb
+                  , lamArgs == headArgs ->
+                      rhsMatches hole rhs
+                _ ->
+                  False
+            _ ->
+              False
+    _ ->
+      False
+  where
+    rhsMatches hole rhs =
+      case rhs of
+        Just (TMSplice hole' me [TMBound 0]) ->
+          hole == hole' && null (mePath me) && meSrc me == meTgt me
+        _ ->
+          False
+
+buildDefFragmentsWithPolicy
+  :: FragmentBuildPolicy
+  -> Doctrine
+  -> TypeTheory
+  -> M.Map ModeName TRS
+  -> Either Text (M.Map ModeName DefFragment)
+buildDefFragmentsWithPolicy policy doc tt0 trsByMode =
+  do
+    fragments <- finalizeFragments
+    if fbpCheckTrustedRules policy
+      then mapM_
+        checkFragmentTermination
+        (M.elems fragments)
+      else Right ()
+    pure fragments
+  where
+    modes = M.keys (mtModes (dModes doc))
+    fragments0 = ttDefFragments tt0
+
+    fragmentsWithTRS =
+      M.fromList
+        [ (mode, withTRS mode)
+        | mode <- modes
+        ]
+
+    withTRS mode =
+      let base = M.findWithDefault (emptyDefFragment mode) mode fragments0
+          trs = M.findWithDefault (mkTRS mode []) mode trsByMode
+       in base
+            { dfCompiledRules = trs
+            , dfBuiltins = emptyBuiltinHeads
+            }
+
+    ttWithTRS = tt0 { ttDefFragments = fragmentsWithTRS }
+
+    functionBuiltinsByMode =
+      M.fromList
+        <$> mapM
+          (\mode -> do
+              builtins <- inferFunctionBuiltinsWithPolicy policy doc ttWithTRS mode
+              pure (mode, builtins)
+          )
+          modes
+
+    fragmentsWithFunctionBuiltins = do
+      funBuiltins <- functionBuiltinsByMode
+      pure
+        ( M.fromList
+            [ (mode, withModeBuiltins funBuiltins mode)
+            | mode <- modes
+            ]
+        )
+      where
+        withModeBuiltins funBuiltins mode =
+          let base = M.findWithDefault (withTRS mode) mode fragmentsWithTRS
+              builtins = M.findWithDefault emptyBuiltinHeads mode funBuiltins
+           in base { dfBuiltins = builtins }
+
+    ttWithFunctionBuiltins = do
+      fragments <- fragmentsWithFunctionBuiltins
+      pure tt0 { ttDefFragments = fragments }
+
+    explicitExtensionalBuiltinsByMode = do
+      ttBuiltins <- ttWithFunctionBuiltins
+      M.fromList
+        <$> mapM
+          (\mode -> do
+              builtins <- compileExplicitExtensionalBuiltinsWithPolicy policy doc ttBuiltins mode
+              pure (mode, builtins)
+          )
+          modes
+
+    extensionalBuiltinsByMode = do
+      ttBuiltins <- ttWithFunctionBuiltins
+      M.fromList
+        <$> mapM
+          (\mode -> do
+              builtins <-
+                inferExtensionalBuiltinsWithPolicy
+                  policy
+                  doc
+                  ttBuiltins
+                  mode
+                  (explicitExtensionalHeadSetForMode doc mode)
+              pure (mode, builtins)
+          )
+          modes
+
+    explicitEliminatorBuiltinsByMode = do
+      ttBuiltins <- ttWithFunctionBuiltins
+      M.fromList
+        <$> mapM
+          (\mode -> do
+              builtins <- compileExplicitEliminatorBuiltinsWithPolicy policy doc ttBuiltins mode
+              pure (mode, builtins)
+          )
+          modes
+
+    eliminatorBuiltinsByMode = do
+      ttBuiltins <- ttWithFunctionBuiltins
+      M.fromList
+        <$> mapM
+          (\mode -> do
+              builtins <-
+                inferEliminatorBuiltinsWithPolicy
+                  policy
+                  doc
+                  ttBuiltins
+                  mode
+                  (explicitEliminatorHeadSetForMode doc mode)
+              pure (mode, builtins)
+          )
+          modes
+
+    finalizeMode mode = do
+      funBuiltins <- M.findWithDefault emptyBuiltinHeads mode <$> functionBuiltinsByMode
+      explicitExtBuiltins <- M.findWithDefault emptyBuiltinHeads mode <$> explicitExtensionalBuiltinsByMode
+      extBuiltins <- M.findWithDefault emptyBuiltinHeads mode <$> extensionalBuiltinsByMode
+      explicitElimBuiltins <- M.findWithDefault emptyBuiltinHeads mode <$> explicitEliminatorBuiltinsByMode
+      elimBuiltins <- M.findWithDefault emptyBuiltinHeads mode <$> eliminatorBuiltinsByMode
+      builtins <-
+        mergeBuiltinHeads funBuiltins explicitExtBuiltins
+          >>= (`mergeBuiltinHeads` extBuiltins)
+          >>= (`mergeBuiltinHeads` explicitElimBuiltins)
+          >>= (`mergeBuiltinHeads` elimBuiltins)
+      let base = M.findWithDefault (withTRS mode) mode fragmentsWithTRS
+      (stripHeads, trs') <- stripBuiltinEvidenceRules doc tt0 mode builtins (dfCompiledRules base)
+      let fragment =
+            base
+              { dfRules =
+                  [ rule
+                  | rule <- dfRules base
+                  , maybe True (`S.notMember` stripHeads) (rawRuleRootHead rule)
+                  ]
+              , dfCompiledRules = trs'
+              , dfBuiltins = builtins
+              }
+      checkFragmentBuiltinRuleSeparation fragment
+      pure (mode, fragment)
+    finalizeFragments = M.fromList <$> mapM finalizeMode modes
+
+    rawRuleRootHead rule =
+      case dOut lhsDiag of
+        [outPid] ->
+          case producerEdge lhsDiag outPid of
+            Just edge ->
+              case ePayload edge of
+                PGen g _ _ -> Just g
+                _ -> Nothing
+            Nothing -> Nothing
+        _ -> Nothing
+      where
+        lhsDiag = unTerm (trLHS rule)
+
+    producerEdge diag pid = do
+      eid <- IM.lookup (unPortId pid) (dProd diag)
+      edgeId <- eid
+      IM.lookup (unEdgeId edgeId) (dEdges diag)
+
 buildCompiledFragments
   :: Doctrine
   -> TypeTheory
   -> M.Map ModeName TRS
   -> Either Text (M.Map ModeName DefFragment)
-buildCompiledFragments doc tt0 trsByMode =
-  fmap M.fromList (mapM buildOne modes)
-  where
-    modes = M.keys (mtModes (dModes doc))
-    fragments0 = ttDefFragments tt0
+buildCompiledFragments =
+  buildDefFragmentsWithPolicy kernelFragmentPolicy
 
-    buildOne mode = do
-      let base =
-            M.findWithDefault
-              (case modeDefEqEngine (dModes doc) mode of
-                 DefEqNBE -> DefFragmentNBE mode M.empty [] defaultNbeConfig
-                 DefEqTRS -> emptyDefFragment mode
-              )
-              mode
-              fragments0
-      case modeDefEqEngine (dModes doc) mode of
-        DefEqTRS -> do
-          let trs = M.findWithDefault (mkTRS mode []) mode trsByMode
-          let fragment =
-                case base of
-                  trsFrag@DefFragmentTRS {} ->
-                    trsFrag { dfTRS = trs }
-                  nbeFrag@DefFragmentNBE {} ->
-                    DefFragmentTRS
-                      { dfMode = dfMode nbeFrag
-                      , dfHeads = dfHeads nbeFrag
-                      , dfRules = dfRules nbeFrag
-                      , dfTRS = trs
-                      }
-          checkFragmentTermination fragment
-          checkFragmentConfluence fragment
-          pure (mode, fragment)
-        DefEqNBE -> do
-          prims <-
-            case inferNbePrimitivesForMode doc mode of
-              Left err -> Left err
-              Right (Just p) -> Right p
-              Right Nothing ->
-                Left
-                  ( "validateDoctrine: NbE mode "
-                      <> renderModeNameText mode
-                      <> " cannot infer NbE primitives (lambda/application/arrow type) from generator signatures"
-                  )
-          cfg <- finalizeNbeConfigForMode doc tt0 mode prims defaultNbeConfig
-          let fragment =
-                case base of
-                  trsFrag@DefFragmentTRS {} ->
-                    DefFragmentNBE
-                      { dfMode = dfMode trsFrag
-                      , dfHeads = dfHeads trsFrag
-                      , dfRules = dfRules trsFrag
-                      , dfNBE = cfg
-                      }
-                  nbeFrag@DefFragmentNBE {} ->
-                    nbeFrag { dfNBE = cfg }
-          pure (mode, fragment)
-
-buildCtorEligibilityFragments
+buildCtorEligibilityElabFragments
   :: Doctrine
   -> TypeTheory
   -> M.Map ModeName TRS
   -> Either Text (M.Map ModeName DefFragment)
-buildCtorEligibilityFragments doc tt0 trsByMode =
-  fmap M.fromList (mapM buildOne modes)
-  where
-    modes = M.keys (mtModes (dModes doc))
-    fragments0 = ttDefFragments tt0
-
-    buildOne mode = do
-      let base =
-            M.findWithDefault
-              (case modeDefEqEngine (dModes doc) mode of
-                 DefEqNBE -> DefFragmentNBE mode M.empty [] defaultNbeConfig
-                 DefEqTRS -> emptyDefFragment mode
-              )
-              mode
-              fragments0
-      case modeDefEqEngine (dModes doc) mode of
-        DefEqTRS -> do
-          let trs = M.findWithDefault (mkTRS mode []) mode trsByMode
-          let fragment =
-                case base of
-                  trsFrag@DefFragmentTRS {} ->
-                    trsFrag { dfTRS = trs }
-                  nbeFrag@DefFragmentNBE {} ->
-                    DefFragmentTRS
-                      { dfMode = dfMode nbeFrag
-                      , dfHeads = dfHeads nbeFrag
-                      , dfRules = dfRules nbeFrag
-                      , dfTRS = trs
-                      }
-          pure (mode, fragment)
-        DefEqNBE -> do
-          inferred <- inferNbePrimitivesForMode doc mode
-          cfg <-
-            case inferred of
-              Nothing -> Right defaultNbeConfig
-              Just prims ->
-                Right
-                  defaultNbeConfig
-                    { nbeLamGen = nbepLamGen prims
-                    , nbeAppGen = nbepAppGen prims
-                    , nbeArrTyCon = nbepArrTyCon prims
-                    }
-          let fragment =
-                case base of
-                  trsFrag@DefFragmentTRS {} ->
-                    DefFragmentNBE
-                      { dfMode = dfMode trsFrag
-                      , dfHeads = dfHeads trsFrag
-                      , dfRules = dfRules trsFrag
-                      , dfNBE = cfg
-                      }
-                  nbeFrag@DefFragmentNBE {} ->
-                    nbeFrag { dfNBE = cfg }
-          pure (mode, fragment)
+buildCtorEligibilityElabFragments =
+  buildDefFragmentsWithPolicy ctorEligibilityElabFragmentPolicy
 
 renderRootSymbols :: TRS -> Text
 renderRootSymbols trs =
@@ -730,9 +2450,16 @@ renderFragmentRules trs =
     else T.unlines [ "    " <> line | line <- linesOut ]
   where
     linesOut =
-      [ RS.trName rule <> ": " <> T.pack (show (RS.trLHS rule)) <> " -> " <> T.pack (show (RS.trRHS rule))
+      [ RS.trName rule <> ": " <> T.pack (show (RS.trLHS rule)) <> " -> " <> renderRuleRHS rule
       | rule <- RS.trsRules trs
       ]
+    renderRuleRHS rule =
+      case RS.trRHS rule of
+        Just rhs -> T.pack (show rhs)
+        Nothing ->
+          case RS.trRHSDiagram rule of
+            Just rhsDiag -> "<diagram-backed rhs " <> T.pack (show rhsDiag) <> ">"
+            Nothing -> "<missing rhs>"
 
 derivedTmHeads :: Doctrine -> CtorTables -> M.Map ModeName (M.Map GenName TmHeadSig)
 derivedTmHeads doc ctorTables =
@@ -758,18 +2485,32 @@ derivedGenArgSigs doc =
     )
     (dGens doc)
 
-derivedTmRules :: Doctrine -> M.Map ModeName (M.Map GenName TmHeadSig) -> M.Map ModeName [TmRule]
-derivedTmRules doc tmFuns =
+derivedDiagramRules :: Doctrine -> M.Map ModeName [Cell2]
+derivedDiagramRules doc =
   M.fromListWith (<>)
-    [ (mode, [rule])
+    [ (dMode (c2LHS cell), [cell])
     | cell <- dCells2 doc
-    , c2Class cell == Computational
-    , (lhs, rhs) <- oriented cell
-    , let mode = dMode lhs
-    , Just funs <- [M.lookup mode tmFuns]
-    , Just rule <- [cellPairToTmRule funs (c2TmVars cell) lhs rhs]
     ]
+
+derivedTmRules :: Doctrine -> M.Map ModeName (M.Map GenName TmHeadSig) -> Either Text (M.Map ModeName [TmRule])
+derivedTmRules doc tmFuns =
+  fmap (M.fromListWith (<>)) $
+    foldM collect [] (dCells2 doc)
   where
+    collect acc cell
+      | c2Class cell /= Computational =
+          Right acc
+      | otherwise =
+          foldM (collectOne cell) acc (oriented cell)
+
+    collectOne cell acc (lhs, rhs) =
+      let mode = dMode lhs
+       in case M.lookup mode tmFuns of
+            Nothing -> Right acc
+            Just funs -> do
+              rule <- cellPairToTmRule funs (c2TyVars cell) (c2TmVars cell) lhs rhs
+              Right ((mode, [rule]) : acc)
+
     oriented cell =
       case c2Orient cell of
         LR -> [(c2LHS cell, c2RHS cell)]
@@ -777,40 +2518,51 @@ derivedTmRules doc tmFuns =
         Bidirectional -> [(c2LHS cell, c2RHS cell), (c2RHS cell, c2LHS cell)]
         Unoriented -> []
 
-cellPairToTmRule :: M.Map GenName TmHeadSig -> [TmVar] -> Diagram -> Diagram -> Maybe TmRule
-cellPairToTmRule heads tmVars lhs0 rhs0 = do
+cellPairToTmRule :: M.Map GenName TmHeadSig -> [TmVar] -> [TmVar] -> Diagram -> Diagram -> Either Text TmRule
+cellPairToTmRule heads tyVars tmVars lhs0 rhs0 = do
   boundaryVars <- mkInputVars lhs0
   let vars = boundaryVars <> tmVars
   let varCtx = map tmvSort vars
-  lhs <- either (const Nothing) Just (weakenDiagramTmCtxTo varCtx lhs0)
-  rhs <- either (const Nothing) Just (weakenDiagramTmCtxTo varCtx rhs0)
-  ensureTermDiagram lhs
-  ensureTermDiagram rhs
-  ensureRuleFunSigs lhs
-  ensureRuleFunSigs rhs
-  pure TmRule { trVars = vars, trLHS = TermDiagram lhs, trRHS = TermDiagram rhs }
+  lhs <- mapLeft "lhs" (weakenDiagramTmCtxTo varCtx lhs0)
+  rhs <- mapLeft "rhs" (weakenDiagramTmCtxTo varCtx rhs0)
+  mapLeft "lhs" (validateDiagram lhs)
+  mapLeft "rhs" (validateDiagram rhs)
+  mapLeft "lhs" (ensureRuleSurface False lhs)
+  mapLeft "rhs" (ensureRuleSurface True rhs)
+  pure TmRule { trTyVars = tyVars, trVars = vars, trLHS = TermDiagram lhs, trRHS = TermDiagram rhs }
   where
-    ensureTermDiagram d = either (const Nothing) (const (Just ())) (validateTermDiagram d)
-    ensureRuleFunSigs d = mapM_ checkEdge (IM.elems (dEdges d))
-    checkEdge edge =
-      case ePayload edge of
-        PGen g args bargs
-          | null bargs -> do
-              sig <- M.lookup g heads
-              if length (thsParams sig) == length args
-                  && length (thsInputs sig) == length (eIns edge)
-                  && length (eOuts edge) == 1
-                then Just ()
-                else Nothing
-        PTmMeta _ -> Just ()
-        _ -> Nothing
+    mapLeft side =
+      first
+        ( \err ->
+            "cellPairToTmRule: "
+              <> side
+              <> " of computational rule failed: "
+              <> err
+        )
 
-mkInputVars :: Diagram -> Maybe [TmVar]
+    ensureRuleSurface allowSplice d = mapM_ (checkEdge allowSplice) (IM.elems (dEdges d))
+    checkEdge allowSplice edge =
+      case ePayload edge of
+        PGen _ _ _ -> Right ()
+        PTmMeta _ -> Right ()
+        PTmLit _ -> Right ()
+        PInternalDrop -> Right ()
+        PSplice _ _
+          | allowSplice ->
+              Right ()
+          | otherwise ->
+              Left "splice nodes are only allowed on trusted rule right-hand sides"
+        _ -> Left "non-term payload in trusted rewrite rule"
+
+mkInputVars :: Diagram -> Either Text [TmVar]
 mkInputVars diag =
   mapM mkOne (zip [0 :: Int ..] (dIn diag))
   where
     mkOne (i, pid) = do
-      sortTy <- IM.lookup (unPortId pid) (dPortObj diag)
+      sortTy <-
+        case IM.lookup (unPortId pid) (dPortObj diag) of
+          Nothing -> Left "trusted rule boundary input is missing a sort"
+          Just ty -> Right ty
       pure TmVar { tmvName = "_x" <> T.pack (show i), tmvSort = sortTy, tmvScope = 0, tmvOwnerMode = Nothing }
 
 validateDoctrine :: Doctrine -> Either Text ()
@@ -961,7 +2713,18 @@ modeIsAcyclic :: Doctrine -> ModeName -> Bool
 modeIsAcyclic doc mode = mode `S.member` dAcyclicModes doc
 
 deriveCtorTables :: Doctrine -> Either Text (M.Map ModeName (M.Map ObjName CtorSig))
-deriveCtorTables doc = do
+deriveCtorTables =
+  deriveCtorTablesWithPolicy ctorEligibilityFragmentPolicy
+
+deriveCtorTablesForElab :: Doctrine -> Either Text (M.Map ModeName (M.Map ObjName CtorSig))
+deriveCtorTablesForElab =
+  deriveCtorTablesWithPolicy ctorEligibilityElabFragmentPolicy
+
+deriveCtorTablesWithPolicy
+  :: FragmentBuildPolicy
+  -> Doctrine
+  -> Either Text (M.Map ModeName (M.Map ObjName CtorSig))
+deriveCtorTablesWithPolicy fragmentPolicy doc = do
   ownerModes <- classificationOrder (dModes doc)
   seedPairs <- mapM seedForOwner ownerModes
   let seed = M.fromList seedPairs
@@ -970,7 +2733,7 @@ deriveCtorTables doc = do
     buildTypeTheory tables = do
       tt0 <- doctrineTypeTheoryBaseFromTables doc tables
       trs <- compileAllTermRules tt0
-      fragments <- buildCtorEligibilityFragments doc tt0 trs
+      fragments <- buildDefFragmentsWithPolicy fragmentPolicy doc tt0 trs
       pure tt0 { ttDefFragments = fragments }
 
     seedForOwner ownerMode = do
@@ -1355,16 +3118,14 @@ checkCell doc tt cell = do
       let tmCtx = dTmCtx (c2LHS cell)
       ctxL <- diagramDom (c2LHS cell)
       ctxR <- diagramDom (c2RHS cell)
-      let flexDom = S.unions (map freeVarsObj (ctxL <> ctxR))
       _ <-
-        case unifyCtx tt tmCtx flexDom ctxL ctxR of
+        case unifyCtxCompat tt tmCtx ctxL ctxR of
           Left err -> Left ("validateDoctrine: cell " <> c2Name cell <> " domain mismatch: " <> err)
           Right subst -> Right subst
       codL <- diagramCod (c2LHS cell)
       codR <- diagramCod (c2RHS cell)
-      let flexCod = S.unions (map freeVarsObj (codL <> codR))
       _ <-
-        case unifyCtx tt tmCtx flexCod codL codR of
+        case unifyCtxCompat tt tmCtx codL codR of
           Left err -> Left ("validateDoctrine: cell " <> c2Name cell <> " codomain mismatch: " <> err)
           Right subst -> Right subst
       let lhsVars = freeVarsDiagram (c2LHS cell)
@@ -1462,22 +3223,6 @@ checkTmTerm doc tt tyvars tmvars tmCtx expectedSort tm =
         then checkType doc tt tyvars tmvars tmCtx (tmvSort v)
         else Left "validateDoctrine: unknown term variable"
 
-ensureDistinctTyVars :: Text -> [TmVar] -> Either Text ()
-ensureDistinctTyVars label vars =
-  let names = map tmvName vars
-      set = S.fromList names
-   in if S.size set == length names
-        then Right ()
-        else Left label
-
-ensureDistinctTmVars :: Text -> [TmVar] -> Either Text ()
-ensureDistinctTmVars label vars =
-  let names = map tmvName vars
-      set = S.fromList names
-   in if S.size set == length names
-        then Right ()
-        else Left label
-
 checkParamTele :: Doctrine -> TypeTheory -> Text -> [GenParam] -> Either Text ()
 checkParamTele doc tt label params = do
   teleDistinctNames params
@@ -1500,20 +3245,6 @@ checkParamTele doc tt label params = do
             else Left (label <> ": term parameter sort contains bound term indices")
           checkType doc tt tyAcc tmAcc [] (tmvSort v)
           go tyAcc (tmAcc <> [v]) rest
-
-checkTyVarModes :: Doctrine -> [TmVar] -> Either Text ()
-checkTyVarModes doc vars =
-  if all (\v -> M.member (tyVarOwnerMode v) (mtModes (dModes doc))) vars
-    then Right ()
-    else Left "validateDoctrine: type variable has unknown mode"
-
-checkTmVarModes :: Doctrine -> TypeTheory -> [TmVar] -> [TmVar] -> Either Text ()
-checkTmVarModes doc tt tyVars vars =
-  mapM_ checkOne vars
-  where
-    checkOne v = do
-      checkType doc tt tyVars vars [] (tmvSort v)
-      Right ()
 
 checkGenLiteralKind :: Doctrine -> CtorTables -> GenDecl -> Either Text ()
 checkGenLiteralKind doc ctorTables gd =
@@ -1737,12 +3468,6 @@ genericGenDiagram gd = do
       | i <- [0 :: Int .. n - 1]
       ]
 
-    allocPorts [] diag = ([], diag)
-    allocPorts (ty:rest) diag =
-      let (pid, diag1) = freshPort ty diag
-          (pids, diag2) = allocPorts rest diag1
-       in (pid : pids, diag2)
-
 instantiateGenParams :: TypeTheory -> GenDecl -> [CodeArg] -> Either Text Subst
 instantiateGenParams tt gd args
   | length args /= length (gdParams gd) =
@@ -1756,7 +3481,7 @@ instantiateGenParams tt gd args
           bind v (CAObj ty) subst
         (GP_Tm v, CATm tm) -> do
           expectedSort <- applySubstObj tt subst (tmvSort v)
-          actualSort <- termDiagramSort tm
+          actualSort <- termDiagramOutputSort "instantiateGenParams" (unTerm tm)
           let tmCtx = dTmCtx (unTerm tm)
           sortOk <- defEqObj tt tmCtx actualSort expectedSort
           if sortOk
@@ -1771,14 +3496,286 @@ instantiateGenParams tt gd args
       singleton <- mkSubst [(v, arg)]
       composeSubst tt singleton subst
 
-    termDiagramSort tm =
-      case dOut (unTerm tm) of
-        [pid] ->
-          case diagramPortObj (unTerm tm) pid of
-            Just sortTy -> Right sortTy
-            Nothing -> Left "instantiateGenParams: term argument is missing an output sort"
+applyModExprWithTypeTheory :: TypeTheory -> Doctrine -> ModExpr -> Diagram -> Either Text Diagram
+applyModExprWithTypeTheory tt doc me diag = do
+  if dMode diag /= meSrc me
+    then Left "map: source mode mismatch"
+    else Right ()
+  case mePath me of
+    [] ->
+      if meSrc me == meTgt me
+        then Right diag
+        else Left "map: empty modality path has mismatched endpoints"
+    mods -> do
+      out <- foldM (\d m -> applyActionWithTypeTheory tt doc m d) diag mods
+      if dMode out == meTgt me
+        then Right out
+        else Left "map: result mode mismatch"
+
+applyActionWithTypeTheory :: TypeTheory -> Doctrine -> ModName -> Diagram -> Either Text Diagram
+applyActionWithTypeTheory tt doc mName diagSrc = do
+  decl <-
+    case M.lookup mName (mtDecls (dModes doc)) of
+      Nothing -> Left "map: unknown modality"
+      Just d -> Right d
+  if dMode diagSrc /= mdSrc decl
+    then Left "map: modality source mismatch"
+    else Right ()
+  let me = ModExpr { meSrc = mdSrc decl, meTgt = mdTgt decl, mePath = [mName] }
+  codeLift <- classifierLiftForModExpr (dModes doc) me
+  let interp =
+        DiagramInterpretation
+          { diMapMode = \m ->
+              if m == mdSrc decl then Right (mdTgt decl)
+              else Left "map: modality source mismatch"
+          , diMapTmCtxObj = mapTypeIfSource me codeLift
+          , diMapPortObj = mapType me codeLift
+          , diMapTmMetaSort = mapTypeIfSource me codeLift
+          , diMapSplice = \x me0 -> do
+              if meTgt me0 == mdSrc decl
+                then Right ()
+                else Left "map: splice modality context target mismatch"
+              let composed =
+                    ModExpr
+                      { meSrc = meSrc me0
+                      , meTgt = mdTgt decl
+                      , mePath = mePath me0 <> [mName]
+                      }
+                  normalized = normalizeModExpr (dModes doc) composed
+              if meSrc normalized == meSrc me0 && meTgt normalized == mdTgt decl
+                then Right (x, normalized)
+                else Left "map: splice modality context normalization changed endpoints"
+          , diOnGenEdge = onGenEdge mName me codeLift
+          }
+  interpretDiagram interp diagSrc
+  where
+    stableCaptureRenaming =
+      stableHoleCaptureRenaming
+        (binderHoleCaptureRiskMetasDiagram diagSrc)
+        (binderArgMetaVarsDiagram diagSrc)
+
+    mapType me codeLift = mapTypeWithLift (dModes doc) me codeLift
+
+    mapTypeIfSource me codeLift ty =
+      if objOwnerMode ty == meSrc me
+        then mapType me codeLift ty
+        else Right ty
+
+    onGenEdge modName me codeLift diagSrc0 diagTgt edgeKey edgeSrc mappedBargs =
+      case ePayload edgeSrc of
+        PGen g args _ -> do
+          genDecl0 <- lookupGenDeclInDoctrine "map: unknown source generator" doc (dMode diagSrc0) g
+          img0raw <- actionImageForGenerator tt doc modName g
+          (genDecl, img0base) <- freshenGenDeclAndImage edgeKey genDecl0 img0raw
+          let protectedVars = S.fromList (gdTyVars genDecl <> gdTmVars genDecl)
+          (img0, renameSubst) <- freshenImageTyVars protectedVars diagTgt img0base
+          argSubst <- instantiateGenParams tt genDecl args
+          img1 <- applySubstDiagram tt argSubst img0
+          (img2, subst) <-
+            firstText
+              (\err -> "map: generator " <> renderGen g <> " boundary instantiation failed: " <> err)
+              (instantiateImage tt diagTgt edgeKey img1)
+          img3 <-
+            firstText
+              (\err -> "map: generator " <> renderGen g <> " binder instantiation failed: " <> err)
+              (instantiateMappedBinders me codeLift genDecl mappedBargs renameSubst subst img2)
+          img4 <- weakenDiagramTmCtxTo (dTmCtx diagTgt) img3
+          diagTgtNorm <- normalizeBoundaryPorts (eIns edgeSrc <> eOuts edgeSrc) diagTgt
+          img4Norm <- normalizeDiagramObjExprs (dModes doc) img4
+          spliceEdge diagTgtNorm edgeKey img4Norm
         _ ->
-          Left "instantiateGenParams: term argument must have exactly one output"
+          Left "map: internal error: diOnGenEdge called on non-PGen"
+
+    freshenGenDeclAndImage edgeIdx genDecl image0 = do
+      (freshParams, renameSubst) <- freshenSourceParams edgeIdx (gdParams genDecl)
+      domFresh <- mapM (renameInputShape renameSubst) (gdDom genDecl)
+      codFresh <- applySubstCtx tt renameSubst (gdCod genDecl)
+      imageFresh <- applySubstDiagram tt renameSubst image0
+      pure
+        ( genDecl
+            { gdParams = freshParams
+            , gdDom = domFresh
+            , gdCod = codFresh
+            }
+        , imageFresh
+        )
+
+    freshenSourceParams edgeIdx =
+      go 0 emptySubst []
+      where
+        go _ subst acc [] =
+          Right (reverse acc, subst)
+        go i subst acc (param : rest) =
+          case param of
+            GP_Ty v -> do
+              sort' <- applySubstObj tt subst (tmvSort v)
+              let fresh = freshTyParamVar edgeIdx i v sort'
+              singleton <- mkSubst [(v, CAObj (OVar fresh))]
+              subst' <- composeSubst tt singleton subst
+              go (i + 1) subst' (GP_Ty fresh : acc) rest
+            GP_Tm v -> do
+              sort' <- applySubstObj tt subst (tmvSort v)
+              let fresh = freshTmParamVar edgeIdx i v sort'
+              tmFresh <- termExprToDiagramChecked tt [] sort' (TMMeta fresh [])
+              singleton <- mkSubst [(v, CATm tmFresh)]
+              subst' <- composeSubst tt singleton subst
+              go (i + 1) subst' (GP_Tm fresh : acc) rest
+
+    renameInputShape subst shape =
+      case shape of
+        InPort ty -> InPort <$> applySubstObj tt subst ty
+        InBinder sig -> InBinder <$> applySubstBinderSig tt subst sig
+
+    freshTyParamVar edgeIdx i v sort' =
+      v
+        { tmvName = tmvName v <> "__map" <> T.pack (show edgeIdx) <> "_" <> T.pack (show i)
+        , tmvSort = sort'
+        }
+
+    freshTmParamVar edgeIdx i v sort' =
+      v
+        { tmvName = tmvName v <> "__map" <> T.pack (show edgeIdx) <> "_" <> T.pack (show i)
+        , tmvSort = sort'
+        , tmvOwnerMode = Nothing
+        }
+
+    instantiateMappedBinders me codeLift genDecl mappedBargs renameSubst subst image = do
+      let slots = [ bs | InBinder bs <- gdDom genDecl ]
+      if length slots /= length mappedBargs
+        then Left "map: source binder argument arity mismatch"
+        else Right ()
+      let holes = binderHoleNames (length slots)
+          mappedBargs' = renameBinderArgMetas stableCaptureRenaming mappedBargs
+      sigs0 <- mapM mapBinderSig (M.fromList (zip holes slots))
+      sigs1 <- applySubstBinderSigs tt renameSubst sigs0
+      sigs <- applySubstBinderSigs tt subst sigs1
+      let holeSub = M.fromList (zip holes mappedBargs')
+      out <- instantiateGenImageBindersWithMapper tt (applyModExprWithTypeTheory tt doc) sigs holeSub image
+      let remaining = S.intersection (M.keysSet sigs) (binderMetaVarsDiagram out)
+      if S.null remaining
+        then Right out
+        else Left "map: uninstantiated binder holes in action image"
+      where
+        mapBinderSig sig = do
+          tmCtx <- mapM (mapTypeIfSource me codeLift) (bsTmCtx sig)
+          dom <- mapM (mapType me codeLift) (bsDom sig)
+          cod <- mapM (mapType me codeLift) (bsCod sig)
+          pure sig { bsTmCtx = tmCtx, bsDom = dom, bsCod = cod }
+
+    freshenImageTyVars protected host image = do
+      let vars = S.toList (S.difference (freeVarsDiagram image) protected)
+      if null vars
+        then do
+          subst <- mkSubst []
+          pure (image, subst)
+        else do
+          let used0 = S.fromList [ (tmVarOwner v, tmvName v) | v <- S.toList (freeVarsDiagram host) ]
+              (_, pairsRev) = foldl freshOne (used0, []) vars
+          subst <- mkSubst [ (v, CAObj (OVar v')) | (v, v') <- reverse pairsRev ]
+          image' <- applySubstDiagram tt subst image
+          pure (image', subst)
+      where
+        freshOne (used, acc) v =
+          let name' = pickFresh used (tyVarMode v) (tmvName v <> "_img") 0
+              v' = v { tmvName = name' }
+              used' = S.insert (tmVarOwner v', tmvName v') used
+           in (used', (v, v') : acc)
+
+    tyVarMode v =
+      case tmvOwnerMode v of
+        Just owner -> owner
+        Nothing -> objOwnerMode (tmvSort v)
+
+    pickFresh used mode base n =
+      let suffix = if n == (0 :: Int) then "" else T.pack (show n)
+          candidate = base <> suffix
+       in if (mode, candidate) `S.member` used
+            then pickFresh used mode base (n + 1)
+            else candidate
+
+    normalizeBoundaryPorts pids diag = do
+      portObj' <- foldM normalizeOne (dPortObj diag) pids
+      pure diag { dPortObj = portObj' }
+      where
+        normalizeOne mp pid =
+          case IM.lookup (unPortId pid) mp of
+            Nothing -> Left "map: missing boundary port while normalizing action image splice"
+            Just ty -> do
+              ty' <- normalizeObjExpr (dModes doc) ty
+              pure (IM.insert (unPortId pid) ty' mp)
+
+instantiateImage :: TypeTheory -> Diagram -> Int -> Diagram -> Either Text (Diagram, Subst)
+instantiateImage tt diag edgeKey img = do
+  edge <-
+    case IM.lookup edgeKey (dEdges diag) of
+      Nothing -> Left "map: missing target edge"
+      Just e -> Right e
+  domEdge <- mapM (requirePortType "map" diag) (eIns edge)
+  codEdge <- mapM (requirePortType "map" diag) (eOuts edge)
+  domImg <- diagramDom img
+  codImg <- diagramCod img
+  let flex = freeVarsDiagram img
+  sDom <- unifyCtxDiagram tt diag flex domImg domEdge
+  codImg1 <- applySubstCtx tt sDom codImg
+  codEdge1 <- applySubstCtx tt sDom codEdge
+  sCod <- unifyCtxDiagram tt diag flex codImg1 codEdge1
+  s <- composeSubst tt sCod sDom
+  img' <- applySubstDiagram tt s img
+  imgNorm <- normalizeDiagramObjExprs (ttModes tt) img'
+  pure (imgNorm, s)
+
+normalizeDiagramObjExprs :: ModeTheory -> Diagram -> Either Text Diagram
+normalizeDiagramObjExprs mt diag = do
+  portObj' <- mapM (normalizeObjExpr mt) (dPortObj diag)
+  tmCtx' <- mapM (normalizeObjExpr mt) (dTmCtx diag)
+  edges' <- mapM normalizeEdge (dEdges diag)
+  pure diag { dPortObj = portObj', dTmCtx = tmCtx', dEdges = edges' }
+  where
+    normalizeEdge edge = do
+      payload' <- normalizePayload (ePayload edge)
+      pure edge { ePayload = payload' }
+
+    normalizePayload payload =
+      case payload of
+        PGen g args bargs ->
+          PGen g args <$> mapM normalizeBinderArg bargs
+        PProvider ref ->
+          pure (PProvider ref)
+        PModuleRef ref ->
+          pure (PModuleRef ref)
+        PBox name inner ->
+          PBox name <$> normalizeDiagramObjExprs mt inner
+        PFeedback inner ->
+          PFeedback <$> normalizeDiagramObjExprs mt inner
+        PTmMeta v -> do
+          sort' <- normalizeObjExpr mt (tmvSort v)
+          pure (PTmMeta v { tmvSort = sort' })
+        PSplice x me ->
+          pure (PSplice x me)
+        PInternalDrop ->
+          pure PInternalDrop
+
+    normalizeBinderArg barg =
+      case barg of
+        BAConcrete inner ->
+          BAConcrete <$> normalizeDiagramObjExprs mt inner
+        BAMeta v ->
+          pure (BAMeta v)
+
+mapTypeWithLift :: ModeTheory -> ModExpr -> ModExpr -> Obj -> Either Text Obj
+mapTypeWithLift mt me codeLift ty = do
+  if objOwnerMode ty /= meSrc me
+    then Left "map: type mode does not match action source"
+    else
+      normalizeObjExpr
+        mt
+        Obj
+          { objOwnerMode = meTgt me
+          , objCode = CTLift codeLift (objCode ty)
+          }
+
+firstText :: (Text -> Text) -> Either Text a -> Either Text a
+firstText = first
 
 checkModeTransform :: Doctrine -> ModTransformDecl -> Either Text ()
 checkModeTransform doc decl = do
@@ -1881,12 +3878,6 @@ checkModTransformWitness doc fromMe toMe witness = do
           { objOwnerMode = meTgt me
           , objCode = CTLift codeLift (objCode ty)
           }
-
-ensureDistinct :: Ord a => Text -> [a] -> Either Text ()
-ensureDistinct label xs =
-  if length (L.nub xs) == length xs
-    then Right ()
-    else Left label
 
 tyVarOwnerMode :: TmVar -> ModeName
 tyVarOwnerMode v =

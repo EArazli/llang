@@ -109,6 +109,7 @@ import Strat.Poly.Diagram
   )
 import Strat.Poly.Doctrine
   ( Doctrine(..)
+  , BuiltinDecl(..)
   , BinderSig(..)
   , GenDecl(..)
   , GenParam(..)
@@ -128,7 +129,8 @@ import Strat.Poly.Doctrine
   , lookupGenDeclInDoctrine
   , validateDoctrine
   )
-import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..), emptyDiagram, freshPort, addEdgePayload, validateDiagram)
+import Strat.Poly.DiagramBuild (allocPorts)
+import Strat.Poly.Graph (BinderArg(..), BinderMetaVar(..), Edge(..), EdgePayload(..), emptyDiagram, addEdgePayload, validateDiagram)
 import Strat.Poly.Cell2 (Cell2(..))
 import Strat.Poly.Literal (LiteralKind(..))
 import Strat.Poly.ModeTheory
@@ -170,7 +172,8 @@ import Strat.Poly.DSL.Elab.Term
   , elabObjExprInferOwnerInScope
   , mkTypeMetaVar
   )
-import qualified Strat.Poly.UnifyObj as U
+import qualified Strat.Poly.Subst as US
+import qualified Strat.Poly.Term.SubstRuntime as SR
 import Strat.Util.List (dedupe)
 
 
@@ -923,6 +926,7 @@ mergeIface left right = do
   classifierLifts <- unionByEq "classifier_lift" (mtClassifierLifts (dModes left)) (mtClassifierLifts (dModes right))
   gens <- mergeModeTables "generator" (dGens left) (dGens right)
   cells <- mergeCellsWithAlphaRename (dCells2 left) (dCells2 right)
+  builtins <- unionByEq "builtin" builtinTableLeft builtinTableRight
   actions <- unionByEq "action" (dActions left) (dActions right)
   obligations <- mergeObligationsWithRename (dObligations left) (dObligations right)
   pure
@@ -939,9 +943,13 @@ mergeIface left right = do
       , dAcyclicModes = S.union (dAcyclicModes left) (dAcyclicModes right)
       , dGens = gens
       , dCells2 = cells
+      , dBuiltins = M.elems builtins
       , dActions = actions
       , dObligations = obligations
       }
+  where
+    builtinTableLeft = M.fromList [((bdMode decl, bdHead decl), decl) | decl <- dBuiltins left]
+    builtinTableRight = M.fromList [((bdMode decl, bdHead decl), decl) | decl <- dBuiltins right]
 
 unionByEq :: (Ord k, Eq v) => Text -> Map k v -> Map k v -> Either Text (Map k v)
 unionByEq label left right =
@@ -1249,7 +1257,7 @@ rawReflectedSupportDoctrine targetName mode =
   where
     modeName = modeText mode
     tyRef name = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
-    ty0 name = PolyAST.RPTCon (tyRef name) []
+    ty0 name = PolyAST.RPTCon (tyRef name) [] []
     ctor name args =
       PolyAST.RawPolyCtorDecl
         { PolyAST.rpcName = name
@@ -2537,12 +2545,6 @@ providerRefDiagram mode dom cod ref = do
   let d3 = d2 { dIn = ins, dOut = outs }
   validateDiagram d3
   pure d3
-  where
-    allocPorts [] diag = ([], diag)
-    allocPorts (ty:rest) diag =
-      let (pid, diag1) = freshPort ty diag
-          (pids, diag2) = allocPorts rest diag1
-       in (pid : pids, diag2)
 
 
 moduleValueRefDiagram :: ModeName -> [Obj] -> [Obj] -> ModuleValueRef -> Either Text Diagram
@@ -2553,12 +2555,6 @@ moduleValueRefDiagram mode dom cod ref = do
   let d3 = d2 { dIn = ins, dOut = outs }
   validateDiagram d3
   pure d3
-  where
-    allocPorts [] diag = ([], diag)
-    allocPorts (ty:rest) diag =
-      let (pid, diag1) = freshPort ty diag
-          (pids, diag2) = allocPorts rest diag1
-       in (pid : pids, diag2)
 
 
 mergeImportedScope
@@ -3172,7 +3168,7 @@ ensureModuleTypeMatchesSig doc iface exportedTypes ifaceName mt sig = do
     Just expected -> do
       tt <- doctrineTypeTheory doc
       subst <- buildOpaqueTypeSubst tt iface exportedTypes
-      expected' <- normalizeObjDeep tt =<< U.applySubstObj tt subst expected
+      expected' <- normalizeObjDeep tt =<< SR.applySubstObj tt subst expected
       actual' <- normalizeObjDeep tt (mtdBody mt)
       if expected' == actual'
         then Right ()
@@ -3192,8 +3188,8 @@ instantiateInterfaceValueSig
 instantiateInterfaceValueSig doc iface exportedTypes sig = do
   tt <- doctrineTypeTheory doc
   subst <- buildOpaqueTypeSubst tt iface exportedTypes
-  dom <- mapM (U.applySubstObj tt subst) (ivsDom sig)
-  cod <- mapM (U.applySubstObj tt subst) (ivsCod sig)
+  dom <- mapM (SR.applySubstObj tt subst) (ivsDom sig)
+  cod <- mapM (SR.applySubstObj tt subst) (ivsCod sig)
   pure sig { ivsDom = dom, ivsCod = cod }
 
 
@@ -3201,9 +3197,9 @@ buildOpaqueTypeSubst
   :: TypeTheory
   -> InterfaceDef
   -> M.Map Text ModuleTypeDef
-  -> Either Text U.Subst
+  -> Either Text US.Subst
 buildOpaqueTypeSubst _tt iface exportedTypes =
-  U.mkSubst
+  US.mkSubst
     [ (v, CAObj (mtdBody mt))
     | (name, sig) <- M.toList (idefTypes iface)
     , Nothing <- [itsBody sig]

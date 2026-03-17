@@ -1,22 +1,20 @@
 # Restrictions
 
-## 1. Term Diagram Fragment
+## 1. Unified Defeq Term-Diagram Fragment
 
-Term arguments (`CATm`) normalize through restricted diagram fragments that depend on the mode's defeq engine:
+Public kernel definitional equality now uses one normalization path, but it still has a deliberate
+two-level boundary:
 
-- `TRS` defeq term-argument fragment:
-  - one output
-  - no boxes, feedback, or splice nodes
-  - no binder args
-  - `PTmMeta` inputs must be boundary ports; explicit meta arguments may choose any boundary subset/order
-  - `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
+- term-headed subdiagrams are evaluated by the term defeq core,
+- fragment-owned structural computational rules may rewrite surrounding diagram structure before/around that core,
+- residual structural diagrams may survive normalization when no structural rule removes them.
 
-- `NbE` defeq term-argument fragment:
-  - one output
-  - no boxes, feedback, or splice nodes
-  - binder args are allowed only for the mode's inferred lambda generator, and only as the enforced concrete binder-body form used by NbE (`BAConcrete`, bound var first, then outer-prefix inputs)
-  - `PTmMeta` inputs must be boundary ports; explicit meta arguments may choose any boundary subset/order
-  - `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs
+The current fragment restrictions are:
+
+- normalized term diagrams must have exactly one output,
+- `PTmMeta` inputs must be boundary ports; explicit meta arguments may choose any boundary subset/order,
+- `PInternalDrop` is kernel-internal only and must be `1` input / `0` outputs,
+- structural nodes (`box`, `feedback`, `provider`, `module_ref`) are not term heads for builtin semantic evaluation or trusted term-rule compilation; they participate only through structural computational rewriting and residual structural diagrams.
 
 ## 2. Definitional TRS Admissibility
 
@@ -75,12 +73,20 @@ Disconnected dead subgraphs do not contribute to reported bound indices.
 - Witness shape is constrained to `mu(A) -> nu(A)` (checked after modality/type normalization).
 - No automatic transform coercion insertion is performed; witnesses must be used explicitly.
 
-## 10. NbE Fragment Coverage Is Intentionally Narrow
+## 10. Builtin Eliminator Scope
 
-Current NbE normalization targets a strict lambda-calculus fragment for definitional equality.
-Unsupported constructs (for now) include box/feedback/splice nodes and binder metavariables; non-lambda generators cannot carry binder args.
-This is a scope restriction, not a fundamental limitation, and should be revisited after core NbE stability and soundness are locked in.
-Follow-up work item: expand supported definitional fragment after NbE core stability/soundness are established.
+Builtin eliminators are intentionally conservative and currently support:
+
+- one scrutinee selected from the eliminator head's ordinary input ports,
+- branches keyed by direct constructors of the scrutinee family,
+- recursive-result sources only for direct recursive constructor fields of that same family,
+- unary branch codomains.
+
+Builtin eliminator **inference** is stricter still:
+
+- ambiguous same-sort branch-input or local-`tm`-context source assignments are not inferred semantically and must use explicit builtin declarations,
+- constructors with binder inputs are not inferred as builtin eliminator branches,
+- explicit builtin declarations are the authoritative path whenever conservative inference is insufficient.
 
 ## 11. Generated Structural Obligations (Current Scope)
 

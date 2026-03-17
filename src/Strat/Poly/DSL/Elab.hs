@@ -66,6 +66,7 @@ import Strat.Poly.DSL.Elab.Term
   , ownerModeForTypeMeta
   )
 import Strat.Poly.Diagram
+import Strat.Poly.DiagramBuild (allocPorts)
 import Strat.Poly.Doctrine
 import Strat.Poly.Graph
   ( BinderArg(..)
@@ -388,11 +389,6 @@ elabPolyMorphismWithBudgetResult budgetDefault env raw = do
       validateDiagram diag3
       pure (GenImage diag3 binderSigs)
       where
-        allocPorts [] diag = ([], diag)
-        allocPorts (ty:rest) diag =
-          let (pid, diag1) = freshPort ty diag
-              (pids, diag2) = allocPorts rest diag1
-           in (pid : pids, diag2)
         paramArg param =
           case param of
             GP_Ty v -> Right (CAObj (OVar v))

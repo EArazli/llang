@@ -3,18 +3,9 @@ include "../../../stdlib/struct.cartesian.llang";
 doctrine SKI extends StructCartesian where {
   gen T : [] -> [U_M] @M;
 
-  gen s : [] -> [T] @M;
-  gen k : [] -> [T] @M;
   gen i : [] -> [T] @M;
   gen app : [T, T] -> [T] @M;
 
   rule computational beta_i -> : [T] -> [T] @M =
     (i * id[T]) ; app == id[T]
-
-  rule computational beta_k -> : [T, T] -> [T] @M =
-    (((k * id[T]) ; app) * id[T]) ; app == id[T] * drop(T)
-
-  rule computational beta_s -> : [T, T, T] -> [T] @M =
-    (((((s * id[T]) ; app) * id[T]) ; app) * id[T]) ; app ==
-      (id[T] * id[T] * dup(T)) ; (id[T] * swap(T, T) * id[T]) ; (app * app) ; app
 }

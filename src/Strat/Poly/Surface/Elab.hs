@@ -33,6 +33,7 @@ import Strat.Poly.Doctrine
   )
 import Strat.Poly.DSL.AST (RawPolyObjExpr(..))
 import qualified Strat.Poly.DSL.Elab.Term as PolyDSL
+import Strat.Poly.DiagramBuild (allocPorts)
 import Strat.Poly.Diagram (Diagram(..), idDTm, genD, unionDiagram, diagramDom, diagramCod, freeVarsDiagram, applySubstDiagram)
 import Strat.Poly.Graph
   ( PortId(..)
@@ -55,7 +56,7 @@ import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..))
 import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
-import Strat.Poly.Rewrite (RewriteRule(..), rulesFromPolicy)
+import Strat.Poly.Rewrite (RewriteRule(..), rulesForMode)
 import qualified Strat.Poly.TeleArgs as TA
 import Strat.Poly.Surface.Parse (SurfaceNode(..), SurfaceParam(..), parseSurfaceExpr)
 import Strat.Poly.Surface.Spec
@@ -65,28 +66,30 @@ import qualified Strat.Poly.Obj as Ty
 import Strat.Poly.TypeTheory (TypeTheory, literalKindForObj)
 import Strat.Poly.DefEq (termExprToDiagramChecked)
 import Strat.Poly.TermExpr (TermExpr(..))
-import qualified Strat.Poly.UnifyObj as U
 import qualified Strat.Poly.Morphism as PolyMorph
+import qualified Strat.Poly.Subst as US
+import qualified Strat.Poly.Term.SubstRuntime as SR
+import qualified Strat.Poly.UnifyFlex as UF
 import Strat.Util.List (dedupe)
 
 
-type Subst = U.Subst
+type Subst = US.Subst
 
 applySubstObj :: TypeTheory -> Subst -> Obj -> Either Text Obj
 applySubstObj =
-  U.applySubstObj
+  SR.applySubstObj
 
 applySubstCtx :: TypeTheory -> Subst -> Context -> Either Text Context
 applySubstCtx =
-  U.applySubstCtx
+  SR.applySubstCtx
 
 unifyObjFlex :: TypeTheory -> S.Set TmVar -> Subst -> Obj -> Obj -> Either Text Subst
 unifyObjFlex tt flex =
-  U.unifyObjFlex tt [] flex
+  UF.unifyObjFlex tt [] flex
 
 composeSubst :: TypeTheory -> Subst -> Subst -> Either Text Subst
 composeSubst =
-  U.composeSubst
+  SR.composeSubst
 
 freeFlexCtx :: Context -> S.Set TmVar
 freeFlexCtx =
@@ -152,7 +155,7 @@ eliminateToBase docS docB mode diag0 = do
   let gensS = genSetForMode docS mode
   let gensB = genSetForMode docB mode
   let sigma = S.difference gensS gensB
-  let rules0 = [ rr | rr <- rulesFromPolicy UseAllOriented (dCells2 docS), dMode (rrLHS rr) == mode ]
+  let rules0 = rulesForMode UseAllOriented tt mode
   let rulesElim =
         [ rr
         | rr <- rules0
@@ -237,7 +240,7 @@ data ElabEnv = ElabEnv
   } deriving (Eq, Show)
 
 initEnv :: Either Text ElabEnv
-initEnv = Right (ElabEnv M.empty [] U.emptySubst)
+initEnv = Right (ElabEnv M.empty [] US.emptySubst)
 
 visibleTermBinders :: [(Text, Obj)] -> [(Text, Obj)]
 visibleTermBinders termBinders =
@@ -430,7 +433,7 @@ instantiateImplUnaryGen iface mor g ty = do
   let srcOwner = Ty.tmVarOwner srcVar
   tgtOwner <- PolyMorph.applyMorphismMode mor srcOwner
   let tgtVar = srcVar { Ty.tmvSort = tgtSort, Ty.tmvOwnerMode = Just tgtOwner }
-  subst <- U.mkSubst [(tgtVar, CAObj ty)]
+  subst <- US.mkSubst [(tgtVar, CAObj ty)]
   applySubstDiagram tgtTT subst dMapped
 
 isDupShape :: GenDecl -> Bool
@@ -650,9 +653,9 @@ buildTypeSubst :: M.Map Text Obj -> Doctrine -> CtorTables -> TypeTheory -> Mode
 buildTypeSubst typeScope doc ctorTables tt mode env paramMap = do
   pairs <- mapM toPair (M.toList paramMap)
   let localTy = M.fromList (concat pairs)
-  localSub <- U.mkSubst [ (v, CAObj ty) | (v, ty) <- M.toList localTy ]
+  localSub <- US.mkSubst [ (v, CAObj ty) | (v, ty) <- M.toList localTy ]
   let envSub = eeTypeSubst env
-  U.composeSubst tt envSub localSub
+  SR.composeSubst tt envSub localSub
   where
     toPair (name, param) =
       case param of
@@ -860,7 +863,7 @@ unifyVarType tt varName ty sd =
                 S.union
                   (freeVarsObj tyUse)
                   (freeVarsObj ty)
-          subst <- liftEither (unifyObjFlex tt flex U.emptySubst tyUse ty)
+          subst <- liftEither (unifyObjFlex tt flex US.emptySubst tyUse ty)
           liftEither (applySubstSurf tt subst sd)
 
 connectVar :: TypeTheory -> Doctrine -> ModeName -> StructuralOps -> Text -> PortId -> Obj -> SurfDiag -> Bool -> Fresh SurfDiag
@@ -983,9 +986,9 @@ instantiateUnaryGen tt gen ty = do
     [v] -> Right (M.singleton v ty)
     [] -> Right M.empty
     _ -> Left "surface: structural generator must be unary polymorphic in exactly one type variable"
-  subst <- U.mkSubst [ (v, CAObj t) | (v, t) <- M.toList substTy ]
-  dom <- U.applySubstCtx tt subst (gdPlainDom gen)
-  cod <- U.applySubstCtx tt subst (gdCod gen)
+  subst <- US.mkSubst [ (v, CAObj t) | (v, t) <- M.toList substTy ]
+  dom <- SR.applySubstCtx tt subst (gdPlainDom gen)
+  cod <- SR.applySubstCtx tt subst (gdCod gen)
   buildGenDiagram (gdMode gen) [] dom cod (gdName gen) genArgs []
   where
     isBinder sh =
@@ -1085,7 +1088,7 @@ checkBinderArgs tt dom cod slots args =
       if length slots /= length args
         then Left "surface: generator binder argument mismatch"
         else do
-          (substFinal, checked0) <- foldM step (U.emptySubst, []) (zip slots args)
+          (substFinal, checked0) <- foldM step (US.emptySubst, []) (zip slots args)
           domFinal <- applySubstCtx tt substFinal dom
           codFinal <- applySubstCtx tt substFinal cod
           checked <- mapM (applySubstBinderArg tt substFinal) checked0
@@ -1099,13 +1102,13 @@ checkBinderArgs tt dom cod slots args =
           inner <- applySubstDiagram tt substAcc inner0
           domArg <- diagramDom inner
           let flexDom = S.union (freeFlexCtx (bsDom slot)) (freeFlexCtx domArg)
-          sDom <- U.unifyCtx tt [] flexDom (bsDom slot) domArg
+          sDom <- UF.unifyCtx tt [] flexDom (bsDom slot) domArg
           subst1 <- composeSubst tt sDom substAcc
           slot1 <- applySubstBinderSigTy tt sDom slot
           inner1 <- applySubstDiagram tt sDom inner
           codArg <- diagramCod inner1
           let flexCod = S.union (freeFlexCtx (bsCod slot1)) (freeFlexCtx codArg)
-          sCod <- U.unifyCtx tt [] flexCod (bsCod slot1) codArg
+          sCod <- UF.unifyCtx tt [] flexCod (bsCod slot1) codArg
           subst2 <- composeSubst tt sCod subst1
           inner2 <- applySubstDiagram tt sCod inner1
           Right (subst2, out <> [BAConcrete inner2])
@@ -1125,13 +1128,6 @@ buildGenDiagram mode tmCtx dom cod gen args bargs = do
   let diagFinal = diag3 { dIn = inPorts, dOut = outPorts }
   validateDiagram diagFinal
   pure diagFinal
-
-allocPorts :: Context -> Diagram -> ([PortId], Diagram)
-allocPorts [] diag = ([], diag)
-allocPorts (ty : rest) diag =
-  let (pid, diag1) = freshPort ty diag
-      (pids, diag2) = allocPorts rest diag1
-   in (pid : pids, diag2)
 
 
 -- Composition with tags and uses
@@ -1158,7 +1154,7 @@ compSurf tt a b = do
   let flexA = freeVarsDiagram (sdDiag a0)
   let flexB = freeVarsDiagram (sdDiag b0)
   let flex = S.union flexA flexB
-  subst <- U.unifyCtx tt [] flex codA domB
+  subst <- UF.unifyCtx tt [] flex codA domB
   a' <- applySubstSurf tt subst a0
   b' <- applySubstSurf tt subst b0
   let bShift = shiftDiagram (dNextPort (sdDiag a')) (dNextEdge (sdDiag a')) (sdDiag b')

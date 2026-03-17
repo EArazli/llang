@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Test.Poly.Morphism
   ( tests
   ) where
@@ -24,7 +25,7 @@ import Strat.Poly.Doctrine
 import Strat.Poly.Morphism
 import Strat.Poly.TypeTheory (modeOnlyTypeTheory)
 import Strat.Poly.Term.AST (TermHeadArg(..))
-import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
+import Strat.Poly.TermExpr (TermExpr(..), pattern TMGen, termExprToDiagram, diagramToTermExpr)
 import Test.Poly.Helpers (mkModes, identityModeMap, identityModMap)
 import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToGenParams)
 
@@ -363,6 +364,7 @@ testTypeMapReorder = do
             insertCompSupportGens mode $
               M.fromList [(mode, M.fromList [(gdName prodCtor, prodCtor), (genName, genSrc)])]
         , dCells2 = []
+        , dBuiltins = []
         , dActions = M.empty
         , dObligations = []
         }
@@ -374,6 +376,7 @@ testTypeMapReorder = do
             insertCompSupportGens mode $
               M.fromList [(mode, M.fromList [(gdName pairCtor, pairCtor), (genName, genTgt)])]
         , dCells2 = []
+        , dBuiltins = []
         , dActions = M.empty
         , dObligations = []
         }
@@ -437,6 +440,7 @@ testCrossModeMorphism = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(modeC, M.fromList [(GenName "f", fGen)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -449,6 +453,7 @@ testCrossModeMorphism = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(modeV, M.fromList [(GenName "g", gGen)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -508,8 +513,8 @@ testModalityMapRewritesTypeModalities = do
         ModeTheory
           { mtModes =
               M.fromList
-                [ (modeA, ModeInfo { miName = modeA, miDefEqEngine = DefEqTRS })
-                , (modeB, ModeInfo { miName = modeB, miDefEqEngine = DefEqTRS })
+                [ (modeA, ModeInfo { miName = modeA })
+                , (modeB, ModeInfo { miName = modeB })
                 ]
           , mtDecls =
               M.fromList
@@ -525,8 +530,8 @@ testModalityMapRewritesTypeModalities = do
         ModeTheory
           { mtModes =
               M.fromList
-                [ (modeC, ModeInfo { miName = modeC, miDefEqEngine = DefEqTRS })
-                , (modeD, ModeInfo { miName = modeD, miDefEqEngine = DefEqTRS })
+                [ (modeC, ModeInfo { miName = modeC })
+                , (modeD, ModeInfo { miName = modeD })
                 ]
           , mtDecls =
               M.fromList
@@ -583,6 +588,7 @@ testModalityMapRewritesTypeModalities = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(modeB, M.fromList [(GenName "g", genGSrc), (GenName "gg", genGGSrc)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -595,6 +601,7 @@ testModalityMapRewritesTypeModalities = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(modeD, M.fromList [(GenName "g", genGTgt), (GenName "gg", genGGTgt)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -667,6 +674,7 @@ testMorphismRejectsMissingTargetCtor = do
             , dAcyclicModes = S.empty
                         , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -679,6 +687,7 @@ testMorphismRejectsMissingTargetCtor = do
             , dAcyclicModes = S.empty
                         , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -717,6 +726,7 @@ testMorphismRequiresExplicitComprehensionMappings = do
             , dAcyclicModes = S.empty
                         , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -729,6 +739,7 @@ testMorphismRequiresExplicitComprehensionMappings = do
             , dAcyclicModes = S.empty
                         , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -788,6 +799,7 @@ testMorphismInstantiationSubstFailure = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(mode, M.fromList [(GenName "f", srcGen)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -800,6 +812,7 @@ testMorphismInstantiationSubstFailure = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(mode, M.fromList [(GenName "g", tgtGen)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -854,6 +867,7 @@ testBinderIdentityMorphismPreservesBinders = do
               , dAcyclicModes = S.empty
                             , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
               , dCells2 = []
+              , dBuiltins = []
               , dActions = M.empty
               , dObligations = []
               }
@@ -922,6 +936,7 @@ testMorphismSpliceRenamesToBinderMeta = do
               , dAcyclicModes = S.empty
                             , dGens = M.fromList [(mode, M.fromList [(gName, gDecl)])]
               , dCells2 = []
+              , dBuiltins = []
               , dActions = M.empty
               , dObligations = []
               }
@@ -1187,6 +1202,7 @@ testMorphismRejectsBadBinderHoleSignatures = do
               , dAcyclicModes = S.empty
                             , dGens = M.fromList [(mode, M.fromList [(lamName, lamGen)])]
               , dCells2 = []
+              , dBuiltins = []
               , dActions = M.empty
               , dObligations = []
               }
@@ -1232,6 +1248,7 @@ testTypeTemplateCycleRejected = do
             , dAcyclicModes = S.empty
                         , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -1282,6 +1299,7 @@ testTermTemplateSortMismatch = do
             , dAcyclicModes = S.empty
                         , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -1296,6 +1314,7 @@ testTermTemplateSortMismatch = do
             , dAcyclicModes = S.empty
                         , dGens = M.empty
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -1418,6 +1437,7 @@ testTermTypeTemplateInstantiation = do
                     , (modeM', M.fromList [(gdName aCtor, aCtor), (gdName vecCtor, vecCtor)])
                     ]
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
           }
@@ -1434,6 +1454,7 @@ testTermTypeTemplateInstantiation = do
                     , (modeM', M.fromList [(gdName aCtor, aCtor), (gdName vec2Ctor, vec2Ctor)])
                     ]
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
           }
@@ -1543,6 +1564,7 @@ testTermTemplateKindMismatch = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -1557,6 +1579,7 @@ testTermTemplateKindMismatch = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(modeI', M.fromList [(GenName "Z", zGen)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -1627,6 +1650,7 @@ testMorphismMapsStructuredTermArgs = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(modeI', M.fromList [(succName, succDecl)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -1641,6 +1665,7 @@ testMorphismMapsStructuredTermArgs = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(modeI', M.fromList [(dblName, dblDecl)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -1714,6 +1739,7 @@ testMorphismWeakenImageTmCtx = do
             , dAcyclicModes = S.empty
                         , dGens = M.singleton mode (M.singleton srcName (mkGen srcName))
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -1726,6 +1752,7 @@ testMorphismWeakenImageTmCtx = do
             , dAcyclicModes = S.empty
                         , dGens = M.singleton mode (M.singleton tgtName (mkGen tgtName))
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -1810,6 +1837,7 @@ mkMonoid = do
             , dAcyclicModes = S.empty
                         , dGens = gens
             , dCells2 = [assoc { c2Class = Structural }, unitL, unitR]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }
@@ -1859,6 +1887,7 @@ mkStringMonoid = do
             , dAcyclicModes = S.empty
                         , dGens = gens
             , dCells2 = [assoc { c2Class = Structural }, unitL, unitR]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
             }

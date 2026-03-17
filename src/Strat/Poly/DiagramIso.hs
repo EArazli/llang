@@ -25,17 +25,13 @@ import Strat.Poly.Graph
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName)
 import Strat.Poly.Obj (Obj, TmVar(..), sameTmVarId)
+import Strat.Poly.ObjEq (ObjEqInCtx)
+import Strat.Poly.Subst (Subst, emptySubst)
+import Strat.Poly.Term.SubstRuntime (applySubstCtx)
 import Strat.Poly.Syntax (CodeArg(..))
 import Strat.Poly.Tele (GenParam)
 import Strat.Poly.TypeTheory (TypeTheory, GenArgSig(..), lookupGenArgSig)
-import Strat.Poly.UnifyObj
-  ( Subst
-  , applySubstCtx
-  , emptySubst
-  , unifyGenArgsFlex
-  , unifyObjFlex
-  )
-import Strat.Poly.DefEq (defEqObj)
+import Strat.Poly.UnifyFlex (unifyGenArgsFlex, unifyObjFlex)
 
 
 data IsoState extra = IsoState
@@ -82,24 +78,26 @@ diagramIsoEqSlow left right =
   fmap (not . null) (diagramIsoWith algoEq () left right)
 
 diagramIsoMatchWithVars
-  :: TypeTheory
+  :: ObjEqInCtx
+  -> TypeTheory
   -> S.Set TmVar
   -> Diagram
   -> Diagram
   -> Either Text [Subst]
-diagramIsoMatchWithVars tt flex =
-  diagramIsoMatchWithVarsFrom tt flex emptySubst
+diagramIsoMatchWithVars objEq tt flex =
+  diagramIsoMatchWithVarsFrom objEq tt flex emptySubst
 
 diagramIsoMatchWithVarsFrom
-  :: TypeTheory
+  :: ObjEqInCtx
+  -> TypeTheory
   -> S.Set TmVar
   -> Subst
   -> Diagram
   -> Diagram
   -> Either Text [Subst]
-diagramIsoMatchWithVarsFrom tt flex tySubst left right = do
+diagramIsoMatchWithVarsFrom objEq tt flex tySubst left right = do
   let initExtra = IsoExtra tySubst
-  xs <- diagramIsoWith (algoMatch tt flex) initExtra left right
+  xs <- diagramIsoWith (algoMatch objEq tt flex) initExtra left right
   pure [ieTySubst ex | ex <- xs]
 
 diagramIsoWith
@@ -352,10 +350,11 @@ algoEq =
     binderShape _ _ = False
 
 algoMatch
-  :: TypeTheory
+  :: ObjEqInCtx
+  -> TypeTheory
   -> S.Set TmVar
   -> IsoAlgo IsoExtra
-algoMatch tt flex =
+algoMatch objEq tt flex =
   IsoAlgo
     { iaComparePorts = comparePorts
     , iaComparePayload = comparePayload
@@ -377,7 +376,7 @@ algoMatch tt flex =
       where
         go _ [] [] = Right True
         go tmCtxAcc (a:as) (b:bs) = do
-          ok <- defEqObj tt tmCtxAcc a b
+          ok <- objEq tmCtxAcc a b
           if ok
             then go (tmCtxAcc <> [a]) as bs
             else Right False
@@ -389,7 +388,7 @@ algoMatch tt flex =
         Right tmCtx' ->
           if S.null flex
             then do
-              ok <- defEqObj tt tmCtx' ty1 ty2
+              ok <- objEq tmCtx' ty1 ty2
               Right [extra | ok]
             else
               case unifyObjFlex tt tmCtx' flex (ieTySubst extra) ty1 ty2 of

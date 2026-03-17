@@ -1,9 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Strat.Poly.ModeTheory
   ( ModeName(..)
   , ModName(..)
   , ModTransformName(..)
-  , DefEqEngine(..)
   , ModeInfo(..)
   , CompDecl(..)
   , ModExpr(..)
@@ -14,7 +14,6 @@ module Strat.Poly.ModeTheory
   , ModeTheory(..)
   , emptyModeTheory
   , addMode
-  , setModeDefEqEngine
   , addModDecl
   , addModEqn
   , addModTransformDecl
@@ -26,7 +25,6 @@ module Strat.Poly.ModeTheory
   , classificationOrder
   , composeMod
   , normalizeModExpr
-  , modeDefEqEngine
   , checkWellFormed
   ) where
 
@@ -39,21 +37,14 @@ import Control.Monad (foldM)
 import Strat.Poly.ModeSyntax
 import Strat.Poly.Syntax (Obj(..))
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
+import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..), pattern TMGen)
 import Strat.Poly.Term.Normalize (normalizeTermExpr)
 import Strat.Poly.Term.RewriteSystem (TRS, TRule(..), mkTRS)
 import Strat.Poly.Term.Termination (checkTerminatingSCT)
 import Strat.Poly.Term.Confluence (checkConfluent)
 
-
-data DefEqEngine
-  = DefEqTRS
-  | DefEqNBE
-  deriving (Eq, Ord, Read, Show)
-
 data ModeInfo = ModeInfo
   { miName :: ModeName
-  , miDefEqEngine :: DefEqEngine
   } deriving (Eq, Read, Show)
 
 data CompDecl = CompDecl
@@ -86,19 +77,8 @@ addMode :: ModeName -> ModeTheory -> Either Text ModeTheory
 addMode name mt
   | M.member name (mtModes mt) = Left "duplicate mode name"
   | otherwise =
-      let info = ModeInfo { miName = name, miDefEqEngine = DefEqTRS }
+      let info = ModeInfo { miName = name }
       in Right mt { mtModes = M.insert name info (mtModes mt) }
-
-setModeDefEqEngine :: ModeName -> DefEqEngine -> ModeTheory -> Either Text ModeTheory
-setModeDefEqEngine mode engine mt =
-  case M.lookup mode (mtModes mt) of
-    Nothing -> Left "mode theory: defeq engine set for unknown mode"
-    Just info ->
-      Right
-        mt
-          { mtModes =
-              M.insert mode (info { miDefEqEngine = engine }) (mtModes mt)
-          }
 
 addModDecl :: ModDecl -> ModeTheory -> Either Text ModeTheory
 addModDecl decl mt
@@ -305,8 +285,10 @@ modEqRuleToTRule i (ModEqn lhs rhs) =
   TRule
     { trName = "mod_eq[" <> T.pack (show i) <> "] "
                <> renderModExprShort lhs <> " -> " <> renderModExprShort rhs
+    , trVars = []
     , trLHS  = encodeModPathWithTail (mePath lhs) (TMBound 0)
-    , trRHS  = encodeModPathWithTail (mePath rhs) (TMBound 0)
+    , trRHS  = Just (encodeModPathWithTail (mePath rhs) (TMBound 0))
+    , trRHSDiagram = Nothing
     }
 
 modEqTRS :: ModeTheory -> TRS
@@ -457,12 +439,6 @@ validateModExpr mt me = do
       if mdSrc decl == cur
         then walk (mdTgt decl) ms
         else Left "mode theory: modality composition type mismatch"
-
-modeDefEqEngine :: ModeTheory -> ModeName -> DefEqEngine
-modeDefEqEngine mt mode =
-  case M.lookup mode (mtModes mt) of
-    Just info -> miDefEqEngine info
-    Nothing -> DefEqTRS
 
 validateModEqn :: ModeTheory -> ModEqn -> Either Text ()
 validateModEqn mt eqn = do

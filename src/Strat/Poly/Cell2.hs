@@ -7,7 +7,7 @@ module Strat.Poly.Cell2
 import Data.Text (Text)
 import Strat.Common.Rules (RuleClass, Orientation)
 import Strat.Poly.Obj (TmVar)
-import Strat.Poly.Diagram (Diagram)
+import Strat.Poly.Syntax (Diagram)
 import Strat.Poly.Tele (GenParam(..), teleTyVars, teleTmVars)
 
 

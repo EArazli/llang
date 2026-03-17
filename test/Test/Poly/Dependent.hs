@@ -14,7 +14,7 @@ import qualified Data.Set as S
 
 import Strat.DSL.Parse (parseRawFile)
 import Strat.DSL.Elab (elabRawFile)
-import Strat.Frontend.Env (meDoctrines)
+import Strat.Frontend.Env (emptyEnv, meDoctrines)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Poly.ModeTheory (ModeName(..), ModExpr(..), addMode, emptyModeTheory)
@@ -48,7 +48,6 @@ import Strat.Poly.Tele (CtorSig(..), GenParam(..))
 import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToCtorSig)
 import Strat.Poly.DefEq (normalizeObjDeep, normalizeTermDiagram, validateTermDiagram)
 import qualified Strat.Poly.DefEq as DE
-import Strat.Poly.UnifyObj (unifyTm, unifyObjFlex, emptySubst, lookupTmMeta)
 import Strat.Poly.Match (MatchConfig(..), findAllMatches)
 import Strat.Poly.Graph
   ( Diagram(..)
@@ -65,11 +64,15 @@ import Strat.Poly.Graph
   )
 import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVars)
 import Strat.Poly.Diagram (idD, genDTm, compD, freeVarsDiagram)
-import Strat.Poly.Names (GenName(..))
+import Strat.Poly.Names (GenName(..), BoxName(..))
 import Strat.Poly.Rewrite (RewriteRule(..), rewriteOnce)
-import Strat.Poly.Term.AST (TermHeadArg(..))
-import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr, diagramGraphToTermExpr)
+import Strat.Poly.Term.AST (TermBinderArg(..), TermHeadArg(..))
+import Strat.Poly.TermExpr (TermExpr(..), pattern TMGen, termExprToDiagram, diagramToTermExpr, diagramGraphToTermExpr)
 import Strat.Poly.Term.RewriteCompile (compileAllTermRules)
+import Strat.Poly.Term.Termination (checkTerminatingSCT)
+import Strat.Poly.Subst (emptySubst, lookupTmMeta)
+import Strat.Poly.UnifyFlex (unifyTm, unifyObjFlex)
+import qualified Strat.Poly.Term.RewriteSystem as RS
 import Test.Poly.Helpers (mkModes, withZeroParamGenArgSigs)
 
 
@@ -81,6 +84,9 @@ tests =
     , testCase "term normalization reduces add(S(Z),S(Z))" testNormalizeTm
     , testCase "term normalization is idempotent" testNormalizeTmIdempotent
     , testCase "doctrine rejects non-terminating term rewrite system" testRejectNonTerminatingTermTRS
+    , testCase "doctrine rejects binder-hidden recursive calls in trusted term rules" testRejectBinderHiddenTermLoop
+    , testCase "SCT rejects diagram-backed recursion hidden in a box" testRejectStructuralBoxHiddenLoop
+    , testCase "SCT rejects binder-body recursion hidden in a box" testRejectBinderBoxHiddenLoop
     , testCase "doctrine rejects non-confluent term rewrite system" testRejectNonConfluentTermTRS
     , testCase "mixed-mode unlabeled tmctx inputs resolve to global indices" testMixedModeTmCtxResolution
     , testCase "bound index survives canonization without labels" testBoundIndexSurvivesCanonization
@@ -99,8 +105,11 @@ tests =
     , testCase "binder metas + splice rewrite" testBinderMetaSplice
     , testCase "explicit binder term args can reference bound term vars" testExplicitBinderTermArg
     , testCase "rule head type args elaborate in surrounding type-variable scope" testRuleHeadTypeArgsSeeTyVars
+    , testCase "trusted rule compilation normalizes dependent type-former term params" testRuleCompileDependentTypeFormerSortEq
     , testCase "generated comprehension laws terminate on dependent Id codomains" testDependentIdCompLaws
     , testCase "nested dependent term-head arguments elaborate without self-capture" testNestedDependentHeadArgElaborates
+    , testCase "binder-bearing term heads elaborate in object codomains" testBinderHeadArgElaboratesInCodomain
+    , testCase "binder-bearing term heads elaborate in diagram term arguments" testBinderHeadArgElaboratesInDiagram
     ]
 
 require :: Either Text a -> IO a
@@ -188,6 +197,57 @@ testNormalizeTmIdempotent = do
   e2 <- require (diagramToTermExpr tt [] natTy n2)
   e1 @?= e2
 
+testRuleCompileDependentTypeFormerSortEq :: Assertion
+testRuleCompileDependentTypeFormerSortEq = do
+  let src = T.unlines
+        [ "doctrine GradedMonadCompile where {"
+        , "  mode G classifiedBy G via G.U_G;"
+        , "  gen comp_ctx_ext(a@G) : [a] -> [a] @G;"
+        , "  gen comp_var(a@G) : [a] -> [a] @G;"
+        , "  gen comp_reindex(a@G) : [a] -> [a] @G;"
+        , "  comprehension G where { ctx_ext = comp_ctx_ext; var = comp_var; reindex = comp_reindex; };"
+        , "  gen U_G : [] -> [G.U_G] @G;"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen Count : [] -> [G.U_G] @G;"
+        , "  gen zero : [] -> [Count] @G;"
+        , "  gen succ : [Count] -> [Count] @G;"
+        , "  gen add : [Count, Count] -> [Count] @G;"
+        , "  rule computational add_zero -> : [Count] -> [Count] @G ="
+        , "    (zero * id[Count]) ; add == id[Count]"
+        , "  rule computational add_succ -> : [Count, Count] -> [Count] @G ="
+        , "    (succ * id[Count]) ; add == add ; succ"
+        , "  gen A : [] -> [M.U_M] @M;"
+        , "  gen B : [] -> [M.U_M] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  rule computational ctx_ext_id -> (a@M) : [a] -> [a] @M ="
+        , "    ctx_ext(a) == id[a]"
+        , "  rule computational var_id -> (a@M) : [a] -> [a] @M ="
+        , "    var(a) == id[a]"
+        , "  rule computational reindex_id -> (a@M) : [a] -> [a] @M ="
+        , "    reindex(a) == id[a]"
+        , "  gen T(g : Count, a@M) : [] -> [M.U_M] @M;"
+        , "  gen gret(a@M) : [a] -> [T(zero, a)] @M;"
+        , "  gen gbind(a@M, b@M, g1 : Count, g2 : Count) :"
+        , "    [T(g1, a), binder { x : a } : [T(g2, b)]] -> [T(add(g1, g2), b)] @M;"
+        , "  rule computational left_unit -> (a@M, b@M, g : Count) :"
+        , "    [a] -> [T(g, b)] @M ="
+        , "    gret(a) ; gbind(a, b, zero, g)[?Body]"
+        , "    =="
+        , "    splice(?Body)"
+        , "}"
+        ]
+  env <- require (parseRawFile src >>= elabRawFile)
+  doc <-
+    case M.lookup "GradedMonadCompile" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine GradedMonadCompile" >> fail "unreachable"
+      Just d -> pure d
+  _ <- require (doctrineTypeTheory doc)
+  pure ()
+
 testRejectNonTerminatingTermTRS :: Assertion
 testRejectNonTerminatingTermTRS = do
   let src = T.unlines
@@ -216,6 +276,83 @@ testRejectNonTerminatingTermTRS = do
     Right _ ->
       assertFailure "expected doctrine elaboration to reject non-terminating term TRS"
 
+testRejectBinderHiddenTermLoop :: Assertion
+testRejectBinderHiddenTermLoop = do
+  let src = T.unlines
+        [ "doctrine BadBinderLoop where {"
+        , "  mode M classifiedBy M via M.U_M;"
+        , "  gen U_M : [] -> [M.U_M] @M;"
+        , "  gen A : [] -> [M.U_M] @M;"
+        , "  gen Fun(a@M, b@M) : [] -> [M.U_M] @M;"
+        , "  gen abs(a@M, b@M) : [binder { x : a } : [b]] -> [Fun(a, b)] @M;"
+        , "  gen ev(a@M, b@M) : [Fun(a, b), a] -> [b] @M;"
+        , "  gen recfun(a@M) : [] -> [Fun(a, a)] @M;"
+        , "  gen ctx_ext(a@M) : [a] -> [a] @M;"
+        , "  gen var(a@M) : [a] -> [a] @M;"
+        , "  gen reindex(a@M) : [a] -> [a] @M;"
+        , "  comprehension M where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+        , "  rule computational beta -> (a@M, b@M) : [a] -> [b] @M ="
+        , "    (abs(a, b)[?Body] * id[a]) ; ev(a, b) == splice(?Body)"
+        , "  rule computational loop_unfold -> (a@M) : [] -> [Fun(a, a)] @M ="
+        , "    recfun(a) == abs(a, a)[(recfun(a) * id[a]) ; ev(a, a)]"
+        , "}"
+        ]
+  case parseRawFile src >>= elabRawFile of
+    Left err ->
+      assertBool
+        ("expected termination failure for binder-hidden recursive call, got: " <> T.unpack err)
+        (  "termination not proven" `T.isInfixOf` err
+        && "recfun" `T.isInfixOf` err
+        )
+    Right _ ->
+      assertFailure "expected doctrine elaboration to reject binder-hidden recursive term rule"
+
+testRejectStructuralBoxHiddenLoop :: Assertion
+testRejectStructuralBoxHiddenLoop = do
+  let mode = ModeName "M"
+  let argTy = mkCon (ObjRef mode (ObjName "A")) []
+  rhs <- require (mkBoxedUnaryCallDiagram mode argTy (GenName "f"))
+  let rule =
+        RS.TRule
+          { RS.trName = "boxed-loop"
+          , RS.trVars = []
+          , RS.trLHS = TMGen (GenName "f") [THATm (TMBound 0)]
+          , RS.trRHS = Nothing
+          , RS.trRHSDiagram = Just (TermDiagram rhs)
+          }
+  case checkTerminatingSCT (RS.mkTRS mode [rule]) of
+    Left err ->
+      assertBool
+        ("expected SCT failure for boxed recursive call, got: " <> T.unpack err)
+        (  "termination not proven" `T.isInfixOf` err
+        && "f" `T.isInfixOf` err
+        )
+    Right _ ->
+      assertFailure "expected SCT to reject box-hidden recursive rule"
+
+testRejectBinderBoxHiddenLoop :: Assertion
+testRejectBinderBoxHiddenLoop = do
+  let mode = ModeName "M"
+  let argTy = mkCon (ObjRef mode (ObjName "A")) []
+  binderBody <- require (mkBoxedUnaryCallDiagram mode argTy (GenName "f"))
+  let rule =
+        RS.TRule
+          { RS.trName = "binder-box-loop"
+          , RS.trVars = []
+          , RS.trLHS = TMGen (GenName "f") [THATm (TMBound 0)]
+          , RS.trRHS = Just (TMHead (GenName "wrap") [THATm (TMBound 0)] [TBABody binderBody])
+          , RS.trRHSDiagram = Nothing
+          }
+  case checkTerminatingSCT (RS.mkTRS mode [rule]) of
+    Left err ->
+      assertBool
+        ("expected SCT failure for binder-box recursive call, got: " <> T.unpack err)
+        (  "termination not proven" `T.isInfixOf` err
+        && "f" `T.isInfixOf` err
+        )
+    Right _ ->
+      assertFailure "expected SCT to reject binder-body recursive call hidden by a box"
+
 testRejectNonConfluentTermTRS :: Assertion
 testRejectNonConfluentTermTRS = do
   let src = T.unlines
@@ -242,8 +379,8 @@ testRejectNonConfluentTermTRS = do
       assertBool
         ("expected confluence failure, got: " <> T.unpack err)
         (  "confluence failed" `T.isInfixOf` err
-        && "overlaps" `T.isInfixOf` err
-        && "at [" `T.isInfixOf` err
+        && "tmrule.0 overlaps tmrule.1" `T.isInfixOf` err
+        && "nf(left)=" `T.isInfixOf` err
         )
     Right _ ->
       assertFailure "expected doctrine elaboration to reject non-confluent term TRS"
@@ -390,7 +527,7 @@ testMatchBoundSortUsesCurrentSubst = do
   _ <- require (validateDiagram host)
 
   tt' <- require (withZeroParamGenArgSigs [lhs, host] tt)
-  let cfg = MatchConfig tt' (S.singleton (aVar))
+  let cfg = MatchConfig tt' (S.singleton aVar) (DE.defEqObj tt')
   matches <- require (findAllMatches cfg lhs host)
   assertBool "expected at least one match" (not (null matches))
 
@@ -449,7 +586,7 @@ testMatchTmCtxCompatibility = do
   let host = (idD modeM [aTy]) { dTmCtx = [boolTy] }
   _ <- require (validateDiagram lhs)
   _ <- require (validateDiagram host)
-  let cfg = MatchConfig tt S.empty
+  let cfg = MatchConfig tt S.empty (DE.defEqObj tt)
   matches <- require (findAllMatches cfg lhs host)
   assertBool "expected no matches for incompatible term contexts" (null matches)
 
@@ -470,7 +607,7 @@ testMatchTmCtxDefEqCompatibility = do
   let rhs = (idD modeM [rhsTy]) { dTmCtx = [rhsTy] }
   _ <- require (validateDiagram lhs)
   _ <- require (validateDiagram rhs)
-  matches <- require (diagramIsoMatchWithVars tt S.empty lhs rhs)
+  matches <- require (diagramIsoMatchWithVars (DE.defEqObj tt) tt S.empty lhs rhs)
   assertBool "expected at least one iso match under definitional tmctx equality" (not (null matches))
 
 testIsoMatchDropsSubstFailure :: Assertion
@@ -486,7 +623,7 @@ testIsoMatchDropsSubstFailure = do
   _ <- require (validateDiagram inner)
   lhs <- require (mkWrapWithBinder mode goodTy inner)
   rhs <- require (mkWrapWithBinder mode goodTy inner)
-  matches <- require (diagramIsoMatchWithVars tt S.empty lhs rhs)
+  matches <- require (diagramIsoMatchWithVars (DE.defEqObj tt) tt S.empty lhs rhs)
   assertBool "expected no matches when binder substitution normalization fails" (null matches)
 
 testCheckedTermConversionDefEq :: Assertion
@@ -517,8 +654,8 @@ testCheckedTermConversionRejectsBadHeadSort = do
   let cName = GenName "c"
   let headSigs =
         M.fromList
-          [ (fName, TmHeadSig { thsParams = [], thsInputs = [aTy], thsRes = bTy })
-          , (cName, TmHeadSig { thsParams = [], thsInputs = [], thsRes = cTy })
+          [ (fName, TmHeadSig { thsParams = [], thsInputs = [aTy], thsBinders = [], thsRes = bTy })
+          , (cName, TmHeadSig { thsParams = [], thsInputs = [], thsBinders = [], thsRes = cTy })
           ]
   let tt = setModeTermHeads mode headSigs (modeOnlyTypeTheory (mkModes [mode]))
   let badExpr = TMGen fName [THATm (TMGen cName [])]
@@ -549,7 +686,7 @@ testBinderMetaSplice = do
 
   let rule = RewriteRule { rrName = "beta", rrLHS = lhs, rrRHS = rhs, rrTyVars = [], rrTmVars = [] }
   tt <- require (withZeroParamGenArgSigs [lhs, rhs, host] (modeOnlyTypeTheory (mkModes [mode])))
-  step <- require (rewriteOnce tt [rule] host)
+  step <- require (rewriteOnce (DE.defEqObj tt) tt [rule] host)
   out <-
     case step of
       Nothing -> assertFailure "expected beta rewrite to fire" >> fail "unreachable"
@@ -661,6 +798,41 @@ testNestedDependentHeadArgElaborates = do
   _ <- require (parseRawFile src >>= elabRawFile)
   pure ()
 
+binderHeadTermSrc :: Text
+binderHeadTermSrc =
+  T.unlines
+    [ "doctrine BinderHeadTermSyntax where {"
+    , "  mode S classifiedBy S via S.U_S;"
+    , "  gen ctx_ext(a@S) : [a] -> [a] @S;"
+    , "  gen var(a@S) : [a] -> [a] @S;"
+    , "  gen reindex(a@S) : [a] -> [a] @S;"
+    , "  comprehension S where { ctx_ext = ctx_ext; var = var; reindex = reindex; };"
+    , "  gen U_S : [] -> [S.U_S] @S;"
+    , "  gen A : [] -> [S.U_S] @S;"
+    , "  gen Arr(a@S, b@S) : [] -> [S.U_S] @S;"
+    , "  gen lam(a@S) : [binder { tm x : a } : [a]] -> [Arr(a, a)] @S;"
+    , "  gen wrap(a@S, f : Arr(a, a)) : [] -> [S.U_S] @S;"
+    , "  gen eval(a@S, f : Arr(a, a)) : [] -> [a] @S;"
+    , "  gen witness : [] -> [wrap(A, lam(A)[id[A]])] @S;"
+    , "}"
+    ]
+
+testBinderHeadArgElaboratesInCodomain :: Assertion
+testBinderHeadArgElaboratesInCodomain = do
+  _ <- require (parseRawFile binderHeadTermSrc >>= elabRawFile)
+  pure ()
+
+testBinderHeadArgElaboratesInDiagram :: Assertion
+testBinderHeadArgElaboratesInDiagram = do
+  env <- require (parseRawFile binderHeadTermSrc >>= elabRawFile)
+  doc <-
+    case M.lookup "BinderHeadTermSyntax" (meDoctrines env) of
+      Nothing -> assertFailure "missing doctrine BinderHeadTermSyntax" >> fail "unreachable"
+      Just d -> pure d
+  expr <- require (parseDiagExpr "eval(A, lam(A)[id[A]])")
+  _ <- require (elabDiagExpr emptyEnv doc (ModeName "S") [] expr)
+  pure ()
+
 mkBetaInput :: ModeName -> Obj -> BinderArg -> Either Text Diagram
 mkBetaInput mode aTy lamArg = do
   let (x, d0) = freshPort aTy (emptyDiagram mode [])
@@ -690,6 +862,25 @@ mkWrapWithBinder mode outTy inner = do
   validateDiagram diag
   pure diag
 
+mkBoxedUnaryCallDiagram :: ModeName -> Obj -> GenName -> Either Text Diagram
+mkBoxedUnaryCallDiagram mode argTy headName = do
+  inner <- mkUnaryCallDiagram mode argTy headName
+  let (inPort, d0) = freshPort argTy (emptyDiagram mode [])
+  let (outPort, d1) = freshPort argTy d0
+  d2 <- addEdgePayload (PBox (BoxName "SCTBox") inner) [inPort] [outPort] d1
+  let diag = d2 { dIn = [inPort], dOut = [outPort] }
+  validateDiagram diag
+  pure diag
+
+mkUnaryCallDiagram :: ModeName -> Obj -> GenName -> Either Text Diagram
+mkUnaryCallDiagram mode argTy headName = do
+  let (inPort, d0) = freshPort argTy (emptyDiagram mode [])
+  let (outPort, d1) = freshPort argTy d0
+  d2 <- addEdgePayload (PGen headName [] []) [inPort] [outPort] d1
+  let diag = d2 { dIn = [inPort], dOut = [outPort] }
+  validateDiagram diag
+  pure diag
+
 mkNatTypeTheory :: Either Text (TypeTheory, Obj, ModeName, ModeName)
 mkNatTypeTheory = do
   let modeM = ModeName "M"
@@ -704,9 +895,9 @@ mkNatTypeTheory = do
   let vN = TmVar { tmvName = "n", tmvSort = natTy, tmvScope = 0, tmvOwnerMode = Nothing }
   let funSigs =
         M.fromList
-          [ (GenName "Z", TmHeadSig [] [] natTy)
-          , (GenName "S", TmHeadSig [] [natTy] natTy)
-          , (GenName "add", TmHeadSig [] [natTy, natTy] natTy)
+          [ (GenName "Z", TmHeadSig [] [] [] natTy)
+          , (GenName "S", TmHeadSig [] [natTy] [] natTy)
+          , (GenName "add", TmHeadSig [] [natTy, natTy] [] natTy)
           ]
   let ttSig =
         setModeTermHeads modeI funSigs $
@@ -720,9 +911,9 @@ mkNatTypeTheory = do
   r3L <- termExprToDiagram ttSig [] natTy (add (TMMeta vN []) z)
   r3R <- termExprToDiagram ttSig [] natTy (TMMeta vN [])
   let rules =
-        [ TmRule { trVars = [vN], trLHS = r1L, trRHS = r1R }
-        , TmRule { trVars = [vM, vN], trLHS = r2L, trRHS = r2R }
-        , TmRule { trVars = [vN], trLHS = r3L, trRHS = r3R }
+        [ TmRule { trTyVars = [], trVars = [vN], trLHS = r1L, trRHS = r1R }
+        , TmRule { trTyVars = [], trVars = [vM, vN], trLHS = r2L, trRHS = r2R }
+        , TmRule { trTyVars = [], trVars = [vN], trLHS = r3L, trRHS = r3R }
         ]
   let tt1 = setModeTermRules modeI rules ttSig
   trsMap <- compileAllTermRules tt1

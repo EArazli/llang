@@ -23,10 +23,11 @@ import Strat.Poly.Obj
   , modeCtxGlobals
   , objMode
   )
+import Strat.Poly.Subst (Subst, emptySubst, mkSubst)
 import Strat.Poly.Tele (GenParam(..))
 import Strat.Poly.Term.AST (TermExpr(..))
+import Strat.Poly.Term.SubstRuntime (applySubstObj, composeSubst)
 import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.UnifyObj (Subst, applySubstObj, composeSubst, emptySubst, mkSubst)
 
 newtype Fresh a = Fresh (Int -> Either Text (a, Int))
 

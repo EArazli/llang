@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Strat.Poly.Alpha
   ( renameTyVarAlpha
   , renameTmVarAlpha
@@ -33,8 +34,8 @@ import Strat.Poly.Obj
   )
 import Strat.Poly.Tele (CtorSig(..), GenParam(..), teleDistinctNames)
 import Strat.Poly.Traversal (traverseDiagram)
-import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
-import Strat.Poly.TypeTheory (TmHeadSig(..))
+import Strat.Poly.Term.AST (TermBinderArg(..), TermExpr(..), TermHeadArg(..))
+import Strat.Poly.TypeTheory (BinderSig(..), TmHeadSig(..))
 
 renameParamAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> GenParam -> GenParam
 renameParamAlpha tyMap tmMap param =
@@ -111,8 +112,19 @@ renameTermExprAlpha tyMap tmMap expr =
   case expr of
     TMBound i -> TMBound i
     TMMeta v args -> TMMeta (renameTmVarAlpha tyMap tmMap v) args
-    TMGen g args -> TMGen g (map (renameHeadArgAlpha tyMap tmMap) args)
+    TMHead g args bargs ->
+      TMHead
+        g
+        (map (renameHeadArgAlpha tyMap tmMap) args)
+        (map renameBinderArgExpr bargs)
+    TMSplice hole me args ->
+      TMSplice hole me (map (renameTermExprAlpha tyMap tmMap) args)
     TMLit lit -> TMLit lit
+  where
+    renameBinderArgExpr barg =
+      case barg of
+        TBABody inner -> TBABody (renameDiagramAlpha tyMap tmMap inner)
+        TBAHole hole -> TBAHole hole
 
 renameBinderArgAlpha :: M.Map TmVar TmVar -> M.Map TmVar TmVar -> BinderArg -> BinderArg
 renameBinderArgAlpha tyMap tmMap barg =
@@ -176,6 +188,7 @@ freshenTmHeadSigAgainstWithMaps used0 sig =
   ( sig
       { thsParams = params'
       , thsInputs = map (renameTypeAlpha tyMap tmMap) (thsInputs sig)
+      , thsBinders = map renameBinderSig (thsBinders sig)
       , thsRes = renameTypeAlpha tyMap tmMap (thsRes sig)
       }
   , tyMap
@@ -183,6 +196,12 @@ freshenTmHeadSigAgainstWithMaps used0 sig =
   )
   where
     (params', tyMap, tmMap, _) = freshenParamsAgainst used0 (thsParams sig)
+    renameBinderSig binder =
+      binder
+        { bsTmCtx = map (renameTypeAlpha tyMap tmMap) (bsTmCtx binder)
+        , bsDom = map (renameTypeAlpha tyMap tmMap) (bsDom binder)
+        , bsCod = map (renameTypeAlpha tyMap tmMap) (bsCod binder)
+        }
 
 freshenParamsAgainst
   :: S.Set TmVar

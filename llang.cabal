@@ -92,6 +92,7 @@ library
       Strat.Poly.Cell2
       Strat.Poly.Coherence
       Strat.Poly.CriticalPairs
+      Strat.Poly.CriticalPairsDoctrine
       Strat.Poly.DefEq
       Strat.Poly.Diagram
       Strat.Poly.DiagramInfo
@@ -128,6 +129,7 @@ library
       Strat.Poly.Quote
       Strat.Poly.Rewrite
       Strat.Poly.Slots
+      Strat.Poly.Subst
       Strat.Poly.Surface
       Strat.Poly.Surface.Elab
       Strat.Poly.Surface.Parse
@@ -135,14 +137,16 @@ library
       Strat.Poly.Syntax
       Strat.Poly.Tele
       Strat.Poly.Term.AST
-      Strat.Poly.Term.NBE.Config
+      Strat.Poly.Term.GraphRead
       Strat.Poly.Term.NBE.Normalize
       Strat.Poly.Term.Normalize
       Strat.Poly.Term.RewriteCompile
       Strat.Poly.Term.RewriteSystem
+      Strat.Poly.Term.SubstRuntime
+      Strat.Poly.Term.Termination
       Strat.Poly.TermExpr
       Strat.Poly.TypeTheory
-      Strat.Poly.UnifyObj
+      Strat.Poly.UnifyFlex
   other-modules:
       Strat.Frontend.CompilerFingerprint
       Strat.Common.Provider
@@ -150,12 +154,20 @@ library
       Strat.Frontend.Compile
       Strat.Poly.TeleArgs
       Strat.Poly.CompObligations
+      Strat.Poly.DiagramBuild
       Strat.Poly.Kernel
       Strat.Poly.ModeSyntax
       Strat.Poly.ObjResolve
-      Strat.Poly.Subst
+      Strat.Poly.ObjEq
       Strat.Poly.Term.Confluence
-      Strat.Poly.Term.Termination
+      Strat.Poly.Term.Compat
+      Strat.Poly.Term.FragmentConfluence
+      Strat.Poly.Term.DefEqCore
+      Strat.Poly.Term.HeadInst
+      Strat.Poly.Term.NormalizeCommon
+      Strat.Poly.Term.RuleDiagram
+      Strat.Poly.Term.Scope
+      Strat.Poly.DSL.Elab.TermBase
       Strat.Poly.Traversal
       Strat.Poly.ObjPretty
       Strat.Util.Fingerprint

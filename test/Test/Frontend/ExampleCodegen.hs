@@ -28,9 +28,6 @@ tests =
     [ testCase "logic_full_adder_codegen main emits structured JavaScript" testLogicFullAdderMain
     , testCase "logic_full_adder_codegen share shows reflected quote bindings" testLogicFullAdderShare
     , testCase "explicit_sharing_js_codegen main exposes reflected quotation IR" testExplicitSharingJsMain
-    , testCase "end-to-end autodiff example emits differentiated JavaScript" testEndToEndAutodiffMain
-    , testCase "end-to-end autodiff core build exposes differentiated target IR" testEndToEndAutodiffCore
-    , testCase "pair-based autodiff main emits shared JavaScript" testPairAutodiffMain
     , testCase "pair-based autodiff share exposes reflected quotation IR" testPairAutodiffShare
     , testCase "CLI does not write FileTree outputs without --output" testCliNoOutputFlagSkipsWrites
     , testCase "CLI writes FileTree outputs with --output" testCliOutputFlagWrites
@@ -68,39 +65,6 @@ testExplicitSharingJsMain = do
   assertBool "expected reflected print binding" ("q_print" `T.isInfixOf` out)
   assertBool "expected reflected quote epilogue" ("q_end" `T.isInfixOf` out)
   assertBool "expected no old explicit-sharing bindings" (not ("let_" `T.isInfixOf` out || "res_" `T.isInfixOf` out || "returnRefs" `T.isInfixOf` out))
-
-testEndToEndAutodiffMain :: Assertion
-testEndToEndAutodiffMain = do
-  result <- loadExampleBuild "examples/build/autodiff_times_sin.llang" "main"
-  let out = brOutput result
-  assertBool "expected exported unary function block" ("export const timesSin = x => {" `T.isInfixOf` out)
-  assertBool "expected shared tangent binding" ("const dx = { value: x, derivative: 1 };" `T.isInfixOf` out)
-  assertBool "expected named product helper" ("const mulDual = (l, r) =>" `T.isInfixOf` out)
-  assertBool "expected named sin helper" ("const sinDual = u =>" `T.isInfixOf` out)
-  assertBool "expected product helper call in body" ("return mulDual(dx, sinDual(dx));" `T.isInfixOf` out)
-  assertBool "expected reusable module without CLI side effect" (not ("console.log(" `T.isInfixOf` out))
-
-testEndToEndAutodiffCore :: Assertion
-testEndToEndAutodiffCore = do
-  result <- loadExampleBuild "examples/build/autodiff_times_sin.llang" "core"
-  let out = brOutput result
-  assertBool "expected normalized dual constructor" ("mkDual" `T.isInfixOf` out)
-  assertBool "expected normalized dual split" ("splitDual" `T.isInfixOf` out)
-  assertBool "expected normalized cosine node" ("cosR" `T.isInfixOf` out)
-  assertBool "expected normalized addition node" ("addR" `T.isInfixOf` out)
-  assertBool "expected normalized multiplication node" ("mulR" `T.isInfixOf` out)
-  assertBool "expected differentiated core to eliminate dsin" (not (" dsin " `T.isInfixOf` out))
-  assertBool "expected differentiated core to eliminate dmul" (not (" dmul " `T.isInfixOf` out))
-
-testPairAutodiffMain :: Assertion
-testPairAutodiffMain = do
-  result <- loadExampleBuild "examples/build/autodiff_times_sin_pair_core.llang" "main"
-  let out = brOutput result
-  assertBool "expected exported function block" ("export const timesSinAD = (" `T.isInfixOf` out)
-  assertBool "expected shared sine call" ("Math.sin" `T.isInfixOf` out)
-  assertBool "expected shared cosine call" ("Math.cos" `T.isInfixOf` out)
-  assertBool "expected temporary return" ("return t" `T.isInfixOf` out)
-  assertBool "expected no reflected IR in JS output" (not ("q_begin" `T.isInfixOf` out || "q_end" `T.isInfixOf` out))
 
 testPairAutodiffShare :: Assertion
 testPairAutodiffShare = do

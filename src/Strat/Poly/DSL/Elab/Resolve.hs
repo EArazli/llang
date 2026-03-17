@@ -88,29 +88,32 @@ unresolvedClassUniverse doc expectedOwnerMode raw =
                 else Left "classifiedBy universe mode mismatch"
             Left _ ->
               go ownerMode innerRaw
-        RPTCon rawRef args ->
-          case asModalityCall rawRef args of
-            Just (rawMe, innerRaw) ->
-              case elabRawModExpr mt rawMe of
-                Right me ->
-                  if meTgt me == ownerMode
-                    then go (meSrc me) innerRaw
-                    else Left "classifiedBy universe mode mismatch"
-                Left _ ->
-                  go ownerMode innerRaw
-            Nothing ->
-              case args of
-                [] ->
-                  let refMode = maybe (modeClassifierMode mt ownerMode) ModeName (rtrMode rawRef)
-                   in Right
-                        ObjRef
-                          { orMode = refMode
-                          , orName = ObjName (rtrName rawRef)
-                          }
-                [innerRaw] ->
-                  go ownerMode innerRaw
-                _ ->
-                  Left "classifiedBy universe seed must expose a base constructor through unary wrappers"
+        RPTCon rawRef args bargs
+          | not (null bargs) ->
+              Left "classifiedBy universe does not support binder arguments"
+          | otherwise ->
+              case asModalityCall rawRef args of
+                Just (rawMe, innerRaw) ->
+                  case elabRawModExpr mt rawMe of
+                    Right me ->
+                      if meTgt me == ownerMode
+                        then go (meSrc me) innerRaw
+                        else Left "classifiedBy universe mode mismatch"
+                    Left _ ->
+                      go ownerMode innerRaw
+                Nothing ->
+                  case args of
+                    [] ->
+                      let refMode = maybe (modeClassifierMode mt ownerMode) ModeName (rtrMode rawRef)
+                       in Right
+                            ObjRef
+                              { orMode = refMode
+                              , orName = ObjName (rtrName rawRef)
+                              }
+                    [innerRaw] ->
+                      go ownerMode innerRaw
+                    _ ->
+                      Left "classifiedBy universe seed must expose a base constructor through unary wrappers"
         RPLit _ ->
           Left "literal is not allowed in classifiedBy universe"
 

@@ -28,7 +28,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
-import Strat.Poly.Alpha (freshenCtorSigAgainstWithMaps, freshenTmHeadSigAgainst, renameCodeArgAlpha)
+import Strat.Poly.Alpha (freshenCtorSigAgainstWithMaps, freshenTmHeadSigAgainst)
 import Strat.Poly.Graph
   ( Diagram(..)
   , Edge(..)
@@ -41,7 +41,7 @@ import Strat.Poly.Names (GenName)
 import Strat.Poly.Obj
 import Strat.Poly.ObjClassifier (modeClassifierMode)
 import Strat.Poly.Tele (CtorSig(..), GenParam(..))
-import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
+import Strat.Poly.Term.AST (TermBinderArg(..), TermExpr(..), TermHeadArg(..))
 import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.TypeTheory (TmHeadSig(..), TypeTheory(..))
 
@@ -62,8 +62,8 @@ data TermSubstOps = TermSubstOps
   , tsoDiagramToTermExpr :: [Obj] -> Obj -> TermDiagram -> Either Text TermExpr
   , tsoTermExprToDiagram :: [Obj] -> Obj -> TermExpr -> Either Text TermDiagram
   , tsoNormalizeCtx :: [Obj] -> Either Text [Obj]
-  , tsoRequireHeadSig :: [Obj] -> Obj -> GenName -> [TermHeadArg] -> Either Text TmHeadSig
-  , tsoResolveHeadFlatArgs :: [Obj] -> Obj -> GenName -> [TermHeadArg] -> Either Text [TermHeadArg]
+  , tsoRequireHeadSig :: [Obj] -> Obj -> GenName -> [TermHeadArg] -> [TermBinderArg] -> Either Text TmHeadSig
+  , tsoResolveHeadArgs :: [Obj] -> Obj -> GenName -> [TermHeadArg] -> [TermBinderArg] -> Either Text ([TermHeadArg], [TermBinderArg])
   , tsoApplyHeadSubstObj :: [Obj] -> M.Map TmVar CodeArg -> Obj -> Either Text Obj
   , tsoInstantiateMetaBody :: [Obj] -> TmVar -> [Int] -> TermExpr -> Either Text TermExpr
   }
@@ -204,11 +204,10 @@ applySubstObjWith ops tt subst ty = do
           args' <-
             case M.lookup (orName ref) sigTableForCode of
               Just sig0 ->
-                let (sig, tyMap, tmMap) = freshenCtorSigAgainstWithMaps (substDomain subst) sig0
-                    argsFresh = map (renameCodeArgAlpha tyMap tmMap) args
+                let (sig, _, _) = freshenCtorSigAgainstWithMaps (substDomain subst) sig0
                  in if length (csParams sig) /= length args
                       then Left "applySubstObj: type constructor arity mismatch"
-                      else fst <$> foldM (goArgBySig seen) ([], M.empty) (zip (csParams sig) argsFresh)
+                      else fst <$> foldM (goArgBySig seen) ([], M.empty) (zip (csParams sig) args)
               Nothing ->
                 mapM (goArgNoSig seen) args
           Right (CTCon ref args')
@@ -405,8 +404,8 @@ substituteTermExprMetasWith ops tt subst =
                   Right (subCtx, subExpr')
         TMBound _ ->
           Right (curCtx, expr)
-        TMGen f args -> do
-          sig0 <- tsoRequireHeadSig ops curCtx currentSort f args
+        TMHead f args bargs -> do
+          sig0 <- tsoRequireHeadSig ops curCtx currentSort f args bargs
           let sig = freshenTmHeadSigAgainst (substDomain subst) sig0
           let (paramArgs, inputArgs) = splitAt (length (thsParams sig)) args
           (ctxAfterParams, paramArgsRev, headSubst) <-
@@ -419,10 +418,18 @@ substituteTermExprMetasWith ops tt subst =
               (stepInput seen headSubst)
               (ctxAfterParams, [])
               (zip (thsInputs sig) inputArgs)
+          binderArgsRev <-
+            foldM
+              stepBinder
+              []
+              bargs
           currentSort' <- tsoNormalizeObj ops ctxOut =<< applySubstObjWith ops tt subst currentSort
           let flatArgs = reverse paramArgsRev <> reverse inputArgsRev
-          flatArgs' <- tsoResolveHeadFlatArgs ops ctxOut currentSort' f flatArgs
-          Right (ctxOut, TMGen f flatArgs')
+          let binderArgs = reverse binderArgsRev
+          (flatArgs', binderArgs') <- tsoResolveHeadArgs ops ctxOut currentSort' f flatArgs binderArgs
+          Right (ctxOut, TMHead f flatArgs' binderArgs')
+        TMSplice _ _ _ ->
+          Left "applySubstTm: splice terms are only supported in trusted rewrite compilation"
         TMLit _ ->
           Right (curCtx, expr)
 
@@ -455,6 +462,14 @@ substituteTermExprMetasWith ops tt subst =
       (ctxArg, argExpr) <- go seen ctxAcc sort' tmExpr
       ctxNext <- mergeTermCtx ctxAcc ctxArg
       Right (ctxNext, THATm argExpr : acc)
+
+    stepBinder acc barg =
+      case barg of
+        TBABody inner0 -> do
+          inner <- applySubstDiagramWith ops tt subst inner0
+          Right (TBABody inner : acc)
+        TBAHole hole ->
+          Right (TBAHole hole : acc)
 
 mergeTermCtx :: [Obj] -> [Obj] -> Either Text [Obj]
 mergeTermCtx left right =

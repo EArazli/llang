@@ -29,7 +29,7 @@ import Strat.Poly.Obj
   , objMode
   , normalizeObjExpr
   )
-import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), DefEqEngine(..), ModExpr(..), ClassificationDecl(..), CompDecl(..), emptyModeTheory)
+import Strat.Poly.ModeTheory (ModeName(..), ModeTheory(..), ModeInfo(..), ModExpr(..), ClassificationDecl(..), CompDecl(..), emptyModeTheory)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Doctrine (Doctrine(..), GenDecl(..), GenParam(..), InputShape(..), validateDoctrine)
 import Strat.Poly.DSL.Parse (parseDiagExpr)
@@ -37,9 +37,9 @@ import Strat.Poly.DSL.Elab (elabDiagExpr)
 import Strat.Frontend.Env (emptyEnv)
 import Strat.Poly.Diagram (diagramDom)
 import Strat.Poly.DefEq (checkObjWellFormed)
-import Strat.Poly.UnifyObj (unifyObj)
 import Strat.Poly.Graph (Diagram(..), emptyDiagram, freshPort, validateDiagram)
 import Strat.Poly.TypeTheory (TypeTheory(..), modeOnlyTypeTheory)
+import Strat.Poly.UnifyFlex (unifyObj)
 import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToGenParams, flatParamsToCtorSig)
 
 
@@ -86,6 +86,7 @@ mkDoctrine tables =
           M.empty
           tables
     , dCells2 = []
+    , dBuiltins = []
     , dActions = M.empty
     , dObligations = []
     }
@@ -93,7 +94,7 @@ mkDoctrine tables =
 mkModes :: S.Set ModeName -> ModeTheory
 mkModes modes =
   ModeTheory
-    { mtModes = M.fromList [ (m, ModeInfo { miName = m, miDefEqEngine = DefEqTRS }) | m <- S.toList modes ]
+    { mtModes = M.fromList [ (m, ModeInfo { miName = m }) | m <- S.toList modes ]
     , mtDecls = M.empty
     , mtEqns = []
     , mtTransforms = M.empty
@@ -272,8 +273,8 @@ testNormalizeClassifierLiftTarget = do
         ModeTheory
           { mtModes =
               M.fromList
-                [ (modeTy, ModeInfo { miName = modeTy, miDefEqEngine = DefEqTRS })
-                , (modeTm, ModeInfo { miName = modeTm, miDefEqEngine = DefEqTRS })
+                [ (modeTy, ModeInfo { miName = modeTy })
+                , (modeTm, ModeInfo { miName = modeTm })
                 ]
           , mtDecls = M.empty
           , mtEqns = []
@@ -320,8 +321,8 @@ testNormalizeClassifierLiftIdentityCollapse = do
         ModeTheory
           { mtModes =
               M.fromList
-                [ (modeTy, ModeInfo { miName = modeTy, miDefEqEngine = DefEqTRS })
-                , (modeTm, ModeInfo { miName = modeTm, miDefEqEngine = DefEqTRS })
+                [ (modeTy, ModeInfo { miName = modeTy })
+                , (modeTm, ModeInfo { miName = modeTm })
                 ]
           , mtDecls = M.empty
           , mtEqns = []

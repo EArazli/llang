@@ -24,7 +24,6 @@ import Strat.Poly.DSL.Elab
 import Strat.Poly.DSL.Parse (parseDiagExpr)
 import Strat.Poly.ModeTheory
 import Strat.Poly.Obj
-import Strat.Poly.UnifyObj
 import Strat.Poly.Doctrine
   ( Doctrine(..)
   , ModAction(..)
@@ -44,8 +43,10 @@ import Strat.Poly.Graph (Diagram(..), canonDiagramRaw)
 import Strat.Poly.ModAction (applyAction, mapTypeByModExpr)
 import Strat.Poly.DiagramInterpretation (stableHoleCaptureRenaming)
 import Strat.Poly.DefEq (normalizeObjDeepWithCtx)
+import Strat.Poly.Term.SubstRuntime (applySubstObj)
 import Strat.Poly.TermExpr (TermExpr(..), termExprToDiagram, diagramToTermExpr)
 import Strat.Poly.Proof (defaultSearchBudget)
+import Strat.Poly.UnifyFlex (unifyObj)
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToCtorSig)
 
@@ -897,6 +898,7 @@ testApplyActionUsesDiagramTmCtx = do
             , dAcyclicModes = S.empty
                         , dGens = M.fromList [(modeC, M.fromList [(genName, genDecl)])]
             , dCells2 = []
+            , dBuiltins = []
             , dActions =
                 M.fromList
                   [ (modF, ModAction { maMod = modF, maGenMap = M.fromList [((modeC, genName), image)], maPolicy = UseOnlyComputationalLR})
@@ -948,6 +950,7 @@ testApplyActionWeakenImageTmCtx = do
             , dAcyclicModes = S.empty
                         , dGens = M.singleton modeM (M.fromList [(genG, mkGen genG), (genH, mkGen genH)])
             , dCells2 = []
+            , dBuiltins = []
             , dActions =
                 M.singleton
                   modF

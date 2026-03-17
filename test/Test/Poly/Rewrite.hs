@@ -18,11 +18,12 @@ import Strat.Poly.Obj (Obj(..), ObjName(..), ObjRef(..), TmVar, mkCon, mkModeMet
 import Strat.Poly.Rewrite
 import Strat.Poly.Normalize (normalize, NormalizationStatus(..))
 import Strat.Poly.Match (Match(..), MatchConfig(..), findFirstMatch)
-import Strat.Poly.UnifyObj (Subst, lookupCodeMeta)
 import Strat.Poly.ModeTheory (ModeName(..), ModeTheory, ModName(..), ModDecl(..), ModExpr(..), ModEqn(..), addMode, addModDecl, addModEqn)
 import Strat.Poly.TypeTheory (TypeTheory, modeOnlyTypeTheory)
 import Strat.Poly.Pretty (renderDiagram)
+import qualified Strat.Poly.DefEq as DE
 import qualified Data.IntMap.Strict as IM
+import Strat.Poly.Subst (Subst, lookupCodeMeta)
 import Test.Poly.Helpers (mkModes, withZeroParamGenArgSigs)
 
 
@@ -86,7 +87,7 @@ testSimpleRewrite = do
   let lhs = rrLHS rule
   let mt = mkModes [modeName]
   tt <- mkTypeTheory mt [lhs, rrRHS rule]
-  res <- case rewriteOnce tt [rule] lhs of
+  res <- case rewriteOnce (DE.defEqObj tt) tt [rule] lhs of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -103,7 +104,7 @@ testSubdiagramRewrite = do
   host <- require (tensorD lhs extra)
   let mt = mkModes [modeName]
   tt <- mkTypeTheory mt [lhs, rrRHS rule, host]
-  res <- case rewriteOnce tt [rule] host of
+  res <- case rewriteOnce (DE.defEqObj tt) tt [rule] host of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -130,7 +131,7 @@ testDanglingReject = do
   let host1 = host0 { dOut = internalPort : dOut host0 }
   let mt = mkModes [modeName]
   tt <- mkTypeTheory mt [lhs, rhs, host1]
-  res <- case rewriteOnce tt [rule] host1 of
+  res <- case rewriteOnce (DE.defEqObj tt) tt [rule] host1 of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -143,7 +144,7 @@ testInjectiveMatch = do
   pat <- require (tensorD g g)
   let host = g
   tt <- mkTypeTheory (mkModes [modeName]) [pat, host]
-  let cfg = MatchConfig tt S.empty
+  let cfg = MatchConfig tt S.empty (DE.defEqObj tt)
   res <- case findFirstMatch cfg pat host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
@@ -164,7 +165,7 @@ testNonInjectiveRewrite = do
         }
   let mt = mkModes [modeName]
   tt <- mkTypeTheory mt [lhs, g]
-  res <- case rewriteOnce tt [rule] g of
+  res <- case rewriteOnce (DE.defEqObj tt) tt [rule] g of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -189,7 +190,7 @@ testRewriteInsideBox = do
   let host = d2 { dIn = [inP], dOut = [outP] }
   let mt = mkModes [modeName]
   tt <- mkTypeTheory mt [f, g, host]
-  res <- case rewriteOnce tt [rule] host of
+  res <- case rewriteOnce (DE.defEqObj tt) tt [rule] host of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -223,7 +224,7 @@ testSpliceExpandsInsideBox = do
           }
   let mt = mkModes [modeName]
   tt <- mkTypeTheory mt [lhs, rhs, host]
-  res <- case rewriteOnce tt [rule] host of
+  res <- case rewriteOnce (DE.defEqObj tt) tt [rule] host of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   out <-
@@ -255,7 +256,7 @@ testBoxMismatchRejects = do
   host <- require (mkBoxDiagram "B" g aTy)
   let mt = mkModes [modeName]
   tt <- mkTypeTheory mt [lhs, rhs, host]
-  res <- case rewriteOnce tt [rule] host of
+  res <- case rewriteOnce (DE.defEqObj tt) tt [rule] host of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -279,7 +280,7 @@ testBoxMatchAccepts = do
   host <- require (mkBoxDiagram "B" f2 aTy)
   let mt = mkModes [modeName]
   tt <- mkTypeTheory mt [lhs, rhs, host]
-  res <- case rewriteOnce tt [rule] host of
+  res <- case rewriteOnce (DE.defEqObj tt) tt [rule] host of
     Left err -> assertFailure (T.unpack err)
     Right r -> pure r
   case res of
@@ -303,7 +304,7 @@ testNestedBoxesMatch = do
   lhs <- require (mkBoxDiagram "Outer" inner aTy)
   host <- require (mkBoxDiagram "Outer" inner aTy)
   tt <- mkTypeTheory (mkModes [modeName]) [lhs, host]
-  let cfg = MatchConfig tt S.empty
+  let cfg = MatchConfig tt S.empty (DE.defEqObj tt)
   res <- case findFirstMatch cfg lhs host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
@@ -322,7 +323,7 @@ testBoxTypeVarUnify = do
   lhs <- require (mkBoxDiagram "B" fVar aVarTy)
   host <- require (mkBoxDiagram "B" fConcrete aConcrete)
   tt <- mkTypeTheory (mkModes [modeName]) [lhs, host]
-  let cfg = MatchConfig tt (S.singleton (aVar))
+  let cfg = MatchConfig tt (S.singleton aVar) (DE.defEqObj tt)
   res <- case findFirstMatch cfg lhs host of
     Left err -> assertFailure (T.unpack err)
     Right m -> pure m
@@ -355,7 +356,7 @@ testRewriteUsesModeEq = do
   host <- require (genD modeA [ufBase] [ufBase] (GenName "foo"))
   let rule = RewriteRule { rrName = "foo_id", rrLHS = lhs, rrRHS = rhs, rrTyVars = [], rrTmVars = [] }
   tt <- mkTypeTheory mt [lhs, rhs, host]
-  res <- require (rewriteOnce tt [rule] host)
+  res <- require (rewriteOnce (DE.defEqObj tt) tt [rule] host)
   out <-
     case res of
       Nothing -> assertFailure "expected rewrite to fire" >> fail "unreachable"

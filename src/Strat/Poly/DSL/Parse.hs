@@ -174,16 +174,20 @@ polyObjExpr = lexeme (literalExpr <|> regular)
       name <- scopedIdentRaw
       mQual <- optional (try (char '.' *> scopedIdentRaw))
       mArgs <- optional (symbol "(" *> polyObjExpr `sepBy` symbol "," <* symbol ")")
+      mBinderArgs <- optional polyBinderArgs
       case mQual of
         Just qualName ->
           let ref = RawTypeRef { rtrMode = Just name, rtrName = qualName }
-          in pure (RPTCon ref (maybe [] id mArgs))
+          in pure (RPTCon ref (maybe [] id mArgs) (maybe [] id mBinderArgs))
         Nothing ->
-          case mArgs of
-            Just args ->
+          case (mArgs, mBinderArgs) of
+            (Just args, mBArgs) ->
               let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
-              in pure (RPTCon ref args)
-            Nothing ->
+              in pure (RPTCon ref args (maybe [] id mBArgs))
+            (Nothing, Just bargs) ->
+              let ref = RawTypeRef { rtrMode = Nothing, rtrName = name }
+              in pure (RPTCon ref [] bargs)
+            (Nothing, Nothing) ->
               pure (RPTVar name)
 
 rawModExpr :: Parser RawModExpr

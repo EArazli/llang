@@ -99,12 +99,20 @@ library:
   - Strat.Frontend.Compile
   - Strat.Poly.TeleArgs
   - Strat.Poly.CompObligations
+  - Strat.Poly.DiagramBuild
   - Strat.Poly.Kernel
   - Strat.Poly.ModeSyntax
   - Strat.Poly.ObjResolve
-  - Strat.Poly.Subst
+  - Strat.Poly.ObjEq
   - Strat.Poly.Term.Confluence
-  - Strat.Poly.Term.Termination
+  - Strat.Poly.Term.Compat
+  - Strat.Poly.Term.FragmentConfluence
+  - Strat.Poly.Term.DefEqCore
+  - Strat.Poly.Term.HeadInst
+  - Strat.Poly.Term.NormalizeCommon
+  - Strat.Poly.Term.RuleDiagram
+  - Strat.Poly.Term.Scope
+  - Strat.Poly.DSL.Elab.TermBase
   - Strat.Poly.Traversal
   - Strat.Poly.ObjPretty
   - Strat.Util.Fingerprint

@@ -9,37 +9,37 @@ module Strat.Poly.Rewrite
   , rewriteOnce
   , rewriteAllWithMapper
   , rewriteAll
+  , rewriteAllNested
   , applyMatchWithMapper
   , applyMatch
+  , instantiateBinderMetas
+  , expandSplices
   , mkMatchConfig
   , rulesFromPolicy
+  , rulesForMode
+  , rulesForDiagram
   ) where
 
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
+import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Monoid (Any(..), getAny)
 import Strat.Poly.Graph
 import Strat.Poly.Diagram hiding (applySubstDiagram)
-import Strat.Poly.DiagramInterpretation
-  ( requirePortType
-  , spliceEdge
-  )
 import Strat.Poly.Match
-import Strat.Poly.Obj (TmVar(..), TermDiagram(..))
+import Strat.Poly.ObjEq (ObjEqInCtx)
+import Strat.Poly.Obj (Obj, TmVar(..), TermDiagram(..))
 import Strat.Poly.Cell2
-import Strat.Poly.UnifyObj
-  ( applySubstCtx
-  , applySubstDiagram
-  , applySubstObj
-  , emptySubst
-  )
+import Strat.Poly.Term.RuleDiagram (SpliceMapper, expandSplices, instantiateBinderMetas, sameModeSpliceMapper)
+import Strat.Poly.Subst (emptySubst)
+import Strat.Poly.Term.SubstRuntime (applySubstCtx, applySubstDiagram, applySubstObj)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Common.Rules (Orientation(..), RuleClass(..))
-import Strat.Poly.ModeSyntax (ModExpr(..))
+import Strat.Poly.ModeSyntax (ModeName)
 import Strat.Poly.Syntax (CodeArg(..))
-import Strat.Poly.TypeTheory (TypeTheory)
+import Strat.Poly.TypeTheory (TypeTheory, diagramRulesForMode)
 import Strat.Poly.Traversal (foldDiagram, traverseDiagram)
 
 
@@ -51,67 +51,68 @@ data RewriteRule = RewriteRule
   , rrTmVars :: [TmVar]
   } deriving (Eq, Show)
 
-type SpliceMapper = ModExpr -> Diagram -> Either Text Diagram
-
 defaultSpliceMapper :: SpliceMapper
-defaultSpliceMapper me captured =
-  if null (mePath me) && meSrc me == dMode captured && meTgt me == dMode captured
-    then Right captured
-    else Left "rewriteOnce: splice requires modality-action mapping but no splice mapper is available"
+defaultSpliceMapper =
+  sameModeSpliceMapper "rewriteOnce"
 
-rewriteOnceRawWithMapper :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceRawWithMapper tt spliceMapper rules diag = do
-  rejectSplice "rewriteOnce" diag
-  top <- rewriteOnceTopRaw tt spliceMapper rules diag
+rewriteOnceRawWithMapper :: ObjEqInCtx -> TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceRawWithMapper objEq tt spliceMapper rules diag = do
+  top <- rewriteOnceTopRaw objEq tt spliceMapper rules diag
   case top of
     Just _ -> pure top
-    Nothing -> rewriteOnceNestedRaw tt spliceMapper rules diag
+    Nothing -> rewriteOnceNestedRaw objEq tt spliceMapper rules diag
 
-rewriteOnceRaw :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceRaw tt =
-  rewriteOnceRawWithMapper tt defaultSpliceMapper
+rewriteOnceRaw :: ObjEqInCtx -> TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceRaw objEq tt =
+  rewriteOnceRawWithMapper objEq tt defaultSpliceMapper
 
-rewriteOnceWithMapper :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceWithMapper tt spliceMapper rules diag =
-  rewriteOnceRawWithMapper tt spliceMapper rules diag
+rewriteOnceWithMapper :: ObjEqInCtx -> TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceWithMapper objEq tt spliceMapper rules diag =
+  rewriteOnceRawWithMapper objEq tt spliceMapper rules diag
 
-rewriteOnce :: TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnce tt =
-  rewriteOnceRaw tt
+rewriteOnce :: ObjEqInCtx -> TypeTheory -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnce objEq tt =
+  rewriteOnceRaw objEq tt
 
-rewriteOnceTopRaw :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceTopRaw tt spliceMapper rules diag =
+rewriteOnceTopRaw :: ObjEqInCtx -> TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceTopRaw objEq tt spliceMapper rules diag =
   let hostIndex = buildHostIndex diag
    in go hostIndex rules
   where
     go _ [] = Right Nothing
     go hostIndex (r:rs) = do
-      if dMode (rrLHS r) /= dMode diag
-        then go hostIndex rs
-        else do
-          rejectSplice "rewrite rule lhs" (rrLHS r)
-          matches <- findAllMatchesWithIndex (mkMatchConfig tt r) (rrLHS r) hostIndex diag
-          tryMatches matches
+      widenedRule <-
+        case widenRuleToHostTmCtx diag r of
+          Left _ -> Right Nothing
+          Right one -> Right (Just one)
+      case widenedRule of
+        Nothing -> go hostIndex rs
+        Just r'
+          | dMode (rrLHS r') /= dMode diag -> go hostIndex rs
+          | otherwise -> do
+              rejectSplice "rewrite rule lhs" (rrLHS r')
+              matches <- findAllMatchesWithIndex (mkMatchConfig objEq tt r') (rrLHS r') hostIndex diag
+              tryMatches r' matches
       where
-        tryMatches [] = go hostIndex rs
-        tryMatches (m:ms) =
-          case applyMatchWithMapper tt spliceMapper r m diag of
-            Left _ -> tryMatches ms
+        tryMatches _ [] = go hostIndex rs
+        tryMatches r' (m:ms) =
+          case applyMatchWithMapper tt spliceMapper r' m diag of
+            Left _ -> tryMatches r' ms
             Right d ->
               pure (Just d)
 
-rewriteOnceNestedRaw :: TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
-rewriteOnceNestedRaw tt spliceMapper rules diag =
+rewriteOnceNestedRaw :: ObjEqInCtx -> TypeTheory -> SpliceMapper -> [RewriteRule] -> Diagram -> Either Text (Maybe Diagram)
+rewriteOnceNestedRaw objEq tt spliceMapper rules diag =
   go (IM.toAscList (dEdges diag))
   where
     go [] = Right Nothing
     go ((edgeKey, edge):rest) =
       case ePayload edge of
-        PSplice _ _ -> Left "rewriteOnce: splice nodes are not allowed in evaluation terms"
+        PSplice _ _ -> go rest
         PProvider _ -> go rest
         PModuleRef _ -> go rest
         PBox name inner -> do
-          innerRes <- rewriteOnceRawWithMapper tt spliceMapper rules inner
+          innerRes <- rewriteOnceRawWithMapper objEq tt spliceMapper rules inner
           case innerRes of
             Nothing -> go rest
             Just inner' -> do
@@ -119,7 +120,7 @@ rewriteOnceNestedRaw tt spliceMapper rules diag =
               let diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
               pure (Just diag')
         PFeedback inner -> do
-          innerRes <- rewriteOnceRawWithMapper tt spliceMapper rules inner
+          innerRes <- rewriteOnceRawWithMapper objEq tt spliceMapper rules inner
           case innerRes of
             Nothing -> go rest
             Just inner' -> do
@@ -153,7 +154,7 @@ rewriteOnceNestedRaw tt spliceMapper rules diag =
       case arg of
         CAObj _ -> fmap (fmap (arg :)) (rewriteOnceCodeArgs args)
         CATm (TermDiagram inner) -> do
-          res <- rewriteOnceRawWithMapper tt spliceMapper rules inner
+          res <- rewriteOnceRawWithMapper objEq tt spliceMapper rules inner
           case res of
             Just inner' -> Right (Just (CATm (TermDiagram inner') : args))
             Nothing -> fmap (fmap (arg :)) (rewriteOnceCodeArgs args)
@@ -163,54 +164,59 @@ rewriteOnceNestedRaw tt spliceMapper rules diag =
       case b of
         BAMeta _ -> fmap (fmap (b :)) (rewriteOnceBinderArgs bs)
         BAConcrete inner -> do
-          res <- rewriteOnceRawWithMapper tt spliceMapper rules inner
+          res <- rewriteOnceRawWithMapper objEq tt spliceMapper rules inner
           case res of
             Just inner' -> Right (Just (BAConcrete inner' : bs))
             Nothing -> fmap (fmap (b :)) (rewriteOnceBinderArgs bs)
 
-rewriteAllWithMapper :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
-rewriteAllWithMapper tt spliceMapper cap rules diag = do
-  rejectSplice "rewriteAll" diag
-  top <- rewriteAllTop tt spliceMapper rules diag
-  inner <- rewriteAllNested tt spliceMapper cap rules diag
+rewriteAllWithMapper :: ObjEqInCtx -> TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
+rewriteAllWithMapper objEq tt spliceMapper cap rules diag = do
+  top <- rewriteAllTop objEq tt spliceMapper rules diag
+  inner <- rewriteAllNested objEq tt spliceMapper cap rules diag
   pure (take cap (top <> inner))
   where
-    rewriteAllTop tt' spliceMapper' rules' diag' = go [] rules'
+    rewriteAllTop objEq' tt' spliceMapper' rules' diag' = go [] rules'
       where
         go acc [] = Right acc
         go acc (r:rs) = do
-          if dMode (rrLHS r) /= dMode diag'
-            then go acc rs
-            else do
-              matches <- findAllMatches (mkMatchConfig tt' r) (rrLHS r) diag'
-              applied <- foldl collect (Right []) matches
-              go (acc <> applied) rs
+          widenedRule <-
+            case widenRuleToHostTmCtx diag' r of
+              Left _ -> Right Nothing
+              Right one -> Right (Just one)
+          case widenedRule of
+            Nothing -> go acc rs
+            Just r'
+              | dMode (rrLHS r') /= dMode diag' -> go acc rs
+              | otherwise -> do
+                  matches <- findAllMatches (mkMatchConfig objEq' tt' r') (rrLHS r') diag'
+                  applied <- foldl (collect r') (Right []) matches
+                  go (acc <> applied) rs
           where
-            collect acc m =
+            collect r' acc m =
               case acc of
                 Left err -> Left err
                 Right ds ->
-                  case applyMatchWithMapper tt' spliceMapper' r m diag' of
+                  case applyMatchWithMapper tt' spliceMapper' r' m diag' of
                     Left _ -> Right ds
                     Right d -> Right (ds <> [d])
 
-rewriteAll :: TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
-rewriteAll tt =
-  rewriteAllWithMapper tt defaultSpliceMapper
+rewriteAll :: ObjEqInCtx -> TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
+rewriteAll objEq tt =
+  rewriteAllWithMapper objEq tt defaultSpliceMapper
 
-rewriteAllNested :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
-rewriteAllNested tt spliceMapper cap rules diag = do
+rewriteAllNested :: ObjEqInCtx -> TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> Either Text [Diagram]
+rewriteAllNested objEq tt spliceMapper cap rules diag = do
   let edges = IM.toAscList (dEdges diag)
-  fmap concat (mapM (rewriteInEdge tt spliceMapper cap rules diag) edges)
+  fmap concat (mapM (rewriteInEdge objEq tt spliceMapper cap rules diag) edges)
 
-rewriteInEdge :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> (Int, Edge) -> Either Text [Diagram]
-rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
+rewriteInEdge :: ObjEqInCtx -> TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> Diagram -> (Int, Edge) -> Either Text [Diagram]
+rewriteInEdge objEq tt spliceMapper cap rules diag (edgeKey, edge) =
   case ePayload edge of
-    PSplice _ _ -> Left "rewriteAll: splice nodes are not allowed in evaluation terms"
+    PSplice _ _ -> Right []
     PProvider _ -> Right []
     PModuleRef _ -> Right []
     PBox name inner -> do
-      innerRes <- rewriteAllWithMapper tt spliceMapper cap rules inner
+      innerRes <- rewriteAllWithMapper objEq tt spliceMapper cap rules inner
       mapM
         (\d ->
           let edge' = edge { ePayload = PBox name d }
@@ -218,7 +224,7 @@ rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
            in Right diag')
         innerRes
     PFeedback inner -> do
-      innerRes <- rewriteAllWithMapper tt spliceMapper cap rules inner
+      innerRes <- rewriteAllWithMapper objEq tt spliceMapper cap rules inner
       mapM
         (\d ->
           let edge' = edge { ePayload = PFeedback d }
@@ -232,7 +238,7 @@ rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
     PInternalDrop ->
       Right []
     PGen gen args bargs -> do
-      argsRes <- rewriteAllCodeArgs tt spliceMapper cap rules args
+      argsRes <- rewriteAllCodeArgs objEq tt spliceMapper cap rules args
       fromArgs <-
         mapM
           (\args' ->
@@ -240,7 +246,7 @@ rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
                 diag' = diag { dEdges = IM.insert edgeKey edge' (dEdges diag) }
              in Right diag')
           argsRes
-      bargsRes <- rewriteAllBinderArgs tt spliceMapper cap rules bargs
+      bargsRes <- rewriteAllBinderArgs objEq tt spliceMapper cap rules bargs
       fromBinders <-
         mapM
           (\bargs' ->
@@ -250,33 +256,32 @@ rewriteInEdge tt spliceMapper cap rules diag (edgeKey, edge) =
           bargsRes
       pure (fromArgs <> fromBinders)
 
-rewriteAllCodeArgs :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> [CodeArg] -> Either Text [[CodeArg]]
-rewriteAllCodeArgs _ _ _ _ [] = Right []
-rewriteAllCodeArgs tt spliceMapper cap rules args =
+rewriteAllCodeArgs :: ObjEqInCtx -> TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> [CodeArg] -> Either Text [[CodeArg]]
+rewriteAllCodeArgs _ _ _ _ _ [] = Right []
+rewriteAllCodeArgs objEq tt spliceMapper cap rules args =
   fmap concat (mapM rewriteAt [0 .. length args - 1])
   where
     rewriteAt i =
       case splitAt i args of
         (pre, CATm (TermDiagram inner) : post) -> do
-          res <- rewriteAllWithMapper tt spliceMapper cap rules inner
+          res <- rewriteAllWithMapper objEq tt spliceMapper cap rules inner
           pure [pre <> [CATm (TermDiagram inner')] <> post | inner' <- res]
         _ -> Right []
 
-rewriteAllBinderArgs :: TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [[BinderArg]]
-rewriteAllBinderArgs _ _ _ _ [] = Right []
-rewriteAllBinderArgs tt spliceMapper cap rules args =
+rewriteAllBinderArgs :: ObjEqInCtx -> TypeTheory -> SpliceMapper -> Int -> [RewriteRule] -> [BinderArg] -> Either Text [[BinderArg]]
+rewriteAllBinderArgs _ _ _ _ _ [] = Right []
+rewriteAllBinderArgs objEq tt spliceMapper cap rules args =
   fmap concat (mapM rewriteAt [0 .. length args - 1])
   where
     rewriteAt i =
       case splitAt i args of
         (pre, BAConcrete inner : post) -> do
-          res <- rewriteAllWithMapper tt spliceMapper cap rules inner
+          res <- rewriteAllWithMapper objEq tt spliceMapper cap rules inner
           pure [pre <> [BAConcrete inner'] <> post | inner' <- res]
         _ -> Right []
 
 applyMatchWithMapper :: TypeTheory -> SpliceMapper -> RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyMatchWithMapper tt spliceMapper rule match host = do
-  rejectSplice "rewrite host" host
   let lhs = rrLHS rule
   let lhsBoundary = dIn lhs <> dOut lhs
   hostBoundary <- mapM boundaryHostPort lhsBoundary
@@ -311,6 +316,27 @@ applyMatchWithMapper tt spliceMapper rule match host = do
 applyMatch :: TypeTheory -> RewriteRule -> Match -> Diagram -> Either Text Diagram
 applyMatch tt =
   applyMatchWithMapper tt defaultSpliceMapper
+
+widenRuleToHostTmCtx :: Diagram -> RewriteRule -> Either Text RewriteRule
+widenRuleToHostTmCtx host rule = do
+  lhs' <- widenDiagramToHostTmCtx (dTmCtx host) (rrLHS rule)
+  rhs' <- widenDiagramToHostTmCtx (dTmCtx host) (rrRHS rule)
+  pure rule { rrLHS = lhs', rrRHS = rhs' }
+
+widenDiagramToHostTmCtx :: [Obj] -> Diagram -> Either Text Diagram
+widenDiagramToHostTmCtx tmCtxHost =
+  traverseDiagram
+    (alignDiagramTmCtxToHost tmCtxHost)
+    pure
+    pure
+    pure
+
+alignDiagramTmCtxToHost :: [Obj] -> Diagram -> Either Text Diagram
+alignDiagramTmCtxToHost tmCtxHost diag
+  | dTmCtx diag `L.isPrefixOf` tmCtxHost =
+      Right diag { dTmCtx = tmCtxHost }
+  | otherwise =
+      weakenDiagramTmCtxToModePrefix tmCtxHost diag
 
 normalizeDiagramCtxOnly :: TypeTheory -> Diagram -> Either Text Diagram
 normalizeDiagramCtxOnly tt =
@@ -415,64 +441,6 @@ normalizeMergeSupport tt seedPorts diag = do
 
     tmVarKey v = (tmvName v, tmvScope v)
 
-instantiateBinderMetas :: M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
-instantiateBinderMetas binderSub =
-  traverseDiagram pure pure pure onBinderArg
-  where
-    onBinderArg barg =
-      case barg of
-        BAConcrete inner -> Right (BAConcrete inner)
-        BAMeta x ->
-          case M.lookup x binderSub of
-            Nothing -> Left "rewriteOnce: RHS uses uncaptured binder meta"
-            Just captured -> Right (BAConcrete captured)
-
-expandSplices :: SpliceMapper -> M.Map BinderMetaVar Diagram -> Diagram -> Either Text Diagram
-expandSplices spliceMapper binderSub =
-  traverseDiagram expandTop pure pure pure
-  where
-    expandTop diag =
-      case findSpliceEdge diag of
-        Nothing -> Right diag
-        Just (edgeKey, edge, x, me) -> do
-          captured <-
-            case M.lookup x binderSub of
-              Nothing -> Left "rewriteOnce: splice uses uncaptured binder meta"
-              Just d -> Right d
-          if dMode captured == meSrc me
-            then Right ()
-            else Left "rewriteOnce: splice mapper source-mode mismatch"
-          capturedMapped <-
-            if null (mePath me)
-              then Right captured
-              else spliceMapper me captured
-          if dMode capturedMapped == meTgt me
-            then Right ()
-            else Left "rewriteOnce: splice mapper target-mode mismatch"
-          if dTmCtx capturedMapped /= dTmCtx diag
-            then Left "rewriteOnce: splice term-context mismatch"
-            else Right ()
-          domSplice <- mapM (requirePortType "rewriteOnce" diag) (eIns edge)
-          codSplice <- mapM (requirePortType "rewriteOnce" diag) (eOuts edge)
-          domCaptured <- mapM (requirePortType "rewriteOnce" capturedMapped) (dIn capturedMapped)
-          codCaptured <- mapM (requirePortType "rewriteOnce" capturedMapped) (dOut capturedMapped)
-          if domSplice /= domCaptured || codSplice /= codCaptured
-            then Left "rewriteOnce: splice boundary mismatch"
-            else Right ()
-          diagMerged <- spliceEdge diag edgeKey capturedMapped
-          expandTop diagMerged
-
-findSpliceEdge :: Diagram -> Maybe (Int, Edge, BinderMetaVar, ModExpr)
-findSpliceEdge diag =
-  case
-    [ (k, edge, x, me)
-    | (k, edge) <- IM.toAscList (dEdges diag)
-    , PSplice x me <- [ePayload edge]
-    ]
-    of
-      [] -> Nothing
-      (x:_) -> Just x
-
 internalPorts :: Diagram -> [PortId]
 internalPorts diag =
   let allPorts = S.fromList (diagramPortIds diag)
@@ -497,6 +465,14 @@ deleteMatchedPorts diag ports portMap = foldl step (Right diag) ports
 
 rulesFromPolicy :: RewritePolicy -> [Cell2] -> [RewriteRule]
 rulesFromPolicy policy cells = concatMap (rulesForCell policy) cells
+
+rulesForMode :: RewritePolicy -> TypeTheory -> ModeName -> [RewriteRule]
+rulesForMode policy tt mode =
+  rulesFromPolicy policy (diagramRulesForMode tt mode)
+
+rulesForDiagram :: RewritePolicy -> TypeTheory -> Diagram -> [RewriteRule]
+rulesForDiagram policy tt diag =
+  rulesForMode policy tt (dMode diag)
 
 rulesForCell :: RewritePolicy -> Cell2 -> [RewriteRule]
 rulesForCell policy cell =
@@ -552,9 +528,10 @@ hasSplice =
           PSplice _ _ -> True
           _ -> False
 
-mkMatchConfig :: TypeTheory -> RewriteRule -> MatchConfig
-mkMatchConfig tt rule =
+mkMatchConfig :: ObjEqInCtx -> TypeTheory -> RewriteRule -> MatchConfig
+mkMatchConfig objEq tt rule =
   MatchConfig
     { mcTheory = tt
     , mcFlex = S.union (S.fromList (rrTyVars rule)) (S.fromList (rrTmVars rule))
+    , mcObjEq = objEq
     }

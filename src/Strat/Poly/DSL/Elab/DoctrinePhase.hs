@@ -61,6 +61,7 @@ import Strat.Poly.DiagramInterpretation (binderHoleNames)
 import Strat.Poly.Doctrine
 import Strat.Poly.Graph (BinderMetaVar(..))
 import Strat.Poly.ModeTheory
+import Strat.Poly.TypeTheory (BranchInputSource(..), RecursiveHeadArgSource(..))
 import Strat.Poly.ModAction (ActionSemanticsResult(..), mapTypeByModExprWithLift, validateActionSemanticsWithBudgetResult)
 import Strat.Poly.Morphism
 import Strat.Poly.Names
@@ -255,12 +256,7 @@ elabPolyItem env st item =
   case item of
     RPMode decl -> do
       let mode = ModeName (rmdName decl)
-      mtAdded <- addMode mode (dModes doc)
-      mt0 <-
-        case rmdDefEqEngine decl of
-          Nothing -> Right mtAdded
-          Just RDETRS -> setModeDefEqEngine mode DefEqTRS mtAdded
-          Just RDENBE -> setModeDefEqEngine mode DefEqNBE mtAdded
+      mt0 <- addMode mode (dModes doc)
       mt' <-
         case rmdClassifiedBy decl of
           Nothing -> Right mt0
@@ -390,6 +386,11 @@ elabPolyItem env st item =
     RPLiteral decl -> do
       doc' <- installLiteralDecl doc decl
       pure st { esDoc = doc' }
+    RPBuiltin decl -> do
+      builtinDecl <- elabBuiltinDecl doc decl
+      if any (\existing -> bdMode existing == bdMode builtinDecl && bdHead existing == bdHead builtinDecl) (dBuiltins doc)
+        then Left "duplicate builtin declaration"
+        else pure st { esDoc = doc { dBuiltins = dBuiltins doc <> [builtinDecl] } }
     RPGen decl -> do
       let mode = ModeName (rpgMode decl)
       ensureMode doc mode
@@ -483,7 +484,8 @@ elabPolyItem env st item =
       rhs <- withRule (elabRuleRHS env doc mode ruleTyVars ruleTmVars binderSigs (rprRHS decl))
       let rigidTy = S.fromList ruleTyVars
       let rigidTm = S.fromList ruleTmVars
-      tt <- doctrineTypeTheory doc
+      ctorTables <- deriveCtorTablesForElab doc
+      tt <- doctrineTypeTheoryBaseFromTables doc ctorTables
       lhs' <-
         case unifyBoundary tt rigidTy rigidTm dom cod lhs of
           Left err -> Left ("rule " <> rprName decl <> ": lhs boundary mismatch: " <> err)
@@ -568,6 +570,47 @@ installLiteralDecl doc decl = do
     Just _ ->
       Left "literal: duplicate literal declaration"
 
+elabBuiltinDecl :: Doctrine -> RawBuiltinDecl -> Either Text BuiltinDecl
+elabBuiltinDecl doc decl = do
+  let mode = ModeName (rbdMode decl)
+  ensureMode doc mode
+  spec <- elabBuiltinSpec (rbdSpec decl)
+  pure
+    BuiltinDecl
+      { bdHead = GenName (rbdHead decl)
+      , bdMode = mode
+      , bdSpec = spec
+      }
+  where
+    elabBuiltinSpec spec =
+      case spec of
+        RBSTransport ->
+          Right BDTransport
+        RBSInductiveElim scrutineeIx branches ->
+          BDInductiveElim
+            <$> pure scrutineeIx
+            <*> mapM elabBuiltinBranchDecl branches
+
+    elabBuiltinBranchDecl branch =
+      BuiltinBranchDecl
+        <$> pure (GenName (rbbCtor branch))
+        <*> mapM elabBuiltinSource (rbbTmCtxInputs branch)
+        <*> mapM elabBuiltinSource (rbbInputs branch)
+
+    elabBuiltinSource source =
+      case source of
+        RBISOuterHeadTmParam i -> Right (BISOuterHeadTmParam i)
+        RBISCtorHeadTmParam i -> Right (BISCtorHeadTmParam i)
+        RBISOuterInput i -> Right (BISOuterInput i)
+        RBISCtorField i -> Right (BISCtorField i)
+        RBISRecursiveResult i headArgs ->
+          BISRecursiveResult i <$> mapM elabRecursiveHeadArgSource headArgs
+
+    elabRecursiveHeadArgSource source =
+      case source of
+        RRHASOuterHeadArg i -> Right (RHOuterHeadArg i)
+        RRHASCtorArg i -> Right (RHCtorArg i)
+
 rpdCtorName :: RawPolyCtorDecl -> Text
 rpdCtorName = rpcName
 
@@ -575,7 +618,7 @@ mkCtor :: Text -> Text -> [RawTyVarDecl] -> RawPolyCtorDecl -> RawPolyGenDecl
 mkCtor modeName tyName vars ctor =
   let typeRef = RawTypeRef { rtrMode = Nothing, rtrName = tyName }
       args = map (RPTVar . rtvName) vars
-      cod = [RPTCon typeRef args]
+      cod = [RPTCon typeRef args []]
   in RawPolyGenDecl
       { rpgName = rpcName ctor
       , rpgVars = map RPDType vars
@@ -608,7 +651,7 @@ mkFoldBundle modeName tyName tyVars ctors =
     typeRef = RawTypeRef { rtrMode = Nothing, rtrName = tyName }
     typeArgs = map (RPTVar . rtvName) tyVars
     selfArgs = typeArgs
-    selfTyCon = RPTCon typeRef selfArgs
+    selfTyCon = RPTCon typeRef selfArgs []
     caseNames = map (\ctorDecl -> "case_" <> rpcName ctorDecl) ctors
     foldCall =
       RDGen

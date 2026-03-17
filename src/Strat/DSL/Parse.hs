@@ -901,6 +901,7 @@ polyItem =
     <|> polyActionDecl
     <|> polyObligationDecl
     <|> polyLiteralDecl
+    <|> polyBuiltinDecl
     <|> (PolyAST.RPData <$> polyDataDecl)
     <|> (PolyAST.RPGen <$> polyGenDecl)
     <|> (PolyAST.RPRule <$> polyRuleDecl)
@@ -910,10 +911,6 @@ polyModeDecl = do
   _ <- symbol "mode"
   name <- ident
   acyclic <- option False (True <$ symbol "acyclic")
-  mDefEq <- optional $ do
-    _ <- symbol "defeq"
-    (PolyAST.RDETRS <$ symbol "trs")
-      <|> (PolyAST.RDENBE <$ symbol "nbe")
   mClass <- optional $ do
     _ <- symbol "classifiedBy"
     cls <- ident
@@ -925,7 +922,7 @@ polyModeDecl = do
         , PolyAST.rcdUniverse = uni
         }
   optionalSemi
-  pure (PolyAST.RPMode (PolyAST.RawModeDecl name acyclic mDefEq mClass))
+  pure (PolyAST.RPMode (PolyAST.RawModeDecl name acyclic mClass))
 
 polyComprehensionDecl :: Parser PolyAST.RawPolyItem
 polyComprehensionDecl = do
@@ -1133,6 +1130,155 @@ polyLiteralDecl = do
         <|> (symbol "string" $> LKString)
         <|> (symbol "bool" $> LKBool)
 
+polyBuiltinDecl :: Parser PolyAST.RawPolyItem
+polyBuiltinDecl = do
+  _ <- symbol "builtin"
+  transportDecl <|> eliminatorDecl
+  where
+    transportDecl = do
+      _ <- symbol "transport"
+      headName <- ident
+      _ <- symbol "@"
+      ownerMode <- ident
+      optionalSemi
+      pure
+        ( PolyAST.RPBuiltin
+            PolyAST.RawBuiltinDecl
+              { PolyAST.rbdHead = headName
+              , PolyAST.rbdMode = ownerMode
+              , PolyAST.rbdSpec = PolyAST.RBSTransport
+              }
+        )
+
+    eliminatorDecl = do
+      _ <- symbol "eliminator"
+      headName <- ident
+      _ <- symbol "@"
+      ownerMode <- ident
+      _ <- symbol "where"
+      _ <- symbol "{"
+      _ <- symbol "scrutinee"
+      _ <- symbol "="
+      scrutineeIx <- builtinNat "builtin eliminator scrutinee index"
+      optionalSemi
+      branches <- many builtinBranchDecl
+      _ <- symbol "}"
+      optionalSemi
+      pure
+        ( PolyAST.RPBuiltin
+            PolyAST.RawBuiltinDecl
+              { PolyAST.rbdHead = headName
+              , PolyAST.rbdMode = ownerMode
+              , PolyAST.rbdSpec =
+                  PolyAST.RBSInductiveElim
+                    { PolyAST.rbsScrutineeIndex = scrutineeIx
+                    , PolyAST.rbsBranches = branches
+                    }
+              }
+        )
+
+    builtinBranchDecl = do
+      _ <- symbol "branch"
+      ctorName <- ident
+      _ <- symbol "{"
+      fields <- many builtinBranchField
+      _ <- symbol "}"
+      optionalSemi
+      (tmCtxInputs, inputs) <- ensureBuiltinBranchFields fields
+      pure
+        PolyAST.RawBuiltinBranchDecl
+          { PolyAST.rbbCtor = ctorName
+          , PolyAST.rbbTmCtxInputs = tmCtxInputs
+          , PolyAST.rbbInputs = inputs
+          }
+
+    builtinBranchField =
+      try builtinTmCtxField <|> builtinInputsField
+
+    builtinTmCtxField = do
+      _ <- symbol "tmctx"
+      _ <- symbol "="
+      xs <- builtinSourceList
+      optionalSemi
+      pure ("tmctx" :: Text, xs)
+
+    builtinInputsField = do
+      _ <- symbol "inputs"
+      _ <- symbol "="
+      xs <- builtinSourceList
+      optionalSemi
+      pure ("inputs" :: Text, xs)
+
+    ensureBuiltinBranchFields fields = do
+      tmCtxInputs <- requireAtMostOne "tmctx" fields
+      inputs <- requireAtMostOne "inputs" fields
+      let validKeys = S.fromList ["tmctx", "inputs"]
+          unknown = [k | (k, _) <- fields, not (k `S.member` validKeys)]
+      case unknown of
+        [] -> pure ()
+        (k:_) -> fail ("unknown builtin branch field: " <> T.unpack k)
+      pure (tmCtxInputs, inputs)
+
+    requireAtMostOne key fields =
+      case [v | (k, v) <- fields, k == key] of
+        [] -> pure []
+        [v] -> pure v
+        _ -> fail ("duplicate builtin branch field: " <> T.unpack key)
+
+    builtinSourceList = do
+      _ <- symbol "["
+      xs <- builtinSource `sepBy` symbol ","
+      _ <- symbol "]"
+      pure xs
+
+    builtinSource =
+      try builtinRecursiveResultSource
+        <|> try builtinOuterHeadTmSource
+        <|> try builtinCtorHeadTmSource
+        <|> try builtinOuterInputSource
+        <|> builtinCtorFieldSource
+
+    builtinOuterHeadTmSource = do
+      _ <- symbol "outer_head_tm"
+      PolyAST.RBISOuterHeadTmParam <$> builtinNat "outer_head_tm index"
+
+    builtinCtorHeadTmSource = do
+      _ <- symbol "ctor_head_tm"
+      PolyAST.RBISCtorHeadTmParam <$> builtinNat "ctor_head_tm index"
+
+    builtinOuterInputSource = do
+      _ <- symbol "outer_input"
+      PolyAST.RBISOuterInput <$> builtinNat "outer_input index"
+
+    builtinCtorFieldSource = do
+      _ <- symbol "ctor_field"
+      PolyAST.RBISCtorField <$> builtinNat "ctor_field index"
+
+    builtinRecursiveResultSource = do
+      _ <- symbol "recursive_result"
+      fieldIx <- builtinNat "recursive_result field index"
+      _ <- symbol "["
+      headArgs <- builtinRecursiveHeadArg `sepBy` symbol ","
+      _ <- symbol "]"
+      pure (PolyAST.RBISRecursiveResult fieldIx headArgs)
+
+    builtinRecursiveHeadArg =
+      try builtinOuterHeadArg <|> builtinCtorArg
+
+    builtinOuterHeadArg = do
+      _ <- symbol "outer_head_arg"
+      PolyAST.RRHASOuterHeadArg <$> builtinNat "outer_head_arg index"
+
+    builtinCtorArg = do
+      _ <- symbol "ctor_arg"
+      PolyAST.RRHASCtorArg <$> builtinNat "ctor_arg index"
+
+    builtinNat label = do
+      n <- integer
+      if n > fromIntegral (maxBound :: Int)
+        then fail (T.unpack label <> " is too large")
+        else pure (fromInteger n)
+
 polyDataDecl :: Parser PolyAST.RawPolyDataDecl
 polyDataDecl = do
   _ <- symbol "data"
@@ -1297,16 +1443,20 @@ polyObjExpr = lexeme (literalExpr <|> regular)
       name <- scopedIdentRaw
       mQual <- optional (try (char '.' *> scopedIdentRaw))
       mArgs <- optional (symbol "(" *> polyObjExpr `sepBy` symbol "," <* symbol ")")
+      mBinderArgs <- optional polyBinderArgs
       case mQual of
         Just qualName ->
           let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Just name, PolyAST.rtrName = qualName }
-          in pure (PolyAST.RPTCon ref (fromMaybe [] mArgs))
+          in pure (PolyAST.RPTCon ref (fromMaybe [] mArgs) (fromMaybe [] mBinderArgs))
         Nothing ->
-          case mArgs of
-            Just args ->
+          case (mArgs, mBinderArgs) of
+            (Just args, mBArgs) ->
               let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
-              in pure (PolyAST.RPTCon ref args)
-            Nothing ->
+              in pure (PolyAST.RPTCon ref args (fromMaybe [] mBArgs))
+            (Nothing, Just bargs) ->
+              let ref = PolyAST.RawTypeRef { PolyAST.rtrMode = Nothing, PolyAST.rtrName = name }
+              in pure (PolyAST.RPTCon ref [] bargs)
+            (Nothing, Nothing) ->
               pure (PolyAST.RPTVar name)
 
 polyDiagExpr :: Parser PolyAST.RawDiagExpr

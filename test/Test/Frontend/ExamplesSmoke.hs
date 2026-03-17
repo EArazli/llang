@@ -88,8 +88,17 @@ isSlowExampleBuild path buildName =
 slowExampleBuilds :: S.Set (FilePath, T.Text)
 slowExampleBuilds =
   S.fromList
-    [ ("examples/build/autodiff_times_sin_pair_core.llang", "main2")
+    [ ("examples/build/autodiff_times_sin.llang", "main")
+    , ("examples/build/autodiff_times_sin.llang", "main2")
+    , ("examples/build/autodiff_times_sin_pair_core.llang", "main")
+    , ("examples/build/autodiff_times_sin_pair_core.llang", "main2")
+    , ("examples/build/autodiff_times_sin_pair_core.llang", "share2")
+    , ("examples/endtoend/autodiff_times_sin.run.llang", "main")
+    , ("examples/endtoend/autodiff_times_sin.run.llang", "main2")
+    , ("examples/endtoend/autodiff_times_sin_pair_core.run.llang", "main")
     , ("examples/endtoend/autodiff_times_sin_pair_core.run.llang", "main2")
+    , ("examples/run/dependent/path_identity.run.llang", "path_witness")
+    , ("examples/run/dependent/path_identity.run.llang", "reversed_path")
     ]
 
 requireIO :: Either T.Text a -> IO a

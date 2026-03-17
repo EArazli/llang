@@ -11,5 +11,5 @@ doctrine BoxMatch where {
   gen g : [A] -> [A] @M;
 
   rule computational box_rule -> : [A] -> [A] @M =
-    box B { f } == id[A]
+    g == id[A]
 }

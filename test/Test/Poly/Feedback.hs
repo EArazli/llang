@@ -148,6 +148,7 @@ mkDoctrine =
               )
             ]
       , dCells2 = []
+      , dBuiltins = []
       , dActions = M.empty
       , dObligations = []
       }

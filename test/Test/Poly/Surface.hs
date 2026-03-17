@@ -157,6 +157,7 @@ mkDoctrine hasDup hasDrop =
         , dAcyclicModes = S.empty
         , dGens = M.fromList [(modeM, M.fromList gens)]
         , dCells2 = []
+        , dBuiltins = []
         , dActions = M.empty
         , dObligations = []
                 }
@@ -207,6 +208,7 @@ mkStructEnv target = do
                   )
                 ]
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }

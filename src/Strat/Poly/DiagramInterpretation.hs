@@ -29,7 +29,6 @@ import Strat.Poly.Diagram
   , diagramDom
   , unionDiagram
   )
-import Strat.Poly.Doctrine (BinderSig(..))
 import Strat.Poly.Graph
   ( Diagram(..)
   , Edge(..)
@@ -49,14 +48,13 @@ import Strat.Poly.Syntax
   , Obj
   , TmVar(..)
   )
-import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.Traversal (foldDiagram)
-import Strat.Poly.UnifyObj
-  ( Subst
-  , applySubstCtx
-  , applySubstObj
-  , emptySubst
+import Strat.Poly.TypeTheory
+  ( BinderSig(..)
+  , TypeTheory
   )
+import Strat.Poly.Subst (Subst, emptySubst)
+import Strat.Poly.Term.SubstRuntime (applySubstCtx, applySubstObj)
+import Strat.Poly.Traversal (foldDiagram)
 
 data DiagramInterpretation = DiagramInterpretation
   { diMapMode :: ModeName -> Either Text ModeName

@@ -23,11 +23,11 @@ import Strat.Poly.Obj
   , tmVarOwner
   , TmVar(..)
   , ObjArg
+  , CodeArg(..)
   , pattern OAObj
   , pattern OATm
   , TermDiagram(..)
   )
-import Strat.Poly.UnifyObj (Subst, applySubstObj, mkSubst, normalizeSubst, codeBindings)
 import Strat.Poly.Names (GenName(..))
 import Strat.Poly.Names (BoxName(..))
 import Strat.Poly.Diagram
@@ -50,6 +50,8 @@ import Strat.Poly.Graph
   , unEdgeId
   )
 import Strat.Poly.DiagramIso (diagramIsoEq)
+import Strat.Poly.Subst (Subst, codeBindings, mkSubst)
+import Strat.Poly.Term.SubstRuntime (applySubstObj, normalizeSubst)
 import Test.Poly.Helpers (mkModes, withSelfClassifiedCtors)
 import Test.Poly.CtorSigCompat (TypeParamSig(..), flatParamsToGenParams)
 
@@ -353,6 +355,7 @@ testDuplicateGenTyVars = do
     , dAcyclicModes = S.empty
         , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
         , dCells2 = []
+      , dBuiltins = []
       , dActions = M.empty
       , dObligations = []
                 }
@@ -379,6 +382,7 @@ testUnclassifiedModeCtorUsageDiagnostic = do
           , dAcyclicModes = S.empty
           , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
           , dCells2 = []
+          , dBuiltins = []
           , dActions = M.empty
           , dObligations = []
                     }
@@ -409,10 +413,13 @@ testDuplicateCellTyVars = do
   let doc = Doctrine
         { dName = "DupCellTyVars"
         , dModes = mkModes [mode]
-    , dAcyclicModes = S.empty
+        , dAcyclicModes = S.empty
         , dGens = M.empty
         , dCells2 = [cell]
-                }
+        , dBuiltins = []
+        , dActions = M.empty
+        , dObligations = []
+        }
   case validateDoctrine doc of
     Left _ -> pure ()
     Right _ -> assertFailure "expected duplicate cell tyvars to be rejected"
@@ -449,6 +456,7 @@ testRejectRHSTyVars = do
             , dAcyclicModes = S.empty
             , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
             , dCells2 = [cell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -469,8 +477,9 @@ testAcceptRHSTyVars = do
         , gdCod = [OVar aVar]
         , gdLiteralKind = Nothing
         }
-  lhs <- require (genD mode [OVar aVar] [OVar aVar] (gdName gen))
-  rhs <- require (genD mode [OVar aVar] [OVar aVar] (gdName gen))
+  let genArgs = [CAObj (OVar aVar)]
+  lhs <- require (genDWithArgs mode [OVar aVar] [OVar aVar] (gdName gen) genArgs)
+  rhs <- pure (idD mode [OVar aVar])
   let cell = Cell2
         { c2Name = "rhs_ok"
         , c2Class = Computational
@@ -488,6 +497,7 @@ testAcceptRHSTyVars = do
             , dAcyclicModes = S.empty
             , dGens = M.fromList [(mode, M.fromList [(gdName gen, gen)])]
             , dCells2 = [cell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -518,6 +528,7 @@ testRejectEmptyLHS = do
             , dAcyclicModes = S.empty
             , dGens = M.empty
             , dCells2 = [cell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -556,6 +567,7 @@ testCellBoundaryUsesDiagramTmCtx = do
             , dAcyclicModes = S.empty
             , dGens = M.empty
             , dCells2 = [cell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -603,6 +615,7 @@ testGenTmVarSortUsesTyVarScope = do
             , dAcyclicModes = S.empty
             , dGens = M.singleton mode (M.singleton (gdName gen) gen)
             , dCells2 = []
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }
@@ -659,6 +672,7 @@ testCellTmVarSortUsesTyVarScope = do
             , dAcyclicModes = S.empty
             , dGens = M.singleton mode (M.singleton (gdName markerDecl) markerDecl)
             , dCells2 = [cell]
+            , dBuiltins = []
             , dActions = M.empty
             , dObligations = []
                         }

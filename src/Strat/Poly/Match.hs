@@ -18,20 +18,16 @@ import qualified Data.Set as S
 import Strat.Poly.Graph
 import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVarsFrom)
 import Strat.Poly.DiagramInterpretation (requirePortType)
-import Strat.Poly.DefEq (defEqObj)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName)
-import Strat.Poly.Obj (TmVar, sameTmVarId)
+import Strat.Poly.Obj (Obj, TmVar, sameTmVarId)
+import Strat.Poly.ObjEq (ObjEqInCtx)
+import Strat.Poly.Subst (Subst, emptySubst)
+import Strat.Poly.Term.SubstRuntime (applySubstCtx)
 import Strat.Poly.Syntax (CodeArg(..))
 import Strat.Poly.Tele (GenParam)
 import Strat.Poly.TypeTheory (TypeTheory, GenArgSig(..), lookupGenArgSig)
-import Strat.Poly.UnifyObj
-  ( Subst
-  , applySubstCtx
-  , emptySubst
-  , unifyGenArgsFlex
-  , unifyObjFlex
-  )
+import Strat.Poly.UnifyFlex (unifyGenArgsFlex, unifyObjFlex)
 
 
 data Match = Match
@@ -47,8 +43,8 @@ data Match = Match
 data MatchConfig = MatchConfig
   { mcTheory :: TypeTheory
   , mcFlex :: S.Set TmVar
+  , mcObjEq :: ObjEqInCtx
   }
-  deriving (Eq, Show)
 
 data ArgKind = AKObj | AKTm
   deriving (Eq, Ord, Show)
@@ -124,12 +120,13 @@ findAllMatchesWithIndexMaybeSeed cfg lhs hostIndex mSeedEdges host
   where
     tt = mcTheory cfg
     flex = mcFlex cfg
+    objEq = mcObjEq cfg
 
     defEqCtx leftCtx rightCtx = go [] leftCtx rightCtx
       where
         go _ [] [] = Right True
         go tmCtxAcc (a:as) (b:bs) = do
-          ok <- defEqObj tt tmCtxAcc a b
+          ok <- objEq tmCtxAcc a b
           if ok
             then go (tmCtxAcc <> [a]) as bs
             else Right False
@@ -150,7 +147,7 @@ findAllMatchesWithIndexMaybeSeed cfg lhs hostIndex mSeedEdges host
 
     tryCandidates acc _ _ _ _ _ [] = Right acc
     tryCandidates acc match adj allEdgeIds lhsSigs edge (cand : cands) =
-      case extendMatch tt flex lhs host match edge cand of
+      case extendMatch objEq tt flex lhs host match edge cand of
         Left _ -> tryCandidates acc match adj allEdgeIds lhsSigs edge cands
         Right matches -> do
           acc' <- foldl step (Right acc) matches
@@ -222,7 +219,8 @@ portsCompatible match pats hosts =
         Just h' -> h' == h
 
 extendMatch
-  :: TypeTheory
+  :: ObjEqInCtx
+  -> TypeTheory
   -> S.Set TmVar
   -> Diagram
   -> Diagram
@@ -230,12 +228,12 @@ extendMatch
   -> Edge
   -> Edge
   -> Either Text [Match]
-extendMatch tt flex lhs host match patEdge hostEdge
+extendMatch objEq tt flex lhs host match patEdge hostEdge
   | M.member (eId patEdge) (mEdgeMap match) = Right []
   | eId hostEdge `S.member` mUsedHostEdges match = Right []
   | otherwise = do
       let pairs = zip (eIns patEdge <> eOuts patEdge) (eIns hostEdge <> eOuts hostEdge)
-      substs <- payloadSubsts tt flex lhs match patEdge hostEdge
+      substs <- payloadSubsts objEq tt flex lhs match patEdge hostEdge
       fmap concat (mapM (extendWithSubst pairs) substs)
   where
     extendWithSubst pairs (tySubst0, binderSub0) =
@@ -279,14 +277,15 @@ extendMatch tt flex lhs host match patEdge hostEdge
         hTy
 
 payloadSubsts
-  :: TypeTheory
+  :: ObjEqInCtx
+  -> TypeTheory
   -> S.Set TmVar
   -> Diagram
   -> Match
   -> Edge
   -> Edge
   -> Either Text [(Subst, M.Map BinderMetaVar Diagram)]
-payloadSubsts tt flex lhs match patEdge hostEdge =
+payloadSubsts objEq tt flex lhs match patEdge hostEdge =
   case (ePayload patEdge, ePayload hostEdge) of
     (PGen g1 args1 bargs1, PGen g2 args2 bargs2)
       | g1 /= g2
@@ -308,7 +307,7 @@ payloadSubsts tt flex lhs match patEdge hostEdge =
         expandOne (patArg, hostArg) (tySubst0, binderSub0) =
           case (patArg, hostArg) of
             (BAConcrete dPat, BAConcrete dHost) -> do
-              subs <- diagramIsoMatchWithVarsFrom tt flex tySubst0 dPat dHost
+              subs <- diagramIsoMatchWithVarsFrom objEq tt flex tySubst0 dPat dHost
               pure [ (tySub', binderSub0) | tySub' <- subs ]
             (BAMeta x, BAConcrete dHost) ->
               case M.lookup x binderSub0 of
@@ -330,11 +329,11 @@ payloadSubsts tt flex lhs match patEdge hostEdge =
       | ref1 == ref2 -> Right [(mTySubst match, mBinderSub match)]
       | otherwise -> Right []
     (PBox _ d1, PBox _ d2) -> do
-      subs <- diagramIsoMatchWithVarsFrom tt flex (mTySubst match) d1 d2
+      subs <- diagramIsoMatchWithVarsFrom objEq tt flex (mTySubst match) d1 d2
       pure [ (tySub', mBinderSub match) | tySub' <- subs ]
 
     (PFeedback d1, PFeedback d2) -> do
-      subs <- diagramIsoMatchWithVarsFrom tt flex (mTySubst match) d1 d2
+      subs <- diagramIsoMatchWithVarsFrom objEq tt flex (mTySubst match) d1 d2
       pure [ (tySub', mBinderSub match) | tySub' <- subs ]
 
     (PSplice x me1, PSplice y me2)

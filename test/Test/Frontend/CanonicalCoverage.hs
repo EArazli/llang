@@ -70,16 +70,6 @@ canonicalBuilds =
       , baBuildName = Just "main"
       }
   , BuildArtifact
-      { baLabel = "autodiff js target"
-      , baPath = "examples/build/autodiff_times_sin.llang"
-      , baBuildName = Just "main"
-      }
-  , BuildArtifact
-      { baLabel = "autodiff core target"
-      , baPath = "examples/build/autodiff_times_sin.llang"
-      , baBuildName = Just "core"
-      }
-  , BuildArtifact
       { baLabel = "pair autodiff share target"
       , baPath = "examples/build/autodiff_times_sin_pair_core.llang"
       , baBuildName = Just "share"

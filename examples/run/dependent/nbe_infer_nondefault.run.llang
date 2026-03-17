@@ -1,5 +1,5 @@
 doctrine NbeInferNonDefault where {
-  mode M defeq nbe classifiedBy M via M.U_M;
+  mode M classifiedBy M via M.U_M;
   gen U_M : [] -> [M.U_M] @M;
   gen A : [] -> [M.U_M] @M;
   gen Fun(a@M, b@M) : [] -> [M.U_M] @M;

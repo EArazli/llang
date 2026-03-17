@@ -50,7 +50,6 @@ checkConfluent trs = do
             <> renderBad bad
         )
 
-
 criticalPairs :: TRS -> [CriticalPair]
 criticalPairs trs =
   concat
@@ -72,9 +71,11 @@ criticalPairs trs =
       , not (isTrivialSelfOverlap outer inner pos)
       , Just subterm <- [subtermAt pos (trLHS inner)]
       , Just subst <- [unifyTerms (trLHS outer) subterm]
+      , Just rhsInner0 <- [trRHS inner]
+      , Just rhsOuter0 <- [trRHS outer]
       , let lhsInnerSub = applyTermSubstClosed subst (trLHS inner)
-      , let rhsInnerSub = applyTermSubstClosed subst (trRHS inner)
-      , let rhsOuter = applyTermSubstClosed subst (trRHS outer)
+      , let rhsInnerSub = applyTermSubstClosed subst rhsInner0
+      , let rhsOuter = applyTermSubstClosed subst rhsOuter0
       ]
 
 renameRuleApart :: TRule -> TRule -> TRule
@@ -83,11 +84,11 @@ renameRuleApart base rule =
         1
           + maximum
               [ maxBoundVarIndex (trLHS base)
-              , maxBoundVarIndex (trRHS base)
+              , maybe (-1) maxBoundVarIndex (trRHS base)
               ]
    in rule
         { trLHS = renameBoundVars off (trLHS rule)
-        , trRHS = renameBoundVars off (trRHS rule)
+        , trRHS = renameBoundVars off <$> trRHS rule
         }
 
 isTrivialSelfOverlap :: TRule -> TRule -> [Int] -> Bool
@@ -98,7 +99,8 @@ isTrivialSelfOverlap outer inner pos =
 overlapPositions :: TermExpr -> [[Int]]
 overlapPositions tm =
   case tm of
-    TMGen _ args -> [] : concat [ map (i :) (overlapArgPositions a) | (i, a) <- zip [0 :: Int ..] args ]
+    TMHead _ args _ ->
+      [] : concat [ map (i :) (overlapArgPositions a) | (i, a) <- zip [0 :: Int ..] args ]
     _ -> []
 
 overlapArgPositions :: TermHeadArg -> [[Int]]
@@ -111,7 +113,7 @@ subtermAt :: [Int] -> TermExpr -> Maybe TermExpr
 subtermAt [] tm = Just tm
 subtermAt (i:is) tm =
   case tm of
-    TMGen _ args -> do
+    TMHead _ args _ -> do
       arg <- nth args i
       subtermAtArg is arg
     _ -> Nothing
@@ -124,8 +126,8 @@ replaceAt :: [Int] -> TermExpr -> TermExpr -> TermExpr
 replaceAt [] new _ = new
 replaceAt (i:is) new tm =
   case tm of
-    TMGen f args ->
-      TMGen f (replaceNth i (replaceHeadArgAt is new) args)
+    TMHead f args bargs ->
+      TMHead f (replaceNth i (replaceHeadArgAt is new) args) bargs
     _ -> tm
 
 replaceHeadArgAt :: [Int] -> TermExpr -> TermHeadArg -> TermHeadArg
@@ -172,9 +174,12 @@ canonicalizeVars tm =
   where
     go expr fwd next =
       case expr of
-        TMGen fn args ->
+        TMHead fn args bargs ->
           let (args', fwd', next') = goHeadArgs args fwd next
-           in (TMGen fn args', fwd', next')
+           in (TMHead fn args' bargs, fwd', next')
+        TMSplice hole me args ->
+          let (args', fwd', next') = goArgs args fwd next
+           in (TMSplice hole me args', fwd', next')
         TMMeta v args ->
           let (args', fwd', next') = renameArgs args fwd next
            in (TMMeta v args', fwd', next')
@@ -197,6 +202,12 @@ canonicalizeVars tm =
         THATm tm0 ->
           let (tm1, fwd1, next1) = go tm0 fwd next
            in (THATm tm1, fwd1, next1)
+
+    goArgs [] fwd next = ([], fwd, next)
+    goArgs (x:xs) fwd next =
+      let (x', fwd1, next1) = go x fwd next
+          (xs', fwd2, next2) = goArgs xs fwd1 next1
+       in (x' : xs', fwd2, next2)
 
     renameArgs [] fwd next = ([], fwd, next)
     renameArgs (i:is) fwd next =

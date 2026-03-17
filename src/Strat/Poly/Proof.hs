@@ -21,6 +21,7 @@ module Strat.Poly.Proof
 import Control.Monad (foldM)
 import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
+import Strat.Poly.DefEq (defEqObjWithMapper)
 import Strat.Poly.Diagram (Diagram(..))
 import Strat.Poly.Graph (Edge(..), EdgePayload(..), BinderArg(..), canonDiagramRaw)
 import Strat.Poly.DiagramIso (diagramIsoEq)
@@ -185,7 +186,8 @@ applyAtFocus spliceMapper tt focus match diag rule =
 
 applyTop :: SpliceMapper -> TypeTheory -> Match -> Diagram -> RewriteRule -> Either Text Diagram
 applyTop spliceMapper tt match diag rule = do
-  matches <- findAllMatches (mkMatchConfig tt rule) (rrLHS rule) diag
+  let objEq = defEqObjWithMapper tt spliceMapper
+  matches <- findAllMatches (mkMatchConfig objEq tt rule) (rrLHS rule) diag
   if match `elem` matches
     then Right ()
     else Left "checkRewriteStep: stored match is not valid at focused diagram"

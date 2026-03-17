@@ -36,14 +36,16 @@ import Strat.Poly.Doctrine
 import Strat.Poly.Diagram
 import Strat.Poly.Graph
 import Strat.Poly.DiagramInterpretation (spliceEdge)
-import Strat.Poly.Obj (objOwnerMode)
+import Strat.Poly.Obj (TermDiagram(..), objOwnerMode)
 import Strat.Poly.DSL.Elab.Diag (renderModeName, topologicalEdges)
 import qualified Strat.Poly.Morphism as Morph
 import Strat.Poly.Pretty (renderDiagram)
 import Strat.Poly.Quote (quoteDiagram)
 import Strat.Poly.ModAction (applyModExpr)
+import Strat.Poly.DefEq (normalizeTermDiagramWithMapper)
 import Strat.Poly.Normalize (NormalizationStatus(..), normalizeWithMapper)
-import Strat.Poly.Rewrite (rulesFromPolicy)
+import Strat.Poly.Rewrite (rulesForDiagram)
+import Strat.Poly.TypeTheory (TypeTheory)
 import Strat.Common.Rules (RewritePolicy)
 import Strat.Util.List (dedupe)
 
@@ -1139,13 +1141,28 @@ clearSatisfiedComponentImports satisfied comp =
 
 normalizeDiagram :: Doctrine -> RewritePolicy -> Int -> Diagram -> Either Text Diagram
 normalizeDiagram doc policy fuel diag = do
-  let rules = rulesFromPolicy policy (dCells2 doc)
   tt <- doctrineTypeTheory doc
+  let rules = rulesForDiagram policy tt diag
   status <- normalizeWithMapper (applyModExpr doc) tt fuel rules diag
-  pure
-    (case status of
-       Finished d -> d
-       OutOfFuel d -> d)
+  let rewritten =
+        case status of
+          Finished d -> d
+          OutOfFuel d -> d
+  normalizeTermDiagramIfPossible doc tt rewritten
+
+normalizeTermDiagramIfPossible :: Doctrine -> TypeTheory -> Diagram -> Either Text Diagram
+normalizeTermDiagramIfPossible doc tt diag =
+  case singleOutputSort diag of
+    Nothing -> Right diag
+    Just sortTy ->
+      case normalizeTermDiagramWithMapper tt (applyModExpr doc) (dTmCtx diag) sortTy (TermDiagram diag) of
+        Right tm -> Right (unTerm tm)
+        Left _ -> Right diag
+  where
+    singleOutputSort current =
+      case dOut current of
+        [outPid] -> diagramPortObj current outPid
+        _ -> Nothing
 
 
 quoteOne :: ModuleEnv -> Doctrine -> Diagram -> Text -> Text -> Either Text Diagram

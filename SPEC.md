@@ -268,44 +268,44 @@ Current policy note:
 
 ## 3. Definitional Fragment
 
-Every mode has a definitional-equality engine used by kernel normalization/equality.
+Every mode has one definitional fragment used by kernel normalization/equality.
 
 Mode declaration supports:
 
-- `mode M ... defeq trs ...;`
-- `mode M ... defeq nbe ...;`
+- `mode M ...;`
+- `mode M ... classifiedBy K via U;`
 
-If `defeq` is omitted, the mode defaults to `trs`.
+Implemented fragment components:
 
-Implemented fragments:
-
-- `TRS` fragment:
+- trusted rewrite rules:
   - first-order TRS normalization compiled from admissible computational rules and eligible generators.
   - term symbols are generator names: the TRS signature is a *subset* of the mode’s generators determined by the term-fragment eligibility checks.
   - admissibility requirements:
     - rewrite compilation remains in the first-order term fragment,
     - termination MUST be proven (SCT),
     - critical pairs MUST be joinable by normalization.
-- `NbE` fragment:
+- inferred function-space builtins:
   - binder-aware normalization for a lambda fragment in term diagrams.
-  - normalization is beta-normal and eta-long at function sorts (`Arr`), with eta enabled by default.
-  - required primitives per NbE mode are inferred structurally by typing shape (not by fixed names):
+  - required primitives are inferred structurally by typing shape, not by fixed names:
     - a lambda generator in owner mode `M` with one binder input of shape `[A] -> [B]`, zero plain inputs, and one output sort `Arr(A,B)`,
     - an application generator in owner mode `M` with boundary shape `[Arr(A,B), A] -> [B]`,
     - an arrow type constructor `Arr` in the classifier mode of `M` used by both shapes above.
-  - primitive inference requires a unique `(lambda, app, Arr)` triple per NbE mode; zero matches or multiple matches are rejected.
+  - primitive inference requires a unique `(lambda, app, Arr)` triple per mode; zero matches or multiple matches are rejected.
+  - lambda/application heads may be either:
+    - polymorphic with exactly two type parameters, which enables both beta and eta,
+    - monomorphic with no generator parameters, which enables beta but not eta.
   - additional `Arr` checks:
     - `Arr` must be declared constructor-like in `classifier(M)` (no diagram-domain inputs),
     - `Arr` must have exactly two type parameters,
-    - `Arr` must be eligible for owner mode `M` (present in derived constructor tables).
-  - unsupported constructs are rejected during definitional normalization in NbE modes:
+    - `Arr` must be eligible for owner mode `M` (present in the final derived constructor table).
+  - unsupported constructs are rejected during builtin semantic normalization:
     - box/feedback/splice payloads,
-    - binder metavariables,
-    - generators other than the inferred lambda primitive carrying binder args.
+    - binder metavariables.
+  - opaque non-builtin binder heads may remain residual rather than reducing.
 
   Conceptually, this matches CCC/STLC structure: `Arr` as exponential type former with lambda/application as intro/elim operations (Lambek–Scott; Berger–Schwichtenberg NbE perspective).
 
-Termination/confluence checks apply to `TRS` fragments only; `NbE` fragments skip TRS compilation checks.
+Termination/confluence checks apply to trusted rewrite rules only. Modes with inferred function-space builtins use the same unified kernel path; there is no user-selectable `defeq` engine.
 
 This matches the standard TRS presentation over a signature (\Sigma) (Terese, *Term Rewriting Systems*, 2003), where in llang the signature (\Sigma) is the eligible subset of generator 1-cells of the mode (cf. Burroni’s polygraphs as presentations, 1993).
 
@@ -631,9 +631,9 @@ Doctrine items:
 - `action`, `obligation`
 - `data`, `gen`, `rule`
 
-Mode declaration supports optional engine selection:
+Mode declaration supports:
 
-- `mode M [acyclic] [defeq trs|nbe] [classifiedBy K via U [as tag]];`
+- `mode M [acyclic] [classifiedBy K via U [as tag]];`
 
 Top-level functor/apply items:
 

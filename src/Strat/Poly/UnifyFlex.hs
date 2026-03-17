@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Strat.Poly.UnifyObj
+{-# LANGUAGE PatternSynonyms #-}
+module Strat.Poly.UnifyFlex
   ( Subst
   , mkSubst
   , lookupCodeMeta
@@ -18,12 +19,6 @@ module Strat.Poly.UnifyObj
   , unifyCtx
   , diagramTmCtx
   , unifyCtxDiagram
-  , applySubstObj
-  , applySubstTm
-  , applySubstDiagram
-  , applySubstCtx
-  , normalizeSubst
-  , composeSubst
   , substIsEmpty
   ) where
 
@@ -32,6 +27,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
+import Data.Monoid (Any(..))
 import Control.Monad (foldM)
 import Strat.Poly.Alpha (freshenTmHeadSigAgainst)
 import Strat.Poly.Literal (Literal, literalKind)
@@ -44,6 +40,7 @@ import Strat.Poly.Graph
   , Edge(..)
   , EdgePayload(..)
   , PortId(..)
+  , canonDiagramRaw
   , diagramPortObj
   , unPortId
   , unEdgeId
@@ -55,29 +52,29 @@ import Strat.Poly.TypeTheory
   , lookupTmHeadSig
   )
 import Strat.Poly.Tele (CtorSig(..), GenParam(..))
-import Strat.Poly.DefEq
+import Strat.Poly.Term.DefEqCore
   ( normalizeObjDeepWithCtx
   , normalizeTermDiagram
   , termToDiagram
   )
+import Strat.Poly.Term.SubstRuntime
+  ( applySubstCtx
+  , applySubstDiagram
+  , applySubstObj
+  , applySubstTm
+  , applySubstTmInCtx
+  , composeSubst
+  )
 import Strat.Poly.Subst
   ( Subst
-  , TermSubstOps(..)
-  , applySubstCtxWith
-  , applySubstDiagramWith
-  , applySubstObjWith
-  , applySubstTmInCtxWith
-  , applySubstTmWith
   , bindHeadSubst
   , codeBindings
-  , composeSubstWith
   , emptySubst
   , insertCodeMeta
   , insertTmMeta
   , lookupCodeMeta
   , lookupTmMeta
   , mkSubst
-  , normalizeSubstWith
   , substDomain
   , substIsEmpty
   , tmBindings
@@ -86,77 +83,23 @@ import Strat.Poly.TermExpr
   ( TermExpr(..)
   , ResolvedHeadArgs(..)
   , applyHeadSubstObj
-  , boundGlobalsExpr
   , diagramToTermExpr
-  , instantiateMetaBody
-  , normalizeCtxStructurally
+  , freeTmVarsExpr
+  , pattern TMGen
   , resolveHeadArgsExpr
-  , resolvedHeadFlatArgs
   , structuralConvEnv
   , termExprToDiagram
   )
-import Strat.Poly.Term.AST (TermHeadArg(..))
+import Strat.Poly.Term.AST (TermBinderArg(..), TermHeadArg(..))
+import Strat.Poly.Term.GraphRead (TermPortReader(..), readTermPort)
+import Strat.Poly.Term.Scope (hostBoundGlobalsExpr, renameTermGlobalsPartial)
+import Strat.Poly.Traversal (foldDiagram)
 
 data PortHead
   = PHBound Int
   | PHGen GenName [CodeArg] [PortId]
   | PHMeta TmVar
   | PHLit Literal
-
-unifySubstOps :: TypeTheory -> TermSubstOps
-unifySubstOps tt =
-  TermSubstOps
-    { tsoNormalizeObj = normalizeObjDeepWithCtx tt
-    , tsoNormalizeTermDiagram = normalizeTermDiagram tt
-    , tsoDiagramToTermExpr = diagramToTermExpr tt
-    , tsoTermExprToDiagram = termExprToDiagram tt
-    , tsoNormalizeCtx = normalizeCtxStructurally tt (structuralConvEnv tt)
-    , tsoRequireHeadSig = requireTmHeadSig tt
-    , tsoResolveHeadFlatArgs =
-        \tmCtx currentSort f flatArgs ->
-          resolvedHeadFlatArgs <$> resolveHeadArgsExpr tt (structuralConvEnv tt) tmCtx M.empty currentSort f flatArgs
-    , tsoApplyHeadSubstObj = \tmCtx headSubst obj -> applyHeadSubstObj tt (structuralConvEnv tt) tmCtx headSubst obj
-    , tsoInstantiateMetaBody = instantiateMetaBody
-    }
-
-requireTmHeadSig :: TypeTheory -> [Obj] -> Obj -> GenName -> [TermHeadArg] -> Either Text TmHeadSig
-requireTmHeadSig tt curCtx currentSort f args = do
-  currentSort' <- normalizeObjDeepWithCtx tt curCtx currentSort
-  sig <-
-    case lookupTmHeadSig tt (objOwnerMode currentSort') f of
-      Nothing -> Left "applySubstTm: unknown term head"
-      Just s -> Right s
-  if length (thsParams sig) + length (thsInputs sig) == length args
-    then Right sig
-    else Left "applySubstTm: term head arity mismatch"
-
-applySubstObj :: TypeTheory -> Subst -> Obj -> Either Text Obj
-applySubstObj tt =
-  applySubstObjWith (unifySubstOps tt) tt
-
-applySubstTm :: TypeTheory -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
-applySubstTm tt =
-  applySubstTmWith (unifySubstOps tt) tt
-
-applySubstTmInCtx :: TypeTheory -> [Obj] -> Subst -> Obj -> TermDiagram -> Either Text TermDiagram
-applySubstTmInCtx tt =
-  applySubstTmInCtxWith (unifySubstOps tt) tt
-
-applySubstDiagram :: TypeTheory -> Subst -> Diagram -> Either Text Diagram
-applySubstDiagram tt =
-  applySubstDiagramWith (unifySubstOps tt) tt
-
-applySubstCtx :: TypeTheory -> Subst -> Context -> Either Text Context
-applySubstCtx tt =
-  applySubstCtxWith (unifySubstOps tt) tt
-
-normalizeSubst :: TypeTheory -> Subst -> Either Text Subst
-normalizeSubst tt =
-  normalizeSubstWith (unifySubstOps tt) tt
-
-composeSubst :: TypeTheory -> Subst -> Subst -> Either Text Subst
-composeSubst tt =
-  composeSubstWith (unifySubstOps tt) tt
 
 unifyObj :: TypeTheory -> Obj -> Obj -> Either Text Subst
 unifyObj tt t1 t2 =
@@ -452,17 +395,31 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
   rhs0 <- applySubstTmInCtx tt tmCtxSub subst expectedSort' tm2
   lhs <- normalizeTermDiagram tt tmCtxSub expectedSort' lhs0
   rhs <- normalizeTermDiagram tt tmCtxSub expectedSort' rhs0
-  lhsGraph <- termToDiagram tt tmCtxSub expectedSort' lhs
-  rhsGraph <- termToDiagram tt tmCtxSub expectedSort' rhs
-  lOut <- requireSingleOut lhsGraph
-  rOut <- requireSingleOut rhsGraph
-  let lhsInputs = inputGlobalMap lhsGraph
-  let rhsInputs = inputGlobalMap rhsGraph
-  unifyTmGraph subst S.empty expectedSort' lhsGraph lhsInputs lOut rhsGraph rhsInputs rOut
+  if normalizedDiagramHasBinderArgs (unTerm lhs) || normalizedDiagramHasBinderArgs (unTerm rhs)
+    then do
+      lhsExpr <- diagramToTermExpr tt tmCtxSub expectedSort' lhs
+      rhsExpr <- diagramToTermExpr tt tmCtxSub expectedSort' rhs
+      unifyTmNorm subst expectedSort' lhsExpr rhsExpr
+    else do
+      lhsGraph <- termToDiagram tt tmCtxSub expectedSort' lhs
+      rhsGraph <- termToDiagram tt tmCtxSub expectedSort' rhs
+      lOut <- requireSingleOut lhsGraph
+      rOut <- requireSingleOut rhsGraph
+      let lhsInputs = inputGlobalMap lhsGraph
+      let rhsInputs = inputGlobalMap rhsGraph
+      unifyTmGraph subst S.empty expectedSort' lhsGraph lhsInputs lOut rhsGraph rhsInputs rOut
   where
     normalizeInCtx s ty = do
       tmCtx' <- applySubstCtx tt s tmCtx
       normalizeObjDeepWithCtx tt tmCtx' ty
+
+    normalizedDiagramHasBinderArgs =
+      getAny
+        . foldDiagram
+            (const mempty)
+            (const mempty)
+            (const mempty)
+            (const (Any True))
 
     unifyTmGraph s seen currentSort lhsDiag lhsInputs lp rhsDiag rhsInputs rp
       | (lp, rp) `S.member` seen = Right s
@@ -510,14 +467,21 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
           if i == j
             then Right s
             else Left "unifyTm: bound term-variable mismatch"
-        (TMGen f xs, TMGen g ys)
-          | f == g && length xs == length ys -> do
-              resolvedL <- canonicalizeHeadAtSubst s currentSort f xs
-              resolvedR <- canonicalizeHeadAtSubst s currentSort g ys
+        (TMHead f xs bxs, TMHead g ys bys)
+          | f == g
+          , length xs == length ys
+          , length bxs == length bys -> do
+              resolvedL <- canonicalizeHeadAtSubst s currentSort f xs bxs
+              resolvedR <- canonicalizeHeadAtSubst s currentSort g ys bys
               let sig = rhaSig resolvedL
               sParam <- unifyGenArgsFlex tt tmCtx tmFlex s (thsParams sig) (rhaStoredCodeArgs resolvedL) (rhaStoredCodeArgs resolvedR)
-              foldM step sParam (zip3 (thsInputs sig) (map snd (rhaInputs resolvedL)) (map snd (rhaInputs resolvedR)))
+              sBind <- compareResolvedBinders sParam resolvedL resolvedR
+              foldM step sBind (zip3 (thsInputs sig) (map snd (rhaInputs resolvedL)) (map snd (rhaInputs resolvedR)))
           | otherwise -> Left "unifyTm: term head mismatch"
+        (TMSplice _ _ _, _) ->
+          Left "unifyTm: splice terms are only supported in trusted rewrite compilation"
+        (_, TMSplice _ _ _) ->
+          Left "unifyTm: splice terms are only supported in trusted rewrite compilation"
         (TMLit l1, TMLit l2) -> do
           ensureTmTermSort s currentSort (TMLit l1)
           ensureTmTermSort s currentSort (TMLit l2)
@@ -634,9 +598,11 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                     <> tmvName v
                 )
         TMBound i -> checkBoundSort s currentSort i
-        TMGen f args -> do
-          resolved <- canonicalizeHeadAtSubst s currentSort f args
+        TMHead f args bargs -> do
+          resolved <- canonicalizeHeadAtSubst s currentSort f args bargs
           mapM_ (uncurry (ensureTmTermSort s)) (rhaInputs resolved)
+        TMSplice _ _ _ ->
+          Left "unifyTm: splice terms are only supported in trusted rewrite compilation"
         TMLit lit -> do
           currentSort' <- normalizeInCtx s currentSort
           case literalKindForObj tt currentSort' of
@@ -652,7 +618,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
         case lookupTmHeadSig tt (objOwnerMode currentSort') f of
           Nothing -> Left "unifyTm: unknown term head"
           Just sig' -> Right (freshenHeadSigAgainstSubst s sig')
-      if length (thsParams sig) + length (thsInputs sig) /= arity
+      if not (null (thsBinders sig)) || length (thsParams sig) + length (thsInputs sig) /= arity
         then Left "unifyTm: term head arity mismatch"
         else Right ()
       resSort0 <- applySubstObj tt s (thsRes sig)
@@ -661,81 +627,43 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
         then Right sig
         else Left "unifyTm: term head result sort mismatch"
 
-    canonicalizeHeadAtSubst s currentSort f args = do
+    compareResolvedBinders s resolvedL resolvedR =
+      foldM
+        compareBinder
+        s
+        (zip (rhaBinderExprArgs resolvedL) (rhaBinderExprArgs resolvedR))
+
+    compareBinder sAcc (TBABody left0, TBABody right0) = do
+      left <- canonDiagramRaw =<< applySubstDiagram tt sAcc left0
+      right <- canonDiagramRaw =<< applySubstDiagram tt sAcc right0
+      if left == right
+        then Right sAcc
+        else Left "unifyTm: binder argument mismatch"
+    compareBinder sAcc (TBAHole left, TBAHole right)
+      | left == right =
+          Right sAcc
+      | otherwise =
+          Left "unifyTm: binder-hole mismatch"
+    compareBinder _ _ =
+      Left "unifyTm: binder argument mismatch"
+
+    canonicalizeHeadAtSubst s currentSort f args bargs = do
       tmCtx1 <- applySubstCtx tt s tmCtx
       currentSort' <- normalizeObjDeepWithCtx tt tmCtx1 =<< applySubstObj tt s currentSort
-      expr' <- applySubstExprInCtx tmCtx1 s currentSort' (TMGen f args)
+      expr' <- applySubstExprInCtx tmCtx1 s currentSort' (TMHead f args bargs)
       case expr' of
-        TMGen f' args'
+        TMHead f' args' bargs'
           | f' == f ->
-              resolveHeadArgsExpr tt (structuralConvEnv tt) tmCtx1 M.empty currentSort' f args'
+              resolveHeadArgsExpr tt (structuralConvEnv tt) tmCtx1 M.empty currentSort' f args' bargs'
           | otherwise ->
               Left "unifyTm: substituted term head changed unexpectedly"
         _ ->
           Left "unifyTm: substituted term head did not remain a head application"
 
-    applySubstExprInCtx ctx s expectedSort expr =
-      go S.empty expectedSort expr
-      where
-        go seen currentSort tm =
-          case tm of
-            TMMeta v args -> do
-              sort' <- applySubstObj tt s (tmvSort v)
-              let v' = v { tmvSort = sort' }
-              case lookupTmMeta s v' of
-                Nothing -> Right (TMMeta v' args)
-                Just tmSub ->
-                  if v' `S.member` seen
-                    then Right (TMMeta v' args)
-                    else do
-                      subExpr0 <- diagramToTermExpr tt ctx sort' tmSub
-                      subExpr <- instantiateMetaBody ctx v' args subExpr0
-                      go (S.insert v' seen) currentSort subExpr
-            TMBound _ -> Right tm
-            TMGen f args -> do
-              sig <- requireFunSigArity s currentSort f (length args)
-              let (paramArgs, inputArgs) = splitAt (length (thsParams sig)) args
-              (paramArgsRev, headSubst) <-
-                foldM
-                  (applyParamHeadArg seen)
-                  ([], M.empty)
-                  (zip (thsParams sig) paramArgs)
-              inputArgsRev <-
-                foldM
-                  (applyInputHeadArg seen headSubst)
-                  []
-                  (zip (thsInputs sig) inputArgs)
-              canonicalizeHead currentSort f (reverse paramArgsRev <> reverse inputArgsRev)
-            TMLit _ -> Right tm
-
-        applyParamHeadArg seen (acc, headSubst) (param, arg) =
-          case (param, arg) of
-            (GP_Ty v, THAObj obj) -> do
-              obj' <- normalizeObjDeepWithCtx tt ctx =<< applySubstObj tt s obj
-              headSubst' <- bindHeadSubst v (CAObj obj') headSubst
-              Right (THAObj obj' : acc, headSubst')
-            (GP_Ty _, THATm _) -> Left "applySubstTm: expected object-valued parameter argument"
-            (GP_Tm v, THATm tmArg) -> do
-              expectedSort0 <- applyHeadSubstObj tt (structuralConvEnv tt) ctx headSubst (tmvSort v)
-              expectedSort <- normalizeObjDeepWithCtx tt ctx =<< applySubstObj tt s expectedSort0
-              tmArg' <- go seen expectedSort tmArg
-              tmDiag <- termExprToDiagram tt ctx expectedSort tmArg'
-              headSubst' <- bindHeadSubst v (CATm tmDiag) headSubst
-              Right (THATm tmArg' : acc, headSubst')
-            (GP_Tm _, THAObj _) -> Left "applySubstTm: expected term-valued parameter argument"
-
-        applyInputHeadArg seen headSubst acc (argSort, arg) =
-          case arg of
-            THATm tmArg -> do
-              expectedSort0 <- applyHeadSubstObj tt (structuralConvEnv tt) ctx headSubst argSort
-              expectedSort <- normalizeObjDeepWithCtx tt ctx =<< applySubstObj tt s expectedSort0
-              tmArg' <- go seen expectedSort tmArg
-              Right (THATm tmArg' : acc)
-            THAObj _ -> Left "applySubstTm: expected term input argument"
-
-        canonicalizeHead currentSort f flatArgs = do
-          resolved <- resolveHeadArgsExpr tt (structuralConvEnv tt) ctx M.empty currentSort f flatArgs
-          Right (TMGen f (resolvedHeadFlatArgs resolved))
+    applySubstExprInCtx ctx s expectedSort expr = do
+      tm <- termExprToDiagram tt ctx expectedSort expr
+      tmSub <- applySubstTmInCtx tt ctx s expectedSort tm
+      diagramToTermExpr tt ctx expectedSort tmSub
 
     normalizeTermExprInCtx ctx _ expectedSort expr = do
       tm <- termExprToDiagram tt ctx expectedSort expr
@@ -766,38 +694,45 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
             PTmLit lit -> Right (PHLit lit)
             _ -> Left "unifyTm: non-term payload in normalized term graph"
 
-    termFromPort diag inputs pid = go S.empty pid
+    termFromPort diag inputs pid = do
+      currentSort <- requirePortSort diag "unifyTm: missing port type in normalized term graph" pid
+      readTermPort (reader diag inputs) diag currentSort pid
       where
-        go seen pid0 =
-          case M.lookup pid0 inputs of
-            Just i -> Right (TMBound i)
-            Nothing ->
-              if pid0 `S.member` seen
-                then Left "unifyTm: cycle detected in normalized term graph"
-                else do
-                  edge <- producerEdge diag pid0
-                  case ePayload edge of
-                    PGen fName args bargs
-                      | null bargs -> do
-                          sig <-
-                            case lookupTmHeadSig tt (dMode diag) fName of
-                              Just sig'
-                                | length (thsParams sig') + length (thsInputs sig') == length args + length (eIns edge) ->
-                                    Right sig'
-                              Just _ -> Left "unifyTm: term head arity mismatch in normalized term graph"
-                              Nothing -> Left "unifyTm: unknown term head in normalized term graph"
-                          storedArgs <- rebuildStoredArgs (thsParams sig) args
-                          inputArgs <- mapM (fmap THATm . go (S.insert pid0 seen)) (eIns edge)
-                          Right (TMGen fName (storedArgs <> inputArgs))
-                      | otherwise ->
-                          Left "unifyTm: non-term generator payload in normalized term graph"
-                    PTmMeta v -> do
-                      metaArgs <- mapM boundaryGlobal (eIns edge)
-                      Right (TMMeta v metaArgs)
-                    PTmLit lit ->
-                      Right (TMLit lit)
-                    _ ->
-                      Left "unifyTm: non-term payload in normalized term graph"
+        reader diag0 inputs0 =
+          TermPortReader
+            { tprBoundaryLookup = \pid0 -> M.lookup pid0 inputs0
+            , tprOnBoundary = \_ i _ -> Right (TMBound i)
+            , tprOnEdge = \recur _ _ edge ->
+                case ePayload edge of
+                  PGen fName args bargs
+                    | null bargs -> do
+                        sig <-
+                          case lookupTmHeadSig tt (dMode diag0) fName of
+                            Just sig'
+                              | null (thsBinders sig')
+                                  && length (thsParams sig') + length (thsInputs sig') == length args + length (eIns edge) ->
+                                  Right sig'
+                            Just _ -> Left "unifyTm: term head arity mismatch in normalized term graph"
+                            Nothing -> Left "unifyTm: unknown term head in normalized term graph"
+                        storedArgs <- rebuildStoredArgs (thsParams sig) args
+                        inputArgs <- mapM (readInputTerm diag0 recur) (eIns edge)
+                        Right (TMGen fName (storedArgs <> inputArgs))
+                    | otherwise ->
+                        Left "unifyTm: non-term generator payload in normalized term graph"
+                  PTmMeta v -> do
+                    metaArgs <- mapM boundaryGlobal (eIns edge)
+                    Right (TMMeta v metaArgs)
+                  PTmLit lit ->
+                    Right (TMLit lit)
+                  _ ->
+                    Left "unifyTm: non-term payload in normalized term graph"
+            , tprSingleOutputErr = "unifyTm: normalized term graph must have exactly one output"
+            , tprCycleErr = "unifyTm: cycle detected in normalized term graph"
+            , tprMissingProducerErr = "unifyTm: missing producer in normalized term graph"
+            }
+        readInputTerm diag0 recur inp = do
+          inpSort <- requirePortSort diag0 "unifyTm: missing port type in normalized term graph" inp
+          THATm <$> recur inpSort inp
         boundaryGlobal inp =
           case M.lookup inp inputs of
             Just i -> Right i
@@ -823,6 +758,11 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
                   go (THATm tmExpr : acc) headSubst' paramsRest argsRest
                 (GP_Tm _, CAObj _) ->
                   Left "unifyTm: expected term-valued stored arg"
+
+    requirePortSort diag err pid =
+      case diagramPortObj diag pid of
+        Just ty -> Right ty
+        Nothing -> Left err
 
     producerEdge diag pid =
       case IM.lookup (unPortId pid) (dProd diag) of
@@ -863,19 +803,6 @@ inferTmSortFromDiagram tt subst tm =
         Just ty -> applySubstObj tt subst ty
     _ -> Left "inferTmSortFromDiagram: term diagram must have exactly one output"
 
-renameTermGlobalsPartial :: M.Map Int Int -> TermExpr -> TermExpr
-renameTermGlobalsPartial ren tm =
-  case tm of
-    TMBound i -> TMBound (M.findWithDefault i i ren)
-    TMMeta v args -> TMMeta v (map (\i -> M.findWithDefault i i ren) args)
-    TMGen f args -> TMGen f (map renameHeadArg args)
-    TMLit lit -> TMLit lit
-  where
-    renameHeadArg arg =
-      case arg of
-        THAObj obj -> THAObj obj
-        THATm tm0 -> THATm (renameTermGlobalsPartial ren tm0)
-
 abstractOverSpineToFormals
   :: [Obj]
   -> TmVar
@@ -886,7 +813,7 @@ abstractOverSpineToFormals tmCtx v spine rhs = do
   let scope = tmvScope v
       formal = defaultMetaArgs tmCtx v
       spineSet = S.fromList spine
-      boundSet = boundGlobalsExpr rhs
+      boundSet = hostBoundGlobalsExpr rhs
   if length formal == scope
     then Right ()
     else Left "abstractOverSpineToFormals: default-meta spine arity does not match scope"
@@ -913,20 +840,11 @@ abstractOverSpineToFormals tmCtx v spine rhs = do
     then Right ()
     else Left "unifyTm: escape from bound term-variable scope"
   let ren = M.fromList (zip spine formal)
-  pure (renameTermGlobalsPartial ren rhs)
+  renameTermGlobalsPartial ren rhs
 
 occursTmVarExpr :: TmVar -> TermExpr -> Bool
-occursTmVarExpr v tm =
-  case tm of
-    TMMeta v' _ -> v == v'
-    TMBound _ -> False
-    TMGen _ args -> any occursHeadArg args
-    TMLit _ -> False
-  where
-    occursHeadArg arg =
-      case arg of
-        THAObj _ -> False
-        THATm tm0 -> occursTmVarExpr v tm0
+occursTmVarExpr v =
+  S.member v . freeTmVarsExpr
 
 renderObj :: Obj -> Text
 renderObj ty =

@@ -53,6 +53,7 @@ mkDoctrine =
       , dAcyclicModes = S.singleton modeM
             , dGens = M.empty
       , dCells2 = []
+      , dBuiltins = []
       , dActions = M.empty
       , dObligations = []
       }

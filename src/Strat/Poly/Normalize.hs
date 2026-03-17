@@ -11,8 +11,8 @@ import Data.Text (Text)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Data.Monoid (Any(..), getAny)
 import Strat.Poly.Diagram (Diagram(..))
+import Strat.Poly.DefEq (defEqObjWithMapper)
 import Strat.Poly.Graph
   ( CanonDiagram(..)
   , Edge(..)
@@ -46,7 +46,6 @@ import Strat.Poly.Rewrite
   )
 import Strat.Poly.Syntax (CodeArg(..))
 import Strat.Poly.TypeTheory (TypeTheory)
-import Strat.Poly.Traversal (foldDiagram)
 
 
 data NormalizationStatus a
@@ -58,6 +57,8 @@ normalizeWithMapper :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Dia
 normalizeWithMapper spliceMapper tt fuel rules diag =
   go fuel diag (allEdgeIds diag)
   where
+    objEq = defEqObjWithMapper tt spliceMapper
+
     go remaining current worklist
       | remaining <= 0 =
           Right (OutOfFuel current)
@@ -68,7 +69,7 @@ normalizeWithMapper spliceMapper tt fuel rules diag =
               Just (next, nextWorklist) ->
                 Right (Just (next, nextWorklist))
               Nothing -> do
-                fullStep <- rewriteOnceRawWithMapper tt spliceMapper rules current
+                fullStep <- rewriteOnceRawWithMapper objEq tt spliceMapper rules current
                 case fullStep of
                   Nothing -> Right Nothing
                   Just next -> Right (Just (next, allEdgeIds next))
@@ -88,7 +89,7 @@ normalizeWithMapper spliceMapper tt fuel rules diag =
         goRules hostIndex (rule:rest)
           | dMode (rrLHS rule) /= dMode current = goRules hostIndex rest
           | otherwise = do
-              matches <- findAllMatchesWithIndexSeeded (mkMatchConfig tt rule) (rrLHS rule) hostIndex candidateEdges current
+              matches <- findAllMatchesWithIndexSeeded (mkMatchConfig objEq tt rule) (rrLHS rule) hostIndex candidateEdges current
               tryMatches rule matches
           where
             tryMatches _ [] = goRules hostIndex rest
@@ -246,7 +247,6 @@ findMeet nodes1 nodes2 = go 0
 
 rewriteAllWithProof :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Diagram -> Either Text [(RewriteStep, Diagram)]
 rewriteAllWithProof spliceMapper tt cap rules diag = do
-  rejectSplice "rewriteAll" diag
   top <- rewriteAllTopWithProof spliceMapper tt rules diag
   inner <- rewriteAllNestedWithProof spliceMapper tt cap rules diag
   pure (take cap (top <> inner))
@@ -256,12 +256,14 @@ rewriteAllTopWithProof spliceMapper tt rules diag =
   let hostIndex = buildHostIndex diag
    in foldl (collect hostIndex) (Right []) (zip [0 :: Int ..] rules)
   where
+    objEq = defEqObjWithMapper tt spliceMapper
+
     collect hostIndex acc (ruleIndex, rule) = do
       out <- acc
       if dMode (rrLHS rule) /= dMode diag
         then Right out
         else do
-          matches <- findAllMatchesWithIndex (mkMatchConfig tt rule) (rrLHS rule) hostIndex diag
+          matches <- findAllMatchesWithIndex (mkMatchConfig objEq tt rule) (rrLHS rule) hostIndex diag
           steps <- fmap concat (mapM (applyOne ruleIndex rule) matches)
           Right (out <> steps)
 
@@ -287,7 +289,7 @@ rewriteAllNestedWithProof spliceMapper tt cap rules diag = do
 rewriteInEdge :: SpliceMapper -> TypeTheory -> Int -> [RewriteRule] -> Diagram -> (Int, Edge) -> Either Text [(RewriteStep, Diagram)]
 rewriteInEdge spliceMapper tt cap rules diag (edgeKey, edge) =
   case ePayload edge of
-    PSplice _ _ -> Left "rewriteAll: splice nodes are not allowed in evaluation terms"
+    PSplice _ _ -> Right []
     PProvider _ -> Right []
     PModuleRef _ -> Right []
     PBox name inner -> do
@@ -360,22 +362,6 @@ rewriteAllBinderArgsWithProof spliceMapper tt cap rules args =
             | (step, inner') <- res
             ]
         _ -> Right []
-
-rejectSplice :: Text -> Diagram -> Either Text ()
-rejectSplice label diag =
-  if hasSplice diag
-    then Left (label <> ": splice nodes are not allowed in evaluation terms")
-    else Right ()
-
-hasSplice :: Diagram -> Bool
-hasSplice =
-  getAny . foldDiagram (\_ -> mempty) onPayload (\_ -> mempty) (\_ -> mempty)
-  where
-    onPayload payload =
-      Any $
-        case payload of
-          PSplice _ _ -> True
-          _ -> False
 
 combineLimits :: ReachStop -> ReachStop -> SearchLimit
 combineLimits s1 s2

@@ -28,14 +28,15 @@ import Strat.Frontend.Coerce (coerceDiagramTo)
 import Strat.Frontend.Env (ModuleEnv(..), ScopedValue(..))
 import Strat.Poly.DSL.AST
 import Strat.Poly.DSL.Elab.Resolve (elabRawModExpr)
-import Strat.Poly.DSL.Elab.Term
-  ( elabContextWithTables
-  , elabObjExprWithTablesInScope
-  , elabTmTermInScope
+import Strat.Poly.DSL.Elab.TermBase
+  ( elabContextWithTablesBy
+  , elabObjExprWithTablesInScopeBy
+  , elabTmTermWithTablesInScopeBy
   , mkTypeMetaVar
   , ownerModeForTypeMeta
   )
 import Strat.Poly.DefEq (normalizeObjDeep, termExprToDiagramChecked)
+import Strat.Poly.DiagramBuild (allocPorts)
 import Strat.Poly.Diagram
 import Strat.Poly.Doctrine
 import Strat.Poly.Graph
@@ -57,9 +58,12 @@ import Strat.Poly.ModAction (applyModExpr)
 import Strat.Poly.Names
 import Strat.Poly.Obj
 import qualified Strat.Poly.TeleArgs as TA
+import Strat.Poly.Term.AST (TermBinderArg(..))
 import Strat.Poly.TermExpr (TermExpr(..))
 import Strat.Poly.TypeTheory (TypeTheory(..), literalKindForObj, ttCtorTablesByOwner)
-import qualified Strat.Poly.UnifyObj as U
+import qualified Strat.Poly.Subst as US
+import qualified Strat.Poly.Term.SubstRuntime as SR
+import qualified Strat.Poly.UnifyFlex as UF
 
 renderGenName :: GenName -> Text
 renderGenName (GenName n) = n
@@ -224,8 +228,8 @@ elabDiagExprWithFresh
   -> RawDiagExpr
   -> Fresh (Diagram, M.Map BinderMetaVar BinderSig)
 elabDiagExprWithFresh valueScope typeScope env doc mode tmCtx tyVars tmVars binderSigs0 metaMode allowSplice allowImplicitGenArgs expr = do
-  ttDoc <- liftEither (doctrineTypeTheory doc)
-  let ctorTables = ttCtorTablesByOwner ttDoc
+  ctorTables <- liftEither (deriveCtorTablesForElab doc)
+  ttDoc <- liftEither (doctrineElabTypeTheoryFromTables doc ctorTables)
   build ttDoc ctorTables tmCtx binderSigs0 expr
   where
     rigidTy = S.fromList tyVars
@@ -234,7 +238,7 @@ elabDiagExprWithFresh valueScope typeScope env doc mode tmCtx tyVars tmVars bind
     build ttDoc ctorTables curTmCtx binderSigs e =
       case e of
         RDId ctx -> do
-          ctx' <- liftEither (elabContextWithTables doc ctorTables mode tyVars tmVars M.empty ctx)
+          ctx' <- liftEither (elabContextWithTablesBy (elabTermBinderArgs ttDoc) doc ctorTables mode tyVars tmVars M.empty ctx)
           pure (idDTm mode curTmCtx ctx', binderSigs)
         RDMetaVar name -> do
           baseTyVar <- liftEither (mkTypeMetaVar doc mode ("mv_" <> name))
@@ -385,8 +389,8 @@ elabDiagExprWithFresh valueScope typeScope env doc mode tmCtx tyVars tmVars bind
                   liftEither
                     ( TA.elabTeleArgsSequentialWith
                         ttDoc
-                        (elabTyArg ctorTables)
-                        (\expectedSort _ rawArg -> elabTmArg ttDoc curTmCtx' expectedSort rawArg)
+                        (elabTyArg ttDoc ctorTables)
+                        (\expectedSort _ rawArg -> elabTmArg ttDoc ctorTables curTmCtx' expectedSort rawArg)
                         freshParams
                         args
                     )
@@ -477,15 +481,58 @@ elabDiagExprWithFresh valueScope typeScope env doc mode tmCtx tyVars tmVars bind
                       | binderSigAlphaEq slot' slot -> pure (acc <> [BAMeta key], bsMap)
                       | otherwise -> liftEither (Left "binder meta used with inconsistent signature")
 
-    elabTyArg ctorTables v rawArg = do
+    elabTermBinderArgs ttDoc binderMode slots rawArgs =
+      case (slots, rawArgs) of
+        ([], []) -> Right []
+        ([], _) -> Left "term head does not accept binder arguments"
+        (_:_, []) -> Left "missing term head binder arguments"
+        _ | length slots /= length rawArgs ->
+              Left "term head binder arity mismatch"
+        _ ->
+              mapM (elabOne binderMode) (zip slots rawArgs)
+      where
+        elabOne binderMode' (slot, rawBinderArg) =
+          case rawBinderArg of
+            RBAMeta _ ->
+              Left "term head binder arguments do not support binder metavariables"
+            RBAExpr exprArg -> do
+              (diagArg, _) <-
+                elabDiagExprWithInScope
+                  valueScope
+                  typeScope
+                  env
+                  doc
+                  binderMode'
+                  (bsTmCtx slot)
+                  tyVars
+                  tmVars
+                  M.empty
+                  BMNoMeta
+                  False
+                  allowImplicitGenArgs
+                  exprArg
+              TBABody <$> unifyBoundary ttDoc rigidTy rigidTm (bsDom slot) (bsCod slot) diagArg
+
+    elabTyArg ttDoc ctorTables v rawArg = do
       ownerMode <- ownerModeForTypeMeta doc v
-      tyArg <- elabObjExprWithTablesInScope typeScope doc ctorTables tyVars tmVars M.empty ownerMode rawArg
+      tyArg <- elabObjExprWithTablesInScopeBy (elabTermBinderArgs ttDoc) typeScope doc ctorTables tyVars tmVars M.empty ownerMode rawArg
       if objOwnerMode tyArg == ownerMode
         then pure tyArg
         else Left "generator type argument mode mismatch"
 
-    elabTmArg ttDoc curTmCtx expectedSort rawArg =
-      case elabTmTermInScope typeScope doc tyVars tmVars M.empty (Just expectedSort) rawArg of
+    elabTmArg ttDoc ctorTables curTmCtx expectedSort rawArg =
+      case
+        elabTmTermWithTablesInScopeBy
+          (elabTermBinderArgs ttDoc)
+          typeScope
+          doc
+          ctorTables
+          tyVars
+          tmVars
+          M.empty
+          (Just expectedSort)
+          rawArg
+      of
         Right tm -> pure tm
         Left err ->
           case rawArg of
@@ -556,21 +603,15 @@ elabDiagExprWithFresh valueScope typeScope env doc mode tmCtx tyVars tmVars bind
         Nothing -> Left "diagram: internal missing port type"
         Just ty -> Right ty
 
-    canonicalCtx ttDoc ctx = liftEither (mapM (U.applySubstObj ttDoc U.emptySubst) ctx)
+    canonicalCtx ttDoc ctx = liftEither (mapM (SR.applySubstObj ttDoc US.emptySubst) ctx)
 
-    applySubstCtxDoc ttDoc subst ctx = liftEither (U.applySubstCtx ttDoc subst ctx)
+    applySubstCtxDoc ttDoc subst ctx = liftEither (SR.applySubstCtx ttDoc subst ctx)
 
     applySubstBinderSig ttDoc subst bs = do
       tmCtx' <- applySubstCtxDoc ttDoc subst (bsTmCtx bs)
       dom' <- applySubstCtxDoc ttDoc subst (bsDom bs)
       cod' <- applySubstCtxDoc ttDoc subst (bsCod bs)
       pure bs { bsTmCtx = tmCtx', bsDom = dom', bsCod = cod' }
-
-    allocPorts [] diag = ([], diag)
-    allocPorts (ty:rest) diag =
-      let (pid, diag1) = freshPort ty diag
-          (pids, diag2) = allocPorts rest diag1
-      in (pid:pids, diag2)
 
     lookupDoctrine env' name =
       case M.lookup name (meDoctrines env') of
@@ -630,11 +671,11 @@ unifyBoundary tt rigidTy rigidTm dom cod diag = do
   domDiag <- diagramDom diag
   let rigid = S.union rigidTy rigidTm
   let flex0 = S.difference (freeVarsDiagram diag) rigid
-  s1 <- U.unifyCtx tt (dTmCtx diag) flex0 domDiag dom
+  s1 <- UF.unifyCtx tt (dTmCtx diag) flex0 domDiag dom
   diag1 <- applySubstDiagram tt s1 diag
   codDiag <- diagramCod diag1
   let flex1 = S.difference (freeVarsDiagram diag1) rigid
-  s2 <- U.unifyCtx tt (dTmCtx diag1) flex1 codDiag cod
+  s2 <- UF.unifyCtx tt (dTmCtx diag1) flex1 codDiag cod
   applySubstDiagram tt s2 diag1
 
 mkForGenDiag :: ModeName -> GenDecl -> Either Text Diagram
@@ -669,12 +710,6 @@ mkForGenDiag mode gen = do
       [ BAMeta (BinderMetaVar ("for_gen_b" <> T.pack (show i)))
       | (i, _) <- zip [0 :: Int ..] [ () | InBinder _ <- domShapes ]
       ]
-
-    allocPorts [] diag = ([], diag)
-    allocPorts (ty:rest) diag =
-      let (pid, diag1) = freshPort ty diag
-          (pids, diag2) = allocPorts rest diag1
-       in (pid : pids, diag2)
 
 ensureDistinct :: Ord a => Text -> [a] -> Either Text ()
 ensureDistinct label names =

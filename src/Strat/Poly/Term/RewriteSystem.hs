@@ -21,13 +21,16 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Strat.Poly.ModeSyntax (ModeName)
 import Strat.Poly.Names (GenName(..))
-import Strat.Poly.Term.AST (TermExpr(..), TermHeadArg(..))
+import Strat.Poly.Syntax (TermDiagram, TmVar)
+import Strat.Poly.Term.AST (TermBinderArg(..), TermExpr(..), TermHeadArg(..))
 
 
 data TRule = TRule
   { trName :: Text
+  , trVars :: [TmVar]
   , trLHS  :: TermExpr
-  , trRHS  :: TermExpr
+  , trRHS  :: Maybe TermExpr
+  , trRHSDiagram :: Maybe TermDiagram
   } deriving (Eq, Ord, Show)
 
 data TRS = TRS
@@ -52,7 +55,7 @@ mkTRS mode rules =
 rootKey :: TermExpr -> Maybe GenName
 rootKey tm =
   case tm of
-    TMGen f _ -> Just f
+    TMHead f _ _ -> Just f
     _ -> Nothing
 
 applyTermSubstClosed :: TermSubst -> TermExpr -> TermExpr
@@ -68,7 +71,8 @@ applyTermSubstClosed subst = go S.empty
                 then TMBound i
                 else go (S.insert i seen) t
         TMMeta _ _ -> tm
-        TMGen f args -> TMGen f (map (mapHeadArg (go seen)) args)
+        TMHead f args bargs -> TMHead f (map (mapHeadArg (go seen)) args) bargs
+        TMSplice hole me args -> TMSplice hole me (map (go seen) args)
         TMLit lit -> TMLit lit
 
 applyTermSubstOnce :: TermSubst -> TermExpr -> TermExpr
@@ -81,7 +85,8 @@ applyTermSubstOnce subst = go
             Nothing -> TMBound i
             Just t -> t
         TMMeta _ _ -> tm
-        TMGen f args -> TMGen f (map (mapHeadArg go) args)
+        TMHead f args bargs -> TMHead f (map (mapHeadArg go) args) bargs
+        TMSplice hole me args -> TMSplice hole me (map go args)
         TMLit lit -> TMLit lit
 
 renameBoundVars :: Int -> TermExpr -> TermExpr
@@ -89,7 +94,8 @@ renameBoundVars off tm =
   case tm of
     TMBound i -> TMBound (i + off)
     TMMeta v args -> TMMeta v (map (+ off) args)
-    TMGen f args -> TMGen f (map (mapHeadArg (renameBoundVars off)) args)
+    TMHead f args bargs -> TMHead f (map (mapHeadArg (renameBoundVars off)) args) bargs
+    TMSplice hole me args -> TMSplice hole me (map (renameBoundVars off) args)
     TMLit lit -> TMLit lit
 
 maxBoundVarIndex :: TermExpr -> Int
@@ -97,7 +103,8 @@ maxBoundVarIndex tm =
   case tm of
     TMBound i -> i
     TMMeta _ args -> maximum (-1 : args)
-    TMGen _ args -> maximum (-1 : map maxHeadArg args)
+    TMHead _ args _ -> maximum (-1 : map maxHeadArg args)
+    TMSplice _ _ args -> maximum (-1 : map maxBoundVarIndex args)
     TMLit _ -> -1
   where
     maxHeadArg arg =
@@ -110,7 +117,8 @@ boundVarSet tm =
   case tm of
     TMBound i -> S.singleton i
     TMMeta _ args -> S.fromList args
-    TMGen _ args -> S.unions (map boundHeadArg args)
+    TMHead _ args _ -> S.unions (map boundHeadArg args)
+    TMSplice _ _ args -> S.unions (map boundVarSet args)
     TMLit _ -> S.empty
   where
     boundHeadArg arg =
@@ -123,7 +131,8 @@ occursBoundVar needle tm =
   case tm of
     TMBound i -> i == needle
     TMMeta _ args -> needle `elem` args
-    TMGen _ args -> any occursHeadArg args
+    TMHead _ args _ -> any occursHeadArg args
+    TMSplice _ _ args -> any (occursBoundVar needle) args
     TMLit _ -> False
   where
     occursHeadArg arg =
@@ -148,13 +157,26 @@ matchPattern pat tm = go M.empty pat tm
           case tgtTm of
             TMMeta w args' | v == w && args == args' -> Just subst
             _ -> Nothing
-        TMGen f args ->
+        TMHead f args bargs ->
           case tgtTm of
-            TMGen g args'
+            TMHead g args' bargs'
               | f == g
+              , matchBinderArgs bargs bargs'
               , length args == length args' ->
                   foldM
                     (\s (a, b) -> matchHeadArg s a b)
+                    subst
+                    (zip args args')
+            _ ->
+              Nothing
+        TMSplice hole me args ->
+          case tgtTm of
+            TMSplice hole' me' args'
+              | hole == hole'
+              , me == me'
+              , length args == length args' ->
+                  foldM
+                    (\s (a, b) -> go s a b)
                     subst
                     (zip args args')
             _ ->
@@ -184,12 +206,18 @@ unifyTerms lhs rhs = go M.empty [(lhs, rhs)]
               case (a', b') of
                 (TMBound i, t) -> bindVar i t subst rest
                 (t, TMBound i) -> bindVar i t subst rest
-                (TMGen f xs, TMGen g ys)
+                (TMHead f xs bxs, TMHead g ys bys)
                   | f == g
+                  , binderArgsEq bxs bys
                   , length xs == length ys ->
                       case zipHeadArgs xs ys of
                         Nothing -> Nothing
                         Just pairs -> go subst (pairs <> rest)
+                (TMSplice hole me xs, TMSplice hole' me' ys)
+                  | hole == hole'
+                  , me == me'
+                  , length xs == length ys ->
+                      go subst (zip xs ys <> rest)
                 (TMMeta v args, TMMeta w args')
                   | v == w
                   , args == args' ->
@@ -222,3 +250,16 @@ zipHeadArgs (THAObj objA : as) (THAObj objB : bs)
   | objA == objB = zipHeadArgs as bs
   | otherwise = Nothing
 zipHeadArgs _ _ = Nothing
+
+matchBinderArgs :: [TermBinderArg] -> [TermBinderArg] -> Bool
+matchBinderArgs xs ys = and (zipWith binderArgEq xs ys) && length xs == length ys
+
+binderArgsEq :: [TermBinderArg] -> [TermBinderArg] -> Bool
+binderArgsEq = matchBinderArgs
+
+binderArgEq :: TermBinderArg -> TermBinderArg -> Bool
+binderArgEq left right =
+  case (left, right) of
+    (TBABody d1, TBABody d2) -> d1 == d2
+    (TBAHole h1, TBAHole h2) -> h1 == h2
+    _ -> False

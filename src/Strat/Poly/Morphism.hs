@@ -24,14 +24,14 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
-import qualified Data.List as L
 import qualified Data.Set as S
 import Control.Monad (foldM)
 import Data.Functor.Identity (runIdentity)
 import Data.Bifunctor (first)
 import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.Alpha
-  ( renameBinderArgAlpha
+  ( freshenCtorSigAgainstWithMaps
+  , renameBinderArgAlpha
   , renameCodeArgAlpha
   , renameDiagramAlpha
   , renameParamAlpha
@@ -60,8 +60,10 @@ import Strat.Poly.DiagramInterpretation
   )
 import Strat.Poly.Names
 import Strat.Poly.Obj
+import Strat.Poly.Subst (Subst, codeBindings, emptySubst, insertCodeMeta, insertTmMeta, mkSubst, tmBindings)
 import Strat.Poly.Tele (CtorSig(..), GenParam(..))
-import Strat.Poly.UnifyObj hiding (applySubstDiagram)
+import Strat.Poly.Term.Compat (unifyCtxCompat, unifyCtxFromPattern)
+import Strat.Poly.Term.SubstRuntime (applySubstCtx, applySubstObj, composeSubst)
 import Strat.Poly.TypeTheory (TypeTheory, literalKindForObj)
 import Strat.Poly.DefEq (normalizeObjDeep, defEqObj, termExprToDiagramChecked)
 import Strat.Poly.Literal (renderLiteralKind)
@@ -95,16 +97,6 @@ import Strat.Poly.ModeTheory
 import Strat.Common.Rules (RuleClass(..))
 import Strat.Poly.Traversal (traverseDiagram)
 import Strat.Poly.TermExpr (TermExpr(..))
-
-unifyCtxCompat :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
-unifyCtxCompat tt tmCtx ctxA ctxB =
-  let flex = S.unions (map freeVarsObj (ctxA <> ctxB))
-   in unifyCtx tt tmCtx flex ctxA ctxB
-
-unifyCtxFromPattern :: TypeTheory -> [Obj] -> Context -> Context -> Either Text Subst
-unifyCtxFromPattern tt tmCtx pat host =
-  let flex = S.unions (map freeVarsObj pat)
-   in unifyCtx tt tmCtx flex pat host
 
 
 data Morphism = Morphism
@@ -273,8 +265,12 @@ applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor ty = do
       | length (ttParams tmpl) /= length args =
           Left "morphism: type template arity mismatch during instantiation"
       | otherwise = do
-          subst <- foldM addParam emptySubst (zip (ttParams tmpl) args)
-          applySubstObj tgtTheory subst (ttBody tmpl)
+          let used = S.unions (map argFreeVars args)
+          let (CtorSig params', tyMap, tmMap) =
+                freshenCtorSigAgainstWithMaps used (CtorSig (ttParams tmpl))
+          let body' = renameTypeAlpha tyMap tmMap (ttBody tmpl)
+          subst <- foldM addParam emptySubst (zip params' args)
+          applySubstObj tgtTheory subst body'
 
     addParam s (param, arg) =
       case (param, arg) of
@@ -284,6 +280,11 @@ applyMorphismTyWithCaches srcTheory tgtTheory tgtCtorTables mor ty = do
           insertTmMeta v tmArg s
         _ ->
           Left "morphism: type template kind mismatch during instantiation"
+
+    argFreeVars arg =
+      case arg of
+        OAObj obj -> freeVarsObj obj
+        OATm tmArg -> freeVarsDiagram (unTerm tmArg)
 
 applyMorphismTmTermWithTheories
   :: TypeTheory
@@ -1145,7 +1146,7 @@ checkCell :: SearchBudget -> TypeTheory -> TypeTheory -> CtorTables -> Morphism 
 checkCell budget ttSrc ttTgt tgtCtorTables mor cell = do
   lhs <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables mor (c2LHS cell)
   rhs <- applyMorphismDiagramWithTheories ttSrc ttTgt tgtCtorTables mor (c2RHS cell)
-  let rules = rulesFromPolicy (morPolicy mor) (dCells2 (morTgt mor))
+  let rules = rulesForDiagram (morPolicy mor) ttTgt lhs
   proof <- autoJoinProofWithMapper (applyModExpr (morTgt mor)) ttTgt budget rules lhs rhs
   case proof of
     SearchUndecided lim ->

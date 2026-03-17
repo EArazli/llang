@@ -21,9 +21,12 @@ normalizeTermExpr trs tm = fst (normalizeWithMemo M.empty tm)
 
     normalizeChildren memo term =
       case term of
-        TMGen f args ->
+        TMHead f args bargs ->
           let (args', memo') = normalizeArgList memo args
-           in (TMGen f args', memo')
+           in (TMHead f args' bargs, memo')
+        TMSplice hole me args ->
+          let (args', memo') = normalizeTermList memo args
+           in (TMSplice hole me args', memo')
         _ -> (term, memo)
 
     normalizeArgList memo [] = ([], memo)
@@ -38,6 +41,12 @@ normalizeTermExpr trs tm = fst (normalizeWithMemo M.empty tm)
         THATm tm0 ->
           let (tm1, memo1) = normalizeWithMemo memo tm0
            in (THATm tm1, memo1)
+
+    normalizeTermList memo [] = ([], memo)
+    normalizeTermList memo (x:xs) =
+      let (x', memo1) = normalizeWithMemo memo x
+          (xs', memo2) = normalizeTermList memo1 xs
+       in (x' : xs', memo2)
 
     rewriteToFixpoint memo term =
       case rewriteRootOnce term of
@@ -59,7 +68,8 @@ normalizeTermExpr trs tm = fst (normalizeWithMemo M.empty tm)
 rewriteByRule :: TRule -> TermExpr -> Maybe TermExpr
 rewriteByRule rule term = do
   subst <- matchPattern (trLHS rule) term
-  pure (applySubstOnce subst (trRHS rule))
+  rhs <- trRHS rule
+  pure (applySubstOnce subst rhs)
 
 applySubstOnce :: TermSubst -> TermExpr -> TermExpr
 applySubstOnce subst = applyTermSubstOnce subst

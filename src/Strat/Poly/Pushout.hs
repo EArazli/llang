@@ -13,6 +13,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
+import qualified Data.List as L
 import Control.Monad (filterM, foldM)
 import Data.Functor.Identity (runIdentity)
 import Strat.Common.Rules (RewritePolicy(..))
@@ -836,6 +837,7 @@ computePolyCoproduct name a b = do
         , dAcyclicModes = S.empty
         , dGens = M.empty
         , dCells2 = []
+        , dBuiltins = []
         , dActions = M.empty
         , dObligations = []
         }
@@ -1674,6 +1676,7 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
   ctorTables <- ctorTablesByDoc
   gens' <- renameGenTables ctorTables (dGens doc)
   cells' <- mapM (renameCell modeRen modRen tyRen permRen genRen cellRen) (dCells2 doc)
+  let builtins' = map renameBuiltinDecl (dBuiltins doc)
   actions' <- renameActions (dActions doc)
   obligations' <- mapM renameObligation (dObligations doc)
   let acyclic' =
@@ -1684,12 +1687,34 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
       , dAcyclicModes = acyclic'
       , dGens = gens'
       , dCells2 = cells'
+      , dBuiltins = builtins'
       , dActions = actions'
       , dObligations = obligations'
       }
   where
     mt = dModes doc
     ctorTablesByDoc = deriveCtorTables doc
+
+    renameBuiltinDecl decl =
+      BuiltinDecl
+        { bdHead = renameGen (bdMode decl) (bdHead decl)
+        , bdMode = renameModeName modeRen (bdMode decl)
+        , bdSpec = renameBuiltinSpec (bdMode decl) (bdSpec decl)
+        }
+
+    renameBuiltinSpec mode spec =
+      case spec of
+        BDTransport ->
+          BDTransport
+        BDInductiveElim scrutineeIx branches ->
+          BDInductiveElim scrutineeIx (map (renameBuiltinBranch mode) branches)
+
+    renameBuiltinBranch mode branch =
+      branch { bbdCtor = renameGen mode (bbdCtor branch) }
+
+    renameGen mode g =
+      let mode' = renameModeName modeRen mode
+       in M.findWithDefault g (mode', g) genRen
 
     renameModeTransforms transRen mt0 = do
       transforms' <- foldM addTransform M.empty (M.toList (mtTransforms mt0))
@@ -2000,36 +2025,39 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
               let ref0 = M.findWithDefault ref ref tyRen
               let ref' = ref0 { orMode = renameModeName modeRen (orMode ref0) }
               pure (mkQualifiedRawTypeCon ref' [])
-        PolyAST.RPTCon ref args ->
-          case asModalityCall mode ref args of
-            Just (rawMe, innerRaw) -> do
-              (srcMode, _tgtMode) <- rawModExprEndpoints mode rawMe
-              inner' <- renameRawTypeAsType tyVarNames tmVarNames srcMode innerRaw
-              let rawMe' = renameRawModExpr rawMe
-              pure (PolyAST.RPTMod rawMe' inner')
-            Nothing -> do
-              ref0 <- resolveRawTypeRefAsType mode ref
-              tables <- ctorTablesByDoc
-              sig <- lookupCtorSigForOwnerInTables doc tables mode ref0
-              if length (csParams sig) /= length args
-                then Left "poly pushout: obligation raw type arity mismatch"
-                else do
-                  args0 <- mapM (renameOneArg tyVarNames tmVarNames) (zip (csParams sig) args)
-                  let args1 =
-                        case M.lookup ref0 permRen of
-                          Nothing -> Right args0
-                          Just perm -> applyPerm perm args0
-                  args2 <- args1
-                  let ref1 = M.findWithDefault ref0 ref0 tyRen
-                  let ref' = ref1 { orMode = renameModeName modeRen (orMode ref1) }
-                  pure (mkQualifiedRawTypeCon ref' args2)
+        PolyAST.RPTCon ref args bargs
+          | not (null bargs) ->
+              Left "poly pushout: binder arguments are invalid in raw type context"
+          | otherwise ->
+              case asModalityCall mode ref args of
+                Just (rawMe, innerRaw) -> do
+                  (srcMode, _tgtMode) <- rawModExprEndpoints mode rawMe
+                  inner' <- renameRawTypeAsType tyVarNames tmVarNames srcMode innerRaw
+                  let rawMe' = renameRawModExpr rawMe
+                  pure (PolyAST.RPTMod rawMe' inner')
+                Nothing -> do
+                  ref0 <- resolveRawTypeRefAsType mode ref
+                  tables <- ctorTablesByDoc
+                  sig <- lookupCtorSigForOwnerInTables doc tables mode ref0
+                  if length (csParams sig) /= length args
+                    then Left "poly pushout: obligation raw type arity mismatch"
+                    else do
+                      args0 <- mapM (renameOneArg tyVarNames tmVarNames) (zip (csParams sig) args)
+                      let args1 =
+                            case M.lookup ref0 permRen of
+                              Nothing -> Right args0
+                              Just perm -> applyPerm perm args0
+                      args2 <- args1
+                      let ref1 = M.findWithDefault ref0 ref0 tyRen
+                      let ref' = ref1 { orMode = renameModeName modeRen (orMode ref1) }
+                      pure (mkQualifiedRawTypeCon ref' args2)
         PolyAST.RPTMod me inner -> do
           (innerMode, _outerMode) <- rawModExprEndpoints mode me
           inner' <- renameRawTypeAsType tyVarNames tmVarNames innerMode inner
           let me' = renameRawModExpr me
           pure (PolyAST.RPTMod me' inner')
 
-    renameRawTypeAsTmTerm tmVarNames mode ty =
+    renameRawTypeAsTmTerm tyVarNames tmVarNames mode ty =
       case ty of
         PolyAST.RPTVar name ->
           if name `S.member` tmVarNames
@@ -2037,8 +2065,9 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
             else do
               let name' = renameTmFunLike mode name
               Right (PolyAST.RPTVar name')
-        PolyAST.RPTCon ref args -> do
-          args' <- mapM (renameRawTypeAsTmTerm tmVarNames mode) args
+        PolyAST.RPTCon ref args bargs -> do
+          args' <- mapM (renameRawTypeAsTmTerm tyVarNames tmVarNames mode) args
+          bargs' <- mapM (renameRawBinderArg tyVarNames tmVarNames mode) bargs
           let name' = renameTmFunLike mode (PolyAST.rtrName ref)
           pure
             ( PolyAST.RPTCon
@@ -2046,6 +2075,7 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
                   { PolyAST.rtrName = name'
                   }
                 args'
+                bargs'
             )
         PolyAST.RPTMod _ _ ->
           Left "poly pushout: modality application is invalid in term-argument context"
@@ -2078,7 +2108,7 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
         GP_Ty _ ->
           renameRawTypeAsType tyVarNames tmVarNames mode arg
         GP_Tm tmv ->
-          renameRawTypeAsTmTerm tmVarNames (objMode (tmvSort tmv)) arg
+          renameRawTypeAsTmTerm tyVarNames tmVarNames (objMode (tmvSort tmv)) arg
 
     paramName param =
       case param of
@@ -2090,7 +2120,7 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
         GP_Ty v ->
           renameRawTypeAsType tyVarNames tmVarNames (tmVarOwner v) arg
         GP_Tm v ->
-          renameRawTypeAsTmTerm tmVarNames (objMode (tmvSort v)) arg
+          renameRawTypeAsTmTerm tyVarNames tmVarNames (objMode (tmvSort v)) arg
 
     lookupGenDecl mode genName =
       case M.lookup mode (dGens doc) >>= M.lookup genName of
@@ -2155,6 +2185,7 @@ renameDoctrine modeRen modRen tyRen permRen genRen cellRen oblRen transformRen d
           , PolyAST.rtrName = renderTypeName (orName ref)
           }
         args
+        []
 
     rawModExprEndpoints fallbackMode me =
       case me of
@@ -2384,6 +2415,7 @@ mergeDoctrine mt a b = do
   ensureModeTheory "right" b
   gens <- mergeGenTables (dGens a) (dGens b)
   cells <- mergeCells mt (dCells2 a) (dCells2 b)
+  builtins <- mergeBuiltins (dBuiltins a) (dBuiltins b)
   actions <- mergeActions (dActions a) (dActions b)
   obligations <- mergeObligations (dObligations a) (dObligations b)
   let merged =
@@ -2392,6 +2424,7 @@ mergeDoctrine mt a b = do
           , dAcyclicModes = S.union (dAcyclicModes a) (dAcyclicModes b)
           , dGens = gens
           , dCells2 = cells
+          , dBuiltins = builtins
           , dActions = actions
           , dObligations = obligations
           }
@@ -2402,6 +2435,25 @@ mergeDoctrine mt a b = do
       if dModes doc == mt
         then Right ()
         else Left ("poly pushout: " <> side <> " doctrine mode theory mismatch")
+
+    mergeBuiltins left right =
+      foldM step left right
+      where
+        step acc decl =
+          case L.find (\existing -> (bdMode existing, bdHead existing) == (bdMode decl, bdHead decl)) acc of
+            Nothing ->
+              Right (acc <> [decl])
+            Just existing
+              | existing == decl ->
+                  Right acc
+              | otherwise ->
+                  let GenName gName = bdHead decl
+                   in Left
+                        ( "poly pushout: incompatible explicit builtin declaration for "
+                            <> renderModeName (bdMode decl)
+                            <> "."
+                            <> gName
+                        )
 
     mergeGenTables left right =
       foldl mergeGenMode (Right left) (M.toList right)
