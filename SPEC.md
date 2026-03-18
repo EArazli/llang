@@ -319,20 +319,16 @@ Current implementation centralizes normalization/equality entrypoints in `Strat.
 - `defEqObj`
 - `defEqTermDiagram`
 
-Per-mode definitional data is represented by `DefFragment`:
+Per-mode definitional data is represented by a single `DefFragment` record:
 
-- `DefFragmentTRS`:
-  - `dfMode`: mode name
-  - `dfHeads`: admissible term heads in that mode, keyed by generator names (`GenName`); there is no separate term-head namespace, so TRS symbols are exactly the eligible generator symbols of the mode.
-  - `dfRules`: admissible computational rules in that mode
-  - `dfTRS`: compiled TRS used by normalization/equality
-- `DefFragmentNBE`:
-  - `dfMode`: mode name
-  - `dfHeads`: admissible term heads in that mode, keyed by generator names (`GenName`); there is no separate term-head namespace, so NbE term heads are exactly the eligible generator symbols of the mode.
-  - `dfRules`: admissible computational rules in that mode
-  - `dfNBE`: NbE configuration
+- `dfMode`: mode name.
+- `dfHeads`: admissible term heads in that mode, keyed by generator names (`GenName`); there is no separate term-head namespace, so eligible term symbols are exactly the eligible generator symbols of the mode.
+- `dfRules`: admissible first-order term rules in that mode.
+- `dfDiagramRules`: fragment-owned structural computational rules on diagrams.
+- `dfCompiledRules`: compiled first-order TRS used by the semantic term core.
+- `dfBuiltins`: inferred builtin head configuration (currently the lambda/application fragment when present).
 
-`normalizeCodeTermDeepWithCtx` and `normalizeTermDiagram` are the shared normalization services used by object equality (`defEqObj`) and term equality (`defEqTermDiagram`). `normalizeTermDiagram` dispatches by mode fragment (`TRS` vs `NbE`).
+`normalizeCodeTermDeepWithCtx` and `normalizeTermDiagram` are the shared normalization services used by object equality (`defEqObj`) and term equality (`defEqTermDiagram`). Public kernel normalization no longer dispatches between separate public `TRS` and `NbE` engines; instead, one unified kernel path evaluates the term-headed core using the fragment's compiled term rules and inferred builtins, while fragment-owned structural computational rules may rewrite surrounding diagram structure between semantic rounds.
 
 ## 4. Doctrine Layer
 

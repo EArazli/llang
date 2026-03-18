@@ -17,5 +17,7 @@ Examples:
   `stack run -- examples/build/autodiff_times_sin_pair_core.llang --build main2`
 - Inspect the reflected quotation IR directly:
   `stack run -- examples/build/autodiff_times_sin_pair_core.llang --build share`
+- Inspect the two-pass reflected quotation IR directly:
+  `stack run -- examples/build/autodiff_times_sin_pair_core.llang --build share2`
 - Write emitted `FileTree` artifacts to disk:
   `stack run -- examples/build/autodiff_times_sin.llang --build main --output`
