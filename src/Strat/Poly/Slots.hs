@@ -22,7 +22,7 @@ import Strat.Poly.Doctrine
   , BinderSig(..)
   , CtorTables
   , deriveCtorTables
-  , doctrineTypeTheoryFromTables
+  , doctrineTypeTheoryBaseFromTables
   , lookupCtorSigForOwnerInTables
   )
 import Strat.Poly.ModeTheory (ModeName(..))
@@ -43,6 +43,7 @@ import Strat.Poly.Tele (CtorSig(..), GenParam(..))
 import Strat.Poly.Subst (bindHeadSubst)
 import Strat.Poly.TermExpr (applyHeadSubstObj, structuralConvEnv)
 import Strat.Poly.Syntax (Diagram(..), Edge(..), EdgePayload(..), BinderArg(..), TmVar(..))
+import Strat.Poly.TypeTheory (TypeTheory)
 
 data SlotKind
   = SlotBinder
@@ -78,25 +79,31 @@ extractDoctrineSlotsWithTables
   -> CtorTables
   -> Either Text (M.Map (ModeName, GenName) [Slot])
 extractDoctrineSlotsWithTables doc ctorTables = do
+  tt <- doctrineTypeTheoryBaseFromTables doc ctorTables
   let allGens =
         [ (mode, gd)
         | (mode, table) <- M.toList (dGens doc)
         , gd <- M.elems table
         ]
-  fmap M.fromList (mapM (one ctorTables) allGens)
+  fmap M.fromList (mapM (one tt ctorTables) allGens)
   where
-    one ctorTables (mode, gd) = do
-      slots <- extractGenSlotsWithTables doc ctorTables gd
+    one tt ctorTables (mode, gd) = do
+      slots <- extractGenSlotsWithTypeTheory doc ctorTables tt gd
       Right ((mode, gdName gd), slots)
 
 extractGenSlots :: Doctrine -> GenDecl -> Either Text [Slot]
 extractGenSlots doc gd = do
   ctorTables <- deriveCtorTables doc
-  extractGenSlotsWithTables doc ctorTables gd
+  tt <- doctrineTypeTheoryBaseFromTables doc ctorTables
+  extractGenSlotsWithTypeTheory doc ctorTables tt gd
 
 extractGenSlotsWithTables :: Doctrine -> CtorTables -> GenDecl -> Either Text [Slot]
 extractGenSlotsWithTables doc ctorTables gd = do
-  tt <- doctrineTypeTheoryFromTables doc ctorTables
+  tt <- doctrineTypeTheoryBaseFromTables doc ctorTables
+  extractGenSlotsWithTypeTheory doc ctorTables tt gd
+
+extractGenSlotsWithTypeTheory :: Doctrine -> CtorTables -> TypeTheory -> GenDecl -> Either Text [Slot]
+extractGenSlotsWithTypeTheory doc ctorTables tt gd = do
   let domOne (i, shape) =
         slotsInInputShape ("dom[" <> tshow i <> "]") shape
       codOne (i, ty) =

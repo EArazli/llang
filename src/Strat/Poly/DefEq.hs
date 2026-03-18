@@ -55,9 +55,12 @@ defEqObj tt =
 
 defEqObjWithMapper :: TypeTheory -> SpliceMapper -> [Obj] -> Obj -> Obj -> Either Text Bool
 defEqObjWithMapper tt spliceMapper tmCtx a b = do
-  aN <- normalizeObjDeepWithCtxWithMapper tt spliceMapper tmCtx a
-  bN <- normalizeObjDeepWithCtxWithMapper tt spliceMapper tmCtx b
-  pure (aN == bN)
+  if a == b
+    then Right True
+    else do
+      aN <- normalizeObjDeepWithCtxWithMapper tt spliceMapper tmCtx a
+      bN <- normalizeObjDeepWithCtxWithMapper tt spliceMapper tmCtx b
+      pure (aN == bN)
 
 defEqTermDiagram
   :: TypeTheory

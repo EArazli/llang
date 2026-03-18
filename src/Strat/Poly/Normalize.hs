@@ -22,7 +22,12 @@ import Strat.Poly.Graph
   , canonDiagram
   )
 import Strat.Poly.Obj (TermDiagram(..))
-import Strat.Poly.Match (Match(..), buildHostIndex, findAllMatchesWithIndex, findAllMatchesWithIndexSeeded)
+import Strat.Poly.Match
+  ( Match(..)
+  , buildHostIndex
+  , findAllMatchesWithIndex
+  , findFirstSuccessfulMatchWithIndexSeeded
+  )
 import Strat.Poly.Proof
   ( JoinProof(..)
   , RewritePath(..)
@@ -89,15 +94,21 @@ normalizeWithMapper spliceMapper tt fuel rules diag =
         goRules hostIndex (rule:rest)
           | dMode (rrLHS rule) /= dMode current = goRules hostIndex rest
           | otherwise = do
-              matches <- findAllMatchesWithIndexSeeded (mkMatchConfig objEq tt rule) (rrLHS rule) hostIndex candidateEdges current
-              tryMatches rule matches
-          where
-            tryMatches _ [] = goRules hostIndex rest
-            tryMatches rule (match:more) =
-              case applyMatchWithMapper tt spliceMapper rule match current of
-                Left _ -> tryMatches rule more
-                Right next ->
-                  Right (Just (next, affectedEdges current next match))
+              result <-
+                findFirstSuccessfulMatchWithIndexSeeded
+                  (mkMatchConfig objEq tt rule)
+                  (rrLHS rule)
+                  hostIndex
+                  candidateEdges
+                  current
+                  (\match ->
+                      case applyMatchWithMapper tt spliceMapper rule match current of
+                        Left _ -> Right Nothing
+                        Right next -> Right (Just (next, affectedEdges current next match))
+                  )
+              case result of
+                Just out -> Right (Just out)
+                Nothing -> goRules hostIndex rest
 
     affectedEdges before after match =
       let oldKeys = S.fromList (IM.keys (dEdges before))

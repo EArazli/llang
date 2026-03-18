@@ -13,18 +13,13 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Strat.Poly.Graph
   ( Diagram(..)
-  , PortId
-  , diagramPortObj
   , validateLiteralEdges
   , weakenDiagramTmCtxToModePrefix
   )
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Obj (Obj, TermDiagram(..), objOwnerMode)
 import qualified Strat.Poly.Term.NormalizeCommon as Common
-import Strat.Poly.Term.NBE.Normalize
-  ( normalizeDiagramDefEq
-  , validateDiagramDefEq
-  )
+import Strat.Poly.Term.NBE.Normalize (normalizeDiagramDefEq)
 import Strat.Poly.Term.RuleDiagram (SpliceMapper, sameModeSpliceMapper)
 import Strat.Poly.TermExpr (TermConvEnv, mkNormalizingConvEnv)
 import Strat.Poly.TypeTheory (DefFragment, TypeTheory, defFragmentForMode)
@@ -73,14 +68,10 @@ normalizeTermDiagramWithMapperUsing normalizeRound tt spliceMapper tmCtx expecte
       Just one -> Right one
       Nothing -> Left "normalizeTermDiagram: missing definitional fragment for mode"
   let conv = mkNormalizingConvEnv tt spliceMapper (normalizeObjDeepWithCtxWithMapper tt spliceMapper)
-  wrap "validate-diagram" (validateDiagramDefEq fragment tt conv tmCtx expectedSort' src)
   wrap "validate-literals" (validateLiteralEdges tt src)
-  wrap "check-output-sort" (ensureOutputSortWith (normalizeObjDeepWithCtxWithMapper tt spliceMapper) tmCtx expectedSort' src)
   out <- wrap "defeq-round" (normalizeRound fragment tt conv tmCtx expectedSort' src)
   let outGraph = unTerm out
-  wrap "validate-output-graph" (validateDiagramDefEq fragment tt conv tmCtx expectedSort' outGraph)
   wrap "validate-literals" (validateLiteralEdges tt outGraph)
-  wrap "check-output-sort" (ensureOutputSortWith (normalizeObjDeepWithCtxWithMapper tt spliceMapper) tmCtx expectedSort' outGraph)
   pure out
   where
     wrap stage =
@@ -120,30 +111,6 @@ termToDiagramWithMapper
   -> Either Text Diagram
 termToDiagramWithMapper tt =
   Common.termToDiagramWithMapperUsing normalizeTermDiagramWithMapper tt
-
-ensureOutputSortWith :: ([Obj] -> Obj -> Either Text Obj) -> [Obj] -> Obj -> Diagram -> Either Text ()
-ensureOutputSortWith normalizeObj tmCtx expectedSort term = do
-  out <- requireSingleOut term
-  outSort <-
-    case diagramPortObj term out of
-      Nothing -> Left "termToDiagram: missing output port type"
-      Just ty -> normalizeObj tmCtx ty
-  expectedSort' <- normalizeObj tmCtx expectedSort
-  if outSort == expectedSort'
-    then pure ()
-    else
-      Left
-        ( "termToDiagram: expected output sort "
-            <> T.pack (show expectedSort')
-            <> " but got "
-            <> T.pack (show outSort)
-        )
-
-requireSingleOut :: Diagram -> Either Text PortId
-requireSingleOut term =
-  case dOut term of
-    [p] -> Right p
-    _ -> Left "termToDiagram: term must have exactly one output"
 
 renderMode :: ModeName -> Text
 renderMode = T.pack . show

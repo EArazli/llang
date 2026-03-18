@@ -23,10 +23,10 @@ import Strat.Common.Rules (RewritePolicy(..))
 import Strat.Poly.Graph (Diagram, dMode)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Obj (CodeTerm, Obj, TermDiagram)
-import Strat.Poly.Rewrite (rewriteOnceRawWithMapper, rulesForMode)
+import Strat.Poly.Rewrite (RewriteProgress(..), rewriteOnceRawDetailedWithMapper, rulesForMode)
 import qualified Strat.Poly.Term.DefEqCore as Core
 import qualified Strat.Poly.Term.NormalizeCommon as Common
-import Strat.Poly.Term.NBE.Normalize (normalizeDiagramDefEqWithStep)
+import Strat.Poly.Term.NBE.Normalize (StructuralProgress(..), normalizeDiagramDefEqWithStep)
 import Strat.Poly.Term.RuleDiagram (SpliceMapper, sameModeSpliceMapper)
 import Strat.Poly.TermExpr (TermExpr)
 import Strat.Poly.TypeTheory (TypeTheory)
@@ -151,15 +151,29 @@ normalizeTermDiagramWithMapper tt spliceMapper tmCtx expectedSort term =
       Common.normalizeObjDeepWithCtxWithMapperUsing normalizeTermDiagramWithMapper tt spliceMapper
 
     objEq tmCtx' a b = do
-      aN <- normalizeObjTopWithMapper tmCtx' a
-      bN <- normalizeObjTopWithMapper tmCtx' b
-      pure (aN == bN)
+      if a == b
+        then Right True
+        else do
+          aN <- normalizeObjTopWithMapper tmCtx' a
+          bN <- normalizeObjTopWithMapper tmCtx' b
+          pure (aN == bN)
 
-    structuralStep current =
+    structuralStep mSeedEdges current =
       let structuralRules = rulesForMode UseOnlyComputationalLR tt (dMode current)
        in if null structuralRules
             then Right Nothing
-            else rewriteOnceRawWithMapper objEq tt spliceMapper structuralRules current
+            else do
+              rewriteRes <- rewriteOnceRawDetailedWithMapper objEq tt spliceMapper mSeedEdges structuralRules current
+              pure
+                ( fmap
+                    (\progress ->
+                        StructuralProgress
+                          { spDiagram = rpDiagram progress
+                          , spTouchedEdges = rpTouchedEdges progress
+                          }
+                    )
+                    rewriteRes
+                )
 
     normalizeRound fragment tt' conv tmCtx' expectedSort' src =
       normalizeDiagramDefEqWithStep fragment tt' conv tmCtx' expectedSort' structuralStep src

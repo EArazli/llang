@@ -5,6 +5,10 @@ module Strat.Poly.Match
   , HostIndex
   , buildHostIndex
   , findFirstMatch
+  , findFirstMatchWithIndex
+  , findFirstMatchWithIndexSeeded
+  , findFirstSuccessfulMatchWithIndex
+  , findFirstSuccessfulMatchWithIndexSeeded
   , findAllMatches
   , findAllMatchesWithIndex
   , findAllMatchesWithIndexSeeded
@@ -20,10 +24,10 @@ import Strat.Poly.DiagramIso (diagramIsoEq, diagramIsoMatchWithVarsFrom)
 import Strat.Poly.DiagramInterpretation (requirePortType)
 import Strat.Poly.ModeTheory (ModeName)
 import Strat.Poly.Names (GenName)
-import Strat.Poly.Obj (Obj, TmVar, sameTmVarId)
+import Strat.Poly.Obj (TmVar, sameTmVarId)
 import Strat.Poly.ObjEq (ObjEqInCtx)
 import Strat.Poly.Subst (Subst, emptySubst)
-import Strat.Poly.Term.SubstRuntime (applySubstCtx)
+import Strat.Poly.Term.SubstRuntime (applySubstCtx, applySubstObj)
 import Strat.Poly.Syntax (CodeArg(..))
 import Strat.Poly.Tele (GenParam)
 import Strat.Poly.TypeTheory (TypeTheory, GenArgSig(..), lookupGenArgSig)
@@ -72,21 +76,32 @@ data EdgeSig = EdgeSig
 
 data HostIndex = HostIndex
   { hiBySig :: M.Map EdgeSig [Edge]
+  , hiCountBySig :: M.Map EdgeSig Int
   , hiAllEdges :: [Edge]
+  , hiAllEdgeCount :: Int
   }
   deriving (Eq, Show)
 
 findFirstMatch :: MatchConfig -> Diagram -> Diagram -> Either Text (Maybe Match)
-findFirstMatch cfg lhs host = do
-  matches <- findAllMatches cfg lhs host
-  pure (safeHead matches)
+findFirstMatch cfg lhs host =
+  findFirstMatchWithIndex cfg lhs (buildHostIndex host) host
+
+findFirstMatchWithIndex :: MatchConfig -> Diagram -> HostIndex -> Diagram -> Either Text (Maybe Match)
+findFirstMatchWithIndex cfg lhs hostIndex host =
+  findFirstSuccessfulMatchWithIndex cfg lhs hostIndex host (Right . Just)
+
+findFirstMatchWithIndexSeeded :: MatchConfig -> Diagram -> HostIndex -> S.Set EdgeId -> Diagram -> Either Text (Maybe Match)
+findFirstMatchWithIndexSeeded cfg lhs hostIndex seedEdges host =
+  findFirstSuccessfulMatchWithIndexSeeded cfg lhs hostIndex seedEdges host (Right . Just)
 
 buildHostIndex :: Diagram -> HostIndex
 buildHostIndex host =
   let hostEdges = IM.elems (dEdges host)
    in HostIndex
         { hiBySig = M.fromListWith (<>) [(edgeSig edge, [edge]) | edge <- hostEdges]
+        , hiCountBySig = M.fromListWith (+) [(edgeSig edge, 1) | edge <- hostEdges]
         , hiAllEdges = hostEdges
+        , hiAllEdgeCount = length hostEdges
         }
 
 findAllMatches :: MatchConfig -> Diagram -> Diagram -> Either Text [Match]
@@ -101,13 +116,37 @@ findAllMatchesWithIndexSeeded :: MatchConfig -> Diagram -> HostIndex -> S.Set Ed
 findAllMatchesWithIndexSeeded cfg lhs hostIndex seedEdges host =
   findAllMatchesWithIndexMaybeSeed cfg lhs hostIndex (Just seedEdges) host
 
+findFirstSuccessfulMatchWithIndex
+  :: MatchConfig
+  -> Diagram
+  -> HostIndex
+  -> Diagram
+  -> (Match -> Either Text (Maybe a))
+  -> Either Text (Maybe a)
+findFirstSuccessfulMatchWithIndex cfg lhs hostIndex host =
+  findFirstSuccessfulMatchWithIndexMaybeSeed cfg lhs hostIndex Nothing host
+
+findFirstSuccessfulMatchWithIndexSeeded
+  :: MatchConfig
+  -> Diagram
+  -> HostIndex
+  -> S.Set EdgeId
+  -> Diagram
+  -> (Match -> Either Text (Maybe a))
+  -> Either Text (Maybe a)
+findFirstSuccessfulMatchWithIndexSeeded cfg lhs hostIndex seedEdges host =
+  findFirstSuccessfulMatchWithIndexMaybeSeed cfg lhs hostIndex (Just seedEdges) host
+
 findAllMatchesWithIndexMaybeSeed :: MatchConfig -> Diagram -> HostIndex -> Maybe (S.Set EdgeId) -> Diagram -> Either Text [Match]
 findAllMatchesWithIndexMaybeSeed cfg lhs hostIndex mSeedEdges host
   | dMode lhs /= dMode host = Right []
   | otherwise = do
       lhsTmCtx <- applySubstCtx tt emptySubst (dTmCtx lhs)
       hostTmCtx <- applySubstCtx tt emptySubst (dTmCtx host)
-      tmCtxOk <- defEqCtx lhsTmCtx hostTmCtx
+      tmCtxOk <-
+        if lhsTmCtx == hostTmCtx
+          then Right True
+          else defEqCtx lhsTmCtx hostTmCtx
       if not tmCtxOk
         then Right []
         else do
@@ -158,7 +197,9 @@ findAllMatchesWithIndexMaybeSeed cfg lhs hostIndex mSeedEdges host
           go acc1 m adj allEdgeIds lhsSigs
 
     candidateCount match lhsSigs eid =
-      length (candidateBucket match lhsSigs eid)
+      case seedCount match lhsSigs eid of
+        Just n -> n
+        Nothing -> length (candidateBucket match lhsSigs eid)
 
     candidateBucket match lhsSigs eid =
       let bucket =
@@ -172,6 +213,119 @@ findAllMatchesWithIndexMaybeSeed cfg lhs hostIndex mSeedEdges host
               Nothing -> bucket
               Just seedEdges -> filter (\edge -> eId edge `S.member` seedEdges) bucket
           else bucket
+
+    seedCount match lhsSigs eid
+      | M.null (mEdgeMap match) =
+          case mSeedEdges of
+            Nothing -> Just (bucketCount lhsSigs eid)
+            Just _ -> Nothing
+      | otherwise = Just (bucketCount lhsSigs eid)
+
+    bucketCount lhsSigs eid =
+      case M.lookup eid lhsSigs of
+        Nothing -> hiAllEdgeCount hostIndex
+        Just sig -> M.findWithDefault 0 sig (hiCountBySig hostIndex)
+
+findFirstSuccessfulMatchWithIndexMaybeSeed
+  :: MatchConfig
+  -> Diagram
+  -> HostIndex
+  -> Maybe (S.Set EdgeId)
+  -> Diagram
+  -> (Match -> Either Text (Maybe a))
+  -> Either Text (Maybe a)
+findFirstSuccessfulMatchWithIndexMaybeSeed cfg lhs hostIndex mSeedEdges host onMatch
+  | dMode lhs /= dMode host = Right Nothing
+  | otherwise = do
+      lhsTmCtx <- applySubstCtx tt emptySubst (dTmCtx lhs)
+      hostTmCtx <- applySubstCtx tt emptySubst (dTmCtx host)
+      tmCtxOk <-
+        if lhsTmCtx == hostTmCtx
+          then Right True
+          else defEqCtx lhsTmCtx hostTmCtx
+      if not tmCtxOk
+        then Right Nothing
+        else do
+          let lhsEdges = IM.elems (dEdges lhs)
+              adj = adjacency lhs
+              allEdgeIds = map eId lhsEdges
+              lhsSigs = M.fromList [(eId edge, edgeSig edge) | edge <- lhsEdges]
+              emptyMatch = Match M.empty M.empty emptySubst M.empty S.empty S.empty
+          go emptyMatch adj allEdgeIds lhsSigs
+  where
+    tt = mcTheory cfg
+    flex = mcFlex cfg
+    objEq = mcObjEq cfg
+
+    defEqCtx leftCtx rightCtx = goCtx [] leftCtx rightCtx
+      where
+        goCtx _ [] [] = Right True
+        goCtx tmCtxAcc (a:as) (b:bs) = do
+          ok <- objEq tmCtxAcc a b
+          if ok
+            then goCtx (tmCtxAcc <> [a]) as bs
+            else Right False
+        goCtx _ _ _ = Right False
+
+    go match adj allEdgeIds lhsSigs =
+      case pickNextEdge match adj allEdgeIds (candidateCount match lhsSigs) of
+        Nothing ->
+          case completeBoundary tt flex lhs host match of
+            Left _ -> Right Nothing
+            Right match'
+              | danglingOk lhs host match' -> onMatch match'
+              | otherwise -> Right Nothing
+        Just eid -> do
+          edge <- lookupEdge lhs eid
+          let candidates = filter (edgeCompatible match edge) (candidateBucket match lhsSigs eid)
+          tryCandidates match adj allEdgeIds lhsSigs edge candidates
+
+    tryCandidates _ _ _ _ _ [] = Right Nothing
+    tryCandidates match adj allEdgeIds lhsSigs edge (cand:cands) =
+      case extendMatch objEq tt flex lhs host match edge cand of
+        Left _ -> tryCandidates match adj allEdgeIds lhsSigs edge cands
+        Right matches -> do
+          result <- tryMatches matches
+          case result of
+            Just out -> Right (Just out)
+            Nothing -> tryCandidates match adj allEdgeIds lhsSigs edge cands
+      where
+        tryMatches [] = Right Nothing
+        tryMatches (next:more) = do
+          result <- go next adj allEdgeIds lhsSigs
+          case result of
+            Just out -> Right (Just out)
+            Nothing -> tryMatches more
+
+    candidateCount match lhsSigs eid =
+      case seedCount match lhsSigs eid of
+        Just n -> n
+        Nothing -> length (candidateBucket match lhsSigs eid)
+
+    candidateBucket match lhsSigs eid =
+      let bucket =
+            case M.lookup eid lhsSigs of
+              Nothing -> hiAllEdges hostIndex
+              Just sig -> M.findWithDefault [] sig (hiBySig hostIndex)
+       in
+        if M.null (mEdgeMap match)
+          then
+            case mSeedEdges of
+              Nothing -> bucket
+              Just seedEdges -> filter (\edge -> eId edge `S.member` seedEdges) bucket
+          else bucket
+
+    seedCount match lhsSigs eid
+      | M.null (mEdgeMap match) =
+          case mSeedEdges of
+            Nothing -> Just (bucketCount lhsSigs eid)
+            Just _ -> Nothing
+      | otherwise = Just (bucketCount lhsSigs eid)
+
+    bucketCount lhsSigs eid =
+      case M.lookup eid lhsSigs of
+        Nothing -> hiAllEdgeCount hostIndex
+        Just sig -> M.findWithDefault 0 sig (hiCountBySig hostIndex)
 
 lookupEdge :: Diagram -> EdgeId -> Either Text Edge
 lookupEdge diag eid =
@@ -268,13 +422,17 @@ extendMatch objEq tt flex lhs host match patEdge hostEdge
     unifyPorts tySubst p h = do
       pTy <- requirePortType "match" lhs p
       hTy <- requirePortType "match" host h
-      unifyObjFlex
-        tt
-        (dTmCtx lhs)
-        flex
-        tySubst
-        pTy
-        hTy
+      pTy' <- applySubstObj tt tySubst pTy
+      if pTy' == hTy
+        then Right tySubst
+        else
+          unifyObjFlex
+            tt
+            (dTmCtx lhs)
+            flex
+            tySubst
+            pTy
+            hTy
 
 payloadSubsts
   :: ObjEqInCtx
@@ -387,20 +545,27 @@ completeBoundary tt flex lhs host match =
           case requirePortType "match" host h of
             Left _ -> chooseCandidate m p pTy rest
             Right hTy ->
-              case
-                unifyObjFlex
-                  tt
-                  (dTmCtx lhs)
-                  flex
-                  (mTySubst m)
-                  pTy
-                  hTy
-                of
-                Left _ -> chooseCandidate m p pTy rest
-                Right subst' ->
-                  let ports' = M.insert p h (mPortMap m)
-                      used' = S.insert h (mUsedHostPorts m)
-                   in Right m { mPortMap = ports', mUsedHostPorts = used', mTySubst = subst' }
+              case applySubstObj tt (mTySubst m) pTy of
+                Right pTy'
+                  | pTy' == hTy ->
+                      let ports' = M.insert p h (mPortMap m)
+                          used' = S.insert h (mUsedHostPorts m)
+                       in Right m { mPortMap = ports', mUsedHostPorts = used' }
+                _ ->
+                  case
+                    unifyObjFlex
+                      tt
+                      (dTmCtx lhs)
+                      flex
+                      (mTySubst m)
+                      pTy
+                      hTy
+                    of
+                    Left _ -> chooseCandidate m p pTy rest
+                    Right subst' ->
+                      let ports' = M.insert p h (mPortMap m)
+                          used' = S.insert h (mUsedHostPorts m)
+                       in Right m { mPortMap = ports', mUsedHostPorts = used', mTySubst = subst' }
 
 pickNextEdge :: Match -> M.Map EdgeId (S.Set EdgeId) -> [EdgeId] -> (EdgeId -> Int) -> Maybe EdgeId
 pickNextEdge match adj allEdges candidateCount =
@@ -416,7 +581,14 @@ pickNextEdge match adj allEdges candidateCount =
   where
     selectBest [] = Nothing
     selectBest candidates =
-      safeHead (L.sortOn (\eid -> (candidateCount eid, unEdgeId eid)) candidates)
+      L.foldl' step Nothing candidates
+      where
+        step Nothing eid = Just eid
+        step (Just best) eid
+          | candidateKey eid < candidateKey best = Just eid
+          | otherwise = Just best
+
+        candidateKey eid = (candidateCount eid, unEdgeId eid)
 
 edgeSig :: Edge -> EdgeSig
 edgeSig edge =
@@ -454,10 +626,6 @@ edgeSig edge =
         PTmMeta _ -> PTTmMeta
         PTmLit _ -> PTTmLit
         PInternalDrop -> PTDrop
-
-safeHead :: [a] -> Maybe a
-safeHead [] = Nothing
-safeHead (x : _) = Just x
 
 adjacency :: Diagram -> M.Map EdgeId (S.Set EdgeId)
 adjacency diag =

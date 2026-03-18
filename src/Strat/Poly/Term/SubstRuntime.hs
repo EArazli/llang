@@ -29,10 +29,8 @@ import Strat.Poly.Term.DefEqCore
   , normalizeTermDiagram
   )
 import Strat.Poly.TermExpr
-  ( diagramToTermExpr
-  , mkTermSubstOps
+  ( mkTermSubstOps
   , structuralConvEnv
-  , termExprToDiagram
   )
 import Strat.Poly.TypeTheory (TypeTheory)
 
@@ -43,8 +41,6 @@ runtimeTermSubstOps tt =
     (structuralConvEnv tt)
     (normalizeObjDeepWithCtx tt)
     (normalizeTermDiagram tt)
-    (diagramToTermExpr tt)
-    (termExprToDiagram tt)
 
 applySubstObj :: TypeTheory -> Subst -> Obj -> Either Text Obj
 applySubstObj tt =

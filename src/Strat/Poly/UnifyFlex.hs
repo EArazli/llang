@@ -54,8 +54,6 @@ import Strat.Poly.TypeTheory
 import Strat.Poly.Tele (CtorSig(..), GenParam(..))
 import Strat.Poly.Term.DefEqCore
   ( normalizeObjDeepWithCtx
-  , normalizeTermDiagram
-  , termToDiagram
   )
 import Strat.Poly.Term.SubstRuntime
   ( applySubstCtx
@@ -117,7 +115,9 @@ unifyObjFlex
 unifyObjFlex tt tmCtx flex subst t1 t2 = do
   t1' <- applySubstObj tt subst t1 >>= expandModSpine
   t2' <- applySubstObj tt subst t2 >>= expandModSpine
-  unifyWith subst t1' t2'
+  if t1' == t2'
+    then Right subst
+    else unifyWith subst t1' t2'
   where
     mkObj owner code = Obj { objOwnerMode = owner, objCode = code }
 
@@ -388,26 +388,27 @@ unifyTm
   -> TermDiagram
   -> Either Text Subst
 unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
+  lhs <- applySubstTmInCtx tt tmCtx subst expectedSort tm1
+  rhs <- applySubstTmInCtx tt tmCtx subst expectedSort tm2
   tmCtxSub <- applySubstCtx tt subst tmCtx
   expectedSort0 <- applySubstObj tt subst expectedSort
   expectedSort' <- normalizeObjDeepWithCtx tt tmCtxSub expectedSort0
-  lhs0 <- applySubstTmInCtx tt tmCtxSub subst expectedSort' tm1
-  rhs0 <- applySubstTmInCtx tt tmCtxSub subst expectedSort' tm2
-  lhs <- normalizeTermDiagram tt tmCtxSub expectedSort' lhs0
-  rhs <- normalizeTermDiagram tt tmCtxSub expectedSort' rhs0
-  if normalizedDiagramHasBinderArgs (unTerm lhs) || normalizedDiagramHasBinderArgs (unTerm rhs)
-    then do
-      lhsExpr <- diagramToTermExpr tt tmCtxSub expectedSort' lhs
-      rhsExpr <- diagramToTermExpr tt tmCtxSub expectedSort' rhs
-      unifyTmNorm subst expectedSort' lhsExpr rhsExpr
+  if lhs == rhs
+    then Right subst
     else do
-      lhsGraph <- termToDiagram tt tmCtxSub expectedSort' lhs
-      rhsGraph <- termToDiagram tt tmCtxSub expectedSort' rhs
-      lOut <- requireSingleOut lhsGraph
-      rOut <- requireSingleOut rhsGraph
-      let lhsInputs = inputGlobalMap lhsGraph
-      let rhsInputs = inputGlobalMap rhsGraph
-      unifyTmGraph subst S.empty expectedSort' lhsGraph lhsInputs lOut rhsGraph rhsInputs rOut
+      if normalizedDiagramHasBinderArgs (unTerm lhs) || normalizedDiagramHasBinderArgs (unTerm rhs)
+        then do
+          lhsExpr <- diagramToTermExpr tt tmCtxSub expectedSort' lhs
+          rhsExpr <- diagramToTermExpr tt tmCtxSub expectedSort' rhs
+          unifyTmNorm subst expectedSort' lhsExpr rhsExpr
+        else do
+          let lhsGraph = unTerm lhs
+          let rhsGraph = unTerm rhs
+          lOut <- requireSingleOut lhsGraph
+          rOut <- requireSingleOut rhsGraph
+          let lhsInputs = inputGlobalMap lhsGraph
+          let rhsInputs = inputGlobalMap rhsGraph
+          unifyTmGraph subst S.empty expectedSort' lhsGraph lhsInputs lOut rhsGraph rhsInputs rOut
   where
     normalizeInCtx s ty = do
       tmCtx' <- applySubstCtx tt s tmCtx
@@ -461,9 +462,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
 
     unifyTmNorm s currentSort a b =
       case (a, b) of
-        (TMBound i, TMBound j) -> do
-          checkBoundSort s currentSort i
-          checkBoundSort s currentSort j
+        (TMBound i, TMBound j) ->
           if i == j
             then Right s
             else Left "unifyTm: bound term-variable mismatch"
@@ -517,9 +516,7 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
           argSort' <- normalizeObjDeepWithCtx tt tmCtx1 argSort0
           x' <- applySubstExprInCtx tmCtx1 s1 argSort' xTm
           y' <- applySubstExprInCtx tmCtx1 s1 argSort' yTm
-          xNorm <- normalizeTermExprInCtx tmCtx1 s1 argSort' x'
-          yNorm <- normalizeTermExprInCtx tmCtx1 s1 argSort' y'
-          unifyTmNorm s1 argSort' xNorm yNorm
+          unifyTmNorm s1 argSort' x' y'
 
     tryMetaMeta s currentSort v args w args' =
       case bindLeft of
@@ -627,6 +624,17 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
         then Right sig
         else Left "unifyTm: term head result sort mismatch"
 
+    checkPortSort s currentSort diag pid = do
+      portSort0 <-
+        case diagramPortObj diag pid of
+          Nothing -> Left "unifyTm: missing port type in normalized term graph"
+          Just ty -> Right ty
+      portSort <- normalizeInCtx s portSort0
+      currentSort' <- normalizeInCtx s currentSort
+      if portSort == currentSort'
+        then Right ()
+        else Left "unifyTm: normalized term graph has unexpected port sort"
+
     compareResolvedBinders s resolvedL resolvedR =
       foldM
         compareBinder
@@ -664,22 +672,6 @@ unifyTm tt tmCtx tmFlex subst expectedSort tm1 tm2 = do
       tm <- termExprToDiagram tt ctx expectedSort expr
       tmSub <- applySubstTmInCtx tt ctx s expectedSort tm
       diagramToTermExpr tt ctx expectedSort tmSub
-
-    normalizeTermExprInCtx ctx _ expectedSort expr = do
-      tm <- termExprToDiagram tt ctx expectedSort expr
-      tmNorm <- normalizeTermDiagram tt ctx expectedSort tm
-      diagramToTermExpr tt ctx expectedSort tmNorm
-
-    checkPortSort s currentSort diag pid = do
-      portSort0 <-
-        case diagramPortObj diag pid of
-          Nothing -> Left "unifyTm: missing port type in normalized term graph"
-          Just ty -> Right ty
-      portSort <- normalizeInCtx s portSort0
-      currentSort' <- normalizeInCtx s currentSort
-      if portSort == currentSort'
-        then Right ()
-        else Left "unifyTm: normalized term graph has unexpected port sort"
 
     classifyPort diag inputs pid =
       case M.lookup pid inputs of
@@ -789,7 +781,7 @@ freshenHeadSigAgainstSubst subst =
   freshenTmHeadSigAgainst (substDomain subst)
 
 inferExpectedTmSort :: TypeTheory -> [Obj] -> Subst -> TermDiagram -> TermDiagram -> Either Text Obj
-inferExpectedTmSort tt tmCtx subst lhs rhs =
+inferExpectedTmSort tt _ subst lhs rhs =
   case inferTmSortFromDiagram tt subst lhs of
     Right ty -> Right ty
     Left _ -> inferTmSortFromDiagram tt subst rhs

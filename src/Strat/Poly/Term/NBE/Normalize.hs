@@ -3,13 +3,13 @@
 module Strat.Poly.Term.NBE.Normalize
   ( normalizeDiagramDefEq
   , normalizeDiagramDefEqWithStep
+  , StructuralProgress(..)
   , validateDiagramDefEq
   , normalizeRuleDiagramDefEq
   , validateRuleDiagramDefEq
   ) where
 
 import Control.Monad (foldM)
-import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.IntMap.Strict as IM
@@ -30,6 +30,7 @@ import Strat.Poly.ModeSyntax (ModExpr(..))
 import Strat.Poly.Graph
   ( Diagram(..)
   , PortId
+  , EdgeId
   , Edge(..)
   , EdgePayload(..)
   , BinderMetaVar
@@ -38,6 +39,7 @@ import Strat.Poly.Graph
   , diagramPortObj
   , emptyDiagram
   , mergePorts
+  , reindexDiagramForDisplay
   , shiftDiagram
   , unPortId
   , unionDisjointIntMap
@@ -208,10 +210,15 @@ emptyRuleSubst =
     , rsBinderVals = M.empty
     }
 
-type StructuralStep = Diagram -> Either Text (Maybe Diagram)
+data StructuralProgress = StructuralProgress
+  { spDiagram :: Diagram
+  , spTouchedEdges :: S.Set EdgeId
+  }
+
+type StructuralStep = Maybe (S.Set EdgeId) -> Diagram -> Either Text (Maybe StructuralProgress)
 
 noStructuralStep :: StructuralStep
-noStructuralStep _ = Right Nothing
+noStructuralStep _ _ = Right Nothing
 
 normalizeDiagramDefEq
   :: DefFragment
@@ -311,13 +318,17 @@ normalizeDiagramDefEqAgainstWithStep
   -> Diagram
   -> Either Text TermDiagram
 normalizeDiagramDefEqAgainstWithStep fragment tt convEnv tmCtx boundarySorts expectedSort structuralStep src0 =
-  loop S.empty src0
+  do
+    _ <- compileDiagramDefEqAgainst fragment tt convEnv boundarySorts expectedSort src0
+    reindexDiagramForDisplay src0 >>= loop S.empty M.empty False
   where
+    maxCanonicalRevisits = 16 :: Int
+
     attemptRound src = do
       let nIn = length (dIn src)
       if nIn <= length boundarySorts
         then
-          normalizeDiagramDefEqRoundAgainst
+          normalizeDiagramDefEqRoundAgainstTrusted
             fragment
             tt
             convEnv
@@ -328,30 +339,42 @@ normalizeDiagramDefEqAgainstWithStep fragment tt convEnv tmCtx boundarySorts exp
         else
           Left "defeq: normalized term requires larger boundary context prefix than available"
 
-    loop seen current0 = do
-      current <- canonDiagramRaw current0
+    loop seen canonicalCounts checkCanonical current = do
       if current `S.member` seen
         then Left "defeq: computational structural normalization encountered a rewrite cycle"
         else do
+          canonicalCounts' <-
+            if checkCanonical
+              then do
+                currentKey <- canonDiagramRaw current
+                let currentCanonCount = M.findWithDefault 0 currentKey canonicalCounts
+                if currentCanonCount >= maxCanonicalRevisits
+                  then Left "defeq: computational structural normalization encountered a rewrite cycle"
+                  else Right (M.insert currentKey (currentCanonCount + 1) canonicalCounts)
+              else Right canonicalCounts
           let seen' = S.insert current seen
-          structuralRes <- structuralStep current
-          nextStructural <-
-            case structuralRes of
-              Nothing -> Right current
-              Just diag -> canonDiagramRaw diag
+          structuralRes <- structuralStep Nothing current
+          let nextStructural =
+                case structuralRes of
+                  Nothing -> current
+                  Just progress -> spDiagram progress
           case attemptRound nextStructural of
             Right out ->
               let next = unTerm out
-                  progressed = isJust structuralRes || next /= current
+                  progressed = maybe False (const True) structuralRes || next /= current
                in if progressed
-                    then loop seen' next
-                    else Right out
+                    then loop seen' canonicalCounts' False next
+                    else finalize out
             Left err ->
               case structuralRes of
-                Just _ -> loop seen' nextStructural
+                Just _ -> loop seen' canonicalCounts' True nextStructural
                 Nothing -> Left err
 
-normalizeDiagramDefEqRoundAgainst
+    finalize out = do
+      outCanon <- canonDiagramRaw (unTerm out)
+      pure (TermDiagram outCanon)
+
+normalizeDiagramDefEqRoundAgainstTrusted
   :: DefFragment
   -> TypeTheory
   -> TermConvEnv
@@ -360,10 +383,21 @@ normalizeDiagramDefEqRoundAgainst
   -> Obj
   -> Diagram
   -> Either Text TermDiagram
-normalizeDiagramDefEqRoundAgainst fragment tt convEnv tmCtx boundarySorts expectedSort src = do
-  validateDiagramDefEqAgainst fragment tt convEnv boundarySorts expectedSort src
+normalizeDiagramDefEqRoundAgainstTrusted fragment tt convEnv tmCtx boundarySorts expectedSort src = do
+  tm <- compileDiagramDefEqAgainstTrusted fragment tt convEnv boundarySorts expectedSort src
+  normalizeDiagramDefEqRoundAgainstFromBTm fragment tt convEnv tmCtx boundarySorts expectedSort tm
+
+normalizeDiagramDefEqRoundAgainstFromBTm
+  :: DefFragment
+  -> TypeTheory
+  -> TermConvEnv
+  -> [Obj]
+  -> [Obj]
+  -> Obj
+  -> BTm
+  -> Either Text TermDiagram
+normalizeDiagramDefEqRoundAgainstFromBTm fragment tt convEnv tmCtx boundarySorts expectedSort tm = do
   let nIn = length boundarySorts
-  tm <- diagramToBTm fragment tt convEnv src [nIn - 1, nIn - 2 .. 0] boundarySorts expectedSort
   let lvl0 = nIn
   env <- mkInitialEnv lvl0 boundarySorts
   val <- evalBTm fragment tt convEnv tmCtx env tm
@@ -373,10 +407,8 @@ normalizeDiagramDefEqRoundAgainst fragment tt convEnv tmCtx boundarySorts expect
     then pure ()
     else Left "defeq: normalized term requires larger boundary context prefix than available"
   out <- btmToDiagram tt fragment tmCtx expectedSort (take needed boundarySorts) nf
-  validateDiagram out
-  outCanon <- canonDiagramRaw out
-  validateDiagram outCanon
-  pure (TermDiagram outCanon)
+  outReindexed <- reindexDiagramForDisplay out
+  pure (TermDiagram outReindexed)
 
 validateDiagramDefEqAgainst
   :: DefFragment
@@ -387,7 +419,30 @@ validateDiagramDefEqAgainst
   -> Diagram
   -> Either Text ()
 validateDiagramDefEqAgainst fragment tt convEnv boundarySorts expectedSort src = do
+  _ <- compileDiagramDefEqAgainst fragment tt convEnv boundarySorts expectedSort src
+  pure ()
+
+compileDiagramDefEqAgainst
+  :: DefFragment
+  -> TypeTheory
+  -> TermConvEnv
+  -> [Obj]
+  -> Obj
+  -> Diagram
+  -> Either Text BTm
+compileDiagramDefEqAgainst fragment tt convEnv boundarySorts expectedSort src = do
   validateDefEqGraph src
+  compileDiagramDefEqAgainstTrusted fragment tt convEnv boundarySorts expectedSort src
+
+compileDiagramDefEqAgainstTrusted
+  :: DefFragment
+  -> TypeTheory
+  -> TermConvEnv
+  -> [Obj]
+  -> Obj
+  -> Diagram
+  -> Either Text BTm
+compileDiagramDefEqAgainstTrusted fragment tt convEnv boundarySorts expectedSort src = do
   case dOut src of
     [_] -> pure ()
     _ -> Left "defeq: term diagram must have exactly one output"
@@ -395,8 +450,7 @@ validateDiagramDefEqAgainst fragment tt convEnv boundarySorts expectedSort src =
     then pure ()
     else Left "defeq: boundary input arity does not match expected boundary context"
   mapM_ checkBoundaryType (zip boundarySorts (dIn src))
-  _ <- diagramToBTm fragment tt convEnv src [length boundarySorts - 1, length boundarySorts - 2 .. 0] boundarySorts expectedSort
-  pure ()
+  diagramToBTm fragment tt convEnv src [length boundarySorts - 1, length boundarySorts - 2 .. 0] boundarySorts expectedSort
   where
     checkBoundaryType (expectedTy, pid) = do
       actualTy <- requirePortSort src "NbE: missing boundary input sort" pid
@@ -1895,7 +1949,7 @@ instantiateRuleDiagramRHS tt convEnv subst rhsDiag0 = do
   rhsDiag1 <- applySubstDiagramWith (termSubstOps tt convEnv) tt headSubst rhsDiag0
   rhsDiag2 <- traverseDiagram pure rewriteSpliceRef pure rewriteBinderArg rhsDiag1
   rhsDiag3 <- expandSplices (tcSpliceMapper convEnv) concreteBinderSub rhsDiag2
-  canonDiagramRaw rhsDiag3
+  reindexDiagramForDisplay rhsDiag3
   where
     concreteBinderSub =
       M.mapMaybe concreteBinderBody (rsBinderVals subst)
@@ -2172,7 +2226,7 @@ canonicalizeRuleBinderDiagram
 canonicalizeRuleBinderDiagram tt convEnv headSubst inner = do
   subst <- mkSubst (M.toList headSubst)
   inner' <- applySubstDiagramWith (termSubstOps tt convEnv) tt subst inner
-  canonDiagramRaw inner'
+  reindexDiagramForDisplay inner'
 
 validateRuleBinderDiagram :: BinderSig -> Diagram -> Either Text ()
 validateRuleBinderDiagram slot inner = do
@@ -2656,7 +2710,7 @@ normalizeResidualDiagramPayloads
 normalizeResidualDiagramPayloads tt convEnv diag0 = do
   diag1 <- traverseDiagram onDiag pure onCodeArg onBinderArg diag0
   validateDiagram diag1
-  canonDiagramRaw diag1
+  reindexDiagramForDisplay diag1
   where
     onDiag diag = do
       validateDiagram diag

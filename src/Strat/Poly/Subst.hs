@@ -155,9 +155,14 @@ categoryName binding =
 
 applySubstObjWith :: TermSubstOps -> TypeTheory -> Subst -> Obj -> Either Text Obj
 applySubstObjWith ops tt subst ty = do
-  raw <- goTy S.empty ty
-  tmCtx <- inferObjTmCtx raw
-  tsoNormalizeObj ops tmCtx raw
+  if substIsEmpty subst
+    then do
+      tmCtx <- inferObjTmCtx ty
+      tsoNormalizeObj ops tmCtx ty
+    else do
+      raw <- goTy S.empty ty
+      tmCtx <- inferObjTmCtx raw
+      tsoNormalizeObj ops tmCtx raw
   where
     inferObjTmCtx o = do
       let ctxs = collectObjCtxs o
@@ -287,32 +292,76 @@ applySubstTmInCtxWith
   -> TermDiagram
   -> Either Text TermDiagram
 applySubstTmInCtxWith ops tt tmCtx subst expectedSort tm = do
-  tmCtx0 <- applySubstCtxWith ops tt subst tmCtx
-  tmCtx' <- tsoNormalizeCtx ops tmCtx0
-  expectedSort0 <- applySubstObjWith ops tt subst expectedSort
-  expectedSort' <- tsoNormalizeObj ops tmCtx' expectedSort0
-  tmGraph0 <- applySubstDiagramWith ops tt subst (unTerm tm)
-  tmGraphCtx <- tsoNormalizeCtx ops (dTmCtx tmGraph0)
-  let tmGraph1 = tmGraph0 { dTmCtx = tmGraphCtx }
-  tmGraph <-
-    case weakenDiagramTmCtxTo tmCtx' tmGraph1 of
-      Left err ->
-        Left
-          ( err
-              <> " (target="
-              <> T.pack (show tmCtx')
-              <> ", image="
-              <> T.pack (show (dTmCtx tmGraph1))
-              <> ")"
-          )
-      Right tmGraph ->
-        Right tmGraph
-  let tmSub = TermDiagram tmGraph
-  expr <- tsoDiagramToTermExpr ops tmCtx' expectedSort' tmSub
-  (tmCtxOut, expr') <- substituteTermExprMetasWith ops tt subst tmCtx' expectedSort' expr
-  expectedSortOut <- tsoNormalizeObj ops tmCtxOut expectedSort0
-  tm' <- tsoTermExprToDiagram ops tmCtxOut expectedSortOut expr'
-  tsoNormalizeTermDiagram ops tmCtxOut expectedSortOut tm'
+  if substIsEmpty subst
+    then do
+      tmCtx' <- tsoNormalizeCtx ops tmCtx
+      expectedSort' <- tsoNormalizeObj ops tmCtx' expectedSort
+      tmGraphCtx <- tsoNormalizeCtx ops (dTmCtx (unTerm tm))
+      let tmGraph1 = (unTerm tm) { dTmCtx = tmGraphCtx }
+      tmGraph <-
+        case weakenDiagramTmCtxTo tmCtx' tmGraph1 of
+          Left err ->
+            Left
+              ( err
+                  <> " (target="
+                  <> T.pack (show tmCtx')
+                  <> ", image="
+                  <> T.pack (show (dTmCtx tmGraph1))
+                  <> ")"
+              )
+          Right tmGraph ->
+            Right tmGraph
+      tsoNormalizeTermDiagram ops tmCtx' expectedSort' (TermDiagram tmGraph)
+    else if null (tmBindings subst)
+      then do
+        tmCtx0 <- applySubstCtxWith ops tt subst tmCtx
+        tmCtx' <- tsoNormalizeCtx ops tmCtx0
+        expectedSort0 <- applySubstObjWith ops tt subst expectedSort
+        expectedSort' <- tsoNormalizeObj ops tmCtx' expectedSort0
+        tmGraph0 <- applySubstDiagramWith ops tt subst (unTerm tm)
+        tmGraphCtx <- tsoNormalizeCtx ops (dTmCtx tmGraph0)
+        let tmGraph1 = tmGraph0 { dTmCtx = tmGraphCtx }
+        tmGraph <-
+          case weakenDiagramTmCtxTo tmCtx' tmGraph1 of
+            Left err ->
+              Left
+                ( err
+                    <> " (target="
+                    <> T.pack (show tmCtx')
+                    <> ", image="
+                    <> T.pack (show (dTmCtx tmGraph1))
+                    <> ")"
+                )
+            Right tmGraph ->
+              Right tmGraph
+        tsoNormalizeTermDiagram ops tmCtx' expectedSort' (TermDiagram tmGraph)
+    else do
+      tmCtx0 <- applySubstCtxWith ops tt subst tmCtx
+      tmCtx' <- tsoNormalizeCtx ops tmCtx0
+      expectedSort0 <- applySubstObjWith ops tt subst expectedSort
+      expectedSort' <- tsoNormalizeObj ops tmCtx' expectedSort0
+      tmGraph0 <- applySubstDiagramWith ops tt subst (unTerm tm)
+      tmGraphCtx <- tsoNormalizeCtx ops (dTmCtx tmGraph0)
+      let tmGraph1 = tmGraph0 { dTmCtx = tmGraphCtx }
+      tmGraph <-
+        case weakenDiagramTmCtxTo tmCtx' tmGraph1 of
+          Left err ->
+            Left
+              ( err
+                  <> " (target="
+                  <> T.pack (show tmCtx')
+                  <> ", image="
+                  <> T.pack (show (dTmCtx tmGraph1))
+                  <> ")"
+              )
+          Right tmGraph ->
+            Right tmGraph
+      let tmSub = TermDiagram tmGraph
+      expr <- tsoDiagramToTermExpr ops tmCtx' expectedSort' tmSub
+      (tmCtxOut, expr') <- substituteTermExprMetasWith ops tt subst tmCtx' expectedSort' expr
+      expectedSortOut <- tsoNormalizeObj ops tmCtxOut expectedSort0
+      tm' <- tsoTermExprToDiagram ops tmCtxOut expectedSortOut expr'
+      tsoNormalizeTermDiagram ops tmCtxOut expectedSortOut tm'
 
 applySubstCtxWith :: TermSubstOps -> TypeTheory -> Subst -> Context -> Either Text Context
 applySubstCtxWith ops tt subst = mapM (applySubstObjWith ops tt subst)
